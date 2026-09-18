@@ -40,6 +40,14 @@ vi.mock("../timeTracker/TimeTrackerIndicator", () => ({
   TimeTrackerIndicator: () => <button data-testid="time-tracker">Timers</button>,
 }));
 
+vi.mock("./StorageStatusIndicator", () => ({
+  StorageStatusIndicator: () => <button data-testid="storage-status">Storage</button>,
+}));
+
+vi.mock("./SyncStatusIndicator", () => ({
+  SyncStatusIndicator: () => <span data-testid="sync-status">Sync</span>,
+}));
+
 import { WorkspaceTopBar } from "./WorkspaceTopBar";
 
 describe("WorkspaceTopBar", () => {
@@ -50,6 +58,8 @@ describe("WorkspaceTopBar", () => {
     expect(markup).toContain('data-testid="provider-update-notice"');
     expect(markup).toContain('data-testid="profile-button"');
     expect(markup).toContain('data-testid="time-tracker"');
+    expect(markup).toContain('data-testid="storage-status"');
+    expect(markup).toContain('data-testid="sync-status"');
     expect(markup.indexOf('data-testid="time-tracker"')).toBeLessThan(
       markup.indexOf('data-testid="profile-button"'),
     );

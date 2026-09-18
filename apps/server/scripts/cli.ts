@@ -21,6 +21,12 @@ import { fromYaml } from "@spiritdevs/shared/schemaYaml";
 import { resolveSpawnCommand } from "@spiritdevs/shared/shell";
 import serverPackageJson from "../package.json" with { type: "json" };
 import {
+  createCliPublishInvocation,
+  cliPublishOptionsIssue,
+  publishedCliOverrides,
+  publishedCliPlatforms,
+} from "./cliPublish.ts";
+import {
   ServerCliBuildAssetMissingError,
   ServerCliCommandExitError,
   ServerCliDevelopmentIconSourceMissingError,
@@ -41,12 +47,19 @@ interface PackageJson {
   version: string;
   engines: Record<string, string>;
   files: string[];
+  os: string[];
+  cpu: string[];
   dependencies: Record<string, string>;
-  overrides: Record<string, string>;
+  overrides?: Record<string, string>;
 }
 
 const PackageJsonPrettyJson = fromJsonStringPretty(Schema.Unknown);
 const encodePackageJson = Schema.encodeEffect(PackageJsonPrettyJson);
+
+class ServerCliPublishOptionsError extends Schema.TaggedErrorClass<ServerCliPublishOptionsError>()(
+  "ServerCliPublishOptionsError",
+  { message: Schema.String },
+) {}
 
 const WorkspaceConfig = Schema.Struct({
   catalog: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -179,35 +192,13 @@ const buildCmd = Command.make(
 // publish subcommand
 // ---------------------------------------------------------------------------
 
-interface PublishCommandConfig {
-  readonly access: string;
-  readonly tag: string;
-  readonly provenance: boolean;
-  readonly dryRun: boolean;
-}
-
-const createVpPmPublishArgs = (config: PublishCommandConfig): ReadonlyArray<string> => {
-  const args = [
-    "publish",
-    "--filter",
-    "@spiritdevs/pathway",
-    "--access",
-    config.access,
-    "--tag",
-    config.tag,
-    "--no-git-checks",
-  ];
-
-  if (config.provenance) args.push("--provenance");
-  if (config.dryRun) args.push("--dry-run");
-
-  return args;
-};
-
 const publishCmd = Command.make(
   "publish",
   {
     tag: Flag.string("tag").pipe(Flag.withDefault("latest")),
+    stage: Flag.boolean("stage").pipe(Flag.withDefault(false)),
+    pack: Flag.boolean("pack").pipe(Flag.withDefault(false)),
+    packDestination: Flag.string("pack-destination").pipe(Flag.optional),
     access: Flag.string("access").pipe(Flag.withDefault("public")),
     appVersion: Flag.string("app-version").pipe(Flag.optional),
     provenance: Flag.boolean("provenance").pipe(Flag.withDefault(false)),
@@ -221,12 +212,27 @@ const publishCmd = Command.make(
       const repoRoot = yield* RepoRoot;
       const serverDir = path.join(repoRoot, "apps/server");
       const packageJsonPath = path.join(serverDir, "package.json");
+      const publishOptions = {
+        ...config,
+        packDestination: Option.getOrUndefined(config.packDestination),
+      };
+      const issue = cliPublishOptionsIssue(publishOptions);
+      if (issue) return yield* new ServerCliPublishOptionsError({ message: issue });
+      if (publishOptions.packDestination) {
+        if (!path.isAbsolute(publishOptions.packDestination)) {
+          return yield* new ServerCliPublishOptionsError({
+            message: "--pack-destination must be an absolute directory path.",
+          });
+        }
+        yield* fs.makeDirectory(publishOptions.packDestination, { recursive: true });
+      }
 
       // Assert build assets exist
       for (const relPath of [
         "dist/bin.mjs",
         "dist/service-launcher.mjs",
         "dist/client/index.html",
+        "dist/resource-monitor/darwin-arm64/pathway-resource-monitor",
       ]) {
         const abs = path.join(serverDir, relPath);
         if (!(yield* fs.exists(abs))) {
@@ -249,15 +255,15 @@ const publishCmd = Command.make(
             version,
             engines: serverPackageJson.engines,
             files: serverPackageJson.files,
+            ...publishedCliPlatforms(),
             dependencies: resolveCatalogDependencies(
               serverPackageJson.dependencies,
               workspaceCatalog,
               "apps/server",
             ),
-            overrides: resolveCatalogDependencies(
-              workspaceOverrides,
-              workspaceCatalog,
-              "apps/server",
+            ...publishedCliOverrides(
+              config.stage || config.pack,
+              resolveCatalogDependencies(workspaceOverrides, workspaceCatalog, "apps/server"),
             ),
           };
 
@@ -267,8 +273,8 @@ const publishCmd = Command.make(
             icons: yield* preparePublishIcons(repoRoot, serverDir, version),
           };
         }),
-        // Use: pnpm publish from the workspace root so pnpm-only workspace
-        // config, including override selectors, is interpreted correctly.
+        // Direct publication uses pnpm's workspace context. npm staging/packing uses
+        // the prepared package directory, without pnpm-only override selectors.
         (resource) =>
           Effect.gen(function* () {
             yield* fs.writeFileString(packageJsonPath, `${resource.packageJsonString}\n`);
@@ -277,18 +283,23 @@ const publishCmd = Command.make(
             }
             yield* Effect.log("[cli] Applied package metadata and publish icon overrides");
 
-            const args = createVpPmPublishArgs(config);
-            const spawnCommand = yield* resolveSpawnCommand("vp", ["pm", ...args]);
+            const invocation = createCliPublishInvocation(publishOptions);
+            const spawnCommand = yield* resolveSpawnCommand(invocation.command, invocation.args);
 
-            yield* Effect.log(`[cli] Running: vp pm ${args.join(" ")}`);
+            yield* Effect.log(`[cli] Running: ${invocation.command} ${invocation.args.join(" ")}`);
             yield* runCommand(
               ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-                cwd: repoRoot,
+                cwd: invocation.cwd === "package" ? serverDir : repoRoot,
                 stdout: config.verbose ? "inherit" : "ignore",
                 stderr: "inherit",
                 shell: spawnCommand.shell,
               }),
             );
+            if (config.pack && !config.dryRun) {
+              yield* Effect.log(
+                `[cli] Packed package in ${publishOptions.packDestination ?? serverDir}`,
+              );
+            }
           }),
         // Release: restore every file even if applying overrides or publishing fails.
         (resource) =>
@@ -301,7 +312,11 @@ const publishCmd = Command.make(
           }),
       );
     }),
-).pipe(Command.withDescription("Publish the server package to npm."));
+).pipe(
+  Command.withDescription(
+    "Publish the server package, stage it for approval, or pack a local archive.",
+  ),
+);
 
 // ---------------------------------------------------------------------------
 // root command

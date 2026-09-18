@@ -450,6 +450,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
 
       assert.notProperty(mac, "asarUnpack");
+      assert.propertyVal(mac.mac, "forceCodeSigning", false);
+      assert.notProperty(mac.mac, "type");
       assert.notProperty(linux, "asarUnpack");
       assert.deepStrictEqual(win.asarUnpack, WINDOWS_ASAR_UNPACK);
       assert.deepStrictEqual(mac.extraResources, [
@@ -651,6 +653,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       const mac = config.mac as Record<string, unknown>;
       assert.equal(config.appId, "com.spiritdevs.pathway");
+      assert.equal(mac.forceCodeSigning, true);
+      assert.equal(mac.type, "distribution");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/pathway.provisionprofile");
       assert.deepStrictEqual(mac.protocols, [

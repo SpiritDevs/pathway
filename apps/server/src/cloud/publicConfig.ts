@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 
 declare const __PATHWAY_BUILD_RELAY_URL__: string | undefined;
+declare const __PATHWAY_BUILD_HOSTED_APP_URL__: string | undefined;
 declare const __PATHWAY_BUILD_CONVEX_URL__: string | undefined;
 declare const __PATHWAY_BUILD_CLERK_PUBLISHABLE_KEY__: string | undefined;
 declare const __PATHWAY_BUILD_CLERK_CLI_OAUTH_CLIENT_ID__: string | undefined;
@@ -111,6 +112,11 @@ export const buildTimeClerkPublishableKey = readBuildTimeValue(
     ? undefined
     : __PATHWAY_BUILD_CLERK_PUBLISHABLE_KEY__,
 );
+export const buildTimeHostedAppUrl = readBuildTimeValue(
+  typeof __PATHWAY_BUILD_HOSTED_APP_URL__ === "undefined"
+    ? undefined
+    : __PATHWAY_BUILD_HOSTED_APP_URL__,
+);
 export const buildTimeClerkCliOAuthClientId = readBuildTimeValue(
   typeof __PATHWAY_BUILD_CLERK_CLI_OAUTH_CLIENT_ID__ === "undefined"
     ? undefined
@@ -174,14 +180,16 @@ export function makeConvexUrlConfig(fallback = buildTimeConvexUrl) {
 export const convexUrlConfig = makeConvexUrlConfig();
 
 /**
- * Hosted app origin used for out-of-band OAuth on headless
- * machines. Overridable so staging/nightly builds can point their CLIs at a
- * matching hosted deployment.
+ * Hosted app origin used for out-of-band OAuth on headless machines. Runtime
+ * overrides win over the built channel URL; source checkouts retain the existing default.
  */
-export const hostedAppUrlConfig = makePublicValueConfig(
-  "PATHWAY_HOSTED_APP_URL",
-  DEFAULT_HOSTED_APP_URL,
-).pipe(Config.mapOrFail(validateHostedAppUrl));
+export function makeHostedAppUrlConfig(fallback = buildTimeHostedAppUrl) {
+  return makePublicValueConfig("PATHWAY_HOSTED_APP_URL", fallback || DEFAULT_HOSTED_APP_URL).pipe(
+    Config.mapOrFail(validateHostedAppUrl),
+  );
+}
+
+export const hostedAppUrlConfig = makeHostedAppUrlConfig();
 
 function validateHostedAppUrl(value: string) {
   try {

@@ -30,11 +30,13 @@ final class PathwayAppleLayoutUITests: XCTestCase {
                     tap(app.buttons["New event"], in: app)
                     cancelEditor("New event", in: app)
                 } else {
-                    tap(app.buttons["Email settings"], in: app)
-                    let settings = app.navigationBars["Email settings"]
-                    XCTAssertTrue(settings.waitForExistence(timeout: 5))
-                    tap(settings.buttons["Done"], in: app)
-                    XCTAssertTrue(settings.waitForNonExistence(timeout: 5))
+                    openEmailSettings(in: app)
+                    tap(app.navigationBars["Email settings"].buttons.element(boundBy: 0), in: app)
+                    XCTAssertTrue(app.buttons["SMTP capture, tags & trusted senders"].waitForExistence(timeout: 5))
+                    tap(app.navigationBars["Email settings"].buttons.element(boundBy: 0), in: app)
+                    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+                    tap(app.navigationBars["Settings"].buttons.element(boundBy: 0), in: app)
+                    XCTAssertTrue(app.navigationBars["Settings"].waitForNonExistence(timeout: 5))
                 }
                 assertDestination(destination.id, title: destination.title, in: app)
                 // Check again after a completed presentation and dismissal so an iPhone
@@ -181,6 +183,28 @@ final class PathwayAppleLayoutUITests: XCTestCase {
             tap(app.buttons.matching(NSPredicate(format: "label == %@", title)).firstMatch, in: app)
         }
         XCTAssertTrue(app.navigationBars[title].firstMatch.waitForExistence(timeout: 5))
+        if id == "email" {
+            // The parity fixture seeds captured SMTP mail, not connected mail accounts.
+            let capture = app.segmentedControls.buttons["SMTP capture"]
+            tap(capture, in: app)
+            XCTAssertTrue(capture.wait(for: \.isSelected, toEqual: true, timeout: 5))
+        }
+    }
+
+    @MainActor private func openEmailSettings(in app: XCUIApplication) {
+        if !app.buttons["rail-destination-email"].exists {
+            tap(app.buttons["Email, choose another view"], in: app)
+            XCTAssertTrue(app.buttons["navigation-settings-button"].waitForExistence(timeout: 5))
+            tap(app.buttons["navigation-settings-button"], in: app)
+        } else {
+            tap(app.buttons["Settings"], in: app)
+        }
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        tap(app.buttons["settings-email-parity-company"], in: app)
+        XCTAssertTrue(app.navigationBars["Email settings"].waitForExistence(timeout: 5))
+        tap(app.buttons["SMTP capture, tags & trusted senders"], in: app)
+        XCTAssertTrue(app.textFields["New tag name"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Parity server"].exists)
     }
 
     @MainActor private func assertDestination(_ id: String, title: String, in app: XCUIApplication) {
@@ -193,7 +217,11 @@ final class PathwayAppleLayoutUITests: XCTestCase {
         }
         let rowID = id == "calendar" ? "calendar-event-planning" : "email-message-parity-company:online:same"
         reveal(app.buttons[rowID], in: app)
-        let action = app.buttons[id == "calendar" ? "New event" : "Email settings"]
+        if id == "email" {
+            XCTAssertTrue(app.segmentedControls.buttons["SMTP capture"].isSelected,
+                          "Rotation and returning from Settings must retain the selected email source")
+        }
+        let action = app.buttons[id == "calendar" ? "New event" : "Select"]
         XCTAssertTrue(action.exists && action.isHittable, "The destination's primary action must remain reachable")
     }
 

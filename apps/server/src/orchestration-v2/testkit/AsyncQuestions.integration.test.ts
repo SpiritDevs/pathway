@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeURL from "node:url";
 import { ChatAttachmentId, ProviderDriverKind } from "@spiritdevs/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -49,8 +50,9 @@ for (const withImage of [false, true]) {
           const fs = yield* FileSystem.FileSystem;
           const raw = yield* decodeProviderReplayNdjson(
             yield* fs.readFileString(
-              new URL("./fixtures/plan_questions/codex_transcript.ndjson", import.meta.url)
-                .pathname,
+              NodeURL.fileURLToPath(
+                new URL("./fixtures/plan_questions/codex_transcript.ndjson", import.meta.url),
+              ),
             ),
           );
           const workspace = yield* checkpointWorkspace("async_questions");
@@ -304,7 +306,9 @@ it.effect(
         materializeReplayTranscriptWorkspace(
           yield* decodeProviderReplayNdjson(
             yield* fs.readFileString(
-              new URL("./fixtures/subagent_v2/codex_transcript.ndjson", import.meta.url).pathname,
+              NodeURL.fileURLToPath(
+                new URL("./fixtures/subagent_v2/codex_transcript.ndjson", import.meta.url),
+              ),
             ),
           ),
           workspace,
@@ -426,8 +430,9 @@ it.effect(
         materializeReplayTranscriptWorkspace(
           yield* decodeProviderReplayNdjson(
             yield* fs.readFileString(
-              new URL("./fixtures/plan_questions/codex_transcript.ndjson", import.meta.url)
-                .pathname,
+              NodeURL.fileURLToPath(
+                new URL("./fixtures/plan_questions/codex_transcript.ndjson", import.meta.url),
+              ),
             ),
           ),
           workspace,

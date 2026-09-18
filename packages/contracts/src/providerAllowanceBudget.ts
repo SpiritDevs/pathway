@@ -1,3 +1,4 @@
+import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import type { ServerProviderUsageLimit, ServerProviderUsageSnapshot } from "./providerUsage.ts";
 
@@ -190,7 +191,7 @@ export function observeProviderAllowance(
     return {
       ...allocation,
       state: "reset",
-      detail: `The provider changed this quota window's reset from ${new Date(allocation.resetsAt).toISOString()} to ${new Date(reading.resetsAt).toISOString()}. A new explicit allocation is required.`,
+      detail: `The provider changed this quota window's reset from ${DateTime.formatIso(DateTime.makeUnsafe(allocation.resetsAt))} to ${DateTime.formatIso(DateTime.makeUnsafe(reading.resetsAt))}. A new explicit allocation is required.`,
     };
   if (reading.usedPercent < allocation.observedUsedPercent)
     return unavailable(

@@ -18,8 +18,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15, windows-2022]
-    runs-on: ${{ matrix.runner }}
+        runner: [macos-15] # Windows is deferred; preserve the existing Mac check identity.
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6

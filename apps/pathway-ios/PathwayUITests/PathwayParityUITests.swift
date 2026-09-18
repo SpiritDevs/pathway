@@ -104,7 +104,7 @@ final class PathwayParityUITests: XCTestCase {
 
     @MainActor func testEmailTagSettingsCreateEditDelete() {
         let app = launch(extra: ["--parity-email"])
-        app.buttons["Email settings"].tap()
+        openEmailSettings(in: app)
         let newTag = app.textFields["New tag name"]
         reveal(newTag, in: app); newTag.tap(); newTag.typeText("Release")
         let create = app.buttons["Create tag"]
@@ -126,7 +126,7 @@ final class PathwayParityUITests: XCTestCase {
 
     @MainActor func testSMTPRoutingPasswordIsSecure() {
         let app = launch(extra: ["--parity-email"])
-        app.buttons["Email settings"].tap()
+        openEmailSettings(in: app)
         app.buttons["Parity server"].tap()
         let form = app.descendants(matching: .any)["email-capture-settings"].firstMatch
         XCTAssertTrue(form.waitForExistence(timeout: 5))
@@ -146,7 +146,7 @@ final class PathwayParityUITests: XCTestCase {
 
     @MainActor func testEmailCaptureRetentionPersistsAndAnalyticsLoads() {
         let app = launch(extra: ["--parity-email"])
-        app.buttons["Email settings"].tap()
+        openEmailSettings(in: app)
         app.buttons["Parity server"].tap()
         let form = app.descendants(matching: .any)["email-capture-settings"].firstMatch
         XCTAssertTrue(form.waitForExistence(timeout: 5))
@@ -196,6 +196,7 @@ final class PathwayParityUITests: XCTestCase {
         app.launch()
         let title = extra.contains("--parity-email") ? "Email" : "Calendar"
         XCTAssertTrue(app.navigationBars[title].firstMatch.waitForExistence(timeout: 10))
+        if title == "Email" { selectCapturedEmail(in: app) }
         return app
     }
 
@@ -209,6 +210,32 @@ final class PathwayParityUITests: XCTestCase {
             reveal(destination, in: app); destination.tap()
         }
         XCTAssertTrue(app.navigationBars[title].firstMatch.waitForExistence(timeout: 5))
+        if id == "email" { selectCapturedEmail(in: app) }
+    }
+
+    @MainActor private func selectCapturedEmail(in app: XCUIApplication) {
+        // The parity fixture seeds captured SMTP mail, not connected mail accounts.
+        let capture = app.segmentedControls.buttons["SMTP capture"]
+        XCTAssertTrue(capture.waitForExistence(timeout: 5))
+        capture.tap()
+        XCTAssertTrue(capture.wait(for: \.isSelected, toEqual: true, timeout: 5))
+    }
+
+    @MainActor private func openEmailSettings(in app: XCUIApplication) {
+        if !app.buttons["rail-destination-email"].exists {
+            app.buttons["Email, choose another view"].tap()
+            let settings = app.buttons["navigation-settings-button"]
+            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            settings.tap()
+        } else {
+            app.buttons["Settings"].tap()
+        }
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        let workspace = app.buttons["settings-email-parity-company"]
+        reveal(workspace, in: app); workspace.tap()
+        XCTAssertTrue(app.navigationBars["Email settings"].waitForExistence(timeout: 5))
+        app.buttons["SMTP capture, tags & trusted senders"].tap()
+        XCTAssertTrue(app.textFields["New tag name"].waitForExistence(timeout: 5))
     }
 
     @MainActor private func event(named title: String, in app: XCUIApplication) -> XCUIElement {

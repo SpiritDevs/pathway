@@ -6,6 +6,7 @@ import * as Result from "effect/Result";
 import {
   hostedAppUrlConfig,
   makeCloudCliOAuthConfig,
+  makeHostedAppUrlConfig,
   makeRelayUrlConfig,
   resolveRelayClientTracingConfig,
 } from "./publicConfig.ts";
@@ -63,6 +64,33 @@ it.effect("normalizes the hosted app URL to an absolute origin", () =>
       "http://localhost:5733",
     );
   }),
+);
+
+it.effect("uses the built stable hosted app origin without a runtime override", () =>
+  Effect.gen(function* () {
+    const url = yield* makeHostedAppUrlConfig("https://app.pathwayos.app/").pipe(provideEnv({}));
+    assert.equal(url, "https://app.pathwayos.app");
+  }),
+);
+
+it.effect("keeps runtime hosted app overrides ahead of the built release origin", () =>
+  Effect.gen(function* () {
+    const url = yield* makeHostedAppUrlConfig("https://app.pathwayos.app").pipe(
+      provideEnv({ PATHWAY_HOSTED_APP_URL: "http://localhost:5733" }),
+    );
+    assert.equal(url, "http://localhost:5733");
+  }),
+);
+
+it.effect("preserves the source checkout hosted app default when no origin was built", () =>
+  Effect.gen(function* () {
+    const url = yield* makeHostedAppUrlConfig("").pipe(provideEnv({}));
+    assert.equal(url, "https://app.pathwayos.dev");
+  }),
+);
+
+it.effect("validates a built hosted app origin before using it for OAuth", () =>
+  makeHostedAppUrlConfig("http://app.pathwayos.app").pipe(provideEnv({}), Effect.flip),
 );
 
 it.effect("rejects malformed or insecure hosted app URLs", () =>

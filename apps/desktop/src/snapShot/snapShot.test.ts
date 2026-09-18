@@ -20,13 +20,13 @@ import {
 } from "./snapShot.ts";
 import { DesktopSnapShotError } from "./DesktopSnapShot.ts";
 
-describe("window capture errors", () => {
+describe("snapshot capture errors", () => {
   it.each([
     ["unsupported", "SnapShots are not supported here."],
     ["disabled", "Enable SnapShots in Settings first."],
     ["no-window-selected", "No window was selected."],
     ["window-unavailable", "The active window is not available for capture."],
-    ["capture", "Could not capture the active window."],
+    ["capture", "Could not take the snapshot."],
   ] as const)("keeps %s failures user-facing", (operation, message) => {
     expect(new DesktopSnapShotError({ operation }).message).toBe(message);
   });

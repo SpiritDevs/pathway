@@ -4,9 +4,6 @@ final class PathwayConversationUITests: XCTestCase {
     @MainActor
     func testCompactComposerAndNavigationDismissOutside() {
         let app = launchFixture()
-        if app.alerts["Couldn’t update thread"].waitForExistence(timeout: 2) {
-            app.alerts.buttons["OK"].tap()
-        }
         let composer = app.buttons["Message agent"]
         let navigation = app.buttons["Show main navigation"]
         let orchestrator = app.buttons["agent-orchestrator-button"]
@@ -57,8 +54,10 @@ final class PathwayConversationUITests: XCTestCase {
         XCTAssertTrue(navigation.isHittable)
 
         orchestrator.tap()
-        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5))
-        app.buttons["Cancel"].tap()
+        let orchestrators = app.navigationBars["Orchestrators"]
+        XCTAssertTrue(orchestrators.waitForExistence(timeout: 5))
+        orchestrators.buttons["Done"].tap()
+        XCTAssertTrue(orchestrators.waitForNonExistence(timeout: 5))
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.tap()
         XCTAssertTrue(field.waitForExistence(timeout: 5))
@@ -90,7 +89,7 @@ final class PathwayConversationUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Changes"].waitForExistence(timeout: 5))
         capture(app, "Conversation changed files")
         app.buttons["Done"].tap()
-        app.buttons["agent-thread-composer-collapsed"].tap()
+        app.buttons["Message agent"].tap()
         let draft = app.textViews["agent-thread-composer-field"]
         XCTAssertTrue(draft.waitForExistence(timeout: 5))
         draft.tap(); draft.typeText("Retained parent draft")
@@ -115,7 +114,10 @@ final class PathwayConversationUITests: XCTestCase {
         XCTAssertTrue(changes.label.contains("+68"))
         XCTAssertTrue(changes.label.contains("−26"))
         XCTAssertFalse(latest.exists)
-        app.scrollViews.firstMatch.swipeDown()
+        let conversation = app.descendants(matching: .any)["agent-thread-conversation"].firstMatch
+        let transcript = conversation.scrollViews.firstMatch
+        XCTAssertTrue(transcript.exists && transcript.isHittable)
+        transcript.swipeDown()
         XCTAssertTrue(latest.waitForExistence(timeout: 5))
         XCTAssertEqual(latest.value as? String, "Working…")
         XCTAssertTrue(latest.isHittable)
@@ -142,7 +144,7 @@ final class PathwayConversationUITests: XCTestCase {
     @MainActor
     func testModelFavourites() {
         let app = launchFixture()
-        app.buttons["agent-thread-composer-collapsed"].tap()
+        app.buttons["Message agent"].tap()
         app.buttons["agent-thread-model-picker"].tap()
         app.buttons["Favourite models"].tap()
         let toggle = app.buttons["model-favourite-codex-gpt-5.4-mini"]
@@ -170,7 +172,7 @@ final class PathwayConversationUITests: XCTestCase {
     @MainActor
     func testComposerModelEditAndFork() {
         let app = launchFixture()
-        app.buttons["agent-thread-composer-collapsed"].tap()
+        app.buttons["Message agent"].tap()
         let field = app.textViews["agent-thread-composer-field"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap(); field.typeText("Keep my draft")
@@ -226,7 +228,7 @@ final class PathwayConversationUITests: XCTestCase {
     @MainActor
     func testSlashModelSuggestions() {
         let app = launchFixture()
-        app.buttons["agent-thread-composer-collapsed"].tap()
+        app.buttons["Message agent"].tap()
         let field = app.textViews["agent-thread-composer-field"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap(); field.typeText("/model mini")
@@ -261,7 +263,8 @@ final class PathwayConversationUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-conversation", "--conversation-paste"]
         app.launch()
-        let expand = app.buttons["agent-thread-composer-collapsed"]
+        dismissFixtureNotificationAlert(in: app)
+        let expand = app.buttons["Message agent"]
         XCTAssertTrue(expand.waitForExistence(timeout: 5))
         expand.tap()
         let field = app.textViews["agent-thread-composer-field"]
@@ -304,7 +307,22 @@ final class PathwayConversationUITests: XCTestCase {
             + (working ? ["--conversation-working"] : []) + (longHistory ? ["--conversation-long-history"] : [])
         app.launch()
         XCTAssertTrue(app.buttons["agent-thread-actions"].waitForExistence(timeout: 10))
+        dismissFixtureNotificationAlert(in: app)
         return app
+    }
+
+    @MainActor private func dismissFixtureNotificationAlert(in app: XCUIApplication) {
+        // This fixture injects the environment transport but deliberately has no cloud client.
+        // Its notification subscription therefore reports exactly this offline error.
+        let alert = app.alerts["Couldn’t update thread"]
+        guard alert.waitForExistence(timeout: 3) else { return }
+        let expected = URLError(.notConnectedToInternet).localizedDescription
+        guard alert.staticTexts[expected].exists else {
+            XCTFail("Unexpected conversation error; only the fixture's offline notification error may be dismissed")
+            return
+        }
+        alert.buttons["OK"].tap()
+        XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
     }
     @MainActor private func reveal(_ element: XCUIElement, in app: XCUIApplication, down: Bool = false) {
         for _ in 0..<5 {
