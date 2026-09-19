@@ -2,6 +2,66 @@
 
 This version targets iOS, iPadOS and visionOS. Android is excluded. Code coverage and local compilation do not establish App Store readiness.
 
+## TestFlight workflow
+
+[Release iOS to TestFlight](../../.github/workflows/release-ios.yml) archives the iPhone/iPad app,
+widget and share extension, then uploads through Xcode's App Store Connect distribution flow.
+It runs every three hours at minute 27 UTC, and can be started from GitHub Actions with
+**Run workflow**. Manual runs always upload the selected branch or tag. The optional version
+input overrides the marketing version for the app and both extensions for that run only.
+Scheduled runs use the version in the Xcode project, so commit version changes there before
+starting a new release series.
+
+Scheduled runs compare the default branch with the `ios-testflight/latest` tag. Only changes
+under `apps/pathway-ios`, `scripts/ios`, the native configuration generator, its public-config
+helper, or the TestFlight workflow trigger an upload. The first scheduled run uploads if there
+is no tag. Successful default-branch uploads advance that tag; failed uploads and releases
+from other branches leave it alone. Skipped runs do not advance it. Allow GitHub Actions to
+create and update this tag in repository rulesets. The workflow serializes all TestFlight runs
+and lets active uploads finish.
+
+The job uses the existing `production` GitHub environment and `FLEET_APPLE_RUNNER` labels.
+Use a dedicated CI account with one job per host, Xcode 26.2 or newer, and the iOS SDK installed.
+The workflow needs these environment or repository entries:
+
+| Type               | Name                                                        | Value                                                                                                                    |
+| ------------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Secret             | `APPLE_API_KEY`                                             | Contents of the App Store Connect team API `.p8` key, as used by the desktop release.                                    |
+| Secret             | `APPLE_API_KEY_ID`                                          | That key's ID.                                                                                                           |
+| Secret             | `APPLE_API_ISSUER`                                          | The team's App Store Connect issuer ID.                                                                                  |
+| Secret             | `IOS_DEVELOPMENT_CERTIFICATE`                               | Base64-encoded `.p12` containing an Apple Development certificate and its private key for the app's team.                |
+| Secret             | `IOS_DEVELOPMENT_CERTIFICATE_PASSWORD`                      | Password used to export that `.p12`.                                                                                     |
+| Variable           | `APPLE_TEAM_ID`                                             | The team that owns the app, currently `4444F36N8Z`.                                                                      |
+| Variables          | `CLERK_PUBLISHABLE_KEY`, `CLERK_JWT_TEMPLATE`, `CONVEX_URL` | Existing production public app configuration. The Clerk key must start with `pk_live_`.                                  |
+| Optional variables | `RELAY_DOMAIN`, `PATHWAY_WEB_LATEST_DOMAIN`                 | Relay and hosted app hostnames. Defaults match the native configuration: `relay.spiritdevs.com` and `app.pathwayos.dev`. |
+
+Export the Apple Development identity from Keychain Access including its private key, then
+encode it with `base64 -i certificate.p12 | pbcopy` when configuring the secret. The desktop
+Developer ID certificate in `CSC_LINK` cannot sign the iOS archive. The script imports the
+development identity into a temporary keychain and uses automatic provisioning for the app
+and extensions. The team needs a registered development device for development profiles.
+On exit, the script restores the original keychain search list, deletes its temporary signing
+files/keychain, and removes newly downloaded provisioning profiles.
+
+Use a team API key with the Admin role so Xcode can manage provisioning and use cloud-managed
+distribution certificates. Existing desktop notarization access alone does not establish
+these permissions. Register the identifiers and capabilities listed below and create the
+`com.spiritdevs.pathway` app record in App Store Connect before the first run. Xcode signs the
+archive for distribution in Apple's cloud and uploads it, including symbols. Xcode also
+manages the uploaded build number to avoid collisions with previous CI or local uploads.
+See [Apple's Xcode distribution automation guide](https://developer.apple.com/videos/play/wwdc2021/10204/).
+
+A successful workflow means the upload finished. Apple still processes the build before it
+appears in TestFlight. Enable automatic distribution on the intended internal TestFlight group
+to deliver processed builds to its testers. External groups require assignment and any required
+Beta App Review in App Store Connect. Resolve export-compliance questions there when prompted.
+See [upload processing](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds)
+and [internal tester distribution](https://developer.apple.com/help/app-store-connect/test-a-beta-version/add-internal-testers).
+
+Each run records its source commit in the job summary and retains archive/upload logs, symbols
+and the distribution summary for 14 days. Check App Store Connect for the final build number.
+This workflow ships the iOS/iPadOS binary; a native visionOS archive needs a separate release.
+
 ## Configuration and signing
 
 1. Generate the ignored native public configuration with `node scripts/configure-pathway-ios.ts`. Use the intended Clerk, Convex and relay environment; never place private credentials in the app.
