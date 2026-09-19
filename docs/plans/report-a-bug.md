@@ -1,6 +1,6 @@
 # Report a bug
 
-Status: approved design implemented in this worktree. Focused automated verification passed; no deployment or manual client walkthrough has been performed.
+Status: approved design implemented. Focused automated verification and native simulator UI checks passed. No deployment or live Cloud/provider walkthrough has been performed.
 
 ## Requested behavior
 
@@ -84,14 +84,14 @@ The collector keeps at most 500 events from the previous 15 minutes and caps dia
 
 Investigation RPCs accept a company/project route and an optional model override. The environment checks the authenticated account and active checkout binding, synchronizes the report before starting, and reads authorized diagnostic attachments. Diagnostic text bypasses ordinary comment truncation. Bug-report findings are posted as comments without applying suggested task metadata changes.
 
-| Area                       | Result                                                                                                                                                         |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Native tests               | 20 passed: report recovery, upload retry, access rejection, project team scope, diagnostic bounds, investigation failure, and existing task data behavior.     |
-| TypeScript tests           | 288 passed across the six focused contract, replica routing, investigation, evidence, and cloud sync/attachment test files.                                    |
-| TypeScript checks          | Server, backend, and web checks passed. Existing Effect suggestions remain.                                                                                    |
-| Targeted lint              | No errors; two existing warnings in backend files remain.                                                                                                      |
-| Apple builds               | iPhone test build, iPad simulator build, and visionOS simulator build passed. The visionOS build retained the existing empty camera usage-description warning. |
-| Integrated UI verification | Not performed. Browser and simulator UI interaction require a separate request or agreement under `AGENTS.md`.                                                 |
+| Area                       | Result                                                                                                                                                                                                                                                                                    |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Native tests               | 20 passed: report recovery, upload retry, access rejection, project team scope, diagnostic bounds, investigation failure, and existing task data behavior.                                                                                                                                |
+| TypeScript tests           | 288 passed across the six focused contract, replica routing, investigation, evidence, and cloud sync/attachment test files.                                                                                                                                                               |
+| TypeScript checks          | Server, backend, and web checks passed. Existing Effect suggestions remain.                                                                                                                                                                                                               |
+| Targeted lint              | No errors; two existing warnings in backend files remain.                                                                                                                                                                                                                                 |
+| Apple builds               | iPhone test build, iPad simulator build, and visionOS simulator build passed. The visionOS build retained the existing empty camera usage-description warning.                                                                                                                            |
+| Integrated UI verification | Passed on iPhone 17 Pro with offline fixture data: Settings, report form, investigation off/on, model selection, and Simulator Shake opening the form. Screenshots and recordings are in `.github/pr-assets/apple-bug-reporting`. No live Cloud submission or provider run was performed. |
 
 Surface review:
 
