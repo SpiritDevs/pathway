@@ -564,6 +564,7 @@ struct NewAgentThreadComposer: View {
                     showsModelSettings = true
                 } label: {
                     HStack(spacing: 4) {
+                        ComposerProviderIcon(provider: model.selectedProvider)
                         Text(model.selectedModel?.name ?? "Choose model").lineLimit(1)
                         Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
                     }

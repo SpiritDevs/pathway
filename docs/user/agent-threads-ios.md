@@ -14,6 +14,7 @@ Tap **+** to open **Composer Options** for attachments, saved prompts, the agent
 access settings, and temporary threads. The sheet can expand for more room. Paste images
 straight into the message field to attach them without replacing your text. Long drafts scroll
 inside the composer, keeping **+**, the model picker, and **Start** above the keyboard.
+The model picker shows the provider icon beside the model name in new and existing threads.
 
 Messages go straight to a connected environment. An idle agent starts immediately; a busy
 agent queues the message for its next turn. Offline messages remain saved for delivery,
