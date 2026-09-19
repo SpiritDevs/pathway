@@ -7,17 +7,20 @@ struct PathwayWorkspaceDestination: View {
     let projectRoot: String
     let initialSection: String
     let usesConversationFolder: Bool
+    var fileLink: PathwayMarkdownFileLink?
     @State private var serverConfig: [String: JSONValue] = [:]
     @State private var configurationError: String?
     @State private var scripts: [PathwayWorkspaceScript] = []
 
     init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment, projectRoot: String,
-         connect: PathwayConnectClient, storageDirectory: URL?, initialSection: String = "repositories", usesConversationFolder: Bool = false) {
+         connect: PathwayConnectClient, storageDirectory: URL?, initialSection: String = "repositories", usesConversationFolder: Bool = false,
+         fileLink: PathwayMarkdownFileLink? = nil) {
         self.thread = thread
         self.environment = environment
         self.projectRoot = projectRoot
         self.initialSection = initialSection
         self.usesConversationFolder = usesConversationFolder
+        self.fileLink = fileLink
     }
 
     private var currentThread: PathwayAgentThread? {
@@ -128,9 +131,10 @@ struct PathwayWorkspaceDestination: View {
                 try PathwayWorkspaceScope.validate(method: "/api/pull-requests/diff", payload: payload, expected: scope,
                     current: currentScope, canMutate: canMutate, linkedPullRequests: linkedPullRequestReferences)
                 return try await PathwayEnvironmentHTTP.request(environment: environment, connect: connect, method: "POST", path: path, payload: payload)
-            }, initialSection: initialSection)
+            }, initialSection: initialSection, fileLink: fileLink)
             .task(id: scope) {
                 serverConfig = [:]; scripts = []; configurationError = nil
+                guard fileLink == nil else { return }
                 do {
                     let config = try await appModel.cloud.environmentRequest(environment: environment, method: "server.getConfig", payload: .object([:])).objectValue ?? [:]
                     try Task.checkCancellation()

@@ -14,7 +14,9 @@ struct AgentTranscriptApproval: View {
         VStack(alignment: .leading, spacing: 14) {
             Label(item.requiresResponse && !submitted ? "Approval needed" : "Approval", systemImage: "checkmark.shield")
                 .font(.headline)
-            if let text = item.text, !text.isEmpty { AgentTranscriptMarkdown(markdown: text).equatable() }
+            if let text = item.text, !text.isEmpty {
+                AgentTranscriptMarkdown(markdown: text, imageContext: AgentMarkdownImageContext(model: model, threadID: item.fields["threadId"]?.stringValue ?? model.threadID)).equatable()
+            }
             if let errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.red) }
             if item.requiresResponse && !submitted {
                 if let reason = model.responseUnavailableReason(for: item) {

@@ -61,6 +61,7 @@ struct PathwayWorkspaceFileView: View {
     let client: PathwayWorkspaceClient
     let path: String
     var assetURL: PathwayWorkspaceAssetURL?
+    var initialLine: Int? = nil
     @Environment(\.openURL) private var openURL
     @State private var original: PathwayWorkspaceFile?
     @State private var contents = ""
@@ -81,8 +82,11 @@ struct PathwayWorkspaceFileView: View {
             if editing {
                 TextEditor(text: $contents).font(.caption.monospaced()).autocorrectionDisabled().textInputAutocapitalization(.never).disabled(busy)
             } else {
-                ScrollView([.vertical, .horizontal]) {
-                    Text(contents).font(.caption.monospaced()).textSelection(.enabled).padding()
+                ScrollViewReader { reader in
+                    ScrollView([.vertical, .horizontal]) {
+                        fileText.font(.caption.monospaced()).textSelection(.enabled).padding()
+                    }
+                    .onChange(of: contents) { if let initialLine { reader.scrollTo(initialLine, anchor: .topLeading) } }
                 }
             }
         }.navigationTitle(URL(fileURLWithPath: path).lastPathComponent)
@@ -106,6 +110,19 @@ struct PathwayWorkspaceFileView: View {
                 Button("Reload", role: .destructive) { Task { await load() } }
                 Button("Cancel", role: .cancel) { }
             }
+    }
+    @ViewBuilder private var fileText: some View {
+        if let initialLine, initialLine > 0 {
+            let lines = contents.components(separatedBy: "\n")
+            if initialLine <= lines.count {
+                VStack(alignment: .leading, spacing: 0) {
+                    if initialLine > 1 { Text(lines.prefix(initialLine - 1).joined(separator: "\n")) }
+                    Text(lines[initialLine - 1].isEmpty ? " " : lines[initialLine - 1])
+                        .background(.yellow.opacity(0.2)).id(initialLine)
+                    if initialLine < lines.count { Text(lines.dropFirst(initialLine).joined(separator: "\n")) }
+                }
+            } else { Text(contents) }
+        } else { Text(contents) }
     }
     private func load() async {
         busy = true; defer { busy = false }
