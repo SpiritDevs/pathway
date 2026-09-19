@@ -203,12 +203,12 @@ extension PathwayAgentThreadModel {
         if threadQueue == nil { await retryAttachment(id: id) }
     }
 
-    func retryAttachment(id: String) async {
+    func retryAttachment(id: String, directly: Bool = false) async {
         preparedSend = nil
         guard let index = draftAttachments.firstIndex(where: { $0.id == id }) else { return }
         let data = attachmentData[id]
         guard data != nil || draftAttachments[index].localFileURL != nil else { return }
-        if threadQueue != nil { draftAttachments[index].state = .ready; actionError = nil; await persistDraftNow(); return }
+        if threadQueue != nil && !directly { draftAttachments[index].state = .ready; actionError = nil; await persistDraftNow(); return }
         draftAttachments[index].state = .uploading
         let draft = draftAttachments[index]
         var uploadedID: String?

@@ -15,6 +15,10 @@ access settings, and temporary threads. The sheet can expand for more room. Past
 straight into the message field to attach them without replacing your text. Long drafts scroll
 inside the composer, keeping **+**, the model picker, and **Start** above the keyboard.
 
+Messages go straight to a connected environment. An idle agent starts immediately; a busy
+agent queues the message for its next turn. Offline messages remain saved for delivery,
+and newer messages wait behind any messages already waiting to reach the environment.
+
 When a thread connects or reconnects, a status bubble above the composer shows that messages
 are syncing. It temporarily replaces the file-change summary until the latest updates arrive.
 You can still scroll to the latest message while reconnecting.

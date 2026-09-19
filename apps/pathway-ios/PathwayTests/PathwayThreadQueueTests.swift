@@ -367,9 +367,11 @@ extension PathwayThreadQueueTests {
                                                     environment: PathwayEnvironment(id: "environment", environmentId: thread.environmentId,
                                                                                     descriptor: PathwayEnvironmentDescriptor(environmentId: thread.environmentId, label: "Mac", serverVersion: "test"),
                                                                                     relayLinkState: "disconnected", managedEndpointAvailable: false, lastSeenAt: nil, state: "active"))
-        return PathwayAgentThreadModel(thread: thread, environment: environment, request: { _, _ in
+        let model = PathwayAgentThreadModel(thread: thread, environment: environment, request: { _, _ in
             Issue.record("The ordinary offline composer must save to the outbox without calling the environment.")
             throw URLError(.notConnectedToInternet)
         }, storageDirectory: directory)
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("disconnected")]))
+        return model
     }
 }
