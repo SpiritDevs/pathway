@@ -47,3 +47,27 @@ corrected source compiles and delivers an actual background-provider payload on
 MainActor. Without the default-isolation flag, both versions pass the standalone
 macOS harness; it is not a reproduction of the iPhone runtime crash. Swift syntax
 checks and `git diff --check` pass. Full native validation remains pending.
+
+## iPad follow-up
+
+[Native Apple run 35406153951](https://github.com/SpiritDevs/pathway/actions/runs/35406153951)
+at `ae845ea32` passed all 428 native unit tests, both layout/rotation tests and
+all 11 issue UI tests on iPad, including the background-provider and drag checks.
+All seven parity tests and four launch configurations also passed. The finalized
+result reports 456 passed, two failed and zero skipped unique tests; the 33 UI
+executions account for 31 passes and these two conversation failures:
+
+- **Cancel** in the **Upload failed** dialog deliberately retains the attachment.
+  The test now verifies that the attachment and draft survive cancellation,
+  then explicitly chooses **Remove** before continuing its direct-paste checks.
+- Completed assistant replies fold away, so the 12-entry history fixture leaves
+  only six user rows plus the final reply. Its iPad conversation container is
+  1066 points high. After Stop removes the activity footer, the return-to-latest
+  control disappears; the captured accessibility log does not establish whether
+  this is a near-bottom threshold crossing or a scroll jump. The long-history
+  fixture now supplies 32 entries, and the idle expectation requires the control
+  to exist and remain hittable with an empty value. The test never scrolls again
+  after Stop, preserving coverage of working-to-idle position retention.
+
+These fixture corrections still require a fresh native run; they do not change
+production scrolling or attachment behavior.

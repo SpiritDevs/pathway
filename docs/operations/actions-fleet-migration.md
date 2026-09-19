@@ -104,6 +104,10 @@ Inspect the downloaded archive's version, Apple Silicon metadata, bundled client
 
 The prepared changes were validated with actionlint across all ten workflows, targeted CLI lint/typechecking, CLI help, the release smoke script, and 72 tests covering npm preparation, desktop artifact configuration, nightly metadata, previous tags, package version updates, and updater manifests. This does not substitute for a signed real release, native Apple simulator run, multi-host observation, or npm publication approval. No release or registry publication was performed by these checks.
 
+Fleet CI validation completed successfully on 2026-09-19: [run 35405815094](https://github.com/SpiritDevs/pathway/actions/runs/35405815094) tested commit [`ae845ea3276e4bf9e97aefeebc7dddc13197666b`](https://github.com/SpiritDevs/pathway/commit/ae845ea3276e4bf9e97aefeebc7dddc13197666b) on the native fleet. All six enabled jobs passed: Check, Test, Test Server 1, Test Server 2, Test Server 3, and Release Smoke. The server shards reported 3,988 passed tests and 11 skipped tests. The separate Rust job was intentionally skipped for the initial Mac rollout.
+
+Native Apple simulator validation and signed nightly release validation remain outstanding in this record. A successful CI run does not establish notarization, signed desktop artifacts, GitHub Release publication, or completion of the separate native workflow.
+
 ## Outages and manual hosted fallback
 
 When the fleet is unavailable, jobs wait. Repair or unpause a compatible machine first. There is no automatic switch to hosted compute.

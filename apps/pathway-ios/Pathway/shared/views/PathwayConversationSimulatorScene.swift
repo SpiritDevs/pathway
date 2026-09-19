@@ -73,7 +73,8 @@ private final class ConversationSimulatorWorkspace {
                 .object(["id": .string("notes"), "header": .string("Details"), "question": .string("Anything else to include?"), "options": .array([])])])])
         }
         if ProcessInfo.processInfo.arguments.contains("--conversation-long-history") {
-            for index in 0..<12 {
+            // Completed assistant replies fold away; retain enough user rows to scroll on iPad.
+            for index in 0..<32 {
                 add("history-\(index)", index.isMultiple(of: 2) ? "user_message" : "assistant_message",
                     text: "Conversation detail \(index + 1).\n\nKeep earlier work readable while the agent continues. The latest-message control returns to the end without losing the draft.")
             }
