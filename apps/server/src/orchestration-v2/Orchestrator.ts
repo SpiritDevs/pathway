@@ -5908,7 +5908,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })),
         );
       const queuedRun = projection.runs.find((candidate) => candidate.id === command.runId);
-      if (queuedRun?.status === "cancelled") {
+      if (
+        queuedRun?.status === "cancelled" &&
+        queuedRun.startedAt === null &&
+        !projection.turnItems.some(
+          (item) => item.type === "user_message" && item.runId === queuedRun.id,
+        )
+      ) {
         // A stale client may still show this run in its queue. Echo the durable
         // state so every subscribed client can remove it without changing history.
         yield* emit(

@@ -288,7 +288,11 @@ import {
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
-import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
+import {
+  useEnvironments,
+  usePrimaryEnvironment,
+  useEnvironmentHttpBaseUrl,
+} from "../state/environments";
 import {
   readEnvironmentSupportsBrowserTakeover,
   resolveThreadDetailRef,
@@ -425,6 +429,8 @@ import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
+import { useAtomQueryRunner } from "../state/use-atom-query-runner";
+import { assetEnvironment } from "../state/assets";
 import { Button } from "./ui/button";
 import {
   AlertDialog,
@@ -444,7 +450,7 @@ import {
   resolveServerConfigVersionMismatch,
   resolveServerSelfUpdateCapability,
 } from "../versionSkew";
-import { useAssetUrls } from "../assets/assetUrls";
+import { useAssetUrls, resolveCurrentAssetUrl } from "../assets/assetUrls";
 import { normalizeComposerAttachmentName } from "./chat/composerAttachmentFiles";
 
 const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
@@ -3032,6 +3038,11 @@ function ChatViewContent(props: ChatViewProps) {
     presentedServerVisibleTurnItems,
     serverAttachmentUrlById,
   ]);
+  const attachmentHttpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
+  const createQueuedAttachmentUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
+    refresh: true,
+    reportFailure: false,
+  });
   const onEditQueuedMessage = useCallback(
     async function restoreQueuedMessage(input: {
       readonly runId: RunId;
@@ -3055,27 +3066,48 @@ function ChatViewContent(props: ChatViewProps) {
 
       let images: ComposerAttachment[] | null;
       try {
-        images = await prepareQueuedMessageEdit(input.attachments, async () => {
-          try {
-            const result = await cancelQueuedRun({
+        images = await prepareQueuedMessageEdit(
+          input.attachments,
+          async () => {
+            try {
+              const result = await cancelQueuedRun({
+                environmentId,
+                input: { threadId, runId: input.runId },
+              });
+              if (result._tag === "Success") return true;
+              if (isAtomCommandInterrupted(result)) return false;
+              throw squashAtomCommandFailure(result);
+            } catch (error) {
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Could not edit queued message",
+                  description:
+                    error instanceof Error ? error.message : "The queued message was kept.",
+                }),
+              );
+              return false;
+            }
+          },
+          async (attachment) => {
+            if (attachmentHttpBaseUrl === null) throw new Error("The environment is disconnected.");
+            const result = await createQueuedAttachmentUrl({
               environmentId,
-              input: { threadId, runId: input.runId },
+              input: {
+                resource: {
+                  _tag: "attachment",
+                  attachmentId: attachment.id,
+                  fileName: attachment.name,
+                  mimeType: attachment.mimeType,
+                },
+              },
             });
-            if (result._tag === "Success") return true;
-            if (isAtomCommandInterrupted(result)) return false;
-            throw squashAtomCommandFailure(result);
-          } catch (error) {
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: "Could not edit queued message",
-                description:
-                  error instanceof Error ? error.message : "The queued message was kept.",
-              }),
-            );
-            return false;
-          }
-        });
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+            const url = resolveCurrentAssetUrl(attachmentHttpBaseUrl, result.value, Date.now());
+            if (url === null) throw new Error("The attachment URL expired.");
+            return url;
+          },
+        );
       } catch {
         // Cancellation is durable even if downloading an attachment fails.
         // Retain the original input in the retry action; never requeue it.
@@ -3133,6 +3165,8 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [
       addComposerDraftImages,
+      attachmentHttpBaseUrl,
+      createQueuedAttachmentUrl,
       cancelQueuedRun,
       composerDraftTarget,
       composerImagesRef,

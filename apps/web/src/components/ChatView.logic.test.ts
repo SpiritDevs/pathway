@@ -161,6 +161,38 @@ describe("resolveThreadProjectionWorkingPresentation", () => {
 });
 
 describe("prepareQueuedMessageEdit", () => {
+  it("resolves new attachment URLs on each retry after cancellation", async () => {
+    const attachment = {
+      type: "file" as const,
+      id: "retry-file",
+      name: "data.json",
+      mimeType: "application/json",
+      sizeBytes: 2,
+    };
+    const attachments = [{ attachment, url: "https://example.test/expired" }];
+    const cancel = vi.fn(async () => true);
+    const resolveUrl = vi
+      .fn()
+      .mockResolvedValueOnce("https://example.test/first")
+      .mockResolvedValueOnce("https://example.test/refreshed");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 403 }))
+      .mockResolvedValueOnce(new Response(new Blob(["{}"])));
+    try {
+      await expect(prepareQueuedMessageEdit(attachments, cancel, resolveUrl)).rejects.toThrow(
+        "Could not load data.json",
+      );
+      expect(await prepareQueuedMessageEdit(attachments, cancel, resolveUrl)).toHaveLength(1);
+      expect(resolveUrl).toHaveBeenCalledTimes(2);
+      expect(resolveUrl).toHaveBeenCalledWith(attachment);
+      expect(fetchSpy).toHaveBeenNthCalledWith(1, "https://example.test/first");
+      expect(fetchSpy).toHaveBeenNthCalledWith(2, "https://example.test/refreshed");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("removes the message from the queue before downloading its attachments", async () => {
     let confirmCancellation!: (cancelled: boolean) => void;
     const cancellation = new Promise<boolean>((resolve) => {

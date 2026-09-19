@@ -1861,6 +1861,37 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
           .pipe(Effect.flip);
         assert.equal(error._tag, "OrchestratorDispatchError");
       }
+      const eventSink = yield* EventSinkV2;
+      const now = yield* DateTime.now;
+      // A claimed run already owns a transcript row even before startedAt lands.
+      for (const startedAt of [null, now]) {
+        yield* eventSink.write({
+          events: [
+            {
+              id: EventId.make(
+                `queued-edit-claimed:${startedAt === null ? "starting" : "started"}`,
+              ),
+              type: "run.updated",
+              threadId,
+              runId: activeRun.id,
+              providerInstanceId: activeRun.providerInstanceId,
+              occurredAt: now,
+              payload: { ...activeRun, status: "cancelled", completedAt: now, startedAt },
+            },
+          ],
+        });
+        const error = yield* orchestrator
+          .dispatch({
+            type: "queued-run.cancel",
+            commandId: CommandId.make(
+              `queued-edit-reject-claimed:${startedAt === null ? "starting" : "started"}`,
+            ),
+            threadId,
+            runId: activeRun.id,
+          })
+          .pipe(Effect.flip);
+        assert.equal(error._tag, "OrchestratorDispatchError");
+      }
     }),
   );
 });
