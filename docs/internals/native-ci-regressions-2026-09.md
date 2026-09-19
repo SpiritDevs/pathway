@@ -69,5 +69,8 @@ executions account for 31 passes and these two conversation failures:
   to exist and remain hittable with an empty value. The test never scrolls again
   after Stop, preserving coverage of working-to-idle position retention.
 
-These fixture corrections still require a fresh native run; they do not change
-production scrolling or attachment behavior.
+Both corrected conversation tests passed on iPhone at `7ee16bc9c` in
+[the follow-up run](https://github.com/SpiritDevs/pathway/actions/runs/35408527166),
+alongside all 428 unit executions and all nine Conversation UI tests. They do
+not change production scrolling or attachment behavior. Full surface outcomes
+are recorded by that workflow and the fleet verification record.

@@ -106,7 +106,11 @@ The prepared changes were validated with actionlint across all ten workflows, ta
 
 Fleet CI validation completed successfully on 2026-09-19: [run 35405815094](https://github.com/SpiritDevs/pathway/actions/runs/35405815094) tested commit [`ae845ea3276e4bf9e97aefeebc7dddc13197666b`](https://github.com/SpiritDevs/pathway/commit/ae845ea3276e4bf9e97aefeebc7dddc13197666b) on the native fleet. All six enabled jobs passed: Check, Test, Test Server 1, Test Server 2, Test Server 3, and Release Smoke. The server shards reported 3,988 passed tests and 11 skipped tests. The separate Rust job was intentionally skipped for the initial Mac rollout.
 
-Native Apple simulator validation and signed nightly release validation remain outstanding in this record. A successful CI run does not establish notarization, signed desktop artifacts, GitHub Release publication, or completion of the separate native workflow.
+The newer main commit `1ef39406e` also passed all six enabled CI jobs in [run 35407182057](https://github.com/SpiritDevs/pathway/actions/runs/35407182057).
+
+[Nightly run 35404594588, attempt 2](https://github.com/SpiritDevs/pathway/actions/runs/35404594588/attempts/2) succeeded at `c6bc4cf23`, including production Convex deployment, Developer ID signing, Apple notarization, GitHub prerelease publication, and the Vercel beta hosted-web deployment. The independently downloaded [public ARM64 release](https://github.com/SpiritDevs/pathway/releases/tag/v0.0.42-nightly.20260918.153) matched GitHub's ZIP SHA-256 and the updater manifest's SHA-512/size. Its extracted app passed deep/strict signature, Apple team, ARM64, version, and stapled-ticket checks without being launched. Stable-only npm staging and version finalization were correctly skipped in this nightly run.
+
+Native Apple coverage is tracked separately in [run 35408527166](https://github.com/SpiritDevs/pathway/actions/runs/35408527166) and the [fleet verification record](https://github.com/SpiritDevs/actions-fleet/blob/main/docs/verification.md). On Xcode 26.3, the bundled visionOS SDK alone did not provide a generic simulator build destination; the visionOS simulator runtime was also required. The workflow checks for an available `xrOS` runtime and installs its ARM64 variant if missing. The installed visionOS 26.2 runtime was verified through `simctl`.
 
 ## Outages and manual hosted fallback
 

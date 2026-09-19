@@ -41,11 +41,16 @@ jobs:
           test "$(uname -m)" = arm64
           xcodebuild -version
           xcodebuild -showsdks
-      - name: Ensure visionOS Simulator SDK
+      - name: Ensure visionOS Simulator runtime
         if: matrix.surface == 'visionos'
         run: |
-          if ! xcrun --sdk xrsimulator --show-sdk-path >/dev/null 2>&1; then
-            xcodebuild -downloadPlatform visionOS
+          if ! xcrun simctl list runtimes --json | python3 -c '
+          import json, sys
+          runtimes = json.load(sys.stdin)["runtimes"]
+          sys.exit(0 if any(runtime.get("isAvailable") and runtime.get("platform") == "xrOS"
+                           for runtime in runtimes) else 1)
+          '; then
+            xcodebuild -downloadPlatform visionOS -architectureVariant arm64
           fi
       - name: Build and test native client
         run: scripts/ios/ci-check.sh '${{ matrix.surface }}'
