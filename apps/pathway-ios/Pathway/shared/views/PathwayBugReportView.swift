@@ -2,6 +2,62 @@ import SwiftUI
 import PhotosUI
 import UIKit
 
+struct PathwayShakeReportSheet: View {
+    @Environment(PathwayAppModel.self) private var appModel
+    @Environment(\.dismiss) private var dismiss
+    @ScaledMetric(relativeTo: .body) private var confirmationHeight = 340
+    @State private var showingReport = false
+    let screenshot: Data?
+
+    var body: some View {
+        @Bindable var reports = appModel.bugReports
+        Group {
+            if showingReport {
+                PathwayBugReportView()
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        HStack {
+                            Text("Report a bug?").font(.title2.bold())
+                            Spacer()
+                            Button("Close", systemImage: "xmark") { dismiss() }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.bordered)
+                                .buttonBorderShape(.circle)
+                                .accessibilityIdentifier("bug-report-confirmation-close")
+                        }
+                        Text("If something isn't working correctly, you can report it to help improve Pathway.")
+                            .foregroundStyle(.secondary)
+                        Button {
+                            reports.begin(screenshot: screenshot, device: pathwayBugDevice())
+                            withAnimation { showingReport = true }
+                        } label: {
+                            Text("Report bug").fontWeight(.semibold).frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.large)
+                        .accessibilityIdentifier("bug-report-confirmation-report")
+                        Divider()
+                        Toggle(isOn: $reports.shakeEnabled) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Shake iPhone to report a bug")
+                                Text("Toggle off to disable").font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .padding(24)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .accessibilityIdentifier("bug-report-confirmation")
+            }
+        }
+        .presentationDetents(showingReport ? [.large] : [.height(confirmationHeight)])
+        .presentationDragIndicator(showingReport ? .visible : .hidden)
+        .presentationCornerRadius(32)
+    }
+}
+
 struct PathwayBugReportSettingsView: View {
     @Environment(PathwayAppModel.self) private var appModel
     @State private var presenting = false
@@ -98,7 +154,7 @@ struct PathwayBugReportView: View {
                 if UIDevice.current.userInterfaceIdiom == .phone {
                     Section {
                         Toggle("Shake iPhone to report a bug", isOn: $reports.shakeEnabled)
-                    } footer: { Text("Shaking opens this form. A report is sent only when you choose Report bug.") }
+                    } footer: { Text("Shaking asks if you want to report a bug before opening this form. A report is sent only when you choose Report bug in the form.") }
                 }
                 #endif
             }
