@@ -20,6 +20,7 @@ struct MainTabView: View {
     @State private var selectedDestination: AppDestination? = .agentThreads
     @State private var presentedSheet: MainTabSheet?
     @State private var showsSettings = false
+    @State private var bugReportScreenshot: Data?
     @State private var systemRequest: PathwaySystemRequest?
 
     init(initialDestination: AppDestination = .agentThreads) {
@@ -45,7 +46,7 @@ struct MainTabView: View {
         #if os(iOS)
         PathwayShakeReporter(content: shell, enabled: UIDevice.current.userInterfaceIdiom == .phone && appModel.bugReports.shakeEnabled) {
             guard presentedSheet == nil, !showsSettings else { return }
-            appModel.bugReports.begin(screenshot: pathwayBugScreenshot(), device: pathwayBugDevice())
+            bugReportScreenshot = pathwayBugScreenshot()
             presentedSheet = .bugReport
         }
         #else
@@ -94,7 +95,7 @@ struct MainTabView: View {
         .onChange(of: selectedDestination, initial: true) { _, destination in
             appModel.bugReports.screen = String(describing: destination)
         }
-        .sheet(item: $presentedSheet) { sheet in
+        .sheet(item: $presentedSheet, onDismiss: { bugReportScreenshot = nil }) { sheet in
             switch sheet {
             case .agentOrchestrator:
                 AgentOrchestratorView()
@@ -131,7 +132,7 @@ struct MainTabView: View {
                         } }
                 }
             case .bugReport:
-                PathwayBugReportView()
+                PathwayShakeReportSheet(screenshot: bugReportScreenshot)
             }
         }
         .onChange(of: PathwayGeneralPreferences.shared.autoSettleDays) { _, _ in appModel.cloud.refreshThreadPartition() }
