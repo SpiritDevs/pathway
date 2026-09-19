@@ -40,6 +40,7 @@ final class PathwayAppModel {
     @ObservationIgnored private var preparedStorageDirectory: URL?
     let cloud: PathwayCloudModel
     let projectIcons = PathwayProjectIconCache()
+    let bugReports = PathwayBugReportModel()
     let connect: PathwayConnectClient?
     let relayURL: URL?
 
@@ -154,6 +155,7 @@ final class PathwayAppModel {
             isAccountReady = false
             preparedStorageDirectory = nil
             localStorageDirectory = nil
+            bugReports.configure(directory: nil)
             accountID = nil
             accountIdentity = nil
             pendingThreadRoute = nil
@@ -183,6 +185,7 @@ final class PathwayAppModel {
         isAccountReady = false
         preparedStorageDirectory = nil
         localStorageDirectory = nil
+        bugReports.configure(directory: nil)
         accountID = nil
         accountIdentity = nil
         pendingThreadRoute = nil
@@ -265,6 +268,7 @@ final class PathwayAppModel {
         accountIdentity = identity
         accountID = identity.split(separator: "\n").last.map(String.init)
         localStorageDirectory = directory
+        bugReports.configure(directory: directory)
         let task = Task { @MainActor [weak self] in
             // Account transitions finish in order even when an SDK operation ignores cancellation.
             await previous?.value

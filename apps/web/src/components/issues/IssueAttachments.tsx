@@ -66,8 +66,17 @@ function AttachmentGallery({
         if (attachment === null) return null;
         return (
           <li className="group relative shrink-0" key={attachmentId}>
-            {attachment.mimeType?.startsWith("video/") === true ||
-            isIssueVideoAttachmentUrl(attachment.url) ? (
+            {attachment.mimeType === "application/json" || attachment.mimeType === "text/plain" ? (
+              <a
+                href={attachment.url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex h-16 max-w-64 items-center rounded-md border border-border/60 px-3 text-sm underline underline-offset-4"
+              >
+                {attachment.fileName ?? "Open diagnostic attachment"}
+              </a>
+            ) : attachment.mimeType?.startsWith("video/") === true ||
+              isIssueVideoAttachmentUrl(attachment.url) ? (
               <video
                 aria-label={`Task recording ${index + 1}`}
                 className="h-16 w-28 rounded-md border border-border/60 object-cover"
@@ -97,7 +106,7 @@ function AttachmentGallery({
               className="absolute -end-1.5 -top-1.5 rounded-full border border-border/60 bg-background opacity-0 shadow-sm transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 motion-reduce:transition-none"
               onClick={() => onRemoveAttachment(commentId, attachmentId)}
               size="icon-xs"
-              title="Remove image"
+              title="Remove attachment"
               variant="ghost"
             >
               <XIcon />

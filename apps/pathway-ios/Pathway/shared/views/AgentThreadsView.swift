@@ -1290,6 +1290,16 @@ struct AgentThreadConversationView: View {
         conversationDestinations
         .onAppear {
             compactThreadChrome?.enterThreadDetail(owner: chromeOwner, composerExpanded: isComposerExpanded)
+            appModel.bugReports.threadContext = ["threadId": model.threadID, "companyId": model.thread.companyId,
+                                                "environmentId": model.thread.environmentId, "projectId": model.thread.shell.projectId ?? ""]
+            appModel.bugReports.chatSnapshot = { [weak model] in
+                guard let model else { return "" }
+                let items = model.items.filter(\.isConversation)
+                let recent = items.suffix(50)
+                return (items.count > 50 ? "[Earlier messages omitted]\n\n" : "") + recent.map {
+                    "\($0.isUserMessage ? "User" : "Agent"):\n\($0.text ?? "")"
+                }.joined(separator: "\n\n")
+            }
             if model.injectedRequest == nil { model.threadQueue = appModel.cloud.threadQueue }
             subscriptionLifetime.retain(.conversation)
         }
@@ -1332,6 +1342,10 @@ struct AgentThreadConversationView: View {
         }
         .onDisappear {
             compactThreadChrome?.leaveThreadDetail(owner: chromeOwner)
+            if appModel.bugReports.threadContext["threadId"] == model.threadID {
+                appModel.bugReports.threadContext = [:]
+                appModel.bugReports.chatSnapshot = nil
+            }
             subscriptionLifetime.release(.conversation)
         }
         .accessibilityElement(children: .contain)

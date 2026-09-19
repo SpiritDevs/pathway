@@ -70,6 +70,12 @@ _Avoid_: Issue, ticket, bug as the generic name for this feature. External track
 
 Existing `/issues` links, `issue`/`issues` storage and protocol identifiers, permission keys, and `issues_*` MCP tool names remain stable for compatibility. Display labels, tool descriptions, and product documentation use task terminology.
 
+**Bug report**:
+In the [report-a-bug design](../plans/report-a-bug.md), a task describing unexpected Pathway behavior, accompanied by diagnostic evidence from the reporting client.
+
+**Bug investigation**:
+Optional agent research into a bug report that adds findings to the task. It may inspect code and attempt reproduction; implementing a fix is a separate action.
+
 ## Connected mail
 
 **Mail account**:

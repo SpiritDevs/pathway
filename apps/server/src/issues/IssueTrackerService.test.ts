@@ -91,7 +91,12 @@ import {
 } from "./IssueCommentAgentEngine.ts";
 import { IssueEnrichmentEngine, type IssueEnrichmentEngineShape } from "./IssueEnrichmentEngine.ts";
 import { SlackIntakeEngine, type SlackIntakeEngineShape } from "./slack/SlackIntakeEngine.ts";
-import { IssueTrackerService, layer, makeIssueTrackerService } from "./IssueTrackerService.ts";
+import {
+  IssueTrackerService,
+  layer,
+  makeIssueTrackerService,
+  issueEnrichmentAutomaticPatch,
+} from "./IssueTrackerService.ts";
 import { issueReadModelFromStoredReplica, type IssueReplicaReader } from "./IssueReplicaReader.ts";
 
 const ACTOR: IssueActor = { kind: "user" };
@@ -358,6 +363,30 @@ const LINEAR_EXPORT = [
 ].join("\n");
 
 describe("IssueTrackerService", () => {
+  it("keeps bug-report research as findings without applying metadata suggestions", () => {
+    assert.deepStrictEqual(
+      issueEnrichmentAutomaticPatch({
+        issue: {
+          title: "New task",
+          description: "The screen is blank",
+          priority: "none",
+          slackSource: null,
+        },
+        result: {
+          summary: "A missing state transition",
+          suggestedPriority: "high",
+          suggestedTitle: "Fix rendering",
+          suggestedDescription: "Replace the report",
+          likelyFiles: [],
+          relatedIssueKeys: [],
+          suggestedLabels: [],
+        },
+        titleActor: { kind: "system", source: "slack" },
+        findingsOnly: true,
+      }),
+      {},
+    );
+  });
   it.effect("resolves the linked cloud identity to its active replica membership", () =>
     Effect.gen(function* () {
       const secrets = yield* ServerSecretStore.ServerSecretStore;

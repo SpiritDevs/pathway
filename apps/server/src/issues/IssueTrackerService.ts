@@ -50,6 +50,9 @@ import {
   type IssueEnrichmentRunResult,
   type IssueEnrichmentRunsResult,
   type IssueEnrichmentStartInput,
+  type IssueEnrichmentRefInput,
+  type IssueInvestigationRoute,
+  type EnvironmentId,
   IssueEventId,
   type IssueEvent,
   IssueId,
@@ -250,7 +253,12 @@ import {
   type IssueCommentAgentIssueUpdate,
   type IssueCommentAgentRunRecorder,
 } from "./IssueCommentAgentEngine.ts";
-import { IssueEnrichmentEngine, type IssueEnrichmentRunRecorder } from "./IssueEnrichmentEngine.ts";
+import {
+  IssueEnrichmentEngine,
+  type IssueEnrichmentRunRecorder,
+  type IssueEnrichmentStartRequest,
+} from "./IssueEnrichmentEngine.ts";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import { SlackIntakeEngine } from "./slack/SlackIntakeEngine.ts";
 // The poller reads the same file at the top of every cycle; one name, so they cannot drift.
 import { SLACK_BOT_TOKEN_SECRET } from "./slack/slackToken.ts";
@@ -266,6 +274,7 @@ import { milestoneHistory } from "./milestoneHistory.ts";
 import { issueSortOrderAfter } from "./sortOrder.ts";
 import {
   makeIssueReplicaReader,
+  resolveClientIssueRoute,
   routeReplicaIssueRead,
   type IssueReplicaReader,
   type IssueReplicaRoute,
@@ -463,6 +472,14 @@ export interface IssueCloudAttachmentSource {
 }
 
 export interface IssueTrackerServiceShape {
+  readonly withCompanyRoute: <A, E, R>(
+    input: IssueInvestigationRoute & {
+      environmentId: EnvironmentId;
+      authenticatedSubject: string;
+      refresh?: boolean;
+    },
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | IssueTrackerError, R>;
   /** Resolves the company once and keeps every tracker call in `effect` on that route. */
   readonly withPinnedRoute: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
@@ -749,7 +766,7 @@ export interface IssueTrackerServiceShape {
   ) => Effect.Effect<IssueEnrichmentRunResult, IssueTrackerError>;
   /** One issue's runs, newest first. */
   readonly getEnrichmentRuns: (
-    input: IssueRefInput,
+    input: IssueEnrichmentRefInput,
   ) => Effect.Effect<IssueEnrichmentRunsResult, IssueTrackerError>;
   /**
    * Record that a thread is working this issue. Linking is the only thing that happens here:
@@ -1029,7 +1046,9 @@ export function issueEnrichmentAutomaticPatch(input: {
   readonly issue: Pick<Issue, "title" | "description" | "priority" | "slackSource">;
   readonly result: NonNullable<IssueEnrichmentRun["result"]>;
   readonly titleActor: IssueActor | null;
+  readonly findingsOnly?: boolean;
 }): IssuePatch {
+  if (input.findingsOnly) return {};
   const title = input.result.suggestedTitle?.trim();
   const applyTitle =
     title !== undefined &&
@@ -1464,6 +1483,39 @@ export const makeIssueTrackerService = Effect.fn(function* (
         ),
       ),
     );
+
+  const withCompanyRoute: IssueTrackerServiceShape["withCompanyRoute"] = (input, effect) =>
+    Effect.gen(function* () {
+      if (syncEngineRegistry === null)
+        return yield* invalid("Cloud task synchronization is unavailable.");
+      let userId = input.authenticatedSubject;
+      if (userId === "cloud-connect") {
+        const linked = yield* secretStore
+          .get(CLOUD_LINKED_USER_ID)
+          .pipe(Effect.mapError(() => invalid("Could not read the connected account")));
+        if (Option.isNone(linked))
+          return yield* invalid("Sign in to the environment before investigating.");
+        userId = new TextDecoder().decode(linked.value);
+      }
+      const route = yield* resolveClientIssueRoute(syncEngineRegistry, {
+        ...input,
+        companyId: CompanyId.make(input.companyId),
+        userId,
+      });
+      if (input.refresh) {
+        yield* route.engine.sync.pipe(
+          Effect.mapError(() =>
+            invalid(
+              "The report could not synchronize to this environment. Retry when it reconnects.",
+            ),
+          ),
+        );
+      }
+      return yield* effect.pipe(
+        Effect.provideService(PinnedIssueReplicaRoute, route),
+        Effect.provideService(ActiveIssueReplicaRoute, route),
+      );
+    });
 
   const syncWriteFailure = (message: string) =>
     new IssueTrackerError({ reason: "storage", message: `Cloud task write failed: ${message}` });
@@ -2671,7 +2723,17 @@ export const makeIssueTrackerService = Effect.fn(function* (
           labelsOf(issueId).pipe(Effect.map((labelIds) => ({ ...record, labelIds }))),
         ),
       ),
-    });
+    }).pipe(
+      Effect.tap((record) =>
+        resolveReplicaRoute.pipe(
+          Effect.flatMap((route) =>
+            route?.localProjectId !== undefined && record.projectId !== route.localProjectId
+              ? Effect.fail(invalid("This task does not belong to the selected project."))
+              : Effect.void,
+          ),
+        ),
+      ),
+    );
 
   const getLegacyDetail: IssueTrackerServiceShape["getDetail"] = Effect.fn(
     "IssueTrackerService.getLegacyDetail",
@@ -4095,6 +4157,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     state: "done" | "failed",
     result: IssueEnrichmentRun["result"],
     error: string | null,
+    findingsOnly = false,
   ) =>
     Effect.gen(function* () {
       const existing = yield* requireEnrichmentRun(runId);
@@ -4114,6 +4177,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           modelSelection: existing.modelSelection,
           result,
           finishedAt,
+          findingsOnly,
         });
       }
     });
@@ -4130,6 +4194,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     readonly modelSelection: IssueEnrichmentRun["modelSelection"];
     readonly result: NonNullable<IssueEnrichmentRun["result"]>;
     readonly finishedAt: string;
+    readonly findingsOnly: boolean;
   }) =>
     Effect.gen(function* () {
       const actor: IssueActor = {
@@ -4146,6 +4211,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         issue: record,
         result: input.result,
         titleActor: latestIssueTitleActor(events),
+        findingsOnly: input.findingsOnly,
       });
       if (Object.keys(patch).length > 0) {
         yield* update({ issueId: input.issueId, patch }, actor);
@@ -4169,7 +4235,10 @@ export const makeIssueTrackerService = Effect.fn(function* (
    * What the engine reports through. Every method writes the row and republishes the whole run,
    * so the engine never touches this service's tag and the two layers stay acyclic.
    */
-  const makeEnrichmentRecorder = (runId: IssueEnrichmentRunId): IssueEnrichmentRunRecorder => ({
+  const makeEnrichmentRecorder = (
+    runId: IssueEnrichmentRunId,
+    findingsOnly = false,
+  ): IssueEnrichmentRunRecorder => ({
     markRunning: Effect.gen(function* () {
       const startedAt = yield* nowIso;
       yield* enrichmentRunRepository
@@ -4186,7 +4255,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
               Effect.mapError(storage("Failed to append to the enrichment transcript")),
               Effect.andThen(publishEnrichmentRun(runId)),
             ),
-    succeed: (result) => finishEnrichmentRun(runId, "done", result, null),
+    succeed: (result) => finishEnrichmentRun(runId, "done", result, null, findingsOnly),
     fail: (reason) => finishEnrichmentRun(runId, "failed", null, reason),
   });
 
@@ -4229,9 +4298,48 @@ export const makeIssueTrackerService = Effect.fn(function* (
       );
     }
 
+    const route = yield* resolveReplicaRoute;
+    let cloudContext: IssueEnrichmentStartRequest["cloudContext"];
+    if (route !== null) {
+      const readModel = yield* route.read;
+      const detail = syncedIssueDetailById(readModel, record.id);
+      if (detail === null) return yield* notFound(record.id, "The report is not synchronized yet.");
+      const resolveUrls = route.engine.resolveIssueAttachmentUrls;
+      const attachments = detail.attachments.filter((attachment) => attachment.state === "ready");
+      if (attachments.length > 0 && resolveUrls === undefined)
+        return yield* invalid("This environment cannot read task evidence yet.");
+      const sources = [];
+      for (let offset = 0; offset < attachments.length; offset += 8) {
+        if (resolveUrls !== undefined)
+          sources.push(
+            ...(yield* resolveUrls({
+              companyId: route.companyId,
+              issueId: record.id,
+              attachmentIds: attachments
+                .slice(offset, offset + 8)
+                .map((attachment) => attachment.id),
+            }).pipe(Effect.mapError(() => invalid("Could not read the report evidence")))),
+          );
+      }
+      const projected = issueDetailProjectionFromReplica(detail).detail;
+      if (projected === null)
+        return yield* notFound(record.id, "The report is not synchronized yet.");
+      cloudContext = {
+        ...issueCollectionProjectionFromReplica(readModel),
+        detail: projected,
+        attachments: sources,
+      };
+    }
+    const findingsOnly =
+      cloudContext?.attachments.some(
+        (attachment) =>
+          attachment.fileName === "pathway-diagnostics.json" &&
+          attachment.mimeType === "application/json",
+      ) ?? false;
+
     // Resolved before the row is written, so a refusal here leaves nothing behind and a later
     // settings change cannot relabel a finished run.
-    const modelSelection = yield* enrichmentEngine.resolveModelSelection;
+    const modelSelection = input.modelSelection ?? (yield* enrichmentEngine.resolveModelSelection);
     const createdAt = yield* nowIso;
     const run: IssueEnrichmentRun = {
       id: IssueEnrichmentRunId.make(yield* newId),
@@ -4250,17 +4358,25 @@ export const makeIssueTrackerService = Effect.fn(function* (
       .pipe(Effect.mapError(storage("Failed to record the enrichment run")));
     yield* publish({ _tag: "EnrichmentRunChanged", run });
 
-    const recorder = makeEnrichmentRecorder(run.id);
+    const recorder = makeEnrichmentRecorder(run.id, findingsOnly);
     // Detached from the request fiber: an investigation takes minutes, the button that asked for
     // it answers now, and the run must outlive the socket that started it. Anything escaping —
     // a failure or a defect — lands the run in `failed` rather than leaving it running forever.
     yield* Effect.forkDetach(
-      enrichmentEngine.start({ run, issue: record, workspaceRoot, recorder }).pipe(
-        Effect.catchCause((cause) =>
-          recorder.fail(`The enrichment run stopped unexpectedly: ${Cause.pretty(cause)}`),
+      enrichmentEngine
+        .start({
+          run,
+          issue: record,
+          workspaceRoot,
+          recorder,
+          ...(cloudContext ? { cloudContext } : {}),
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            recorder.fail(`The enrichment run stopped unexpectedly: ${Cause.pretty(cause)}`),
+          ),
+          Effect.ignoreCause({ log: true }),
         ),
-        Effect.ignoreCause({ log: true }),
-      ),
     );
 
     return { run };
@@ -4270,6 +4386,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     "IssueTrackerService.cancelEnrichment",
   )(function* (input) {
     const existing = yield* requireEnrichmentRun(input.runId);
+    yield* requireRoutedIssue(existing.issueId);
     if (existing.state === "done" || existing.state === "failed") {
       return yield* conflict(`Enrichment run ${existing.id} has already finished.`, existing.id);
     }
@@ -6134,6 +6251,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
   return {
     withPinnedRoute,
+    withCompanyRoute,
     replicaRoutable,
     memberActorForCloudUserId,
     activeMemberActor,

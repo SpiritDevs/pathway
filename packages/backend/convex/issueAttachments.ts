@@ -14,6 +14,7 @@ import { makeFunctionReference } from "convex/server";
 import {
   ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
   ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES,
+  ISSUE_DIAGNOSTIC_ATTACHMENT_MAX_BYTES,
 } from "@spiritdevs/contracts";
 
 import type { Doc, Id } from "./_generated/dataModel.js";
@@ -221,7 +222,9 @@ function normalizeUpload(input: {
     ? ISSUE_COMMENT_ATTACHMENT_MAX_BYTES
     : mimeType === "video/mp4" || mimeType === "video/webm"
       ? ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES
-      : 0;
+      : mimeType === "application/json" || mimeType === "text/plain"
+        ? ISSUE_DIAGNOSTIC_ATTACHMENT_MAX_BYTES
+        : 0;
   if (maxBytes === 0)
     throw backendError("invalid-arguments", `Unsupported attachment MIME type ${mimeType}.`);
   if (input.byteSize > maxBytes)

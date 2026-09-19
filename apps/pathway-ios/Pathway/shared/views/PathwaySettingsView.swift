@@ -24,6 +24,7 @@ struct PathwaySettingsView: View {
                 }
             }
             Section("App") {
+                NavigationLink("Report a bug") { PathwayBugReportSettingsView() }
                 NavigationLink("General") { PathwayGeneralSettingsView() }
                 NavigationLink("Appearance") { PathwayAppearanceSettingsView() }
                 NavigationLink("Storage & cleanup") { PathwayEnvironmentStorageView() }

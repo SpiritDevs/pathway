@@ -21,10 +21,14 @@ import type {
   IssueEnrichmentRun,
   IssueEnrichmentRunId,
   ModelSelection,
+  IssueDetail,
+  IssueStatus,
+  IssueLabel,
 } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import type { CloudIssueAttachmentUrl } from "../cloud/CloudSyncEngineRegistry.ts";
 
 /**
  * How a run reports itself back to the tracker. Every method here writes the row and publishes
@@ -58,6 +62,13 @@ export interface IssueEnrichmentStartRequest {
    */
   readonly workspaceRoot: string;
   readonly recorder: IssueEnrichmentRunRecorder;
+  readonly cloudContext?: {
+    readonly issues: ReadonlyArray<Issue>;
+    readonly statuses: ReadonlyArray<IssueStatus>;
+    readonly labels: ReadonlyArray<IssueLabel>;
+    readonly detail: IssueDetail;
+    readonly attachments: ReadonlyArray<CloudIssueAttachmentUrl>;
+  };
 }
 
 export interface IssueEnrichmentEngineShape {

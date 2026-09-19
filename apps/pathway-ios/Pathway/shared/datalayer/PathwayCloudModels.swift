@@ -50,6 +50,8 @@ struct PathwayCloudProject: Decodable, Equatable, Identifiable, Sendable {
     let name: String
     let description: String
     let archivedAt: Double?
+    var teamIds: [String]? = nil
+    var defaultWorkflowOwner: JSONValue? = nil
 }
 
 struct PathwayCompanyProject: Equatable, Identifiable, Sendable {

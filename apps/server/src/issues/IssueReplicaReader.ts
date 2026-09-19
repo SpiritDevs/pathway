@@ -18,7 +18,12 @@ import {
   type StoredSyncState,
   type SyncedIssueDomainReadModel,
 } from "@spiritdevs/client-runtime/sync";
-import { IssueTrackerError, type IssueMemberActor, type ProjectId } from "@spiritdevs/contracts";
+import {
+  IssueTrackerError,
+  type EnvironmentId,
+  type IssueMemberActor,
+  type ProjectId,
+} from "@spiritdevs/contracts";
 import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
 import { MembershipId, type CompanyId } from "@spiritdevs/contracts/company";
 import type { SyncActor } from "@spiritdevs/contracts/cloudSync";
@@ -32,6 +37,7 @@ import type {
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 
 export interface IssueReplicaRoute {
+  readonly localProjectId?: ProjectId;
   readonly companyId: CompanyId;
   readonly engine: CloudSyncIssueEngineHandle;
   readonly actor: SyncActor;
@@ -198,6 +204,89 @@ function translateProjectIds(
     })),
   };
 }
+
+/** A client pins its company and checkout; the server supplies environment and account identity. */
+export const resolveClientIssueRoute = Effect.fn("issues.resolveClientRoute")(function* (
+  registry: CloudSyncEngineRegistryShape,
+  input: {
+    companyId: CompanyId;
+    localProjectId: ProjectId;
+    environmentId: EnvironmentId;
+    userId: string;
+  },
+) {
+  const engine = yield* registry.issueEngine(input.companyId);
+  if (engine === null || engine.environmentId !== input.environmentId) {
+    return yield* routingFailure("This company is not connected to this environment.");
+  }
+  const snapshot = yield* engine.readIssueSnapshot;
+  if (!snapshot.bootstrapped || snapshot.quarantined !== 0) {
+    return yield* routingFailure(
+      "The company replica is not ready. Retry when synchronization completes.",
+    );
+  }
+  const member = issueMemberActorFromEntities(snapshot.readModel.memberships, input.userId);
+  if (member === null)
+    return yield* routingFailure("This account cannot access the report's company.");
+  const latest = new Map<ProjectId, (typeof snapshot.readModel.environmentBindings)[number]>();
+  for (const binding of snapshot.readModel.environmentBindings) {
+    if (binding.environmentId !== input.environmentId) continue;
+    const previous = latest.get(binding.localProjectId);
+    if (previous === undefined || previous.updatedAt < binding.updatedAt)
+      latest.set(binding.localProjectId, binding);
+  }
+  const bindings = [...latest.values()].filter((binding) => binding.status === "active");
+  if (!bindings.some((binding) => binding.localProjectId === input.localProjectId)) {
+    return yield* routingFailure(
+      "The report's project has no active checkout on this environment.",
+    );
+  }
+  const translate = (model: SyncedIssueDomainReadModel) =>
+    translateProjectIds(model, bindings, input.localProjectId);
+  const read = engine.readIssueSnapshot.pipe(
+    Effect.flatMap((next) => {
+      if (
+        !next.bootstrapped ||
+        next.quarantined !== 0 ||
+        issueMemberActorFromEntities(next.readModel.memberships, input.userId) === null
+      ) {
+        return Effect.fail(
+          routingFailure("The report's company is unavailable or access was revoked."),
+        );
+      }
+      const binding = next.readModel.environmentBindings
+        .filter(
+          (candidate) =>
+            candidate.environmentId === input.environmentId &&
+            candidate.localProjectId === input.localProjectId,
+        )
+        .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      if (
+        binding?.status !== "active" ||
+        binding.cloudProjectId !==
+          bindings.find((candidate) => candidate.localProjectId === input.localProjectId)
+            ?.cloudProjectId
+      ) {
+        return Effect.fail(
+          routingFailure("The report's project binding changed. Reopen the investigation."),
+        );
+      }
+      return Effect.succeed(translate(next.readModel));
+    }),
+  );
+  return {
+    companyId: input.companyId,
+    localProjectId: input.localProjectId,
+    engine,
+    actor: member,
+    readModel: translate(snapshot.readModel),
+    read,
+    memberActorForCloudUserId: (userId) =>
+      issueMemberActorFromEntities(snapshot.readModel.memberships, userId),
+    cloudProjectIdForLocal: (id) =>
+      bindings.find((binding) => binding.localProjectId === id)?.cloudProjectId ?? null,
+  } satisfies IssueReplicaRoute;
+});
 
 /**
  * Builds a reader whose route is resolved when the operation runs, after MCP authentication has

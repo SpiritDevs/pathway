@@ -464,6 +464,9 @@ actor PathwayRPCClient {
 
     private func complete(_ id: Int, result: Result<JSONValue, Error>) {
         guard let request = pending.removeValue(forKey: id) else { return }
+        if case let .failure(error) = result {
+            PathwayDiagnostics.shared.record(request.envelope.tag, outcome: "failed", error: error)
+        }
         request.deadlineTask?.cancel()
         request.resume(result)
     }
@@ -477,6 +480,7 @@ actor PathwayRPCClient {
     /// Transport changes share the subscription queue so an old snapshot cannot overwrite
     /// a newer disconnect notification in the consumer.
     private func yieldTransportState(_ state: String) {
+        PathwayDiagnostics.shared.record("environment.connection", outcome: state)
         guard let subscriptionContinuation else { return }
         pathwayRPCYieldTransportState(state, to: subscriptionContinuation, policy: subscriptionBufferingPolicy)
     }

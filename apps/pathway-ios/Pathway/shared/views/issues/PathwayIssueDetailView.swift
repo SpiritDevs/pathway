@@ -36,7 +36,13 @@ struct PathwayIssueDetailView: View {
         model.records.first { $0.companyId == companyID && $0.id == issueID }
     }
 
-    var body: some View { content }
+    var body: some View {
+        content.onAppear {
+            appModel.bugReports.taskContext = ["taskId": issueID, "companyId": companyID, "projectId": issue?.projectId ?? ""]
+        }.onDisappear {
+            if appModel.bugReports.taskContext["taskId"] == issueID { appModel.bugReports.taskContext = [:] }
+        }
+    }
 
     private var content: some View {
             Group {
@@ -567,9 +573,14 @@ struct PathwayIssueDetailView: View {
                     ForEach(comment.fields["attachmentIds"]?.arrayValue?.compactMap(\.stringValue) ?? [], id: \.self) { id in
                         if let url = attachmentURLs[id] {
                             Link(destination: url) {
-                                AsyncImage(url: url) { image in image.resizable().scaledToFit() }
-                                placeholder: { Label("View attachment", systemImage: "photo") }
-                                    .frame(maxHeight: 200).clipShape(.rect(cornerRadius: 10))
+                                if let attachment = detail.attachments.first(where: { $0.id == id }),
+                                   attachment.fields["mimeType"]?.stringValue?.hasPrefix("image/") == false {
+                                    Label(attachment.fields["fileName"]?.stringValue ?? "Open attachment", systemImage: "doc")
+                                } else {
+                                    AsyncImage(url: url) { image in image.resizable().scaledToFit() }
+                                    placeholder: { Label("View attachment", systemImage: "photo") }
+                                        .frame(maxHeight: 200).clipShape(.rect(cornerRadius: 10))
+                                }
                             }
                         }
                     }
@@ -641,7 +652,7 @@ struct PathwayIssueDetailView: View {
                             AsyncImage(url: url) { image in image.resizable().scaledToFill() }
                             placeholder: { Image(systemName: "photo").foregroundStyle(.secondary) }
                                 .frame(width: 72, height: 56).clipShape(.rect(cornerRadius: 8))
-                        } else { Image(systemName: "video") }
+                        } else { Image(systemName: attachment.fields["mimeType"]?.stringValue?.hasPrefix("video/") == true ? "video" : "doc") }
                         Text(name).lineLimit(2).foregroundStyle(.primary)
                     }
                 }.accessibilityLabel("Open attachment \(name)")

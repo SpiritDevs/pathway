@@ -2620,126 +2620,156 @@ describe("issueComment attachments", () => {
     });
   });
 
-  it("prepares idempotently, verifies UploadThing bytes, exposes an authorized URL, and binds the ready id", async () => {
+  it("rejects oversized diagnostic files and unsupported executable attachment types", async () => {
     const t = harness();
     await seed(t);
-    const op = await twoIssues(t);
-    const checksum = "ab".repeat(32);
-    const calls = { prepare: 0, verify: 0, delete: 0 };
-    const uploadThing: UploadThingClient = {
-      prepareUpload: async ({ customId }) => {
-        calls.prepare += 1;
-        return {
-          key: `ut-${customId}`,
-          url: `https://upload.example.test/${customId}`,
-          expiresAt: Date.now() + 60_000,
-        };
-      },
-      verifyUpload: async (key) => {
-        calls.verify += 1;
-        return {
-          key,
-          url: `https://utfs.io/f/${key}`,
-          byteSize: 4,
-          mimeType: "image/png",
-          checksum,
-        };
-      },
-      deleteFiles: async () => {
-        calls.delete += 1;
-      },
+    await twoIssues(t);
+    const upload = {
+      clientRequestId: "report",
+      fileName: "diagnostics.json",
+      mimeType: "application/json",
+      byteSize: 256 * 1024 + 1,
+      checksum: "ab".repeat(32),
     };
-    setUploadThingClient(uploadThing);
-    try {
-      const args = {
+    await expect(
+      asWriter(t).action(api.issueAttachments.prepareUpload, {
         companyId: COMPANY_ID,
         issueId: ISSUE_A,
-        uploads: [
-          {
-            clientRequestId: "browser-file-1",
-            fileName: "evidence.png",
-            mimeType: "image/png",
+        uploads: [upload],
+      }),
+    ).rejects.toThrow("byte limit");
+    await expect(
+      asWriter(t).action(api.issueAttachments.prepareUpload, {
+        companyId: COMPANY_ID,
+        issueId: ISSUE_A,
+        uploads: [{ ...upload, mimeType: "text/html", byteSize: 10 }],
+      }),
+    ).rejects.toThrow("Unsupported attachment MIME type");
+  });
+
+  it.each(["image/png", "application/json", "text/plain"])(
+    "prepares %s idempotently, verifies bytes and binds the ready id",
+    async (mimeType) => {
+      const t = harness();
+      await seed(t);
+      const op = await twoIssues(t);
+      const checksum = "ab".repeat(32);
+      const calls = { prepare: 0, verify: 0, delete: 0 };
+      const uploadThing: UploadThingClient = {
+        prepareUpload: async ({ customId }) => {
+          calls.prepare += 1;
+          return {
+            key: `ut-${customId}`,
+            url: `https://upload.example.test/${customId}`,
+            expiresAt: Date.now() + 60_000,
+          };
+        },
+        verifyUpload: async (key) => {
+          calls.verify += 1;
+          return {
+            key,
+            url: `https://utfs.io/f/${key}`,
             byteSize: 4,
+            mimeType,
             checksum,
-          },
-        ],
+          };
+        },
+        deleteFiles: async () => {
+          calls.delete += 1;
+        },
       };
-      const first = await asWriter(t).action(api.issueAttachments.prepareUpload, args);
-      const retry = await asWriter(t).action(api.issueAttachments.prepareUpload, args);
-      expect(retry).toEqual(first);
-      expect(calls.prepare).toBe(1);
+      setUploadThingClient(uploadThing);
+      try {
+        const args = {
+          companyId: COMPANY_ID,
+          issueId: ISSUE_A,
+          uploads: [
+            {
+              clientRequestId: "browser-file-1",
+              fileName: "evidence.png",
+              mimeType,
+              byteSize: 4,
+              checksum,
+            },
+          ],
+        };
+        const first = await asWriter(t).action(api.issueAttachments.prepareUpload, args);
+        const retry = await asWriter(t).action(api.issueAttachments.prepareUpload, args);
+        expect(retry).toEqual(first);
+        expect(calls.prepare).toBe(1);
 
-      const attachmentId = first[0]!.attachmentId;
-      expect(first[0]).toMatchObject({ state: "upload-required" });
-      await asWriter(t).action(api.issueAttachments.finalizeUpload, {
-        companyId: COMPANY_ID,
-        attachmentId,
-      });
-      expect(calls.verify).toBe(1);
-
-      const urls = await asWriter(t).query(api.issueAttachments.urls, {
-        companyId: COMPANY_ID,
-        issueId: ISSUE_A,
-        attachmentIds: [attachmentId],
-      });
-      expect(urls).toEqual([
-        expect.objectContaining({
+        const attachmentId = first[0]!.attachmentId;
+        expect(first[0]).toMatchObject({ state: "upload-required" });
+        await asWriter(t).action(api.issueAttachments.finalizeUpload, {
+          companyId: COMPANY_ID,
           attachmentId,
-          url: `https://utfs.io/f/ut-${attachmentId}`,
-        }),
-      ]);
+        });
+        expect(calls.verify).toBe(1);
 
-      const created = await asWriter(t).mutation(api.sync.applyOperations, {
-        companyId: COMPANY_ID,
-        operations: [
-          op("issueComment.create", COMMENT_ID, {
-            issueId: ISSUE_A,
-            body: "Verified evidence",
-            attachmentIds: [attachmentId],
-          }),
-        ],
-      });
-      expect(created.receipts[0]).toMatchObject({ status: "accepted" });
-      expect(calls.delete).toBe(0);
-
-      const softDeleted = await asWriter(t).mutation(api.sync.applyOperations, {
-        companyId: COMPANY_ID,
-        operations: [op("issue.delete", ISSUE_A, {})],
-      });
-      expect(softDeleted.receipts[0]).toMatchObject({ status: "accepted" });
-      expect(
-        await asWriter(t).query(api.issueAttachments.urls, {
+        const urls = await asWriter(t).query(api.issueAttachments.urls, {
           companyId: COMPANY_ID,
           issueId: ISSUE_A,
           attachmentIds: [attachmentId],
-        }),
-      ).toEqual([
-        expect.objectContaining({
-          attachmentId,
-          url: `https://utfs.io/f/ut-${attachmentId}`,
-        }),
-      ]);
-      const restored = await asWriter(t).mutation(api.sync.applyOperations, {
-        companyId: COMPANY_ID,
-        operations: [op("issue.restore", ISSUE_A, {})],
-      });
-      expect(restored.receipts[0]).toMatchObject({ status: "accepted" });
+        });
+        expect(urls).toEqual([
+          expect.objectContaining({
+            attachmentId,
+            url: `https://utfs.io/f/ut-${attachmentId}`,
+          }),
+        ]);
 
-      const deleted = await asWriter(t).mutation(api.sync.applyOperations, {
-        companyId: COMPANY_ID,
-        operations: [op("issueComment.delete", COMMENT_ID, {})],
-      });
-      expect(deleted.receipts[0]).toMatchObject({ status: "accepted" });
-      await t.run(async (ctx) => {
-        const row = (await ctx.db.query("issueAttachments").collect()).find(
-          (candidate) => candidate.id === attachmentId,
-        );
-        expect(row?.deletedAt).not.toBeNull();
-      });
-    } finally {
-      setUploadThingClient(null);
-    }
-  });
+        const created = await asWriter(t).mutation(api.sync.applyOperations, {
+          companyId: COMPANY_ID,
+          operations: [
+            op("issueComment.create", COMMENT_ID, {
+              issueId: ISSUE_A,
+              body: "Verified evidence",
+              attachmentIds: [attachmentId],
+            }),
+          ],
+        });
+        expect(created.receipts[0]).toMatchObject({ status: "accepted" });
+        expect(calls.delete).toBe(0);
+
+        const softDeleted = await asWriter(t).mutation(api.sync.applyOperations, {
+          companyId: COMPANY_ID,
+          operations: [op("issue.delete", ISSUE_A, {})],
+        });
+        expect(softDeleted.receipts[0]).toMatchObject({ status: "accepted" });
+        expect(
+          await asWriter(t).query(api.issueAttachments.urls, {
+            companyId: COMPANY_ID,
+            issueId: ISSUE_A,
+            attachmentIds: [attachmentId],
+          }),
+        ).toEqual([
+          expect.objectContaining({
+            attachmentId,
+            url: `https://utfs.io/f/ut-${attachmentId}`,
+          }),
+        ]);
+        const restored = await asWriter(t).mutation(api.sync.applyOperations, {
+          companyId: COMPANY_ID,
+          operations: [op("issue.restore", ISSUE_A, {})],
+        });
+        expect(restored.receipts[0]).toMatchObject({ status: "accepted" });
+
+        const deleted = await asWriter(t).mutation(api.sync.applyOperations, {
+          companyId: COMPANY_ID,
+          operations: [op("issueComment.delete", COMMENT_ID, {})],
+        });
+        expect(deleted.receipts[0]).toMatchObject({ status: "accepted" });
+        await t.run(async (ctx) => {
+          const row = (await ctx.db.query("issueAttachments").collect()).find(
+            (candidate) => candidate.id === attachmentId,
+          );
+          expect(row?.deletedAt).not.toBeNull();
+        });
+      } finally {
+        setUploadThingClient(null);
+      }
+    },
+  );
 
   it("garbage-collects expired pending rows and their UploadThing keys", async () => {
     const t = harness();

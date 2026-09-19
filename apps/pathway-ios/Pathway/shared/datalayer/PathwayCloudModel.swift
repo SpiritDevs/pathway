@@ -219,7 +219,11 @@ final class PathwayCloudModel {
 
     func request(kind: String, name: String, arguments: JSONValue) async throws -> JSONValue {
         guard let client else { throw URLError(.notConnectedToInternet) }
-        return try await client.issueRequest(kind: kind, name: name, arguments: arguments)
+        do { return try await client.issueRequest(kind: kind, name: name, arguments: arguments) }
+        catch {
+            PathwayDiagnostics.shared.record(name, outcome: "failed", error: error)
+            throw error
+        }
     }
 
     func subscribe(name: String, arguments: JSONValue = .object([:])) -> AsyncThrowingStream<JSONValue, Error> {
@@ -479,6 +483,10 @@ final class PathwayCloudModel {
             throw NSError(domain: "PathwayIssues", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Connect an environment for this project to use this action."
             ])
+        }
+        if ["issues.startEnrichment", "issues.getEnrichmentRuns", "issues.cancelEnrichment"].contains(method),
+           let binding = bindings.first(where: { $0.binding.environmentId == environment.environment.environmentId }) {
+            fields["route"] = .object(["companyId": .string(companyID), "localProjectId": .string(binding.binding.localProjectId)])
         }
         return try await issueEnvironmentClient.request(
             environment: environment, connect: connect, method: method, payload: .object(fields)
@@ -929,6 +937,7 @@ extension PathwayCloudModel {
     }
 
     private func fail(_ error: any Error) {
+        PathwayDiagnostics.shared.record("cloud.sync", outcome: "failed", error: error)
         pathwayCloudLogger.error("Convex sync failed: \(error.localizedDescription, privacy: .public)")
         connectionState = .failed(
             "Pathway couldn’t sync your workspace. Check your connection and try again."
