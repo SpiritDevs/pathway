@@ -7,19 +7,30 @@ struct PathwayWorkspaceView: View {
     var assetURL: PathwayWorkspaceAssetURL?
     var postHTTP: PathwayWorkspacePostHTTP?
     var initialSection = "repositories"
+    var fileLink: PathwayMarkdownFileLink?
     private var client: PathwayWorkspaceClient { .init(context: context, request: request) }
 
     var body: some View {
         Group {
-            switch PathwayWorkspaceSection(rawValue: initialSection) ?? .repositories {
-            case .repositories: overview
-            case .changes: PathwayWorkspaceGitView(client: client, subscribe: subscribe, assetURL: assetURL)
-            case .pullRequests:
-                if context.supportsPullRequests {
-                    PathwayWorkspacePullRequestsView(client: client, postHTTP: postHTTP)
+            if let fileLink {
+                if let path = fileLink.relativePath(in: context.cwd) {
+                    PathwayWorkspaceFileView(client: client, path: path, assetURL: assetURL, initialLine: fileLink.line)
+                        .id("\(context.cwd):\(fileLink.id)")
                 } else {
-                    ContentUnavailableView("Pull requests unavailable", systemImage: "arrow.triangle.pull",
-                        description: Text("Connect to an environment with pull-request support to review its repository."))
+                    ContentUnavailableView("File outside this workspace", systemImage: "doc.badge.ellipsis",
+                        description: Text("This link points outside the thread's current folder. Open it from the thread that owns that workspace."))
+                }
+            } else {
+                switch PathwayWorkspaceSection(rawValue: initialSection) ?? .repositories {
+                case .repositories: overview
+                case .changes: PathwayWorkspaceGitView(client: client, subscribe: subscribe, assetURL: assetURL)
+                case .pullRequests:
+                    if context.supportsPullRequests {
+                        PathwayWorkspacePullRequestsView(client: client, postHTTP: postHTTP)
+                    } else {
+                        ContentUnavailableView("Pull requests unavailable", systemImage: "arrow.triangle.pull",
+                            description: Text("Connect to an environment with pull-request support to review its repository."))
+                    }
                 }
             }
         }
