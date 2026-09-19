@@ -13,7 +13,7 @@ concurrency:
 jobs:
   check:
     name: Check
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -56,7 +56,7 @@ jobs:
   # limit stays at the default 4 so peak load per runner is unchanged.
   test:
     name: Test
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -86,7 +86,7 @@ jobs:
   # isolation that flag buys is preserved exactly.
   test_server:
     name: Test Server ${{ matrix.shard }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -108,13 +108,11 @@ jobs:
           cache: true
           run-install: true
 
-      # ACP process-tree live tests compile a small pthread fixture with `cc`
-      # and soft-skip when it is missing. Keep that fixture active on every
-      # server shard.
-      - name: Install C toolchain for process-tree fixtures
+      # Native macOS dependencies require Apple's C toolchain. Linux-only
+      # process-tree fixtures retain their existing platform guards.
+      - name: Verify C toolchain for process-tree fixtures
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential
+          xcrun --find clang
           command -v cc
 
       # No Electron setup here: apps/server has no Electron dependency
@@ -162,7 +160,9 @@ jobs:
   # for checks that take under 3s, on the critical path of every PR.
   rust:
     name: Rust
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Linux checks are opt-in during the initial Mac fleet rollout.
+    if: ${{ vars.FLEET_ENABLE_LINUX_CHECKS == 'true' }}
+    runs-on: ${{ fromJSON(vars.FLEET_LINUX_RUNNER || '["self-hosted","fleet-linux-x64"]') }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -186,7 +186,7 @@ jobs:
 
   release_smoke:
     name: Release Smoke
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
     timeout-minutes: 10
     steps:
       - name: Checkout

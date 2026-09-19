@@ -25,7 +25,7 @@
  * so a misconfigured deployment fails the hook step with an actionable message
  * instead of poisoning a later negative-case assertion.
  */
-import * as NodeUrl from "node:url";
+import * as NodeURL from "node:url";
 
 import * as Effect from "effect/Effect";
 
@@ -34,7 +34,7 @@ import { ConvexSyncSmokeHookError, type ConvexSyncSmokeHooks } from "./convexSyn
 
 /** `packages/backend` resolved relative to this source file (repo checkout layout). */
 export function defaultConvexSmokeBackendDir(): string {
-  return NodeUrl.fileURLToPath(new URL("../../../../packages/backend", import.meta.url));
+  return NodeURL.fileURLToPath(new URL("../../../../packages/backend", import.meta.url));
 }
 
 export type ParsedConvexRunOutput =

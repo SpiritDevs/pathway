@@ -31,6 +31,7 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
   loadQueuedComposerImages,
+  prepareQueuedMessageEdit,
   openForkedThreadSideChatWhenReady,
   resolvePanelSurfaceOwnerThreadRef,
   shortcutScopeOwnsEvent,
@@ -156,6 +157,91 @@ describe("resolveThreadProjectionWorkingPresentation", () => {
         latestRun: null,
       }),
     ).toBe("connecting-neutral");
+  });
+});
+
+describe("prepareQueuedMessageEdit", () => {
+  it("resolves new attachment URLs on each retry after cancellation", async () => {
+    const attachment = {
+      type: "file" as const,
+      id: "retry-file",
+      name: "data.json",
+      mimeType: "application/json",
+      sizeBytes: 2,
+    };
+    const attachments = [{ attachment, url: "https://example.test/expired" }];
+    const cancel = vi.fn(async () => true);
+    const resolveUrl = vi
+      .fn()
+      .mockResolvedValueOnce("https://example.test/first")
+      .mockResolvedValueOnce("https://example.test/refreshed");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 403 }))
+      .mockResolvedValueOnce(new Response(new Blob(["{}"])));
+    try {
+      await expect(prepareQueuedMessageEdit(attachments, cancel, resolveUrl)).rejects.toThrow(
+        "Could not load data.json",
+      );
+      expect(await prepareQueuedMessageEdit(attachments, cancel, resolveUrl)).toHaveLength(1);
+      expect(resolveUrl).toHaveBeenCalledTimes(2);
+      expect(resolveUrl).toHaveBeenCalledWith(attachment);
+      expect(fetchSpy).toHaveBeenNthCalledWith(1, "https://example.test/first");
+      expect(fetchSpy).toHaveBeenNthCalledWith(2, "https://example.test/refreshed");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("removes the message from the queue before downloading its attachments", async () => {
+    let confirmCancellation!: (cancelled: boolean) => void;
+    const cancellation = new Promise<boolean>((resolve) => {
+      confirmCancellation = resolve;
+    });
+    const cancel = vi.fn(() => cancellation);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(new Blob(["{}"], { type: "application/json" })));
+    try {
+      const preparation = prepareQueuedMessageEdit(
+        [
+          {
+            attachment: {
+              type: "file",
+              id: "queued-file",
+              name: "data.json",
+              mimeType: "application/json",
+              sizeBytes: 2,
+            },
+            url: "https://example.test/data.json",
+          },
+        ],
+        cancel,
+      );
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      confirmCancellation(true);
+      expect(await preparation).toHaveLength(1);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("does not prepare an editable draft when removal is rejected", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      expect(await prepareQueuedMessageEdit([], async () => false)).toBeNull();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("removes text-only messages before returning them for editing", async () => {
+    const cancel = vi.fn(async () => true);
+    expect(await prepareQueuedMessageEdit([], cancel)).toEqual([]);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });
 

@@ -55,58 +55,63 @@ import {
 const SMOKE_ENABLED = process.env.PATHWAY_CONVEX_SMOKE === "1";
 
 describe.skipIf(!SMOKE_ENABLED)("convex sync relay-flow smoke (live)", () => {
-  it("exercises CLI credential → link → key-binding exchange → Convex → negatives → cleanup", async () => {
-    const relayBaseUrl = process.env.PATHWAY_RELAY_URL ?? "https://relay.spiritdevs.com";
-    const convexUrl = process.env.CONVEX_URL;
-    const deployment = process.env.PATHWAY_CONVEX_SMOKE_DEPLOYMENT;
-    const allowUrlMismatch = process.env.PATHWAY_CONVEX_SMOKE_ALLOW_URL_MISMATCH === "1";
-    const companyId = process.env.PATHWAY_CONVEX_SMOKE_COMPANY_ID ?? SMOKE_COMPANY_DOMAIN_ID;
-    const backendDir =
-      process.env.PATHWAY_CONVEX_SMOKE_BACKEND_DIR ?? defaultConvexSmokeBackendDir();
-    assert.isDefined(convexUrl, "CONVEX_URL must be set for the Convex sync smoke run");
-    assert.isDefined(
-      deployment,
-      'PATHWAY_CONVEX_SMOKE_DEPLOYMENT must name the deployment the admin hooks may mutate (e.g. "dev:chatty-ermine-52")',
-    );
-    if (convexUrl === undefined || deployment === undefined) {
-      return;
-    }
+  it.live(
+    "exercises CLI credential → link → key-binding exchange → Convex → negatives → cleanup",
+    () =>
+      Effect.gen(function* () {
+        const relayBaseUrl = process.env.PATHWAY_RELAY_URL ?? "https://relay.spiritdevs.com";
+        const convexUrl = process.env.CONVEX_URL;
+        const deployment = process.env.PATHWAY_CONVEX_SMOKE_DEPLOYMENT;
+        const allowUrlMismatch = process.env.PATHWAY_CONVEX_SMOKE_ALLOW_URL_MISMATCH === "1";
+        const companyId = process.env.PATHWAY_CONVEX_SMOKE_COMPANY_ID ?? SMOKE_COMPANY_DOMAIN_ID;
+        const backendDir =
+          process.env.PATHWAY_CONVEX_SMOKE_BACKEND_DIR ?? defaultConvexSmokeBackendDir();
+        assert.isDefined(convexUrl, "CONVEX_URL must be set for the Convex sync smoke run");
+        assert.isDefined(
+          deployment,
+          'PATHWAY_CONVEX_SMOKE_DEPLOYMENT must name the deployment the admin hooks may mutate (e.g. "dev:chatty-ermine-52")',
+        );
+        if (convexUrl === undefined || deployment === undefined) {
+          return;
+        }
 
-    // Same runtime wiring `pathway connect` commands use, minus the pieces the
-    // smoke never touches (relay client binary, boot service, prompts).
-    const program = Effect.gen(function* () {
-      const config = yield* resolveCliAuthConfig({ baseDir: Option.none() }, Option.none());
-      const runtimeLayer = Layer.mergeAll(
-        ServerSecretStore.layer,
-        CliTokenManager.layer.pipe(
-          Layer.provide(ServerSecretStore.layer),
-          Layer.provide(ExternalLauncher.layer),
-        ),
-      ).pipe(
-        Layer.provideMerge(FetchHttpClient.layer),
-        Layer.provideMerge(ServerConfig.layer(config)),
-      );
-      const environmentId = makeSmokeEnvironmentId();
-      const hooks = yield* makeConvexRunSmokeHooks({
-        environmentId,
-        companyId,
-        backendDir,
-        deployment,
-        convexUrl,
-        allowUrlMismatch,
-      }).pipe(Effect.provide(ProcessRunner.layer));
-      return yield* runConvexSyncSmoke({
-        relayBaseUrl,
-        convexUrl,
-        deployment,
-        stateDir: defaultSmokeStateDir(),
-        companyId,
-        environmentId,
-        hooks,
-      }).pipe(Effect.provide(runtimeLayer));
-    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer)));
+        // Same runtime wiring `pathway connect` commands use, minus the pieces the
+        // smoke never touches (relay client binary, boot service, prompts).
+        const program = Effect.gen(function* () {
+          const config = yield* resolveCliAuthConfig({ baseDir: Option.none() }, Option.none());
+          const runtimeLayer = Layer.mergeAll(
+            ServerSecretStore.layer,
+            CliTokenManager.layer.pipe(
+              Layer.provide(ServerSecretStore.layer),
+              Layer.provide(ExternalLauncher.layer),
+            ),
+          ).pipe(
+            Layer.provideMerge(FetchHttpClient.layer),
+            Layer.provideMerge(ServerConfig.layer(config)),
+          );
+          const environmentId = makeSmokeEnvironmentId();
+          const hooks = yield* makeConvexRunSmokeHooks({
+            environmentId,
+            companyId,
+            backendDir,
+            deployment,
+            convexUrl,
+            allowUrlMismatch,
+          }).pipe(Effect.provide(ProcessRunner.layer));
+          return yield* runConvexSyncSmoke({
+            relayBaseUrl,
+            convexUrl,
+            deployment,
+            stateDir: defaultSmokeStateDir(),
+            companyId,
+            environmentId,
+            hooks,
+          }).pipe(Effect.provide(runtimeLayer));
+        }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer)));
 
-    const report = await Effect.runPromise(program);
-    assert.isTrue(report.ok, `\n${renderConvexSyncSmokeReport(report)}`);
-  }, 600_000);
+        const report = yield* program;
+        assert.isTrue(report.ok, `\n${renderConvexSyncSmokeReport(report)}`);
+      }),
+    600_000,
+  );
 });

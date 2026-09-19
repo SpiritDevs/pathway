@@ -363,6 +363,24 @@ export function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+/** Takes a message out of the runnable queue before any asynchronous draft preparation. */
+export async function prepareQueuedMessageEdit(
+  attachments: Parameters<typeof loadQueuedComposerImages>[0],
+  cancel: () => Promise<boolean>,
+  resolveUrl?: (attachment: ChatAttachment) => Promise<string>,
+): Promise<ComposerAttachment[] | null> {
+  if (!(await cancel())) return null;
+  const currentAttachments = resolveUrl
+    ? await Promise.all(
+        attachments.map(async ({ attachment }) => ({
+          attachment,
+          url: await resolveUrl(attachment),
+        })),
+      )
+    : attachments;
+  return loadQueuedComposerImages(currentAttachments);
+}
+
 /** Downloads durable queued attachments into composer-owned files and previews. */
 export async function loadQueuedComposerImages(
   attachments: ReadonlyArray<{
