@@ -927,6 +927,7 @@ struct AgentThreadConversationView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.compactThreadChrome) private var compactThreadChrome
+    @State private var chromeOwner = UUID()
     @State private var model: PathwayAgentThreadModel
     @State private var subscriptionLifetime: PathwayThreadSubscriptionLifetime
     @State private var isComposerExpanded = false
@@ -1210,14 +1211,14 @@ struct AgentThreadConversationView: View {
     private var conversationLifecycle: some View {
         conversationDestinations
         .onAppear {
-            compactThreadChrome?.enterThreadDetail()
+            compactThreadChrome?.enterThreadDetail(owner: chromeOwner, composerExpanded: isComposerExpanded)
             if model.injectedRequest == nil { model.threadQueue = appModel.cloud.threadQueue }
             subscriptionLifetime.retain(.conversation)
         }
         .onChange(of: showsBrowser) { _, presented in
             if !presented { subscriptionLifetime.release(.browser) }
         }
-        .onChange(of: isComposerExpanded, initial: true) { _, expanded in compactThreadChrome?.setComposerExpanded(expanded) }
+        .onChange(of: isComposerExpanded, initial: true) { _, expanded in compactThreadChrome?.setComposerExpanded(expanded, owner: chromeOwner) }
         .onChange(of: model.thread.shell.deletedAt) { _, deletedAt in
             if deletedAt != nil { dismiss() }
         }
@@ -1252,7 +1253,7 @@ struct AgentThreadConversationView: View {
             if let queued = queuedConversation { PathwayQueuedThreadMoveView(thread: queued) }
         }
         .onDisappear {
-            compactThreadChrome?.leaveThreadDetail()
+            compactThreadChrome?.leaveThreadDetail(owner: chromeOwner)
             subscriptionLifetime.release(.conversation)
         }
         .accessibilityElement(children: .contain)

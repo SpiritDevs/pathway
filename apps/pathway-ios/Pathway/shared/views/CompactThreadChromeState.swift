@@ -4,18 +4,20 @@ import SwiftUI
 @MainActor
 @Observable
 final class CompactThreadChromeState {
-    private(set) var isThreadDetailActive = false
+    private var activeOwner: UUID?
+    var isThreadDetailActive: Bool { activeOwner != nil }
     private(set) var isNavigationExpanded = false
     private(set) var isComposerExpanded = false
 
-    func enterThreadDetail() {
-        isThreadDetailActive = true
+    func enterThreadDetail(owner: UUID, composerExpanded: Bool) {
+        activeOwner = owner
         isNavigationExpanded = false
-        isComposerExpanded = false
+        isComposerExpanded = composerExpanded
     }
 
-    func leaveThreadDetail() {
-        isThreadDetailActive = false
+    func leaveThreadDetail(owner: UUID) {
+        guard activeOwner == owner else { return }
+        activeOwner = nil
         isNavigationExpanded = false
         isComposerExpanded = false
     }
@@ -29,7 +31,8 @@ final class CompactThreadChromeState {
         isNavigationExpanded = false
     }
 
-    func setComposerExpanded(_ isExpanded: Bool) {
+    func setComposerExpanded(_ isExpanded: Bool, owner: UUID) {
+        guard activeOwner == owner else { return }
         isComposerExpanded = isExpanded
         if isExpanded {
             isNavigationExpanded = false

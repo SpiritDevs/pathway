@@ -19,6 +19,14 @@ struct PathwayConversationSimulatorScene: View {
                 .navigationDestination(isPresented: $showsThread) {
                     AgentThreadConversationView(model: workspace.model)
                         .toolbar {
+                            if ProcessInfo.processInfo.arguments.contains("--conversation-nested") {
+                                NavigationLink {
+                                    AgentThreadConversationView(model: workspace.model)
+                                } label: {
+                                    Image(systemName: "arrow.right")
+                                }
+                                .accessibilityIdentifier("fixture-open-nested-thread")
+                            }
                             if ProcessInfo.processInfo.arguments.contains("--conversation-collapse-work") {
                                 Button("Finish run") { workspace.finishRun() }
                                     .accessibilityIdentifier("fixture-finish-run")

@@ -19,6 +19,9 @@ Messages go straight to a connected environment. An idle agent starts immediatel
 agent queues the message for its next turn. Offline messages remain saved for delivery,
 and newer messages wait behind any messages already waiting to reach the environment.
 
+Inside a thread, the main navigation collapses to a button beside the composer. It stays
+compact when opening a child thread or returning to its parent. Tap the button to expand it.
+
 When a thread connects or reconnects, a status bubble above the composer shows that messages
 are syncing. It temporarily replaces the file-change summary until the latest updates arrive.
 You can still scroll to the latest message while reconnecting.
