@@ -7,6 +7,8 @@ import SwiftUI
 struct AgentThreadsView: View {
     @Environment(PathwayAppModel.self) private var appModel
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var listScenePhase
+    @State private var isListVisible = false
     let newThreadAction: () -> Void
 
     @State private var isSnoozedExpanded = false
@@ -60,9 +62,16 @@ struct AgentThreadsView: View {
                 try await appModel.cloud.refreshThreads()
             }
         }
-        .task(id: "\(refresh.revision):\(lifecycleRefreshKey)") {
-            guard let connect = appModel.connect else { return }
-            await appModel.cloud.refreshLifecycleMetadata(using: connect)
+        .onAppear { isListVisible = true }
+        .onDisappear { isListVisible = false }
+        .task(id: "\(refresh.revision):\(lifecycleRefreshKey):\(listScenePhase):\(isListVisible):\(appModel.cloud.isConnected)") {
+            guard isListVisible, listScenePhase == .active, let connect = appModel.connect else { return }
+            // A PR can merge without changing the thread's cloud shell. Refresh while
+            // this list is visible, and immediately on return from another app or thread.
+            while !Task.isCancelled {
+                await appModel.cloud.refreshLifecycleMetadata(using: connect)
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+            }
         }
         .task(id: "\(refresh.revision):\(providerEnvironments.map(\.id).joined(separator: "|"))") {
             guard let connect = appModel.connect else { return }

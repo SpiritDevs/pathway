@@ -73,3 +73,8 @@ available in the queued thread’s menu, even if its environment cannot be opene
 Loaded image attachments stay cached on this device, so scrolling back or returning to a
 thread can show the preview while its environment reconnects. Images that have not loaded
 yet wait for reconnection and retry automatically.
+
+Agent Threads checks pull request status when you return to the list or foreground the app,
+and every 30 seconds while the list is visible. Eligible threads move to **Settled** when
+their linked pull requests are merged. Pinned threads, active work, temporary threads, and
+threads you explicitly reopened keep their existing settlement safeguards.
