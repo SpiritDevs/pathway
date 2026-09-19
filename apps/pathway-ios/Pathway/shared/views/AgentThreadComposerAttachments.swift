@@ -64,6 +64,7 @@ struct AgentThreadComposerAttachmentChip: View {
             Text(failureReason)
         }
         .task(id: attachment.id) {
+            if let cached = PathwayDecodedImageCache.image("draft:\(attachment.id)") { thumbnail = cached; return }
             let data = attachment.previewData
             let file = attachment.localFileURL
             guard data != nil || file != nil else { return }
@@ -80,13 +81,16 @@ struct AgentThreadComposerAttachmentChip: View {
                 return UIImage(cgImage: image).jpegData(compressionQuality: 0.8)
             }.value
             guard !Task.isCancelled, let thumbnailData else { return }
-            thumbnail = UIImage(data: thumbnailData)
+            if let image = UIImage(data: thumbnailData) {
+                PathwayDecodedImageCache.store(image, key: "draft:\(attachment.id)")
+                thumbnail = image
+            }
         }
     }
 
     private var preview: some View {
         Group {
-            if let thumbnail {
+            if let thumbnail = thumbnail ?? PathwayDecodedImageCache.image("draft:\(attachment.id)") {
                 Image(uiImage: thumbnail).resizable().scaledToFill()
             } else {
                 Image(systemName: "photo").font(.title2).foregroundStyle(.secondary)

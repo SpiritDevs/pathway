@@ -496,6 +496,17 @@ final class PathwayAgentThreadModel {
                     attachments = result.objectValue?["attachments"]?.arrayValue ?? []
                     guard attachments.count == selected.count else { throw PathwayThreadConversationError.message("The attachments could not be prepared. Try again.") }
                 }
+                if let storageDirectory {
+                    for (draft, persisted) in zip(selected, attachments) where draft.type == "image" {
+                        guard let id = persisted.objectValue?["id"]?.stringValue else { continue }
+                        let bytes = attachmentData[draft.id] ?? draft.previewData
+                        if let bytes {
+                            if let saved = try? await PathwayAttachmentImageCache.shared.store(bytes, directory: storageDirectory, key: attachmentImageCacheKey(id)) {
+                                PathwayAttachmentImageLocations.store(saved, directory: storageDirectory, image: attachmentImageCacheKey(id))
+                            }
+                        }
+                    }
+                }
                 preparedSend?.attachments = attachments
                 preparedSend?.attachmentsPrepared = true
                 await persistDraftNow()

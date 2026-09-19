@@ -73,7 +73,7 @@ private final class ConversationSimulatorWorkspace {
             cloudProjectId: "sim-project", shell: shell, cloudUpdatedAt: 0), environment: environment, request: { [weak self] method, payload in
                 guard let self else { throw CancellationError() }
                 return try self.request(method, payload)
-            })
+            }, storageDirectory: ProcessInfo.processInfo.arguments.contains("--conversation-image") ? FileManager.default.temporaryDirectory.appending(path: "image-fixture") : nil)
         add("user", "user_message", text: "Bring the mobile conversation in line with desktop.", extra: ["messageId": .string("message-user")])
         add("commentary", "assistant_message", text: "I’ll bring the conversation controls together, then verify the full flow on mobile.")
         add("search", "file_search", extra: ["pattern": .string("AgentThreadConversation"), "results": .array([.object(["fileName": .string("shared/views/AgentThreadsView.swift"), "line": .number(588), "preview": .string("struct AgentThreadConversationView: View")])])])
@@ -81,6 +81,19 @@ private final class ConversationSimulatorWorkspace {
         add("change", "file_change", extra: ["fileName": .string("shared/views/AgentThreadsView.swift"), "additions": .number(68), "deletions": .number(26), "diffStr": .string("@@ -1,2 +1,3 @@\n-OldTimeline(items: items)\n+AgentThreadTranscript(model: model)\n+    .scrollDismissesKeyboard(.interactively)")])
         add("child", "subagent", extra: ["childThreadId": .string("sim-child"), "title": .string("Review conversation controls"), "prompt": .string("Check the native conversation controls."), "result": .string("Model selection and message actions verified."), "model": .string("gpt-5.4")])
         add("answer", "assistant_message", text: "The conversation now keeps the answer easy to read.\n\nCompleted work folds into a compact summary. Open the tool rows to inspect searches, commands, and file changes.\n\nSubagents have their own conversation, and your draft stays here when you come back.")
+        if ProcessInfo.processInfo.arguments.contains("--conversation-image") {
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 280, height: 160)).image { context in
+                UIColor.systemBlue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 280, height: 160))
+                ("Image stays visible" as NSString).draw(at: CGPoint(x: 24, y: 65), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 22), .foregroundColor: UIColor.white])
+            }
+            let file = FileManager.default.temporaryDirectory.appending(path: "fixture-image.png")
+            try! image.pngData()!.write(to: file)
+            model.cloudQueueAttachmentURLs["fixture-image"] = file
+            add("image-message", "user_message", text: "Keep this image when returning to the thread.", extra: [
+                "messageId": .string("image-message"), "attachments": .array([.object([
+                    "id": .string("fixture-image"), "type": .string("image"), "name": .string("Preview.png"),
+                    "mimeType": .string("image/png"), "sizeBytes": .number(Double(image.pngData()!.count))])])])
+        }
         if questions {
             add("question", "user_input_request", extra: ["requestId": .string("request-question"), "status": .string("waiting"), "runId": .string("run-question"), "questions": .array([
                 .object(["id": .string("direction"), "header": .string("Direction"), "question": .string("Which conversation layout should we use?"), "options": .array([

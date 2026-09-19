@@ -69,3 +69,7 @@ Queued threads have their own actions: swipe left or long-press to **Cancel** pe
 Canceled entries offer **Remove from list**, which remembers your choice on this device.
 If the entry is retried or changes elsewhere, it appears again. These actions are also
 available in the queued thread’s menu, even if its environment cannot be opened.
+
+Loaded image attachments stay cached on this device, so scrolling back or returning to a
+thread can show the preview while its environment reconnects. Images that have not loaded
+yet wait for reconnection and retry automatically.

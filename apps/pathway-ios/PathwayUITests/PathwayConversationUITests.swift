@@ -371,11 +371,27 @@ final class PathwayConversationUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Choose another view"].isHittable)
     }
 
-    @MainActor private func launchFixture(questions: Bool = false, agents: Bool = false, working: Bool = false, longHistory: Bool = false, collapseWork: Bool = false, nested: Bool = false) -> XCUIApplication {
+    @MainActor
+    func testImageRemainsAvailableAfterThreadNavigation() {
+        let app = launchFixture(nested: true, image: true)
+        let image = app.buttons["transcript-image-fixture-image"]
+        XCTAssertTrue(image.waitForExistence(timeout: 5))
+        app.buttons["fixture-open-nested-thread"].tap()
+        dismissFixtureNotificationAlert(in: app)
+        XCTAssertTrue(image.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Retry"].exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        dismissFixtureNotificationAlert(in: app)
+        XCTAssertTrue(image.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Retry"].exists)
+        capture(app, "Image retained after returning to thread")
+    }
+
+    @MainActor private func launchFixture(questions: Bool = false, agents: Bool = false, working: Bool = false, longHistory: Bool = false, collapseWork: Bool = false, nested: Bool = false, image: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-conversation"] + (questions ? ["--conversation-questions"] : []) + (agents ? ["--conversation-agents"] : [])
             + (working ? ["--conversation-working"] : []) + (longHistory ? ["--conversation-long-history"] : [])
-            + (collapseWork ? ["--conversation-collapse-work"] : []) + (nested ? ["--conversation-nested"] : [])
+            + (collapseWork ? ["--conversation-collapse-work"] : []) + (nested ? ["--conversation-nested"] : []) + (image ? ["--conversation-image"] : [])
         app.launch()
         XCTAssertTrue(app.buttons["agent-thread-actions"].waitForExistence(timeout: 10))
         dismissFixtureNotificationAlert(in: app)
