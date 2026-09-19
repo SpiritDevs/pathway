@@ -402,7 +402,7 @@ import {
   cloneComposerAttachmentForRetry,
   deriveLockedProvider,
   readFileAsDataUrl,
-  loadQueuedComposerImages,
+  prepareQueuedMessageEdit,
   reconcileMountedTerminalThreadIds,
   resolveEditableV2UserMessageId,
   resolveRetryableV2UserMessageId,
@@ -3033,14 +3033,14 @@ function ChatViewContent(props: ChatViewProps) {
     serverAttachmentUrlById,
   ]);
   const onEditQueuedMessage = useCallback(
-    async (input: {
+    async function restoreQueuedMessage(input: {
       readonly runId: RunId;
       readonly text: string;
       readonly attachments: ReadonlyArray<{
         readonly attachment: ChatAttachment;
         readonly url: string;
       }>;
-    }): Promise<boolean> => {
+    }): Promise<boolean> {
       const draftStore = useComposerDraftStore.getState();
       if (composerDraftHasUserContent(draftStore.getComposerDraft(composerDraftTarget))) {
         toastManager.add(
@@ -3053,68 +3053,52 @@ function ChatViewContent(props: ChatViewProps) {
         return false;
       }
 
-      let images: ComposerAttachment[];
+      let images: ComposerAttachment[] | null;
       try {
-        images = await loadQueuedComposerImages(input.attachments);
-      } catch (error) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not edit queued message",
-            description:
-              error instanceof Error ? error.message : "Its attachments could not be loaded.",
-          }),
-        );
-        return false;
-      }
-
-      if (
-        composerDraftHasUserContent(
-          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
-        )
-      ) {
-        for (const image of images) revokeBlobPreviewUrl(image.previewUrl);
-        toastManager.add(
-          stackedThreadToast({
-            type: "info",
-            title: "Composer already has a draft",
-            description: "Send or clear the current draft before editing a queued message.",
-          }),
-        );
-        return false;
-      }
-
-      let result: Awaited<ReturnType<typeof cancelQueuedRun>>;
-      try {
-        result = await cancelQueuedRun({
-          environmentId,
-          input: { threadId, runId: input.runId },
+        images = await prepareQueuedMessageEdit(input.attachments, async () => {
+          try {
+            const result = await cancelQueuedRun({
+              environmentId,
+              input: { threadId, runId: input.runId },
+            });
+            if (result._tag === "Success") return true;
+            if (isAtomCommandInterrupted(result)) return false;
+            throw squashAtomCommandFailure(result);
+          } catch (error) {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Could not edit queued message",
+                description:
+                  error instanceof Error ? error.message : "The queued message was kept.",
+              }),
+            );
+            return false;
+          }
         });
-      } catch (error) {
-        for (const image of images) revokeBlobPreviewUrl(image.previewUrl);
-        toastManager.add(
+      } catch {
+        // Cancellation is durable even if downloading an attachment fails.
+        // Retain the original input in the retry action; never requeue it.
+        const toastId = toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not edit queued message",
-            description: error instanceof Error ? error.message : "The queued message was kept.",
+            title: "Message removed from queue; attachments could not be loaded",
+            description:
+              "It will not send automatically. Retry to restore the message and its attachments for editing.",
+            timeout: 0,
+            actionProps: {
+              children: "Retry editing",
+              onClick: () => {
+                void restoreQueuedMessage(input).then((restored) => {
+                  if (restored) toastManager.close(toastId);
+                });
+              },
+            },
           }),
         );
         return false;
       }
-      if (result._tag === "Failure") {
-        for (const image of images) revokeBlobPreviewUrl(image.previewUrl);
-        if (!isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not edit queued message",
-              description: error instanceof Error ? error.message : "The queued message was kept.",
-            }),
-          );
-        }
-        return false;
-      }
+      if (images === null) return false;
 
       const latestDraft = useComposerDraftStore.getState().getComposerDraft(composerDraftTarget);
       const draftAppearedWhileCancelling = composerDraftHasUserContent(latestDraft);

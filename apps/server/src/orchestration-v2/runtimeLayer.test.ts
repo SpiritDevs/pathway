@@ -1534,6 +1534,27 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         type: "message.dispatch",
         createdBy: "user",
         creationSource: "web",
+        commandId: CommandId.make("runtime-layer-serialized-queue-editing"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-serialized-queue-editing"),
+        text: "This message is being edited in the composer.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+      });
+      const editingProjection = yield* orchestrator.getThreadProjection(threadId);
+      const editingRun = editingProjection.runs.find((run) => run.status === "queued");
+      assert.isDefined(editingRun);
+      yield* orchestrator.dispatch({
+        type: "queued-run.cancel",
+        commandId: CommandId.make("runtime-layer-serialized-queue-take-for-edit"),
+        threadId,
+        runId: editingRun.id,
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
         commandId: CommandId.make("runtime-layer-serialized-queue-first"),
         threadId,
         messageId: MessageId.make("runtime-layer-serialized-queue-first"),
@@ -1663,6 +1684,49 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         afterSecondPromotion.runs.find((run) => run.id === secondQueuedRun.id)?.status,
         "starting",
       );
+      assert.equal(
+        afterSecondPromotion.runs.find((run) => run.id === editingRun.id)?.status,
+        "cancelled",
+        "advancing the queue must leave the message being edited cancelled",
+      );
+      assert.isFalse(
+        afterSecondPromotion.turnItems.some(
+          (item) => item.type === "user_message" && item.messageId === editingRun.userMessageId,
+        ),
+        "the composer draft must never be sent by queue advancement",
+      );
+      const promotedSecond = afterSecondPromotion.runs.find((run) => run.id === secondQueuedRun.id);
+      assert.isDefined(promotedSecond);
+      const secondCompletedAt = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("runtime-layer-serialized-queue-second-completed"),
+            type: "run.updated",
+            threadId,
+            runId: promotedSecond.id,
+            providerInstanceId: promotedSecond.providerInstanceId,
+            occurredAt: secondCompletedAt,
+            payload: { ...promotedSecond, status: "completed", completedAt: secondCompletedAt },
+          },
+        ],
+      });
+      assert.equal(yield* orchestrator.resumeQueuedRuns, 0);
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-serialized-queue-edited-submit"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-serialized-queue-edited-submit"),
+        text: "Edited and explicitly submitted.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+      });
+      const afterSubmit = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(afterSubmit.runs.filter((run) => run.status === "starting").length, 1);
+      assert.equal(afterSubmit.runs.find((run) => run.id === editingRun.id)?.status, "cancelled");
     }),
   );
 
@@ -1768,15 +1832,35 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       );
       assert.equal(yield* orchestrator.resumeQueuedRuns, 0);
 
-      const cancelAgainError = yield* orchestrator
-        .dispatch({
-          type: "queued-run.cancel",
-          commandId: CommandId.make("runtime-layer-queued-edit-cancel-again"),
-          threadId,
-          runId: queuedRun.id,
-        })
-        .pipe(Effect.flip);
-      assert.equal(cancelAgainError._tag, "OrchestratorDispatchError");
+      const cancelAgain = yield* orchestrator.dispatch({
+        type: "queued-run.cancel",
+        commandId: CommandId.make("runtime-layer-queued-edit-cancel-again"),
+        threadId,
+        runId: queuedRun.id,
+      });
+      const cancelledRun = afterCancel.runs.find((run) => run.id === queuedRun.id);
+      assert.equal(cancelAgain.storedEvents.length, 1);
+      const echoed = cancelAgain.storedEvents[0]?.event;
+      assert.equal(echoed?.type, "run.updated");
+      assert.deepEqual(echoed?.payload, cancelledRun);
+      const afterRetry = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(afterRetry.runs, afterCancel.runs);
+      assert.deepEqual(afterRetry.attempts, afterCancel.attempts);
+      assert.deepEqual(afterRetry.nodes, afterCancel.nodes);
+
+      const activeRun = before.runs.find((run) => run.id !== queuedRun.id);
+      assert.isDefined(activeRun);
+      for (const runId of [activeRun.id, RunId.make("missing-queued-run")]) {
+        const error = yield* orchestrator
+          .dispatch({
+            type: "queued-run.cancel",
+            commandId: CommandId.make(`runtime-layer-queued-edit-reject:${runId}`),
+            threadId,
+            runId,
+          })
+          .pipe(Effect.flip);
+        assert.equal(error._tag, "OrchestratorDispatchError");
+      }
     }),
   );
 });

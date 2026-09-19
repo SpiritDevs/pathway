@@ -5908,6 +5908,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })),
         );
       const queuedRun = projection.runs.find((candidate) => candidate.id === command.runId);
+      if (queuedRun?.status === "cancelled") {
+        // A stale client may still show this run in its queue. Echo the durable
+        // state so every subscribed client can remove it without changing history.
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "run.updated",
+          threadId: command.threadId,
+          runId: queuedRun.id,
+          ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
+          providerInstanceId: queuedRun.providerInstanceId,
+          occurredAt: yield* DateTime.now,
+          payload: queuedRun,
+        });
+        return;
+      }
       if (queuedRun === undefined || queuedRun.status !== "queued") {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,

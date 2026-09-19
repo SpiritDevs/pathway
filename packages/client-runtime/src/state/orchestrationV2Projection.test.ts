@@ -14,6 +14,7 @@ import {
 import * as DateTime from "effect/DateTime";
 
 import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
+import { deriveThreadQueueWorkflowState } from "./threadWorkflows.ts";
 
 const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
 const threadId = ThreadId.make("thread-reducer");
@@ -127,6 +128,26 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     } as OrchestrationV2DomainEvent;
 
     expect(applyOrchestrationV2ProjectionEvent(emptyProjection, event)).toBe(emptyProjection);
+  });
+
+  it("clears a stale queued row when cancellation is echoed again", () => {
+    const projection = {
+      ...emptyProjection,
+      runs: [{ ...run, status: "queued" as const, queuePosition: 1, completedAt: null }],
+    };
+    expect(deriveThreadQueueWorkflowState(projection).queuedRuns).toHaveLength(1);
+
+    const next = applyOrchestrationV2ProjectionEvent(projection, {
+      id: "event-cancel-echo",
+      type: "run.updated",
+      threadId,
+      runId,
+      occurredAt: now,
+      payload: { ...run, status: "cancelled", queuePosition: null },
+    } as OrchestrationV2DomainEvent);
+
+    expect(next).not.toBeNull();
+    expect(deriveThreadQueueWorkflowState(next!).queuedRuns).toEqual([]);
   });
 
   it("preserves visible row identity when run updates do not change membership", () => {
