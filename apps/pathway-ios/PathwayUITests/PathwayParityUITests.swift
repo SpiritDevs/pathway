@@ -18,6 +18,31 @@ final class PathwayParityUITests: XCTestCase {
         capture(app, "Thread refresh finishes with an offline result")
     }
 
+    @MainActor func testThreadSearchOpensAtTopAndCancels() {
+        let app = launch(extra: ["--parity-thread-menu"])
+        let field = app.textFields["agent-threads-search"]
+        XCTAssertFalse(field.exists)
+        XCTAssertEqual(app.searchFields.count, 0)
+        capture(app, "Thread list without bottom search")
+        app.buttons["Thread options"].tap()
+        app.buttons["Search"].tap()
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertLessThan(field.frame.maxY, app.frame.height / 2)
+        field.typeText("Astro")
+        XCTAssertEqual(field.value as? String, "Astro")
+        XCTAssertTrue(app.staticTexts["Five Astro Web Designs"].exists)
+        XCTAssertFalse(app.staticTexts["Review Billing For Missing Stripe IDs"].exists)
+        capture(app, "Top search focused with keyboard")
+        app.buttons["agent-threads-search-cancel"].tap()
+        XCTAssertFalse(field.exists)
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        app.buttons["Thread options"].tap()
+        app.buttons["Search"].tap()
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, "Search threads")
+    }
+
     override func setUp() {
         super.setUp()
         continueAfterFailure = false

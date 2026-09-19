@@ -22,6 +22,8 @@ struct AgentThreadsView: View {
     @State private var threadActions = PathwayThreadActions()
     @State private var sleepingThread: PathwayAgentThread?
     @State private var query = ""
+    @State private var showsSearch = false
+    @FocusState private var searchFocused: Bool
     @State private var listFilter: PathwayThreadListFilter
     @State private var companyFilter = ""
     @State private var environmentFilter = ""
@@ -41,7 +43,7 @@ struct AgentThreadsView: View {
     }
 
     private var threadNavigation: some View {
-        Group {
+        VStack(spacing: 0) {
             if lifecycleThreadCount == 0 {
                 VStack {
                     refreshResult.padding(.horizontal)
@@ -52,10 +54,13 @@ struct AgentThreadsView: View {
             }
         }
         .navigationTitle("Agent Threads")
+        .navigationBarTitleDisplayMode(showsSearch ? .inline : .large)
         .navigationDestination(isPresented: Binding(get: { queuedThread != nil }, set: { if !$0 { queuedThread = nil } })) {
             if let queuedThread { PathwayQueuedThreadView(thread: queuedThread) }
         }
-        .searchable(text: $query, prompt: "Search threads")
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if showsSearch { threadSearch }
+        }
         .toolbar { threadToolbar }
         .refreshable {
             await refresh.run {
@@ -95,7 +100,6 @@ struct AgentThreadsView: View {
         .task(id: appModel.localStorageDirectory) { await focuses.observe(cloud: appModel.cloud, storageDirectory: appModel.localStorageDirectory) }
         .sheet(isPresented: $creatingFocus) { PathwayFocusEditorView(model: focuses) }
         .sheet(isPresented: $showingNotifications) { PathwayFocusNotificationsView(model: focuses) }
-        .accessibilityIdentifier("agent-threads-list")
         .sheet(item: $sleepingThread) { thread in
             sleepSheet(for: thread)
         }
@@ -262,6 +266,7 @@ struct AgentThreadsView: View {
             }
         }
         .listStyle(.plain)
+        .accessibilityIdentifier("agent-threads-list")
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if usesCompactShell {
                 Color.clear
@@ -356,6 +361,38 @@ struct AgentThreadsView: View {
         return true
     }
 
+    private var threadSearch: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search threads", text: $query)
+                    .focused($searchFocused)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.search)
+                    .onSubmit { searchFocused = false }
+                    .accessibilityIdentifier("agent-threads-search")
+                if !query.isEmpty {
+                    Button("Clear search", systemImage: "xmark.circle.fill") { query = ""; searchFocused = true }
+                        .labelStyle(.iconOnly)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(12)
+            .background(.quaternary, in: .rect(cornerRadius: 12))
+            Button("Cancel") {
+                searchFocused = false
+                query = ""
+                showsSearch = false
+            }
+            .accessibilityIdentifier("agent-threads-search-cancel")
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(.background)
+        .task { searchFocused = true }
+    }
+
     @ToolbarContentBuilder
     private var threadToolbar: some ToolbarContent {
         if focuses.selectedID != "all" {
@@ -377,6 +414,11 @@ struct AgentThreadsView: View {
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
+                Button("Search", systemImage: "magnifyingglass") {
+                    showsSearch = true
+                    searchFocused = true
+                }
+                Divider()
                 focusMenu
                 filtersMenu
             } label: { Image(systemName: "line.3.horizontal.decrease").frame(minWidth: 44, minHeight: 44) }

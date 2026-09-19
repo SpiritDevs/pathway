@@ -79,3 +79,6 @@ Agent Threads checks pull request status when you return to the list or foregrou
 and every 30 seconds while the list is visible. Eligible threads move to **Settled** when
 their linked pull requests are merged. Pinned threads, active work, temporary threads, and
 threads you explicitly reopened keep their existing settlement safeguards.
+
+To search threads, open **Thread options** and choose **Search**. The search field opens
+at the top with the keyboard ready. Tap **Cancel** to clear the search and hide the field.
