@@ -15,7 +15,7 @@ Optional repository variables accept JSON runner-label arrays:
 | Variable                    | Default                                       | Purpose                                                                      |
 | --------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------- |
 | `FLEET_MACOS_RUNNER`        | `["self-hosted","fleet-macos-arm64"]`         | Portable jobs, desktop releases, dictation.                                  |
-| `FLEET_APPLE_RUNNER`        | `["self-hosted","fleet-macos-arm64","xcode"]` | Native Apple client checks.                                                  |
+| `FLEET_APPLE_RUNNER`        | `["self-hosted","fleet-macos-arm64","xcode"]` | Native Apple client checks and iOS TestFlight releases.                      |
 | `FLEET_ENABLE_LINUX_CHECKS` | Unset, disabled                               | Set to `true` only when restoring the Linux Rust check on a compatible host. |
 | `FLEET_LINUX_RUNNER`        | `["self-hosted","fleet-linux-x64"]`           | Linux Rust check if explicitly enabled.                                      |
 
@@ -33,6 +33,7 @@ Optional repository variables accept JSON runner-label arrays:
 | Deploy Pathway Connect relay | Existing path-filtered main pushes; production deployment behavior retained.                                                                                          |
 | Check private mail storage   | Remains intentionally manual; writes a temporary synthetic file for its check.                                                                                        |
 | Release                      | Every three hours at minute 7 for changed nightly commits; stable `v*.*.*` tags excluding nightly tags; manual stable/nightly dispatch.                               |
+| Release iOS to TestFlight    | Every three hours at minute 27 when iOS code or release tooling changed since the last successful default-branch upload; manual dispatch always builds.               |
 
 Required-check policies should match the retained job names. The native dictation matrix keeps its existing Mac check identity, while Windows coverage is deliberately absent. A skipped Linux check is not evidence that Linux code passed. Some server tests also have existing OS guards and do not exercise Linux-only behavior on Mac.
 
@@ -52,6 +53,12 @@ The following configuration is required. Environment-scoped entries belong to th
 | Repository, stable version finalization               | `RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY`                                                                           | —                                                                                                                                                   |
 
 `APPLE_API_KEY` contains the key contents; the workflow writes a private temporary file. `MACOS_PROVISIONING_PROFILE` is base64-encoded. Both temporary files are removed on step exit. The release App must be installed on this repository, allowed to write contents, and allowed to push the intended version bump under main's branch rules.
+
+The iOS TestFlight workflow reuses the Apple API key, team ID and production public configuration.
+It additionally needs `IOS_DEVELOPMENT_CERTIFICATE` and `IOS_DEVELOPMENT_CERTIFICATE_PASSWORD`,
+plus API access to automatic provisioning and cloud-managed distribution signing. Its
+`ios-testflight/latest` tag tracks successful default-branch uploads. See the
+[Apple client release runbook](apple-client-release.md#testflight-workflow) for setup and tester delivery.
 
 The production relay and mail workflows keep their existing credentials. Relay deployment uses `CLOUDFLARE_API_TOKEN`, `AXIOM_TOKEN`, `CLERK_SECRET_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `AXIOM_ORG_ID`, `CONVEX_URL`, and the configured relay/Clerk variables. Enabled APNs/mail integrations additionally require their existing `APNS_*`/`MAIL_*` settings. Mail storage diagnostics require `MAIL_UPLOADTHING_API_KEY`. This migration does not create or rotate those credentials.
 
