@@ -2594,3 +2594,53 @@ it("leaves an empty conversation clear without an instructional placeholder", as
   const markup = renderToStaticMarkup(<MessagesTimeline {...buildProps()} timelineEntries={[]} />);
   expect(markup).toBe("");
 });
+
+it("keeps both history boundaries and unloaded index markers available in an empty window", () => {
+  const markup = renderToStaticMarkup(
+    <MessagesTimeline
+      {...buildProps()}
+      timelineEntries={[]}
+      liveFollowEnabled={false}
+      history={{
+        hasOlder: true,
+        hasNewer: true,
+        isLoading: false,
+        error: null,
+        request: () => {},
+        retry: () => {},
+        index: [
+          { messageId: MessageId.make("old"), role: "user", preview: "Old prompt" },
+          { messageId: MessageId.make("recent"), role: "user", preview: "Recent prompt" },
+        ],
+      }}
+    />,
+  );
+  expect(markup).toContain("Load older messages from remote");
+  expect(markup).toContain("Load newer messages from remote");
+  expect(markup).toContain('data-testid="timeline-minimap"');
+  expect(markup.match(/data-minimap-strip="true"/g)).toHaveLength(2);
+  expect(markup).toContain('data-maintain-visible-content-position-data="true"');
+  expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
+});
+
+it("makes a failed remote history request retryable without clearing the timeline", () => {
+  const markup = renderToStaticMarkup(
+    <MessagesTimeline
+      {...buildProps()}
+      timelineEntries={[]}
+      history={{
+        hasOlder: true,
+        hasNewer: false,
+        isLoading: false,
+        error: "Connection closed",
+        request: () => {},
+        retry: () => {},
+        index: [],
+      }}
+    />,
+  );
+  expect(markup).toContain('role="alert"');
+  expect(markup).toContain("Couldn&#x27;t load messages from remote.");
+  expect(markup).toContain("Retry");
+  expect(markup).toContain("Load older messages from remote");
+});

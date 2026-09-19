@@ -1,4 +1,8 @@
-import type { OrchestrationV2ThreadDetailSnapshot, ThreadId } from "@spiritdevs/contracts";
+import type {
+  OrchestrationV2ThreadDetailSnapshot,
+  OrchestrationV2ThreadHistoryRequest,
+  ThreadId,
+} from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -33,25 +37,32 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
   readonly threadId: ThreadId;
   readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
   readonly timeoutMs?: number;
+  readonly history?: OrchestrationV2ThreadHistoryRequest;
 }) {
-  const requestUrl = environmentEndpointUrl(
+  const endpoint = environmentEndpointUrl(
     input.prepared.httpBaseUrl,
     `/api/orchestration/threads/${input.threadId}`,
   );
+  const requestUrl = new URL(endpoint);
+  if (input.history !== undefined) {
+    for (const [key, value] of Object.entries(input.history))
+      requestUrl.searchParams.set(key, String(value));
+  }
   const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
   const headers = yield* buildEnvironmentAuthHeaders(
     input.prepared.httpAuthorization,
     "GET",
-    requestUrl,
+    requestUrl.href,
     input.signer,
   );
   return yield* executeEnvironmentHttpRequest(
-    requestUrl,
+    requestUrl.href,
     input.timeoutMs ?? DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS,
     withEnvironmentCredentials(
       input.prepared.httpAuthorization,
       client.orchestration.threadSnapshot({
         params: { threadId: input.threadId },
+        query: input.history ?? {},
         headers,
       }),
     ),
@@ -80,6 +91,7 @@ export class ThreadSnapshotLoader extends Context.Service<
     readonly load: (
       prepared: PreparedConnection,
       threadId: ThreadId,
+      history?: OrchestrationV2ThreadHistoryRequest,
     ) => Effect.Effect<ThreadSnapshotLoadResult>;
   }
 >()("@spiritdevs/client-runtime/state/threadSnapshotHttp/ThreadSnapshotLoader") {}
@@ -97,8 +109,17 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
     // connections work without one).
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
     return ThreadSnapshotLoader.of({
-      load: (prepared: PreparedConnection, threadId: ThreadId) =>
-        fetchEnvironmentThreadSnapshot({ prepared, threadId, signer }).pipe(
+      load: (
+        prepared: PreparedConnection,
+        threadId: ThreadId,
+        history?: OrchestrationV2ThreadHistoryRequest,
+      ) =>
+        fetchEnvironmentThreadSnapshot({
+          prepared,
+          threadId,
+          signer,
+          ...(history === undefined ? {} : { history }),
+        }).pipe(
           Effect.map((snapshot): ThreadSnapshotLoadResult => ({ _tag: "Snapshot", snapshot })),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           // A cloud-discovered or draft-promoting shell can reach the client before the owning

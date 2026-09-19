@@ -451,6 +451,7 @@ export const ServerConfig = Schema.Struct({
    * fields to servers that don't advertise this.
    */
   threadSnapshotPagination: Schema.optionalKey(Schema.Boolean),
+  orchestrationV2ThreadHistory: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 

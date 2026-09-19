@@ -36,6 +36,7 @@ import { EnvironmentRelayLinkState } from "./cloudProject.ts";
 import {
   OrchestrationV2ShellSnapshot,
   OrchestrationV2ThreadDetailSnapshot,
+  OrchestrationV2ThreadHistoryRequest,
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
 import {
@@ -502,6 +503,10 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     HttpApiEndpoint.get("threadSnapshot", "/api/orchestration/threads/:threadId", {
       headers: OptionalBearerHeaders,
       params: EnvironmentOrchestrationThreadSnapshotParams,
+      query: Schema.Struct({
+        ...OrchestrationV2ThreadHistoryRequest.fields,
+        limit: Schema.optionalKey(OrchestrationV2ThreadHistoryRequest.fields.limit),
+      }),
       success: OrchestrationV2ThreadDetailSnapshot,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
