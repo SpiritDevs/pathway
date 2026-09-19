@@ -182,6 +182,19 @@ function CommentAttachments({
       {attachmentIds.map((attachmentId, index) => {
         const attachment = resolved[index] ?? null;
         if (attachment === null) return null;
+        if (attachment.mimeType === "application/json" || attachment.mimeType === "text/plain") {
+          return (
+            <a
+              key={attachmentId}
+              href={attachment.url}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-md border border-border/60 px-3 py-2 text-sm underline underline-offset-4"
+            >
+              {attachment.fileName ?? "Open diagnostic attachment"}
+            </a>
+          );
+        }
         return attachment.mimeType?.startsWith("video/") === true ||
           isIssueVideoAttachmentUrl(attachment.url) ? (
           <video

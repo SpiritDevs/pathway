@@ -209,6 +209,7 @@ export const SLACK_MAX_REACTION_ROUTES = 20;
 export const ISSUE_COMMENT_ATTACHMENT_MAX_BYTES = PROVIDER_SEND_TURN_MAX_IMAGE_BYTES;
 /** Short browser recordings attached by agents as review evidence. */
 export const ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES = 25 * 1024 * 1024;
+export const ISSUE_DIAGNOSTIC_ATTACHMENT_MAX_BYTES = 256 * 1024;
 /**
  * The wire bound on the upload. Base64 spends four characters on every three bytes, and the
  * `data:image/webp;base64,` header and any wrapping whitespace ride on top of that.
@@ -1694,10 +1695,28 @@ export type IssuesGetEventsResult = typeof IssuesGetEventsResult.Type;
  * queued or running, and when the issue's project is rootless or absent: enrichment is a
  * read-only process in a directory, and there is no directory to run it in.
  */
-export const IssueEnrichmentStartInput = Schema.Struct({ issueId: IssueId });
+export const IssueInvestigationRoute = Schema.Struct({
+  companyId: TrimmedNonEmptyString,
+  localProjectId: ProjectId,
+});
+export type IssueInvestigationRoute = typeof IssueInvestigationRoute.Type;
+export const IssueEnrichmentRefInput = Schema.Struct({
+  issueId: IssueId,
+  route: Schema.optionalKey(IssueInvestigationRoute),
+});
+export type IssueEnrichmentRefInput = typeof IssueEnrichmentRefInput.Type;
+export const IssueEnrichmentStartInput = Schema.Struct({
+  issueId: IssueId,
+  route: Schema.optionalKey(IssueInvestigationRoute),
+  /** Pins this investigation without changing the environment's default model. */
+  modelSelection: Schema.optionalKey(ModelSelection),
+});
 export type IssueEnrichmentStartInput = typeof IssueEnrichmentStartInput.Type;
 
-export const IssueEnrichmentRunRefInput = Schema.Struct({ runId: IssueEnrichmentRunId });
+export const IssueEnrichmentRunRefInput = Schema.Struct({
+  runId: IssueEnrichmentRunId,
+  route: Schema.optionalKey(IssueInvestigationRoute),
+});
 export type IssueEnrichmentRunRefInput = typeof IssueEnrichmentRunRefInput.Type;
 
 /** One run after a write. The stream carries the same row to everybody else watching. */

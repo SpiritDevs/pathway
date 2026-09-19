@@ -66,6 +66,7 @@ func pathwayIssueDate(_ value: JSONValue?) -> Date? {
 
 struct PathwayIssueWriteError: LocalizedError {
     let message: String
+    var rejectionCode: String? = nil
     var errorDescription: String? { message }
 }
 
@@ -95,7 +96,8 @@ enum PathwayIssueOperations {
         for receipt in receipts {
             guard receipt.objectValue?["status"]?.stringValue == "accepted" else {
                 throw PathwayIssueWriteError(
-                    message: receipt.objectValue?["message"]?.stringValue ?? "This task change was rejected."
+                    message: receipt.objectValue?["message"]?.stringValue ?? "This task change was rejected.",
+                    rejectionCode: receipt.objectValue?["status"]?.stringValue == "rejected" ? receipt.objectValue?["code"]?.stringValue : nil
                 )
             }
         }

@@ -37,17 +37,19 @@ import {
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
+import { prepareIssueEvidence } from "./investigationEvidence.ts";
 import * as ServerConfig from "../config.ts";
 import { IssueCommentRepository } from "../persistence/Services/IssueComments.ts";
 import { IssueLabelRepository } from "../persistence/Services/IssueLabels.ts";
 import { IssueRelationRepository } from "../persistence/Services/IssueRelations.ts";
-import { IssueRepository, type IssueRecord } from "../persistence/Services/Issues.ts";
+import { IssueRepository } from "../persistence/Services/Issues.ts";
 import { IssueStatusRepository } from "../persistence/Services/IssueStatuses.ts";
 import { IssueTodoRepository } from "../persistence/Services/IssueTodos.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
@@ -151,6 +153,7 @@ export const make = Effect.gen(function* () {
   const settings = yield* ServerSettingsService;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const providers = yield* ProviderInstanceRegistry;
   const issueRepository = yield* IssueRepository;
@@ -221,33 +224,48 @@ export const make = Effect.gen(function* () {
    */
   const gatherContext = Effect.fn("IssueEnrichmentEngine.gatherContext")(function* (
     issue: Issue,
-    options: { readonly imagesSupported: boolean },
+    options: {
+      readonly imagesSupported: boolean;
+      readonly cloudContext?: IssueEnrichmentStartRequest["cloudContext"];
+    },
   ) {
-    const [statuses, labels, records, todos, relations, comments] = yield* Effect.all(
-      [
-        read("Failed to read the task statuses", statusRepository.listAll()),
-        read("Failed to read the task labels", labelRepository.listAll()),
-        read("Failed to read the tasks", issueRepository.listLive()),
-        read("Failed to read the task todos", todoRepository.listByIssue({ issueId: issue.id })),
-        read(
-          "Failed to read the task relations",
-          relationRepository.listByIssue({ issueId: issue.id }),
-        ),
-        read(
-          "Failed to read the task comments",
-          commentRepository.listByIssue({ issueId: issue.id }),
-        ),
-      ],
-      { concurrency: "unbounded" },
-    );
+    const cloud = options.cloudContext;
+    const [statuses, labels, records, todos, relations, comments] =
+      cloud !== undefined
+        ? ([
+            cloud.statuses,
+            cloud.labels,
+            cloud.issues,
+            cloud.detail.todos,
+            cloud.detail.relations,
+            cloud.detail.comments,
+          ] as const)
+        : yield* Effect.all(
+            [
+              read("Failed to read the task statuses", statusRepository.listAll()),
+              read("Failed to read the task labels", labelRepository.listAll()),
+              read("Failed to read the tasks", issueRepository.listLive()),
+              read(
+                "Failed to read the task todos",
+                todoRepository.listByIssue({ issueId: issue.id }),
+              ),
+              read(
+                "Failed to read the task relations",
+                relationRepository.listByIssue({ issueId: issue.id }),
+              ),
+              read(
+                "Failed to read the task comments",
+                commentRepository.listByIssue({ issueId: issue.id }),
+              ),
+            ],
+            { concurrency: "unbounded" },
+          );
 
     const statusById = new Map(statuses.map((status) => [status.id, status] as const));
     const labelById = new Map<IssueLabel["id"], IssueLabel>(
       labels.map((label) => [label.id, label] as const),
     );
-    const recordById = new Map<IssueRecord["id"], IssueRecord>(
-      records.map((record) => [record.id, record] as const),
-    );
+    const recordById = new Map(records.map((record) => [record.id, record] as const));
 
     // Open, not deleted, and not this issue: the set the model may name as related. A triage item
     // is included — it has no status yet, and "related to something nobody has sorted" is exactly
@@ -284,7 +302,7 @@ export const make = Effect.gen(function* () {
     // entirely for a provider with no way to accept one: unread bytes cost disk probes here and a
     // sentence of untruth in the prompt.
     const attachmentIds: Array<string> = [];
-    if (options.imagesSupported) {
+    if (options.imagesSupported && cloud === undefined) {
       const seenAttachmentIds = new Set<string>();
       for (const comment of comments) {
         for (const attachmentId of comment.attachmentIds) {
@@ -364,7 +382,17 @@ export const make = Effect.gen(function* () {
   ) {
     const { recorder, run } = request;
     const imagesSupported = yield* investigationImagesSupported(run.modelSelection);
-    const context = yield* gatherContext(request.issue, { imagesSupported });
+    const context = yield* gatherContext(request.issue, {
+      imagesSupported,
+      ...(request.cloudContext ? { cloudContext: request.cloudContext } : {}),
+    });
+    const evidence =
+      request.cloudContext === undefined
+        ? null
+        : yield* prepareIssueEvidence(request.cloudContext.attachments, imagesSupported).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.provideService(Path.Path, path),
+          );
 
     // Everything above this line is cheap and local; the permit is taken only for the part that
     // spends money and CPU. Queued runs wait here, and the row stays `queued` while they do.
@@ -376,9 +404,14 @@ export const make = Effect.gen(function* () {
           textGeneration
             .investigate({
               cwd: request.workspaceRoot,
-              prompt: context.prompt,
+              prompt:
+                context.prompt +
+                (evidence?.prompt ?? "") +
+                (evidence === null
+                  ? ""
+                  : `\nReport images supplied: ${evidence.imagePaths.length}. Images not supplied: ${evidence.omittedImages}. Do not claim to have read omitted images.`),
               onOutput,
-              imagePaths: context.imagePaths,
+              imagePaths: evidence?.imagePaths ?? context.imagePaths,
               modelSelection: run.modelSelection,
             })
             .pipe(
@@ -419,6 +452,7 @@ export const make = Effect.gen(function* () {
       // queued behind another one has something to interrupt.
       const fiber = yield* Effect.forkChild(
         runInvestigation(request).pipe(
+          Effect.scoped,
           Effect.catch((error: IssueTrackerError) => recorderFail(request, error.message)),
           Effect.ignoreCause({ log: true }),
         ),

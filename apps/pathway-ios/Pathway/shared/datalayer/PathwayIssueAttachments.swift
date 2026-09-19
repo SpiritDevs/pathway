@@ -3,7 +3,8 @@ import Foundation
 
 extension PathwayIssuesModel {
     func uploadAttachment(
-        _ issue: PathwayIssueRecord, data: Data, mimeType: String, fileName: String
+        _ issue: PathwayIssueRecord, data: Data, mimeType: String, fileName: String,
+        clientRequestID: String = UUID().uuidString.lowercased()
     ) async throws -> String {
         guard let cloudRequest else {
             throw PathwayIssueWriteError(message: "Connect to Pathway to upload attachments.")
@@ -12,7 +13,7 @@ extension PathwayIssuesModel {
         let result = try await cloudRequest("action", "issueAttachments:prepareUpload", .object([
             "companyId": .string(issue.companyId), "issueId": .string(issue.id),
             "uploads": .array([.object([
-                "clientRequestId": .string(UUID().uuidString.lowercased()),
+                "clientRequestId": .string(clientRequestID),
                 "fileName": .string(fileName), "mimeType": .string(mimeType),
                 "byteSize": .number(Double(data.count)), "checksum": .string(checksum)
             ])])

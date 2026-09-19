@@ -159,6 +159,7 @@ import {
   IssueMilestonesReorderInput,
   IssueMilestonesResult,
   IssueRefInput,
+  IssueEnrichmentRefInput,
   IssueThreadRefInput,
   IssueRelationCreateInput,
   IssueRelationDeleteInput,
@@ -1737,7 +1738,7 @@ export const WsIssuesCancelEnrichmentRpc = Rpc.make(ISSUES_WS_METHODS.cancelEnri
 });
 
 export const WsIssuesGetEnrichmentRunsRpc = Rpc.make(ISSUES_WS_METHODS.getEnrichmentRuns, {
-  payload: IssueRefInput,
+  payload: IssueEnrichmentRefInput,
   success: IssueEnrichmentRunsResult,
   error: IssuesRpcError,
 });

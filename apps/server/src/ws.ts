@@ -23,6 +23,7 @@ import {
   type DiscoveredLocalServerList,
   type IssueActor,
   type IssueTrackerError,
+  type IssueInvestigationRoute,
   ISSUES_WS_METHODS,
   EMAIL_WS_METHODS,
   type GitActionProgressEvent,
@@ -729,6 +730,31 @@ const makeWsRpcLayer = (
           }),
           traceAttributes,
         );
+      const investigationRpc = <A, R>(
+        method: string,
+        input: { readonly route?: IssueInvestigationRoute },
+        effect: Effect.Effect<A, IssueTrackerError, R>,
+      ) => {
+        const operation = issueRpcEffect(method, effect, { "rpc.aggregate": "issues" }, input);
+        if (input.route === undefined) return operation;
+        const route = input.route;
+        return authorizeEffect(
+          requiredScopeForRpcMethod(method),
+          serverEnvironment.getEnvironmentId.pipe(
+            Effect.flatMap((environmentId) =>
+              issueTracker.withCompanyRoute(
+                {
+                  ...route,
+                  environmentId,
+                  authenticatedSubject: currentSession.subject,
+                  refresh: method === ISSUES_WS_METHODS.startEnrichment,
+                },
+                operation,
+              ),
+            ),
+          ),
+        );
+      };
       const observeRpcStream = <A, E, R>(
         method: string,
         stream: Stream.Stream<A, E, R>,
@@ -2885,18 +2911,22 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "issues",
           }),
         [ISSUES_WS_METHODS.startEnrichment]: (input) =>
-          issueRpcEffect(ISSUES_WS_METHODS.startEnrichment, issueTracker.startEnrichment(input), {
-            "rpc.aggregate": "issues",
-          }),
+          investigationRpc(
+            ISSUES_WS_METHODS.startEnrichment,
+            input,
+            issueTracker.startEnrichment(input),
+          ),
         [ISSUES_WS_METHODS.cancelEnrichment]: (input) =>
-          issueRpcEffect(ISSUES_WS_METHODS.cancelEnrichment, issueTracker.cancelEnrichment(input), {
-            "rpc.aggregate": "issues",
-          }),
+          investigationRpc(
+            ISSUES_WS_METHODS.cancelEnrichment,
+            input,
+            issueTracker.cancelEnrichment(input),
+          ),
         [ISSUES_WS_METHODS.getEnrichmentRuns]: (input) =>
-          issueRpcEffect(
+          investigationRpc(
             ISSUES_WS_METHODS.getEnrichmentRuns,
+            input,
             issueTracker.getEnrichmentRuns(input),
-            { "rpc.aggregate": "issues" },
           ),
         [ISSUES_WS_METHODS.linkThread]: (input) =>
           issueRpcEffect(ISSUES_WS_METHODS.linkThread, issueTracker.linkThread(input, issueActor), {

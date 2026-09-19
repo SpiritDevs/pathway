@@ -249,6 +249,27 @@ const ANSWER = {
 } satisfies IssueEnrichmentResult;
 
 describe("IssueEnrichmentEngineLive", () => {
+  it.effect("pins an explicit investigation model without changing the next run's default", () =>
+    Effect.gen(function* () {
+      const called = yield* Deferred.make<void>();
+      const tracker = yield* buildTracker(() =>
+        Deferred.succeed(called, undefined).pipe(Effect.andThen(Effect.never)),
+      );
+      yield* seedProject;
+      const { issue } = yield* tracker.create({ title: "Phone report", projectId: PROJECT }, ACTOR);
+      const selection = { instanceId: ProviderInstanceId.make("codex"), model: "report-model" };
+      const { run } = yield* tracker.startEnrichment({
+        issueId: issue.id,
+        modelSelection: selection,
+      });
+      yield* Deferred.await(called);
+      assert.deepStrictEqual(run.modelSelection, selection);
+      yield* tracker.cancelEnrichment({ runId: run.id });
+      const next = yield* tracker.startEnrichment({ issueId: issue.id });
+      assert.notStrictEqual(next.run.modelSelection.model, "report-model");
+      yield* tracker.cancelEnrichment({ runId: next.run.id });
+    }).pipe(Effect.provide(DependenciesLive), Effect.scoped),
+  );
   it.effect("streams the transcript, records the result, and leaves an agent comment", () =>
     Effect.gen(function* () {
       const tracker = yield* buildTracker(({ onOutput }) =>

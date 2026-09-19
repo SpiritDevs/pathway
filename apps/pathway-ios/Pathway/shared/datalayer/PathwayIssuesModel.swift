@@ -275,6 +275,17 @@ final class PathwayIssuesModel {
     }
 
     /// Uncertain network writes keep their original operation identity for an explicit retry.
+    func mutateOnce(companyID: String, kind: String, entityID: String, args: [String: JSONValue]) async throws -> JSONValue {
+        let membership = try membershipID(companyID)
+        if let operation = pendingOperations.first(where: {
+            $0.objectValue?["companyId"]?.stringValue == companyID && $0.objectValue?["kind"]?.stringValue == kind
+                && $0.objectValue?["entityId"]?.stringValue == entityID
+                && $0.objectValue?["actor"]?.objectValue?["membershipId"]?.stringValue == membership
+        }) { return try await submit(operation) }
+        return try await mutate(companyID: companyID, kind: kind, entityID: entityID, args: args)
+    }
+
+    /// Replays saved operations with their original identities.
     func retryPendingChanges() async throws {
         for operation in pendingOperations {
             let companyID = operation.objectValue?["companyId"]?.stringValue ?? ""

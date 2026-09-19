@@ -45,6 +45,7 @@ import {
   issueReadModelFromStoredReplica,
   makeIssueReplicaReader,
   routeReplicaIssueRead,
+  resolveClientIssueRoute,
 } from "./IssueReplicaReader.ts";
 
 const COMPANY_ID = CompanyId.make("company-server-issue-reads");
@@ -247,6 +248,95 @@ describe("issueMemberActorFromStoredReplica", () => {
 });
 
 describe("routeReplicaIssueRead", () => {
+  it.effect(
+    "routes an authenticated phone to its company checkout and refuses foreign or revoked routes",
+    () =>
+      Effect.gen(function* () {
+        const stored = replica();
+        const member = realCodecEntity("membership", {
+          id: "phone-member",
+          userId: "phone-user",
+          state: "active",
+          displayNameSnapshot: "Reporter",
+          emailSnapshot: "reporter@example.test",
+          invitedByMembershipId: null,
+          joinedAt: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        const binding = realCodecEntity("environmentBinding", {
+          id: "phone-binding",
+          cloudProjectId: "phone-project",
+          environmentId: ENVIRONMENT_ID,
+          localProjectId: PROJECT_ID,
+          localWorkspaceRoot: "/tmp/pathway",
+          status: "active",
+          lastSeenAt: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        let model = issueReadModelFromStoredReplica({
+          ...stored,
+          entities: [...stored.entities, member, binding],
+        })!;
+        const engine: CloudSyncIssueEngineHandle = {
+          companyId: COMPANY_ID,
+          environmentId: ENVIRONMENT_ID,
+          enqueue: () => Effect.die("unused"),
+          operationDisposition: () => Effect.die("unused"),
+          sync: Effect.succeed({
+            outcome: "synced",
+            cursor: CompanyVersion.make(1),
+            authorizationEpoch: AuthorizationEpoch.make(1),
+            appliedChanges: 0,
+            acceptedOperations: 0,
+            rejectedOperations: 0,
+            error: null,
+          }),
+          readIssueSnapshot: Effect.sync(() => ({
+            readModel: model,
+            bootstrapped: true,
+            quarantined: 0,
+          })),
+        };
+        const registry: CloudSyncEngineRegistryShape = {
+          expectIssueRouting: () => Effect.void,
+          registerIssueEngine: () => Effect.void,
+          unregisterIssueEngine: () => Effect.void,
+          withIssueEngine: (_input, use) => use,
+          issueEngine: (companyId) => Effect.succeed(companyId === COMPANY_ID ? engine : null),
+          issueEngineForProject: () => Effect.die("explicit company routing must not guess"),
+        };
+        const input = {
+          companyId: COMPANY_ID,
+          localProjectId: PROJECT_ID,
+          environmentId: ENVIRONMENT_ID,
+          userId: "phone-user",
+        };
+        const route = yield* resolveClientIssueRoute(registry, input);
+        expect(route.actor).toEqual({ kind: "member", membershipId: "phone-member" });
+        expect(route.cloudProjectIdForLocal(PROJECT_ID)).toBe("phone-project");
+        expect(
+          (yield* resolveClientIssueRoute(registry, { ...input, userId: "someone-else" }).pipe(
+            Effect.result,
+          ))._tag,
+        ).toBe("Failure");
+        expect(
+          (yield* resolveClientIssueRoute(registry, {
+            ...input,
+            environmentId: EnvironmentId.make("foreign"),
+          }).pipe(Effect.result))._tag,
+        ).toBe("Failure");
+        expect(
+          (yield* resolveClientIssueRoute(registry, {
+            ...input,
+            localProjectId: ProjectId.make("unbound"),
+          }).pipe(Effect.result))._tag,
+        ).toBe("Failure");
+        model = { ...model, environmentBindings: [] };
+        expect((yield* route.read.pipe(Effect.result))._tag).toBe("Failure");
+      }),
+  );
   it.effect("keeps the company-less legacy RPC on local storage", () =>
     Effect.gen(function* () {
       const reader = yield* makeIssueReplicaReader();

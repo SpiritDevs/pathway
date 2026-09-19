@@ -9,6 +9,7 @@ enum MainTabSheet: String, Identifiable {
     case systemRequest
     case sharedDrafts
     case storage
+    case bugReport
 
     var id: Self { self }
 }
@@ -41,6 +42,18 @@ struct MainTabView: View {
     }
 
     var body: some View {
+        #if os(iOS)
+        PathwayShakeReporter(content: shell, enabled: UIDevice.current.userInterfaceIdiom == .phone && appModel.bugReports.shakeEnabled) {
+            guard presentedSheet == nil, !showsSettings else { return }
+            appModel.bugReports.begin(screenshot: pathwayBugScreenshot(), device: pathwayBugDevice())
+            presentedSheet = .bugReport
+        }
+        #else
+        shell
+        #endif
+    }
+
+    private var shell: some View {
         Group {
             switch layout {
             case .compact:
@@ -78,6 +91,9 @@ struct MainTabView: View {
                 PathwayStorageStatusNotice()
             }
         }
+        .onChange(of: selectedDestination, initial: true) { _, destination in
+            appModel.bugReports.screen = String(describing: destination)
+        }
         .sheet(item: $presentedSheet) { sheet in
             switch sheet {
             case .agentOrchestrator:
@@ -114,6 +130,8 @@ struct MainTabView: View {
                             Button("Close") { presentedSheet = nil }
                         } }
                 }
+            case .bugReport:
+                PathwayBugReportView()
             }
         }
         .onChange(of: PathwayGeneralPreferences.shared.autoSettleDays) { _, _ in appModel.cloud.refreshThreadPartition() }
