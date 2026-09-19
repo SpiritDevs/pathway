@@ -203,12 +203,12 @@ extension PathwayAgentThreadModel {
         if threadQueue == nil { await retryAttachment(id: id) }
     }
 
-    func retryAttachment(id: String) async {
+    func retryAttachment(id: String, directly: Bool = false) async {
         preparedSend = nil
         guard let index = draftAttachments.firstIndex(where: { $0.id == id }) else { return }
         let data = attachmentData[id]
         guard data != nil || draftAttachments[index].localFileURL != nil else { return }
-        if threadQueue != nil { draftAttachments[index].state = .ready; actionError = nil; await persistDraftNow(); return }
+        if threadQueue != nil && !directly { draftAttachments[index].state = .ready; actionError = nil; await persistDraftNow(); return }
         draftAttachments[index].state = .uploading
         let draft = draftAttachments[index]
         var uploadedID: String?
@@ -264,13 +264,41 @@ extension PathwayAgentThreadModel {
         }
     }
 
+    func attachmentImageCacheKey(_ id: String) -> String { "\(thread.companyId):\(thread.environmentId):\(threadID):\(id)" }
+
+    func cachedAttachmentImageURL(_ id: String) -> URL? {
+        guard let storageDirectory else { return nil }
+        return PathwayAttachmentImageLocations.cached(directory: storageDirectory, image: attachmentImageCacheKey(id))
+    }
+
     func attachmentURL(_ attachment: PathwayMessageAttachment) async throws -> URL {
-        if let url = cloudQueueAttachmentURLs[attachment.id] { return url }
-        let value = try await request("assets.createUrl", payload: .object(["resource": .object([
-            "_tag": .string("attachment"), "attachmentId": .string(attachment.id), "fileName": .string(attachment.name), "mimeType": .string(attachment.mimeType)
-        ])]), reportsErrors: false)
-        guard let relative = value.objectValue?["relativeUrl"]?.stringValue else { throw PathwayThreadConversationError.message("The attachment URL was unavailable.") }
-        return try await resolveAssetURL(relative)
+        let cache = PathwayAttachmentImageCache.shared
+        let key = attachmentImageCacheKey(attachment.id)
+        if attachment.type == "image", let storageDirectory,
+           let saved = await cache.cachedURL(directory: storageDirectory, key: key) {
+            PathwayAttachmentImageLocations.store(saved, directory: storageDirectory, image: key)
+            return saved
+        }
+        let url: URL
+        if let saved = cloudQueueAttachmentURLs[attachment.id] { url = saved }
+        else {
+            let value = try await request("assets.createUrl", payload: .object(["resource": .object([
+                "_tag": .string("attachment"), "attachmentId": .string(attachment.id), "fileName": .string(attachment.name), "mimeType": .string(attachment.mimeType)
+            ])]), reportsErrors: false)
+            guard let relative = value.objectValue?["relativeUrl"]?.stringValue else { throw PathwayThreadConversationError.message("The attachment URL was unavailable.") }
+            url = try await resolveAssetURL(relative)
+        }
+        guard attachment.type == "image", let storageDirectory else { return url }
+        let data: Data
+        if url.isFileURL { data = try Data(contentsOf: url) }
+        else {
+            let (download, response) = try await URLSession.shared.data(from: url)
+            guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else { throw URLError(.badServerResponse) }
+            data = download
+        }
+        let saved = (try? await cache.store(data, directory: storageDirectory, key: key)) ?? url
+        if saved.isFileURL { PathwayAttachmentImageLocations.store(saved, directory: storageDirectory, image: key) }
+        return saved
     }
     private func resolveAssetURL(_ relative: String) async throws -> URL {
         guard let connect else { throw PathwayThreadConversationError.message("Connect to the environment to access files.") }

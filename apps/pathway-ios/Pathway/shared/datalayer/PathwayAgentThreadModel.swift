@@ -443,15 +443,35 @@ final class PathwayAgentThreadModel {
     }
 
     func send(mode: String = "queue") async {
-        if let threadQueue { await enqueueMessage(using: threadQueue, mode: mode); return }
+        if let threadQueue {
+            let retriesDirectSend = preparedSend?.attachmentsPrepared == true
+                && preparedSend?.text == draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                && preparedSend?.ids == draftAttachments.map(\.id) && preparedSend?.requestedMode == mode
+            let hasCloudBacklog = threadQueue.threads.contains {
+                $0.companyID == thread.companyId && $0.environmentID == thread.environmentId && $0.threadID == threadID
+                    && (!["delivered", "canceled"].contains($0.state) || ($0.fields["localCount"]?.intValue ?? 0) > 0)
+            }
+            let activeRun = runs.first { $0.id == activeRunID }
+            let activeProvider = activeRun?.fields["providerInstanceId"]?.stringValue
+                ?? activeRun?.fields["modelSelection"]?.objectValue?["instanceId"]?.stringValue
+            let switchesBusyProvider = mode != "steer" && activeProvider != nil && activeProvider != currentModelSelection.instanceId
+            // A direct dispatch may have succeeded before its response was lost. Retry its
+            // command ID on the same transport instead of creating a second cloud receipt.
+            if !retriesDirectSend && (!isSubscriptionReady || connectionState != .live || hasCloudBacklog || switchesBusyProvider) {
+                await enqueueMessage(using: threadQueue, mode: mode)
+                return
+            }
+        }
         guard canSend else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         var selected = draftAttachments
         isSending = true
         defer { isSending = false }
         do {
-            if preparedNewSend != nil {
-                for id in selected.map(\.id) { await retryAttachment(id: id) }
+            if preparedNewSend != nil || selected.contains(where: { $0.attachment == nil }) {
+                for attachment in selected where preparedNewSend != nil || attachment.attachment == nil {
+                    await retryAttachment(id: attachment.id, directly: true)
+                }
                 selected = draftAttachments
                 guard selected.allSatisfy({ $0.state == .ready }) else { throw PathwayThreadConversationError.message("Finish uploading the attachments before sending.") }
                 preparedNewSend = nil
@@ -476,13 +496,25 @@ final class PathwayAgentThreadModel {
                     attachments = result.objectValue?["attachments"]?.arrayValue ?? []
                     guard attachments.count == selected.count else { throw PathwayThreadConversationError.message("The attachments could not be prepared. Try again.") }
                 }
+                if let storageDirectory {
+                    for (draft, persisted) in zip(selected, attachments) where draft.type == "image" {
+                        guard let id = persisted.objectValue?["id"]?.stringValue else { continue }
+                        let bytes = attachmentData[draft.id] ?? draft.previewData
+                        if let bytes {
+                            if let saved = try? await PathwayAttachmentImageCache.shared.store(bytes, directory: storageDirectory, key: attachmentImageCacheKey(id)) {
+                                PathwayAttachmentImageLocations.store(saved, directory: storageDirectory, image: attachmentImageCacheKey(id))
+                            }
+                        }
+                    }
+                }
                 preparedSend?.attachments = attachments
                 preparedSend?.attachmentsPrepared = true
                 await persistDraftNow()
             }
             guard let prepared = preparedSend else { return }
             try await dispatch("message.dispatch", fields: ["commandId": .string(prepared.messageID), "createdBy": .string("user"), "creationSource": .string("mobile"),
-                "messageId": .string(prepared.messageID), "text": .string(prepared.text), "attachments": .array(prepared.attachments), "dispatchMode": prepared.dispatchMode])
+                "messageId": .string(prepared.messageID), "text": .string(prepared.text), "attachments": .array(prepared.attachments), "dispatchMode": prepared.dispatchMode,
+                "modelSelection": try Self.json(currentModelSelection), "runtimeMode": .string(runtimeMode), "interactionMode": .string(interactionMode)])
             if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
             preparedSend = nil
             let sentIDs = Set(selected.map(\.id))

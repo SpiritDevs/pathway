@@ -1,5 +1,10 @@
 # Agent Threads on iOS
 
+Pull down on Agent Threads to refresh cloud updates and reconnect active environments.
+Refresh finishes within 15 seconds and shows a result above the list. If an environment
+cannot be reached, the result names it and keeps your available threads visible. You can
+pull down again to retry. Git and pull request statuses update separately in the background.
+
 When starting a thread, tap the environment dropdown below the project name to choose where
 it will run. The menu lists the environments linked to that project and marks the selected
 environment with a checkmark. It remains available when the project has only one environment.
@@ -7,7 +12,16 @@ environment with a checkmark. It remains available when the project has only one
 The new-thread composer keeps the workspace choice and base branch above the message field.
 Tap **+** to open **Composer Options** for attachments, saved prompts, the agent and model,
 access settings, and temporary threads. The sheet can expand for more room. Paste images
-straight into the message field to attach them without replacing your text.
+straight into the message field to attach them without replacing your text. Long drafts scroll
+inside the composer, keeping **+**, the model picker, and **Start** above the keyboard.
+The model picker shows the provider icon beside the model name in new and existing threads.
+
+Messages go straight to a connected environment. An idle agent starts immediately; a busy
+agent queues the message for its next turn. Offline messages remain saved for delivery,
+and newer messages wait behind any messages already waiting to reach the environment.
+
+Inside a thread, the main navigation collapses to a button beside the composer. It stays
+compact when opening a child thread or returning to its parent. Tap the button to expand it.
 
 When a thread connects or reconnects, a status bubble above the composer shows that messages
 are syncing. It temporarily replaces the file-change summary until the latest updates arrive.
@@ -40,7 +54,8 @@ down to leave the thread awake. Swipe left to reveal **Settle**, or continue swi
 all the way left to settle immediately. These actions sync through the thread's environment.
 
 To bring a thread back, expand **Snoozed** and swipe left for **Wake**, or expand **Settled** and
-swipe left for **Reopen**. If an action fails, the app shows an error and keeps the thread in place.
+swipe left for **Reopen**. If an action fails, the app shows an error and keeps the thread in place. If the environment
+does not confirm the action, check its connection and tap **Retry** in the error alert.
 
 You can paste a copied photo or screenshot from the attachment menu or directly into the message
 field. The field also accepts image paste suggestions from the iOS keyboard when offered. Images
@@ -50,3 +65,20 @@ images must be under 10 MB. If an image cannot be read or uploaded, the app show
 Image attachments appear as compact thumbnails with one corner button. Tap the cross to remove
 an image. If its upload fails, a retry icon replaces the cross. Tap it to see the failure reason,
 retry the upload, or cancel and remove the attachment using the alert.
+
+Queued threads have their own actions: swipe left or long-press to **Cancel** pending work.
+Canceled entries offer **Remove from list**, which remembers your choice on this device.
+If the entry is retried or changes elsewhere, it appears again. These actions are also
+available in the queued thread’s menu, even if its environment cannot be opened.
+
+Loaded image attachments stay cached on this device, so scrolling back or returning to a
+thread can show the preview while its environment reconnects. Images that have not loaded
+yet wait for reconnection and retry automatically.
+
+Agent Threads checks pull request status when you return to the list or foreground the app,
+and every 30 seconds while the list is visible. Eligible threads move to **Settled** when
+their linked pull requests are merged. Pinned threads, active work, temporary threads, and
+threads you explicitly reopened keep their existing settlement safeguards.
+
+To search threads, open **Thread options** and choose **Search**. The search field opens
+at the top with the keyboard ready. Tap **Cancel** to clear the search and hide the field.

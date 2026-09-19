@@ -16,7 +16,23 @@ struct PathwayConversationSimulatorScene: View {
         ) { _, _ in
             List { Button("Bring conversations to mobile") { showsThread = true } }
                 .navigationTitle("Threads")
-                .navigationDestination(isPresented: $showsThread) { AgentThreadConversationView(model: workspace.model) }
+                .navigationDestination(isPresented: $showsThread) {
+                    AgentThreadConversationView(model: workspace.model)
+                        .toolbar {
+                            if ProcessInfo.processInfo.arguments.contains("--conversation-nested") {
+                                NavigationLink {
+                                    AgentThreadConversationView(model: workspace.model)
+                                } label: {
+                                    Image(systemName: "arrow.right")
+                                }
+                                .accessibilityIdentifier("fixture-open-nested-thread")
+                            }
+                            if ProcessInfo.processInfo.arguments.contains("--conversation-collapse-work") {
+                                Button("Finish run") { workspace.finishRun() }
+                                    .accessibilityIdentifier("fixture-finish-run")
+                            }
+                        }
+                }
         }
         .sheet(item: $presentedSheet) { sheet in
             if sheet == .agentOrchestrator {
@@ -57,7 +73,7 @@ private final class ConversationSimulatorWorkspace {
             cloudProjectId: "sim-project", shell: shell, cloudUpdatedAt: 0), environment: environment, request: { [weak self] method, payload in
                 guard let self else { throw CancellationError() }
                 return try self.request(method, payload)
-            })
+            }, storageDirectory: ProcessInfo.processInfo.arguments.contains("--conversation-image") ? FileManager.default.temporaryDirectory.appending(path: "image-fixture") : nil)
         add("user", "user_message", text: "Bring the mobile conversation in line with desktop.", extra: ["messageId": .string("message-user")])
         add("commentary", "assistant_message", text: "I’ll bring the conversation controls together, then verify the full flow on mobile.")
         add("search", "file_search", extra: ["pattern": .string("AgentThreadConversation"), "results": .array([.object(["fileName": .string("shared/views/AgentThreadsView.swift"), "line": .number(588), "preview": .string("struct AgentThreadConversationView: View")])])])
@@ -65,6 +81,19 @@ private final class ConversationSimulatorWorkspace {
         add("change", "file_change", extra: ["fileName": .string("shared/views/AgentThreadsView.swift"), "additions": .number(68), "deletions": .number(26), "diffStr": .string("@@ -1,2 +1,3 @@\n-OldTimeline(items: items)\n+AgentThreadTranscript(model: model)\n+    .scrollDismissesKeyboard(.interactively)")])
         add("child", "subagent", extra: ["childThreadId": .string("sim-child"), "title": .string("Review conversation controls"), "prompt": .string("Check the native conversation controls."), "result": .string("Model selection and message actions verified."), "model": .string("gpt-5.4")])
         add("answer", "assistant_message", text: "The conversation now keeps the answer easy to read.\n\nCompleted work folds into a compact summary. Open the tool rows to inspect searches, commands, and file changes.\n\nSubagents have their own conversation, and your draft stays here when you come back.")
+        if ProcessInfo.processInfo.arguments.contains("--conversation-image") {
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 280, height: 160)).image { context in
+                UIColor.systemBlue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 280, height: 160))
+                ("Image stays visible" as NSString).draw(at: CGPoint(x: 24, y: 65), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 22), .foregroundColor: UIColor.white])
+            }
+            let file = FileManager.default.temporaryDirectory.appending(path: "fixture-image.png")
+            try! image.pngData()!.write(to: file)
+            model.cloudQueueAttachmentURLs["fixture-image"] = file
+            add("image-message", "user_message", text: "Keep this image when returning to the thread.", extra: [
+                "messageId": .string("image-message"), "attachments": .array([.object([
+                    "id": .string("fixture-image"), "type": .string("image"), "name": .string("Preview.png"),
+                    "mimeType": .string("image/png"), "sizeBytes": .number(Double(image.pngData()!.count))])])])
+        }
         if questions {
             add("question", "user_input_request", extra: ["requestId": .string("request-question"), "status": .string("waiting"), "runId": .string("run-question"), "questions": .array([
                 .object(["id": .string("direction"), "header": .string("Direction"), "question": .string("Which conversation layout should we use?"), "options": .array([
@@ -78,6 +107,13 @@ private final class ConversationSimulatorWorkspace {
                 add("history-\(index)", index.isMultiple(of: 2) ? "user_message" : "assistant_message",
                     text: "Conversation detail \(index + 1).\n\nKeep earlier work readable while the agent continues. The latest-message control returns to the end without losing the draft.")
             }
+        }
+        if ProcessInfo.processInfo.arguments.contains("--conversation-collapse-work") {
+            add("collapse-user", "user_message", text: "Complete a long investigation.", extra: ["runId": .string("run-sent")])
+            for index in 0..<60 {
+                add("work-\(index)", "assistant_message", text: "Investigation step \(index + 1).\n\nChecking the implementation and validating the result before continuing.", extra: ["runId": .string("run-sent")])
+            }
+            add("collapse-answer", "assistant_message", text: "Investigation complete. The final answer stays visible.", extra: ["runId": .string("run-sent")])
         }
         publish()
         serverConfig = .object(["environment": .object(["capabilities": .object(["attachmentUploads": .bool(true), "fileAttachments": .object(["maxUploadBytes": .number(52428800)])])]), "providers": .array([.object([
@@ -100,6 +136,11 @@ private final class ConversationSimulatorWorkspace {
             }
         }
     }
+    func finishRun() {
+        runStatus = "completed"
+        publish()
+    }
+
     private func add(_ id: String, _ type: String, text: String? = nil, extra: [String: JSONValue] = [:]) {
         var item: [String: JSONValue] = ["id": .string(id), "type": .string(type), "threadId": .string("sim-thread"),
             "createdBy": .string("user"), "ordinal": .number(Double(items.count)), "runId": .string("run-completed"), "status": .string("completed"),

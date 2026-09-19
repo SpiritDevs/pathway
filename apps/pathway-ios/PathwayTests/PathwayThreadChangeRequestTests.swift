@@ -20,6 +20,18 @@ struct PathwayThreadChangeRequestTests {
             status: "active", lastSeenAt: nil))
     }
 
+    @Test func freshMergedStatusSettlesAnUnchangedThreadShell() throws {
+        let thread = makeAgentThread(attachedPullRequest: attachment)
+        let request = try #require(PathwayThreadChangeRequestResolver.request(for: thread, environment: environment(), bindings: [binding()]))
+        let open = request.status(from: .object(["url": .string(attachment.url), "number": .number(110), "state": .string("open")]))
+        let merged = request.status(from: .object(["url": .string(attachment.url), "number": .number(110), "state": .string("merged")]))
+        let before = PathwayThreadLifecyclePartition(threads: [thread], now: Date(), changeRequestStates: [thread.id: try #require(open.state)])
+        let after = PathwayThreadLifecyclePartition(threads: [thread], now: Date(), changeRequestStates: [thread.id: try #require(merged.state)])
+        #expect(before.active.map(\.id) == [thread.id])
+        #expect(after.active.isEmpty)
+        #expect(after.settled.map(\.id) == [thread.id])
+    }
+
     @Test func routesAttachmentsToTheirOwnProjectWithinTheEnvironment() throws {
         let thread = makeAgentThread(attachedPullRequest: attachment)
         let other = PathwayPullRequestAttachment(number: 111, url: "https://github.com/SpiritDevs/other/pull/111")

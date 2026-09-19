@@ -10,6 +10,7 @@ struct AgentComposerTextInput: UIViewRepresentable {
     let placeholder: String
     let pasteImages: @MainActor ([NSItemProvider]) -> Void
 
+    var maximumHeight: CGFloat = .infinity
     var accessibilityIdentifier = "agent-thread-composer-field"
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -55,7 +56,7 @@ struct AgentComposerTextInput: UIViewRepresentable {
         guard let width = proposal.width, width > 0 else { return nil }
         let line = uiView.font?.lineHeight ?? 22
         let measured = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-        let height = min(max(measured, line * 2), ceil(line * 7))
+        let height = min(max(measured, line * 2), min(ceil(line * 7), max(line * 2, maximumHeight)))
         uiView.isScrollEnabled = measured > height
         return CGSize(width: width, height: height)
     }

@@ -625,6 +625,112 @@ struct PathwayThreadConversationTests {
         #expect(!model.canRecoverWorkspacePreparation(item))
     }
 
+    @Test(arguments: ["idle", "running", "steer"])
+    func connectedComposerDispatchesWithoutCloudQueue(state: String) async throws {
+        var commands: [[String: JSONValue]] = []
+        let model = makeModel { method, payload in
+            #expect(method == "orchestration.dispatchCommand")
+            commands.append(try #require(payload.objectValue))
+            return .object([:])
+        }
+        model.threadQueue = PathwayThreadQueueModel(request: { _, _, _ in
+            Issue.record("Connected sends must bypass the cloud queue")
+            return .object([:])
+        }, subscribe: { _, _ in AsyncThrowingStream { _ in } })
+        model.installSnapshot(snapshot(status: state == "idle" ? "completed" : "running"))
+        try await model.changeModelSelection(.init(instanceId: "codex-work", model: "selected-model", options: nil))
+        try await model.setRuntimeMode("approval-required")
+        try await model.setInteractionMode("plan")
+        model.draft = "Send to the connected environment"
+        await model.send(mode: state == "steer" ? "steer" : "queue")
+        let command = try #require(commands.last)
+        #expect(commands.count == 1)
+        #expect(command["type"] == .string("message.dispatch"))
+        #expect(command["dispatchMode"]?.objectValue?["type"] == .string(state == "idle" ? "start_immediately" : state == "steer" ? "steer_active" : "queue_after_active"))
+        if state == "steer" { #expect(command["dispatchMode"]?.objectValue?["targetRunId"] == .string("run-1")) }
+        #expect(command["modelSelection"]?.objectValue?["model"] == .string("selected-model"))
+        #expect(command["runtimeMode"] == .string("approval-required"))
+        #expect(command["interactionMode"] == .string("plan"))
+        #expect(model.draft.isEmpty)
+        #expect(model.actionError == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func cloudDeliveryPreservesBacklogAndBusyProviderSwitches(switchProvider: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let queue = PathwayThreadQueueModel(request: { _, _, _ in throw URLError(.notConnectedToInternet) },
+            subscribe: { _, _ in AsyncThrowingStream { _ in } })
+        await queue.configure(directory: directory)
+        queue.observe(companies: ["company-1"])
+        defer { queue.stop(clear: true) }
+        let model = makeModel { _, _ in
+            Issue.record("Do not bypass saved messages or switch a busy provider directly")
+            return .object([:])
+        }
+        model.threadQueue = queue
+        model.installSnapshot(snapshot(status: switchProvider ? "running" : "completed"))
+        if switchProvider {
+            try await model.changeModelSelection(.init(instanceId: "other-provider", model: "other-model", options: nil))
+        } else {
+            try await queue.enqueue(companyID: model.thread.companyId, environmentID: model.thread.environmentId,
+                threadID: model.threadID, submission: .object(["kind": .string("message"), "input": .object([
+                    "commandId": .string("older-message"), "text": .string("Older message")])]))
+        }
+        model.draft = "Next message"
+        await model.send()
+        #expect(model.draft.isEmpty)
+        let entries = try await PathwayThreadQueueStore(directory: directory).load()
+        #expect(entries.count == (switchProvider ? 1 : 2))
+        #expect(entries.last?.submission.objectValue?["input"]?.objectValue?["text"] == .string("Next message"))
+    }
+
+    @Test func uncertainDirectSendRetriesSameCommandAfterReconnect() async throws {
+        var commands: [[String: JSONValue]] = []
+        let model = makeModel { _, payload in
+            commands.append(try #require(payload.objectValue))
+            if commands.count == 1 { throw URLError(.networkConnectionLost) }
+            return .object([:])
+        }
+        model.threadQueue = PathwayThreadQueueModel(request: { _, _, _ in
+            Issue.record("An uncertain direct send must not create a cloud receipt")
+            return .object([:])
+        }, subscribe: { _, _ in AsyncThrowingStream { _ in } })
+        model.installSnapshot(snapshot(status: "completed"))
+        model.draft = "Send once"
+        await model.send()
+        #expect(model.draft == "Send once")
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("disconnected")]))
+        await model.send()
+        #expect(commands.count == 1)
+        #expect(model.draft == "Send once")
+        model.applySubscriptionValue(.object(["kind": .string("synchronized")]))
+        await model.send()
+        #expect(commands.count == 2)
+        #expect(commands.first?["commandId"] == commands.last?["commandId"])
+        #expect(model.draft.isEmpty)
+    }
+
+    @Test func directAttachmentFailureKeepsDraftAndDoesNotDispatch() async {
+        var methods: [String] = []
+        let model = makeModel { method, _ in
+            methods.append(method)
+            throw URLError(.networkConnectionLost)
+        }
+        model.threadQueue = PathwayThreadQueueModel(request: { _, _, _ in
+            Issue.record("A connected attachment send must not silently enter the cloud queue")
+            return .object([:])
+        }, subscribe: { _, _ in AsyncThrowingStream { _ in } })
+        model.installSnapshot(snapshot(status: "completed"))
+        await model.addAttachment(data: Data("context".utf8), name: "context.txt", mimeType: "text/plain")
+        model.draft = "Use the attachment"
+        await model.send()
+        #expect(methods == ["attachments.createUploadUrl"])
+        #expect(model.draft == "Use the attachment")
+        #expect(model.draftAttachments.count == 1)
+        #expect(model.actionError != nil)
+    }
+
     private func makeModel(storageDirectory: URL? = nil, request: @escaping PathwayAgentThreadModel.Request) -> PathwayAgentThreadModel {
         let thread = makeAgentThread()
         let environment = PathwayCompanyEnvironment(companyId: thread.companyId, environment: PathwayEnvironment(id: "environment", environmentId: thread.environmentId,

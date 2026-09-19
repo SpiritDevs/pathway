@@ -200,6 +200,12 @@ private struct AgentTranscriptAttachment: View {
     @State private var attempt = 0
     @State private var showPreview = false
 
+    init(attachment: PathwayMessageAttachment, model: PathwayAgentThreadModel) {
+        self.attachment = attachment
+        self.model = model
+        _url = State(initialValue: model.cachedAttachmentImageURL(attachment.id))
+    }
+
     var body: some View {
         Group {
             if let url {
@@ -220,6 +226,7 @@ private struct AgentTranscriptAttachment: View {
                                     }
                                 }
                             }.buttonStyle(.plain)
+                                .accessibilityIdentifier("transcript-image-\(attachment.id)")
                         case .failure:
                             unavailable("This image couldn’t be loaded.")
                         default:
@@ -235,7 +242,7 @@ private struct AgentTranscriptAttachment: View {
             } else if let errorMessage {
                 unavailable(errorMessage)
             } else {
-                HStack(spacing: 8) { ProgressView(); Text(attachment.name).lineLimit(1) }
+                HStack(spacing: 8) { Image(systemName: "photo"); Text(model.isSubscriptionReady ? attachment.name : "Image available when reconnected").lineLimit(1) }
                     .foregroundStyle(.secondary)
             }
         }
@@ -243,9 +250,16 @@ private struct AgentTranscriptAttachment: View {
         .sheet(isPresented: $showPreview) {
             AgentTranscriptAttachmentPreview(attachment: attachment, model: model, initialURL: url)
         }
-        .task(id: "\(attempt):\(model.cloudQueueAttachmentURLs[attachment.id]?.absoluteString ?? "")") {
-            do { url = try await model.attachmentURL(attachment); errorMessage = nil }
-            catch { errorMessage = error.localizedDescription }
+        .task(id: "\(attempt):\(model.isSubscriptionReady):\(model.cloudQueueAttachmentURLs[attachment.id]?.absoluteString ?? "")") {
+            guard url == nil else { return }
+            do {
+                let loaded = try await model.attachmentURL(attachment)
+                guard !Task.isCancelled else { return }
+                url = loaded; errorMessage = nil
+            } catch {
+                guard !Task.isCancelled else { return }
+                errorMessage = model.isSubscriptionReady ? "This image isn’t available yet. Try again." : nil
+            }
         }
     }
     private func unavailable(_ message: String) -> some View {
@@ -319,7 +333,7 @@ struct AgentTranscriptAttachmentPreview: View {
                     if let url { ShareLink(item: url).labelStyle(.iconOnly) }
                 }
             }
-            .task(id: "\(attempt):\(model.cloudQueueAttachmentURLs[attachment.id]?.absoluteString ?? "")") {
+            .task(id: "\(attempt):\(model.isSubscriptionReady):\(model.cloudQueueAttachmentURLs[attachment.id]?.absoluteString ?? "")") {
                 do {
                     if markdownSource == nil, let saved = model.cloudQueueAttachmentURLs[attachment.id] { url = saved }
                     else if attempt == 0, let initialURL { url = initialURL }

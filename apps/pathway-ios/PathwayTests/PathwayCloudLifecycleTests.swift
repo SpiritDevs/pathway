@@ -5,6 +5,64 @@ import Observation
 import Testing
 
 @MainActor struct PathwayCloudLifecycleTests {
+    @Test func refreshReconnectsActiveEnvironmentsAndReportsOnlyFailedOnes() async throws {
+        let client = ControlledCloudClient()
+        var requested: [String] = []
+        let environmentClient = PathwayIssueEnvironmentClient { environment, _ in
+            requested.append(environment.environment.environmentId)
+            return RefreshEnvironmentRPC(offline: environment.environment.environmentId == "offline")
+        }
+        let connect = PathwayConnectClient(relayURL: URL(string: "https://relay.test")!, clerkTokenProvider: { "unused" })
+        let model = PathwayCloudModel(client: client, connect: connect, issueEnvironmentClient: environmentClient)
+        await model.received(companies: [company()])
+        var bootstrap = client.bootstrapEvents.makeAsyncIterator()
+        let entities = ["online", "offline", "disabled"].map { id in
+            PathwaySyncChange(version: 10, entityKind: "environmentRegistration", entityId: id, changeKind: "upsert", payload: .object([
+                "id": .string(id), "environmentId": .string(id),
+                "descriptor": .object(["environmentId": .string(id), "label": .string(id), "serverVersion": .string("test")]),
+                "relayLinkState": .string("linked"), "managedEndpointAvailable": .bool(true),
+                "state": .string(id == "disabled" ? "revoked" : "active"), "lastSeenAt": .null
+            ]))
+        }
+        try #require(await bootstrap.next()).resume(page(epoch: 1, entities: entities))
+        await observed { model.connectionState == .connected }
+        #expect(model.environments.count == 3)
+        client.refreshCompanies = [company()]
+        client.refreshHead = .init(version: 10, authorizationEpoch: 1)
+        #expect(try await model.refreshThreads() == .unavailable(["offline"]))
+        #expect(requested.sorted() == ["offline", "online"])
+        requested = []
+        #expect(try await model.refreshThreads() == .unavailable(["offline"]))
+        #expect(requested.sorted() == ["offline", "online"])
+        await model.stop()
+    }
+
+    @Test func refreshWaitsForFreshHeadChangesToBeInstalled() async throws {
+        let client = ControlledCloudClient()
+        let model = PathwayCloudModel(client: client)
+        await model.received(companies: [company()])
+        var bootstrap = client.bootstrapEvents.makeAsyncIterator()
+        try #require(await bootstrap.next()).resume(page(epoch: 1, entities: [change("old")]))
+        await observed { model.entities(kind: "test", companyID: "company") == [.string("old")] }
+        client.refreshCompanies = [company()]
+        client.refreshHead = .init(version: 11, authorizationEpoch: 1)
+        var finished = false
+        let refresh = Task {
+            let result = try await model.refreshThreads()
+            finished = true
+            return result
+        }
+        var changes = client.changeEvents.makeAsyncIterator()
+        let request = try #require(await changes.next())
+        #expect(!finished)
+        #expect(request.cursor == 10)
+        request.resume(.init(tag: "Changes", changes: [change("old", tombstone: true), change("new")], cursor: 11, hasMore: false, latestVersion: 11, authorizationEpoch: 1))
+        #expect(try await refresh.value == .updated)
+        #expect(model.entities(kind: "test", companyID: "company") == [.string("new")])
+        #expect(client.calls.prefix(2) == ["disconnect", "authenticate"])
+        await model.stop()
+    }
+
     @Test func mixedAuthorizationPagesRestartWithoutPublishingPartialData() async throws {
         let client = ControlledCloudClient()
         let model = PathwayCloudModel(client: client)
@@ -195,6 +253,24 @@ import Testing
     }
 }
 
+private actor RefreshEnvironmentRPC: PathwayIssueRPCClient {
+    let offline: Bool
+    private var continuation: AsyncThrowingStream<JSONValue, Error>.Continuation?
+    init(offline: Bool) { self.offline = offline }
+    func subscribe(_ tag: String, payload: JSONValue) async -> AsyncThrowingStream<JSONValue, Error> {
+        #expect(tag == "issues.stream")
+        return AsyncThrowingStream { continuation = $0 }
+    }
+    func request(_ tag: String, payload: JSONValue, requiresSubscription: Bool, waitForSubscription: Bool, timeout: Duration) async throws -> JSONValue {
+        #expect(tag == "server.getConfig")
+        #expect(requiresSubscription && waitForSubscription)
+        #expect(timeout == .seconds(5))
+        if offline { throw PathwayRPCError.timedOut }
+        return .object([:])
+    }
+    func stop() async { continuation?.finish(); continuation = nil }
+}
+
 @MainActor private final class CloudObservationWaiter {
     let predicate: @MainActor () -> Bool
     var continuation: CheckedContinuation<Void, Never>?
@@ -238,14 +314,22 @@ private struct CloudPageRequest<Value: Sendable, Cursor: Sendable>: Sendable {
     var authenticationCount = 0
     var calls: [String] = []
     var disconnectGate: CloudVoidGate?
+    var refreshCompanies: [PathwayCompany]?
+    var refreshHead: PathwaySyncHead?
     init() {
         (bootstrapEvents, bootstrapContinuation) = AsyncStream.makeStream()
         (changeEvents, changeContinuation) = AsyncStream.makeStream()
     }
     func authenticate() async throws { authenticationCount += 1; calls.append("authenticate") }
     func disconnect() async { calls.append("disconnect"); await disconnectGate?.wait() }
-    func companiesPublisher() -> AnyPublisher<[PathwayCompany], Error> { Empty(completeImmediately: false).eraseToAnyPublisher() }
-    func syncHeadPublisher(companyId: String) -> AnyPublisher<PathwaySyncHead, Error> { Empty(completeImmediately: false).eraseToAnyPublisher() }
+    func companiesPublisher() -> AnyPublisher<[PathwayCompany], Error> {
+        if let refreshCompanies { return Just(refreshCompanies).setFailureType(to: Error.self).eraseToAnyPublisher() }
+        return Empty(completeImmediately: false).eraseToAnyPublisher()
+    }
+    func syncHeadPublisher(companyId: String) -> AnyPublisher<PathwaySyncHead, Error> {
+        if let refreshHead { return Just(refreshHead).setFailureType(to: Error.self).eraseToAnyPublisher() }
+        return Empty(completeImmediately: false).eraseToAnyPublisher()
+    }
     func publisher(name: String, arguments: JSONValue) -> AnyPublisher<JSONValue, Error> { Empty(completeImmediately: false).eraseToAnyPublisher() }
     func provisionCurrentUser() async throws -> PathwayCompany { throw CancellationError() }
     func bootstrapCompany(companyId: String, cursor: String?) async throws -> PathwaySyncBootstrapPage {

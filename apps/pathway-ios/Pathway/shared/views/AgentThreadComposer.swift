@@ -310,6 +310,11 @@ struct AgentThreadComposer: View {
         .accessibilityIdentifier("agent-thread-add-attachment")
     }
 
+    private var selectedProvider: PathwayServerProvider? {
+        model.providers.first { $0.id == model.currentModelSelection.instanceId }
+            ?? model.modelCatalog.first { $0.id == model.currentModelSelection.instanceId }
+    }
+
     private var selectedModelName: String {
         model.providers.first { $0.id == model.currentModelSelection.instanceId }?.models
             .first { $0.id == model.currentModelSelection.model }?.name ?? model.currentModelSelection.model
@@ -321,6 +326,7 @@ struct AgentThreadComposer: View {
             showsSettings = true
         } label: {
             HStack(spacing: 4) {
+                ComposerProviderIcon(provider: selectedProvider)
                 Text(selectedModelName.isEmpty ? modelName : selectedModelName).lineLimit(1)
                 if model.providers.isEmpty && model.connectionState == .connecting { ProgressView().controlSize(.mini) }
                 else { Image(systemName: "chevron.down").font(.caption2.weight(.semibold)) }

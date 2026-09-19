@@ -309,10 +309,89 @@ final class PathwayConversationUITests: XCTestCase {
         XCTAssertTrue((field.value as? String)?.contains("More detail") == true)
     }
 
-    @MainActor private func launchFixture(questions: Bool = false, agents: Bool = false, working: Bool = false, longHistory: Bool = false) -> XCUIApplication {
+    @MainActor func testFinalAnswerRemainsVisibleWhenLongWorkingTranscriptCollapses() {
+        let app = launchFixture(working: true, collapseWork: true)
+        let answer = app.staticTexts["Investigation complete. The final answer stays visible."].firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        XCTAssertTrue(answer.isHittable)
+        capture(app, "Long working transcript before completion")
+        app.buttons["fixture-finish-run"].tap()
+        XCTAssertTrue(app.buttons["thread-work-run-sent"].waitForExistence(timeout: 5))
+        let visible = NSPredicate(format: "exists == true AND hittable == true")
+        expectation(for: visible, evaluatedWith: answer)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.buttons["agent-thread-jump-bottom"].exists)
+        capture(app, "Final answer after working transcript collapses")
+    }
+
+    @MainActor func testCollapsingWorkDoesNotLeaveAViewportBeyondTheTranscript() {
+        let app = launchFixture(working: true, collapseWork: true)
+        let transcript = app.descendants(matching: .any)["agent-thread-conversation"].firstMatch.scrollViews.firstMatch
+        transcript.swipeDown()
+        XCTAssertTrue(app.buttons["agent-thread-jump-bottom"].waitForExistence(timeout: 5))
+        capture(app, "Reading working details before completion")
+        app.buttons["fixture-finish-run"].tap()
+        let answer = app.staticTexts["Investigation complete. The final answer stays visible."].firstMatch
+        let visible = NSPredicate(format: "exists == true AND hittable == true")
+        expectation(for: visible, evaluatedWith: answer)
+        waitForExpectations(timeout: 5)
+        capture(app, "Recovered viewport after working details disappear")
+    }
+
+    @MainActor
+    func testNestedThreadTransitionsKeepNavigationClearOfComposer() {
+        let app = launchFixture(nested: true)
+        for _ in 0..<2 {
+            app.buttons["fixture-open-nested-thread"].tap()
+            dismissFixtureNotificationAlert(in: app)
+            assertCompactThreadControls(app)
+            capture(app, "Nested thread compact navigation")
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(app.buttons["fixture-open-nested-thread"].waitForExistence(timeout: 5))
+            dismissFixtureNotificationAlert(in: app)
+            assertCompactThreadControls(app)
+        }
+        app.buttons["Message agent"].tap()
+        let field = app.textViews["agent-thread-composer-field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText("Draft remains accessible")
+        XCTAssertFalse(app.buttons["Show main navigation"].isHittable)
+        capture(app, "Composer accessible after nested navigation")
+    }
+
+    @MainActor
+    private func assertCompactThreadControls(_ app: XCUIApplication) {
+        let navigation = app.buttons["Show main navigation"]
+        let composer = app.buttons["Message agent"]
+        XCTAssertTrue(navigation.waitForExistence(timeout: 5))
+        XCTAssertTrue(navigation.isHittable)
+        XCTAssertTrue(composer.isHittable)
+        XCTAssertLessThanOrEqual(navigation.frame.maxX, composer.frame.minX)
+        XCTAssertFalse(app.buttons["Choose another view"].isHittable)
+    }
+
+    @MainActor
+    func testImageRemainsAvailableAfterThreadNavigation() {
+        let app = launchFixture(nested: true, image: true)
+        let image = app.buttons["transcript-image-fixture-image"]
+        XCTAssertTrue(image.waitForExistence(timeout: 5))
+        app.buttons["fixture-open-nested-thread"].tap()
+        dismissFixtureNotificationAlert(in: app)
+        XCTAssertTrue(image.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Retry"].exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        dismissFixtureNotificationAlert(in: app)
+        XCTAssertTrue(image.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Retry"].exists)
+        capture(app, "Image retained after returning to thread")
+    }
+
+    @MainActor private func launchFixture(questions: Bool = false, agents: Bool = false, working: Bool = false, longHistory: Bool = false, collapseWork: Bool = false, nested: Bool = false, image: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-conversation"] + (questions ? ["--conversation-questions"] : []) + (agents ? ["--conversation-agents"] : [])
             + (working ? ["--conversation-working"] : []) + (longHistory ? ["--conversation-long-history"] : [])
+            + (collapseWork ? ["--conversation-collapse-work"] : []) + (nested ? ["--conversation-nested"] : []) + (image ? ["--conversation-image"] : [])
         app.launch()
         XCTAssertTrue(app.buttons["agent-thread-actions"].waitForExistence(timeout: 10))
         dismissFixtureNotificationAlert(in: app)

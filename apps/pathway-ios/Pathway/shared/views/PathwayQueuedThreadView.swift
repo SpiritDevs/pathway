@@ -4,6 +4,9 @@ import SwiftUI
 struct PathwayQueuedThreadView: View {
     @Environment(PathwayAppModel.self) private var appModel
     let thread: PathwayQueuedThread
+    @Environment(\.dismiss) private var dismiss
+    @State private var isUpdatingQueue = false
+    @State private var queueActionError: String?
     @State private var model: PathwayAgentThreadModel?
     @State private var errorMessage: String?
 
@@ -28,6 +31,36 @@ struct PathwayQueuedThreadView: View {
             } else { ProgressView("Opening conversation…") }
         }
         .task(id: current.environmentID) { await loadConversation() }
+        .toolbar {
+            ToolbarItem(placement: .secondaryAction) {
+                Button(current.state == "canceled" ? "Remove from list" : "Cancel queued thread",
+                       systemImage: current.state == "canceled" ? "trash" : "xmark.circle", role: .destructive) {
+                    updateQueue()
+                }
+                .disabled(isUpdatingQueue)
+            }
+        }
+        .alert("Couldn’t update queued thread", isPresented: Binding(get: { queueActionError != nil }, set: { if !$0 { queueActionError = nil } })) {
+            Button("OK", role: .cancel) { queueActionError = nil }
+        } message: { Text(queueActionError ?? "") }
+    }
+
+    private func updateQueue() {
+        guard !isUpdatingQueue else { return }
+        isUpdatingQueue = true
+        let queued = current
+        Task {
+            defer { isUpdatingQueue = false }
+            do {
+                if queued.state == "canceled" {
+                    try await appModel.cloud.threadQueue.removeCanceledThread(queued)
+                    dismiss()
+                } else {
+                    try await appModel.cloud.threadQueue.cancelThread(queued)
+                    dismiss()
+                }
+            } catch { queueActionError = error.localizedDescription }
+        }
     }
 
     private func loadConversation() async {
