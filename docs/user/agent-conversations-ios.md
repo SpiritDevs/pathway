@@ -8,6 +8,8 @@ When you scroll away from the latest message, a floating button above the compos
 
 Completed turns keep the final answer visible and fold intermediate work into a **Worked for…** row. Expand it to read progress updates, then expand individual search, command, tool, and file rows for details. Questions, approval requests, plans, and subagent links remain accessible in the conversation.
 
+When working details fold away, the conversation keeps the latest answer in view if you were following it. Reading earlier messages does not resume automatic scrolling. If the collapsed work leaves your view beyond the end of the conversation, it returns to the final answer.
+
 The file count above the composer opens the changed files and available diffs. Copy an answer with its copy button, or hold a message to open its actions. Fork from an answer to continue from that turn in a separate conversation. The thread menu can also fork the latest state and copy the conversation.
 
 Hold the latest message you sent and choose **Edit and restart** when the provider supports restoring that conversation point. Editing preserves attached context. Messages that have already changed workspace files may no longer be editable.

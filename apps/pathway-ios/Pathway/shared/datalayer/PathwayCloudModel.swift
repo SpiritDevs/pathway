@@ -131,7 +131,7 @@ final class PathwayCloudModel {
         }
     )
     @ObservationIgnored private let connect: PathwayConnectClient?
-    @ObservationIgnored private let issueEnvironmentClient = PathwayIssueEnvironmentClient()
+    @ObservationIgnored private let issueEnvironmentClient: PathwayIssueEnvironmentClient
     @ObservationIgnored private var companiesSubscription: AnyCancellable?
     @ObservationIgnored private var headSubscriptions: [String: AnyCancellable] = [:]
     @ObservationIgnored private var bootstrapTasks: [String: Task<Void, Never>] = [:]
@@ -158,9 +158,11 @@ final class PathwayCloudModel {
     @ObservationIgnored private var discoveryCache: PathwayDiscoveryCache?
     @ObservationIgnored private var cacheTask: Task<Void, Never>?
 
-    init(client: (any PathwayCloudSyncClient)? = nil, connect: PathwayConnectClient? = nil) {
+    init(client: (any PathwayCloudSyncClient)? = nil, connect: PathwayConnectClient? = nil,
+         issueEnvironmentClient: PathwayIssueEnvironmentClient = PathwayIssueEnvironmentClient()) {
         self.client = client
         self.connect = connect
+        self.issueEnvironmentClient = issueEnvironmentClient
     }
 
     var isConnected: Bool {
@@ -330,6 +332,78 @@ final class PathwayCloudModel {
         await stop(clearContent: false)
         guard lifecycleGeneration == generationAfterStop, connectionState == .disconnected, !Task.isCancelled else { return }
         await start()
+    }
+
+    /// Wait for fresh discovery heads and their installed changes, not just authentication.
+    func refreshThreads() async throws -> PathwayThreadRefresh.Result {
+        guard let client else { throw URLError(.notConnectedToInternet) }
+        let generation = lifecycleGeneration + 2 // Retry stops, then starts a new lifecycle.
+        await retry()
+        try Task.checkCancellation()
+        guard lifecycleGeneration == generation else { throw CancellationError() }
+        if let errorMessage { throw PathwayThreadConversationError.message(errorMessage) }
+        var receivedMemberships = false
+        for try await memberships in client.companiesPublisher().values {
+            try Task.checkCancellation()
+            guard lifecycleGeneration == generation else { throw CancellationError() }
+            await received(companies: memberships)
+            receivedMemberships = true
+            break
+        }
+        guard receivedMemberships, !companies.isEmpty else {
+            throw PathwayThreadConversationError.message("Workspace sync did not finish.")
+        }
+        for company in companies {
+            var receivedHead = false
+            for try await head in client.syncHeadPublisher(companyId: company.id).values {
+                try Task.checkCancellation()
+                guard lifecycleGeneration == generation else { throw CancellationError() }
+                received(head: head, companyId: company.id)
+                // A drain can discover an expired cursor and hand over to a bootstrap.
+                while let pending = bootstrapTasks[company.id] ?? drainTasks[company.id] {
+                    await pending.value
+                    try Task.checkCancellation()
+                    guard lifecycleGeneration == generation else { throw CancellationError() }
+                }
+                guard let cursor = cursorByCompany[company.id], cursor >= head.version,
+                      let epoch = authorizationEpochByCompany[company.id], epoch >= head.authorizationEpoch else {
+                    throw PathwayThreadConversationError.message(errorMessage ?? "Workspace sync did not finish.")
+                }
+                receivedHead = true
+                break
+            }
+            guard receivedHead else { throw PathwayThreadConversationError.message("Workspace sync did not finish.") }
+        }
+        try Task.checkCancellation()
+        guard lifecycleGeneration == generation else { throw CancellationError() }
+        let activeEnvironments = environments.filter { $0.environment.state == "active" }
+        guard let connect else {
+            return activeEnvironments.isEmpty ? .updated : .unavailable(activeEnvironments.map(\.environment.label))
+        }
+        observeEnvironmentEvents()
+        let unavailable = await withTaskGroup(of: String?.self) { group in
+            for environment in activeEnvironments {
+                group.addTask {
+                    do {
+                        try await self.refreshEnvironment(environment, connect: connect, generation: generation)
+                        return nil
+                    } catch { return environment.environment.label }
+                }
+            }
+            var unavailable: [String] = []
+            for await name in group { if let name { unavailable.append(name) } }
+            return unavailable.sorted()
+        }
+        try Task.checkCancellation()
+        guard lifecycleGeneration == generation else { throw CancellationError() }
+        return unavailable.isEmpty ? .updated : .unavailable(unavailable)
+    }
+
+    private func refreshEnvironment(_ environment: PathwayCompanyEnvironment, connect: PathwayConnectClient, generation: Int) async throws {
+        try Task.checkCancellation()
+        guard lifecycleGeneration == generation else { throw CancellationError() }
+        _ = try await issueEnvironmentClient.request(environment: environment, connect: connect,
+            method: "server.getConfig", payload: .object([:]), timeout: .seconds(5))
     }
 
     func stop(clearContent: Bool = true) async {

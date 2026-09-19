@@ -16,7 +16,15 @@ struct PathwayConversationSimulatorScene: View {
         ) { _, _ in
             List { Button("Bring conversations to mobile") { showsThread = true } }
                 .navigationTitle("Threads")
-                .navigationDestination(isPresented: $showsThread) { AgentThreadConversationView(model: workspace.model) }
+                .navigationDestination(isPresented: $showsThread) {
+                    AgentThreadConversationView(model: workspace.model)
+                        .toolbar {
+                            if ProcessInfo.processInfo.arguments.contains("--conversation-collapse-work") {
+                                Button("Finish run") { workspace.finishRun() }
+                                    .accessibilityIdentifier("fixture-finish-run")
+                            }
+                        }
+                }
         }
         .sheet(item: $presentedSheet) { sheet in
             if sheet == .agentOrchestrator {
@@ -79,6 +87,13 @@ private final class ConversationSimulatorWorkspace {
                     text: "Conversation detail \(index + 1).\n\nKeep earlier work readable while the agent continues. The latest-message control returns to the end without losing the draft.")
             }
         }
+        if ProcessInfo.processInfo.arguments.contains("--conversation-collapse-work") {
+            add("collapse-user", "user_message", text: "Complete a long investigation.", extra: ["runId": .string("run-sent")])
+            for index in 0..<60 {
+                add("work-\(index)", "assistant_message", text: "Investigation step \(index + 1).\n\nChecking the implementation and validating the result before continuing.", extra: ["runId": .string("run-sent")])
+            }
+            add("collapse-answer", "assistant_message", text: "Investigation complete. The final answer stays visible.", extra: ["runId": .string("run-sent")])
+        }
         publish()
         serverConfig = .object(["environment": .object(["capabilities": .object(["attachmentUploads": .bool(true), "fileAttachments": .object(["maxUploadBytes": .number(52428800)])])]), "providers": .array([.object([
             "instanceId": .string("codex"), "driver": .string("codex"), "displayName": .string("Codex"),
@@ -100,6 +115,11 @@ private final class ConversationSimulatorWorkspace {
             }
         }
     }
+    func finishRun() {
+        runStatus = "completed"
+        publish()
+    }
+
     private func add(_ id: String, _ type: String, text: String? = nil, extra: [String: JSONValue] = [:]) {
         var item: [String: JSONValue] = ["id": .string(id), "type": .string(type), "threadId": .string("sim-thread"),
             "createdBy": .string("user"), "ordinal": .number(Double(items.count)), "runId": .string("run-completed"), "status": .string("completed"),

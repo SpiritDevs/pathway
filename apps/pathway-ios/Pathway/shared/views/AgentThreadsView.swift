@@ -31,6 +31,7 @@ struct AgentThreadsView: View {
     @State private var focuses = PathwayFocusModel()
     @State private var creatingFocus = false
     @State private var showingNotifications = false
+    @State private var refresh = PathwayThreadRefresh()
     init(newThreadAction: @escaping () -> Void, initialFilter: PathwayThreadListFilter = .all) {
         self.newThreadAction = newThreadAction
         _listFilter = State(initialValue: initialFilter)
@@ -39,7 +40,10 @@ struct AgentThreadsView: View {
     private var threadNavigation: some View {
         Group {
             if lifecycleThreadCount == 0 {
-                emptyState
+                VStack {
+                    refreshResult.padding(.horizontal)
+                    emptyState
+                }
             } else {
                 threadList
             }
@@ -51,16 +55,15 @@ struct AgentThreadsView: View {
         .searchable(text: $query, prompt: "Search threads")
         .toolbar { threadToolbar }
         .refreshable {
-            await appModel.cloud.retry()
-            if let connect = appModel.connect {
-                await appModel.cloud.refreshLifecycleMetadata(using: connect)
+            await refresh.run {
+                try await appModel.cloud.refreshThreads()
             }
         }
-        .task(id: lifecycleRefreshKey) {
+        .task(id: "\(refresh.revision):\(lifecycleRefreshKey)") {
             guard let connect = appModel.connect else { return }
             await appModel.cloud.refreshLifecycleMetadata(using: connect)
         }
-        .task(id: providerEnvironments.map(\.id)) {
+        .task(id: "\(refresh.revision):\(providerEnvironments.map(\.id).joined(separator: "|"))") {
             guard let connect = appModel.connect else { return }
             await threadProviders.observe(environments: providerEnvironments, using: connect)
         }
@@ -135,8 +138,20 @@ struct AgentThreadsView: View {
     }
 
     @ViewBuilder
+    private var refreshResult: some View {
+        if let result = refresh.result {
+            Text(result.message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("thread-refresh-result")
+        }
+    }
+
+    @ViewBuilder
     private var threadList: some View {
         List {
+            refreshResult
             ForEach(pendingQueueThreads) { queued in
                 Button { queuedThread = queued } label: {
                     if let thread = try? queued.conversationThread(detail: .object(["thread": .object(queued.fields)])) {
@@ -918,6 +933,7 @@ struct AgentThreadConversationView: View {
     @State private var isNearBottom = true
     @State private var followsLatest = true
     @State private var userIsScrolling = false
+    @State private var viewportIsBeyondContent = false
     private let workspaceRoot: String?
     @State private var childDestination: AgentThreadDestination?
     @State private var isOpeningChild = false
@@ -1009,10 +1025,23 @@ struct AgentThreadConversationView: View {
                 if phase == .idle && userIsScrolling {
                     followsLatest = isNearBottom
                     userIsScrolling = false
+                    if viewportIsBeyondContent {
+                        proxy.scrollTo("agent-transcript-bottom", anchor: .bottom)
+                    }
+                }
+            }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentSize.height > 0 && geometry.visibleRect.minY >= geometry.contentSize.height
+            } action: { _, beyondContent in
+                viewportIsBeyondContent = beyondContent
+                // Folding work can remove the rows under the viewport, even when not following.
+                if beyondContent && !userIsScrolling {
+                    proxy.scrollTo("agent-transcript-bottom", anchor: .bottom)
                 }
             }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
-                if old != new && followsLatest && !userIsScrolling && model.activeRunID != nil {
+                // Completion folds the transcript after the run has already become inactive.
+                if old != new && followsLatest && !userIsScrolling {
                     proxy.scrollTo("agent-transcript-bottom", anchor: .bottom)
                 }
             }

@@ -3,6 +3,21 @@ import XCTest
 /// Runs the actual adaptive shell and Calendar/Email views against deterministic model adapters.
 /// These checks prove native interactions, not cloud authorization or remote server delivery.
 final class PathwayParityUITests: XCTestCase {
+    @MainActor func testThreadRefreshFinishesWhenCloudIsUnavailable() {
+        let app = launch(extra: ["--parity-thread-menu"])
+        let list = app.collectionViews.firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
+        let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+        start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+        let result = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Couldn’t refresh threads.")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        XCTAssertTrue(result.label.contains("Couldn’t refresh threads"))
+        XCTAssertTrue(app.navigationBars["Agent Threads"].exists)
+        XCTAssertEqual(app.activityIndicators.count, 0)
+        capture(app, "Thread refresh finishes with an offline result")
+    }
+
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
@@ -194,7 +209,7 @@ final class PathwayParityUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-parity"] + extra
         app.launch()
-        let title = extra.contains("--parity-email") ? "Email" : "Calendar"
+        let title = extra.contains("--parity-thread-menu") ? "Agent Threads" : extra.contains("--parity-email") ? "Email" : "Calendar"
         XCTAssertTrue(app.navigationBars[title].firstMatch.waitForExistence(timeout: 10))
         if title == "Email" { selectCapturedEmail(in: app) }
         return app

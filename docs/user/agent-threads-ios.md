@@ -1,5 +1,10 @@
 # Agent Threads on iOS
 
+Pull down on Agent Threads to refresh cloud updates and reconnect active environments.
+Refresh finishes within 15 seconds and shows a result above the list. If an environment
+cannot be reached, the result names it and keeps your available threads visible. You can
+pull down again to retry. Git and pull request statuses update separately in the background.
+
 When starting a thread, tap the environment dropdown below the project name to choose where
 it will run. The menu lists the environments linked to that project and marks the selected
 environment with a checkmark. It remains available when the project has only one environment.

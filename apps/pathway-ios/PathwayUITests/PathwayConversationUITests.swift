@@ -309,10 +309,40 @@ final class PathwayConversationUITests: XCTestCase {
         XCTAssertTrue((field.value as? String)?.contains("More detail") == true)
     }
 
-    @MainActor private func launchFixture(questions: Bool = false, agents: Bool = false, working: Bool = false, longHistory: Bool = false) -> XCUIApplication {
+    @MainActor func testFinalAnswerRemainsVisibleWhenLongWorkingTranscriptCollapses() {
+        let app = launchFixture(working: true, collapseWork: true)
+        let answer = app.staticTexts["Investigation complete. The final answer stays visible."].firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        XCTAssertTrue(answer.isHittable)
+        capture(app, "Long working transcript before completion")
+        app.buttons["fixture-finish-run"].tap()
+        XCTAssertTrue(app.buttons["thread-work-run-sent"].waitForExistence(timeout: 5))
+        let visible = NSPredicate(format: "exists == true AND hittable == true")
+        expectation(for: visible, evaluatedWith: answer)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.buttons["agent-thread-jump-bottom"].exists)
+        capture(app, "Final answer after working transcript collapses")
+    }
+
+    @MainActor func testCollapsingWorkDoesNotLeaveAViewportBeyondTheTranscript() {
+        let app = launchFixture(working: true, collapseWork: true)
+        let transcript = app.descendants(matching: .any)["agent-thread-conversation"].firstMatch.scrollViews.firstMatch
+        transcript.swipeDown()
+        XCTAssertTrue(app.buttons["agent-thread-jump-bottom"].waitForExistence(timeout: 5))
+        capture(app, "Reading working details before completion")
+        app.buttons["fixture-finish-run"].tap()
+        let answer = app.staticTexts["Investigation complete. The final answer stays visible."].firstMatch
+        let visible = NSPredicate(format: "exists == true AND hittable == true")
+        expectation(for: visible, evaluatedWith: answer)
+        waitForExpectations(timeout: 5)
+        capture(app, "Recovered viewport after working details disappear")
+    }
+
+    @MainActor private func launchFixture(questions: Bool = false, agents: Bool = false, working: Bool = false, longHistory: Bool = false, collapseWork: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-conversation"] + (questions ? ["--conversation-questions"] : []) + (agents ? ["--conversation-agents"] : [])
             + (working ? ["--conversation-working"] : []) + (longHistory ? ["--conversation-long-history"] : [])
+            + (collapseWork ? ["--conversation-collapse-work"] : [])
         app.launch()
         XCTAssertTrue(app.buttons["agent-thread-actions"].waitForExistence(timeout: 10))
         dismissFixtureNotificationAlert(in: app)
