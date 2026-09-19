@@ -48,7 +48,11 @@ struct AgentThreadsView: View {
         .navigationDestination(isPresented: Binding(get: { queuedThread != nil }, set: { if !$0 { queuedThread = nil } })) {
             if let queuedThread { PathwayQueuedThreadView(thread: queuedThread) }
         }
-        .searchable(text: $query, prompt: "Search threads")
+        .searchable(
+            text: $query,
+            placement: .navigationBarDrawer(displayMode: .automatic),
+            prompt: "Search threads"
+        )
         .toolbar { threadToolbar }
         .refreshable {
             await appModel.cloud.retry()

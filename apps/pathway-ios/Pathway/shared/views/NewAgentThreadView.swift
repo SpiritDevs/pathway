@@ -386,63 +386,91 @@ private struct NewAgentThreadComposer: View {
     @State private var showsBranches = false
 
     var body: some View {
-        ZStack {
-            Color.clear
-
-            VStack(spacing: 12) {
-                Spacer(minLength: 54)
-
-                Text(project.isConversation ? "What’s on your mind" : "What should we build")
-                    .font(.largeTitle.weight(.regular))
-
-                Button(action: chooseProject) {
-                    HStack(spacing: 5) {
-                        Text(project.isConversation ? "Conversation" : "in \(project.name)?")
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Image(systemName: "chevron.down")
-                            .font(.caption.weight(.bold))
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 12) {
+                    projectHeader
+                    Spacer(minLength: 20)
+                    if let model {
+                        if let selectedBinding, let connect = appModel.connect {
+                            PathwayConversationStorageNotice(environment: selectedBinding.environment, connect: connect,
+                                chooseEnvironment: chooseProject, onContinueAnyway: { model.continueDespiteCriticalStorage() }, onAvailabilityChanged: { model.storageAllowsLaunch = $0 }).id(selectedBinding.id)
+                        }
+                        if !model.isConversation {
+                            workspaceSummary(model)
+                                .simultaneousGesture(TapGesture().onEnded { promptFocused = false })
+                        }
+                        NewAgentThreadMessageEditor(model: model, isFocused: $promptFocused, showsOptions: $showsOptions)
+                            .disabled(model.isLaunching || model.isImportingCapture || isResolvingPlacement || placementUnavailable)
+                            .padding(14)
+                            .background {
+                                RoundedRectangle(cornerRadius: 26).fill(.regularMaterial)
+                                    .onTapGesture { promptFocused = false }
+                            }
+                    } else {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("Connecting to \(selectedBinding?.label ?? "environment")…")
+                        }
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 110)
                     }
-                    .font(.largeTitle.weight(.regular))
-                    .foregroundStyle(.primary)
                 }
-                .buttonStyle(.plain)
-                .disabled(model?.isLaunching == true || model?.hasPendingLaunch == true)
-                .accessibilityLabel("Choose project")
-                .accessibilityValue(project.name)
-
-                environmentPicker
-
-                Spacer(minLength: 0)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+                .frame(minHeight: geometry.size.height)
+                .background {
+                    Color.clear.contentShape(Rectangle())
+                        .onTapGesture { promptFocused = false }
+                }
             }
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 24)
+            .scrollDismissesKeyboard(.interactively)
+            .defaultScrollAnchor(.bottom, for: .sizeChanges)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 4) {
-                if let model {
-                    if let selectedBinding, let connect = appModel.connect {
-                        PathwayConversationStorageNotice(environment: selectedBinding.environment, connect: connect,
-                            chooseEnvironment: chooseProject, onContinueAnyway: { model.continueDespiteCriticalStorage() }, onAvailabilityChanged: { model.storageAllowsLaunch = $0 }).id(selectedBinding.id)
-                    }
-                    if !model.isConversation { workspaceSummary(model) }
-                    composer(model).disabled(model.isImportingCapture || isResolvingPlacement || placementUnavailable)
-                } else {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text("Connecting to \(selectedBinding?.label ?? "environment")…")
-                    }
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 110)
-                }
+            if let model {
+                composerControls(model)
+                    .disabled(model.isImportingCapture || isResolvingPlacement || placementUnavailable)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+                    .background(.background)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(TapGesture().onEnded { promptFocused = false })
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 12)
-            .background(.background)
         }
         .sheet(isPresented: $showsBranches) {
             if let model { NewAgentThreadBranchPicker(model: model).presentationDetents([.medium, .large]) }
         }
+    }
+
+    private var projectHeader: some View {
+        VStack(spacing: 12) {
+            Text(project.isConversation ? "What’s on your mind" : "What should we build")
+                .font(.largeTitle.weight(.regular))
+
+            Button(action: chooseProject) {
+                HStack(spacing: 5) {
+                    Text(project.isConversation ? "Conversation" : "in \(project.name)?")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.bold))
+                }
+                .font(.largeTitle.weight(.regular))
+                .foregroundStyle(.primary)
+            }
+            .buttonStyle(.plain)
+            .disabled(model?.isLaunching == true || model?.hasPendingLaunch == true)
+            .accessibilityLabel("Choose project")
+            .accessibilityValue(project.name)
+
+            environmentPicker
+        }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 8)
+        .padding(.top, 54)
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture().onEnded { promptFocused = false })
     }
 
     private var selectedBinding: PathwayNewThreadBindingOption? {
@@ -525,11 +553,8 @@ private struct NewAgentThreadComposer: View {
         .disabled(model.isLaunching)
     }
 
-    private func composer(_ model: PathwayAgentThreadCreationModel) -> some View {
+    private func composerControls(_ model: PathwayAgentThreadCreationModel) -> some View {
         return VStack(spacing: 12) {
-            NewAgentThreadMessageEditor(model: model, isFocused: $promptFocused, showsOptions: $showsOptions)
-                .disabled(model.isLaunching)
-
             HStack(spacing: 10) {
                 Button("Composer options", systemImage: "plus") {
                     promptFocused = false
