@@ -7,6 +7,8 @@ struct NewAgentThreadMessageEditor: View {
     @Bindable var model: PathwayAgentThreadCreationModel
     @Binding var isFocused: Bool
     @Binding var showsOptions: Bool
+    var maximumHeight: CGFloat = .infinity
+    @State private var accessoryHeight: CGFloat = 0
     @State private var selection: NSRange?
     @State private var pendingTool: Tool?
     private enum Tool { case photos, files, camera, document, stash }
@@ -25,13 +27,17 @@ struct NewAgentThreadMessageEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if isFocused, let trigger {
-                NewAgentThreadSuggestions(model: model, trigger: trigger, select: selectSuggestion)
+            VStack(spacing: 10) {
+                if isFocused, let trigger {
+                    NewAgentThreadSuggestions(model: model, trigger: trigger, select: selectSuggestion)
+                }
+                if !model.attachments.drafts.isEmpty { attachmentStrip }
             }
-            if !model.attachments.drafts.isEmpty { attachmentStrip }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { accessoryHeight = $0 }
             AgentComposerTextInput(text: $model.prompt, selection: $selection,
                 isFocused: $isFocused,
                 placeholder: "Ask anything…", pasteImages: pasteImages,
+                maximumHeight: maximumHeight - accessoryHeight - 10,
                 accessibilityIdentifier: "new-agent-thread-prompt")
                 .overlay(alignment: .topLeading) {
                     if model.prompt.isEmpty {

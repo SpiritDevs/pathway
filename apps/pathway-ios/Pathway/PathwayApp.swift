@@ -96,6 +96,8 @@ struct PathwayApp: App {
             PathwayIssuesSimulatorScene()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-conversation") {
             PathwayConversationSimulatorScene()
+        } else if ProcessInfo.processInfo.arguments.contains("--uitest-new-thread") {
+            PathwayNewThreadSimulatorScene()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-parity") {
             PathwayParitySimulatorScene()
         } else {

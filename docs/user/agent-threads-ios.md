@@ -12,7 +12,8 @@ environment with a checkmark. It remains available when the project has only one
 The new-thread composer keeps the workspace choice and base branch above the message field.
 Tap **+** to open **Composer Options** for attachments, saved prompts, the agent and model,
 access settings, and temporary threads. The sheet can expand for more room. Paste images
-straight into the message field to attach them without replacing your text.
+straight into the message field to attach them without replacing your text. Long drafts scroll
+inside the composer, keeping **+**, the model picker, and **Start** above the keyboard.
 
 When a thread connects or reconnects, a status bubble above the composer shows that messages
 are syncing. It temporarily replaces the file-change summary until the latest updates arrive.
