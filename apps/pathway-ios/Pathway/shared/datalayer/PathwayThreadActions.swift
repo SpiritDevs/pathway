@@ -66,6 +66,9 @@ final class PathwayThreadActions {
     private(set) var pendingThreadIDs: Set<String> = []
     var errorMessage: String?
     var unfinishedGitThread: PathwayAgentThread?
+    private(set) var failedAction: (action: PathwayThreadAction, thread: PathwayAgentThread)?
+    private var retryCommands: [String: (action: PathwayThreadAction, command: JSONValue)] = [:]
+    typealias Request = (PathwayCompanyEnvironment, String, JSONValue) async throws -> JSONValue
 
     static func requiresDiscardConfirmation(_ error: Error) -> Bool {
         if case let PathwayRPCError.rejected(_, detail) = error {
@@ -78,43 +81,49 @@ final class PathwayThreadActions {
         _ action: PathwayThreadAction,
         thread: PathwayAgentThread,
         environments: [PathwayCompanyEnvironment],
-        connect: PathwayConnectClient?
+        request: Request
     ) async {
-        guard let connect, let environment = environments.first(where: {
+        guard let environment = environments.first(where: {
             $0.companyId == thread.companyId && $0.environment.environmentId == thread.environmentId
         }) else {
             errorMessage = "This thread’s environment is unavailable. Reconnect and try again."
+            failedAction = nil
             return
         }
         await perform(threadID: thread.id) {
-            let rpc = PathwayRPCClient {
-                try await connect.prepare(environment: environment).webSocketURL
-            }
+            self.errorMessage = nil
+            self.failedAction = nil
+            let previous = self.retryCommands[thread.id]
+            let command: JSONValue
+            if let previous, previous.action == action { command = previous.command }
+            else { command = action.command(threadID: thread.threadId) }
+            self.retryCommands[thread.id] = (action, command)
             do {
-                try await withThrowingTaskGroup(of: Void.self) { group in
-                    group.addTask {
-                        _ = try await rpc.request(
-                            "orchestration.dispatchCommand",
-                            payload: action.command(threadID: thread.threadId)
-                        )
-                    }
-                    group.addTask {
-                        try await Task.sleep(for: .seconds(20))
-                        throw URLError(.timedOut)
-                    }
-                    defer { group.cancelAll() }
-                    _ = try await group.next()
-                }
-                await rpc.stop()
+                _ = try await request(environment, "orchestration.dispatchCommand", command)
+                self.retryCommands.removeValue(forKey: thread.id)
             } catch {
-                await rpc.stop()
                 if action == .settle && thread.shell.isTemporary && Self.requiresDiscardConfirmation(error) {
+                    self.retryCommands.removeValue(forKey: thread.id)
                     self.unfinishedGitThread = thread
                     return
+                }
+                if Self.isConnectionFailure(error) {
+                    self.failedAction = (action, thread)
+                } else {
+                    self.retryCommands.removeValue(forKey: thread.id)
                 }
                 throw error
             }
         }
+    }
+
+    private static func isConnectionFailure(_ error: Error) -> Bool {
+        if let error = error as? URLError {
+            return [.timedOut, .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost].contains(error.code)
+        }
+        if case PathwayRPCError.disconnected = error { return true }
+        if case PathwayRPCError.timedOut = error { return true }
+        return false
     }
 
     func perform(threadID: String, send: () async throws -> Void) async {
@@ -124,7 +133,11 @@ final class PathwayThreadActions {
         do {
             try await send()
         } catch {
-            errorMessage = error.localizedDescription
+            if Self.isConnectionFailure(error) {
+                errorMessage = "The environment did not confirm this action. Check its connection and retry. The thread will stay visible until the update is confirmed."
+            } else {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

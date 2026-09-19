@@ -53,7 +53,8 @@ down to leave the thread awake. Swipe left to reveal **Settle**, or continue swi
 all the way left to settle immediately. These actions sync through the thread's environment.
 
 To bring a thread back, expand **Snoozed** and swipe left for **Wake**, or expand **Settled** and
-swipe left for **Reopen**. If an action fails, the app shows an error and keeps the thread in place.
+swipe left for **Reopen**. If an action fails, the app shows an error and keeps the thread in place. If the environment
+does not confirm the action, check its connection and tap **Retry** in the error alert.
 
 You can paste a copied photo or screenshot from the attachment menu or directly into the message
 field. The field also accepts image paste suggestions from the iOS keyboard when offered. Images

@@ -131,6 +131,9 @@ struct AgentThreadsView: View {
             get: { threadActions.errorMessage != nil },
             set: { if !$0 { threadActions.errorMessage = nil } }
         )) {
+            if let failed = threadActions.failedAction {
+                Button("Retry") { perform(failed.action, on: failed.thread) }
+            }
             Button("OK", role: .cancel) { threadActions.errorMessage = nil }
         } message: {
             Text(threadActions.errorMessage ?? "Please try again.")
@@ -434,7 +437,7 @@ struct AgentThreadsView: View {
         Task {
             threadActions.errorMessage = nil
             for (target, key) in writes {
-                await threadActions.perform(.reorder(key), thread: target, environments: appModel.cloud.environments, connect: appModel.connect)
+                await threadActions.perform(.reorder(key), thread: target, environments: appModel.cloud.environments, request: appModel.cloud.environmentRequest)
                 if threadActions.errorMessage != nil { return }
             }
         }
@@ -563,7 +566,7 @@ private extension AgentThreadsView {
                 action,
                 thread: thread,
                 environments: appModel.cloud.environments,
-                connect: appModel.connect
+                request: appModel.cloud.environmentRequest
             )
         }
     }
