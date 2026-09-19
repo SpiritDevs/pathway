@@ -40,6 +40,7 @@ import {
   OrchestrationV2ThreadLaunchError,
   type OrchestrationProjectShell,
   type OrchestrationV2ShellSnapshot,
+  type OrchestrationV2SubscribeThreadInput,
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
@@ -82,6 +83,7 @@ import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import { threadHistoryNeedsSnapshot } from "./orchestration-v2/ThreadHistory.ts";
 import { EffectOutboxV2 } from "./orchestration-v2/EffectOutbox.ts";
 import type { OrchestratorV2Error } from "./orchestration-v2/Orchestrator.ts";
 import { issuePullRequestFromStatus } from "./orchestration-v2/RunFinalizationService.ts";
@@ -798,6 +800,7 @@ const makeWsRpcLayer = (
           shellResumeCompletionMarker: true,
           threadResumeCompletionMarker: true,
           threadSnapshotPagination: true,
+          orchestrationV2ThreadHistory: true,
         };
       });
 
@@ -829,11 +832,7 @@ const makeWsRpcLayer = (
         );
 
       const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subscribeThread")(
-        function* (input: {
-          readonly threadId: ThreadId;
-          readonly afterSequence?: number;
-          readonly requestCompletionMarker?: boolean;
-        }) {
+        function* (input: OrchestrationV2SubscribeThreadInput) {
           yield* Effect.annotateCurrentSpan({
             "orchestration_v2.thread_id": input.threadId,
           });
@@ -909,22 +908,44 @@ const makeWsRpcLayer = (
                   }),
               ),
             );
-            return Stream.concat(
-              Stream.concat(replayThrough(input.afterSequence, highWater), completionMarker),
-              eventStreamFrom(highWater),
-            );
+            // Count only a bounded prefix: global sequence gaps also contain other threads.
+            const resetHistory =
+              input.history === undefined
+                ? false
+                : yield* threadHistoryNeedsSnapshot(
+                    input.threadId,
+                    input.afterSequence,
+                    highWater,
+                  ).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new OrchestrationV2GetThreadProjectionError({
+                          threadId: input.threadId,
+                          message: `Failed to inspect thread ${input.threadId} replay`,
+                          cause,
+                        }),
+                    ),
+                  );
+            if (!resetHistory) {
+              return Stream.concat(
+                Stream.concat(replayThrough(input.afterSequence, highWater), completionMarker),
+                eventStreamFrom(highWater),
+              );
+            }
           }
 
-          const snapshot = yield* threadManagement.getThreadSnapshot(input.threadId).pipe(
-            Effect.mapError(
-              (cause) =>
-                new OrchestrationV2GetThreadProjectionError({
-                  threadId: input.threadId,
-                  message: `Failed to load orchestration V2 thread ${input.threadId}`,
-                  cause,
-                }),
-            ),
-          );
+          const snapshot = yield* threadManagement
+            .getThreadSnapshot(input.threadId, input.history)
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2GetThreadProjectionError({
+                    threadId: input.threadId,
+                    message: `Failed to load orchestration V2 thread ${input.threadId}`,
+                    cause,
+                  }),
+              ),
+            );
           const { projection, snapshotSequence } = snapshot;
 
           return Stream.concat(
@@ -933,6 +954,7 @@ const makeWsRpcLayer = (
                 kind: "snapshot" as const,
                 snapshotSequence,
                 projection,
+                ...(snapshot.history === undefined ? {} : { history: snapshot.history }),
               }),
               completionMarker,
             ),

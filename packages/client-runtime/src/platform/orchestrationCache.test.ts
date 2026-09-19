@@ -3,6 +3,7 @@ import {
   EnvironmentId,
   MessageId,
   RuntimeRequestId,
+  TurnItemId,
   type OrchestrationV2ShellSnapshot,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
@@ -76,7 +77,24 @@ describe("orchestration cache envelopes", () => {
         schemaVersion: ORCHESTRATION_CACHE_SCHEMA_VERSION,
         environmentId,
         threadId: v2ThreadId,
-        snapshot: { snapshotSequence: 4, projection: v2Projection },
+        snapshot: {
+          snapshotSequence: 4,
+          projection: v2Projection,
+          history: {
+            hasOlder: true,
+            hasNewer: false,
+            beforeCursor: TurnItemId.make("cursor-4"),
+            afterCursor: TurnItemId.make("cursor-9"),
+            index: [
+              {
+                messageId: MessageId.make("message-1"),
+                role: "user",
+                preview: "First question",
+                assistantPreview: "Reply",
+              },
+            ],
+          },
+        },
       });
       const thread = decodeStoredThreadSnapshotJson(encodedThread);
       const [threadShell] = shell.snapshot.threads;
@@ -103,6 +121,25 @@ describe("orchestration cache envelopes", () => {
       );
       expect(thread.snapshot.projection).toEqual(v2Projection);
       expect(thread.snapshot.snapshotSequence).toBe(4);
+      expect(thread.snapshot.history).toEqual({
+        hasOlder: true,
+        hasNewer: false,
+        beforeCursor: "cursor-4",
+        afterCursor: "cursor-9",
+        index: [
+          {
+            messageId: "message-1",
+            role: "user",
+            preview: "First question",
+            assistantPreview: "Reply",
+          },
+        ],
+      });
+      expect(() =>
+        decodeStoredThreadSnapshotJson(
+          encodedThread.replace('"schemaVersion":4', '"schemaVersion":3'),
+        ),
+      ).toThrow();
     }),
   );
 

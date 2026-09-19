@@ -343,8 +343,10 @@ const make = Effect.gen(function* () {
   const getThreadProjection: ThreadManagementServiceShape["getThreadProjection"] = (threadId) =>
     orchestrator.getThreadProjection(threadId);
 
-  const getThreadSnapshot: ThreadManagementServiceShape["getThreadSnapshot"] = (threadId) =>
-    orchestrator.getThreadSnapshot(threadId);
+  const getThreadSnapshot: ThreadManagementServiceShape["getThreadSnapshot"] = (
+    threadId,
+    history,
+  ) => orchestrator.getThreadSnapshot(threadId, history);
 
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
     orchestrator.dispatch(command);

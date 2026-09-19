@@ -21,6 +21,8 @@ import {
   type OrchestrationV2ContextTransfer,
   type OrchestrationV2ContextTransferResolution,
   type OrchestrationV2ConversationMessage,
+  type OrchestrationV2ThreadHistoryRequest,
+  type OrchestrationV2ThreadDetailSnapshot,
   type OrchestrationV2DelegatedCompletionCohort,
   type OrchestrationV2DelegatedCompletionDelivery,
   type OrchestrationV2DomainEvent,
@@ -187,12 +189,11 @@ export interface OrchestratorV2Shape {
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, OrchestratorV2Error>;
-  readonly getThreadSnapshot: (threadId: ThreadId) => Effect.Effect<
-    {
-      readonly schemaVersion: number;
-      readonly snapshotSequence: number;
-      readonly projection: OrchestrationV2ThreadProjection;
-    },
+  readonly getThreadSnapshot: (
+    threadId: ThreadId,
+    history?: OrchestrationV2ThreadHistoryRequest,
+  ) => Effect.Effect<
+    OrchestrationV2ThreadDetailSnapshot & { readonly schemaVersion: number },
     OrchestratorV2Error
   >;
   readonly getShellSnapshot: () => Effect.Effect<
@@ -9403,9 +9404,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projectionStore
         .getThreadProjection(threadId)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
-    getThreadSnapshot: (threadId) =>
+    getThreadSnapshot: (threadId, history) =>
       projectionStore
-        .getThreadSnapshot(threadId)
+        .getThreadSnapshot(threadId, history)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
     getShellSnapshot: () =>
       projectionStore.getShellSnapshot().pipe(

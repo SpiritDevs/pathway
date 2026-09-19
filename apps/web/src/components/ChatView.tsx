@@ -344,6 +344,7 @@ import {
   useProject,
   useProjects,
   useThreadProjection,
+  useThreadHistory,
   useThreadShell,
   useThreadShells,
   useThreadStatus,
@@ -1578,6 +1579,11 @@ function ChatViewContent(props: ChatViewProps) {
     threadLoadStopped ? null : routeThreadDetailRef,
   );
   const serverProjection = serverThreadProjection?.projection ?? null;
+  const threadHistory = useThreadHistory(threadLoadStopped ? null : routeThreadDetailRef);
+  const threadHistoryRef = useRef(threadHistory);
+  useEffect(() => {
+    threadHistoryRef.current = threadHistory;
+  }, [threadHistory]);
   const allowanceHold =
     serverProjection?.runs.findLast((run) => run.status === "starting" || run.status === "running")
       ?.allowanceHold ?? null;
@@ -5105,7 +5111,7 @@ function ChatViewContent(props: ChatViewProps) {
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [activeThreadKey, isTimelineLive]);
+  }, [activeThreadKey, isTimelineLive, threadHistory?.hasNewer]);
   const getActiveTimelineTurnMetrics = useCallback(
     (list?: LegendListRef | null) => {
       const resolvedList = list ?? legendListRef.current;
@@ -5157,6 +5163,8 @@ function ChatViewContent(props: ChatViewProps) {
   // Live-follow stays active after send/thread-open until an actual list scroll
   // gesture opts out.
   const scrollToEnd = useCallback((animated = false) => {
+    if (threadHistoryRef.current?.hasNewer || threadHistoryRef.current?.isLoading)
+      threadHistoryRef.current.request("latest");
     isAtEndRef.current = true;
     timelineScrollModeRef.current = "following-end";
     liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
@@ -6735,6 +6743,8 @@ function ChatViewContent(props: ChatViewProps) {
         ? canSettle(activeThread, { now: new Date().toISOString() }) &&
           (activeThread.pendingBackgroundTasks?.length ?? 0) === 0
         : activeThread?.conversationPath == null &&
+          !threadHistory?.hasOlder &&
+          !threadHistory?.hasNewer &&
           canReplaceInitialThreadProject(serverProjection)));
   const handleHeaderProjectChange = useCallback(
     async (projectRef: { environmentId: EnvironmentId; projectId: ProjectId }) => {
@@ -7670,6 +7680,8 @@ function ChatViewContent(props: ChatViewProps) {
       ...(image.type === "image" && image.source ? { source: image.source } : {}),
     }));
     if (sendsToCurrentThread && !shouldQueueBehindActiveRun) {
+      if (threadHistoryRef.current?.hasNewer || threadHistoryRef.current?.isLoading)
+        threadHistoryRef.current.request("latest");
       // A sent turn returns to the live edge and anchors its new transcript
       // row. Queued input stays in the composer queue and must not move the
       // timeline away from the provider work already in flight.
@@ -8779,6 +8791,8 @@ function ChatViewContent(props: ChatViewProps) {
     setThreadError(threadIdForSend, null);
 
     // Position this sent row once LegendList has measured the anchored tail.
+    if (threadHistoryRef.current?.hasNewer || threadHistoryRef.current?.isLoading)
+      threadHistoryRef.current.request("latest");
     isAtEndRef.current = true;
     timelineScrollModeRef.current = "anchoring-new-turn";
     liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
@@ -9686,20 +9700,21 @@ function ChatViewContent(props: ChatViewProps) {
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
                 key={activeThread.id}
-                isWorking={isWorking}
+                isWorking={isWorking && !threadHistory?.hasNewer}
                 workingPresentation={resolveThreadProjectionWorkingPresentation({
                   projectionPending: isThreadProjectionPending,
                   loadingStopped: threadLoadStopped,
                   isWorking,
                   latestRun: activeLatestRun,
                 })}
-                activeTurnInProgress={isWorking || !latestRunSettled}
+                activeTurnInProgress={(isWorking || !latestRunSettled) && !threadHistory?.hasNewer}
                 activeTurnStartedAt={activeWorkStartedAt}
                 allowanceHold={allowanceHold}
-                pendingBackgroundTasks={pendingBackgroundTasks}
+                pendingBackgroundTasks={threadHistory?.hasNewer ? null : pendingBackgroundTasks}
                 listRef={legendListRef}
                 asyncQuestions={timelineAsyncQuestions}
                 timelineEntries={timelineEntries}
+                history={threadHistory}
                 latestRun={activeActivityRun}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                 queuedMessageControls={queuedMessageControls}
@@ -9754,7 +9769,7 @@ function ChatViewContent(props: ChatViewProps) {
               />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
-              {showScrollToBottom && (
+              {(showScrollToBottom || threadHistory?.hasNewer) && (
                 <div
                   className="chat-scroll-to-bottom pointer-events-none absolute z-30 flex justify-center py-1.5"
                   style={{ bottom: composerOverlayHeight + 4 }}

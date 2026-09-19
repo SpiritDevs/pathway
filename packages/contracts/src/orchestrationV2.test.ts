@@ -29,6 +29,7 @@ import {
   OrchestrationV2ProviderThreadJson,
   OrchestrationV2ShellSnapshot,
   OrchestrationV2Subagent,
+  OrchestrationV2SubscribeThreadInput,
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadShell,
   OrchestrationV2TurnItem,
@@ -67,6 +68,22 @@ const decodeOrchestrationV2ContinuationLaunchInput = Schema.decodeUnknownSync(
 );
 
 describe("orchestration V2 contracts", () => {
+  it("keeps thread history windows opt-in and accepts stable paging targets", () => {
+    const decode = Schema.decodeUnknownSync(OrchestrationV2SubscribeThreadInput);
+    expect(decode({ threadId: "thread:history" }).history).toBeUndefined();
+    expect(
+      decode({ threadId: "thread:history", history: { limit: 50, around: "message:target" } })
+        .history,
+    ).toEqual({ limit: 50, around: "message:target" });
+  });
+
+  it("rejects unbounded or fractional thread history requests", () => {
+    const decode = Schema.decodeUnknownSync(OrchestrationV2SubscribeThreadInput);
+    for (const limit of [0, -1, 1.5, 101]) {
+      expect(() => decode({ threadId: "thread:history", history: { limit } })).toThrow();
+    }
+  });
+
   it("lets legacy snapshot decoders ignore enrichment metadata", () => {
     const decoded = decodeLegacyShellStreamItem({
       kind: "snapshot",

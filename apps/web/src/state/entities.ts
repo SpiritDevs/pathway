@@ -4,7 +4,10 @@ import type {
   EnvironmentThread,
   EnvironmentThreadShell,
 } from "@spiritdevs/client-runtime/state/shell";
-import type { EnvironmentThreadStatus } from "@spiritdevs/client-runtime/state/threads";
+import type {
+  EnvironmentThreadHistory,
+  EnvironmentThreadStatus,
+} from "@spiritdevs/client-runtime/state/threads";
 import type { ScopedProjectRef, ScopedThreadRef, ServerConfig } from "@spiritdevs/contracts";
 import type {
   EnvironmentId,
@@ -56,6 +59,9 @@ const EMPTY_THREAD_SHELL_ATOM = Atom.make<EnvironmentThreadShell | null>(null).p
 );
 const EMPTY_THREAD_PROJECTION_ATOM = Atom.make<EnvironmentThread | null>(null).pipe(
   Atom.withLabel("web-thread-projection:empty"),
+);
+const EMPTY_THREAD_HISTORY_ATOM = Atom.make<EnvironmentThreadHistory | null>(null).pipe(
+  Atom.withLabel("web-thread-history:empty"),
 );
 const EMPTY_THREAD_STATUS_ATOM = Atom.make<EnvironmentThreadStatus>("empty").pipe(
   Atom.withLabel("web-thread-status:empty"),
@@ -179,6 +185,12 @@ export function useThreadVisibleTurnItems(
     ref === null
       ? EMPTY_VISIBLE_TURN_ITEMS_ATOM
       : environmentThreadDetails.visibleTurnItemsAtom(ref),
+  );
+}
+
+export function useThreadHistory(ref: ScopedThreadRef | null): EnvironmentThreadHistory | null {
+  return useAtomValue(
+    ref === null ? EMPTY_THREAD_HISTORY_ATOM : environmentThreadDetails.historyAtom(ref),
   );
 }
 

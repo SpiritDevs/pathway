@@ -22,6 +22,7 @@ import {
   squashAtomCommandFailure,
 } from "@spiritdevs/client-runtime/state/runtime";
 import { canForkProjectedAssistantItem } from "@spiritdevs/client-runtime/state/thread-workflows";
+import type { EnvironmentThreadHistory } from "@spiritdevs/client-runtime/state/threads";
 import { isUsageLimitFailure } from "@spiritdevs/client-runtime/state/usage-limit-recovery";
 import { resolveChatListAnchoredEndSpace } from "@spiritdevs/shared/chatList";
 import { buildOrchestrationErrorFixPrompt } from "@spiritdevs/shared/orchestrationV2Timeline";
@@ -69,6 +70,7 @@ import {
   ChevronUpIcon,
   CircleAlertIcon,
   CircleDotIcon,
+  CloudDownloadIcon,
   EyeIcon,
   FileTextIcon,
   GitForkIcon,
@@ -123,6 +125,12 @@ import {
   TIMELINE_MINIMAP_MIN_ITEMS,
   type TimelineLatestRun,
 } from "./MessagesTimeline.logic";
+import {
+  deriveTimelineMinimapItems,
+  resolveTimelineHistoryNavigation,
+  resolveTimelineHistoryScrollRequest,
+  type TimelineMinimapItem,
+} from "./MessagesTimeline.history";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -304,6 +312,7 @@ interface MessagesTimelineProps {
   }> | null;
   listRef: React.RefObject<LegendListRef | null>;
   timelineEntries: ReadonlyArray<TimelineEntry>;
+  history?: EnvironmentThreadHistory | null;
   latestRun: TimelineLatestRun | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   queuedMessageControls?: ReadonlyMap<string, QueuedMessageControl>;
@@ -391,6 +400,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   pendingBackgroundTasks = null,
   listRef,
   timelineEntries,
+  history = null,
   latestRun,
   turnDiffSummaryByAssistantMessageId,
   queuedMessageControls = EMPTY_QUEUED_MESSAGE_CONTROLS,
@@ -456,16 +466,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const disclosureSettleFrameRef = useRef<number | null>(null);
   const disclosureSettleSecondFrameRef = useRef<number | null>(null);
   const previousContentInsetEndAdjustmentRef = useRef(contentInsetEndAdjustment);
+  const previousHistoryScrollRef = useRef<number | null>(null);
+  const historyScrollDirectionRef = useRef<"older" | "newer" | "either" | null>(null);
+  const pendingHistoryMessageRef = useRef<MessageId | null>(null);
+  const [historyNavigationMessageId, setHistoryNavigationMessageId] = useState<MessageId | null>(
+    null,
+  );
 
   useLayoutEffect(() => {
     keepTimelineEndVisibleAfterOverlayGrowth({
       timeline: listRef.current,
       previousOverlayHeight: previousContentInsetEndAdjustmentRef.current,
       overlayHeight: contentInsetEndAdjustment,
-      followingEnd: liveFollowEnabled && anchorMessageId === null,
+      followingEnd: liveFollowEnabled && !history?.hasNewer && anchorMessageId === null,
     });
     previousContentInsetEndAdjustmentRef.current = contentInsetEndAdjustment;
-  }, [anchorMessageId, contentInsetEndAdjustment, listRef, liveFollowEnabled]);
+  }, [anchorMessageId, contentInsetEndAdjustment, history?.hasNewer, listRef, liveFollowEnabled]);
 
   useEffect(() => {
     return () => {
@@ -724,7 +740,70 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // must not change with them or every timeline row re-renders per event.
   const runs = useStableHandoffRuns(runsProp);
   const subagents = useStableSubagentModels(subagentsProp);
-  const minimapItems = useMemo(() => deriveTimelineMinimapItems(rows), [rows]);
+  const minimapItems = useMemo(
+    () => deriveTimelineMinimapItems(rows, history?.index),
+    [rows, history?.index],
+  );
+  const requestHistory = useCallback(
+    (request: Parameters<EnvironmentThreadHistory["request"]>[0]) => {
+      if (!history || history.isLoading) return;
+      onManualNavigation();
+      historyScrollDirectionRef.current = null;
+      if (typeof request === "string") {
+        pendingHistoryMessageRef.current = null;
+        setHistoryNavigationMessageId(null);
+      }
+      history.request(request);
+    },
+    [history, onManualNavigation],
+  );
+  const selectMinimapItem = useCallback(
+    (item: TimelineMinimapItem) => {
+      if (history?.isLoading) return;
+      historyScrollDirectionRef.current = null;
+      if (item.rowIndex !== null) {
+        onManualNavigation();
+        pendingHistoryMessageRef.current = null;
+        setHistoryNavigationMessageId(null);
+        void listRef.current?.scrollToIndex({
+          index: item.rowIndex,
+          animated: true,
+          viewOffset: 24,
+        });
+        return;
+      }
+      pendingHistoryMessageRef.current = item.messageId;
+      setHistoryNavigationMessageId(item.messageId);
+      requestHistory({ aroundMessageId: item.messageId });
+    },
+    [history?.isLoading, listRef, onManualNavigation, requestHistory],
+  );
+  useLayoutEffect(() => {
+    const navigation = resolveTimelineHistoryNavigation({
+      messageId: historyNavigationMessageId,
+      rows,
+      liveFollowEnabled,
+      isLoading: history?.isLoading === true,
+    });
+    if (navigation.kind === "cancel") {
+      pendingHistoryMessageRef.current = null;
+      if (historyNavigationMessageId !== null) setHistoryNavigationMessageId(null);
+      return;
+    }
+    if (navigation.kind !== "scroll") return;
+    const frame = requestAnimationFrame(() => {
+      if (pendingHistoryMessageRef.current !== historyNavigationMessageId) return;
+      void listRef.current?.scrollToIndex({
+        index: navigation.rowIndex,
+        animated: false,
+        viewOffset: 24,
+      });
+      pendingHistoryMessageRef.current = null;
+      previousHistoryScrollRef.current = null;
+      setHistoryNavigationMessageId(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [history?.isLoading, historyNavigationMessageId, listRef, liveFollowEnabled, rows]);
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
     null,
   );
@@ -767,14 +846,24 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     const state = listRef.current?.getState?.();
     const isAtEnd = resolveTimelineIsAtEnd(state, contentInsetEndAdjustment);
     if (isAtEnd !== undefined) {
-      onIsAtEndChange(isAtEnd);
+      onIsAtEndChange(isAtEnd && !history?.hasNewer);
     }
-    if (!state || minimapItems.length === 0) {
+    if (!state) {
       return;
     }
 
     const scrollTop = state.scroll ?? 0;
     const scrollBottom = scrollTop + (state.scrollLength ?? 0);
+    const historyRequest = resolveTimelineHistoryScrollRequest({
+      previousScroll: previousHistoryScrollRef.current,
+      scroll: scrollTop,
+      atEnd: isAtEnd === true,
+      liveFollowEnabled,
+      userScrollDirection: historyScrollDirectionRef.current,
+      history,
+    });
+    previousHistoryScrollRef.current = scrollTop;
+    if (historyRequest && pendingHistoryMessageRef.current === null) requestHistory(historyRequest);
 
     for (const item of minimapItems) {
       const strip = minimapStripMap.get(item.id);
@@ -782,8 +871,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         continue;
       }
 
-      const rowTop = resolveTimelineRowTop(state, item.rowIndex);
-      const rowHeight = resolveTimelineRowHeight(state, item.rowIndex);
+      const rowTop = item.rowIndex === null ? null : resolveTimelineRowTop(state, item.rowIndex);
+      const rowHeight =
+        item.rowIndex === null ? null : resolveTimelineRowHeight(state, item.rowIndex);
       const inView =
         rowTop !== null &&
         rowTop < scrollBottom &&
@@ -796,7 +886,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         strip.dataset.inView = next;
       }
     }
-  }, [listRef, minimapItems, minimapStripMap, onIsAtEndChange, contentInsetEndAdjustment]);
+  }, [
+    listRef,
+    minimapItems,
+    minimapStripMap,
+    onIsAtEndChange,
+    contentInsetEndAdjustment,
+    history,
+    liveFollowEnabled,
+    requestHistory,
+  ]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(handleScroll);
@@ -941,23 +1040,59 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [activeTurnInProgress, isRevertingCheckpoint, isWorking, latestRun?.runId],
   );
   const listHeader = useMemo(
-    () =>
-      parentThreadLink === null ? (
-        TIMELINE_LIST_HEADER
-      ) : (
-        <div className="messages-timeline-row-frame">
-          <div className="chat-content-lane pt-1 sm:pt-2">
-            <TimelineSystemDivider
-              label="Subagent of"
-              detail={parentThreadLink.title}
-              icon={BotIcon}
-              actionLabel="Open parent thread"
-              onAction={() => onOpenThread(parentThreadLink.threadId)}
-            />
+    () => (
+      <>
+        {history?.hasOlder ? (
+          <TimelineHistoryBoundary
+            direction="older"
+            isLoading={history.isLoading}
+            onLoad={() => requestHistory("older")}
+          />
+        ) : null}
+        {parentThreadLink === null ? (
+          topFadeEnabled ? (
+            TIMELINE_LIST_FADE_HEADER
+          ) : (
+            TIMELINE_LIST_HEADER
+          )
+        ) : (
+          <div className="messages-timeline-row-frame">
+            <div className="chat-content-lane pt-1 sm:pt-2">
+              <TimelineSystemDivider
+                label="Subagent of"
+                detail={parentThreadLink.title}
+                icon={BotIcon}
+                actionLabel="Open parent thread"
+                onAction={() => onOpenThread(parentThreadLink.threadId)}
+              />
+            </div>
           </div>
-        </div>
-      ),
-    [onOpenThread, parentThreadLink],
+        )}
+      </>
+    ),
+    [
+      history?.hasOlder,
+      history?.isLoading,
+      onOpenThread,
+      parentThreadLink,
+      requestHistory,
+      topFadeEnabled,
+    ],
+  );
+  const listFooter = useMemo(
+    () => (
+      <>
+        {history?.hasNewer ? (
+          <TimelineHistoryBoundary
+            direction="newer"
+            isLoading={history.isLoading}
+            onLoad={() => requestHistory("newer")}
+          />
+        ) : null}
+        {TIMELINE_LIST_FOOTER}
+      </>
+    ),
+    [history?.hasNewer, history?.isLoading, requestHistory],
   );
 
   // Stable renderItem — no closure deps. Row components read shared state
@@ -973,7 +1108,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [],
   );
 
-  if (rows.length === 0 && !isWorking && parentThreadLink === null) {
+  if (rows.length === 0 && !isWorking && parentThreadLink === null && history === null) {
     return null;
   }
 
@@ -981,7 +1116,26 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     <TimelineRowCtx value={sharedState}>
       <TimelineQuestionsCtx value={asyncQuestions ?? null}>
         <TimelineRowActivityCtx value={activityState}>
-          <div ref={setTimelineViewportElement} className="relative h-full min-h-0">
+          <div
+            ref={setTimelineViewportElement}
+            className="relative h-full min-h-0"
+            onWheelCapture={(event) => {
+              if (event.deltaY !== 0)
+                historyScrollDirectionRef.current = event.deltaY < 0 ? "older" : "newer";
+            }}
+            onTouchMoveCapture={() => {
+              historyScrollDirectionRef.current = "either";
+            }}
+            onPointerDownCapture={() => {
+              historyScrollDirectionRef.current = "either";
+            }}
+            onKeyDownCapture={(event) => {
+              if (["ArrowUp", "PageUp", "Home"].includes(event.key))
+                historyScrollDirectionRef.current = "older";
+              if (["ArrowDown", "PageDown", "End"].includes(event.key))
+                historyScrollDirectionRef.current = "newer";
+            }}
+          >
             <LegendList<MessagesTimelineRow>
               ref={listRef}
               data={rows}
@@ -997,7 +1151,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               // sent turn anchors near the top (anchoredEndSpace), or for the
               // two-frame settle window of a fold toggle.
               maintainScrollAtEnd={
-                anchoredEndSpace || !liveFollowEnabled || disclosureToggleSettling
+                anchoredEndSpace ||
+                !liveFollowEnabled ||
+                history?.hasNewer ||
+                disclosureToggleSettling
                   ? false
                   : TIMELINE_MAINTAIN_SCROLL_AT_END
               }
@@ -1007,25 +1164,36 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
                 topFadeEnabled && "chat-timeline-scroll-fade",
               )}
-              ListHeaderComponent={
-                topFadeEnabled && parentThreadLink === null ? TIMELINE_LIST_FADE_HEADER : listHeader
-              }
-              ListFooterComponent={TIMELINE_LIST_FOOTER}
+              ListHeaderComponent={listHeader}
+              ListFooterComponent={listFooter}
             />
             <TimelineMinimap
               items={minimapItems}
               hasPersistentGutter={minimapHasPersistentGutter}
               hitStripWidth={minimapHitStripWidth}
               stripMap={minimapStripMap}
-              onSelect={(item) => {
-                onManualNavigation();
-                void listRef.current?.scrollToIndex({
-                  index: item.rowIndex,
-                  animated: true,
-                  viewOffset: 24,
-                });
-              }}
+              onSelect={selectMinimapItem}
             />
+            {history?.isLoading || history?.error ? (
+              <div className="pointer-events-none absolute inset-x-0 top-2 z-30 flex justify-center px-8">
+                <div
+                  role={history.error ? "alert" : "status"}
+                  className="pointer-events-auto flex max-w-lg items-center gap-2 rounded-xl border border-border bg-background/95 px-3 py-2 text-xs text-muted-foreground shadow-sm"
+                >
+                  <CloudDownloadIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                  <span>
+                    {history.error
+                      ? "Couldn't load messages from remote."
+                      : "Loading messages from remote…"}
+                  </span>
+                  {history.error ? (
+                    <Button variant="ghost" size="xs" onClick={history.retry}>
+                      Retry
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
           </div>
         </TimelineRowActivityCtx>
       </TimelineQuestionsCtx>
@@ -1041,58 +1209,12 @@ function getItemType(item: MessagesTimelineRow) {
   return item.kind === "message" ? `message:${item.message.role}` : item.kind;
 }
 
-interface TimelineMinimapItem {
-  readonly id: string;
-  readonly rowIndex: number;
-  readonly userText: string | null;
-  readonly assistantText: string | null;
-}
-
 interface TimelinePositionState {
   readonly contentLength?: number;
   readonly scroll?: number;
   readonly scrollLength?: number;
   readonly positionAtIndex?: (index: number) => number | undefined;
   readonly sizeAtIndex?: (index: number) => number | undefined;
-}
-
-function deriveTimelineMinimapItems(
-  rows: ReadonlyArray<MessagesTimelineRow>,
-): TimelineMinimapItem[] {
-  const items: TimelineMinimapItem[] = [];
-  let finalAssistantText: string | null = null;
-  let hasFinalAssistantMessage = false;
-  for (let index = rows.length - 1; index >= 0; index -= 1) {
-    const row = rows[index];
-    if (row?.kind !== "message") {
-      continue;
-    }
-    if (row.message.role === "assistant") {
-      if (!hasFinalAssistantMessage) {
-        finalAssistantText = row.message.text ?? null;
-        hasFinalAssistantMessage = true;
-      }
-      continue;
-    }
-    if (row.message.role !== "user") {
-      continue;
-    }
-
-    items.push({
-      id: row.id,
-      rowIndex: index,
-      userText: compactMinimapPreview(row.message.text),
-      assistantText: compactMinimapPreview(finalAssistantText),
-    });
-    finalAssistantText = null;
-    hasFinalAssistantMessage = false;
-  }
-  return items.reverse();
-}
-
-function compactMinimapPreview(text: string | null | undefined) {
-  const compact = text?.slice(0, 500).replace(/\s+/g, " ").trim() ?? "";
-  return compact.length > 0 ? compact : null;
 }
 
 function resolveTimelineRowTop(state: TimelinePositionState, rowIndex: number) {
@@ -1107,6 +1229,27 @@ function resolveTimelineRowHeight(state: TimelinePositionState, rowIndex: number
 
 function timelineMinimapEventTargetsPreview(target: EventTarget): boolean {
   return target instanceof Element && target.closest("[data-minimap-preview]") !== null;
+}
+
+function TimelineHistoryBoundary({
+  direction,
+  isLoading,
+  onLoad,
+}: {
+  direction: "older" | "newer";
+  isLoading: boolean;
+  onLoad: () => void;
+}) {
+  return (
+    <div className="messages-timeline-row-frame">
+      <div className="chat-content-lane flex justify-center py-3">
+        <Button variant="ghost" size="sm" disabled={isLoading} onClick={onLoad}>
+          <CloudDownloadIcon className="size-3.5" aria-hidden="true" />
+          {`Load ${direction} messages from remote`}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 function TimelineMinimap({
@@ -1309,6 +1452,9 @@ function TimelineMinimap({
                   >
                     {activeItem.assistantText}
                   </span>
+                ) : null}
+                {activeItem.rowIndex === null ? (
+                  <span className="mt-2 block text-xs text-muted-foreground">Get from remote</span>
                 ) : null}
               </span>
             </span>

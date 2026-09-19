@@ -2913,8 +2913,35 @@ export const OrchestrationV2SubscribeShellInput = Schema.Struct({
 });
 export type OrchestrationV2SubscribeShellInput = typeof OrchestrationV2SubscribeShellInput.Type;
 
+/** A window of timeline items, including tool activity within a single run. */
+export const OrchestrationV2ThreadHistoryRequest = Schema.Struct({
+  limit: PositiveInt.check(Schema.isLessThanOrEqualTo(100)),
+  before: Schema.optionalKey(TurnItemId),
+  after: Schema.optionalKey(TurnItemId),
+  around: Schema.optionalKey(MessageId),
+});
+export type OrchestrationV2ThreadHistoryRequest = typeof OrchestrationV2ThreadHistoryRequest.Type;
+
+export const OrchestrationV2ThreadHistory = Schema.Struct({
+  hasOlder: Schema.Boolean,
+  hasNewer: Schema.Boolean,
+  beforeCursor: Schema.optionalKey(TurnItemId),
+  afterCursor: Schema.optionalKey(TurnItemId),
+  index: Schema.Array(
+    Schema.Struct({
+      messageId: MessageId,
+      role: Schema.Literal("user"),
+      preview: Schema.String,
+      assistantPreview: Schema.optionalKey(Schema.String),
+    }),
+  ),
+});
+export type OrchestrationV2ThreadHistory = typeof OrchestrationV2ThreadHistory.Type;
+
 export const OrchestrationV2SubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
+  /** Opts into bounded snapshots, including when a reconnect has a large backlog. */
+  history: Schema.optionalKey(OrchestrationV2ThreadHistoryRequest),
   /**
    * When provided, the server skips the initial snapshot frame and instead
    * replays events after this sequence before streaming live events. Clients
@@ -2931,6 +2958,7 @@ export type OrchestrationV2SubscribeThreadInput = typeof OrchestrationV2Subscrib
 export const OrchestrationV2ThreadDetailSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projection: OrchestrationV2ThreadProjection,
+  history: Schema.optionalKey(OrchestrationV2ThreadHistory),
 });
 export type OrchestrationV2ThreadDetailSnapshot = typeof OrchestrationV2ThreadDetailSnapshot.Type;
 
@@ -2942,6 +2970,7 @@ export const OrchestrationV2ThreadStreamItem = Schema.Union([
     kind: Schema.Literal("snapshot"),
     snapshotSequence: NonNegativeInt,
     projection: OrchestrationV2ThreadProjection,
+    history: Schema.optionalKey(OrchestrationV2ThreadHistory),
   }),
   Schema.Struct({
     kind: Schema.Literal("event"),
