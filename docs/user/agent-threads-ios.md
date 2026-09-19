@@ -64,3 +64,8 @@ images must be under 10 MB. If an image cannot be read or uploaded, the app show
 Image attachments appear as compact thumbnails with one corner button. Tap the cross to remove
 an image. If its upload fails, a retry icon replaces the cross. Tap it to see the failure reason,
 retry the upload, or cancel and remove the attachment using the alert.
+
+Queued threads have their own actions: swipe left or long-press to **Cancel** pending work.
+Canceled entries offer **Remove from list**, which remembers your choice on this device.
+If the entry is retried or changes elsewhere, it appears again. These actions are also
+available in the queued thread’s menu, even if its environment cannot be opened.

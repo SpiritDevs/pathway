@@ -86,6 +86,19 @@ actor PathwayThreadQueueStore {
     private nonisolated var filesDirectory: URL { url.deletingLastPathComponent().appending(path: "ThreadQueueAttachments") }
     init(directory: URL) { url = directory.appending(path: "ThreadQueue.json") }
 
+    func loadDismissedThreads() throws -> [String: String] {
+        let file = url.deletingLastPathComponent().appending(path: "DismissedQueuedThreads.json")
+        guard FileManager.default.fileExists(atPath: file.path) else { return [:] }
+        return try JSONDecoder().decode([String: String].self, from: Data(contentsOf: file))
+    }
+
+    func dismissThread(id: String, version: String) throws {
+        var values = try loadDismissedThreads()
+        values[id] = version
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(values).write(to: url.deletingLastPathComponent().appending(path: "DismissedQueuedThreads.json"), options: .atomic)
+    }
+
     nonisolated func attachmentURL(entryID: String, attachmentID: String, persistedName: String? = nil) -> URL {
         if let persistedName, persistedName.count == 64, persistedName.allSatisfy(\.isHexDigit) {
             let persisted = filesDirectory.appending(path: persistedName)
@@ -154,6 +167,47 @@ final class PathwayThreadQueueModel {
     typealias Request = @MainActor (String, String, JSONValue) async throws -> JSONValue
     typealias Subscribe = @MainActor (String, JSONValue) -> AsyncThrowingStream<JSONValue, Error>
     private(set) var threads: [PathwayQueuedThread] = []
+    private var dismissedThreads: [String: String] = [:]
+    var visibleThreads: [PathwayQueuedThread] {
+        threads.filter(isVisible)
+    }
+
+    func isVisible(_ thread: PathwayQueuedThread) -> Bool {
+        thread.state != "canceled" || dismissedThreads[thread.id] != dismissalVersion(thread)
+    }
+
+    private func dismissalVersion(_ thread: PathwayQueuedThread) -> String {
+        "\(thread.revision):\(thread.fields["updatedAt"]?.intValue ?? 0)"
+    }
+
+    func removeCanceledThread(_ thread: PathwayQueuedThread) async throws {
+        let current = generation
+        guard companyIDs.contains(thread.companyID), let store, thread.state == "canceled",
+              (thread.fields["localCount"]?.intValue ?? 0) == 0 else {
+            throw PathwayThreadConversationError.message("Cancel pending work before removing this thread.")
+        }
+        let version = dismissalVersion(thread)
+        try await store.dismissThread(id: thread.id, version: version)
+        guard current == generation else { throw CancellationError() }
+        dismissedThreads[thread.id] = version
+    }
+
+    func cancelThread(_ thread: PathwayQueuedThread) async throws {
+        let detail = try await detail(thread)
+        let messages = detail.objectValue?["messages"]?.arrayValue ?? []
+        let pending = messages.filter { ["local", "queued", "blocked"].contains($0.objectValue?["state"]?.stringValue ?? "") }
+        let launch = pending.first { $0.objectValue?["submission"]?.objectValue?["kind"] == .string("launch") }
+        let targets = launch.map { [$0] } ?? pending
+        guard !targets.isEmpty else {
+            throw PathwayThreadConversationError.message("This thread has already changed. Refresh the list before trying again.")
+        }
+        for target in targets {
+            guard let fields = target.objectValue, let command = fields["commandId"], let revision = fields["revision"] else {
+                throw PathwayThreadConversationError.message("The saved message details are unavailable. Refresh and try again.")
+            }
+            try await mutate("cancel", thread: thread, fields: ["commandId": command, "revision": revision])
+        }
+    }
     private(set) var errorMessage: String?
     @ObservationIgnored private let request: Request
     @ObservationIgnored private let subscribe: Subscribe
@@ -194,7 +248,9 @@ final class PathwayThreadQueueModel {
         let current = generation
         do {
             let restored = try await store?.load() ?? []
+            let dismissed = try await store?.loadDismissedThreads() ?? [:]
             guard current == generation else { return }
+            dismissedThreads = dismissed
             local = restored; storageReady = store != nil; rebuild()
         } catch {
             guard current == generation else { return }
@@ -273,7 +329,7 @@ final class PathwayThreadQueueModel {
             }
         }
         observers = [:]; pages = [:]; stopDrain(); companyIDs = []; captures = []
-        if clear { local = []; remote = [:]; detailCache = [:]; acknowledgedRows = [:]; threads = []; store = nil; storageReady = false; errorMessage = nil }
+        if clear { dismissedThreads = [:]; local = []; remote = [:]; detailCache = [:]; acknowledgedRows = [:]; threads = []; store = nil; storageReady = false; errorMessage = nil }
     }
 
     func enqueue(companyID: String, environmentID: String, threadID: String, submission: JSONValue, files: [PathwayQueueFile] = []) async throws {

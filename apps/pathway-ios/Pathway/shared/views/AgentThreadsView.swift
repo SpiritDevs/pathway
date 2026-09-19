@@ -14,6 +14,7 @@ struct AgentThreadsView: View {
     @State private var settledVisibleCount = 10
     @State private var routedThreadID: String?
     @State private var queuedThread: PathwayQueuedThread?
+    @State private var pendingQueueActionIDs: Set<String> = []
     @State private var reviewingThreadID: String?
     @State private var threadProviders = PathwayThreadProviders()
     @State private var threadActions = PathwayThreadActions()
@@ -167,6 +168,9 @@ struct AgentThreadsView: View {
                         }
                     }
                 }
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) { queuedThreadActions(queued) }
+                .contextMenu { queuedThreadActions(queued) }
+                .disabled(pendingQueueActionIDs.contains(queued.id))
             }
             if let cachedAt = appModel.cloud.cachedAt, !appModel.cloud.isConnected {
                 Label("Saved \(cachedAt.formatted(date: .abbreviated, time: .shortened))", systemImage: "wifi.slash")
@@ -266,9 +270,29 @@ struct AgentThreadsView: View {
         #endif
     }
 
+    @ViewBuilder
+    private func queuedThreadActions(_ thread: PathwayQueuedThread) -> some View {
+        if thread.state == "canceled" {
+            Button("Remove from list", systemImage: "trash", role: .destructive) { performQueueAction(thread) }
+        } else {
+            Button("Cancel", systemImage: "xmark.circle", role: .destructive) { performQueueAction(thread) }
+        }
+    }
+
+    private func performQueueAction(_ thread: PathwayQueuedThread) {
+        guard pendingQueueActionIDs.insert(thread.id).inserted else { return }
+        Task {
+            defer { pendingQueueActionIDs.remove(thread.id) }
+            do {
+                if thread.state == "canceled" { try await appModel.cloud.threadQueue.removeCanceledThread(thread) }
+                else { try await appModel.cloud.threadQueue.cancelThread(thread) }
+            } catch { threadActions.errorMessage = error.localizedDescription }
+        }
+    }
+
     private var pendingQueueThreads: [PathwayQueuedThread] {
         guard listFilter != .archived else { return [] }
-        return appModel.cloud.threadQueue.threads.filter { queued in
+        return appModel.cloud.threadQueue.visibleThreads.filter { queued in
             !appModel.cloud.threads.contains {
                 $0.companyId == queued.companyID && $0.threadId == queued.threadID && $0.environmentId == queued.environmentID
             }
