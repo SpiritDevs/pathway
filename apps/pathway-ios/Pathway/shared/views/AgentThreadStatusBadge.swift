@@ -3,6 +3,7 @@ import SwiftUI
 struct AgentThreadStatusBadge: View {
     @Environment(PathwayAppModel.self) private var appModel
     let thread: PathwayAgentThread
+    var queueStatus: String? = nil
 
     private var status: PathwayThreadStatus {
         PathwayThreadStatus(requestKind: thread.shell.pendingRuntimeRequest?.kind,
@@ -23,7 +24,7 @@ struct AgentThreadStatusBadge: View {
     }
 
     private var label: String {
-        appModel.cloud.threadQueue.threads.first {
+        queueStatus ?? appModel.cloud.threadQueue.threads.first {
             $0.companyID == thread.companyId && $0.environmentID == thread.environmentId
                 && $0.threadID == thread.threadId && $0.state != "delivered"
         }?.status ?? status.rawValue
