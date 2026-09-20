@@ -65,6 +65,8 @@ images must be under 10 MB. If an image cannot be read or uploaded, the app show
 Image attachments appear as compact thumbnails with one corner button. Tap the cross to remove
 an image. If its upload fails, a retry icon replaces the cross. Tap it to see the failure reason,
 retry the upload, or cancel and remove the attachment using the alert.
+If an upload fails while sending or queuing a message, the alert shows the failure reason.
+Your text and attachments stay in the composer so you can retry.
 
 Queued threads have their own actions: swipe left or long-press to **Cancel** pending work.
 Canceled entries offer **Remove from list**, which remembers your choice on this device.

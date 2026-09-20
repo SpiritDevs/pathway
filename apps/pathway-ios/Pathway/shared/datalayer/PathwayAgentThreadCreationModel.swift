@@ -188,7 +188,7 @@ final class PathwayAgentThreadCreationModel {
         }
         attachments.uploadRequest = { [weak self] path in
             guard let self, let connect = self.connect else { throw PathwayRPCError.disconnected }
-            return try await connect.authenticatedRequest(environment: self.environment, method: "PUT", path: path)
+            return try await connect.authenticatedRequest(environment: self.environment, method: "POST", path: path)
         }
     }
 

@@ -473,6 +473,11 @@ final class PathwayAgentThreadModel {
                     await retryAttachment(id: attachment.id, directly: true)
                 }
                 selected = draftAttachments
+                for attachment in selected {
+                    if case .failed(let message) = attachment.state {
+                        throw PathwayThreadConversationError.message(message)
+                    }
+                }
                 guard selected.allSatisfy({ $0.state == .ready }) else { throw PathwayThreadConversationError.message("Finish uploading the attachments before sending.") }
                 preparedNewSend = nil
             }
@@ -756,7 +761,7 @@ final class PathwayAgentThreadModel {
         }
         store.uploadRequest = { [weak self] path in
             guard let self, let connect = self.connect else { throw PathwayRPCError.disconnected }
-            return try await connect.authenticatedRequest(environment: self.environment, method: "PUT", path: path)
+            return try await connect.authenticatedRequest(environment: self.environment, method: "POST", path: path)
         }
         return store
     }
