@@ -172,7 +172,7 @@ struct AgentThreadsView: View {
             ForEach(pendingQueueThreads) { queued in
                 Button { queuedThread = queued } label: {
                     if let thread = try? queued.conversationThread(detail: .object(["thread": .object(queued.fields)])) {
-                        AgentThreadRow(thread: thread, provider: threadProviders.provider(for: thread))
+                        AgentThreadRow(thread: thread, provider: threadProviders.provider(for: thread), queueStatus: queued.status)
                             .overlay(alignment: .leading) { unreadDot(for: thread) }
                     } else {
                         VStack(alignment: .leading, spacing: 5) {
@@ -286,7 +286,7 @@ struct AgentThreadsView: View {
 
     @ViewBuilder
     private func queuedThreadActions(_ thread: PathwayQueuedThread) -> some View {
-        if thread.state == "canceled" {
+        if thread.canRemoveFromList {
             Button("Remove from list", systemImage: "trash", role: .destructive) { performQueueAction(thread) }
         } else {
             Button("Cancel", systemImage: "xmark.circle", role: .destructive) { performQueueAction(thread) }
@@ -298,7 +298,7 @@ struct AgentThreadsView: View {
         Task {
             defer { pendingQueueActionIDs.remove(thread.id) }
             do {
-                if thread.state == "canceled" { try await appModel.cloud.threadQueue.removeCanceledThread(thread) }
+                if thread.canRemoveFromList { try await appModel.cloud.threadQueue.removeFinishedThread(thread) }
                 else { try await appModel.cloud.threadQueue.cancelThread(thread) }
             } catch { threadActions.errorMessage = error.localizedDescription }
         }
@@ -728,6 +728,7 @@ private struct AgentThreadRow: View {
     @Environment(PathwayAppModel.self) private var appModel
     let thread: PathwayAgentThread
     let provider: PathwayThreadProvider?
+    var queueStatus: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -749,7 +750,7 @@ private struct AgentThreadRow: View {
                     Image(systemName: "clock.badge.xmark").font(.caption2).accessibilityLabel("Temporary")
                 }
 
-                AgentThreadStatusBadge(thread: thread)
+                AgentThreadStatusBadge(thread: thread, queueStatus: queueStatus)
 
                 Text(activityAge)
                     .font(.caption)

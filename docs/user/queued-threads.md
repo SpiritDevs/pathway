@@ -58,3 +58,8 @@ conversation, Pathway explains this and offers a way back to your threads. Delet
 also cleans up its completed cloud delivery records. Missed cleanup is repaired automatically;
 pending work and canceled messages you can retry are preserved. Unused queue uploads are
 removed after seven days.
+
+On iPhone and iPad, a saved entry marked **Sent to environment** has already been delivered.
+Use **Remove from list** to dismiss that entry on this device. This does not stop an agent in
+the environment. Connect to the environment to stop work that it has already accepted.
+Canceled entries can also be removed; newly queued work appears again.

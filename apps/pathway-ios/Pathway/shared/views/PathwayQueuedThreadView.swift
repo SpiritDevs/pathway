@@ -33,8 +33,8 @@ struct PathwayQueuedThreadView: View {
         .task(id: current.environmentID) { await loadConversation() }
         .toolbar {
             ToolbarItem(placement: .secondaryAction) {
-                Button(current.state == "canceled" ? "Remove from list" : "Cancel queued thread",
-                       systemImage: current.state == "canceled" ? "trash" : "xmark.circle", role: .destructive) {
+                Button(current.canRemoveFromList ? "Remove from list" : "Cancel queued thread",
+                       systemImage: current.canRemoveFromList ? "trash" : "xmark.circle", role: .destructive) {
                     updateQueue()
                 }
                 .disabled(isUpdatingQueue)
@@ -52,8 +52,8 @@ struct PathwayQueuedThreadView: View {
         Task {
             defer { isUpdatingQueue = false }
             do {
-                if queued.state == "canceled" {
-                    try await appModel.cloud.threadQueue.removeCanceledThread(queued)
+                if queued.canRemoveFromList {
+                    try await appModel.cloud.threadQueue.removeFinishedThread(queued)
                     dismiss()
                 } else {
                     try await appModel.cloud.threadQueue.cancelThread(queued)

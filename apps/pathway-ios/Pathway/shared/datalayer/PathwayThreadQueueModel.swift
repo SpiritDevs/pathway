@@ -28,6 +28,9 @@ struct PathwayQueuedThread: Identifiable, Equatable, Sendable {
     var title: String { fields["title"]?.stringValue ?? "New thread" }
     var state: String { fields["state"]?.stringValue ?? "queued" }
     var revision: Int { fields["revision"]?.intValue ?? 0 }
+    var canRemoveFromList: Bool {
+        ["canceled", "delivered"].contains(state) && (fields["localCount"]?.intValue ?? 0) == 0
+    }
     var status: String {
         if (fields["localCount"]?.intValue ?? 0) > 0 { return "Waiting to sync" }
         return switch state {
@@ -173,17 +176,16 @@ final class PathwayThreadQueueModel {
     }
 
     func isVisible(_ thread: PathwayQueuedThread) -> Bool {
-        thread.state != "canceled" || dismissedThreads[thread.id] != dismissalVersion(thread)
+        !thread.canRemoveFromList || dismissedThreads[thread.id] != dismissalVersion(thread)
     }
 
     private func dismissalVersion(_ thread: PathwayQueuedThread) -> String {
         "\(thread.revision):\(thread.fields["updatedAt"]?.intValue ?? 0)"
     }
 
-    func removeCanceledThread(_ thread: PathwayQueuedThread) async throws {
+    func removeFinishedThread(_ thread: PathwayQueuedThread) async throws {
         let current = generation
-        guard companyIDs.contains(thread.companyID), let store, thread.state == "canceled",
-              (thread.fields["localCount"]?.intValue ?? 0) == 0 else {
+        guard companyIDs.contains(thread.companyID), let store, thread.canRemoveFromList else {
             throw PathwayThreadConversationError.message("Cancel pending work before removing this thread.")
         }
         let version = dismissalVersion(thread)
@@ -199,7 +201,15 @@ final class PathwayThreadQueueModel {
         let launch = pending.first { $0.objectValue?["submission"]?.objectValue?["kind"] == .string("launch") }
         let targets = launch.map { [$0] } ?? pending
         guard !targets.isEmpty else {
-            throw PathwayThreadConversationError.message("This thread has already changed. Refresh the list before trying again.")
+            let state = detail.objectValue?["thread"]?.objectValue?["state"]?.stringValue
+            if state == "canceled" { return }
+            if state == "delivered" {
+                throw PathwayThreadConversationError.message("This thread was already sent to its environment. You can remove its saved entry from the list, but stopping the agent requires connecting to that environment.")
+            }
+            if state == "accepted" || messages.contains(where: { $0.objectValue?["state"] == .string("accepted") }) {
+                throw PathwayThreadConversationError.message("The environment has already accepted this thread. Connect to that environment to stop it.")
+            }
+            throw PathwayThreadConversationError.message("No pending messages are available to cancel. Open the thread to check its delivery status.")
         }
         for target in targets {
             guard let fields = target.objectValue, let command = fields["commandId"], let revision = fields["revision"] else {
@@ -414,6 +424,21 @@ final class PathwayThreadQueueModel {
         }
         guard current == generation, companyIDs.contains(thread.companyID) else { throw CancellationError() }
         detailCache[thread.id] = .object(result)
+        if let fields = result["thread"]?.objectValue {
+            let fresh = PathwayQueuedThread(companyID: thread.companyID, fields: fields)
+            let listed = remote[thread.companyID]?.first { $0.id == thread.id } ?? acknowledgedRows[thread.id]
+            if fresh.id == thread.id, listed != fresh {
+                remote[thread.companyID] = remote[thread.companyID]?.map { $0.id == thread.id ? fresh : $0 }
+                if var companyPages = pages[thread.companyID] {
+                    for index in companyPages.indices {
+                        companyPages[index].rows = companyPages[index].rows.map { $0.id == thread.id ? fresh : $0 }
+                    }
+                    pages[thread.companyID] = companyPages
+                }
+                if acknowledgedRows[thread.id] != nil { acknowledgedRows[thread.id] = fresh }
+                rebuild()
+            }
+        }
         let confirmed = result["messages"]?.arrayValue ?? []
         var ids = Set(confirmed.compactMap { $0.objectValue?["commandId"]?.stringValue })
         // Queue detail omits delivered bodies. Check each uncertain command's indexed receipt
