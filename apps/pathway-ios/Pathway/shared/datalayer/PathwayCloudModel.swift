@@ -534,20 +534,30 @@ final class PathwayCloudModel {
 
         let accountDirectory = storageDirectory
         let requestedThreads = Dictionary(uniqueKeysWithValues: activeThreads.map { ($0.id, $0) })
-        let resolutions = await PathwayThreadChangeRequestResolver.resolve(
+        await PathwayThreadChangeRequestResolver.resolve(
             threads: activeThreads,
             environments: environments,
             bindings: environmentBindings,
             connect: connect
-        )
-        guard !Task.isCancelled, storageDirectory == accountDirectory, lifecycleGeneration == generation, lifecycleMetadataID == metadataID else { return }
-        for resolution in resolutions {
-            guard let requested = requestedThreads[resolution.threadID],
-                  let current = threads.first(where: { $0.id == resolution.threadID }),
-                  PathwayThreadChangeRequestSource(current.shell) == PathwayThreadChangeRequestSource(requested.shell) else { continue }
-            changeRequestStatuses[resolution.threadID] = resolution.status
-            threadPullRequestStatuses[resolution.threadID] = resolution.pullRequests
+        ) { [weak self] resolution in
+            await self?.receiveLifecycleResolution(resolution, requested: requestedThreads[resolution.threadID],
+                accountDirectory: accountDirectory, generation: generation, metadataID: metadataID)
         }
+    }
+
+    private func receiveLifecycleResolution(
+        _ resolution: PathwayThreadChangeRequestResolution, requested: PathwayAgentThread?,
+        accountDirectory: URL?, generation: Int, metadataID: UUID
+    ) {
+        guard !Task.isCancelled, storageDirectory == accountDirectory, lifecycleGeneration == generation, lifecycleMetadataID == metadataID else { return }
+
+        guard let requested,
+              let current = threads.first(where: { $0.id == resolution.threadID }),
+              PathwayThreadChangeRequestSource(current.shell) == PathwayThreadChangeRequestSource(requested.shell) else { return }
+        let previousState = changeRequestStatuses[resolution.threadID]?.state
+        changeRequestStatuses[resolution.threadID] = resolution.status
+        threadPullRequestStatuses[resolution.threadID] = resolution.pullRequests
+        guard previousState != resolution.status.state else { return }
         let currentThreadIDs = Set(threads.map(\.id))
         threadPullRequestStatuses = threadPullRequestStatuses.filter { currentThreadIDs.contains($0.key) }
         changeRequestStatuses = changeRequestStatuses.filter { currentThreadIDs.contains($0.key) }

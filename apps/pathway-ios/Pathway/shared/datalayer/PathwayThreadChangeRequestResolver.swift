@@ -146,8 +146,9 @@ enum PathwayThreadChangeRequestResolver {
         threads: [PathwayAgentThread],
         environments: [PathwayCompanyEnvironment],
         bindings: [PathwayCompanyEnvironmentBinding],
-        connect: PathwayConnectClient
-    ) async -> [PathwayThreadChangeRequestResolution] {
+        connect: PathwayConnectClient,
+        receive: @escaping @Sendable (PathwayThreadChangeRequestResolution) async -> Void
+    ) async {
         let candidates = threads.compactMap { thread -> Candidate? in
             guard !thread.isRunning,
                   let environment = environments.first(where: {
@@ -161,17 +162,14 @@ enum PathwayThreadChangeRequestResolver {
             }
             return Candidate(threadID: thread.id, environment: environment, requests: requests, attachments: attachments, detachedURLs: thread.shell.detachedPullRequestUrls ?? [])
         }
-        return await withTaskGroup(of: [PathwayThreadChangeRequestResolution].self) { group in
+        await withTaskGroup(of: Void.self) { group in
             for candidates in Dictionary(grouping: candidates, by: \.environment.id).values {
-                group.addTask { await resolve(candidates: candidates, connect: connect) }
+                group.addTask { await resolve(candidates: candidates, connect: connect, receive: receive) }
             }
-            var resolutions: [PathwayThreadChangeRequestResolution] = []
-            for await results in group { resolutions.append(contentsOf: results) }
-            return resolutions
         }
     }
 
-    private struct Candidate: Sendable {
+    struct Candidate: Sendable {
         let threadID: String
         let environment: PathwayCompanyEnvironment
         let requests: [Request?]
@@ -186,10 +184,23 @@ enum PathwayThreadChangeRequestResolver {
         return .init(state: state, checksFailed: statuses.contains { $0.checksFailed }, checksPending: statuses.contains { $0.checksPending }, isDraft: statuses.contains { $0.isDraft }, unavailable: statuses.contains { $0.unavailable })
     }
 
-    private static func resolve(candidates: [Candidate], connect: PathwayConnectClient) async -> [PathwayThreadChangeRequestResolution] {
-        guard let environment = candidates.first?.environment else { return [] }
+    private static func resolve(
+        candidates: [Candidate], connect: PathwayConnectClient,
+        receive: @escaping @Sendable (PathwayThreadChangeRequestResolution) async -> Void
+    ) async {
+        guard let environment = candidates.first?.environment else { return }
         let rpc = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
-        var resolutions: [PathwayThreadChangeRequestResolution] = []
+        await resolve(candidates: candidates, request: { request in
+            try await rpc.request(request.method, payload: request.payload)
+        }, receive: receive)
+        await rpc.stop()
+    }
+
+    static func resolve(
+        candidates: [Candidate],
+        request send: (Request) async throws -> JSONValue,
+        receive: (PathwayThreadChangeRequestResolution) async -> Void
+    ) async {
         var responses: [String: JSONValue] = [:]
         for candidate in candidates {
             guard !Task.isCancelled else { break }
@@ -202,7 +213,7 @@ enum PathwayThreadChangeRequestResolver {
                         let value: JSONValue
                         if let cached = responses[request.cacheKey] { value = cached }
                         else {
-                            value = try await rpc.request(request.method, payload: request.payload)
+                            value = try await send(request)
                             responses[request.cacheKey] = value
                         }
                         let branchURL = value.objectValue?["pr"]?.objectValue?["url"]?.stringValue
@@ -214,9 +225,7 @@ enum PathwayThreadChangeRequestResolver {
                 if candidate.attachments.indices.contains(index) { linked[candidate.attachments[index].url] = status }
             }
             guard !Task.isCancelled else { break }
-            resolutions.append(.init(threadID: candidate.threadID, status: aggregate(statuses), pullRequests: linked))
+            await receive(.init(threadID: candidate.threadID, status: aggregate(statuses), pullRequests: linked))
         }
-        await rpc.stop()
-        return resolutions
     }
 }
