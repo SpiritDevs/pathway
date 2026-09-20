@@ -6,17 +6,20 @@ struct PathwayWorkspaceDestination: View {
     let environment: PathwayCompanyEnvironment
     let projectRoot: String
     let initialSection: String
+    let initialGitAction: PathwayWorkspaceGitAction?
     let usesConversationFolder: Bool
     @State private var serverConfig: [String: JSONValue] = [:]
     @State private var configurationError: String?
     @State private var scripts: [PathwayWorkspaceScript] = []
 
     init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment, projectRoot: String,
-         connect: PathwayConnectClient, storageDirectory: URL?, initialSection: String = "repositories", usesConversationFolder: Bool = false) {
+         connect: PathwayConnectClient, storageDirectory: URL?, initialSection: String = "repositories", usesConversationFolder: Bool = false,
+         initialGitAction: PathwayWorkspaceGitAction? = nil) {
         self.thread = thread
         self.environment = environment
         self.projectRoot = projectRoot
         self.initialSection = initialSection
+        self.initialGitAction = initialGitAction
         self.usesConversationFolder = usesConversationFolder
     }
 
@@ -107,7 +110,8 @@ struct PathwayWorkspaceDestination: View {
                 return try await appModel.cloud.environmentRequest(environment: environment, method: method, payload: .object(fields))
             },
             subscribe: { method, payload in
-                guard method == "terminal.attach", payload.objectValue?["restartIfNotRunning"] == .bool(false) else {
+                guard method == "git.runStackedAction"
+                    || (method == "terminal.attach" && payload.objectValue?["restartIfNotRunning"] == .bool(false)) else {
                     throw PathwayWorkspaceError.unavailable
                 }
                 try PathwayWorkspaceScope.validate(method: method, payload: payload, expected: scope,
@@ -128,7 +132,7 @@ struct PathwayWorkspaceDestination: View {
                 try PathwayWorkspaceScope.validate(method: "/api/pull-requests/diff", payload: payload, expected: scope,
                     current: currentScope, canMutate: canMutate, linkedPullRequests: linkedPullRequestReferences)
                 return try await PathwayEnvironmentHTTP.request(environment: environment, connect: connect, method: "POST", path: path, payload: payload)
-            }, initialSection: initialSection)
+            }, initialSection: initialSection, initialGitAction: initialGitAction)
             .task(id: scope) {
                 serverConfig = [:]; scripts = []; configurationError = nil
                 do {

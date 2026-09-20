@@ -1033,6 +1033,7 @@ struct AgentThreadConversationView: View {
     @State private var showsBrowser = false
     @State private var newThreadDefaults: PathwayNewThreadDefaults?
     @State private var showsQueueMove = false
+    @State private var isCancelingQueuedThread = false
     @State private var isComposerFocused = false
 
     init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient, workspaceRoot: String? = nil, storageDirectory: URL? = nil, initiallyReviewChanges: Bool = false) {
@@ -1211,11 +1212,9 @@ struct AgentThreadConversationView: View {
                 .accessibilityIdentifier("agent-thread-heading")
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button("New thread", systemImage: "square.and.pencil") {
+                AgentThreadGitActionsMenu(model: model, workspaceRoot: currentWorkspaceRoot) {
                     isComposerFocused = false
-                    newThreadDefaults = PathwayNewThreadDefaults(model: model)
                 }
-                .accessibilityIdentifier("agent-thread-new-with-defaults")
                 threadActionsMenu
                 .accessibilityLabel("Thread actions").accessibilityIdentifier("agent-thread-actions")
             }
@@ -1365,6 +1364,11 @@ struct AgentThreadConversationView: View {
     }
     private var threadActionsMenu: some View {
         Menu {
+        Button("New thread", systemImage: "square.and.pencil") {
+            isComposerFocused = false
+            newThreadDefaults = PathwayNewThreadDefaults(model: model)
+        }
+        .accessibilityIdentifier("agent-thread-new-with-defaults")
         Button("Rename thread", systemImage: "pencil") {
             renameTitle = model.threadTitle
             showsRename = true
@@ -1439,6 +1443,13 @@ struct AgentThreadConversationView: View {
         }
         Button("Copy thread ID", systemImage: "doc.on.doc") { UIPasteboard.general.string = model.threadID }
         Section {
+            if let queued = queuedConversation, queued.canCancelLaunch, model.activeRunID == nil {
+                Button("Cancel queued thread", systemImage: "xmark.circle", role: .destructive) {
+                    cancelQueuedThread()
+                }
+                .disabled(isCancelingQueuedThread || model.isSending)
+                .accessibilityIdentifier("agent-thread-cancel-queued")
+            }
             if model.thread.shell.archivedAt != nil {
                 Button("Restore thread", systemImage: "tray.and.arrow.up") { performLifecycle(.restore) }
                     .disabled(isUpdatingLifecycle)
@@ -1514,6 +1525,19 @@ struct AgentThreadConversationView: View {
     }
     private var queuedConversation: PathwayQueuedThread? {
         appModel.cloud.threadQueue.threads.first { $0.companyID == model.thread.companyId && $0.environmentID == model.thread.environmentId && $0.threadID == model.threadID }
+    }
+
+    private func cancelQueuedThread() {
+        guard let queued = queuedConversation, queued.canCancelLaunch, model.activeRunID == nil,
+              !model.isSending, !isCancelingQueuedThread else { return }
+        isCancelingQueuedThread = true
+        Task {
+            defer { isCancelingQueuedThread = false }
+            do {
+                try await appModel.cloud.threadQueue.cancelThread(queued)
+                dismiss()
+            } catch { navigationError = error.localizedDescription }
+        }
     }
 
     private var connectionStatus: String? {

@@ -30,6 +30,7 @@ typealias PathwayWorkspaceRequest = @MainActor (String, JSONValue) async throws 
 @MainActor
 struct PathwayWorkspaceClient {
     let context: PathwayWorkspaceContext
+    var subscribe: PathwayWorkspaceSubscribe?
     let request: PathwayWorkspaceRequest
 
     func call<T: Decodable>(_ method: String, _ fields: [String: JSONValue] = [:]) async throws -> T {
@@ -58,19 +59,46 @@ struct PathwayWorkspaceClient {
         ["cwd": .string(context.cwd), "relativePath": .string(path)]
     }
 
-    func gitAction(_ action: String, message: String, paths: Set<String>) async throws -> String {
+    func gitAction(_ action: String, message: String, paths: Set<String>, featureBranch: Bool = false) async throws -> String {
+        guard context.canMutate, let subscribe else { throw PathwayWorkspaceError.unavailable }
         var payload = cwdPayload
         payload["threadId"] = .string(context.threadID)
         payload["actionId"] = .string(UUID().uuidString)
         payload["action"] = .string(action)
         if action.contains("commit") {
-            guard !paths.isEmpty, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            guard !paths.isEmpty else {
                 throw PathwayWorkspaceError.invalidCommit
             }
-            payload["commitMessage"] = .string(message)
+            let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedMessage.isEmpty { payload["commitMessage"] = .string(trimmedMessage) }
             payload["filePaths"] = .array(paths.sorted().map(JSONValue.string))
+            if featureBranch { payload["featureBranch"] = .bool(true) }
         }
-        let result = try await run("git.runStackedAction", payload)
+        try await verifyConversationGitRoot(for: "git.runStackedAction")
+        var completedResult: JSONValue?
+        for try await event in try await subscribe("git.runStackedAction", .object(payload)) {
+            try Task.checkCancellation()
+            let fields = event.objectValue
+            if fields?["kind"]?.stringValue == "action_finished" { completedResult = fields?["result"] }
+            if fields?["kind"]?.stringValue == "action_failed" {
+                throw PathwayRPCError.remote(fields?["message"]?.stringValue ?? "Git action failed.")
+            }
+        }
+        guard let result = completedResult else {
+            throw PathwayRPCError.remote("The Git action ended without a result. Refresh the repository before trying again.")
+        }
+        if let branch = result.objectValue?["branch"]?.objectValue,
+           branch["status"]?.stringValue == "created", let name = branch["name"]?.stringValue {
+            do {
+                _ = try await run("orchestration.dispatchCommand", [
+                    "type": .string("thread.metadata.update"), "commandId": .string(UUID().uuidString),
+                    "threadId": .string(context.threadID), "branch": .string(name),
+                    "expectedWorktreePath": context.cwd == context.projectRoot ? .null : .string(context.cwd)
+                ])
+            } catch {
+                throw PathwayRPCError.remote("Git action completed, but the thread's branch label could not be updated: " + error.localizedDescription)
+            }
+        }
         return result.objectValue?["toast"]?.objectValue?["title"]?.stringValue ?? "Git action completed"
     }
 
@@ -109,7 +137,7 @@ enum PathwayWorkspaceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unavailable: "Reconnect and wait for the thread to finish before changing its workspace."
-        case .invalidCommit: "Select files and enter a commit message."
+        case .invalidCommit: "Select the files to commit."
         case .revisionUnavailable: "Update the environment server to enable revision-protected file editing."
         case .fileChanged: "This file changed on the environment. Reload it before saving your edit."
         case .conversationRepository: "Use Files or open a terminal in this folder to review its Git repositories. This folder has no verified repository at its root."
@@ -126,6 +154,8 @@ struct PathwayWorkspaceStatus: Decodable {
     let aheadCount: Int
     let behindCount: Int
     let workingTree: WorkingTree
+    var isDefaultRef: Bool? = nil
+    var aheadOfDefaultCount: Int? = nil
     var canCreatePullRequest: Bool { isRepo && hasPrimaryRemote && !hasWorkingTreeChanges }
     struct WorkingTree: Decodable {
         let files: [File]

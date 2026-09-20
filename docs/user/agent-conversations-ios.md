@@ -40,11 +40,15 @@ The model picker shows favourites first, groups models by provider, and marks th
 
 The thread menu at the top includes Rename, Pin or Unpin, Settle or Reopen, Force settle, Snooze or Wake, and Regenerate title when the connected environment supports them. Copy the workspace path, branch, thread ID, or conversation from the same menu. Archive and Delete ask for confirmation; archived threads can be restored.
 
+A thread still waiting to start includes **Cancel queued thread** in that same menu. This action disappears once the environment accepts the thread. Stop a running agent with the composer’s Stop control. Finished queue entries can be removed from the thread list.
+
 Thread rows show compact status labels so you can scan for Working, Preparing, Queued, Waiting, Question, Approval, Review plan, Failed, Stopped, or Ready. A pending question or approval takes priority over background work. Status labels use text as well as color and update with the environment's thread state.
 
 The notification bell is hidden when there are no notifications. It appears when notifications arrive; read notifications remain accessible from the bell.
 
-Tap the compose button at the top of a conversation to start a new thread. The new-thread sheet preselects the current project, environment, provider, model and reasoning options, access mode, chat or plan mode, and temporary setting. You can change the defaults before sending. Tap outside the message field to hide the keyboard without losing your new-thread draft. Tap the field to keep writing. The existing conversation and its draft stay intact.
+The Git menu at the top of a conversation offers Commit, Commit & push, Commit, push & create PR, Push commits, Create pull request, and Pull upstream changes. Choose an action to review the thread's repository and confirm it. For commits, select the files to include and enter a message, or leave it blank to generate one automatically. You can create a new branch as part of a commit. Actions are unavailable while the thread is working or its environment is disconnected. The same menu opens changes, branches, pull requests, and reviews.
+
+Choose **New thread** from the ellipsis menu at the top of a conversation. The new-thread sheet preselects the current project, environment, provider, model and reasoning options, access mode, chat or plan mode, and temporary setting. You can change the defaults before sending. Tap outside the message field to hide the keyboard without losing your new-thread draft. Tap the field to keep writing. The existing conversation and its draft stay intact.
 
 The new-thread project picker displays each project's icon when available. Projects without an available icon use the folder symbol; conversations use the conversation symbol. Project icons share the thread list's cache.
 

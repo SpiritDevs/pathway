@@ -31,6 +31,10 @@ struct PathwayQueuedThread: Identifiable, Equatable, Sendable {
     var canRemoveFromList: Bool {
         ["canceled", "delivered"].contains(state) && (fields["localCount"]?.intValue ?? 0) == 0
     }
+    var canCancelLaunch: Bool {
+        ["local", "queued", "blocked"].contains(state) && fields["launch"]?.objectValue != nil
+            && (fields["acceptedAt"] == nil || fields["acceptedAt"] == .null)
+    }
     var status: String {
         if (fields["localCount"]?.intValue ?? 0) > 0 { return "Waiting to sync" }
         return switch state {

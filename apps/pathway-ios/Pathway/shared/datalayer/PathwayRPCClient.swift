@@ -95,6 +95,7 @@ actor PathwayRPCClient {
 
     private let endpointProvider: EndpointProvider
     private let session: URLSession
+    private let reconnectsSubscriptions: Bool
     private var socket: URLSessionWebSocketTask?
     private var connectionID: UUID?
     private var loopTask: Task<Void, Never>?
@@ -113,9 +114,11 @@ actor PathwayRPCClient {
 
     init(
         session: URLSession = .shared,
+        reconnectsSubscriptions: Bool = true,
         endpointProvider: @escaping EndpointProvider
     ) {
         self.session = session
+        self.reconnectsSubscriptions = reconnectsSubscriptions
         self.endpointProvider = endpointProvider
     }
 
@@ -247,6 +250,11 @@ actor PathwayRPCClient {
             } catch is CancellationError {
                 break
             } catch {
+                if !reconnectsSubscriptions {
+                    subscriptionContinuation?.finish(throwing: error)
+                    stop()
+                    break
+                }
                 disconnect(id: id)
                 guard desired, !Task.isCancelled else { break }
                 failureCount += 1
@@ -329,6 +337,12 @@ actor PathwayRPCClient {
                         : .failure(Self.remoteError(exit))
                 )
             } else if requestID == subscriptionRequestID {
+                if !reconnectsSubscriptions {
+                    if exit.envelopeTag == "Success" { subscriptionContinuation?.finish() }
+                    else { subscriptionContinuation?.finish(throwing: Self.remoteError(exit)) }
+                    stop()
+                    return
+                }
                 subscriptionRequestID = nil
                 subscriptionGate.reset()
                 yieldTransportState("disconnected")
@@ -348,6 +362,11 @@ actor PathwayRPCClient {
 
     private func disconnect(id: UUID) {
         guard connectionID == id else { return }
+        if !reconnectsSubscriptions {
+            subscriptionContinuation?.finish(throwing: PathwayRPCError.disconnected)
+            stop()
+            return
+        }
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         connectionID = nil
