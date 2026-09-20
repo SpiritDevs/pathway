@@ -267,7 +267,10 @@ final class PathwayCloudModel {
         guard let connect, environments.contains(where: { $0.id == environment.id }) else {
             return AsyncThrowingStream { $0.finish(throwing: URLError(.notConnectedToInternet)) }
         }
-        let rpc = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+        // A streamed Git mutation must finish once and must never replay after reconnecting.
+        let rpc = PathwayRPCClient(reconnectsSubscriptions: method != "git.runStackedAction") {
+            try await connect.prepare(environment: environment).webSocketURL
+        }
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {

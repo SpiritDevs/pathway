@@ -5,6 +5,24 @@ import Testing
 
 @MainActor
 struct PathwayQueuedThreadActionsTests {
+    @Test func launchCancellationIsOnlyAvailableBeforeTheEnvironmentAcceptsIt() {
+        for state in ["local", "queued", "blocked", "accepted", "delivered", "canceled"] {
+            var fields = row(state: state).fields
+            fields["launch"] = .object([:])
+            fields["acceptedAt"] = .null
+            let queued = PathwayQueuedThread(companyID: "company", fields: fields)
+            #expect(queued.canCancelLaunch == ["local", "queued", "blocked"].contains(state))
+            fields["acceptedAt"] = .number(123)
+            #expect(!PathwayQueuedThread(companyID: "company", fields: fields).canCancelLaunch)
+        }
+        var local = row(state: "local").fields
+        local["launch"] = .object([:])
+        #expect(PathwayQueuedThread(companyID: "company", fields: local).canCancelLaunch)
+        local["launch"] = .null
+        #expect(!PathwayQueuedThread(companyID: "company", fields: local).canCancelLaunch)
+        #expect(!row(state: "queued").canCancelLaunch)
+    }
+
     @Test func removingCanceledEntryPersistsButRetriedWorkReappears() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

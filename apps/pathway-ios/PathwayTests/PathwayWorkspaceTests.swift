@@ -33,11 +33,14 @@ struct PathwayWorkspaceTests {
 
     @Test func commitsOnlySelectedFilesInTheThreadsWorkspace() async throws {
         var captured: [String: JSONValue] = [:]
-        let client = PathwayWorkspaceClient(context: context) { method, payload in
+        let client = PathwayWorkspaceClient(context: context, subscribe: { method, payload in
             #expect(method == "git.runStackedAction")
             captured = payload.objectValue ?? [:]
-            return .object(["toast": .object(["title": .string("Committed")])])
-        }
+            return AsyncThrowingStream { continuation in
+                continuation.yield(.object(["kind": .string("action_finished"), "result": .object(["toast": .object(["title": .string("Committed")])])]))
+                continuation.finish()
+            }
+        }, request: { _, _ in Issue.record("Git actions must use the streaming transport"); return .null })
         let result = try await client.gitAction("commit", message: "Fix selection", paths: ["src/a.swift"])
         #expect(result == "Committed")
         #expect(captured["cwd"] == .string("/worktrees/a"))

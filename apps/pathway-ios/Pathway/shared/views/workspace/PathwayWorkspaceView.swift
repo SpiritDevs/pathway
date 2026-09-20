@@ -7,13 +7,14 @@ struct PathwayWorkspaceView: View {
     var assetURL: PathwayWorkspaceAssetURL?
     var postHTTP: PathwayWorkspacePostHTTP?
     var initialSection = "repositories"
-    private var client: PathwayWorkspaceClient { .init(context: context, request: request) }
+    var initialGitAction: PathwayWorkspaceGitAction?
+    private var client: PathwayWorkspaceClient { .init(context: context, subscribe: subscribe, request: request) }
 
     var body: some View {
         Group {
             switch PathwayWorkspaceSection(rawValue: initialSection) ?? .repositories {
             case .repositories: overview
-            case .changes: PathwayWorkspaceGitView(client: client, subscribe: subscribe, assetURL: assetURL)
+            case .changes: PathwayWorkspaceGitView(client: client, subscribe: subscribe, assetURL: assetURL, initialAction: initialGitAction)
             case .pullRequests:
                 if context.supportsPullRequests {
                     PathwayWorkspacePullRequestsView(client: client, postHTTP: postHTTP)
@@ -53,22 +54,28 @@ struct PathwayWorkspaceView: View {
 }
 
 struct PathwayWorkspaceGitView: View {
+    @Environment(\.dismiss) private var dismiss
     let client: PathwayWorkspaceClient
     var subscribe: PathwayWorkspaceSubscribe?
     var assetURL: PathwayWorkspaceAssetURL?
+    var initialAction: PathwayWorkspaceGitAction?
     @State private var status: PathwayWorkspaceStatus?
     @State private var selected = Set<String>()
     @State private var message = ""
+    @State private var featureBranch = false
     @State private var busy = false
     @State private var error: String?
     @State private var notice: String?
-    @State private var pendingAction: String?
+    @State private var pendingAction: PathwayWorkspaceGitAction?
 
     var body: some View {
         List {
             PathwayThreadPullRequestsSection(client: client)
             if let error { Section { Text(error).foregroundStyle(.red) } }
             if let notice { Section { Text(notice) } }
+            if !client.context.canMutate {
+                Section { Text("Reconnect and wait for the thread to finish before changing its workspace.").foregroundStyle(.secondary) }
+            }
             if client.context.projectID == nil {
                 Section("Conversation folder") {
                     Text(client.context.cwd).font(.caption.monospaced()).textSelection(.enabled)
@@ -90,44 +97,56 @@ struct PathwayWorkspaceGitView: View {
                     }
                 }
                 if status.isRepo {
-                    Section("Files to commit") {
-                        if status.workingTree.files.isEmpty { Text("No uncommitted changes") }
-                        ForEach(status.workingTree.files) { file in
-                            Toggle(isOn: Binding(get: { selected.contains(file.path) }, set: { on in
-                                if on { selected.insert(file.path) } else { selected.remove(file.path) }
-                            })) {
-                                VStack(alignment: .leading) {
-                                    Text(file.path).font(.subheadline.monospaced())
-                                    Text("+\(file.insertions) −\(file.deletions)").font(.caption).foregroundStyle(.secondary)
+                    if initialAction == nil || initialAction?.requiresCommit == true {
+                        Section("Files to commit") {
+                            if status.workingTree.files.isEmpty { Text("No uncommitted changes") }
+                            ForEach(status.workingTree.files) { file in
+                                Toggle(isOn: Binding(get: { selected.contains(file.path) }, set: { on in
+                                    if on { selected.insert(file.path) } else { selected.remove(file.path) }
+                                })) {
+                                    VStack(alignment: .leading) {
+                                        Text(file.path).font(.subheadline.monospaced())
+                                        Text("+\(file.insertions) −\(file.deletions)").font(.caption).foregroundStyle(.secondary)
+                                    }
                                 }
                             }
-                        }
+                        }.disabled(busy || !client.context.canMutate)
+                        Section {
+                            TextField("Commit message (optional)", text: $message, axis: .vertical)
+                            Text("Leave the message blank to generate one automatically.").font(.caption).foregroundStyle(.secondary)
+                            Toggle("Create a new branch", isOn: $featureBranch)
+                        }.disabled(busy || !client.context.canMutate)
                     }
                     Section {
-                        TextField("Commit message", text: $message, axis: .vertical)
-                        Button("Commit selected files") { pendingAction = "commit" }
-                            .disabled(selected.isEmpty || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        Button("Push commits") { pendingAction = "push" }.disabled(!status.hasPrimaryRemote)
-                        Button("Pull upstream changes") { pendingAction = "pull" }.disabled(!status.hasUpstream)
-                        Button("Create pull request") { pendingAction = "create_pr" }.disabled(!status.canCreatePullRequest)
-                        if status.hasWorkingTreeChanges { Text("Commit local changes before creating a pull request.").font(.caption).foregroundStyle(.secondary) }
+                        ForEach(initialAction.map { [$0] } ?? PathwayWorkspaceGitAction.allCases) { action in
+                            let reason = action.unavailableReason(status: status, selected: selected, featureBranch: featureBranch)
+                            Button(action.title, systemImage: action.systemImage) { pendingAction = action }
+                                .disabled(reason != nil)
+                                .accessibilityIdentifier("workspace-git-\(action.rawValue)")
+                            if initialAction != nil, let reason {
+                                Text(reason).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                     }.disabled(busy || !client.context.canMutate)
                 } else { Text("This workspace is not a repository.") }
             } else if busy { ProgressView("Loading repository…") }
         }
-        .navigationTitle("Source control")
+        .navigationTitle(initialAction?.title ?? "Source control")
         .refreshable { await refresh() }
         .task(id: client.context.cwd) { await refresh() }
-        .toolbar { if busy { ProgressView() } }
+        .toolbar {
+            if busy { ToolbarItem(placement: .topBarTrailing) { ProgressView("Running Git action…") } }
+            if initialAction != nil {
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.disabled(busy) }
+            }
+        }
+        .interactiveDismissDisabled(busy)
         .confirmationDialog("Confirm Git action", isPresented: Binding(get: { pendingAction != nil }, set: { if !$0 { pendingAction = nil } })) {
-            Button(actionLabel) { if let action = pendingAction { pendingAction = nil; Task { await perform(action) } } }
+            Button(pendingAction?.title ?? "Continue") { if let action = pendingAction { pendingAction = nil; Task { await perform(action) } } }
             Button("Cancel", role: .cancel) { pendingAction = nil }
         } message: {
-            Text(pendingAction == "commit" ? "Commit \(selected.count) selected files in \(client.context.cwd)." : "This changes the repository or its remote for this thread. Refresh and review the current changes before continuing.")
+            Text(pendingAction?.requiresCommit == true ? "\(pendingAction?.title ?? "Commit") with \(selected.count) selected files in \(client.context.cwd)." : "\(pendingAction?.title ?? "Continue") in \(client.context.cwd).")
         }
-    }
-    private var actionLabel: String {
-        switch pendingAction { case "commit": "Commit"; case "push": "Push"; case "pull": "Pull"; default: "Create pull request" }
     }
     private func refresh() async {
         guard !busy else { return }; busy = true; defer { busy = false }
@@ -138,21 +157,20 @@ struct PathwayWorkspaceGitView: View {
             error = nil
         } catch { self.error = error.localizedDescription }
     }
-    private func perform(_ action: String) async {
+    private func perform(_ action: PathwayWorkspaceGitAction) async {
+        guard !busy else { return }
         busy = true; error = nil; notice = nil
         do {
-            if action == "create_pr" {
-                let latest: PathwayWorkspaceStatus = try await client.call("vcs.refreshStatus", client.cwdPayload)
-                status = latest
-                guard latest.canCreatePullRequest else {
-                    throw PathwayRPCError.remote(latest.hasWorkingTreeChanges ? "Commit local changes before creating a pull request." : "A repository with a remote is required to create a pull request.")
-                }
+            let latest: PathwayWorkspaceStatus = try await client.call("vcs.refreshStatus", client.cwdPayload)
+            status = latest
+            if let reason = action.unavailableReason(status: latest, selected: selected, featureBranch: featureBranch) {
+                throw PathwayRPCError.remote(reason)
             }
-            if action == "pull" {
+            if action == .pull {
                 _ = try await client.run("vcs.pull", client.cwdPayload)
                 notice = "Upstream pull completed"
-            } else { notice = try await client.gitAction(action, message: message, paths: selected) }
-            if action == "commit" { message = ""; selected = [] }
+            } else { notice = try await client.gitAction(action.rawValue, message: message, paths: selected, featureBranch: action.requiresCommit && featureBranch) }
+            if action.requiresCommit { message = ""; selected = []; featureBranch = false }
         } catch { self.error = error.localizedDescription }
         let actionError = error
         busy = false
