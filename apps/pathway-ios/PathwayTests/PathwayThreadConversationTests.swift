@@ -728,7 +728,8 @@ struct PathwayThreadConversationTests {
         #expect(methods == ["attachments.createUploadUrl"])
         #expect(model.draft == "Use the attachment")
         #expect(model.draftAttachments.count == 1)
-        #expect(model.actionError != nil)
+        #expect(model.actionError == URLError(.networkConnectionLost).localizedDescription)
+        #expect(model.canSend)
     }
 
     private func makeModel(storageDirectory: URL? = nil, request: @escaping PathwayAgentThreadModel.Request) -> PathwayAgentThreadModel {

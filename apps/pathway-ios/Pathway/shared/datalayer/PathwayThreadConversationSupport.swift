@@ -219,7 +219,7 @@ extension PathwayAgentThreadModel {
                   let relative = object["relativeUrl"]?.stringValue else { throw PathwayThreadConversationError.message("The upload URL was unavailable.") }
             uploadedID = attachmentID
             guard let connect else { throw PathwayRPCError.disconnected }
-            var request = try await connect.authenticatedRequest(environment: environment, method: "PUT", path: relative)
+            var request = try await connect.authenticatedRequest(environment: environment, method: "POST", path: relative)
             request.setValue(draft.mimeType, forHTTPHeaderField: "Content-Type")
             let response: URLResponse
             if let file = draft.localFileURL {
