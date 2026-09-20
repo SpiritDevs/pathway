@@ -32,6 +32,32 @@ struct PathwayThreadChangeRequestTests {
         #expect(after.settled.map(\.id) == [thread.id])
     }
 
+    @Test func publishesMergedThreadBeforeRequestingTheNextThread() async throws {
+        let first = makeAgentThread(attachedPullRequest: attachment)
+        let secondAttachment = PathwayPullRequestAttachment(number: 111, url: attachment.url.replacingOccurrences(of: "110", with: "111"))
+        let second = makeAgentThread(attachedPullRequest: secondAttachment)
+        let firstRequest = try #require(PathwayThreadChangeRequestResolver.request(for: first, environment: environment(), bindings: [binding()]))
+        let secondRequest = try #require(PathwayThreadChangeRequestResolver.request(for: second, environment: environment(), bindings: [binding()]))
+        var received: [PathwayThreadChangeRequestResolution] = []
+        await PathwayThreadChangeRequestResolver.resolve(candidates: [
+            .init(threadID: "first", environment: environment(), requests: [firstRequest], attachments: [attachment], detachedURLs: []),
+            .init(threadID: "second", environment: environment(), requests: [secondRequest], attachments: [secondAttachment], detachedURLs: [])
+        ], request: { request in
+            if request.cacheKey == secondRequest.cacheKey {
+                #expect(received.map(\.threadID) == ["first"])
+                #expect(received.first?.status.state == .merged)
+                throw URLError(.notConnectedToInternet)
+            }
+            return .object(["url": .string(attachment.url), "number": .number(110), "state": .string("merged")])
+        }, receive: { received.append($0) })
+        #expect(received.count == 2)
+        #expect(received.last?.status.unavailable == true)
+        let partition = PathwayThreadLifecyclePartition(threads: [first], now: .now,
+            changeRequestStates: [first.id: try #require(received.first?.status.state)])
+        #expect(partition.active.isEmpty)
+        #expect(partition.settled.map(\.id) == [first.id])
+    }
+
     @Test func routesAttachmentsToTheirOwnProjectWithinTheEnvironment() throws {
         let thread = makeAgentThread(attachedPullRequest: attachment)
         let other = PathwayPullRequestAttachment(number: 111, url: "https://github.com/SpiritDevs/other/pull/111")
