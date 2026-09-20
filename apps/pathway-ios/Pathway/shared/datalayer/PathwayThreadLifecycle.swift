@@ -185,6 +185,14 @@ extension PathwayAgentThread {
     }
 
     static func isOrderedBefore(_ left: Self, _ right: Self) -> Bool {
+        if left.shell.pinnedAt != nil, right.shell.pinnedAt != nil {
+            switch (left.shell.pinOrderKey, right.shell.pinOrderKey) {
+            case let (.some(leftKey), .some(rightKey)) where leftKey != rightKey: return leftKey < rightKey
+            case (.some, .none): return true
+            case (.none, .some): return false
+            default: break
+            }
+        }
         switch (left.shell.pinnedAt, right.shell.pinnedAt) {
         case (.some, .none):
             return true
