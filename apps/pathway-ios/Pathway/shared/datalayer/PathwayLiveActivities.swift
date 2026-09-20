@@ -109,11 +109,15 @@ import Observation
                 return
             }
             let state = try LiveActivityAttributes.ContentState(aggregate: aggregate)
-            let content = ActivityContent(state: state, staleDate: (aggregate.date ?? Date()).addingTimeInterval(600))
+            let content = ActivityContent(state: state, staleDate: aggregate.canStart ? (aggregate.date ?? Date()).addingTimeInterval(600) : nil)
             if let current = activity {
                 guard aggregate.shouldReplace(current.content.state.aggregate) else { return }
-                if aggregate.canStart { await PathwayActivitySystem.update(id: current.id, content: content) }
-                else { await endCurrent(content: content, immediate: false, epoch: epoch) }
+                if aggregate.canStart {
+                    await PathwayActivitySystem.update(id: current.id, content: content)
+                } else {
+                    // End the island while retaining the final Lock Screen card.
+                    await endCurrent(content: content, immediate: false, epoch: epoch)
+                }
             } else if aggregate.canStart {
                 // Re-check OS state after the fetch: a push-to-start may have arrived in flight.
                 if let existing = Activity<LiveActivityAttributes>.activities.first(where: { $0.activityState == .active || $0.activityState == .stale }) {
@@ -191,7 +195,7 @@ import Observation
         guard let current = activity else { return }
         activity = nil; isActive = false; registeredToken = nil; startToken = nil
         activityObservers.forEach { $0.cancel() }; activityObservers = []
-        await PathwayActivitySystem.end(id: current.id, content: content, policy: immediate ? .immediate : .after(Date().addingTimeInterval(300)))
+        await PathwayActivitySystem.end(id: current.id, content: content, policy: immediate ? .immediate : .after(Date().addingTimeInterval(15 * 60)))
         guard generation == epoch else { return }
         if let cleanup = onActivityEnded { enqueue(epoch: epoch, operation: cleanup) }
     }
