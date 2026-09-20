@@ -1,5 +1,8 @@
 # Retry a failed message
 
+If setup fails before the agent starts, the run stops and shows the error in the conversation.
+You can address the reported problem and send the request again.
+
 When the latest message you sent fails, Pathway may show **Retry message** beneath it. Select the
 button to send the same text and attachments again without rebuilding the prompt in the composer.
 

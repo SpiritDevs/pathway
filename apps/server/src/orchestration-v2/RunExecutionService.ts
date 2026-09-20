@@ -25,6 +25,7 @@ import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -811,42 +812,6 @@ export const layer: Layer.Layer<
     return RunExecutionServiceV2.of({
       startRootRun: (input) =>
         Effect.gen(function* () {
-          const assistantStreamingEnabled = yield* serverSettings.getSettings.pipe(
-            Effect.map((settings) => settings.enableLegacyTokenStreaming),
-            Effect.mapError(
-              (cause) =>
-                new RunExecutionStartError({
-                  commandId: input.commandId,
-                  runId: input.run.id,
-                  cause,
-                }),
-            ),
-          );
-          yield* checkpointService
-            .captureBaseline({
-              scope: input.checkpointScope,
-              // Root scopes are per-run: 0 is that run's pre-turn baseline
-              // and 1 is its completed checkpoint. appRunOrdinal retains the
-              // thread-wide ordering used by rollback selection.
-              ordinalWithinScope: 0,
-            })
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new RunExecutionStartError({
-                    commandId: input.commandId,
-                    runId: input.run.id,
-                    cause,
-                  }),
-              ),
-            );
-          if (
-            input.shouldStartProviderTurn !== undefined &&
-            !(yield* input.shouldStartProviderTurn())
-          ) {
-            return;
-          }
-          const terminalEvent = yield* Ref.make<ProviderTerminalEvent | null>(null);
           const makeFailedTerminalEvent = (
             failure: OrchestrationV2ProviderFailure,
             failureItemOrdinal: number,
@@ -866,6 +831,64 @@ export const layer: Layer.Layer<
             failure,
             threadDisposition: "reusable",
           });
+          const preparation = yield* Effect.gen(function* () {
+            const assistantStreamingEnabled = yield* serverSettings.getSettings.pipe(
+              Effect.map((settings) => settings.enableLegacyTokenStreaming),
+            );
+            yield* checkpointService.captureBaseline({
+              scope: input.checkpointScope,
+              // Root scopes are per-run: 0 is that run's pre-turn baseline
+              // and 1 is its completed checkpoint. appRunOrdinal retains the
+              // thread-wide ordering used by rollback selection.
+              ordinalWithinScope: 0,
+            });
+            if (
+              input.shouldStartProviderTurn !== undefined &&
+              !(yield* input.shouldStartProviderTurn())
+            ) {
+              return null;
+            }
+            const eventSubscription =
+              input.session.subscribeEvents === undefined
+                ? { events: input.session.events, close: Effect.void }
+                : yield* input.session.subscribeEvents;
+            const inheritedBackgroundTurnItems = yield* (
+              input.loadInheritedBackgroundTurnItems?.() ?? Effect.succeed([])
+            ).pipe(Effect.onError(() => eventSubscription.close));
+            return { assistantStreamingEnabled, eventSubscription, inheritedBackgroundTurnItems };
+          }).pipe(Effect.exit);
+          if (Exit.isFailure(preparation)) {
+            if (Cause.hasInterruptsOnly(preparation.cause)) {
+              return yield* Effect.failCause(preparation.cause).pipe(Effect.orDie);
+            }
+            // The run is already running in the projection. Retrying startup
+            // would skip it, leaving no provider turn and no terminal event.
+            yield* Effect.logError("orchestration V2 provider turn preparation failed", {
+              runId: input.run.id,
+              cause: preparation.cause,
+            });
+            return yield* writeFinalRunEvents({
+              ...input,
+              terminal: makeFailedTerminalEvent(
+                makeProviderFailure({ cause: Cause.squash(preparation.cause), class: "unknown" }),
+                input.providerTurnOrdinal * 100 + 1,
+              ),
+              failureItemPersisted: false,
+            }).pipe(
+              Effect.mapError(
+                (writeCause) =>
+                  new RunExecutionStartError({
+                    commandId: input.commandId,
+                    runId: input.run.id,
+                    cause: { start: preparation.cause, write: writeCause },
+                  }),
+              ),
+            );
+          }
+          if (preparation.value === null) return;
+          const { assistantStreamingEnabled, eventSubscription, inheritedBackgroundTurnItems } =
+            preparation.value;
+          const terminalEvent = yield* Ref.make<ProviderTerminalEvent | null>(null);
           const latestTurnItemOrdinal = yield* Ref.make(input.providerTurnOrdinal * 100);
           const latestProviderThread = yield* Ref.make(input.providerThread);
           const providerThreadsForAllowance = yield* Ref.make(
@@ -878,23 +901,6 @@ export const layer: Layer.Layer<
             attemptId: input.attempt.id,
             providerThreadId: input.providerThread.id,
           };
-          const eventSubscription =
-            input.session.subscribeEvents === undefined
-              ? { events: input.session.events, close: Effect.void }
-              : yield* input.session.subscribeEvents;
-          const inheritedBackgroundTurnItems = yield* (
-            input.loadInheritedBackgroundTurnItems?.() ?? Effect.succeed([])
-          ).pipe(
-            Effect.onError(() => eventSubscription.close),
-            Effect.mapError(
-              (cause) =>
-                new RunExecutionStartError({
-                  commandId: input.commandId,
-                  runId: input.run.id,
-                  cause,
-                }),
-            ),
-          );
           const inheritedBackgroundTurnItemsById = new Map(
             inheritedBackgroundTurnItems.map((item) => [item.id, item.runId]),
           );

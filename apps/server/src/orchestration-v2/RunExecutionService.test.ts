@@ -26,8 +26,10 @@ import {
   TurnItemId,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -39,7 +41,7 @@ import {
   ProviderAllowanceRuntime,
   type AllowanceAdmission,
 } from "../providerUsage/AllowanceRuntime.ts";
-import { CheckpointServiceV2 } from "./CheckpointService.ts";
+import { CheckpointBaselineCaptureError, CheckpointServiceV2 } from "./CheckpointService.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { IdAllocatorV2, layer as idAllocatorLayer } from "./IdAllocator.ts";
 import type { ProviderAdapterV2Event, ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
@@ -96,6 +98,160 @@ it("identifies the provider event or finalization phase that failed", () => {
     `Failed while finalizing orchestration V2 run execution ${runId}.`,
   );
 });
+
+for (const failureStage of [
+  "settings",
+  "checkpoint",
+  "subscription",
+  "background-routing",
+  "interruption",
+] as const) {
+  for (const ownsRun of [true, false]) {
+    it.effect(
+      `settles ${failureStage} startup failures only while the attempt owns the run (${ownsRun})`,
+      () =>
+        Effect.gen(function* () {
+          const threadId = ThreadId.make("thread:startup-failure");
+          const runId = RunId.make("run:startup-failure");
+          const attemptId = RunAttemptId.make("attempt:startup-failure");
+          const rootNodeId = NodeId.make("node:startup-failure");
+          const scopeId = CheckpointScopeId.make("scope:startup-failure");
+          const providerThreadId = ProviderThreadId.make("provider-thread:startup-failure");
+          const providerInstanceId = ProviderInstanceId.make("codex");
+          const events = yield* Ref.make<ReadonlyArray<OrchestrationV2DomainEvent>>([]);
+          const subscriptionClosed = vi.fn(() => Effect.void);
+          const startTurn = vi.fn(() => Effect.void);
+          const failure = new Error(`Simulated ${failureStage} failure`);
+          const testLayer = runExecutionServiceLayer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.mock(CheckpointServiceV2)({
+                  captureBaseline: () =>
+                    failureStage === "checkpoint"
+                      ? Effect.fail(
+                          new CheckpointBaselineCaptureError({
+                            scopeId,
+                            ordinalWithinScope: 0,
+                            cause: failure,
+                          }),
+                        )
+                      : Effect.void,
+                }),
+                Layer.mock(EventSinkV2)({
+                  writeWithEffects: (input) =>
+                    Ref.update(events, (current) => [...current, ...input.events]).pipe(
+                      Effect.as([]),
+                    ),
+                }),
+                idAllocatorLayer,
+                Layer.mock(ProviderEventIngestorV2)({}),
+                failureStage === "settings"
+                  ? Layer.mock(ServerSettingsService)({ getSettings: Effect.die(failure) })
+                  : ServerSettingsService.layerTest(),
+              ),
+            ),
+          );
+          const result = yield* Effect.gen(function* () {
+            const execution = yield* RunExecutionServiceV2;
+            yield* execution.startRootRun({
+              commandId: CommandId.make("command:startup-failure"),
+              appThread: { id: threadId } as OrchestrationV2AppThread,
+              providerSessionId: ProviderSessionId.make("session:startup-failure"),
+              session: {
+                events: Stream.never,
+                subscribeEvents:
+                  failureStage === "subscription"
+                    ? Effect.die(failure)
+                    : Effect.succeed({
+                        events: Stream.never,
+                        close: Effect.suspend(subscriptionClosed),
+                      }),
+                startTurn,
+              } as unknown as ProviderAdapterV2SessionRuntime,
+              run: {
+                id: runId,
+                threadId,
+                ordinal: 1,
+                providerInstanceId,
+                status: "running",
+                activeAttemptId: attemptId,
+              } as OrchestrationV2Run,
+              rootNode: { id: rootNodeId, status: "running" } as OrchestrationV2ExecutionNode,
+              checkpointScope: { id: scopeId } as OrchestrationV2CheckpointScope,
+              providerThread: { id: providerThreadId, driver } as OrchestrationV2ProviderThread,
+              attempt: {
+                id: attemptId,
+                runId,
+                providerTurnId: null,
+                status: "running",
+              } as OrchestrationV2RunAttempt,
+              attemptId,
+              providerTurnOrdinal: 1,
+              loadInheritedBackgroundTurnItems: () =>
+                failureStage === "interruption" ? Effect.interrupt : Effect.fail(failure),
+              shouldFinalizeRun: () => Effect.succeed(ownsRun),
+              message: {
+                messageId: MessageId.make("message:startup-failure"),
+                text: "Start the agent.",
+                attachments: [],
+                createdBy: "user",
+                creationSource: "mobile",
+              },
+              modelSelection: { instanceId: providerInstanceId, model: "gpt-6-astra" },
+              runtimePolicy: {
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                cwd: process.cwd(),
+                approvalPolicy: "never",
+                sandboxPolicy: {
+                  type: "readOnly",
+                  access: { type: "fullAccess" },
+                  networkAccess: false,
+                },
+              },
+            });
+          }).pipe(Effect.provide(testLayer), Effect.exit);
+
+          assert.equal(startTurn.mock.calls.length, 0);
+          assert.equal(
+            subscriptionClosed.mock.calls.length,
+            failureStage === "background-routing" || failureStage === "interruption" ? 1 : 0,
+          );
+          const written = yield* Ref.get(events);
+          if (failureStage === "interruption") {
+            assert.isTrue(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause));
+            assert.deepEqual(written, []);
+            return;
+          }
+          assert.isTrue(Exit.isSuccess(result));
+          if (!ownsRun) {
+            assert.deepEqual(written, []);
+            return;
+          }
+          assert.deepEqual(
+            written
+              .filter((event) =>
+                ["run.updated", "run-attempt.updated", "node.updated"].includes(event.type),
+              )
+              .map((event) => [
+                event.type,
+                "status" in event.payload ? event.payload.status : null,
+              ]),
+            [
+              ["run-attempt.updated", "failed"],
+              ["run.updated", "failed"],
+              ["node.updated", "failed"],
+            ],
+          );
+          const failureItem = written.find((event) => event.type === "turn-item.updated");
+          assert.equal(failureItem?.payload.type, "error");
+          if (failureItem?.payload.type === "error") {
+            assert.equal(failureItem.payload.failure.message, failure.message);
+          }
+        }),
+    );
+  }
+}
 
 it.effect("routes shared-runtime events only to their owning root run", () =>
   Effect.gen(function* () {
