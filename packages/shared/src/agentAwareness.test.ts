@@ -6,7 +6,7 @@ import type {
   Project,
   ThreadId,
 } from "@spiritdevs/contracts";
-import { ProviderInstanceId, RuntimeRequestId } from "@spiritdevs/contracts";
+import { ProviderInstanceId, RuntimeRequestId, RunId } from "@spiritdevs/contracts";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import * as DateTime from "effect/DateTime";
 
@@ -66,6 +66,53 @@ describe("projectThreadAwarenessV2", () => {
     expect(projectThreadAwarenessV2({ ...input, project })).not.toHaveProperty(
       "conversationCompanyId",
     );
+  });
+
+  it("keeps the turn's timing stable across questions and completion", () => {
+    const latestRunStartedAt = DateTime.makeUnsafe("2026-05-22T11:58:00.000Z");
+    const thread = { ...v2Thread(), latestRunStartedAt, latestRunCompletedAt: updatedAt };
+    const input = { environmentId: "env-1" as EnvironmentId, project, thread };
+    expect(projectThreadAwarenessV2(input)).toMatchObject({
+      startedAt: "2026-05-22T11:58:00.000Z",
+    });
+    expect(projectThreadAwarenessV2(input)).not.toHaveProperty("completedAt");
+    expect(
+      projectThreadAwarenessV2({
+        ...input,
+        thread: {
+          ...thread,
+          pendingRuntimeRequest: {
+            id: RuntimeRequestId.make("question"),
+            kind: "user_input",
+            createdAt: updatedAt,
+          },
+        },
+      }),
+    ).toMatchObject({ phase: "waiting_for_input", startedAt: "2026-05-22T11:58:00.000Z" });
+    expect(
+      projectThreadAwarenessV2({ ...input, thread: { ...thread, status: "completed" } }),
+    ).toMatchObject({
+      phase: "completed",
+      startedAt: "2026-05-22T11:58:00.000Z",
+      completedAt: NOW,
+    });
+  });
+
+  it("does not use a newer cancelled turn's timing for an older active turn", () => {
+    const state = projectThreadAwarenessV2({
+      environmentId: "env-1" as EnvironmentId,
+      project,
+      thread: {
+        ...v2Thread({ status: "cancelled", activityRunStatus: "running" }),
+        activeRunId: RunId.make("older"),
+        latestRunId: RunId.make("newer"),
+        latestRunStartedAt: updatedAt,
+        latestRunCompletedAt: updatedAt,
+      },
+    });
+    expect(state).toMatchObject({ phase: "running" });
+    expect(state).not.toHaveProperty("startedAt");
+    expect(state).not.toHaveProperty("completedAt");
   });
 
   it("keeps an older activity run visible over a newer cancelled run", () => {

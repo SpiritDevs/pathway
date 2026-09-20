@@ -303,7 +303,10 @@ function shouldUpdateLiveActivity(input: {
   if (JSON.stringify(input.previousAggregate) === JSON.stringify(input.nextAggregate)) {
     return false;
   }
-  if (input.previousAggregate.activeCount !== input.nextAggregate.activeCount) {
+  if (
+    input.previousAggregate.activeCount !== input.nextAggregate.activeCount ||
+    input.previousAggregate.runningCount !== input.nextAggregate.runningCount
+  ) {
     return true;
   }
   if (aggregateNeedsAttention(input.nextAggregate)) {
@@ -404,11 +407,7 @@ function chooseLiveActivityDelivery(input: {
   if (!input.target.activity_push_token) {
     return null;
   }
-  // An armed card always shows content: live agents, or recently finished
-  // ones (the publisher keeps Done/Failed rows in the aggregate for a
-  // while). A null aggregate means there is truly nothing left to show, so
-  // the card ends — arming is cheap now that the app re-arms on any open
-  // with content.
+  // A null aggregate has no content to retain on the Lock Screen.
   if (input.aggregate === null) {
     // Except right after arming: the app arms the card the moment the user
     // starts work, and the token registration's replay can land before the
@@ -433,6 +432,19 @@ function chooseLiveActivityDelivery(input: {
   }
   const nextAggregate = input.aggregate;
   const previousAggregate = parseAggregate(input.target.last_aggregate_json);
+  if (nextAggregate.activeCount === 0) {
+    return {
+      kind: "live_activity_end",
+      token: input.target.activity_push_token,
+      aggregate: nextAggregate,
+      alert: alertForNewlyTerminal({
+        previousAggregate,
+        nextAggregate,
+        preferences,
+        nowMs: input.nowMs,
+      }),
+    };
+  }
   return shouldUpdateLiveActivity({
     previousAggregate,
     nextAggregate,
@@ -713,8 +725,9 @@ export const make = Effect.gen(function* () {
   // delivered moments after a newer terminal publish already ended the user's
   // work, birthing an orphan activity that shows stale content forever (no
   // token is ever registered for it, so nothing can update or end it).
-  // Re-validate at delivery time that the user still has live work; fail open
-  // on persistence errors so a database hiccup never drops a legitimate start.
+  // Re-validate at delivery time. This also prevents a queued completion end
+  // from clearing a card after new work starts in a different thread.
+  // On persistence errors, assume work remains so we do not lose a live card.
   const userStillHasLiveWork = Effect.fnUntraced(function* (userId: string) {
     const now = yield* DateTime.now;
     return yield* activityRows.listForUser({ userId }).pipe(
@@ -725,7 +738,7 @@ export const make = Effect.gen(function* () {
         ),
       ),
       Effect.catchCause((cause) =>
-        Effect.logWarning("live-work recheck failed; allowing queued start", { cause }).pipe(
+        Effect.logWarning("live-work recheck failed; assuming work remains", { cause }).pipe(
           Effect.as(true),
         ),
       ),
@@ -906,10 +919,13 @@ export const make = Effect.gen(function* () {
       if (
         input.kind !== "live_activity_start" &&
         aggregate !== null &&
-        !(yield* aggregateRowsAreCurrent({
-          userId: input.target.user_id,
-          aggregate,
-        }))
+        ((input.kind === "live_activity_end" &&
+          aggregate.activeCount === 0 &&
+          (yield* userStillHasLiveWork(input.target.user_id))) ||
+          !(yield* aggregateRowsAreCurrent({
+            userId: input.target.user_id,
+            aggregate,
+          })))
       ) {
         yield* attempts.completeSourceJob({
           sourceJobId: input.sourceJobId,
@@ -1266,23 +1282,23 @@ export const make = Effect.gen(function* () {
         });
         return result;
       }
-      const notification = notificationForAggregate({
-        target: input.target,
-        aggregate: input.aggregate,
-        nowMs: input.nowMs,
-      });
+      const notification =
+        delivery.kind === "live_activity_end" &&
+        delivery.aggregate?.activeCount === 0 &&
+        delivery.alert === null
+          ? null
+          : notificationForAggregate({
+              target: input.target,
+              aggregate: input.aggregate,
+              nowMs: input.nowMs,
+            });
       // The end event doubles as the "task finished" moment. When a companion
       // push notification is about to ring the device (below), the activity end
       // stays silent; otherwise the end itself carries the alert so LA-only
       // users still get the buzz.
       const alert =
-        delivery.kind === "live_activity_end"
-          ? notification && input.target.push_token
-            ? null
-            : alertForTerminalAggregate({
-                aggregate: delivery.aggregate,
-                preferences: parsePreferences(input.target.preferences_json),
-              })
+        delivery.kind === "live_activity_end" && notification && input.target.push_token
+          ? null
           : delivery.alert;
       const result = yield* deliveryQueue.enqueueLiveActivity({
         userId: input.target.user_id,

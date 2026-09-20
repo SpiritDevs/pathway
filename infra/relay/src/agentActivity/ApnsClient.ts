@@ -20,7 +20,7 @@ const LIVE_ACTIVITY_NAME = "AgentActivity";
 // perfectly healthy activities; ten minutes still bounds how long a dead
 // environment can look alive.
 const STALE_AFTER_SECONDS = 10 * 60;
-const DISMISS_AFTER_SECONDS = 5 * 60;
+const DISMISS_AFTER_SECONDS = 15 * 60;
 // An end without a final content-state leaves whatever the card last showed
 // frozen on the lock screen until dismissal — get it off quickly instead of
 // parading stale state for the full window.

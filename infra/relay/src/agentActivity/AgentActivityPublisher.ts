@@ -218,18 +218,10 @@ function aggregateRowForState(state: RelayAgentActivityState) {
     phase: state.phase,
     status: statusForPhase(state.phase),
     updatedAt: state.updatedAt,
+    ...(state.startedAt === undefined ? {} : { startedAt: state.startedAt }),
+    ...(state.completedAt === undefined ? {} : { completedAt: state.completedAt }),
     deepLink: state.deepLink,
   };
-}
-
-function terminalAggregateState(state: RelayAgentActivityState): RelayAgentActivityAggregateState {
-  return sanitizeAgentActivityAggregateState({
-    title: "Pathway",
-    subtitle: state.phase === "failed" ? "Agent work failed" : "Agent work completed",
-    activeCount: 0,
-    updatedAt: state.updatedAt,
-    activities: [aggregateRowForState(state)],
-  });
 }
 
 // How long a finished thread keeps its Done/Failed row in the aggregate while
@@ -241,7 +233,7 @@ function isRecentTerminalState(state: RelayAgentActivityState, nowMs: number): b
   if (!isTerminalPhase(state)) {
     return false;
   }
-  const updatedAtMs = Option.match(DateTime.make(state.updatedAt), {
+  const updatedAtMs = Option.match(DateTime.make(state.completedAt ?? state.updatedAt), {
     onNone: () => Number.NaN,
     onSome: (dt) => dt.epochMilliseconds,
   });
@@ -256,19 +248,25 @@ export function makeAggregateState(input: {
   readonly terminalState: RelayAgentActivityState | null;
   readonly nowMs: number;
 }): RelayAgentActivityAggregateState | null {
-  const activeStates = input.activeStates.filter(
+  const states =
+    input.terminalState === null
+      ? input.activeStates
+      : [
+          input.terminalState,
+          ...input.activeStates.filter(
+            (state) =>
+              state.environmentId !== input.terminalState?.environmentId ||
+              state.threadId !== input.terminalState?.threadId,
+          ),
+        ];
+  const activeStates = states.filter(
     (state) => !isTerminalPhase(state) && !isExpiredAgentActivityState(state, input.nowMs),
   );
   if (activeStates.length === 0) {
-    if (input.terminalState !== null) {
-      return terminalAggregateState(input.terminalState);
-    }
     // With no live work, recently finished threads keep the card showing
-    // Done/Failed content (an armed card never renders an empty state). The
-    // newly-terminal alert rules key off the previously delivered aggregate,
-    // so replays repaint this without buzzing. Once the terminal rows age
-    // out, the aggregate is null and the delivery layer ends the card.
-    const recentTerminal = input.activeStates
+    // Done/Failed content for the final Lock Screen card. The delivery layer
+    // ends the activity so it leaves the Dynamic Island.
+    const recentTerminal = states
       .filter((state) => isRecentTerminalState(state, input.nowMs))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     const newest = recentTerminal[0];
@@ -279,20 +277,26 @@ export function makeAggregateState(input: {
       title: "Pathway",
       subtitle: newest.phase === "failed" ? "Agent work failed" : "Agent work completed",
       activeCount: 0,
+      runningCount: 0,
       updatedAt: newest.updatedAt,
       activities: recentTerminal.slice(0, MAX_ACTIVITY_ROWS).map(aggregateRowForState),
     });
   }
-  // Recently finished threads ride along after the active ones (display slots
-  // permitting) so a completion is visible as Done/Failed instead of the row
-  // silently vanishing while other agents keep the activity alive.
-  const recentTerminalStates = input.activeStates
+  // Questions stay actionable and recent completions keep their visible slot
+  // instead of falling below every running thread on the compact card.
+  const recentTerminalStates = states
     .filter((state) => isRecentTerminalState(state, input.nowMs))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  const displayedStates = [
-    ...activeStates.slice(0, MAX_ACTIVITY_ROWS),
-    ...recentTerminalStates,
-  ].slice(0, MAX_ACTIVITY_ROWS);
+  const displayedStates = [...activeStates, ...recentTerminalStates]
+    .sort((a, b) => {
+      const needsAttention = (state: RelayAgentActivityState) =>
+        state.phase === "waiting_for_input" || state.phase === "waiting_for_approval";
+      return (
+        Number(needsAttention(b)) - Number(needsAttention(a)) ||
+        b.updatedAt.localeCompare(a.updatedAt)
+      );
+    })
+    .slice(0, MAX_ACTIVITY_ROWS);
   const updatedAt = [...activeStates, ...recentTerminalStates].reduce((latest, state) =>
     state.updatedAt.localeCompare(latest.updatedAt) > 0 ? state : latest,
   ).updatedAt;
@@ -300,6 +304,9 @@ export function makeAggregateState(input: {
     title: "Pathway",
     subtitle: "Agent work in progress",
     activeCount: activeStates.length,
+    runningCount: activeStates.filter(
+      (state) => state.phase === "running" || state.phase === "starting",
+    ).length,
     updatedAt,
     activities: displayedStates.map(aggregateRowForState),
   });

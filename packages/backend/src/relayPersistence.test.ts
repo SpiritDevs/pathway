@@ -89,6 +89,62 @@ const deliveryAttempt = (id: string) => ({
 });
 
 describe("relayPersistence", () => {
+  it("preserves optional turn timing in activity state and delivered cards", async () => {
+    const { t, relay } = testRelay();
+    const timing = {
+      startedAt: "2026-08-13T23:58:00.000Z",
+      completedAt: "2026-08-14T00:00:00.000Z",
+    };
+    const state = { ...activityState("timed", "completed"), ...timing };
+    await relay.mutation(api.relayPersistence.upsertAgentActivityRow, {
+      environmentPublicKey: "key",
+      state,
+      createdAt: state.updatedAt,
+    });
+    await relay.mutation(api.relayPersistence.upsertAgentActivityRow, {
+      environmentPublicKey: "key",
+      state: activityState("older-client", "running"),
+      createdAt: state.updatedAt,
+    });
+    await relay.mutation(api.relayPersistence.markLiveActivityDelivery, {
+      userId: "user-1",
+      deviceId: "iphone",
+      kind: "live_activity_update",
+      deliveredAt: state.updatedAt,
+      aggregate: {
+        title: "Pathway",
+        subtitle: "Completed",
+        activeCount: 0,
+        runningCount: 0,
+        updatedAt: state.updatedAt,
+        activities: [
+          {
+            environmentId: state.environmentId,
+            threadId: state.threadId,
+            projectTitle: state.projectTitle,
+            threadTitle: state.threadTitle,
+            modelTitle: state.modelTitle,
+            phase: state.phase,
+            status: "Done",
+            updatedAt: state.updatedAt,
+            deepLink: state.deepLink,
+            ...timing,
+          },
+        ],
+      },
+    });
+    const stored = await t.run(async (ctx) => ({
+      rows: await ctx.db.query("relayAgentActivityRows").collect(),
+      activity: await ctx.db.query("relayLiveActivities").first(),
+    }));
+    expect(stored.rows.find((row) => row.threadId === "timed")?.state).toMatchObject(timing);
+    expect(stored.rows.find((row) => row.threadId === "older-client")?.state).not.toHaveProperty(
+      "startedAt",
+    );
+    expect(stored.activity?.lastAggregate?.activities[0]).toMatchObject(timing);
+    expect(stored.activity?.lastAggregate?.runningCount).toBe(0);
+  });
+
   it("limits conversation activity delivery and replay to active members of its owning company", async () => {
     const { t, relay } = testRelay();
     const membership = await t.run(async (ctx) => {

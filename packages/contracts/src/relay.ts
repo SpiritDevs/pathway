@@ -120,6 +120,8 @@ export const RelayAgentActivityState = Schema.Struct({
   detail: Schema.optional(TrimmedNonEmptyString),
   modelTitle: TrimmedNonEmptyString,
   updatedAt: TrimmedNonEmptyString,
+  startedAt: Schema.optionalKey(TrimmedNonEmptyString),
+  completedAt: Schema.optionalKey(TrimmedNonEmptyString),
   deepLink: TrimmedNonEmptyString,
 });
 export type RelayAgentActivityState = typeof RelayAgentActivityState.Type;
@@ -134,6 +136,8 @@ export const RelayAgentActivityAggregateRow = Schema.Struct({
   phase: RelayAgentAwarenessPhase,
   status: TrimmedNonEmptyString,
   updatedAt: TrimmedNonEmptyString,
+  startedAt: Schema.optionalKey(TrimmedNonEmptyString),
+  completedAt: Schema.optionalKey(TrimmedNonEmptyString),
   deepLink: TrimmedNonEmptyString,
 });
 export type RelayAgentActivityAggregateRow = typeof RelayAgentActivityAggregateRow.Type;
@@ -142,6 +146,7 @@ export const RelayAgentActivityAggregateState = Schema.Struct({
   title: TrimmedNonEmptyString,
   subtitle: TrimmedNonEmptyString,
   activeCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  runningCount: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   updatedAt: TrimmedNonEmptyString,
   activities: Schema.Array(RelayAgentActivityAggregateRow),
 });

@@ -30,6 +30,32 @@ struct PathwayLiveActivityTests {
         #expect(try !fixture(rows: false).canStart)
     }
 
+    @Test func islandCountsRunningThreadsEvenWhenTheRowsAreTruncated() throws {
+        var aggregate = try fixture(activeCount: 10)
+        aggregate.runningCount = 8
+        #expect(aggregate.activities.count == 1)
+        #expect(aggregate.runningThreadCount == 8)
+        let roundTrip = try JSONDecoder().decode(PathwayActivityAggregate.self, from: JSONEncoder().encode(aggregate))
+        #expect(roundTrip.runningThreadCount == 8)
+    }
+
+    @Test func olderCardsDoNotCountQuestionsAsRunningOrCompleted() throws {
+        let running = try fixture()
+        #expect(running.runningThreadCount == 1)
+        for phase in ["waiting_for_input", "waiting_for_approval", "stale"] {
+            let waiting = try fixture(phase: phase)
+            #expect(waiting.runningThreadCount == 0)
+            #expect(waiting.canStart)
+            #expect(waiting.restingStatusRow?.phase == phase)
+        }
+        let completed = try fixture(activeCount: 0, phase: "completed")
+        #expect(completed.runningThreadCount == 0)
+        #expect(!completed.canStart)
+        #expect(completed.restingStatusRow?.symbol == "checkmark.circle.fill")
+        let failed = try fixture(activeCount: 0, phase: "failed")
+        #expect(failed.restingStatusRow?.symbol == "exclamationmark.circle.fill")
+    }
+
     @Test func foregroundSnapshotCannotReplaceNewerPushedContent() throws {
         let pushed = try fixture(updatedAt: "2026-09-06T11:00:01.123Z")
         let oldSnapshot = try fixture(updatedAt: "2026-09-06T11:00:00Z")
@@ -52,6 +78,43 @@ struct PathwayLiveActivityTests {
         #expect(malformed.aggregate == nil)
         let other = try JSONDecoder().decode(LiveActivityAttributes.ContentState.self, from: Data(#"{"name":"OtherActivity","props":"{}"}"#.utf8))
         #expect(other.aggregate == nil)
+    }
+
+    @Test func completedDurationUsesTurnTimesInsteadOfLastUpdate() throws {
+        var row = try #require(fixture(phase: "completed").activities.first)
+        row.startedAt = "2026-09-06T10:57:55Z"
+        row.completedAt = "2026-09-06T11:00:00Z"
+        #expect(row.elapsedText == "2:05")
+        #expect(row.isComplete)
+        #expect(row.symbol == "checkmark.circle.fill")
+        let encoded = try JSONEncoder().encode(row)
+        #expect(try JSONDecoder().decode(PathwayActivityRow.self, from: encoded).elapsedText == "2:05")
+        row.startedAt = "2026-09-06T09:57:55Z"
+        #expect(row.elapsedText == "1:02:05")
+        row.startedAt = "2026-09-06T12:00:00Z"
+        #expect(row.elapsedText == nil)
+    }
+
+    @Test func questionKeepsItsStartTimeWithoutACompletedTimer() throws {
+        var row = try #require(fixture(phase: "waiting_for_input").activities.first)
+        row.startedAt = "2026-09-06T10:57:55Z"
+        #expect(row.hasQuestion)
+        #expect(row.symbol == "questionmark.circle.fill")
+        #expect(row.startDate != nil)
+        #expect(row.endDate == nil)
+        #expect(row.elapsedText == nil)
+    }
+
+    @Test func olderPayloadHasNoInventedDurationAndRowsOpenTheirOwnThreads() throws {
+        let first = try #require(fixture().activities.first)
+        #expect(first.startDate == nil)
+        #expect(first.elapsedText == nil)
+        let second = PathwayActivityRow(environmentId: "env-two", threadId: "thread-two", projectTitle: "Other",
+            threadTitle: "Review", modelTitle: "Codex", phase: "completed", status: "Done",
+            updatedAt: first.updatedAt, deepLink: "/threads/ignored")
+        #expect(first.url != second.url)
+        #expect(PathwayProductLink(url: try #require(second.url))?.environmentID == "env-two")
+        #expect(PathwayProductLink(url: try #require(second.url))?.threadID == "thread-two")
     }
 
     private func fixture(activeCount: Int = 1, phase: String = "running", updatedAt: String = "2026-09-06T11:00:00.000Z", rows: Bool = true) throws -> PathwayActivityAggregate {

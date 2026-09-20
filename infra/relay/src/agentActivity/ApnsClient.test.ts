@@ -140,7 +140,7 @@ describe("ApnsClient", () => {
       expect(request.payload).toMatchObject({
         aps: {
           event: "end",
-          "dismissal-date": 300,
+          "dismissal-date": 900,
         },
       });
 

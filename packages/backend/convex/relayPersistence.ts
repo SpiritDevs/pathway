@@ -39,6 +39,8 @@ const activityState = v.object({
   detail: v.optional(v.string()),
   modelTitle: v.string(),
   updatedAt: v.string(),
+  startedAt: v.optional(v.string()),
+  completedAt: v.optional(v.string()),
   deepLink: v.string(),
 });
 const aggregateRow = v.object({
@@ -51,12 +53,15 @@ const aggregateRow = v.object({
   phase: activityPhase,
   status: v.string(),
   updatedAt: v.string(),
+  startedAt: v.optional(v.string()),
+  completedAt: v.optional(v.string()),
   deepLink: v.string(),
 });
 const aggregateState = v.object({
   title: v.string(),
   subtitle: v.string(),
   activeCount: v.number(),
+  runningCount: v.optional(v.number()),
   updatedAt: v.string(),
   activities: v.array(aggregateRow),
 });

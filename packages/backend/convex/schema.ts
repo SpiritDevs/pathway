@@ -156,6 +156,8 @@ const relayActivityState = v.object({
   detail: v.optional(v.string()),
   modelTitle: v.string(),
   updatedAt: v.string(),
+  startedAt: v.optional(v.string()),
+  completedAt: v.optional(v.string()),
   deepLink: v.string(),
 });
 
@@ -163,6 +165,7 @@ const relayActivityAggregateState = v.object({
   title: v.string(),
   subtitle: v.string(),
   activeCount: v.number(),
+  runningCount: v.optional(v.number()),
   updatedAt: v.string(),
   activities: v.array(
     v.object({
@@ -175,6 +178,8 @@ const relayActivityAggregateState = v.object({
       phase: relayActivityPhase,
       status: v.string(),
       updatedAt: v.string(),
+      startedAt: v.optional(v.string()),
+      completedAt: v.optional(v.string()),
       deepLink: v.string(),
     }),
   ),

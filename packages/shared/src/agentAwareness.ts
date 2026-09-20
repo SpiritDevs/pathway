@@ -27,6 +27,8 @@ export interface AgentAwarenessState {
   readonly detail?: string;
   readonly modelTitle: string;
   readonly updatedAt: string;
+  readonly startedAt?: string;
+  readonly completedAt?: string;
   readonly deepLink: string;
 }
 
@@ -50,7 +52,17 @@ export interface ProjectThreadAwarenessV2Input {
     | "status"
     | "title"
     | "updatedAt"
-  >;
+  > &
+    Partial<
+      Pick<
+        OrchestrationV2ThreadShell,
+        | "activeRunId"
+        | "latestRunId"
+        | "latestRunRequestedAt"
+        | "latestRunStartedAt"
+        | "latestRunCompletedAt"
+      >
+    >;
 }
 
 /** Build relay activity directly from the V2 shell projection. */
@@ -69,6 +81,16 @@ export function projectThreadAwarenessV2(
       : phase === "failed"
         ? "The agent run failed."
         : undefined;
+  // The shell's timing belongs to the latest run, which can differ from an
+  // older run that is still active after a newer queued turn was cancelled.
+  const hasLatestRunTiming = !thread.activeRunId || thread.activeRunId === thread.latestRunId;
+  const startedAt = hasLatestRunTiming
+    ? (thread.latestRunStartedAt ?? thread.latestRunRequestedAt)
+    : null;
+  const completedAt =
+    hasLatestRunTiming && (phase === "completed" || phase === "failed")
+      ? thread.latestRunCompletedAt
+      : null;
   return {
     environmentId,
     threadId: thread.id,
@@ -82,6 +104,8 @@ export function projectThreadAwarenessV2(
     ...(detail === undefined ? {} : { detail }),
     modelTitle: thread.modelSelection.model,
     updatedAt: DateTime.formatIso(thread.updatedAt),
+    ...(startedAt == null ? {} : { startedAt: DateTime.formatIso(startedAt) }),
+    ...(completedAt == null ? {} : { completedAt: DateTime.formatIso(completedAt) }),
     deepLink: buildAgentAwarenessDeepLink({ environmentId, threadId: thread.id }),
   };
 }

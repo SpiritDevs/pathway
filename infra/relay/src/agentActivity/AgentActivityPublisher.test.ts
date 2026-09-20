@@ -720,6 +720,85 @@ describe("isExpiredAgentActivityState", () => {
 describe("makeAggregateState", () => {
   const hourMs = 60 * 60 * 1_000;
 
+  it("prioritizes a question and carries timing through to the native card", () => {
+    const running = {
+      ...state,
+      threadId: "running" as RelayAgentActivityState["threadId"],
+      updatedAt: "1970-01-01T00:59:30.000Z",
+    };
+    const question: RelayAgentActivityState = {
+      ...state,
+      threadId: "question" as RelayAgentActivityState["threadId"],
+      phase: "waiting_for_input",
+      updatedAt: "1970-01-01T00:58:00.000Z",
+      startedAt: "1970-01-01T00:55:00.000Z",
+    };
+    const completed: RelayAgentActivityState = {
+      ...state,
+      phase: "completed",
+      updatedAt: "1970-01-01T00:59:45.000Z",
+      startedAt: "1970-01-01T00:56:00.000Z",
+      completedAt: "1970-01-01T00:59:00.000Z",
+    };
+    const aggregate = AgentActivityPublisher.makeAggregateState({
+      activeStates: [running, question, completed],
+      terminalState: null,
+      nowMs: hourMs,
+    });
+    expect(aggregate?.activities).toMatchObject([
+      { threadId: "question", startedAt: question.startedAt },
+      {
+        threadId: completed.threadId,
+        startedAt: completed.startedAt,
+        completedAt: completed.completedAt,
+      },
+      { threadId: "running" },
+    ]);
+    expect(aggregate?.activeCount).toBe(2);
+    expect(aggregate?.runningCount).toBe(1);
+  });
+
+  it("retains other completed rows when the final active thread finishes", () => {
+    const older: RelayAgentActivityState = {
+      ...state,
+      phase: "completed",
+      updatedAt: "1970-01-01T00:58:00.000Z",
+    };
+    const final: RelayAgentActivityState = {
+      ...state,
+      threadId: "final" as RelayAgentActivityState["threadId"],
+      phase: "completed",
+      updatedAt: "1970-01-01T00:59:00.000Z",
+    };
+    const aggregate = AgentActivityPublisher.makeAggregateState({
+      activeStates: [older, final],
+      terminalState: final,
+      nowMs: hourMs,
+    });
+    expect(aggregate?.activeCount).toBe(0);
+    expect(aggregate?.runningCount).toBe(0);
+    expect(aggregate?.activities.map((row) => row.threadId)).toEqual([
+      final.threadId,
+      older.threadId,
+    ]);
+  });
+
+  it("does not extend completion retention when the thread is later renamed", () => {
+    const completed: RelayAgentActivityState = {
+      ...state,
+      phase: "completed",
+      updatedAt: "1970-01-01T00:59:00.000Z",
+      completedAt: "1970-01-01T00:44:00.000Z",
+    };
+    expect(
+      AgentActivityPublisher.makeAggregateState({
+        activeStates: [completed],
+        terminalState: completed,
+        nowMs: hourMs,
+      }),
+    ).toBeNull();
+  });
+
   it("drops expired rows from the aggregate", () => {
     const fresh: RelayAgentActivityState = {
       ...state,
@@ -783,8 +862,8 @@ describe("makeAggregateState", () => {
     expect(aggregate?.activeCount).toBe(1);
     expect(aggregate?.subtitle).toBe("Agent work in progress");
     expect(aggregate?.activities).toMatchObject([
-      { threadId: "thread-active", phase: "running" },
       { threadId: "thread-done", phase: "completed", status: "Done" },
+      { threadId: "thread-active", phase: "running" },
     ]);
     expect(aggregate?.updatedAt).toBe("1970-01-01T00:59:00.000Z");
   });
@@ -822,9 +901,7 @@ describe("makeAggregateState", () => {
       nowMs: hourMs,
     });
 
-    // An armed card never renders an empty state: recently finished threads
-    // keep Done content on it, and once they age out the aggregate becomes
-    // null and the delivery layer ends the card.
+    // The final content remains available for the ended Lock Screen card.
     expect(aggregate).toMatchObject({
       activeCount: 0,
       subtitle: "Agent work completed",
@@ -839,7 +916,7 @@ describe("makeAggregateState", () => {
     ).toBeNull();
   });
 
-  it("gives active agents the display slots before finished ones", () => {
+  it("keeps a newly finished thread in the visible slots beside running agents", () => {
     const mkActive = (id: string): RelayAgentActivityState => ({
       ...state,
       threadId: id as RelayAgentActivityState["threadId"],
@@ -865,12 +942,13 @@ describe("makeAggregateState", () => {
     });
 
     expect(aggregate?.activeCount).toBe(5);
+    expect(aggregate?.runningCount).toBe(5);
     expect(aggregate?.activities).toMatchObject([
+      { threadId: "thread-done" },
       { threadId: "a-1" },
       { threadId: "a-2" },
       { threadId: "a-3" },
       { threadId: "a-4" },
-      { threadId: "a-5" },
     ]);
   });
 });

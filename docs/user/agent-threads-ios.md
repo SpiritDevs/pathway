@@ -1,5 +1,20 @@
 # Agent Threads on iOS
 
+With Live Activities enabled in **Settings → Agent notifications**, the Lock Screen card
+shows up to three threads. Running turns show elapsed time beside the thread name. Completed
+turns show a green check and their final duration, and stay in the recent activity list for
+15 minutes. A thread awaiting your answer shows a blue **Question** label instead of a timer.
+Questions appear first, followed by the most recently updated threads, including completions.
+Tap a thread row to open that specific thread. The expanded Dynamic Island uses the same rows.
+Older environments that do not supply turn timing show the thread's status instead of a duration.
+
+The compact Dynamic Island shows the Pathway P and the number of running threads inside an
+activity ring. The smallest view shows just the count and ring. The ring animates when activity
+updates arrive; iOS limits Live Activity animations and pauses them on the Always-On display.
+When no threads are running, a pending question or approval keeps its attention icon visible.
+Once all work finishes, the Dynamic Island clears and the final card remains on the Lock Screen
+for 15 minutes, with green checks for completed threads and a red icon for failed threads.
+
 Pull down on Agent Threads to refresh cloud updates and reconnect active environments.
 Refresh finishes within 15 seconds and shows a result above the list. If an environment
 cannot be reached, the result names it and keeps your available threads visible. You can
