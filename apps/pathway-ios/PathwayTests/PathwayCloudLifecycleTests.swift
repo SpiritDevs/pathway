@@ -235,6 +235,41 @@ import Testing
         #expect(model.entities(kind: "test", companyID: "company").isEmpty)
     }
 
+    @Test func optimisticLifecyclePartitionsSurviveDiscoveryAndRollbackToLatestState() async throws {
+        let client = ControlledCloudClient()
+        let model = PathwayCloudModel(client: client)
+        await model.received(companies: [company()])
+        var bootstrap = client.bootstrapEvents.makeAsyncIterator()
+        var drains = client.changeEvents.makeAsyncIterator()
+        var shell = makeAgentThread(pinnedAt: "2026-01-01T00:00:00Z").shell
+        func threadChange(version: Int) throws -> PathwaySyncChange {
+            let encoded = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(shell))
+            return .init(version: version, entityKind: "agentThread", entityId: shell.id, changeKind: "upsert",
+                payload: .object(["environmentId": .string("environment-1"), "shell": encoded, "updatedAt": .number(Double(version))]))
+        }
+        try #require(await bootstrap.next()).resume(page(epoch: 1, entities: [try threadChange(version: 10)]))
+        await observed { model.activeThreads.count == 1 }
+        let thread = try #require(model.threads.first)
+        let mutation = model.beginThreadAction(.settle, thread: thread)
+        #expect(model.activeThreads.isEmpty)
+        #expect(model.settledThreads.map(\.id) == [thread.id])
+        shell.title = "Remote rename"
+        model.received(head: .init(version: 11, authorizationEpoch: 1), companyId: "company")
+        try #require(await drains.next()).resume(.init(tag: "Changes", changes: [try threadChange(version: 11)],
+            cursor: 11, hasMore: false, latestVersion: 11, authorizationEpoch: 1))
+        await observed { model.threads.first?.shell.title == "Remote rename" }
+        #expect(model.activeThreads.isEmpty)
+        model.rollbackThreadAction(mutation)
+        #expect(model.activeThreads.first?.shell.title == "Remote rename")
+        #expect(model.settledThreads.isEmpty)
+        let deletion = model.beginThreadAction(.delete, thread: thread)
+        #expect(model.threads.isEmpty)
+        #expect(model.threadForNavigation(id: thread.id) != nil)
+        model.rollbackThreadAction(deletion)
+        #expect(model.activeThreads.count == 1)
+        await model.stop()
+    }
+
     private func company(membership: String = "member", name: String = "Workspace") -> PathwayCompany {
         .init(id: "company", membershipId: membership, name: name, workspaceKind: "personal", issueKeyPrefix: "P", lifecycleState: "active", syncVersion: 10, isOwner: true)
     }

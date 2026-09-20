@@ -35,6 +35,7 @@ final class PathwayCloudModel {
     private(set) var environments: [PathwayCompanyEnvironment] = []
     private(set) var projects: [PathwayCompanyProject] = []
     private(set) var environmentBindings: [PathwayCompanyEnvironmentBinding] = []
+    private var optimisticThreadActions: [PathwayOptimisticThreadAction] = []
     private(set) var threads: [PathwayAgentThread] = []
     private(set) var activeThreads: [PathwayAgentThread] = []
     private(set) var snoozedThreads: [PathwayAgentThread] = []
@@ -448,6 +449,7 @@ final class PathwayCloudModel {
         entitiesByCompany = [:]
         decodedDiscovery = [:]
         discoveryThreads = []
+        optimisticThreadActions = []
         cursorByCompany = [:]
         latestVersionByCompany = [:]
         authorizationEpochByCompany = [:]
@@ -878,7 +880,7 @@ extension PathwayCloudModel {
                 }
             }
             discoveryThreads = nextThreads
-            threads = nextThreads
+            reconcileThreadActions(with: nextThreads)
             rebuildThreadPartition()
             threadQueue.retry()
         }
@@ -910,9 +912,50 @@ extension PathwayCloudModel {
         }
     }
 
+    @discardableResult
+    func beginThreadAction(_ action: PathwayThreadAction, thread: PathwayAgentThread) -> UUID {
+        let mutation = PathwayOptimisticThreadAction(threadID: thread.id, action: action, date: Date(),
+            baseline: discoveryThreads.first { $0.id == thread.id } ?? thread)
+        if action != .regenerateTitle { optimisticThreadActions.append(mutation) }
+        rebuildThreadPartition()
+        return mutation.id
+    }
+
+    func rollbackThreadAction(_ id: UUID) {
+        optimisticThreadActions.removeAll { $0.id == id }
+        rebuildThreadPartition()
+    }
+
+    func reconcileThreadActions(with confirmed: [PathwayAgentThread]) {
+        let byID = Dictionary(uniqueKeysWithValues: confirmed.map { ($0.id, $0) })
+        // A later reflected action also acknowledges preceding actions on that thread.
+        // This handles a settle followed by reopen when discovery skips the settled snapshot.
+        var acknowledged: [String: Int] = [:]
+        for (index, mutation) in optimisticThreadActions.enumerated() {
+            guard let thread = byID[mutation.threadID] else {
+                acknowledged[mutation.threadID] = index
+                continue
+            }
+            if thread != mutation.baseline && mutation.isReflected(in: thread) {
+                acknowledged[mutation.threadID] = index
+            }
+        }
+        optimisticThreadActions = optimisticThreadActions.enumerated().compactMap { index, mutation in
+            index <= (acknowledged[mutation.threadID] ?? -1) ? nil : mutation
+        }
+    }
+
+    func threadForNavigation(id: String) -> PathwayAgentThread? {
+        threads.first { $0.id == id } ?? discoveryThreads.first { $0.id == id }
+    }
+
+    func optimisticThread(_ thread: PathwayAgentThread) -> PathwayAgentThread {
+        optimisticThreadActions.filter { $0.threadID == thread.id }.reduce(thread) { $1.applying(to: $0) }
+    }
+
     private func rebuildThreadPartition() {
         let partition = PathwayThreadLifecyclePartition(
-            threads: threads,
+            threads: discoveryThreads.map { optimisticThread($0) },
             now: Date(),
             changeRequestStates: changeRequestStatuses.compactMapValues(\.state),
             autoSettleAfterDays: PathwayGeneralPreferences.shared.autoSettleDays == 0 ? nil : PathwayGeneralPreferences.shared.autoSettleDays

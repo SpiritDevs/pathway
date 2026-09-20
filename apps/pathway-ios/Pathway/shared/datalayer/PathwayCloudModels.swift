@@ -117,8 +117,8 @@ struct PathwayPullRequestAttachment: Codable, Equatable, Sendable {
 struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     var allowanceHold: String? = nil
     let id: String
-    let projectId: String?
-    let title: String
+    var projectId: String?
+    var title: String
     let providerInstanceId: String
     let modelSelection: PathwayModelSelection
     let runtimeMode: String
@@ -130,11 +130,11 @@ struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let latestRunRequestedAt: String?
     let latestRunStartedAt: String?
     let latestRunCompletedAt: String?
-    let activeRunId: String?
-    let activityRunStatus: String?
-    let status: String
+    var activeRunId: String?
+    var activityRunStatus: String?
+    var status: String
     let lastError: String?
-    let pendingRuntimeRequest: PathwayRuntimeRequestSummary?
+    var pendingRuntimeRequest: PathwayRuntimeRequestSummary?
     let latestVisibleMessage: PathwayLatestMessageSummary?
     let latestUserMessageAt: String?
     let attachedPullRequest: PathwayPullRequestAttachment?
@@ -148,15 +148,15 @@ struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let visibleItemCount: Int
     let createdAt: String
     let updatedAt: String
-    let archivedAt: String?
-    let settledOverride: String?
-    let settledAt: String?
-    let snoozedUntil: String?
-    let snoozedAt: String?
-    let pinnedAt: String?
-    let pinOrderKey: String?
+    var archivedAt: String?
+    var settledOverride: String?
+    var settledAt: String?
+    var snoozedUntil: String?
+    var snoozedAt: String?
+    var pinnedAt: String?
+    var pinOrderKey: String?
     let lastVisitedAt: String?
-    let deletedAt: String?
+    var deletedAt: String?
     var conversationPath: String? = nil
     var temporary: Bool? = nil
     var conversationCompanyId: String? = nil
@@ -170,7 +170,7 @@ struct PathwayAgentThread: Equatable, Identifiable, Sendable {
     let companyId: String
     let environmentId: String
     let cloudProjectId: String?
-    let shell: PathwayAgentThreadShell
+    var shell: PathwayAgentThreadShell
     let cloudUpdatedAt: Double
 
     var id: String { "\(companyId):\(environmentId):\(shell.id)" }
