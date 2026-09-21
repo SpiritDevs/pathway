@@ -65,7 +65,7 @@ Pathway adaptations:
 - Device support and agent access are off by default and configured per environment. Helpers are installed on demand, outside the application bundle. No Convex schema, polling or write path was added.
 - Chat's panel menu opens device setup or the picker. Settings → Integrations exposes setup, enable/disable controls and SSH hosts. There is no existing device keybinding or command-palette command to preserve.
 - Desktop uses the shared web panel. Hosted/local web clients use the authenticated environment proxy; narrow layouts retain the flat stream fallback. React Native does not gain a native Three.js panel in this change; it retains the shared typed protocol and can control the same environment through agents.
-- Provider adapters remain unchanged. Codex, Claude, Cursor, Grok and OpenCode use Pathway's common MCP endpoint. The open result gives an absolute `agent-device` launcher and host/thread-pinned arguments rather than relying on each provider's shell PATH.
+- Claude's read-only allowlist includes device listing and screenshots; other provider adapters remain unchanged. Codex, Claude, Cursor, Grok and OpenCode use Pathway's common MCP endpoint. The open result gives an absolute `agent-device` launcher and host/thread-pinned arguments rather than relying on each provider's shell PATH.
 - Agent-opened sessions reveal a panel tab after the initial subscription snapshot. Closing a tab does not resurrect it on unrelated state updates. Closing a session from another client removes its tab. Power-off remains a separate action.
 - Pathway's existing browser mini-player remains browser-specific. Devices use the right panel; no unsupported floating-device button is shown.
 
