@@ -50,7 +50,7 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
     expect(resolved?.threadId).toBe(threadId);
     expect(resolved?.projectId).toBe(projectId);
     expect(resolved?.capabilities).toEqual(
-      new Set(["preview", "orchestration", "worktree", "email"]),
+      new Set(["preview", "orchestration", "worktree", "email", "device"]),
     );
 
     yield* registry.revokeThread(threadId);
