@@ -1,3 +1,4 @@
+import { commandReadinessLayer, rendererShellReadinessRouteLayer } from "./httpStartupReadiness.ts";
 import * as StorageManagement from "./storage/StorageService.ts";
 import { EnvironmentHttpApi } from "@spiritdevs/contracts";
 import * as Duration from "effect/Duration";
@@ -590,14 +591,6 @@ const RuntimeDependenciesLive = RuntimeCoreWithEmailReactorLive.pipe(
   Layer.provide(NetService.layer),
 );
 
-const commandReadinessLayer = HttpRouter.middleware(
-  (httpEffect) =>
-    Effect.flatMap(ServerRuntimeStartup.ServerRuntimeStartup, (startup) =>
-      startup.awaitCommandReady.pipe(Effect.orDie, Effect.andThen(httpEffect)),
-    ),
-  { global: true },
-);
-
 const PullRequestServiceLive = PullRequestService.layer.pipe(
   // One registry entry per supported host; the service only knows the registry.
   Layer.provide(PullRequestProviderRegistry.layer),
@@ -618,27 +611,30 @@ const previewAutomationBrokerLayer = Layer.effectDiscard(registerPreviewAutomati
 
 export const makeRoutesLayer = Layer.mergeAll(
   Layer.mergeAll(
-    HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
-      Layer.provide(authHttpApiLayer),
-      Layer.provide(connectHttpApiLayer),
-      Layer.provide(orchestrationHttpApiLayer),
-      Layer.provide(pullRequestHttpApiLayer),
-      Layer.provide(projectHttpApiLayer),
-      Layer.provide(serverEnvironmentHttpApiLayer),
-      Layer.provide(environmentAuthenticatedAuthLayer),
+    Layer.mergeAll(
+      HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
+        Layer.provide(authHttpApiLayer),
+        Layer.provide(connectHttpApiLayer),
+        Layer.provide(orchestrationHttpApiLayer),
+        Layer.provide(pullRequestHttpApiLayer),
+        Layer.provide(projectHttpApiLayer),
+        Layer.provide(serverEnvironmentHttpApiLayer),
+        Layer.provide(environmentAuthenticatedAuthLayer),
+      ),
+      otlpTracesProxyRouteLayer,
+      // #region DEBUG
+      cloudSyncDebugRouteLayer,
+      // #endregion DEBUG
+      assetRouteLayer,
+      attachmentUploadRouteLayer,
+      websocketRpcRouteLayer,
     ),
-    otlpTracesProxyRouteLayer,
-    // #region DEBUG
-    cloudSyncDebugRouteLayer,
-    // #endregion DEBUG
-    assetRouteLayer,
-    attachmentUploadRouteLayer,
-    staticAndDevRouteLayer,
-    websocketRpcRouteLayer,
-  ),
-  // The MCP session registry is provided globally (shared with V2 provider
-  // sessions) rather than inline here.
-  McpHttpServer.layerWithSharedEmailPersistence,
+    // The MCP session registry is provided globally (shared with V2 provider
+    // sessions) rather than inline here.
+    McpHttpServer.layerWithSharedEmailPersistence,
+  ).pipe(Layer.provide(commandReadinessLayer)),
+  staticAndDevRouteLayer,
+  rendererShellReadinessRouteLayer,
 ).pipe(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
@@ -646,7 +642,6 @@ export const makeRoutesLayer = Layer.mergeAll(
   Layer.provide(RemoteBrowser.layer),
   Layer.provide(previewAutomationBrokerLayer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
-  Layer.provide(commandReadinessLayer),
   Layer.provide(browserApiCorsLayer),
   Layer.provide(httpCompressionLayer),
 );

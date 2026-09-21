@@ -454,6 +454,33 @@ describe("DesktopWindow", () => {
     }),
   );
 
+  for (const concurrent of [false, true]) {
+    it.effect(
+      `creates one renderer window when readiness signals are ${concurrent ? "concurrent" : "sequential"}`,
+      () =>
+        Effect.gen(function* () {
+          const fakeWindow = makeFakeBrowserWindow();
+          const createCount = yield* Ref.make(0);
+          const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+          const layer = makeTestLayer({ window: fakeWindow.window, createCount, mainWindow });
+          yield* Effect.gen(function* () {
+            const desktopWindow = yield* DesktopWindow.DesktopWindow;
+            const url = new URL("http://127.0.0.1:3773");
+            if (!concurrent) {
+              yield* desktopWindow.handleRendererReady(url);
+              assert.equal(yield* Ref.get(createCount), 1);
+            }
+            yield* Effect.all(
+              [desktopWindow.handleRendererReady(url), desktopWindow.handleBackendReady(url)],
+              { concurrency: "unbounded" },
+            );
+            assert.equal(yield* Ref.get(createCount), 1);
+            assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["pathway-dev://app/"]);
+          }).pipe(Effect.provide(layer));
+        }),
+    );
+  }
+
   it.effect("blocks only repeated Cmd+W input before it reaches the native window menu", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();

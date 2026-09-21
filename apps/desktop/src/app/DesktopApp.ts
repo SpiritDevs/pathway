@@ -208,7 +208,8 @@ const bootstrap = Effect.gen(function* () {
 
   if (!(yield* Ref.get(state.quitting))) {
     // The backend takes seconds to become ready (login-shell PATH fix, DB
-    // migrations, startup phases) and the main window only opens once it is.
+    // migrations, startup phases). The renderer opens as soon as its routes are
+    // available, while command readiness continues independently.
     // Show a splash immediately so every boot has visible feedback; WSL-only
     // boots name the actual wait, which can be a slow first wsl.exe spawn.
     yield* desktopWindow.showConnectingSplash({

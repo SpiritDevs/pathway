@@ -5,6 +5,8 @@ import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
+export const HTTP_SHELL_READINESS_PATH = "/.well-known/pathway/shell";
+
 export const DEFAULT_HTTP_READY_PROBE_TIMEOUT_MS = 1_000;
 
 /**

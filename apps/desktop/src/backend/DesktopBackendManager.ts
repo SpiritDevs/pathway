@@ -25,6 +25,7 @@
 
 import * as Brand from "effect/Brand";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -48,7 +49,10 @@ import {
   DesktopTelemetryControlMessage,
   type DesktopTelemetryControlMessage as DesktopTelemetryControlMessageValue,
 } from "@spiritdevs/contracts";
-import { waitForHttpReady as waitForHttpReadyShared } from "@spiritdevs/shared/httpReadiness";
+import {
+  HTTP_SHELL_READINESS_PATH,
+  waitForHttpReady as waitForHttpReadyShared,
+} from "@spiritdevs/shared/httpReadiness";
 
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
@@ -225,6 +229,7 @@ interface RunBackendProcessOptions extends DesktopBackendStartConfig {
   readonly onStarted?: (pid: number) => Effect.Effect<void>;
   readonly onExitObserved?: () => Effect.Effect<void>;
   readonly onReady?: () => Effect.Effect<void>;
+  readonly onRendererReady?: () => Effect.Effect<void>;
   readonly onReadinessFailure?: (error: BackendReadinessTimeoutError) => Effect.Effect<void>;
   readonly onOutput?: (
     streamName: BackendProcessOutputStream,
@@ -289,6 +294,7 @@ export interface BackendInstanceSpec {
   // 127.0.0.1). Splitting this off from configResolve avoids races
   // between "fired onReady" and "currentConfig already advanced".
   readonly onReady?: (httpBaseUrl: URL) => Effect.Effect<void>;
+  readonly onRendererReady?: (httpBaseUrl: URL) => Effect.Effect<void>;
   readonly onShutdown?: () => Effect.Effect<void>;
   // Fired once when a fatal or bounded preflight failure has exhausted its
   // retries. Returns true when the callback changed configuration and the
@@ -366,12 +372,13 @@ const closeRun = (
 };
 
 export const waitForHttpReady = (
-  options: BackendProcessContext & { readonly timeout: Duration.Duration },
+  options: BackendProcessContext & { readonly timeout: Duration.Duration; readonly path?: string },
 ): Effect.Effect<void, BackendReadinessTimeoutError, HttpClient.HttpClient> => {
-  const readinessUrl = new URL(BACKEND_READINESS_PATH, options.httpBaseUrl);
+  const path = options.path ?? BACKEND_READINESS_PATH;
+  const readinessUrl = new URL(path, options.httpBaseUrl);
   return waitForHttpReadyShared({
     baseUrl: options.httpBaseUrl.href,
-    path: BACKEND_READINESS_PATH,
+    path,
     timeoutMs: Duration.toMillis(options.timeout),
     intervalMs: Duration.toMillis(DEFAULT_BACKEND_READINESS_INTERVAL),
     probeTimeoutMs: Duration.toMillis(DEFAULT_BACKEND_READINESS_REQUEST_TIMEOUT),
@@ -563,6 +570,24 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
       ).pipe(Effect.forkScoped),
     );
   }
+  const commandsReady = yield* Deferred.make<void>();
+  if (options.onRendererReady) {
+    const notifyRenderer = options.onRendererReady;
+    yield* waitForHttpReady({
+      executablePath: options.executablePath,
+      entryPath: options.entryPath,
+      cwd: options.cwd,
+      httpBaseUrl: options.httpBaseUrl,
+      path: HTTP_SHELL_READINESS_PATH,
+      timeout: options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
+    }).pipe(
+      Effect.as(true),
+      Effect.catchTag("BackendReadinessTimeoutError", () => Effect.succeed(false)),
+      Effect.raceFirst(Deferred.await(commandsReady).pipe(Effect.as(false))),
+      Effect.flatMap((available) => (available ? notifyRenderer() : Effect.void)),
+      Effect.forkScoped,
+    );
+  }
   // Probe readiness in a loop while the backend process is still alive
   // instead of giving up after the first budget. A slow cold boot (the
   // WSL bundle loading across /mnt/c, or a first launch right after an
@@ -579,6 +604,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
       httpBaseUrl: options.httpBaseUrl,
       timeout: options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
     }).pipe(
+      Effect.andThen(Deferred.succeed(commandsReady, undefined)),
       Effect.flatMap(() => options.onReady?.() ?? Effect.void),
       Effect.as(true),
       Effect.catchTags({
@@ -918,6 +944,19 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               ...run,
               exitObserved: true,
             })),
+          ...(spec.onRendererReady
+            ? {
+                onRendererReady: Effect.fn("desktop.backendInstance.onRendererReady")(function* () {
+                  const current = yield* Ref.get(state);
+                  if (
+                    Option.getOrUndefined(current.active)?.id !== runId ||
+                    !current.desiredRunning
+                  )
+                    return;
+                  yield* spec.onRendererReady?.(config.value.httpBaseUrl) ?? Effect.void;
+                }),
+              }
+            : {}),
           onReady: Effect.fn("desktop.backendInstance.onReady")(function* () {
             const isCurrentRun = yield* Ref.modify(state, (latest) => {
               const activeRun = Option.getOrUndefined(latest.active);

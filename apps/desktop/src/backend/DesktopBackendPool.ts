@@ -289,6 +289,14 @@ export const layer = Layer.effect(
       // logs on success, so log the failure here before swallowing it —
       // otherwise a post-readiness window-open failure vanishes silently and
       // is near-impossible to diagnose in production.
+      onRendererReady: (httpBaseUrl) =>
+        desktopWindow.handleRendererReady(httpBaseUrl).pipe(
+          Effect.catch((error) =>
+            logBackendPoolWarning("failed to open renderer during backend recovery", {
+              error: error.message,
+            }),
+          ),
+        ),
       onReady: (httpBaseUrl) =>
         desktopWindow.handleBackendReady(httpBaseUrl).pipe(
           Effect.catch((error) =>

@@ -373,3 +373,20 @@ before cleanup so a delayed job cannot retire an active environment.
 Daily instead of hourly repair removes about 96% of periodic scan frequency;
 excluding terminal rows reduces each pass further. Revocation-triggered work is
 additional but targeted. This is scan work avoided, not measured production GB.
+
+## 9. Overlap renderer loading with command recovery
+
+Static and development shell routes now respond as soon as HTTP starts. Data APIs,
+WebSocket requests, attachments and MCP routes still wait for the command recovery
+gate. The public `/.well-known/pathway/shell` endpoint reports only shell-route
+availability; it does not report authentication or command readiness.
+
+The primary desktop backend probes this endpoint alongside its existing full
+readiness probe, allowing the renderer to load while recovery continues. The full
+readiness latch, secondary/WSL environment behavior and fallback window opening
+remain intact. Window creation is serialized when the two signals arrive together.
+
+Focused route and desktop lifecycle tests cover the pending command gate, early
+renderer signal and concurrent window creation. Server and desktop package
+checks validate the shared route contract. No browser/app was launched, so this
+change establishes safe overlap but does not claim a measured startup-time saving.

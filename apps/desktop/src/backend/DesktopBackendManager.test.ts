@@ -116,6 +116,7 @@ interface MakeInstanceInput {
   readonly httpClientLayer?: Layer.Layer<HttpClient.HttpClient>;
   readonly backendOutputLog?: Partial<DesktopObservability.DesktopBackendOutputLogShape>;
   readonly onReady?: Effect.Effect<void>;
+  readonly onRendererReady?: Effect.Effect<void>;
   readonly onShutdown?: Effect.Effect<void>;
   readonly onPreflightFailed?: (
     failure: DesktopBackendManager.PreflightFailure,
@@ -174,6 +175,7 @@ function makeTestInstance(input: MakeInstanceInput) {
     id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
     label: Effect.succeed("Windows"),
     configResolve: input.configResolve ?? Effect.succeed(input.config ?? baseConfig),
+    ...(input.onRendererReady ? { onRendererReady: () => input.onRendererReady! } : {}),
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
     ...(input.onShutdown ? { onShutdown: () => input.onShutdown! } : {}),
     ...(input.onPreflightFailed ? { onPreflightFailed: input.onPreflightFailed } : {}),
@@ -183,6 +185,35 @@ function makeTestInstance(input: MakeInstanceInput) {
 }
 
 describe("DesktopBackendManager", () => {
+  it.effect("announces renderer availability without marking recovering commands ready", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rendererReady = yield* Deferred.make<void>();
+        const releaseCommands = yield* Deferred.make<void>();
+        const commandsReady = yield* Deferred.make<void>();
+        const instance = yield* makeTestInstance({
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() => Effect.succeed(makeProcess({ exitCode: Effect.never }))),
+          ),
+          httpClientLayer: httpClientLayer((request) =>
+            request.url.endsWith("/shell")
+              ? Effect.succeed(responseForRequest(request, 204))
+              : Deferred.await(releaseCommands).pipe(Effect.as(responseForRequest(request, 200))),
+          ),
+          onRendererReady: Deferred.succeed(rendererReady, undefined).pipe(Effect.asVoid),
+          onReady: Deferred.succeed(commandsReady, undefined).pipe(Effect.asVoid),
+        });
+        yield* instance.start;
+        yield* Deferred.await(rendererReady);
+        assert.isFalse((yield* instance.snapshot).ready);
+        yield* Deferred.succeed(releaseCommands, undefined);
+        yield* Deferred.await(commandsReady);
+        assert.isTrue((yield* instance.snapshot).ready);
+      }),
+    ),
+  );
+
   it.effect("spawns the backend with fd3 bootstrap and fd4 telemetry", () =>
     Effect.scoped(
       Effect.gen(function* () {
