@@ -90,7 +90,7 @@ describe("company admin function references", () => {
       membershipId: MEMBERSHIP_ID,
     });
 
-    expect(fake.client.setAuth).toHaveBeenCalledWith(fetchToken);
+    expect(fake.client.setAuth).not.toHaveBeenCalled();
     expect(fake.calls).toEqual([
       {
         kind: "mutation",

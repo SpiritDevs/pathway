@@ -8,12 +8,10 @@
  * `localStorage` key — so a layer toggled in the sidebar reaches the grid on the same tick.
  *
  * {@link useCalendarWriter} is the other half and is deliberately *not* in that hook: it opens a
- * Convex client, and a sidebar that called it would open a second websocket to do nothing with.
- * Only the page writes.
+ * writer over the shared account connection. Only the page writes.
  *
  * @module components/calendar/useCalendarSurface
  */
-import { useAuth } from "@clerk/react";
 import type { CalendarEventEntity } from "@spiritdevs/client-runtime/sync";
 import type {
   CalendarEventAttachmentId,
@@ -23,7 +21,7 @@ import type {
   IssueDate,
 } from "@spiritdevs/contracts";
 import * as Schema from "effect/Schema";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import { newCompanyDomainId } from "~/cloud/companyAdmin";
 import { makeCalendarEventsClient, type CalendarEventsClient } from "~/cloud/calendarEvents";
@@ -35,8 +33,7 @@ import {
   type CalendarEntity,
   type CalendarViewer,
 } from "~/cloud/calendarReadModel";
-import { resolveCloudSyncConvexUrl } from "~/cloud/publicConfig";
-import { makeClerkConvexTokenFetcher } from "~/cloud/syncTransportAuth";
+import { useAuthenticatedConvexClient } from "~/cloud/useAuthenticatedConvexClient";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useIssueMemberDirectory } from "../issues/issueMemberDirectory";
 import {
@@ -224,18 +221,14 @@ export function useCalendarLayers(): CalendarLayersView {
  * no single mutation target, which is the same rule every other creation flow in the app follows.
  */
 export function useCalendarWriter(viewer: CalendarViewer): CalendarWriter {
-  const { getToken, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
-  const convexUrl = resolveCloudSyncConvexUrl();
-  const getTokenRef = useRef(getToken);
-  getTokenRef.current = getToken;
-
-  const client = useMemo<CalendarEventsClient | null>(() => {
-    if (!isSignedIn || convexUrl === null) return null;
-    return makeCalendarEventsClient({
-      convexUrl,
-      fetchToken: (args) => makeClerkConvexTokenFetcher(getTokenRef.current)(args),
-    });
-  }, [convexUrl, isSignedIn]);
+  const { client: shared, url } = useAuthenticatedConvexClient();
+  const client = useMemo<CalendarEventsClient | null>(
+    () =>
+      shared && url
+        ? makeCalendarEventsClient({ convexUrl: url, client: shared, fetchToken: async () => null })
+        : null,
+    [shared, url],
+  );
 
   useEffect(() => () => void client?.close(), [client]);
 

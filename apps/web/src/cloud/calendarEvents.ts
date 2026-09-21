@@ -207,7 +207,7 @@ export function makeCalendarEventsClient(options: {
   const ownsClient = options.client === undefined;
   const client: CalendarEventsConvexClient = options.client ?? new ConvexClient(options.convexUrl);
   const fetcher = options.fetcher ?? fetch;
-  client.setAuth(options.fetchToken);
+  if (ownsClient) client.setAuth(options.fetchToken);
 
   const mutation = async (reference: FunctionReference<"mutation">, args: ConvexArgs) => {
     try {

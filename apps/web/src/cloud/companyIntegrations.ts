@@ -319,6 +319,7 @@ export function retainCompanyIntegrationsClient(client: CompanyIntegrationsClien
 }
 
 export function makeCompanyIntegrationsClient(options: {
+  readonly client?: ConvexClient;
   readonly convexUrl: string;
   readonly fetchToken: ConvexAuthTokenFetcher;
 }): CompanyIntegrationsClient {
@@ -326,26 +327,27 @@ export function makeCompanyIntegrationsClient(options: {
   const debugClientId = nextCompanyIntegrationsDebugClientId++;
   debugCompanyIntegrations("H3", "integrations-client-created", { debugClientId });
   // #endregion DEBUG
-  const client = new ConvexClient(options.convexUrl);
-  client.setAuth(async (args) => {
-    // #region DEBUG
-    const startedAt = performance.now();
-    debugCompanyIntegrations("H1", "integrations-token-fetch-started", {
-      debugClientId,
-      forceRefresh: args.forceRefreshToken,
+  const client = options.client ?? new ConvexClient(options.convexUrl);
+  if (!options.client)
+    client.setAuth(async (args) => {
+      // #region DEBUG
+      const startedAt = performance.now();
+      debugCompanyIntegrations("H1", "integrations-token-fetch-started", {
+        debugClientId,
+        forceRefresh: args.forceRefreshToken,
+      });
+      // #endregion DEBUG
+      const token = await options.fetchToken(args);
+      // #region DEBUG
+      debugCompanyIntegrations("H1", "integrations-token-fetch-finished", {
+        debugClientId,
+        forceRefresh: args.forceRefreshToken,
+        hasToken: token !== null && token !== undefined,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+      // #endregion DEBUG
+      return token;
     });
-    // #endregion DEBUG
-    const token = await options.fetchToken(args);
-    // #region DEBUG
-    debugCompanyIntegrations("H1", "integrations-token-fetch-finished", {
-      debugClientId,
-      forceRefresh: args.forceRefreshToken,
-      hasToken: token !== null && token !== undefined,
-      durationMs: Math.round(performance.now() - startedAt),
-    });
-    // #endregion DEBUG
-    return token;
-  });
   const query = <R>(reference: FunctionReference<"query">, args: Args, operation: string) => {
     // #region DEBUG
     const startedAt = performance.now();
@@ -444,7 +446,7 @@ export function makeCompanyIntegrationsClient(options: {
       // #region DEBUG
       debugCompanyIntegrations("H3", "integrations-client-closed", { debugClientId });
       // #endregion DEBUG
-      return client.close();
+      return options.client ? Promise.resolve() : client.close();
     },
   };
 }

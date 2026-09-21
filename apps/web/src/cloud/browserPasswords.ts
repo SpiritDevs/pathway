@@ -1,9 +1,6 @@
-import { useAuth } from "@clerk/react";
-import { ConvexClient } from "convex/browser";
+import type { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
-import { useEffect, useRef, useState } from "react";
-import { resolveCloudSyncConvexUrl } from "./publicConfig";
-import { makeClerkConvexTokenFetcher } from "./syncTransportAuth";
+import { useAuthenticatedConvexClient } from "./useAuthenticatedConvexClient";
 
 export interface BrowserPasswordMetadata {
   id: string;
@@ -42,25 +39,5 @@ export const browserPasswordFunctions = {
 
 /** A personal account connection. Passwords never enter the replicated company store. */
 export function useBrowserPasswordClient(): ConvexClient | null {
-  const { getToken, isSignedIn, userId } = useAuth({ treatPendingAsSignedOut: false });
-  const getTokenRef = useRef(getToken);
-  getTokenRef.current = getToken;
-  const url = resolveCloudSyncConvexUrl();
-  const [connection, setConnection] = useState<{
-    client: ConvexClient;
-    userId: string;
-    url: string;
-  }>();
-  useEffect(() => {
-    if (!isSignedIn || !userId || !url) return;
-    const client = new ConvexClient(url);
-    client.setAuth((options) => makeClerkConvexTokenFetcher(getTokenRef.current)(options));
-    setConnection({ client, userId, url });
-    return () => {
-      void client.close();
-    };
-  }, [isSignedIn, userId, url]);
-  return isSignedIn && userId === connection?.userId && url === connection.url
-    ? connection.client
-    : null;
+  return useAuthenticatedConvexClient().client;
 }

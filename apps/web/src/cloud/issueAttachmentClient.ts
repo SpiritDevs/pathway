@@ -1,5 +1,4 @@
 /** Browser client for Convex-authorized, direct-to-UploadThing issue attachments. */
-import { useAuth } from "@clerk/react";
 import type { ChatAttachmentId, IssueId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { ConvexClient } from "convex/browser";
@@ -7,8 +6,7 @@ import { makeFunctionReference, type FunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
 import { useEffect, useMemo, useState } from "react";
 
-import { resolveCloudSyncConvexUrl } from "./publicConfig";
-import { makeClerkConvexTokenFetcher } from "./syncTransportAuth";
+import { useAuthenticatedConvexClient } from "./useAuthenticatedConvexClient";
 import type { ConvexArgs, ConvexAuthTokenFetcher } from "./syncTransport";
 
 export interface IssueAttachmentConvexClient {
@@ -127,7 +125,7 @@ export function makeIssueAttachmentClient(options: {
   const ownsClient = options.client === undefined;
   const client = options.client ?? new ConvexClient(options.convexUrl);
   const fetcher = options.fetcher ?? fetch;
-  client.setAuth(options.fetchToken);
+  if (ownsClient) client.setAuth(options.fetchToken);
   const call = async <A>(run: () => Promise<unknown>): Promise<A> => {
     try {
       return (await run()) as A;
@@ -187,24 +185,24 @@ export interface ReplicaIssueAttachmentCloud {
   readonly isOnline: boolean;
 }
 
-/** One short-lived Convex client per open issue sheet; legacy sheets create none. */
+/** Issue sheets borrow the account connection; legacy sheets expose no cloud writer. */
 export function useReplicaIssueAttachmentCloud(
   companyId: CompanyId | null,
 ): ReplicaIssueAttachmentCloud | null {
-  const { getToken } = useAuth();
-  const convexUrl = resolveCloudSyncConvexUrl();
+  const { client: shared, url: convexUrl } = useAuthenticatedConvexClient();
   const [isOnline, setIsOnline] = useState(
     () => typeof navigator === "undefined" || navigator.onLine,
   );
   const client = useMemo(
     () =>
-      companyId === null || convexUrl === null
+      companyId === null || convexUrl === null || shared === null
         ? null
         : makeIssueAttachmentClient({
             convexUrl,
-            fetchToken: makeClerkConvexTokenFetcher(getToken),
+            client: shared,
+            fetchToken: async () => null,
           }),
-    [companyId, convexUrl, getToken],
+    [companyId, convexUrl, shared],
   );
 
   useEffect(() => () => void client?.close(), [client]);

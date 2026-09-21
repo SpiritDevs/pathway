@@ -1,40 +1,14 @@
-import { useAuth } from "@clerk/react";
-import { ConvexClient } from "convex/browser";
+import type { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import type { Value } from "convex/values";
-import { useEffect, useRef, useState } from "react";
-import { resolveCloudSyncConvexUrl } from "../../cloud/publicConfig";
-import { makeClerkConvexTokenFetcher } from "../../cloud/syncTransportAuth";
+import { useEffect, useState } from "react";
+import { useAuthenticatedConvexClient } from "../../cloud/useAuthenticatedConvexClient";
 
 export function useBusinessToolsCloud() {
-  const { getToken, isSignedIn, userId } = useAuth({ treatPendingAsSignedOut: false });
-  const getTokenRef = useRef(getToken);
-  getTokenRef.current = getToken;
-  const url = resolveCloudSyncConvexUrl();
-  const [connection, setConnection] = useState<{
-    client: ConvexClient;
-    accountID: string;
-    url: string;
-  } | null>(null);
-  useEffect(() => {
-    if (!url || !isSignedIn || !userId) {
-      setConnection(null);
-      return;
-    }
-    const client = new ConvexClient(url);
-    client.setAuth(makeClerkConvexTokenFetcher((options) => getTokenRef.current(options)));
-    setConnection({ client, accountID: userId, url });
-    return () => {
-      void client.close();
-    };
-  }, [url, isSignedIn, userId]);
-  const client =
-    isSignedIn && connection?.accountID === userId && connection.url === url
-      ? connection.client
-      : null;
+  const { client, accountID } = useAuthenticatedConvexClient();
   return {
     client,
-    accountID: userId ?? "",
+    accountID,
     request: async (name: string, args: Record<string, Value>) => {
       if (!client) throw new Error("Sign in to your workspace to save changes.");
       if (!navigator.onLine) throw new Error("You are offline. Reconnect and retry this change.");
@@ -64,18 +38,23 @@ export function useBusinessToolsQuery<Result>(
   args: Record<string, Value> | null,
 ) {
   const key = `${scope}:${name}:${JSON.stringify(args)}`;
-  const [state, setState] = useState<{ key: string; value?: Result; error?: string }>({ key });
+  const [state, setState] = useState<{
+    key: string;
+    client: ConvexClient | null;
+    value?: Result;
+    error?: string;
+  }>({ key, client });
   useEffect(() => {
-    setState({ key });
+    setState({ key, client });
     if (!client || !args) return;
     return client.onUpdate(
       makeFunctionReference<"query">(name),
       args,
-      (value: Result) => setState({ key, value }),
-      (error: Error) => setState({ key, error: error.message }),
+      (value: Result) => setState({ key, client, value }),
+      (error: Error) => setState({ key, client, error: error.message }),
     );
     // Serialized args define the subscription; callers need no object memoization.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, key]);
-  return state.key === key ? state : { key };
+  return state.key === key && state.client === client ? state : { key, client };
 }

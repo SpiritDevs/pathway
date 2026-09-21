@@ -1,14 +1,11 @@
-import { useAuth } from "@clerk/react";
 import type { CalendarEventId } from "@spiritdevs/contracts";
 import { CALENDAR_ALERT_WINDOW_MS } from "@spiritdevs/contracts/calendarAlerts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useCalendarAlertCompanyIds } from "~/cloud/calendarReadModel";
-import { resolveCloudSyncConvexUrl } from "~/cloud/publicConfig";
-import { makeClerkConvexTokenFetcher } from "~/cloud/syncTransportAuth";
+import { useAuthenticatedConvexClient } from "~/cloud/useAuthenticatedConvexClient";
 
 const DELIVERED_KEY = "pathway:calendar-alerts:delivered:v1";
 const ALERTS_ENABLED_EVENT = "pathway:calendar-alerts-enabled";
@@ -98,20 +95,15 @@ export function calendarAlertWindow(now: number) {
 
 function useCalendarAlertEvents(): ReadonlyArray<CalendarAlertEvent> {
   const companyIds = useCalendarAlertCompanyIds();
-  const { getToken, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
-  const convexUrl = resolveCloudSyncConvexUrl();
-  const getTokenRef = useRef(getToken);
-  getTokenRef.current = getToken;
+  const { client } = useAuthenticatedConvexClient();
   const [events, setEvents] = useState<ReadonlyArray<CalendarAlertEvent>>([]);
 
   useEffect(() => {
-    if (!isSignedIn || convexUrl === null || companyIds.length === 0) {
+    if (!client || companyIds.length === 0) {
       setEvents([]);
       return;
     }
     setEvents([]);
-    const client = new ConvexClient(convexUrl);
-    client.setAuth((args) => makeClerkConvexTokenFetcher(getTokenRef.current)(args));
     const byCompany = new Map<CompanyId, ReadonlyArray<CalendarAlertEvent>>();
     const publish = () => setEvents([...byCompany.values()].flat());
     let unsubscribes: Array<() => void> = [];
@@ -149,9 +141,8 @@ function useCalendarAlertEvents(): ReadonlyArray<CalendarAlertEvent> {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", refresh);
       for (const unsubscribe of unsubscribes) unsubscribe();
-      void client.close();
     };
-  }, [companyIds, convexUrl, isSignedIn]);
+  }, [companyIds, client]);
 
   return events;
 }

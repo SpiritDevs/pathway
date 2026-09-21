@@ -1,7 +1,7 @@
 import { useAuth } from "@clerk/react";
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo } from "react";
 
 import { companyListAtom } from "../../../cloud/activeCompany";
 import { makeCompanyAdminClient, type CompanyAdminClient } from "../../../cloud/companyAdmin";
@@ -9,8 +9,7 @@ import {
   companyRegistryMembershipIdsAtom,
   companyRegistryReplicasAtom,
 } from "../../../cloud/companyRegistryReplica";
-import { resolveCloudSyncConvexUrl } from "../../../cloud/publicConfig";
-import { makeClerkConvexTokenFetcher } from "../../../cloud/syncTransportAuth";
+import { useAuthenticatedConvexClient } from "../../../cloud/useAuthenticatedConvexClient";
 import {
   hasMultipleCompanies,
   organizationCompanies,
@@ -25,7 +24,7 @@ import {
 } from "./companySettings.logic";
 
 export function useCompanySettings() {
-  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const companies = useAtomValue(companyListAtom);
   const [settingsCompanyScope, setSettingsCompanyScope] = useAtom(settingsCompanyScopeAtom);
   const companyId = resolveSettingsCompanyId({
@@ -46,16 +45,14 @@ export function useCompanySettings() {
     () => companyDirectoryFromReplicaValues(replica?.view.values() ?? []),
     [replica],
   );
-  const convexUrl = resolveCloudSyncConvexUrl();
-  const getTokenRef = useRef(getToken);
-  getTokenRef.current = getToken;
-  const admin = useMemo<CompanyAdminClient | null>(() => {
-    if (!isSignedIn || convexUrl === null) return null;
-    return makeCompanyAdminClient({
-      convexUrl,
-      fetchToken: (args) => makeClerkConvexTokenFetcher(getTokenRef.current)(args),
-    });
-  }, [convexUrl, isSignedIn]);
+  const { client: shared, url } = useAuthenticatedConvexClient();
+  const admin = useMemo<CompanyAdminClient | null>(
+    () =>
+      shared && url
+        ? makeCompanyAdminClient({ convexUrl: url, client: shared, fetchToken: async () => null })
+        : null,
+    [shared, url],
+  );
   const currentMembership = useMemo(() => {
     if (companyId === null) return null;
     const membershipId = membershipIds.get(companyId);

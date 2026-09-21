@@ -1,5 +1,4 @@
 /** Authenticated Convex writes for synchronized captured-email administration. */
-import { useAuth } from "@clerk/react";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import type { EmailMessageId, EmailTagId, TrustedEmailSenderId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
@@ -8,9 +7,8 @@ import { makeFunctionReference, type FunctionReference } from "convex/server";
 import { useEffect, useMemo } from "react";
 
 import { newCompanyDomainId } from "./companyAdmin";
-import { resolveCloudSyncConvexUrl } from "./publicConfig";
 import type { ConvexAuthTokenFetcher } from "./syncTransport";
-import { makeClerkConvexTokenFetcher } from "./syncTransportAuth";
+import { useAuthenticatedConvexClient } from "./useAuthenticatedConvexClient";
 
 type Args = Record<string, unknown>;
 const mutationReference = <Request extends Args>(name: string) =>
@@ -101,7 +99,7 @@ export function makeCapturedEmailAdminClient(options: {
 }): CapturedEmailAdminClient {
   const ownsClient = options.client === undefined;
   const client = options.client ?? new ConvexClient(options.convexUrl);
-  client.setAuth(options.fetchToken);
+  if (ownsClient) client.setAuth(options.fetchToken);
   const mutate = (reference: FunctionReference<"mutation">, args: Args) =>
     client.mutation(reference, args).then(() => undefined);
   return {
@@ -129,17 +127,17 @@ export function makeCapturedEmailAdminClient(options: {
 
 /** Null when company sync is unavailable; environment-local email actions can still use RPC. */
 export function useCapturedEmailAdmin(): CapturedEmailAdminClient | null {
-  const { getToken, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
-  const convexUrl = resolveCloudSyncConvexUrl();
+  const { client: shared, url } = useAuthenticatedConvexClient();
   const client = useMemo(
     () =>
-      convexUrl === null || !isSignedIn
-        ? null
-        : makeCapturedEmailAdminClient({
-            convexUrl,
-            fetchToken: makeClerkConvexTokenFetcher(getToken),
-          }),
-    [convexUrl, getToken, isSignedIn],
+      shared && url
+        ? makeCapturedEmailAdminClient({
+            convexUrl: url,
+            client: shared,
+            fetchToken: async () => null,
+          })
+        : null,
+    [shared, url],
   );
   useEffect(() => () => void client?.close(), [client]);
   return client;

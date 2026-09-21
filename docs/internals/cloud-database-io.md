@@ -298,3 +298,22 @@ Older clients retain their previous behavior until updated. Deploy the backend
 before the new client. Savings depend on how many events lie beyond four weeks;
 for an evenly populated year-ahead calendar this excludes about 92% of future
 event rows. This is an illustrative read-count estimate, not measured billing.
+
+## Shared feature connections
+
+React feature hooks borrow a reference-counted Convex client keyed by deployment,
+account, and Clerk session. Business tools (including orchestrators, timers and
+contacts), calendar alerts/writers/sharing, company settings/integrations,
+captured-email administration, issue attachments, and browser-password metadata
+share that connection. Convex can share identical subscriptions within it.
+
+The final consumer closes the socket. Token refresh uses a remaining consumer's
+current fetcher; account changes immediately fence old results and token sources.
+Borrowed mutation adapters neither reconfigure authentication nor close their
+owner's client. The replica transport and workers with separate reconnection
+lifecycles retain their owned connections.
+
+Tests cover shared consumers in React Strict Mode, account/session/deployment
+separation, partial unmount, token refresh, and final cleanup. N simultaneous
+feature clients now use one socket (for example, six becomes one: 83% fewer).
+Server query caching means database savings must still be measured separately.

@@ -7,7 +7,12 @@ const mocks = vi.hoisted(() => ({
   userId: "one",
 }));
 vi.mock("@clerk/react", () => ({
-  useAuth: () => ({ getToken: mocks.getToken, isSignedIn: true, userId: mocks.userId }),
+  useAuth: () => ({
+    getToken: mocks.getToken,
+    isSignedIn: true,
+    userId: mocks.userId,
+    sessionId: `session:${mocks.userId}`,
+  }),
 }));
 vi.mock("../../cloud/publicConfig", () => ({
   resolveCloudSyncConvexUrl: () => "https://example.convex.cloud",
@@ -113,7 +118,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   mocks.clients.length = 0;
 });
-it("keeps queries connected after Strict Mode cleanup and closes clients on unmount", async () => {
+it("shares queries across Strict Mode consumers, account switches and partial unmounts", async () => {
   const document = installTestDom();
   const { createRoot } = await import("react-dom/client");
   let entries: string[] | undefined;
@@ -133,11 +138,33 @@ it("keeps queries connected after Strict Mode cleanup and closes clients on unmo
       root.render(
         <StrictMode>
           <Probe />
+          <Probe />
         </StrictMode>,
       ),
     );
     expect(entries).toEqual(["recorded run"]);
     expect(mocks.clients.filter((client) => !client.closed)).toHaveLength(1);
+    const previous = [...mocks.clients];
+    mocks.userId = "two";
+    await act(async () =>
+      root.render(
+        <StrictMode>
+          <Probe />
+          <Probe />
+        </StrictMode>,
+      ),
+    );
+    expect(previous.every((client) => client.closed)).toBe(true);
+    expect(mocks.clients.filter((client) => !client.closed)).toHaveLength(1);
+    await act(async () =>
+      root.render(
+        <StrictMode>
+          <Probe />
+        </StrictMode>,
+      ),
+    );
+    expect(mocks.clients.filter((client) => !client.closed)).toHaveLength(1);
+    expect(entries).toEqual(["recorded run"]);
   } finally {
     await act(async () => root.unmount());
   }

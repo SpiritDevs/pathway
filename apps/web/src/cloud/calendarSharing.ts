@@ -4,7 +4,6 @@
  * Sharing is administered online rather than from the replica: the settings surface needs the
  * grant rows themselves, and a grantee only ever replicates the calendars they can already read.
  */
-import { useAuth } from "@clerk/react";
 import type { Calendar, CalendarGrantId, CalendarId, CalendarSharing } from "@spiritdevs/contracts";
 import type { CompanyId, MembershipId, TeamId } from "@spiritdevs/contracts/company";
 import { ConvexClient } from "convex/browser";
@@ -12,9 +11,8 @@ import { makeFunctionReference, type FunctionReference } from "convex/server";
 import { useEffect, useMemo } from "react";
 
 import { mapCompanyAdminError, newCompanyDomainId } from "./companyAdmin";
-import { resolveCloudSyncConvexUrl } from "./publicConfig";
 import type { ConvexAuthTokenFetcher } from "./syncTransport";
-import { makeClerkConvexTokenFetcher } from "./syncTransportAuth";
+import { useAuthenticatedConvexClient } from "./useAuthenticatedConvexClient";
 
 type Args = Record<string, unknown>;
 
@@ -105,7 +103,7 @@ export function makeCalendarSharingClient(options: {
 }): CalendarSharingClient {
   const ownsClient = options.client === undefined;
   const client: CalendarSharingConvexClient = options.client ?? new ConvexClient(options.convexUrl);
-  client.setAuth(options.fetchToken);
+  if (ownsClient) client.setAuth(options.fetchToken);
 
   const call = async <A>(operation: () => Promise<unknown>): Promise<A> => {
     try {
@@ -139,17 +137,17 @@ export function makeCalendarSharingClient(options: {
 
 /** Null until the member is signed in to a deployment that has company sync configured. */
 export function useCalendarSharingClient(): CalendarSharingClient | null {
-  const { getToken, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
-  const convexUrl = resolveCloudSyncConvexUrl();
+  const { client: shared, url } = useAuthenticatedConvexClient();
   const client = useMemo(
     () =>
-      convexUrl === null || !isSignedIn
-        ? null
-        : makeCalendarSharingClient({
-            convexUrl,
-            fetchToken: makeClerkConvexTokenFetcher(getToken),
-          }),
-    [convexUrl, getToken, isSignedIn],
+      shared && url
+        ? makeCalendarSharingClient({
+            convexUrl: url,
+            client: shared,
+            fetchToken: async () => null,
+          })
+        : null,
+    [shared, url],
   );
   useEffect(() => () => void client?.close(), [client]);
   return client;

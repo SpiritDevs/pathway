@@ -1,28 +1,24 @@
-import { useAuth } from "@clerk/react";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo } from "react";
 
 import {
   makeCompanyIntegrationsClient,
   retainCompanyIntegrationsClient,
   type CompanyIntegrationsClient,
 } from "./companyIntegrations";
-import { resolveCloudSyncConvexUrl } from "./publicConfig";
-import { makeClerkConvexTokenFetcher } from "./syncTransportAuth";
+import { useAuthenticatedConvexClient } from "./useAuthenticatedConvexClient";
 
 export function useCompanyIntegrationsClient(): CompanyIntegrationsClient | null {
-  const { getToken, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
-  const getTokenRef = useRef(getToken);
-  getTokenRef.current = getToken;
-  const convexUrl = resolveCloudSyncConvexUrl();
+  const { client: shared, url } = useAuthenticatedConvexClient();
   const client = useMemo(
     () =>
-      !isSignedIn || convexUrl === null
-        ? null
-        : makeCompanyIntegrationsClient({
-            convexUrl,
-            fetchToken: (args) => makeClerkConvexTokenFetcher(getTokenRef.current)(args),
-          }),
-    [convexUrl, isSignedIn],
+      shared && url
+        ? makeCompanyIntegrationsClient({
+            convexUrl: url,
+            client: shared,
+            fetchToken: async () => null,
+          })
+        : null,
+    [shared, url],
   );
   useEffect(
     () => (client === null ? undefined : retainCompanyIntegrationsClient(client)),

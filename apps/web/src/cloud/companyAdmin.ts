@@ -305,7 +305,7 @@ export function makeCompanyAdminClient(options: {
 }): CompanyAdminClient {
   const ownsClient = options.client === undefined;
   const client: CompanyAdminConvexClient = options.client ?? new ConvexClient(options.convexUrl);
-  client.setAuth(options.fetchToken);
+  if (ownsClient) client.setAuth(options.fetchToken);
 
   const call = async <A>(operation: () => Promise<unknown>): Promise<A> => {
     try {
