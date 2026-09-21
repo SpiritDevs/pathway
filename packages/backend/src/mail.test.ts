@@ -1,3 +1,4 @@
+import { patchMailAccount, withMailAccountRuntime } from "../convex/lib/mailAccountRuntime.ts";
 // @effect-diagnostics globalDate:off -- Test fixtures exercise deterministic Convex lease time.
 import { convexTest } from "convex-test";
 import { makeFunctionReference } from "convex/server";
@@ -7,6 +8,7 @@ import { makeMailRuntime, type MailRpc } from "../../../infra/relay/src/mail/run
 import { describe, expect, it, vi, afterEach } from "vite-plus/test";
 import { api } from "../convex/_generated/api.js";
 import schema from "../convex/schema.ts";
+import { listAccounts } from "../convex/mail.ts";
 import { claim as claimMailJob } from "../convex/mailJobs.ts";
 import { functionHandler, measureDatabaseReads } from "./testDatabaseReads.ts";
 const RELAY = "https://relay.example.test";
@@ -156,7 +158,12 @@ async function seedAccountGroup(t: Harness, count: number) {
     const ids = [first];
     for (let index = 1; index < count; index++) {
       const id = `account-${index}`;
-      await ctx.db.insert("mailAccounts", { ...account, id, email: `owner-${index}@gmail.test` });
+      const recordId = await ctx.db.insert("mailAccounts", {
+        ...account,
+        id,
+        email: `owner-${index}@gmail.test`,
+      });
+      await patchMailAccount(ctx, (await ctx.db.get(recordId))!, {});
       await ctx.db.insert("mailCredentials", {
         accountId: id,
         encryptedCredentials: "encrypted-only",
@@ -183,6 +190,72 @@ async function measuredMailClaim(t: Harness, environmentId = "primary") {
 }
 afterEach(() => vi.useRealTimers());
 describe("connected mail", () => {
+  it("keeps lease and auth bookkeeping out of account reads and preserves legacy fences", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const t = harness();
+    const accountId = await seed(t);
+    const cold = await t.run((ctx) => ctx.db.query("mailAccounts").first());
+    const claim = await relay(t).mutation(api.mailRelay.claimSync, {
+      accountId,
+      leaseToken: "sync",
+    });
+    expect(claim?.generation).toBe(1);
+    vi.setSystemTime(Date.now() + 30_000);
+    await relay(t).mutation(api.mailRelay.renewSync, {
+      accountId,
+      leaseToken: "sync",
+      generation: claim!.generation,
+    });
+    await relay(t).mutation(api.mailRelay.sweepUnavailableAccounts, {});
+    expect(await t.run((ctx) => ctx.db.get(cold!._id))).toEqual(cold);
+    const reads = await human(t).run(async (ctx) => {
+      const meter = measureDatabaseReads(ctx.db);
+      const accounts = await functionHandler(listAccounts)(
+        { ...ctx, db: meter.db },
+        { companyId: COMPANY },
+      );
+      return { accounts, runtime: meter.documents.get("mailAccountRuntime") ?? 0 };
+    });
+    expect(reads.accounts).toHaveLength(1);
+    expect(reads.runtime).toBe(0);
+    // Recreate an unmigrated account with a live lease and durable cursor.
+    await t.run(async (ctx) => {
+      const runtime = (await ctx.db.query("mailAccountRuntime").first())!;
+      await ctx.db.delete(runtime._id);
+      await ctx.db.patch(cold!._id, {
+        runtimeMigrated: undefined,
+        generation: 7,
+        leaseToken: "legacy",
+        leaseExpiresAt: Date.now() + 120_000,
+        cursor: "legacy-cursor",
+      });
+    });
+    expect(
+      (await relay(t).query(api.mailRelay.dueAccounts, {})).map((account) => account.id),
+    ).toContain(accountId);
+    expect(
+      await relay(t).mutation(api.mailRelay.claimSync, { accountId, leaseToken: "wrong" }),
+    ).toBeNull();
+    await relay(t).mutation(api.mailRelay.renewSync, {
+      accountId,
+      leaseToken: "legacy",
+      generation: 7,
+    });
+    const migrated = await t.run((ctx) => ctx.db.query("mailAccountRuntime").first());
+    expect(migrated).toMatchObject({
+      generation: 7,
+      cursor: "legacy-cursor",
+      leaseToken: "legacy",
+    });
+    await expect(
+      relay(t).mutation(api.mailRelay.renewSync, { accountId, leaseToken: "wrong", generation: 7 }),
+    ).rejects.toThrow("lease expired");
+    await human(t).mutation(api.mail.disconnectAccount, { companyId: COMPANY, accountId });
+    expect(await relay(t).query(api.mailRelay.dueAccounts, {})).toEqual([]);
+    expect((await t.run((ctx) => ctx.db.query("mailAccountRuntime").first()))?.generation).toBe(8);
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+  });
   it.each([1, 25])(
     "avoids idle bookkeeping for %i accounts and claims new work immediately",
     async (count) => {
@@ -211,10 +284,15 @@ describe("connected mail", () => {
       expect(
         await t.run(
           async (ctx) =>
-            (await ctx.db
-              .query("mailAccounts")
-              .withIndex("by_domain_id", (q) => q.eq("id", accountId))
-              .unique())!.lastClaimAt,
+            (
+              await withMailAccountRuntime(
+                ctx,
+                (await ctx.db
+                  .query("mailAccounts")
+                  .withIndex("by_domain_id", (q) => q.eq("id", accountId))
+                  .unique())!,
+              )
+            ).lastClaimAt,
         ),
       ).toBe(Date.now());
     },
@@ -232,7 +310,7 @@ describe("connected mail", () => {
           .query("mailAccounts")
           .withIndex("by_domain_id", (q) => q.eq("id", accountId))
           .unique())!;
-        await ctx.db.patch(account._id, { lastClaimAt: 1 });
+        await patchMailAccount(ctx, account, { lastClaimAt: 1 });
         const primary = (await ctx.db
           .query("environmentRegistrations")
           .withIndex("by_environment", (q) => q.eq("environmentId", "primary"))

@@ -60,6 +60,7 @@ import type * as lib_errors from "../lib/errors.js";
 import type * as lib_identity from "../lib/identity.js";
 import type * as lib_issueApply from "../lib/issueApply.js";
 import type * as lib_mail from "../lib/mail.js";
+import type * as lib_mailAccountRuntime from "../lib/mailAccountRuntime.js";
 import type * as lib_mailSchema from "../lib/mailSchema.js";
 import type * as lib_providerAllowanceSchema from "../lib/providerAllowanceSchema.js";
 import type * as lib_publisherReconciliation from "../lib/publisherReconciliation.js";
@@ -144,6 +145,7 @@ declare const fullApi: ApiFromModules<{
   "lib/identity": typeof lib_identity;
   "lib/issueApply": typeof lib_issueApply;
   "lib/mail": typeof lib_mail;
+  "lib/mailAccountRuntime": typeof lib_mailAccountRuntime;
   "lib/mailSchema": typeof lib_mailSchema;
   "lib/providerAllowanceSchema": typeof lib_providerAllowanceSchema;
   "lib/publisherReconciliation": typeof lib_publisherReconciliation;

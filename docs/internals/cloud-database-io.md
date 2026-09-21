@@ -331,3 +331,28 @@ measured HTML-referenced initial JavaScript at 5,610,892 -> 4,068,390 raw bytes 
 1,845,324 -> 1,273,346 gzip bytes: 1.54 MB raw and 572 KB gzip saved (31% compressed).
 Neither deferred chunk appears in the initial preload list. This excludes Clerk's
 runtime network requests and is not a browser latency or desktop startup claim.
+
+## Mail account runtime isolation
+
+Sync leases/generations, provider cursors/continuations, watch scheduling, worker
+claim rotation, and authorization-check timestamps now live in
+`mailAccountRuntime`. Account authorization and mailbox-list readers continue
+reading configuration alone. User-visible sync completion/error fields remain
+on the account and publish real status changes.
+
+The runtime has indexed due, authorization, and primary/backup worker queues.
+Legacy candidates are read through migration-flag indexes and merged with the
+new queues before applying the existing fairness limits. The first write copies
+legacy state atomically; newly connected accounts start migrated, and the
+existing authorization sweep migrates idle accounts. Brain routing, reconnect,
+disconnect, lease renewal, progress publication, and scheduling all update through
+one helper. Current account/owner authorization remains authoritative.
+
+The regression proves claim, renewal, and authorization sweep leave a migrated
+account byte-for-byte unchanged, and account lists read zero runtime rows. It
+also covers a live legacy fence/cursor and disconnect generation advancement.
+This removes up to 288 daily auth-check writes per mailbox from configuration
+and all sync-lease renewal writes from that document; the compact runtime writes
+still occur. Production retry and I/O savings need post-deployment measurement.
+Rollback to an older backend requires copying current runtime fields back into
+accounts with workers stopped, to preserve cursors and fencing generations.

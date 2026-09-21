@@ -43,6 +43,26 @@ export const mailIntakeMessage = v.object({
   attachments: v.array(mailAttachment),
   deleted: v.optional(v.boolean()),
 });
+export const mailAccountRuntimeFields = {
+  lastClaimAt: v.number(),
+  lastAuthCheckAt: v.number(),
+  cursor: v.optional(v.string()),
+  continuation: v.optional(
+    v.object({
+      mode: v.union(v.literal("backfill"), v.literal("history")),
+      pageToken: v.string(),
+      baselineCursor: v.string(),
+      messageOffset: v.optional(v.number()),
+      deletedOffset: v.optional(v.number()),
+    }),
+  ),
+  watchExpiresAt: v.optional(v.number()),
+  nextSyncAt: v.number(),
+  leaseToken: v.optional(v.string()),
+  leaseExpiresAt: v.optional(v.number()),
+  generation: v.number(),
+};
+
 const scope = {
   companyId: v.id("companies"),
   ownerMembershipId: v.id("memberships"),
@@ -96,6 +116,7 @@ export const mailTables = {
   mailAccounts: defineTable({
     ...scope,
     id: v.string(),
+    runtimeMigrated: v.optional(v.boolean()),
     email: v.string(),
     /** Relay-only, nonsecret Google OAuth client id used to distinguish authorization grants. */
     oauthClientId: v.string(),
@@ -104,25 +125,10 @@ export const mailTables = {
     brain: v.optional(mailBrain),
     primaryEnvironmentId: v.optional(v.string()),
     backupEnvironmentId: v.optional(v.string()),
-    lastClaimAt: v.number(),
-    lastAuthCheckAt: v.number(),
-    cursor: v.optional(v.string()),
-    continuation: v.optional(
-      v.object({
-        mode: v.union(v.literal("backfill"), v.literal("history")),
-        pageToken: v.string(),
-        baselineCursor: v.string(),
-        messageOffset: v.optional(v.number()),
-        deletedOffset: v.optional(v.number()),
-      }),
-    ),
-    watchExpiresAt: v.optional(v.number()),
-    nextSyncAt: v.number(),
+    // Retained for legacy rows; new writes live in mailAccountRuntime.
+    ...mailAccountRuntimeFields,
     lastSyncAt: v.optional(v.number()),
     lastError: v.optional(v.string()),
-    leaseToken: v.optional(v.string()),
-    leaseExpiresAt: v.optional(v.number()),
-    generation: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -132,6 +138,33 @@ export const mailTables = {
     .index("by_owner_status", ["companyId", "ownerMembershipId", "status"])
     .index("by_due", ["status", "nextSyncAt"])
     .index("by_email", ["email"])
+    .index("by_auth_check", ["lastAuthCheckAt"])
+    .index("by_legacy", ["runtimeMigrated"])
+    .index("by_legacy_due", ["runtimeMigrated", "status", "nextSyncAt"])
+    .index("by_legacy_primary", [
+      "runtimeMigrated",
+      "companyId",
+      "primaryEnvironmentId",
+      "lastClaimAt",
+    ])
+    .index("by_legacy_backup", [
+      "runtimeMigrated",
+      "companyId",
+      "backupEnvironmentId",
+      "lastClaimAt",
+    ])
+    .index("by_primary", ["companyId", "primaryEnvironmentId", "lastClaimAt"])
+    .index("by_backup", ["companyId", "backupEnvironmentId", "lastClaimAt"]),
+  mailAccountRuntime: defineTable({
+    accountId: v.id("mailAccounts"),
+    companyId: v.id("companies"),
+    status: v.union(v.literal("active"), v.literal("reauth_required"), v.literal("disconnected")),
+    primaryEnvironmentId: v.optional(v.string()),
+    backupEnvironmentId: v.optional(v.string()),
+    ...mailAccountRuntimeFields,
+  })
+    .index("by_account", ["accountId"])
+    .index("by_due", ["status", "nextSyncAt"])
     .index("by_auth_check", ["lastAuthCheckAt"])
     .index("by_primary", ["companyId", "primaryEnvironmentId", "lastClaimAt"])
     .index("by_backup", ["companyId", "backupEnvironmentId", "lastClaimAt"]),

@@ -1,3 +1,4 @@
+import { patchMailAccount, withMailAccountRuntime } from "./mailAccountRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex provides deterministic transaction time without an Effect runtime.
 import type { MutationCtx, QueryCtx } from "../_generated/server.js";
 import type { Doc } from "../_generated/dataModel.js";
@@ -178,14 +179,15 @@ export async function queueMailBlobCleanup(
   });
 }
 export async function disconnectMailAccount(ctx: MutationCtx, account: Doc<"mailAccounts">) {
-  await ctx.db.patch(account._id, {
+  const current = await withMailAccountRuntime(ctx, account);
+  await patchMailAccount(ctx, account, {
     status: "disconnected",
     brain: undefined,
     primaryEnvironmentId: undefined,
     backupEnvironmentId: undefined,
     leaseToken: undefined,
     leaseExpiresAt: undefined,
-    generation: account.generation + 1,
+    generation: current.generation + 1,
     updatedAt: Date.now(),
   });
   const credential = await ctx.db

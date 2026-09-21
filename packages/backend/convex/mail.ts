@@ -1,3 +1,4 @@
+import { patchMailAccount } from "./lib/mailAccountRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex provides deterministic transaction time without an Effect runtime.
 /** Owner-only mailbox subscriptions and explicit user actions. */
 import { v } from "convex/values";
@@ -72,7 +73,7 @@ export const configureBrain = mutation({
     }
     if (args.brain.backupEnvironmentId === args.brain.primaryEnvironmentId)
       throw backendError("invalid-mail-brain", "Backup must be a different environment.");
-    await ctx.db.patch(account._id, {
+    await patchMailAccount(ctx, account, {
       brain: args.brain,
       primaryEnvironmentId: args.brain.primaryEnvironmentId,
       backupEnvironmentId: args.brain.backupEnvironmentId,
@@ -250,7 +251,7 @@ export const setRead = mutation({
         updatedAt: now,
       });
     const account = await mailAccount(ctx, message.accountId);
-    await ctx.db.patch(account._id, { nextSyncAt: 0 });
+    await patchMailAccount(ctx, account, { nextSyncAt: 0 });
     return null;
   },
 });
@@ -477,7 +478,7 @@ export const requestSend = mutation({
       lastError: undefined,
       updatedAt: Date.now(),
     });
-    await ctx.db.patch(account._id, { nextSyncAt: 0 });
+    await patchMailAccount(ctx, account, { nextSyncAt: 0 });
     return null;
   },
 });
@@ -551,7 +552,7 @@ export const disableBrain = mutation({
   args: { ...companyArg, accountId: v.string() },
   handler: async (ctx, args) => {
     const account = await ownedMailAccount(ctx, args.companyId, args.accountId);
-    await ctx.db.patch(account._id, {
+    await patchMailAccount(ctx, account, {
       brain: undefined,
       primaryEnvironmentId: undefined,
       backupEnvironmentId: undefined,

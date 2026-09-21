@@ -1,3 +1,9 @@
+import {
+  patchMailAccount,
+  withMailAccountRuntime,
+  dueMailAccounts,
+  mailAuthorizationCandidates,
+} from "./lib/mailAccountRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex provides deterministic transaction time without an Effect runtime.
 /** Gmail ingestion and delivery persistence, callable only by the hosted relay. */
 import { v } from "convex/values";
@@ -28,7 +34,7 @@ const continuation = v.object({
   deletedOffset: v.optional(v.number()),
 });
 async function relayAccount(ctx: QueryCtx, accountId: string) {
-  const account = await mailAccount(ctx, accountId);
+  const account = await withMailAccountRuntime(ctx, await mailAccount(ctx, accountId));
   const credentials = await ctx.db
     .query("mailCredentials")
     .withIndex("by_account", (q) => q.eq("accountId", accountId))
@@ -58,7 +64,7 @@ async function syncFence(
   args: { accountId: string; leaseToken: string; generation: number },
 ) {
   await requireRelayControlPlane(ctx);
-  const account = await mailAccount(ctx, args.accountId);
+  const account = await withMailAccountRuntime(ctx, await mailAccount(ctx, args.accountId));
   assertActive(account);
   if (!(await ownerAvailable(ctx, account)))
     throw backendError(
@@ -161,7 +167,8 @@ export const connectAccount = mutation({
       )
       .order("desc")
       .take(100);
-    const existing = matches.find((a) => a.status !== "disconnected");
+    const match = matches.find((a) => a.status !== "disconnected");
+    const existing = match ? await withMailAccountRuntime(ctx, match) : undefined;
     const id = existing?.id ?? mintDomainId(now);
     const fields = {
       email,
@@ -172,7 +179,7 @@ export const connectAccount = mutation({
       updatedAt: now,
     };
     if (existing)
-      await ctx.db.patch(existing._id, {
+      await patchMailAccount(ctx, existing, {
         ...fields,
         lastError: undefined,
         generation: existing.generation + 1,
@@ -191,6 +198,7 @@ export const connectAccount = mutation({
         lastAuthCheckAt: 0,
         createdAt: now,
       });
+    await patchMailAccount(ctx, await mailAccount(ctx, id), {});
     const credential = await ctx.db
       .query("mailCredentials")
       .withIndex("by_account", (q) => q.eq("accountId", id))
@@ -211,32 +219,30 @@ export const dueAccounts = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     await requireRelayControlPlane(ctx);
-    return await ctx.db
-      .query("mailAccounts")
-      .withIndex("by_due", (q) => q.eq("status", "active").lte("nextSyncAt", Date.now()))
-      .take(Math.min(100, Math.max(1, args.limit ?? 50)));
+    return await dueMailAccounts(ctx, Date.now(), Math.min(100, Math.max(1, args.limit ?? 50)));
   },
 });
 export const findByEmail = query({
   args: { email: v.string() },
   handler: async (ctx, args) => {
     await requireRelayControlPlane(ctx);
-    return (
+    const accounts = (
       await ctx.db
         .query("mailAccounts")
         .withIndex("by_email", (q) => q.eq("email", args.email.toLowerCase()))
         .take(100)
     ).filter((a) => a.status === "active");
+    return await Promise.all(accounts.map((account) => withMailAccountRuntime(ctx, account)));
   },
 });
 export const claimSync = mutation({
   args: { accountId: v.string(), leaseToken: v.string() },
   handler: async (ctx, args) => {
     await requireRelayControlPlane(ctx);
-    const account = await mailAccount(ctx, args.accountId);
+    const account = await withMailAccountRuntime(ctx, await mailAccount(ctx, args.accountId));
     if (await retireUnavailable(ctx, account)) return null;
     if (account.status !== "active" || (account.leaseExpiresAt ?? 0) > Date.now()) return null;
-    await ctx.db.patch(account._id, {
+    await patchMailAccount(ctx, account, {
       leaseToken: args.leaseToken,
       leaseExpiresAt: Date.now() + 120_000,
       generation: account.generation + 1,
@@ -248,7 +254,7 @@ export const renewSync = mutation({
   args: fence,
   handler: async (ctx, args) => {
     const account = await syncFence(ctx, args);
-    await ctx.db.patch(account._id, { leaseExpiresAt: Date.now() + 120_000 });
+    await patchMailAccount(ctx, account, { leaseExpiresAt: Date.now() + 120_000 });
     return true;
   },
 });
@@ -410,7 +416,7 @@ export const finishSync = mutation({
   },
   handler: async (ctx, args) => {
     const account = await syncFence(ctx, args);
-    await ctx.db.patch(account._id, {
+    await patchMailAccount(ctx, account, {
       ...(args.cursor ? { cursor: args.cursor } : {}),
       continuation: args.continuation,
       ...(args.watchExpiresAt ? { watchExpiresAt: args.watchExpiresAt } : {}),
@@ -428,7 +434,7 @@ export const failSync = mutation({
   args: { ...fence, error: v.string(), needsReauth: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const account = await syncFence(ctx, args);
-    await ctx.db.patch(account._id, {
+    await patchMailAccount(ctx, account, {
       status: args.needsReauth ? "reauth_required" : "active",
       lastError: args.error.slice(0, 500),
       nextSyncAt: Date.now() + 300_000,
@@ -906,10 +912,10 @@ export const sweepUnavailableAccounts = mutation({
   args: {},
   handler: async (ctx) => {
     await requireRelayControlPlane(ctx);
-    const accounts = await ctx.db.query("mailAccounts").withIndex("by_auth_check").take(50);
+    const accounts = await mailAuthorizationCandidates(ctx, 50);
     let retired = 0;
     for (const account of accounts) {
-      await ctx.db.patch(account._id, { lastAuthCheckAt: Date.now() });
+      await patchMailAccount(ctx, account, { lastAuthCheckAt: Date.now() });
       if (await retireUnavailable(ctx, account)) retired++;
     }
     return retired;

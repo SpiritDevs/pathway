@@ -1,3 +1,4 @@
+import { patchMailAccount, mailWorkerAccounts } from "./lib/mailAccountRuntime.ts";
 import { readEnvironmentPresence } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex provides deterministic transaction time without an Effect runtime.
 /** Fenced, renewable analysis work on the mailbox owner's selected environments. */
@@ -93,18 +94,10 @@ export const claim = mutation({
       )
       .take(100);
     if (ownRunning.some((j) => (j.leaseExpiresAt ?? 0) > now)) return null;
-    const primaryAccounts = await ctx.db
-      .query("mailAccounts")
-      .withIndex("by_primary", (q) =>
-        q.eq("companyId", actor.company._id).eq("primaryEnvironmentId", environmentId),
-      )
-      .take(ACCOUNTS_PER_CLAIM + 1);
-    const backupAccounts = await ctx.db
-      .query("mailAccounts")
-      .withIndex("by_backup", (q) =>
-        q.eq("companyId", actor.company._id).eq("backupEnvironmentId", environmentId),
-      )
-      .take(ACCOUNTS_PER_CLAIM + 1);
+    const [primaryAccounts, backupAccounts] = await Promise.all([
+      mailWorkerAccounts(ctx, actor.company._id, environmentId, "primary", ACCOUNTS_PER_CLAIM + 1),
+      mailWorkerAccounts(ctx, actor.company._id, environmentId, "backup", ACCOUNTS_PER_CLAIM + 1),
+    ]);
     // Rotate truncated groups so accounts beyond the scan window cannot starve.
     // A complete group needs a timestamp write only when it actually claims work.
     const rotations = new Set(
@@ -121,7 +114,7 @@ export const claim = mutation({
       ].map((account) => [account._id, account] as const),
     );
     for (const account of [...accounts.values()].sort((a, b) => a.lastClaimAt - b.lastClaimAt)) {
-      if (rotations.has(account._id)) await ctx.db.patch(account._id, { lastClaimAt: now });
+      if (rotations.has(account._id)) await patchMailAccount(ctx, account, { lastClaimAt: now });
       const running = await ctx.db
         .query("mailJobs")
         .withIndex("by_account_status", (q) =>
@@ -186,7 +179,7 @@ export const claim = mutation({
           )
           .unique();
         const generation = job.generation + 1;
-        if (!rotations.has(account._id)) await ctx.db.patch(account._id, { lastClaimAt: now });
+        if (!rotations.has(account._id)) await patchMailAccount(ctx, account, { lastClaimAt: now });
         await ctx.db.patch(job._id, {
           status: "running",
           generation,
