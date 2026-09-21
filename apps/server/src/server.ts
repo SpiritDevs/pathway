@@ -122,7 +122,7 @@ import * as CloudCliState from "./cloud/CliState.ts";
 import { threadQueueWorkerLayer } from "./cloud/threadQueueWorker.ts";
 import { environmentCommandClaimantLayer } from "./cloud/environmentCommandClaimant.ts";
 import { companySlackCoordinatorLayer } from "./cloud/companySlackCoordinator.ts";
-import { cloudSyncDaemonLayer } from "./cloud/syncDaemon.ts";
+import { cloudCompanyDiscoveryLayer, cloudSyncDaemonLayer } from "./cloud/syncDaemon.ts";
 import { cloudProjectPublisherLayer } from "./cloud/cloudProjectPublisher.ts";
 import { cloudAgentThreadPublisherLayer } from "./cloud/cloudAgentThreadPublisher.ts";
 import { mailBrainLayer } from "./cloud/mailBrain.ts";
@@ -793,6 +793,7 @@ export const makeServerLayer = Layer.unwrap(
     );
 
     return serverApplicationLayer.pipe(
+      Layer.provide(cloudCompanyDiscoveryLayer),
       Layer.provideMerge(runtimeServicesLive),
       Layer.provideMerge(McpSessionRegistry.layer.pipe(Layer.provide(ServerEnvironment.layer))),
       Layer.provide(activationLayer),

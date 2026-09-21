@@ -52,6 +52,7 @@ import {
 } from "@spiritdevs/client-runtime/sync";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -160,6 +161,41 @@ export const DEFAULT_SYNC_DAEMON_COMPANY_RECONCILE_INTERVAL = Duration.seconds(1
 export const DEFAULT_CLOUD_PROJECT_RECONCILE_INTERVAL = Duration.minutes(1);
 /** Bounded recovery attempts after a per-company worker returns or fails unexpectedly. */
 export const DEFAULT_CLOUD_COMPANY_WORKER_RESTARTS = 3;
+
+/** Registration discovery is shared only within one server's authenticated runtime scope. */
+export class CloudCompanyDiscovery extends Context.Service<
+  CloudCompanyDiscovery,
+  { readonly companies: Stream.Stream<ReadonlyArray<CompanyId>> }
+>()("@spiritdevs/pathway/cloud/syncDaemon/CloudCompanyDiscovery") {}
+
+const companyDiscoveryPolls = <E, R>(
+  discover: Effect.Effect<ReadonlyArray<CompanyId>, E, R>,
+  interval: Duration.Input = DEFAULT_SYNC_DAEMON_COMPANY_RECONCILE_INTERVAL,
+) =>
+  Stream.fromEffectSchedule(
+    discover.pipe(
+      Effect.map(Option.some),
+      Effect.catchCause((cause) =>
+        Cause.hasInterrupts(cause)
+          ? Effect.interrupt
+          : Effect.logWarning("Cloud company discovery failed; keeping current workers", {
+              cause,
+            }).pipe(Effect.as(Option.none<ReadonlyArray<CompanyId>>())),
+      ),
+    ),
+    Schedule.spaced(interval),
+  ).pipe(
+    Stream.filter(Option.isSome),
+    Stream.map((value) => value.value),
+  );
+
+export const makeSharedCompanyDiscovery = <E, R>(
+  discover: Effect.Effect<ReadonlyArray<CompanyId>, E, R>,
+  interval: Duration.Input = DEFAULT_SYNC_DAEMON_COMPANY_RECONCILE_INTERVAL,
+) =>
+  companyDiscoveryPolls(discover, interval).pipe(
+    Stream.share({ capacity: 1, strategy: "sliding", replay: 1 }),
+  );
 
 /** The configuration half of the gates: fixed for the life of the process. */
 export interface CloudSyncDaemonSettings {
@@ -630,6 +666,11 @@ export function superviseCloudSyncCompanies<DiscoveryError, WorkerError, R>(
           }
         });
 
+      const shared = yield* Effect.serviceOption(CloudCompanyDiscovery);
+      if (Option.isSome(shared)) {
+        return yield* Stream.runForEach(shared.value.companies, reconcile);
+      }
+
       const discoverAndReconcile = options.discover().pipe(
         Effect.flatMap(reconcile),
         Effect.catch((error) =>
@@ -653,6 +694,29 @@ export function superviseCloudSyncCompanies<DiscoveryError, WorkerError, R>(
     }),
   );
 }
+
+/** Lazy acquisition follows activation; every poll rechecks the current link through its token provider. */
+export const cloudCompanyDiscoveryLayer = Layer.effect(
+  CloudCompanyDiscovery,
+  Effect.gen(function* () {
+    const companies = yield* Stream.unwrap(
+      Effect.gen(function* () {
+        const config = yield* resolveCloudSyncConfig;
+        if (config._tag === "Disabled") return Stream.never;
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
+        const dpopKeys = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(secrets).pipe(
+          Effect.orDie,
+        );
+        const tokens = yield* makeCloudSyncTokenProvider({ environmentId, secrets, dpopKeys });
+        return companyDiscoveryPolls(
+          discoverCloudSyncCompanyIds({ convexUrl: config.settings.convexUrl, tokens }),
+        );
+      }),
+    ).pipe(Stream.share({ capacity: 1, strategy: "sliding", replay: 1 }));
+    return { companies };
+  }),
+);
 
 /** State changes reconcile immediately; the periodic snapshot retries intents after a quiet failure. */
 export function cloudProjectReconciliationStates<A>(

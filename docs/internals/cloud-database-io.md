@@ -216,3 +216,19 @@ unprepared backend rollback would leave its old readers with stale presence.
 
 Convex's [performance guidance](https://docs.convex.dev/understanding/best-practices/)
 explains why indexed ranges and smaller subscription read sets matter.
+
+## Shared company discovery
+
+All ten cloud worker supervisors consume one registration-discovery stream in
+the server's dependency scope. It polls every 15 seconds, replays the latest
+successful listing to newly attached workers, and stops when its final consumer
+leaves. Each worker retains its own company scopes and bounded restart policy.
+Failed listings preserve current workers; successful empty listings revoke them.
+The token provider reads current link credentials on each discovery call, and a
+new source starts fresh after the last consumer stops. Direct authorization
+checks outside the background supervisors still call Convex immediately.
+
+For ten enabled worker groups, shared discovery reduces the steady recurring
+calls from approximately 57,600 to 5,760 per day per environment (90%), without
+increasing the registration-revocation interval. This is a call-rate estimate,
+not a measured billing reduction. This change requires a server update only.

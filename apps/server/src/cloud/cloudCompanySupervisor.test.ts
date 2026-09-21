@@ -2,16 +2,74 @@ import { CompanyId } from "@spiritdevs/contracts/company";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
-import { superviseCloudSyncCompanies } from "./syncDaemon.ts";
+import {
+  CloudCompanyDiscovery,
+  makeSharedCompanyDiscovery,
+  superviseCloudSyncCompanies,
+} from "./syncDaemon.ts";
 
 const COMPANY_A = CompanyId.make("company-a");
 const COMPANY_B = CompanyId.make("company-b");
 const COMPANY_C = CompanyId.make("company-c");
 
 describe("superviseCloudSyncCompanies", () => {
+  it.effect(
+    "shares discovery across ten supervisors, preserves workers offline and applies revocation",
+    () =>
+      Effect.gen(function* () {
+        let calls = 0;
+        let listing: ReadonlyArray<CompanyId> | "offline" = [COMPANY_A];
+        const events = yield* Queue.unbounded<string>();
+        const companies = yield* makeSharedCompanyDiscovery(
+          Effect.suspend(() => {
+            calls++;
+            return listing === "offline" ? Effect.fail("offline") : Effect.succeed(listing);
+          }),
+        );
+        const supervisors = [];
+        for (let index = 0; index < 10; index++) {
+          supervisors.push(
+            yield* superviseCloudSyncCompanies({
+              discover: () => Effect.die("Shared workers must not run individual discovery"),
+              runCompany: (id) =>
+                Effect.acquireRelease(Queue.offer(events, `start:${index}:${id}`), () =>
+                  Queue.offer(events, `stop:${index}:${id}`),
+                ).pipe(Effect.andThen(Effect.never)),
+              workerLabel: `shared-${index}`,
+            }).pipe(Effect.provideService(CloudCompanyDiscovery, { companies }), Effect.forkScoped),
+          );
+          expect(yield* Queue.take(events)).toBe(`start:${index}:${COMPANY_A}`);
+        }
+        expect(calls).toBe(1);
+        listing = "offline";
+        yield* TestClock.adjust("15 seconds");
+        expect(calls).toBe(2);
+        expect(yield* Queue.size(events)).toBe(0);
+        listing = [];
+        yield* TestClock.adjust("15 seconds");
+        for (let index = 0; index < 10; index++)
+          expect(yield* Queue.take(events)).toContain("stop:");
+        expect(calls).toBe(3);
+        listing = [COMPANY_B];
+        yield* TestClock.adjust("15 seconds");
+        for (let index = 0; index < 10; index++)
+          expect(yield* Queue.take(events)).toContain(COMPANY_B);
+        expect(calls).toBe(4);
+        for (const fiber of supervisors) yield* Fiber.interrupt(fiber);
+        yield* TestClock.adjust("1 minute");
+        expect(calls).toBe(4);
+        listing = [COMPANY_C];
+        expect(yield* Stream.runHead(companies)).toEqual(Option.some([COMPANY_C]));
+        expect(calls).toBe(5);
+      }),
+  );
+
   it.effect("adds and removes workers while a failed listing preserves the current set", () =>
     Effect.scoped(
       Effect.gen(function* () {
