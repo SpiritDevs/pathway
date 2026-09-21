@@ -66,6 +66,11 @@ elseif(PATHWAY_ENGINE STREQUAL "cleanup")
     add_executable(${worker} cleanup/worker.cpp)
     target_include_directories(${worker} SYSTEM PRIVATE "${llama_SOURCE_DIR}/vendor/nlohmann")
     target_link_libraries(${worker} PRIVATE llama)
+    add_executable(pathway-cleanup-lookup-test EXCLUDE_FROM_ALL tests/prompt-lookup.cpp)
+    target_compile_features(pathway-cleanup-lookup-test PRIVATE cxx_std_17)
+    add_custom_target(check-dictation-lookup
+        COMMAND $<TARGET_FILE:pathway-cleanup-lookup-test>
+        DEPENDS pathway-cleanup-lookup-test)
     set(dependency_source "${llama_SOURCE_DIR}")
     set(dependency_name llama)
 else()

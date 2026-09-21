@@ -41,7 +41,7 @@ jobs:
       - name: Build and test capture host
         run: node scripts/build-dictation-host.mjs --test
       - name: Build speech and cleanup engines
-        run: node scripts/build-dictation-engines.mjs
+        run: node scripts/build-dictation-engines.mjs --test
       - name: Verify native engine protocol without weights
         run: node scripts/smoke-dictation-engines.mjs
       - name: Test model transfers and engine cancellation

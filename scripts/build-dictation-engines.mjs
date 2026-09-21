@@ -13,7 +13,7 @@ const build = NodePath.join(root, "native/dictation/build");
 const options = process.argv.slice(2);
 if (options.includes("--help")) {
   console.log(
-    "node scripts/build-dictation-engines.mjs [--cpu|--gpu] [--speech|--cleanup] [-- CMake configure arguments]",
+    "node scripts/build-dictation-engines.mjs [--cpu|--gpu] [--speech|--cleanup] [--test] [-- CMake configure arguments]",
   );
   console.log(
     "Requires CMake >=3.24 and a C++17 compiler. Mac defaults to Metal; Windows defaults to CPU. Windows --gpu requires the Vulkan SDK.",
@@ -26,7 +26,7 @@ const divider = options.indexOf("--");
 const extra = divider < 0 ? [] : options.slice(divider + 1);
 const flags = divider < 0 ? options : options.slice(0, divider);
 for (const option of flags)
-  if (!["--cpu", "--gpu", "--speech", "--cleanup"].includes(option))
+  if (!["--cpu", "--gpu", "--speech", "--cleanup", "--test"].includes(option))
     throw new Error(`Unknown option: ${option}`);
 if (flags.includes("--cpu") && flags.includes("--gpu"))
   throw new Error("Choose either --cpu or --gpu.");
@@ -71,6 +71,8 @@ for (const engine of engines) {
     "--parallel",
     String(Math.min(NodeOS.availableParallelism(), 8)),
   ]);
+  if (engine === "cleanup" && flags.includes("--test"))
+    cmake(["--build", directory, "--config", "Release", "--target", "check-dictation-lookup"]);
   await NodeFSP.cp(NodePath.join(directory, "bin"), NodePath.join(build, "engines"), {
     recursive: true,
   });

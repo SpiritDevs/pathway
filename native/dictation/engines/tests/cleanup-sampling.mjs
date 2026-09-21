@@ -13,6 +13,8 @@ const required = (name) => {
 const modelDirectory = required("--model-directory");
 const baselineDirectory = required("--baseline-directory");
 const engineDirectory = required("--engine-directory");
+const speechModel = args.includes("--speech-model") ? required("--speech-model") : "whisper-base";
+NodeAssert.ok(["whisper-base", "whisper-small", "whisper-turbo"].includes(speechModel));
 const cases = [
   ...cleanupQualityCases,
   {
@@ -35,6 +37,26 @@ const cases = [
     expected: [/microphone/, /language/, /review/i],
     absent: [],
   },
+  {
+    id: "draft-diverges-at-correction",
+    language: "en",
+    text:
+      "Please send the updated project notes to the team on Tuesday no sorry on Friday. " +
+      "Keep the current keyboard shortcut and do not change the selected language.",
+    terms: [],
+    expected: [/Friday/i, /keyboard shortcut/i, /do not change the selected language/i],
+    absent: [/Tuesday|no sorry/i],
+  },
+  {
+    id: "repeated-draft-prefix",
+    language: "en",
+    text:
+      "Keep the project notes in the first folder. Keep the project notes in the second folder too. " +
+      "Do not delete either copy.",
+    terms: [],
+    expected: [/first folder/i, /second folder/i, /Do not delete either copy/i],
+    absent: [],
+  },
 ];
 const requests = [cases, cases.toReversed()].flatMap((round) =>
   round.flatMap((item) => ["auto", item.language].map((language) => ({ item, language }))),
@@ -50,7 +72,7 @@ async function run(directory) {
   try {
     // Exclude model preparation from per-request timing, as in a warm desktop session.
     await inference.prepare({
-      modelId: "whisper-base",
+      modelId: speechModel,
       cleanup: true,
       signal: new AbortController().signal,
     });
@@ -59,6 +81,8 @@ async function run(directory) {
       const text = await inference.cleanup({ text: item.text, terms: item.terms, language });
       assertCleanupQuality(item, text);
       results.push({ text, ms: performance.now() - started });
+      if (results.length % 8 === 0)
+        console.log(`${directory}: ${results.length}/${requests.length} checks passed.`);
     }
     return results;
   } finally {

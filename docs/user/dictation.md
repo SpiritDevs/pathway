@@ -77,6 +77,10 @@ still loading, your recognized text is delivered immediately while the model get
 recordings. Once loaded, cleanup has a five-second limit so a slow pass does not leave your
 transcript waiting indefinitely.
 
+Cleanup runs after speech recognition. For the fastest delivery, turn off **Clean up
+dictation**; your dictionary corrections still apply, but the cleanup model will no
+longer remove fillers, repetitions or spoken self-corrections.
+
 Removing the selected speech model turns dictation off. Select another downloaded speech model and
 enable it again. Removing models does not delete your dictionary or history.
 

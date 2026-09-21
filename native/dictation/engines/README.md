@@ -44,6 +44,9 @@ are fetched by the build or basic smoke command. Windows CPU defaults avoid
 AVX/AVX2/FMA/F16C requirements; optimized release builds may enable those CMake
 flags for a narrower hardware target.
 
+Add `--test` to build and run the cleanup prompt-lookup checks without model
+weights. CI runs these checks alongside the protocol tests.
+
 Dependencies are fetched from immutable source archives and verified by SHA-256:
 
 | Dependency                                                                                                  | Commit                                     | Archive SHA-256                                                    |
@@ -107,6 +110,17 @@ all vocabulary tokens. If the candidate is invalid, it applies the full grammar
 and selects again. This follows llama.cpp's common sampler rejection path and
 preserves the highest-scoring valid token while avoiding a full grammar scan for
 ordinary text tokens. The grammar is advanced exactly once per accepted token.
+
+Cleanup also proposes up to eight tokens from the current transcript when the
+last three generated tokens match an unchanged passage. Qwen evaluates those
+proposals together, but its greedy sampler and JSON grammar still select every
+output token. A disagreement discards the unused proposals from the KV cache and
+continues from the model's chosen token. This follows the verification pattern in
+[llama.cpp's speculative example](https://github.com/ggml-org/llama.cpp/blob/b95502ba9aa0eb73a2f4fc8878d7fbe6a847a0b9/examples/speculative-simple/speculative-simple.cpp).
+Drafts use JSON-escaped transcript tokens without interpreting control tokens;
+they never use an earlier recording. Output, context and time limits are unchanged.
+Batch evaluation can introduce floating-point differences, so changes require
+native quality comparisons as well as the model-free lookup checks.
 
 Cleanup uses multilingual demonstrations and a trusted reminder after the
 quoted transcript. A llama.cpp grammar constrains the private model answer to a
@@ -209,12 +223,18 @@ node native/dictation/engines/tests/cleanup-sampling.mjs \
   --engine-directory native/dictation/build/engines
 ```
 
-This optional GPU test uses installed Base/Qwen models, checks 14 synthetic cases
+This optional GPU test uses installed Base/Qwen models, checks 16 synthetic cases
 in automatic and explicit languages over two rounds, and compares every result
 byte-for-byte with the baseline. It reports warm request medians separately from
-model preparation. The cases include JSON escaping, Unicode and a longer dictation.
+model preparation. Pass `--speech-model whisper-small` or `whisper-turbo` when
+using those installed speech weights. The cases include JSON escaping, Unicode,
+a longer dictation, corrections after a matching passage and repeated prefixes.
 
 ### Current validation limits
+
+The [2026-09-21 Apple M1 measurements](../../../docs/internals/dictation-performance-2026-09-21.md)
+cover transcript-draft verification with the production cleanup timeout and
+native comparisons against the previous worker.
 
 On 2026-09-12, the Apple Silicon Metal and CPU-only builds compiled, and the
 27 downloader/protocol fixture tests passed. Real Base inference passed the JFK
