@@ -418,3 +418,20 @@ before starting tests; even querying that isolated device's installed apps hung.
 Those lifecycle tests were compiled but are not claimed as passing. Scoped
 SwiftLint still reports the existing cloud/issue class-length errors (confirmed
 against the previous commit); the new index and its tests pass lint.
+
+## Server sync-head subscriptions (item 1 follow-up)
+
+Server replicas now receive `sync.latestVersion` through a scoped, authenticated
+Convex subscription. An immediate HTTP read starts recovery even if the socket is
+silent; subsequent recovery reads run every 60 seconds instead of every 15.
+Duplicate or older heads from either path are ignored, while authorization epoch
+changes still propagate at the same version. Permission errors end the stream so
+the existing daemon policy can handle them. Unsubscribing or restarting closes the
+socket and its token callback; a new scope starts with a fresh head watermark.
+
+At continuous idle operation, periodic recovery reads fall from 5,760 to 1,440 per
+day per company/environment: 75% fewer, excluding startup and reconnects. Realtime
+query executions on actual changes are additional work. This is a call-rate
+estimate, not a measured reduction in billed GB. Focused tests cover immediate
+updates, the recovery cadence, stale HTTP answers, auth refresh/revocation and
+subscription disposal/recreation.

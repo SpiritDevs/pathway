@@ -7,11 +7,10 @@
  * `pathway-convex` service token from `./convexServiceToken.ts` and a `ConvexHttpClient` against the
  * deployment.
  *
- * Two things are deliberately different from a browser client:
+ * Server transport lifecycle choices:
  *
- * - **`latestVersion` polls.** `ConvexHttpClient` has no subscriptions, so the one query a client
- *   would normally subscribe to is polled on a schedule and deduplicated, which is why the engine
- *   cannot tell the difference: it only ever sees a version that actually moved.
+ * - **`latestVersion` subscribes.** A scoped realtime client delivers company heads, with a
+ *   slower HTTP recovery check. Duplicate and stale heads from either path are discarded.
  * - **Calls are serialized.** A `ConvexHttpClient`'s bearer token is client-wide mutable state, so
  *   the token is installed and the call issued under one permit. Concurrent calls would otherwise
  *   race to overwrite each other's `setAuth` during a refresh.
@@ -34,9 +33,11 @@ import type {
   SyncReserveIssueKeysResponse,
 } from "@spiritdevs/contracts/cloudSync";
 import { SyncTransport, SyncTransportError } from "@spiritdevs/client-runtime/sync";
-import { ConvexHttpClient } from "convex/browser";
+import { ConvexClient, ConvexHttpClient } from "convex/browser";
 import { ConvexError } from "convex/values";
 import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex/server";
+import * as Cause from "effect/Cause";
+import * as Queue from "effect/Queue";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -297,20 +298,20 @@ function toActorArg(actor: SyncActor): OperationArg["actor"] {
 // Transport
 // --------------------------------------------------------------------------
 
-/**
- * How often `latestVersion` is polled when nothing else prompts a sync. Fifteen seconds is the
- * upper bound on how stale a passive replica gets; a local write syncs immediately through the
- * engine's own flush rather than waiting for the next tick.
- */
-export const DEFAULT_LATEST_VERSION_POLL_INTERVAL_MS = 15_000;
+/** Recovery cadence when realtime head delivery is unavailable or delayed. */
+export const DEFAULT_LATEST_VERSION_POLL_INTERVAL_MS = 60_000;
 
 export interface ConvexSyncTransportOptions {
-  /** Deployment URL. Ignored when {@link client} is supplied. */
+  /** Deployment URL used by the default HTTP and realtime clients. */
   readonly convexUrl: string;
   /** Mints and caches the `pathway-convex` service token every call presents. */
   readonly tokens: ConvexServiceTokenProvider;
   /** Injected client seam; the default builds a real `ConvexHttpClient` over {@link convexUrl}. */
   readonly client?: ConvexClientLike;
+  /** Scoped realtime client factory. Null selects HTTP-only operation for transport tests. */
+  readonly createSubscriptionClient?:
+    | (() => Pick<ConvexClient, "setAuth" | "onUpdate" | "close">)
+    | null;
   /** Defaults to {@link DEFAULT_LATEST_VERSION_POLL_INTERVAL_MS}. */
   readonly pollIntervalMs?: number;
 }
@@ -383,23 +384,72 @@ export const makeConvexSyncTransport = Effect.fn("cloud.convex_sync_transport.ma
         }),
       ).pipe(Effect.map(asContract<SyncBootstrapResponse>)),
 
-    /**
-     * The subscription the engine believes it has. `ConvexHttpClient` cannot subscribe, so the head
-     * is polled on {@link ConvexSyncTransportOptions.pollIntervalMs} and deduplicated: the first
-     * read is emitted immediately so a starting engine syncs at once, and every later tick is
-     * emitted only when the version or the authorization epoch actually moved. Without the
-     * deduplication the engine would run a full sync pass every interval forever.
-     */
     latestVersion: (input) =>
-      Stream.fromEffectSchedule(
-        latestVersionOnce(input.companyId),
-        Schedule.spaced(pollInterval),
-      ).pipe(
-        Stream.changesWith(
-          (previous, next) =>
-            previous.version === next.version &&
-            previous.authorizationEpoch === next.authorizationEpoch,
-        ),
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const recovery = Stream.fromEffectSchedule(
+            latestVersionOnce(input.companyId),
+            Schedule.spaced(pollInterval),
+          );
+          let heads = recovery;
+          if (options.createSubscriptionClient !== null) {
+            const realtime = yield* Effect.acquireRelease(
+              Effect.try({
+                try: () =>
+                  options.createSubscriptionClient?.() ?? new ConvexClient(options.convexUrl),
+                catch: toTransportError,
+              }),
+              (convex) => Effect.promise(() => convex.close()),
+            );
+            const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+            yield* Effect.try({
+              try: () =>
+                realtime.setAuth(({ forceRefreshToken }) =>
+                  runPromise(
+                    (forceRefreshToken ? tokens.invalidate() : Effect.void).pipe(
+                      Effect.andThen(tokens.token),
+                    ),
+                  ),
+                ),
+              catch: toTransportError,
+            });
+            const subscription = Stream.callback<SyncLatestVersionResponse, SyncTransportError>(
+              (queue) =>
+                Effect.acquireRelease(
+                  Effect.try({
+                    try: () =>
+                      realtime.onUpdate(
+                        api.sync.latestVersion,
+                        { companyId: input.companyId },
+                        (head) =>
+                          Queue.offerUnsafe(queue, asContract<SyncLatestVersionResponse>(head)),
+                        (error) =>
+                          Queue.failCauseUnsafe(queue, Cause.fail(toTransportError(error))),
+                      ),
+                    catch: toTransportError,
+                  }),
+                  (unsubscribe) => Effect.sync(unsubscribe),
+                ).pipe(Effect.asVoid),
+              { bufferSize: 1, strategy: "sliding" },
+            );
+            heads = Stream.merge(subscription, recovery);
+          }
+          // An older in-flight HTTP response must not regress a newer subscription head.
+          let latest: SyncLatestVersionResponse | undefined;
+          return heads.pipe(
+            Stream.filter((head) => {
+              if (
+                latest &&
+                (head.authorizationEpoch < latest.authorizationEpoch ||
+                  (head.authorizationEpoch === latest.authorizationEpoch &&
+                    head.version <= latest.version))
+              )
+                return false;
+              latest = head;
+              return true;
+            }),
+          );
+        }),
       ),
 
     listChanges: (input) =>

@@ -554,6 +554,7 @@ describe("convex sync transport", () => {
         convexUrl: CONVEX_URL,
         tokens: staticTokenProvider(["service-token-a"]),
         client: fake.client,
+        createSubscriptionClient: null,
       });
 
       yield* transport.bootstrap({ companyId: COMPANY_ID, cursor: null, pageSize: 25 });
@@ -640,6 +641,7 @@ describe("convex sync transport", () => {
         convexUrl: CONVEX_URL,
         tokens: staticTokenProvider(["service-token-a"]),
         client: fake.client,
+        createSubscriptionClient: null,
       });
 
       yield* transport.bootstrap({ companyId: COMPANY_ID, cursor: null });
@@ -664,6 +666,7 @@ describe("convex sync transport", () => {
         convexUrl: CONVEX_URL,
         tokens: staticTokenProvider(["service-token-a", "service-token-b"]),
         client: fake.client,
+        createSubscriptionClient: null,
         pollIntervalMs: 60_000,
       });
 
@@ -688,6 +691,7 @@ describe("convex sync transport", () => {
         convexUrl: CONVEX_URL,
         tokens: staticTokenProvider(["service-token-a", "service-token-b"]),
         client: fake.client,
+        createSubscriptionClient: null,
       });
 
       const error = yield* Effect.flip(
@@ -706,6 +710,7 @@ describe("convex sync transport", () => {
         convexUrl: CONVEX_URL,
         tokens: staticTokenProvider(["service-token-a"]),
         client: fake.client,
+        createSubscriptionClient: null,
       });
 
       const error = yield* Effect.flip(
@@ -730,6 +735,7 @@ describe("convex sync transport", () => {
         convexUrl: CONVEX_URL,
         tokens: staticTokenProvider(["service-token-a", "service-token-b"]),
         client: fake.client,
+        createSubscriptionClient: null,
       });
 
       const error = yield* Effect.flip(
@@ -753,6 +759,7 @@ describe("convex sync transport", () => {
         convexUrl: CONVEX_URL,
         tokens,
         client: fake.client,
+        createSubscriptionClient: null,
       });
 
       const error = yield* Effect.flip(
@@ -772,6 +779,7 @@ describe("convex sync transport", () => {
         convexUrl: CONVEX_URL,
         tokens: staticTokenProvider(["service-token-a"]),
         client: fake.client,
+        createSubscriptionClient: null,
         // An interval no test would ever wait out: a first emission that was not immediate would
         // hang here instead of passing.
         pollIntervalMs: 600_000,
@@ -796,6 +804,7 @@ describe("convex sync transport", () => {
         convexUrl: CONVEX_URL,
         tokens: staticTokenProvider(["service-token-a"]),
         client: fake.client,
+        createSubscriptionClient: null,
         pollIntervalMs: 1,
       });
 
@@ -820,6 +829,7 @@ describe("convex sync transport", () => {
         convexUrl: CONVEX_URL,
         tokens: staticTokenProvider(["service-token-a"]),
         client: fake.client,
+        createSubscriptionClient: null,
         pollIntervalMs: 1,
       });
 
