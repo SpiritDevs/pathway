@@ -154,6 +154,8 @@ export async function startCollaboration(
       archived: false,
       lastSequence: 0,
       lastMessage: "",
+      lastVisibleSequence: 0,
+      lastVisibleAt: now,
       summary: "",
       summaryThroughSequence: 0,
       createdAt: now,
@@ -165,6 +167,7 @@ export async function startCollaboration(
         subject,
         fromSequence: 0,
         readSequence: 0,
+        attentionReady: true,
         updatedAt: now,
       });
     chat = (await ctx.db.get(rowId))!;

@@ -1,3 +1,4 @@
+import { internal } from "./_generated/api.js";
 import { conversationWork, reconcileConversationLifecycle } from "./lib/conversationLifecycle.ts";
 import { conversationAttention, type HumanMention } from "@spiritdevs/contracts/aiOrchestrator";
 import {
@@ -19,7 +20,13 @@ import {
   OrchestratorConfig,
   defaultOrchestratorConfig,
 } from "@spiritdevs/contracts/aiOrchestrator";
-import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
+import {
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server.js";
 import type { Doc } from "./_generated/dataModel.js";
 import {
   requireUser,
@@ -497,7 +504,12 @@ export async function appendChatMessage(
   await ctx.db.patch(chat._id, {
     lastSequence: sequence,
     ...(message.senderKind !== "system" || message.senderId === "participants"
-      ? { lastMessage: conversationMessagePreview(message), updatedAt: now }
+      ? {
+          lastMessage: conversationMessagePreview(message),
+          lastVisibleSequence: sequence,
+          lastVisibleAt: now,
+          updatedAt: now,
+        }
       : {}),
     ...(notification
       ? {
@@ -543,13 +555,33 @@ export async function appendChatMessage(
       .query("aiOrchestratorChatMembers")
       .withIndex("by_chat_subject", (q) => q.eq("chatId", chat.id).eq("subject", subject))
       .unique();
-    if (member)
+    if (
+      member &&
+      (message.senderKind !== "system" || message.senderId === "participants") &&
+      conversationAttention({
+        hasAccess: true,
+        isMember: true,
+        subject,
+        senderId: message.senderId,
+        coordination,
+        mentions,
+      })
+    ) {
+      await ctx.db.insert("aiOrchestratorAttention", { memberId: member._id, sequence });
+    }
+    if (member) {
       await ctx.db.patch(member._id, {
         updatedAt: now,
         ...(message.senderKind === "user" && message.senderId === subject
           ? { readSequence: sequence }
           : {}),
       });
+      if (message.senderKind === "user" && message.senderId === subject)
+        await ctx.scheduler.runAfter(0, internal.aiOrchestrators.pruneAttention, {
+          memberId: member._id,
+          through: sequence,
+        });
+    }
   }
   return sequence;
 }
@@ -578,20 +610,54 @@ export const listChats = query({
         )
           return null;
         // Internal wake messages remain available to reasoning, not the human conversation.
-        const latest = await ctx.db
-          .query("aiOrchestratorMessages")
-          .withIndex("by_chat_sequence", (q) =>
-            q.eq("chatId", chat.id).gte("sequence", member.fromSequence),
-          )
-          .filter((q) =>
-            q.or(q.neq(q.field("senderKind"), "system"), q.eq(q.field("senderId"), "participants")),
-          )
-          .order("desc")
-          .first();
+        const legacyLatest =
+          chat.lastVisibleSequence === undefined
+            ? await ctx.db
+                .query("aiOrchestratorMessages")
+                .withIndex("by_chat_sequence", (q) =>
+                  q.eq("chatId", chat.id).gte("sequence", member.fromSequence),
+                )
+                .filter((q) =>
+                  q.or(
+                    q.neq(q.field("senderKind"), "system"),
+                    q.eq(q.field("senderId"), "participants"),
+                  ),
+                )
+                .order("desc")
+                .first()
+            : null;
+        const latest =
+          chat.lastVisibleSequence !== undefined
+            ? chat.lastVisibleSequence >= member.fromSequence && chat.lastVisibleSequence > 0
+              ? {
+                  sequence: chat.lastVisibleSequence,
+                  createdAt: chat.lastVisibleAt ?? chat.createdAt,
+                  preview: chat.lastMessage,
+                }
+              : null
+            : legacyLatest
+              ? {
+                  sequence: legacyLatest.sequence,
+                  createdAt: legacyLatest.createdAt,
+                  preview: conversationMessagePreview(legacyLatest),
+                }
+              : null;
         // Cap the projection at 100; the client displays 99+ without loading history.
-        let unreadCount = 0;
+        let unreadCount =
+          !member.muted && member.attentionReady
+            ? (
+                await ctx.db
+                  .query("aiOrchestratorAttention")
+                  .withIndex("by_member_sequence", (q) =>
+                    q
+                      .eq("memberId", member._id)
+                      .gte("sequence", Math.max(member.fromSequence, member.readSequence + 1)),
+                  )
+                  .take(100)
+              ).length
+            : 0;
         let cursor: number | null = Math.max(member.fromSequence, member.readSequence + 1);
-        while (!member.muted && cursor !== null && unreadCount < 100) {
+        while (!member.muted && !member.attentionReady && cursor !== null && unreadCount < 100) {
           const page = await ctx.db
             .query("aiOrchestratorMessages")
             .withIndex("by_chat_sequence", (q) => q.eq("chatId", chat.id).gte("sequence", cursor!))
@@ -621,12 +687,25 @@ export const listChats = query({
           summary: _summary,
           summaryThroughSequence: _summaryThroughSequence,
           notification,
+          lastVisibleSequence: _lastVisibleSequence,
+          lastVisibleAt: _lastVisibleAt,
           ...record
         } = chat;
+        const notificationAttention =
+          notification?.coordination !== undefined && notification.senderId !== undefined
+            ? {
+                coordination: notification.coordination,
+                senderId: notification.senderId,
+                mentions: notification.mentions ?? [],
+              }
+            : null;
         const notificationMessage =
-          !member.muted && notification && notification.sequence >= member.fromSequence
-            ? latest?.sequence === notification.sequence
-              ? latest
+          !member.muted &&
+          notification &&
+          notification.sequence >= member.fromSequence &&
+          !notificationAttention
+            ? legacyLatest?.sequence === notification.sequence
+              ? legacyLatest
               : await ctx.db
                   .query("aiOrchestratorMessages")
                   .withIndex("by_chat_sequence", (q) =>
@@ -634,15 +713,15 @@ export const listChats = query({
                   )
                   .unique()
             : null;
-        const attention = notificationMessage
-          ? await messageAttention(ctx, chat, notificationMessage)
-          : null;
+        const attention =
+          notificationAttention ??
+          (notificationMessage ? await messageAttention(ctx, chat, notificationMessage) : null);
         return {
           ...record,
           pinned: member.pinned ?? false,
           muted: member.muted ?? false,
           markedUnread: member.markedUnread ?? false,
-          lastMessage: latest ? conversationMessagePreview(latest) : "",
+          lastMessage: latest?.preview ?? "",
           lastSequence: latest?.sequence ?? 0,
           readSequence: member.readSequence,
           unreadCount: member.muted
@@ -733,6 +812,8 @@ export const createChat = mutation({
       archived: false,
       lastSequence: 0,
       lastMessage: "",
+      lastVisibleSequence: 0,
+      lastVisibleAt: now,
       summary: "",
       summaryThroughSequence: 0,
       createdAt: now,
@@ -743,6 +824,7 @@ export const createChat = mutation({
       subject: user.clerkSubject,
       fromSequence: 0,
       readSequence: 0,
+      attentionReady: true,
       updatedAt: now,
     });
     return id;
@@ -900,13 +982,16 @@ export const invite = mutation({
       for (const companyId of companyIds)
         if (!(await hasCompanyAccess(ctx, companyId, participant)))
           return fail("The invited person needs access to every workspace in this conversation.");
-      await ctx.db.insert("aiOrchestratorChatMembers", {
+      const memberId = await ctx.db.insert("aiOrchestratorChatMembers", {
         chatId: chat.id,
         subject,
         fromSequence,
         readSequence: fromSequence === 0 ? 0 : chat.lastSequence,
+        ...(fromSequence > chat.lastSequence ? { attentionReady: true } : {}),
         updatedAt: now,
       });
+      if (fromSequence === 0)
+        await ctx.scheduler.runAfter(0, internal.aiOrchestrators.backfillAttention, { memberId });
       await ctx.db.patch(chat._id, {
         participantSubjects: [...chat.participantSubjects, subject],
         kind: "group",
@@ -962,7 +1047,13 @@ export const removeParticipant = mutation({
         .query("aiOrchestratorChatMembers")
         .withIndex("by_chat_subject", (q) => q.eq("chatId", chat.id).eq("subject", args.subject!))
         .unique();
-      if (member) await ctx.db.delete(member._id);
+      if (member) {
+        await ctx.db.delete(member._id);
+        await ctx.scheduler.runAfter(0, internal.aiOrchestrators.pruneAttention, {
+          memberId: member._id,
+          through: chat.lastSequence,
+        });
+      }
       await ctx.db.patch(chat._id, {
         participantSubjects: chat.participantSubjects.filter((subject) => subject !== args.subject),
         updatedAt: Date.now(),
@@ -1110,6 +1201,10 @@ export const markRead = mutation({
     if (Math.min(chat.lastSequence, args.sequence) <= member.readSequence) return null;
     await ctx.db.patch(member._id, {
       readSequence: Math.max(member.readSequence, Math.min(chat.lastSequence, args.sequence)),
+    });
+    await ctx.scheduler.runAfter(0, internal.aiOrchestrators.pruneAttention, {
+      memberId: member._id,
+      through: Math.min(chat.lastSequence, args.sequence),
     });
     return null;
   },
@@ -1608,3 +1703,107 @@ export async function beginConversationStop(
   }
   await reconcileConversationLifecycle(ctx, { ...chat, archived: true, lifecycle: intent });
 }
+
+/** One legacy membership per chain, with 50 source messages per transaction plus legacy reply lookups. */
+export const backfillAttention = internalMutation({
+  args: { memberId: v.optional(v.id("aiOrchestratorChatMembers")) },
+  handler: async (ctx, args) => {
+    const member = args.memberId
+      ? await ctx.db.get(args.memberId)
+      : await ctx.db
+          .query("aiOrchestratorChatMembers")
+          .withIndex("by_attention_ready", (q) => q.eq("attentionReady", undefined))
+          .first();
+    if (!member || member.attentionReady) return null;
+    const chat = await ctx.db
+      .query("aiOrchestratorChats")
+      .withIndex("by_domain_id", (q) => q.eq("id", member.chatId))
+      .unique();
+    if (!chat || chat.lifecycle === "deleted") {
+      await ctx.db.patch(member._id, { attentionReady: true });
+      return null;
+    }
+    const page = await ctx.db
+      .query("aiOrchestratorMessages")
+      .withIndex("by_chat_sequence", (q) =>
+        q.eq("chatId", member.chatId).gte("sequence", (member.attentionCursor ?? 0) + 1),
+      )
+      .take(50);
+    let preview = member.attentionPreview;
+    for (const message of page) {
+      if (message.senderKind === "system" && message.senderId !== "participants") continue;
+      preview = {
+        sequence: message.sequence,
+        createdAt: message.createdAt,
+        text: conversationMessagePreview(message),
+      };
+      const attention = await messageAttention(ctx, chat, message);
+      // Freeze the legacy inference at migration time, just as new message writes do.
+      if (message.coordination === undefined)
+        await ctx.db.patch(message._id, { coordination: attention.coordination });
+      if (
+        message.sequence < member.fromSequence ||
+        message.sequence <= member.readSequence ||
+        !conversationAttention({
+          hasAccess: true,
+          isMember: true,
+          subject: member.subject,
+          ...attention,
+        })
+      )
+        continue;
+      const existing = await ctx.db
+        .query("aiOrchestratorAttention")
+        .withIndex("by_member_sequence", (q) =>
+          q.eq("memberId", member._id).eq("sequence", message.sequence),
+        )
+        .unique();
+      if (!existing)
+        await ctx.db.insert("aiOrchestratorAttention", {
+          memberId: member._id,
+          sequence: message.sequence,
+        });
+    }
+    const cursor = page.at(-1)?.sequence ?? member.attentionCursor ?? 0;
+    const done = page.length < 50;
+    await ctx.db.patch(member._id, {
+      attentionCursor: cursor,
+      attentionPreview: done ? undefined : preview,
+      ...(done ? { attentionReady: true } : {}),
+    });
+    if (!done)
+      await ctx.scheduler.runAfter(0, internal.aiOrchestrators.backfillAttention, {
+        memberId: member._id,
+      });
+    // Old chats also get the same compact preview maintained by all new message writes.
+    if (
+      done &&
+      (chat.lastVisibleSequence === undefined ||
+        (preview?.sequence ?? 0) > chat.lastVisibleSequence)
+    ) {
+      await ctx.db.patch(chat._id, {
+        lastVisibleSequence: preview?.sequence ?? 0,
+        lastVisibleAt: preview?.createdAt ?? chat.createdAt,
+        lastMessage: preview?.text ?? "",
+      });
+    }
+    return null;
+  },
+});
+
+/** Read acknowledgements and removed memberships release their compact attention rows in batches. */
+export const pruneAttention = internalMutation({
+  args: { memberId: v.id("aiOrchestratorChatMembers"), through: v.number() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("aiOrchestratorAttention")
+      .withIndex("by_member_sequence", (q) =>
+        q.eq("memberId", args.memberId).lte("sequence", args.through),
+      )
+      .take(100);
+    for (const row of rows) await ctx.db.delete(row._id);
+    if (rows.length === 100)
+      await ctx.scheduler.runAfter(0, internal.aiOrchestrators.pruneAttention, args);
+    return null;
+  },
+});

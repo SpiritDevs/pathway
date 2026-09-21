@@ -76,4 +76,11 @@ crons.interval(
   {},
 );
 
+crons.interval(
+  "backfill conversation attention",
+  { minutes: 1 },
+  internal.aiOrchestrators.backfillAttention,
+  {},
+);
+
 export default crons;

@@ -264,6 +264,14 @@ export async function applyWorkerAction(
           message._id,
           action.kind === "removeWorkMessage" ? { status: "cancelled" } : { text: action.text },
         );
+      if (message && action.kind === "editWorkMessage") {
+        const chat = await ctx.db
+          .query("aiOrchestratorChats")
+          .withIndex("by_domain_id", (q) => q.eq("id", message.chatId))
+          .unique();
+        if (chat?.lastVisibleSequence === message.sequence)
+          await ctx.db.patch(chat._id, { lastMessage: action.text.slice(0, 160) });
+      }
     }
     if (action.kind === "removeWorkMessage" && existing.questionId) {
       const question = await questionById(ctx, work.id, existing.questionId);

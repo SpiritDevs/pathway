@@ -188,6 +188,8 @@ export const aiOrchestratorTables = {
     lifecycleDetail: v.optional(v.string()),
     lastSequence: v.number(),
     lastMessage: v.string(),
+    lastVisibleSequence: v.optional(v.number()),
+    lastVisibleAt: v.optional(v.number()),
     notification: v.optional(
       v.object({
         coordination: v.optional(v.boolean()),
@@ -214,13 +216,24 @@ export const aiOrchestratorTables = {
     subject: v.string(),
     fromSequence: v.number(),
     readSequence: v.number(),
+    attentionReady: v.optional(v.boolean()),
+    attentionCursor: v.optional(v.number()),
+    attentionPreview: v.optional(
+      v.object({ sequence: v.number(), createdAt: v.number(), text: v.string() }),
+    ),
     pinned: v.optional(v.boolean()),
     muted: v.optional(v.boolean()),
     markedUnread: v.optional(v.boolean()),
     updatedAt: v.number(),
   })
+    .index("by_attention_ready", ["attentionReady"])
     .index("by_subject", ["subject", "updatedAt"])
     .index("by_chat_subject", ["chatId", "subject"]),
+  // Only attention-worthy messages have a row; bodies never enter the unread-count read set.
+  aiOrchestratorAttention: defineTable({
+    memberId: v.id("aiOrchestratorChatMembers"),
+    sequence: v.number(),
+  }).index("by_member_sequence", ["memberId", "sequence"]),
   aiOrchestratorAttachments: defineTable({
     id: v.string(),
     chatId: v.string(),

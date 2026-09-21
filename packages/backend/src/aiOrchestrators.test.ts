@@ -7,7 +7,7 @@ import {
 import { notifyOrchestratorIssueChanges } from "../convex/lib/aiOrchestratorIssueSignals.ts";
 // @effect-diagnostics globalDate:off -- Convex transaction time in fixtures.
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { defaultOrchestratorConfig } from "@spiritdevs/contracts/aiOrchestrator";
 import { allowanceWindowKey, budgetAdmission } from "@spiritdevs/contracts/providerAllowanceBudget";
 import { api, internal } from "../convex/_generated/api.js";
@@ -307,7 +307,7 @@ describe("persistent orchestrator identities and messages", () => {
         bytes: meter.bytes(),
       };
     });
-    expect(measured.messageReads).toBe(1);
+    expect(measured.messageReads ?? 0).toBe(0);
     expect(measured.bytes).toBeLessThan(10_000);
     expect(measured.rows[0]).toMatchObject({
       lastMessage: "Please review",
@@ -320,6 +320,76 @@ describe("persistent orchestrator identities and messages", () => {
     const unmuted = (await owner.query(api.aiOrchestrators.listChats, {}))[0]!;
     expect(unmuted).toMatchObject({ unreadCount: 1, readSequence: 0, lastSequence: 501 });
     expect(unmuted.notification).toMatchObject({ enabled: true, urgent: true });
+  });
+  it("migrates unread attention in bounded batches and stops reading message bodies", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = harness();
+      await seed(t);
+      const { owner, chatId } = await personalChat(t);
+      const memberId = await t.run(async (ctx) => {
+        const chat = (await ctx.db.query("aiOrchestratorChats").first())!;
+        const member = (await ctx.db.query("aiOrchestratorChatMembers").first())!;
+        await ctx.db.patch(member._id, { attentionReady: undefined });
+        await ctx.db.patch(chat._id, { lastVisibleSequence: undefined, lastSequence: 503 });
+        for (let sequence = 1; sequence <= 503; sequence++)
+          await ctx.db.insert("aiOrchestratorMessages", {
+            id: `legacy-${sequence}`,
+            chatId,
+            sequence,
+            senderKind: "orchestrator",
+            senderId: chat.leadId,
+            senderName: "Chief",
+            text: "x".repeat(2000),
+            status: "sent",
+            replyToId: null,
+            coordination: sequence <= 502,
+            ...(sequence === 502 ? { mentions: [{ kind: "user" as const, id: "owner" }] } : {}),
+            createdAt: sequence,
+          });
+        return member._id;
+      });
+      const before = (await owner.query(api.aiOrchestrators.listChats, {}))[0]!;
+      expect(before.unreadCount).toBe(2);
+      await t.mutation(internal.aiOrchestrators.backfillAttention, { memberId });
+      expect(await t.run((ctx) => ctx.db.get(memberId))).toMatchObject({ attentionCursor: 50 });
+      // New writes during the backfill must be counted once, even when a later batch reaches them.
+      await t.run(async (ctx) => {
+        const chat = (await ctx.db.query("aiOrchestratorChats").first())!;
+        await appendChatMessage(ctx, chat, {
+          id: "during-migration",
+          senderKind: "orchestrator",
+          senderId: chat.leadId,
+          senderName: "Chief",
+          text: "Review this",
+          status: "sent",
+          replyToId: null,
+          coordination: false,
+        });
+      });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      const measured = await owner.run(async (ctx) => {
+        const meter = measureDatabaseReads(ctx.db);
+        const rows = await functionHandler(listChats)({ ...ctx, db: meter.db }, {});
+        return {
+          row: rows[0],
+          bodies: meter.documents.get("aiOrchestratorMessages") ?? 0,
+          attention: meter.documents.get("aiOrchestratorAttention") ?? 0,
+          bytes: meter.bytes(),
+        };
+      });
+      expect(measured).toMatchObject({
+        bodies: 0,
+        attention: 3,
+        row: { unreadCount: 3, lastMessage: "Review this", lastSequence: 504 },
+      });
+      expect(measured.bytes).toBeLessThan(10_000);
+      await owner.mutation(api.aiOrchestrators.markRead, { chatId, sequence: 502 });
+      expect((await owner.query(api.aiOrchestrators.listChats, {}))[0]?.unreadCount).toBe(2);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it("shares conversation-list company checks only within the current request", async () => {
     const t = harness();
@@ -413,7 +483,11 @@ describe("persistent orchestrator identities and messages", () => {
         .query("aiOrchestratorChats")
         .withIndex("by_domain_id", (q) => q.eq("id", chatId))
         .unique())!;
-      await ctx.db.patch(chat._id, { lastMessage: "Internal review instructions" });
+      await ctx.db.patch(chat._id, {
+        lastMessage: "Internal review instructions",
+        lastVisibleSequence: undefined,
+        lastVisibleAt: undefined,
+      });
     });
     expect((await owner.query(api.aiOrchestrators.listChats, {}))[0]?.lastMessage).toBe(
       "Hello Jarvis",

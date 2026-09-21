@@ -258,3 +258,28 @@ Focused coverage includes legacy nonzero heads, contiguous mixed-writer versions
 replays, company lifecycle/permissions, bootstrap handoff, issue import, direct
 automation/Slack writes and smoke cleanup. The isolation test verifies zero
 company patches for normal feed appends and zero head reads during authorization.
+
+## Conversation list attention
+
+`listChats` uses the chat's bounded visible-message preview and at most 100 tiny
+`aiOrchestratorAttention` records per unmuted membership. Internal wake messages
+and unmentioned coordination messages create no attention records. Full message
+bodies and attachments are no longer read to render migrated list entries.
+
+All message creation paths share the projection writer. Editing a pending worker
+message refreshes its preview. Read acknowledgements and participant removal
+prune attention records in batches of 100. Current membership and workspace
+permissions remain checked on every list query; history cutoffs, mute, manual
+unread, and notification rules are unchanged.
+
+New conversations start migrated. Existing memberships retain their original
+read path until a background job finishes, processing 50 source messages per
+transaction (plus reply lookups for legacy coordination inference). The minute
+cron starts one membership's chain; history-sharing invitations start their own
+chain immediately. Concurrent appends are deduplicated during backfill. The
+migration also repairs old previews without an unbounded final history scan.
+
+The regression fixture with 503 historical messages plus a concurrent append
+reads zero message bodies, three attention records, and under 10 KB for its
+migrated list query. The previous audit's similar 500-message fixture read over
+1 MB. This is a fixture-level read reduction, not a production billing estimate.
