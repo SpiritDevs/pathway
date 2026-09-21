@@ -1,3 +1,4 @@
+import { readCompanySyncVersion } from "../convex/lib/companySyncHead.ts";
 // @effect-diagnostics globalDate:off -- Test rows mirror Convex documents, whose clock is `Date.now()`.
 /**
  * Drives `lib/companyApply` — the company domain's feed writer — against the same Convex harness
@@ -6,7 +7,9 @@
  * versions, not two that collide.
  */
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { requireCompanyActor } from "../convex/lib/identity.ts";
+import { measureDatabaseReads } from "./testDatabaseReads.ts";
 
 import { api } from "../convex/_generated/api.js";
 import type { MutationCtx } from "../convex/_generated/server.js";
@@ -51,6 +54,46 @@ const OWNER_ACTOR = { kind: "member", membershipId: OWNER_MEMBERSHIP_ID } as con
 function harness() {
   return convexTest(schema, modules);
 }
+
+it("migrates a legacy feed head without writing authorization records and keeps it out of authorization reads", async () => {
+  const t = harness();
+  const seeded = await seed(t);
+  await t.run(async (ctx) => {
+    await ctx.db.patch(seeded.companyDocId, { syncVersion: 42 });
+    const before = (await ctx.db.get(seeded.companyDocId))!;
+    expect(await readCompanySyncVersion(ctx, before)).toBe(42);
+    const patches = vi.spyOn(ctx.db, "patch");
+    const append = () =>
+      appendCompanyChanges(ctx, {
+        companyId: seeded.companyDocId,
+        actor: OWNER_ACTOR,
+        changes: [
+          {
+            entityKind: "team",
+            entityId: TEAM_ID,
+            changeKind: "tombstone",
+            versionDocId: null,
+            payload: null,
+          },
+        ],
+      });
+    expect((await append()).versionTo).toBe(43);
+    expect((await append()).versionTo).toBe(44);
+    expect(patches.mock.calls.some(([id]) => id === seeded.companyDocId)).toBe(false);
+    expect(await ctx.db.get(seeded.companyDocId)).toEqual(before);
+    expect(await readCompanySyncVersion(ctx, before)).toBe(44);
+    patches.mockRestore();
+  });
+  await asOwner(t).run(async (ctx) => {
+    const meter = measureDatabaseReads(ctx.db);
+    await requireCompanyActor({ ...ctx, db: meter.db }, COMPANY_ID);
+    expect(meter.documents.get("companySyncHeads") ?? 0).toBe(0);
+  });
+  expect(await asOwner(t).query(api.sync.latestVersion, { companyId: COMPANY_ID })).toMatchObject({
+    version: 44,
+    authorizationEpoch: 1,
+  });
+});
 
 /**
  * A company with an owner who can write issues, one ordinary member, one team, and a role assigned
@@ -302,7 +345,7 @@ describe("appendCompanyChanges", () => {
 
     await t.run(async (ctx) => {
       const company = await ctx.db.get(seeded.companyDocId);
-      expect(company?.syncVersion).toBe(5);
+      expect(await readCompanySyncVersion(ctx, company!)).toBe(5);
       // The appended rows carry the versions their feed entries were assigned.
       expect((await ctx.db.get(seeded.teamDocId))?.version).toBe(2);
       expect((await ctx.db.get(seeded.roleDocId))?.version).toBe(3);
@@ -409,7 +452,7 @@ describe("appendCompanyChanges", () => {
     await t.run(async (ctx) => {
       const company = await ctx.db.get(seeded.companyDocId);
       expect(company?.authorizationEpoch).toBe(2);
-      expect(company?.syncVersion).toBe(1);
+      expect(await readCompanySyncVersion(ctx, company!)).toBe(1);
       // The company row is stamped with its own change's version, not just the head.
       expect(company?.version).toBe(1);
     });
@@ -437,7 +480,7 @@ describe("appendCompanyChanges", () => {
 
     await t.run(async (ctx) => {
       const company = await ctx.db.get(seeded.companyDocId);
-      expect(company?.syncVersion).toBe(0);
+      expect(await readCompanySyncVersion(ctx, company!)).toBe(0);
       expect(company?.authorizationEpoch).toBe(2);
     });
   });
@@ -523,7 +566,7 @@ describe("bumpAuthorizationEpoch", () => {
     await t.run(async (ctx) => {
       const company = await ctx.db.get(seeded.companyDocId);
       expect(company?.authorizationEpoch).toBe(2);
-      expect(company?.syncVersion).toBe(0);
+      expect(await readCompanySyncVersion(ctx, company!)).toBe(0);
       expect(company?.updatedAt).toBe(seeded.now);
     });
   });

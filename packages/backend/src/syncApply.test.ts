@@ -1,3 +1,4 @@
+import { readCompanySyncVersion } from "../convex/lib/companySyncHead.ts";
 // @effect-diagnostics globalDate:off -- Test rows mirror Convex documents, whose clock is `Date.now()`.
 /**
  * Drives `sync.applyOperations`, `sync.listChanges`, and `sync.bootstrap` end to end through the
@@ -1736,7 +1737,9 @@ describe("operation decision ledger", () => {
         (row) => row.kind === "created",
       );
       expect(created).toHaveLength(1);
-      expect((await ctx.db.query("companies").collect())[0]?.syncVersion).toBeGreaterThan(head);
+      expect(
+        await readCompanySyncVersion(ctx, (await ctx.db.query("companies").collect())[0]!),
+      ).toBeGreaterThan(head);
     });
   });
 

@@ -1,3 +1,4 @@
+import { readCompanySyncVersion } from "../convex/lib/companySyncHead.ts";
 // @effect-diagnostics globalDate:off -- Test rows mirror Convex documents.
 import { convexTest } from "convex-test";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -928,8 +929,11 @@ describe("calendar administration", () => {
 });
 
 async function companyDoc(ctx: QueryCtx) {
-  return await ctx.db
+  const company = await ctx.db
     .query("companies")
     .withIndex("by_domain_id", (q) => q.eq("id", COMPANY))
     .unique();
+  return company === null
+    ? null
+    : { ...company, syncVersion: await readCompanySyncVersion(ctx, company) };
 }

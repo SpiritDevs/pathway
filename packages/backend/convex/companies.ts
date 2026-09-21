@@ -1,3 +1,4 @@
+import { readCompanySyncVersion } from "./lib/companySyncHead.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations are not Effect programs; the transaction clock is `Date.now()`.
 /**
  * Company lifecycle: provisioning on first sign-in, renaming, ownership, and the 30-day
@@ -239,7 +240,7 @@ async function summarize(
     lifecycleState: company.lifecycleState,
     purgeAfter: company.purgeAfter,
     authorizationEpoch: company.authorizationEpoch,
-    syncVersion: company.syncVersion,
+    syncVersion: await readCompanySyncVersion(ctx, company),
     isOwner: await isOwnerMembership(ctx, company._id, membership._id),
   };
 }
@@ -430,7 +431,7 @@ export const listMine = query({
         lifecycleState: company.lifecycleState,
         purgeAfter: company.purgeAfter,
         authorizationEpoch: company.authorizationEpoch,
-        syncVersion: company.syncVersion,
+        syncVersion: await readCompanySyncVersion(ctx, company),
         isOwner: owner !== null,
       });
     }

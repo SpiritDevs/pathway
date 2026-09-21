@@ -1,3 +1,4 @@
+import { readCompanySyncVersion, writeCompanySyncVersion } from "./companySyncHead.ts";
 import { readEnvironmentPresence } from "./environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations are not Effect programs; the transaction clock is `Date.now()`.
 /**
@@ -644,20 +645,22 @@ export async function appendCompanyChanges(
   const changes = options.changes;
   const companyUpsert = options.companyUpsert === true;
   const now = Date.now();
-  const headBefore = company.syncVersion;
+  const headBefore = await readCompanySyncVersion(ctx, company);
   const assignment = assignVersions(headBefore, changes.length + (companyUpsert ? 1 : 0));
 
-  // One patch for everything the company row owes this call: the new head, the bumped epoch, and —
+  // Only authorization or company metadata changes patch the company row; the head is isolated.
+  // One patch covers the bumped epoch and —
   // when the run ends in a `company` upsert — that row's own version, which is the last version of
   // the run. Applying it before the payload is encoded is what lets that payload be the row as it
   // will be read, rather than the row as it was a moment ago.
   const companyPatch: {
-    syncVersion?: number;
     authorizationEpoch?: number;
     version?: number;
     updatedAt?: number;
   } = {};
-  if (assignment.nextHead !== headBefore) companyPatch.syncVersion = assignment.nextHead;
+  if (assignment.nextHead !== headBefore) {
+    await writeCompanySyncVersion(ctx, company, assignment.nextHead);
+  }
   if (options.bumpEpoch === true) companyPatch.authorizationEpoch = company.authorizationEpoch + 1;
   if (companyUpsert) {
     companyPatch.version = assignment.lastVersion;

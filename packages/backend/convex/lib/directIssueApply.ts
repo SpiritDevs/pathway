@@ -1,3 +1,4 @@
+import { readCompanySyncVersion, writeCompanySyncVersion } from "./companySyncHead.ts";
 /** Applies one server-authored issue operation and appends its changes in the same transaction. */
 import { changeRetainUntil } from "../../src/sync/changeFeed.ts";
 import { assignVersions } from "../../src/sync/operations.ts";
@@ -37,7 +38,7 @@ export async function applyDirectIssueOperation(
     environmentId: actor.registration.environmentId,
     actor: { kind: "system", source: input.source ?? "slack" },
     localSequence: 0,
-    baseVersion: actor.company.syncVersion,
+    baseVersion: await readCompanySyncVersion(ctx, actor.company),
     kind: input.kind,
     entityId: input.entityId,
     args: input.args,
@@ -51,7 +52,8 @@ export async function applyDirectIssueOperation(
 
   const company = await ctx.db.get(actor.company._id);
   if (company === null) throw backendError("entity-not-found", "The company is missing.");
-  const assignment = assignVersions(company.syncVersion, outcome.changes.length);
+  const headBefore = await readCompanySyncVersion(ctx, company);
+  const assignment = assignVersions(headBefore, outcome.changes.length);
   // @effect-diagnostics-next-line globalDate:off -- Convex transaction clock.
   const now = Date.now();
   const feedActor = syncOperationActorRecord(systemActor, operation.actor, operation.environmentId);
@@ -74,7 +76,7 @@ export async function applyDirectIssueOperation(
       retainUntil: changeRetainUntil(now),
     });
   }
-  if (assignment.nextHead !== company.syncVersion) {
-    await ctx.db.patch(company._id, { syncVersion: assignment.nextHead });
+  if (assignment.nextHead !== headBefore) {
+    await writeCompanySyncVersion(ctx, company, assignment.nextHead);
   }
 }

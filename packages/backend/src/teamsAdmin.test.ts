@@ -1,3 +1,4 @@
+import { readCompanySyncVersion } from "../convex/lib/companySyncHead.ts";
 // @effect-diagnostics globalDate:off -- Test rows mirror Convex documents, whose clock is `Date.now()`.
 /**
  * Drives `convex/teams` end to end through the Convex harness.
@@ -270,7 +271,7 @@ describe("teams.create", () => {
       // Stamped with the version its feed entry carries, which closes the bootstrap seed handoff.
       expect(team?.version).toBe(1);
       const company = await ctx.db.get(seeded.companyDocId);
-      expect(company?.syncVersion).toBe(1);
+      expect(await readCompanySyncVersion(ctx, company!)).toBe(1);
     });
     // A team nobody belongs to and nobody is assigned into grants nothing.
     expect(await epochOf(t, seeded.companyDocId)).toBe(1);

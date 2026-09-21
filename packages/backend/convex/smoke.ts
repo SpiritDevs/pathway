@@ -1,3 +1,4 @@
+import { readCompanySyncVersion } from "./lib/companySyncHead.ts";
 import { deleteEnvironmentRuntime } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations are not Effect programs; the transaction clock is `Date.now()`.
 /**
@@ -521,6 +522,11 @@ export const cleanup = internalMutation({
       }
     }
 
+    const syncHead = await ctx.db
+      .query("companySyncHeads")
+      .withIndex("by_company", (q) => q.eq("companyId", company._id))
+      .unique();
+    if (syncHead) await ctx.db.delete(syncHead._id);
     await ctx.db.delete(company._id);
     counts.companies += 1;
     return counts;
@@ -557,7 +563,7 @@ export const inspect = internalQuery({
     return {
       companyId: company.id,
       authorizationEpoch: company.authorizationEpoch,
-      syncVersion: company.syncVersion,
+      syncVersion: await readCompanySyncVersion(ctx, company),
       registration:
         registration === null
           ? null

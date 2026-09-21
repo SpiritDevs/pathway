@@ -1,3 +1,4 @@
+import { readCompanySyncVersion, writeCompanySyncVersion } from "./lib/companySyncHead.ts";
 import { internal } from "./_generated/api.js";
 // @effect-diagnostics globalDate:off -- Convex mutations are not Effect programs; the transaction clock is `Date.now()`.
 /**
@@ -117,7 +118,7 @@ export const latestVersion = query({
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
     return {
-      version: actor.company.syncVersion,
+      version: await readCompanySyncVersion(ctx, actor.company),
       authorizationEpoch: actor.company.authorizationEpoch,
     };
   },
@@ -158,6 +159,7 @@ export const listChanges = query({
   ),
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
+    const head = await readCompanySyncVersion(ctx, actor.company);
     // Clamped at both ends: Convex validates `limit` as a number, so a client asking for zero or a
     // negative page would otherwise be handed an empty page at its own cursor with `hasMore` set,
     // and drain forever without ever making progress.
@@ -170,12 +172,11 @@ export const listChanges = query({
       .withIndex("by_company_and_version", (q) => q.eq("companyId", actor.company._id))
       .order("asc")
       .first();
-    const expired =
-      oldest === null ? args.cursor < actor.company.syncVersion : args.cursor < oldest.version - 1;
+    const expired = oldest === null ? args.cursor < head : args.cursor < oldest.version - 1;
     if (expired) {
       return {
         _tag: "CursorExpired" as const,
-        latestVersion: actor.company.syncVersion,
+        latestVersion: head,
         authorizationEpoch: actor.company.authorizationEpoch,
       };
     }
@@ -259,7 +260,7 @@ export const listChanges = query({
       // A read that stopped on a ceiling rather than on the end of the feed leaves work behind even
       // when the pager consumed everything it was handed.
       hasMore: page.hasMore || !read.exhausted,
-      latestVersion: actor.company.syncVersion,
+      latestVersion: head,
       authorizationEpoch: actor.company.authorizationEpoch,
     };
   },
@@ -294,10 +295,11 @@ export const bootstrap = query({
   }),
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
+    const head = await readCompanySyncVersion(ctx, actor.company);
 
     let state: BootstrapCursorState;
     if (args.cursor === null) {
-      state = initialBootstrapState(args.companyId, actor.company.syncVersion);
+      state = initialBootstrapState(args.companyId, head);
     } else {
       const decoded = decodeBootstrapCursor(args.cursor, args.companyId);
       // A token this build cannot read — corrupted in the client's store, bound to another company,
@@ -307,7 +309,7 @@ export const bootstrap = query({
       // for a finished one. A snapshot version past this company's head is the same kind of
       // unusable: it comes back as the seed's resume version, and a client that persisted it as its
       // feed cursor would skip every change up to it and never learn anything was missed.
-      if (decoded === null || decoded.snapshotVersion > actor.company.syncVersion) {
+      if (decoded === null || decoded.snapshotVersion > head) {
         throw backendError("invalid-arguments", "Unrecognized bootstrap cursor.");
       }
       state = decoded;
@@ -611,7 +613,7 @@ export const applyOperations = mutation({
     }
     const partition = partitionByExistingReceipts(operations, new Set(existingReceipts.keys()));
 
-    const headBefore = actor.company.syncVersion;
+    const headBefore = await readCompanySyncVersion(ctx, actor.company);
     const now = Date.now();
     const receipts: OperationReceipt[] = [];
 
@@ -785,9 +787,7 @@ export const applyOperations = mutation({
     }
 
     if (assignment.nextHead !== headBefore) {
-      await ctx.db.patch(actor.company._id, {
-        syncVersion: assignment.nextHead,
-      });
+      await writeCompanySyncVersion(ctx, actor.company, assignment.nextHead);
     }
 
     return {

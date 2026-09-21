@@ -340,18 +340,23 @@ export default defineSchema({
     purgeAfter: v.union(v.number(), v.null()),
     /** Bumped by any authorization change; a client that sees a new epoch reseeds its replica. */
     authorizationEpoch: v.number(),
-    /** Head of the company change feed. Every accepted operation advances it contiguously. */
+    /** Legacy feed head, used only until companySyncHeads is created by the first subsequent write. */
     syncVersion: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),
     /**
-     * Feed version of the last `company` change, distinct from {@link syncVersion}: that is the
+     * Feed version of the last `company` change, distinct from the companySyncHeads version: that is the
      * head of the whole feed, this is where this one row last moved. Optional because rows written
      * before the company domain joined the feed have none; `lib/companyApply` stamps it on the
      * first write and `?? 0` reads the rest as never-changed.
      */
     version: v.optional(v.number()),
   }).index("by_domain_id", ["id"]),
+
+  companySyncHeads: defineTable({
+    companyId: v.id("companies"),
+    version: v.number(),
+  }).index("by_company", ["companyId"]),
 
   companySettings: defineTable({
     companyId: v.id("companies"),

@@ -232,3 +232,29 @@ For ten enabled worker groups, shared discovery reduces the steady recurring
 calls from approximately 57,600 to 5,760 per day per environment (90%), without
 increasing the registration-revocation interval. This is a call-rate estimate,
 not a measured billing reduction. This change requires a server update only.
+
+## Company sync heads
+
+`companySyncHeads` owns the changing feed version. Company authorization reads
+the original company record without joining the head. Feed append, batched sync
+operations and direct issue operations allocate versions against the same head
+inside their transaction. Company lists, bootstrap, incremental reads and smoke
+inspection retain their existing wire response shapes and read the current head.
+
+Until a company's first subsequent feed write, readers fall back to its legacy
+`companies.syncVersion`. The first write creates the head without patching that
+company record; repeated writes in one transaction see the new head. Authorization
+epochs and genuine company metadata updates still patch the company, intentionally
+invalidating permission-sensitive readers. Sequence writers still serialize on
+their per-company head; this removes unrelated authorization-reader contention,
+not all conflicts between feed writers.
+
+Keep the legacy field in the schema during rollout. Deploy all updated backend
+readers and writers together. A rollback to older backend code needs a bounded
+copy of current heads back to legacy fields while feed writes are stopped; simply
+rolling back would reuse stale sequence numbers. Clients need no update.
+
+Focused coverage includes legacy nonzero heads, contiguous mixed-writer versions,
+replays, company lifecycle/permissions, bootstrap handoff, issue import, direct
+automation/Slack writes and smoke cleanup. The isolation test verifies zero
+company patches for normal feed appends and zero head reads during authorization.

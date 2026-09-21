@@ -1,3 +1,4 @@
+import { readCompanySyncVersion } from "../convex/lib/companySyncHead.ts";
 // @effect-diagnostics globalDate:off -- Test rows mirror Convex documents, whose clock is `Date.now()`.
 /**
  * Drives the invitation lifecycle end to end through the production identity resolution:
@@ -283,7 +284,7 @@ async function companyRow(t: ReturnType<typeof harness>) {
       .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
       .unique();
     if (company === null) throw new Error("no company");
-    return company;
+    return { ...company, syncVersion: await readCompanySyncVersion(ctx, company) };
   });
 }
 

@@ -1,3 +1,4 @@
+import { readCompanySyncVersion } from "../convex/lib/companySyncHead.ts";
 // @effect-diagnostics globalDate:off -- Test rows mirror Convex documents, whose clock is `Date.now()`.
 /**
  * Drives the company and membership administration surface end to end through the production
@@ -252,7 +253,9 @@ async function companyState(t: Harness) {
       .query("companies")
       .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
       .unique();
-    return company;
+    return company === null
+      ? null
+      : { ...company, syncVersion: await readCompanySyncVersion(ctx, company) };
   });
 }
 

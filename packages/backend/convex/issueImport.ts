@@ -1,3 +1,4 @@
+import { readCompanySyncVersion } from "./lib/companySyncHead.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock directly.
 /**
  * Full-fidelity, empty-company issue import.
@@ -1224,7 +1225,7 @@ async function applyBatch(
   });
   const company = await ctx.db.get(actor.company._id);
   if (company === null) throw new Error("The import company vanished.");
-  return { outcomes, progress, version: company.syncVersion };
+  return { outcomes, progress, version: await readCompanySyncVersion(ctx, company) };
 }
 
 export const start = mutation({

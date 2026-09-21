@@ -49,6 +49,7 @@ import type * as lib_aiOrchestratorWork from "../lib/aiOrchestratorWork.js";
 import type * as lib_automationJobs from "../lib/automationJobs.js";
 import type * as lib_businessToolsSchema from "../lib/businessToolsSchema.js";
 import type * as lib_companyApply from "../lib/companyApply.js";
+import type * as lib_companySyncHead from "../lib/companySyncHead.js";
 import type * as lib_conversationLifecycle from "../lib/conversationLifecycle.js";
 import type * as lib_delegatedBusinessOwner from "../lib/delegatedBusinessOwner.js";
 import type * as lib_dictationDictionary from "../lib/dictationDictionary.js";
@@ -132,6 +133,7 @@ declare const fullApi: ApiFromModules<{
   "lib/automationJobs": typeof lib_automationJobs;
   "lib/businessToolsSchema": typeof lib_businessToolsSchema;
   "lib/companyApply": typeof lib_companyApply;
+  "lib/companySyncHead": typeof lib_companySyncHead;
   "lib/conversationLifecycle": typeof lib_conversationLifecycle;
   "lib/delegatedBusinessOwner": typeof lib_delegatedBusinessOwner;
   "lib/dictationDictionary": typeof lib_dictationDictionary;
