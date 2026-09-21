@@ -383,7 +383,7 @@ export const aiOrchestratorTables = {
     .index("by_domain_id", ["id"])
     .index("by_company_environment_status", ["companyId", "environmentId", "status"])
     .index("by_company_environment_updated", ["companyId", "environmentId", "updatedAt"])
-    .index("by_pending_controls", ["companyId", "environmentId", "controlsPending"])
+    .index("by_pending_controls", ["companyId", "environmentId", "controlsPending", "threadId"])
     .index("by_chat", ["chatId"])
     .index("by_command", ["commandId"])
     .index("by_control_work", ["controlWorkId", "createdAt"])

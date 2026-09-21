@@ -424,17 +424,21 @@ export const claim = mutation({
     }
     const pending = await ctx.db
       .query("environmentCommands")
-      .withIndex("by_target_and_state", (q) =>
-        q.eq("targetEnvironmentId", environmentId).eq("state", "pending"),
+      .withIndex("by_company_target_state", (q) =>
+        q
+          .eq("companyId", actor.company._id)
+          .eq("targetEnvironmentId", environmentId)
+          .eq("state", "pending"),
       )
-      .filter((q) => q.eq(q.field("companyId"), actor.company._id))
       .take(limit);
     const claimed = await ctx.db
       .query("environmentCommands")
-      .withIndex("by_target_and_state", (q) =>
-        q.eq("targetEnvironmentId", environmentId).eq("state", "claimed"),
+      .withIndex("by_company_target_state", (q) =>
+        q
+          .eq("companyId", actor.company._id)
+          .eq("targetEnvironmentId", environmentId)
+          .eq("state", "claimed"),
       )
-      .filter((q) => q.eq(q.field("companyId"), actor.company._id))
       .take(limit);
 
     const selected = [...pending, ...claimed]

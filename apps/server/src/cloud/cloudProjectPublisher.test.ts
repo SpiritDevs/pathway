@@ -3,10 +3,14 @@ import { EnvironmentId, ProjectId, type Project } from "@spiritdevs/contracts";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 
 import type { ConvexServiceTokenProvider } from "./convexServiceToken.ts";
 import type { ConvexClientLike } from "./convexSyncTransport.ts";
-import { makeCloudProjectPublisher } from "./cloudProjectPublisher.ts";
+import {
+  CLOUD_PROJECT_REFRESH_INTERVAL,
+  makeCloudProjectPublisher,
+} from "./cloudProjectPublisher.ts";
 
 const COMPANY_ID = CompanyId.make("company-project-publisher");
 const ENVIRONMENT_ID = EnvironmentId.make("environment-project-publisher");
@@ -91,3 +95,46 @@ describe("cloud project publisher", () => {
     }),
   );
 });
+
+it.effect(
+  "skips unchanged projects, retries failures, and refreshes remote ownership periodically",
+  () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      let failNext = false;
+      const client: ConvexClientLike = {
+        setAuth: () => {},
+        query: (() => Promise.reject(new Error("unexpected query"))) as ConvexClientLike["query"],
+        mutation: ((reference: FunctionReference<"mutation">) => {
+          calls.push(getFunctionName(reference));
+          if (failNext) {
+            failNext = false;
+            return Promise.reject(new Error("temporary network failure"));
+          }
+          return Promise.resolve(null);
+        }) as ConvexClientLike["mutation"],
+      };
+      const publisher = yield* makeCloudProjectPublisher({
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        convexUrl: "https://example.convex.cloud",
+        client,
+        tokens: { token: Effect.succeed("token"), invalidate: () => Effect.void },
+      });
+      yield* publisher.publish(PROJECT);
+      yield* publisher.publish(PROJECT);
+      assert.equal(calls.length, 1);
+      yield* publisher.publish({ ...PROJECT, title: "Renamed" });
+      assert.equal(calls.length, 2);
+      yield* TestClock.adjust(CLOUD_PROJECT_REFRESH_INTERVAL);
+      yield* publisher.publish({ ...PROJECT, title: "Renamed" });
+      assert.equal(calls.length, 3);
+      failNext = true;
+      yield* publisher.publish({ ...PROJECT, title: "Retry me" }).pipe(Effect.exit);
+      yield* publisher.publish({ ...PROJECT, title: "Retry me" });
+      assert.equal(calls.length, 5);
+      yield* publisher.release(PROJECT_ID);
+      yield* publisher.publish({ ...PROJECT, title: "Retry me" });
+      assert.equal(calls.length, 7);
+    }),
+);

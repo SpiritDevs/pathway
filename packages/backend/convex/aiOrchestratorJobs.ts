@@ -1,3 +1,4 @@
+import { canonicalQueueJson } from "../src/threadQueue.ts";
 import { assignmentForExecution } from "./lib/aiOrchestratorAuthority.ts";
 import { reconcileConversationLifecycle } from "./lib/conversationLifecycle.ts";
 import { resolveWorkAssignments } from "./lib/aiOrchestratorContext.ts";
@@ -772,10 +773,18 @@ export const claim = mutation({
       if (JSON.stringify(args.delegationCatalog).length > 100000)
         return fail("Worker catalog is too large.");
       const catalog = decodeDelegationCatalog(args.delegationCatalog);
-      await ctx.db.patch(actor.registration._id, {
-        orchestratorDelegationCatalog: catalog,
-        orchestratorDelegationCatalogAt: now,
-      });
+      // A changed timestamp invalidates every registration reader. Renew unchanged catalogs
+      // halfway through their two-minute freshness window, rather than on every idle poll.
+      if (
+        canonicalQueueJson(actor.registration.orchestratorDelegationCatalog ?? null) !==
+          canonicalQueueJson(catalog) ||
+        now - (actor.registration.orchestratorDelegationCatalogAt ?? 0) >= 60_000
+      ) {
+        await ctx.db.patch(actor.registration._id, {
+          orchestratorDelegationCatalog: catalog,
+          orchestratorDelegationCatalogAt: now,
+        });
+      }
     }
     if (
       (actor.registration.lastSeenAt ?? 0) < now - 30_000 ||

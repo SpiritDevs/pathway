@@ -44,27 +44,44 @@ export async function audienceProjectPermissions(
 export function workVisibilityForConversation(ctx: QueryCtx, chat: Doc<"aiOrchestratorChats">) {
   const visibility = new Map<string, Promise<boolean>>();
   const audiences = new Map<string, ReturnType<typeof audienceProjectPermissions>>();
+  const personalBoundaries = new Map<string, Promise<number | null>>();
   return (work: Doc<"aiOrchestratorWork">) => {
     if (!work.companyId) return Promise.resolve(false);
     // Personal assignments are shared only with their original human audience.
-    if (work.projectId === null)
+    if (work.projectId === null) {
+      const companyId = work.companyId;
+      if (!personalBoundaries.has(work.chatId))
+        personalBoundaries.set(
+          work.chatId,
+          (async () => {
+            const source =
+              work.chatId === chat.id
+                ? chat
+                : await ctx.db
+                    .query("aiOrchestratorChats")
+                    .withIndex("by_domain_id", (q) => q.eq("id", work.chatId))
+                    .unique();
+            if (
+              !source ||
+              !chat.participantSubjects.every((subject) =>
+                source.participantSubjects.includes(subject),
+              )
+            )
+              return null;
+            return sharedHistoryBoundary(ctx, source, chat);
+          })(),
+        );
+      if (!audiences.has(companyId))
+        audiences.set(companyId, audienceProjectPermissions(ctx, chat, companyId));
       return (async () => {
-        const source = await ctx.db
-          .query("aiOrchestratorChats")
-          .withIndex("by_domain_id", (q) => q.eq("id", work.chatId))
-          .unique();
-        if (
-          !source ||
-          !chat.participantSubjects.every((subject) => source.participantSubjects.includes(subject))
-        )
-          return false;
-        const boundary = await sharedHistoryBoundary(ctx, source, chat);
+        const boundary = await personalBoundaries.get(work.chatId)!;
         return (
           boundary !== null &&
           (work.sourceSequence ?? 0) >= boundary &&
-          (await audienceProjectPermissions(ctx, chat, work.companyId!)) !== null
+          (await audiences.get(companyId)!) !== null
         );
       })();
+    }
     const companyId = work.companyId,
       key = `${companyId}:${work.projectId}`;
     if (!visibility.has(key))

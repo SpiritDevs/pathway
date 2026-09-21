@@ -7,6 +7,10 @@ import { api } from "../convex/_generated/api.js";
 import type { MutationCtx } from "../convex/_generated/server.js";
 import { appendCompanyChanges, encodeEnvironmentBinding } from "../convex/lib/companyApply.ts";
 import schema from "../convex/schema.ts";
+import { reconcile as reconcileThreads } from "../convex/agentThreads.ts";
+import { reconcile as reconcileEmails } from "../convex/capturedEmails.ts";
+import { PUBLISHER_RECONCILIATION_INTERVAL_MS } from "../convex/lib/publisherReconciliation.ts";
+import { functionHandler, measureDatabaseReads } from "./testDatabaseReads.ts";
 
 const RELAY_ISSUER = "https://relay.example.test";
 process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
@@ -1494,5 +1498,115 @@ describe("environment registry", () => {
       changeKind: "tombstone",
       payload: null,
     });
+  });
+});
+
+describe("publisher reconciliation read budget", () => {
+  it.each(["threads", "emails"] as const)(
+    "skips unchanged %s inventories, repairs missed removals, and rechecks permission",
+    async (kind) => {
+      const t = harness();
+      const { companyDocId } = await seedRegistration(t);
+      const inventory = Array.from({ length: 300 }, (_, i) => `item-${i}`);
+      await t.run(async (ctx) => {
+        const registration = (await ctx.db.query("environmentRegistrations").unique())!;
+        await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+        for (const id of inventory) {
+          const shared = {
+            id: `${ENVIRONMENT_ID}:${id}`,
+            companyId: companyDocId,
+            environmentId: ENVIRONMENT_ID,
+            localProjectId: null,
+            cloudProjectId: null,
+            updatedAt: Date.now(),
+          };
+          if (kind === "threads")
+            await ctx.db.insert("agentThreads", {
+              ...shared,
+              threadId: id,
+              shell: { title: "x".repeat(1000) },
+            });
+          else
+            await ctx.db.insert("capturedEmails", {
+              ...shared,
+              messageId: id,
+              message: { textBody: "x".repeat(1000) },
+            });
+        }
+      });
+      const call = (ids: string[]) =>
+        asEnvironment(t).run(async (ctx) => {
+          const meter = measureDatabaseReads(ctx.db);
+          if (kind === "threads")
+            await functionHandler(reconcileThreads)(
+              { ...ctx, db: meter.db },
+              { companyId: COMPANY_ID, environmentId: ENVIRONMENT_ID, currentThreadIds: ids },
+            );
+          else
+            await functionHandler(reconcileEmails)(
+              { ...ctx, db: meter.db },
+              { companyId: COMPANY_ID, environmentId: ENVIRONMENT_ID, currentMessageIds: ids },
+            );
+          return {
+            scanned:
+              meter.documents.get(kind === "threads" ? "agentThreads" : "capturedEmails") ?? 0,
+            bytes: meter.bytes(),
+          };
+        });
+      const initial = await call(inventory);
+      expect(initial.scanned).toBe(300);
+      const idle = await call(inventory.toReversed().concat(inventory[0]!));
+      expect(idle.scanned).toBe(0);
+      expect(idle.bytes).toBeLessThan(initial.bytes / 20);
+      // A changed inventory must repair immediately rather than wait for the idle cooldown.
+      expect((await call(inventory.slice(1))).scanned).toBe(300);
+      const table = kind === "threads" ? "agentThreads" : "capturedEmails";
+      expect(await t.run(async (ctx) => (await ctx.db.query(table).collect()).length)).toBe(299);
+      await t.run(async (ctx) => {
+        const registration = (await ctx.db.query("environmentRegistrations").unique())!;
+        const key =
+          kind === "threads" ? "agentThreadReconciliation" : "capturedEmailReconciliation";
+        const checkpoint = registration[key]!;
+        await ctx.db.patch(registration._id, {
+          [key]: { ...checkpoint, completedAt: Date.now() - PUBLISHER_RECONCILIATION_INTERVAL_MS },
+        });
+      });
+      expect((await call(inventory.slice(1))).scanned).toBe(299);
+      await t.run(async (ctx) => {
+        const registration = (await ctx.db.query("environmentRegistrations").unique())!;
+        await ctx.db.patch(registration._id, { serviceRoleIds: [] });
+      });
+      await expect(call(inventory.slice(1))).rejects.toThrow("projects.manage");
+    },
+  );
+
+  it("drains more than one removal batch before starting the idle cooldown", async () => {
+    const t = harness();
+    const { companyDocId } = await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = (await ctx.db.query("environmentRegistrations").unique())!;
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+      for (let i = 0; i < 201; i++)
+        await ctx.db.insert("agentThreads", {
+          id: `${ENVIRONMENT_ID}:stale-${i}`,
+          companyId: companyDocId,
+          environmentId: ENVIRONMENT_ID,
+          threadId: `stale-${i}`,
+          localProjectId: null,
+          cloudProjectId: null,
+          shell: {},
+          updatedAt: Date.now(),
+        });
+    });
+    for (const remaining of [101, 1, 0]) {
+      await asEnvironment(t).mutation(api.agentThreads.reconcile, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        currentThreadIds: [],
+      });
+      expect(
+        await t.run(async (ctx) => (await ctx.db.query("agentThreads").collect()).length),
+      ).toBe(remaining);
+    }
   });
 });

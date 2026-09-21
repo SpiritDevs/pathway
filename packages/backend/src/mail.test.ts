@@ -7,6 +7,8 @@ import { makeMailRuntime, type MailRpc } from "../../../infra/relay/src/mail/run
 import { describe, expect, it, vi, afterEach } from "vite-plus/test";
 import { api } from "../convex/_generated/api.js";
 import schema from "../convex/schema.ts";
+import { claim as claimMailJob } from "../convex/mailJobs.ts";
+import { functionHandler, measureDatabaseReads } from "./testDatabaseReads.ts";
 const RELAY = "https://relay.example.test";
 process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY;
 process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY}/.well-known/jwks.json`;
@@ -144,8 +146,110 @@ async function intake(t: Harness, accountId: string, ids = ["gmail-1"]) {
   await relay(t).mutation(api.mailRelay.finishSync, { ...args, cursor: "100" });
   return (await human(t).query(api.mail.listMessages, { companyId: COMPANY, accountId })).messages;
 }
+async function seedAccountGroup(t: Harness, count: number) {
+  const first = await seed(t);
+  return t.run(async (ctx) => {
+    const { _id, _creationTime, ...account } = (await ctx.db.query("mailAccounts").first())!;
+    void _id;
+    void _creationTime;
+    const ids = [first];
+    for (let index = 1; index < count; index++) {
+      const id = `account-${index}`;
+      await ctx.db.insert("mailAccounts", { ...account, id, email: `owner-${index}@gmail.test` });
+      await ctx.db.insert("mailCredentials", {
+        accountId: id,
+        encryptedCredentials: "encrypted-only",
+      });
+      ids.push(id);
+    }
+    return ids;
+  });
+}
+async function measuredMailClaim(t: Harness, environmentId = "primary") {
+  return environment(t, environmentId).run(async (ctx) => {
+    const patches = vi.spyOn(ctx.db, "patch");
+    try {
+      const meter = measureDatabaseReads(ctx.db);
+      const job = await functionHandler(claimMailJob)(
+        { ...ctx, db: meter.db },
+        { companyId: COMPANY },
+      );
+      return { job, patches: patches.mock.calls.length, bytes: meter.bytes() };
+    } finally {
+      patches.mockRestore();
+    }
+  });
+}
 afterEach(() => vi.useRealTimers());
 describe("connected mail", () => {
+  it.each([1, 25])(
+    "avoids idle bookkeeping for %i accounts and claims new work immediately",
+    async (count) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_800_000_000_000);
+      const t = harness();
+      const accounts = await seedAccountGroup(t, count);
+      for (let poll = 0; poll < 6; poll++) {
+        for (const environmentId of ["primary", "backup"]) {
+          const measured = await measuredMailClaim(t, environmentId);
+          expect(measured.job).toBeNull();
+          expect(measured.patches).toBe(0);
+        }
+        vi.setSystemTime(Date.now() + 10_000);
+      }
+      expect(
+        await t.run(async (ctx) =>
+          (await ctx.db.query("mailAccounts").collect()).map((account) => account.lastClaimAt),
+        ),
+      ).toEqual(Array(count).fill(0));
+      const accountId = accounts.at(-1)!;
+      await intake(t, accountId);
+      const claimed = await measuredMailClaim(t);
+      expect(claimed.job?.kind).toBe("analyze");
+      expect(claimed.patches).toBe(2);
+      expect(
+        await t.run(
+          async (ctx) =>
+            (await ctx.db
+              .query("mailAccounts")
+              .withIndex("by_domain_id", (q) => q.eq("id", accountId))
+              .unique())!.lastClaimAt,
+        ),
+      ).toBe(Date.now());
+    },
+  );
+  it.each(["primary", "backup"])(
+    "keeps accounts beyond the %s scan window eligible",
+    async (environmentId) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_800_000_000_000);
+      const t = harness();
+      const accounts = await seedAccountGroup(t, 26);
+      const accountId = accounts.at(-1)!;
+      await t.run(async (ctx) => {
+        const account = (await ctx.db
+          .query("mailAccounts")
+          .withIndex("by_domain_id", (q) => q.eq("id", accountId))
+          .unique())!;
+        await ctx.db.patch(account._id, { lastClaimAt: 1 });
+        const primary = (await ctx.db
+          .query("environmentRegistrations")
+          .withIndex("by_environment", (q) => q.eq("environmentId", "primary"))
+          .unique())!;
+        await ctx.db.patch(primary._id, { lastSeenAt: 0 });
+      });
+      await intake(t, accountId);
+      const first = await measuredMailClaim(t, environmentId);
+      expect(first.job).toBeNull();
+      expect(first.patches).toBe(25);
+      vi.setSystemTime(Date.now() + 10_000);
+      const second = await measuredMailClaim(t, environmentId);
+      expect(second.job?.kind).toBe("analyze");
+      expect(second.job?.selection.instanceId).toBe(
+        environmentId === "primary" ? "claude" : "codex",
+      );
+    },
+  );
   it("keeps mail, bodies, sender knowledge, drafts and credentials private to the owner", async () => {
     const t = harness();
     const accountId = await seed(t);

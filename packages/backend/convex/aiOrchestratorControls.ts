@@ -80,37 +80,67 @@ const questionById = (ctx: QueryCtx, workId: string, id: string) =>
     .withIndex("by_work_id", (q) => q.eq("workId", workId).eq("id", id))
     .unique();
 
+/** Reuse authorization reads only within this transaction; later calls always recheck live grants. */
+function workerVisibility(ctx: QueryCtx) {
+  const orchestrators = new Map<string, ReturnType<typeof findOrchestrator>>();
+  const registrations = new Map<string, Promise<Doc<"environmentRegistrations"> | null>>();
+  const boundaries = new Map<string, ReturnType<typeof sharedHistoryBoundary>>();
+  const access = new Map<string, ReturnType<typeof orchestratorCanReadWork>>();
+  const audiences = new Map<string, ReturnType<typeof workVisibilityForConversation>>();
+  return async (work: Doc<"aiOrchestratorWork">, chat: Doc<"aiOrchestratorChats">) => {
+    if (
+      !work.companyId ||
+      work.chatId !== chat.id ||
+      !chat.orchestratorIds.includes(work.orchestratorId)
+    )
+      return false;
+    if (!orchestrators.has(work.orchestratorId))
+      orchestrators.set(work.orchestratorId, findOrchestrator(ctx, work.orchestratorId));
+    const orchestrator = await orchestrators.get(work.orchestratorId)!;
+    const registrationKey = JSON.stringify([work.companyId, work.environmentId]);
+    if (!registrations.has(registrationKey))
+      registrations.set(
+        registrationKey,
+        (async () => {
+          const company = await ctx.db
+            .query("companies")
+            .withIndex("by_domain_id", (q) => q.eq("id", work.companyId!))
+            .unique();
+          return company
+            ? ctx.db
+                .query("environmentRegistrations")
+                .withIndex("by_company_and_environment", (q) =>
+                  q.eq("companyId", company._id).eq("environmentId", work.environmentId),
+                )
+                .unique()
+            : null;
+        })(),
+      );
+    const registration = await registrations.get(registrationKey)!;
+    if (!orchestrator || !registration) return false;
+    if (!boundaries.has(chat.id)) boundaries.set(chat.id, sharedHistoryBoundary(ctx, chat, chat));
+    const boundary = await boundaries.get(chat.id)!;
+    if (boundary === null || (work.sourceSequence ?? 0) < boundary) return false;
+    const accessKey = JSON.stringify([
+      work.orchestratorId,
+      work.companyId,
+      work.environmentId,
+      work.projectId,
+    ]);
+    if (!access.has(accessKey))
+      access.set(accessKey, orchestratorCanReadWork(ctx, orchestrator, work, registration));
+    if (!(await access.get(accessKey)!)) return false;
+    if (!audiences.has(chat.id)) audiences.set(chat.id, workVisibilityForConversation(ctx, chat));
+    return audiences.get(chat.id)!(work);
+  };
+}
+
 export async function visibleWorker(
   ctx: QueryCtx,
   work: Doc<"aiOrchestratorWork">,
   chat: Doc<"aiOrchestratorChats">,
 ) {
-  const orchestrator = await findOrchestrator(ctx, work.orchestratorId);
-  const company = work.companyId
-    ? await ctx.db
-        .query("companies")
-        .withIndex("by_domain_id", (q) => q.eq("id", work.companyId!))
-        .unique()
-    : null;
-  const registration = company
-    ? await ctx.db
-        .query("environmentRegistrations")
-        .withIndex("by_company_and_environment", (q) =>
-          q.eq("companyId", company._id).eq("environmentId", work.environmentId),
-        )
-        .unique()
-    : null;
-  const boundary = await sharedHistoryBoundary(ctx, chat, chat);
-  return !!(
-    orchestrator &&
-    registration &&
-    work.chatId === chat.id &&
-    chat.orchestratorIds.includes(orchestrator.id) &&
-    boundary !== null &&
-    (work.sourceSequence ?? 0) >= boundary &&
-    (await orchestratorCanReadWork(ctx, orchestrator, work, registration)) &&
-    (await workVisibilityForConversation(ctx, chat)(work))
-  );
+  return workerVisibility(ctx)(work, chat);
 }
 
 export async function workerConversationContext(ctx: QueryCtx, work: Doc<"aiOrchestratorWork">) {
@@ -387,35 +417,45 @@ export const environmentInbox = query({
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
     if (actor.kind !== "environment") return fail("An authenticated environment is required.");
-    const active = await Promise.all(
-      (["queued", "working", "unknown"] as const).map((status) =>
-        ctx.db
+    const active = args.threadId
+      ? []
+      : await Promise.all(
+          (["queued", "working", "unknown"] as const).map((status) =>
+            ctx.db
+              .query("aiOrchestratorWork")
+              .withIndex("by_company_environment_status", (q) =>
+                q
+                  .eq("companyId", args.companyId)
+                  .eq("environmentId", actor.registration.environmentId)
+                  .eq("status", status),
+              )
+              .take(100),
+          ),
+        );
+    const recent = args.threadId
+      ? []
+      : await ctx.db
           .query("aiOrchestratorWork")
-          .withIndex("by_company_environment_status", (q) =>
-            q
-              .eq("companyId", args.companyId)
-              .eq("environmentId", actor.registration.environmentId)
-              .eq("status", status),
+          .withIndex("by_company_environment_updated", (q) =>
+            q.eq("companyId", args.companyId).eq("environmentId", actor.registration.environmentId),
           )
-          .take(100),
-      ),
-    );
-    const recent = await ctx.db
-      .query("aiOrchestratorWork")
-      .withIndex("by_company_environment_updated", (q) =>
-        q.eq("companyId", args.companyId).eq("environmentId", actor.registration.environmentId),
-      )
-      .order("desc")
-      .take(100);
-    const pending = await ctx.db
-      .query("aiOrchestratorWork")
-      .withIndex("by_pending_controls", (q) =>
-        q
-          .eq("companyId", args.companyId)
-          .eq("environmentId", actor.registration.environmentId)
-          .eq("controlsPending", true),
-      )
-      .collect();
+          .order("desc")
+          .take(100);
+    const pendingControls = (threadId?: string | null) =>
+      ctx.db
+        .query("aiOrchestratorWork")
+        .withIndex("by_pending_controls", (q) => {
+          const pending = q
+            .eq("companyId", args.companyId)
+            .eq("environmentId", actor.registration.environmentId)
+            .eq("controlsPending", true);
+          return threadId === undefined ? pending : pending.eq("threadId", threadId);
+        })
+        .collect();
+    // Keep older pending controls beyond the recent-work limit, plus stops for pending launches.
+    const pending = args.threadId
+      ? (await Promise.all([pendingControls(args.threadId), pendingControls(null)])).flat()
+      : await pendingControls();
     const matching = args.threadId
       ? await ctx.db
           .query("aiOrchestratorWork")
@@ -434,20 +474,30 @@ export const environmentInbox = query({
       ).values(),
     ];
     const result = [];
+    const visible = workerVisibility(ctx);
+    const chats = new Map<string, Promise<Doc<"aiOrchestratorChats"> | null>>();
+    const orchestrators = new Map<string, ReturnType<typeof findOrchestrator>>();
+    const scopes = new Map<string, ReturnType<typeof orchestratorOwnerScope>>();
     for (const work of rows) {
       if (!work.commandId || ((!work.threadId || work.controlMessageId) && !work.stopRequested))
         continue;
-      const chat = await ctx.db
-        .query("aiOrchestratorChats")
-        .withIndex("by_domain_id", (q) => q.eq("id", work.chatId))
-        .unique();
-      if (!chat || !(await visibleWorker(ctx, work, chat))) continue;
-      const orchestrator = await findOrchestrator(ctx, work.orchestratorId);
+      if (!chats.has(work.chatId))
+        chats.set(
+          work.chatId,
+          ctx.db
+            .query("aiOrchestratorChats")
+            .withIndex("by_domain_id", (q) => q.eq("id", work.chatId))
+            .unique(),
+        );
+      const chat = await chats.get(work.chatId)!;
+      if (!chat || !(await visible(work, chat))) continue;
+      if (!orchestrators.has(work.orchestratorId))
+        orchestrators.set(work.orchestratorId, findOrchestrator(ctx, work.orchestratorId));
+      const orchestrator = await orchestrators.get(work.orchestratorId)!;
       const messages = await pendingMessagesFor(ctx, work.id);
-      const scope =
-        orchestrator && work.companyId
-          ? await orchestratorOwnerScope(ctx, orchestrator, work.companyId)
-          : null;
+      if (orchestrator && work.companyId && !scopes.has(work.orchestratorId))
+        scopes.set(work.orchestratorId, orchestratorOwnerScope(ctx, orchestrator, work.companyId));
+      const scope = (await scopes.get(work.orchestratorId)) ?? null;
       const enabled =
         !!scope &&
         hasCompanyPermission(scope.permissions, "remoteAgents.control") &&

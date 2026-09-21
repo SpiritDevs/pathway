@@ -11,6 +11,7 @@ import { mailBucket } from "./lib/mailSchema.ts";
 import { backendError } from "./lib/errors.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
 const LEASE_MS = 90_000;
+const ACCOUNTS_PER_CLAIM = 25;
 const jobArgs = { companyId: v.string(), jobId: v.string(), generation: v.number() };
 async function environmentActor(ctx: QueryCtx, companyId: string) {
   const actor = await requireCompanyActor(ctx, companyId);
@@ -96,17 +97,30 @@ export const claim = mutation({
       .withIndex("by_primary", (q) =>
         q.eq("companyId", actor.company._id).eq("primaryEnvironmentId", environmentId),
       )
-      .take(25);
+      .take(ACCOUNTS_PER_CLAIM + 1);
     const backupAccounts = await ctx.db
       .query("mailAccounts")
       .withIndex("by_backup", (q) =>
         q.eq("companyId", actor.company._id).eq("backupEnvironmentId", environmentId),
       )
-      .take(25);
-    for (const account of [...primaryAccounts, ...backupAccounts].sort(
-      (a, b) => a.lastClaimAt - b.lastClaimAt,
-    )) {
-      await ctx.db.patch(account._id, { lastClaimAt: now });
+      .take(ACCOUNTS_PER_CLAIM + 1);
+    // Rotate truncated groups so accounts beyond the scan window cannot starve.
+    // A complete group needs a timestamp write only when it actually claims work.
+    const rotations = new Set(
+      [primaryAccounts, backupAccounts].flatMap((accounts) =>
+        accounts.length > ACCOUNTS_PER_CLAIM
+          ? accounts.slice(0, ACCOUNTS_PER_CLAIM).map((account) => account._id)
+          : [],
+      ),
+    );
+    const accounts = new Map(
+      [
+        ...primaryAccounts.slice(0, ACCOUNTS_PER_CLAIM),
+        ...backupAccounts.slice(0, ACCOUNTS_PER_CLAIM),
+      ].map((account) => [account._id, account] as const),
+    );
+    for (const account of [...accounts.values()].sort((a, b) => a.lastClaimAt - b.lastClaimAt)) {
+      if (rotations.has(account._id)) await ctx.db.patch(account._id, { lastClaimAt: now });
       const running = await ctx.db
         .query("mailJobs")
         .withIndex("by_account_status", (q) =>
@@ -171,6 +185,7 @@ export const claim = mutation({
           )
           .unique();
         const generation = job.generation + 1;
+        if (!rotations.has(account._id)) await ctx.db.patch(account._id, { lastClaimAt: now });
         await ctx.db.patch(job._id, {
           status: "running",
           generation,

@@ -730,6 +730,13 @@ export default defineSchema({
     orchestratorDelegationCatalog: v.optional(v.any()),
     orchestratorDelegationCatalogAt: v.optional(v.number()),
     orchestratorPresence: v.optional(v.union(v.literal("online"), v.literal("offline"))),
+    /** Storage-only checkpoints bound idle publisher scans; absent rows reconcile on first use. */
+    agentThreadReconciliation: v.optional(
+      v.object({ fingerprint: v.string(), completedAt: v.number() }),
+    ),
+    capturedEmailReconciliation: v.optional(
+      v.object({ fingerprint: v.string(), completedAt: v.number() }),
+    ),
     relayLinkState: v.union(
       v.literal("unlinked"),
       v.literal("linked"),
@@ -813,6 +820,9 @@ export default defineSchema({
     .index("by_company_and_project", ["companyId", "cloudProjectId"])
     .index("by_company_and_environment", ["companyId", "environmentId"])
     .index("by_company_and_repository", ["companyId", "repositoryKey"])
+    .index("by_company_environment_local_project", ["companyId", "environmentId", "localProjectId"])
+    .index("by_company_status_environment", ["companyId", "status", "environmentId"])
+    .index("by_environment_local_project", ["environmentId", "localProjectId"])
     .index("by_environment", ["environmentId"]),
 
   /**
@@ -866,6 +876,7 @@ export default defineSchema({
     .index("by_company_and_project", ["companyId", "cloudProjectId"])
     .index("by_company_project_and_state", ["companyId", "cloudProjectId", "state"])
     .index("by_target_and_state", ["targetEnvironmentId", "state"])
+    .index("by_company_target_state", ["companyId", "targetEnvironmentId", "state"])
     .index("by_company_and_state", ["companyId", "state"])
     .index("by_state_and_expiry", ["state", "expiresAt"]),
 

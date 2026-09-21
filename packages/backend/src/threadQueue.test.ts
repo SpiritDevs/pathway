@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { api, internal } from "../convex/_generated/api.js";
 import type { Id } from "../convex/_generated/dataModel.js";
 import schema from "../convex/schema.ts";
+import { destinations as queueDestinations } from "../convex/threadQueue.ts";
+import { functionHandler, measureDatabaseReads } from "./testDatabaseReads.ts";
 import type { ThreadQueuePage } from "@spiritdevs/contracts/threadQueue";
 import {
   QUEUE_ORPHAN_GRACE_MS,
@@ -255,6 +257,71 @@ async function capabilities(t: Harness) {
 }
 
 describe("durable thread queue", () => {
+  it("loads destination metadata only for active bindings and registered environments", async () => {
+    const t = harness();
+    const { companyDocId } = await seed(t);
+    await capabilities(t);
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 100; index++) {
+        const projectId = await ctx.db.insert("cloudProjects", {
+          id: `project-${index}`,
+          companyId: companyDocId,
+          name: `Project ${index}`,
+          description: "x".repeat(1000),
+          teamIds: [],
+          defaultWorkflowOwner: null,
+          preferredBindingId: null,
+          archivedAt: null,
+          deletedAt: null,
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        await ctx.db.insert("environmentBindings", {
+          id: `binding-${index}`,
+          companyId: companyDocId,
+          cloudProjectId: projectId,
+          environmentId: ENVIRONMENT_TWO,
+          localProjectId: `local-${index}`,
+          localWorkspaceRoot: `/projects/${index}`,
+          status: index === 0 ? "active" : "revoked",
+          lastSeenAt: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        await ctx.db.insert("environmentProviderCapabilities", {
+          companyId: companyDocId,
+          environmentId: `unregistered-${index}`,
+          revision: 1,
+          supportsSlackCoordination: false,
+          supportsAutomationJobs: false,
+          providers: [],
+          publishedAt: 1,
+        });
+      }
+    });
+    const measured = await asMember(t, "manager").run(async (ctx) => {
+      const meter = measureDatabaseReads(ctx.db);
+      const result = await functionHandler(queueDestinations)(
+        { ...ctx, db: meter.db },
+        { companyId: COMPANY_ID },
+      );
+      return {
+        result,
+        bindingReads: meter.documents.get("environmentBindings"),
+        capabilityReads: meter.documents.get("environmentProviderCapabilities"),
+        bytes: meter.bytes(),
+      };
+    });
+    expect(measured.result).toHaveLength(2);
+    expect(measured.result.find((row) => row.environmentId === ENVIRONMENT_TWO)).toMatchObject({
+      projects: [{ localProjectId: "local-0", title: "Project 0", cloudProjectId: "project-0" }],
+      providers: [{ instanceId: "codex", modelIds: ["gpt-5"] }],
+    });
+    expect(measured.bindingReads).toBe(1);
+    expect(measured.capabilityReads).toBe(1);
+    expect(measured.bytes).toBeLessThan(25_000);
+  });
+
   it("discovers and delivers saved work after a desktop refreshes its registration key", async () => {
     const t = harness();
     await seed(t);

@@ -11,10 +11,15 @@ import { deleteThreadAlertPolicies } from "./lib/threadAlertPolicy.ts";
 import {
   actorRecord,
   requireCompanyActor,
+  type EnvironmentActor,
   requirePermission,
   requireRecordPermission,
 } from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
+import {
+  publisherInventoryFingerprint,
+  publisherReconciliationDue,
+} from "./lib/publisherReconciliation.ts";
 import {
   finishQueueListingHandoff,
   scheduleOrphanQueueCleanup,
@@ -97,7 +102,7 @@ function requireTrimmed(value: string, label: string): string {
 function requireEnvironmentActor(
   actor: Awaited<ReturnType<typeof requireCompanyActor>>,
   environmentId: string,
-) {
+): asserts actor is EnvironmentActor {
   requirePermission(actor, "projects.manage");
   if (actor.kind !== "environment" || actor.registration.environmentId !== environmentId) {
     throw backendError(
@@ -116,8 +121,11 @@ async function activeBinding(
   return (
     await ctx.db
       .query("environmentBindings")
-      .withIndex("by_company_and_environment", (q) =>
-        q.eq("companyId", companyId).eq("environmentId", environmentId),
+      .withIndex("by_company_environment_local_project", (q) =>
+        q
+          .eq("companyId", companyId)
+          .eq("environmentId", environmentId)
+          .eq("localProjectId", localProjectId),
       )
       .collect()
   ).find((binding) => binding.localProjectId === localProjectId && binding.status === "active");
@@ -364,6 +372,11 @@ export const reconcile = mutation({
     const environmentId = requireTrimmed(args.environmentId, "Environment id");
     requireEnvironmentActor(actor, environmentId);
     const current = new Set(args.currentThreadIds.map((id) => requireTrimmed(id, "Thread id")));
+    // Authorization is checked on every call, including calls that skip the inventory scan.
+    const fingerprint = await publisherInventoryFingerprint(current);
+    const now = Date.now();
+    if (!publisherReconciliationDue(actor.registration.agentThreadReconciliation, fingerprint, now))
+      return null;
     const stale = (
       await ctx.db
         .query("agentThreads")
@@ -375,6 +388,12 @@ export const reconcile = mutation({
       .filter((row) => !current.has(row.threadId))
       .slice(0, MAX_RECONCILE_REMOVALS);
     await removeRows(ctx, actor, stale);
+    // Keep draining bounded removal batches on subsequent ticks until the entire inventory agrees.
+    if (stale.length < MAX_RECONCILE_REMOVALS) {
+      await ctx.db.patch(actor.registration._id, {
+        agentThreadReconciliation: { fingerprint, completedAt: now },
+      });
+    }
     return null;
   },
 });

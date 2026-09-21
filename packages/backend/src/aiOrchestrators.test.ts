@@ -5,8 +5,10 @@ import { describe, expect, it } from "vite-plus/test";
 import { defaultOrchestratorConfig } from "@spiritdevs/contracts/aiOrchestrator";
 import { allowanceWindowKey, budgetAdmission } from "@spiritdevs/contracts/providerAllowanceBudget";
 import { api, internal } from "../convex/_generated/api.js";
-import { appendChatMessage } from "../convex/aiOrchestrators.ts";
+import { appendChatMessage, listChats } from "../convex/aiOrchestrators.ts";
 import schema from "../convex/schema.ts";
+import { environmentInbox } from "../convex/aiOrchestratorControls.ts";
+import { functionHandler, measureDatabaseReads } from "./testDatabaseReads.ts";
 import {
   notifyOrchestratorPriorityMail,
   notifyOrchestratorThreadUpdate,
@@ -245,6 +247,117 @@ describe("persistent orchestrator identities and messages", () => {
     expect(row.lastMessageAt).toBe(page.messages.at(-1)?.createdAt);
     await owner.mutation(api.aiOrchestrators.markRead, { chatId, sequence: row.lastSequence });
     expect((await owner.query(api.aiOrchestrators.listChats, {}))[0]?.unreadCount).toBe(0);
+  });
+  it("skips muted unread history without losing previews or unread messages after unmuting", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, chatId } = await personalChat(t);
+    const memberId = await t.run(async (ctx) => {
+      const member = (await ctx.db
+        .query("aiOrchestratorChatMembers")
+        .withIndex("by_chat_subject", (q) => q.eq("chatId", chatId).eq("subject", "owner"))
+        .unique())!;
+      await ctx.db.patch(member._id, { muted: true, markedUnread: true });
+      const chat = (await ctx.db.query("aiOrchestratorChats").first())!;
+      for (let sequence = 1; sequence <= 500; sequence++)
+        await ctx.db.insert("aiOrchestratorMessages", {
+          id: `muted-${sequence}`,
+          chatId,
+          sequence,
+          senderKind: "orchestrator",
+          senderId: chat.leadId,
+          senderName: "Chief",
+          text: "x".repeat(2000),
+          status: "sent",
+          replyToId: null,
+          coordination: true,
+          createdAt: sequence,
+        });
+      await ctx.db.patch(chat._id, { lastSequence: 500 });
+      await appendChatMessage(
+        ctx,
+        { ...chat, lastSequence: 500 },
+        {
+          id: "needs-attention",
+          senderKind: "orchestrator",
+          senderId: chat.leadId,
+          senderName: "Chief",
+          text: "Please review",
+          status: "sent",
+          replyToId: null,
+          coordination: false,
+        },
+        { enabled: true, urgent: true },
+      );
+      return member._id;
+    });
+    const measured = await owner.run(async (ctx) => {
+      const meter = measureDatabaseReads(ctx.db);
+      const rows = await functionHandler(listChats)({ ...ctx, db: meter.db }, {});
+      return {
+        rows,
+        messageReads: meter.documents.get("aiOrchestratorMessages"),
+        bytes: meter.bytes(),
+      };
+    });
+    expect(measured.messageReads).toBe(1);
+    expect(measured.bytes).toBeLessThan(10_000);
+    expect(measured.rows[0]).toMatchObject({
+      lastMessage: "Please review",
+      lastSequence: 501,
+      unreadCount: 0,
+      readSequence: 0,
+    });
+    expect(measured.rows[0]).not.toHaveProperty("notification");
+    await t.run((ctx) => ctx.db.patch(memberId, { muted: false, markedUnread: false }));
+    const unmuted = (await owner.query(api.aiOrchestrators.listChats, {}))[0]!;
+    expect(unmuted).toMatchObject({ unreadCount: 1, readSequence: 0, lastSequence: 501 });
+    expect(unmuted.notification).toMatchObject({ enabled: true, urgent: true });
+  });
+  it("shares conversation-list company checks only within the current request", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, chatId } = await personalChat(t);
+    await t.run(async (ctx) => {
+      const { _id, _creationTime, ...chat } = (await ctx.db.query("aiOrchestratorChats").first())!;
+      void _creationTime;
+      await ctx.db.patch(_id, { companyIds: ["workspace"] });
+      const {
+        _id: memberId,
+        _creationTime: memberCreatedAt,
+        ...member
+      } = (await ctx.db
+        .query("aiOrchestratorChatMembers")
+        .withIndex("by_chat_subject", (q) => q.eq("chatId", chatId).eq("subject", "owner"))
+        .unique())!;
+      void memberId;
+      void memberCreatedAt;
+      for (let index = 1; index < 20; index++) {
+        const id = `shared-workspace-${index}`;
+        await ctx.db.insert("aiOrchestratorChats", { ...chat, id, companyIds: ["workspace"] });
+        await ctx.db.insert("aiOrchestratorChatMembers", { ...member, chatId: id });
+      }
+    });
+    const measured = await owner.run(async (ctx) => {
+      const meter = measureDatabaseReads(ctx.db);
+      const rows = await functionHandler(listChats)({ ...ctx, db: meter.db }, {});
+      return {
+        rows,
+        companyReads: meter.documents.get("companies"),
+        membershipReads: meter.documents.get("memberships"),
+      };
+    });
+    expect(measured.rows).toHaveLength(20);
+    expect(measured.companyReads).toBe(1);
+    expect(measured.membershipReads).toBe(1);
+    await t.run(async (ctx) => {
+      const member = (await ctx.db
+        .query("memberships")
+        .withIndex("by_domain_id", (q) => q.eq("id", "member-owner"))
+        .unique())!;
+      await ctx.db.patch(member._id, { state: "left" });
+    });
+    expect(await owner.query(api.aiOrchestrators.listChats, {})).toEqual([]);
   });
   it("keeps internal wakes out of history, previews and unread counts without deleting them", async () => {
     const t = harness();
@@ -5798,4 +5911,155 @@ it("delivers ID-free discovery through the coordinator contract and preserves ar
   expect(revoked.context).not.toContain("Decision: use the old Apollo engine");
   expect(revoked.context).not.toContain("Apollo planning");
   expect(revoked.context).toContain("unavailable");
+});
+
+it("keeps a thread-specific control inbox independent of unrelated worker history", async () => {
+  const test = await workerControlHarness();
+  await test.send("pending-message");
+  await test.t.run(async (ctx) => {
+    const template = (await ctx.db.query("aiOrchestratorWork").first())!;
+    const { _id, _creationTime, ...work } = template;
+    void _id;
+    void _creationTime;
+    for (let i = 0; i < 100; i++)
+      await ctx.db.insert("aiOrchestratorWork", {
+        ...work,
+        id: `unrelated-${i}`,
+        threadId: `other-thread-${i}`,
+        commandId: `other-command-${i}`,
+        status: "completed",
+        controlsPending: true,
+        prompt: "large unrelated assignment ".repeat(100),
+      });
+    await ctx.db.insert("aiOrchestratorWork", {
+      ...work,
+      id: "launch-being-stopped",
+      threadId: null,
+      commandId: "stopped-launch-command",
+      stopRequested: true,
+      controlsPending: true,
+    });
+  });
+  const measured = await test.environment().run(async (ctx) => {
+    const meter = measureDatabaseReads(ctx.db);
+    const result = await functionHandler(environmentInbox)(
+      { ...ctx, db: meter.db },
+      { companyId: "workspace", threadId: "worker-thread" },
+    );
+    return { result, reads: meter.documents.get("aiOrchestratorWork") };
+  });
+  expect(measured.result).toHaveLength(2);
+  expect(measured.result[0]).toMatchObject({
+    workId: "controlled-work",
+    message: { id: "pending-message", revision: 0 },
+  });
+  expect(measured.result[1]).toMatchObject({
+    workId: "launch-being-stopped",
+    cancellationRequested: true,
+  });
+  expect(measured.reads).toBeLessThanOrEqual(3);
+  await test.t.run(async (ctx) => {
+    const { _id, _creationTime, ...work } = (await ctx.db
+      .query("aiOrchestratorWork")
+      .withIndex("by_domain_id", (q) => q.eq("id", "controlled-work"))
+      .unique())!;
+    void _id;
+    void _creationTime;
+    for (let i = 0; i < 100; i++)
+      await ctx.db.insert("aiOrchestratorWork", {
+        ...work,
+        id: `newer-control-${i}`,
+        commandId: `newer-command-${i}`,
+        controlMessageId: `delivered-${i}`,
+        controlsPending: false,
+        status: "completed",
+      });
+  });
+  const olderPending = await test.environment().query(api.aiOrchestratorControls.environmentInbox, {
+    companyId: "workspace",
+    threadId: "worker-thread",
+  });
+  expect(olderPending).toEqual(measured.result);
+});
+
+it("reuses control inbox permission reads within a transaction without caching revoked authority", async () => {
+  const test = await workerControlHarness();
+  await test.t.run(async (ctx) => {
+    const { _id, _creationTime, ...work } = (await ctx.db.query("aiOrchestratorWork").first())!;
+    void _id;
+    void _creationTime;
+    for (let i = 0; i < 20; i++)
+      await ctx.db.insert("aiOrchestratorWork", {
+        ...work,
+        id: `sibling-${i}`,
+        threadId: `sibling-thread-${i}`,
+        commandId: `sibling-command-${i}`,
+      });
+  });
+  const measured = await test.environment().run(async (ctx) => {
+    const meter = measureDatabaseReads(ctx.db);
+    const result = await functionHandler(environmentInbox)(
+      { ...ctx, db: meter.db },
+      { companyId: "workspace" },
+    );
+    return {
+      result,
+      companyReads: meter.documents.get("companies"),
+      chatReads: meter.documents.get("aiOrchestratorChats"),
+    };
+  });
+  expect(measured.result).toHaveLength(21);
+  expect(measured.chatReads).toBe(1);
+  expect(measured.companyReads).toBeLessThan(15);
+  await test.t.run(async (ctx) => {
+    const member = (await ctx.db.query("memberships").collect()).find(
+      (row) => row.id === "member-owner",
+    );
+    if (!member) throw new Error("Missing owner");
+    await ctx.db.patch(member._id, { state: "left" });
+  });
+  expect(
+    await test
+      .environment()
+      .query(api.aiOrchestratorControls.environmentInbox, { companyId: "workspace" }),
+  ).toEqual([]);
+});
+
+it("does not rewrite unchanged worker catalogs on every claim, but refreshes them before expiry", async () => {
+  const test = await coordinatorHarness();
+  const args = {
+    companyId: "workspace",
+    providers: [{ instanceId: "codex", driver: "codex" }],
+    delegationCatalog: workerCatalog,
+  };
+  await test.environment().mutation(api.aiOrchestratorJobs.claim, args);
+  const registration = () =>
+    test.t.run((ctx) =>
+      ctx.db
+        .query("environmentRegistrations")
+        .withIndex("by_environment", (q) => q.eq("environmentId", "studio"))
+        .unique(),
+    );
+  const first = (await registration())!;
+  await test.t.run((ctx) =>
+    ctx.db.patch(first._id, { orchestratorDelegationCatalogAt: Date.now() - 10_000 }),
+  );
+  const before = (await registration())!.orchestratorDelegationCatalogAt;
+  await test.environment().mutation(api.aiOrchestratorJobs.claim, args);
+  expect((await registration())!.orchestratorDelegationCatalogAt).toBe(before);
+  const changedCatalog = { ...workerCatalog, truncated: true };
+  await test.environment().mutation(api.aiOrchestratorJobs.claim, {
+    ...args,
+    delegationCatalog: changedCatalog,
+  });
+  expect((await registration())!.orchestratorDelegationCatalog).toEqual(changedCatalog);
+  expect((await registration())!.orchestratorDelegationCatalogAt).toBeGreaterThan(before!);
+  await test.t.run((ctx) =>
+    ctx.db.patch(first._id, { orchestratorDelegationCatalogAt: Date.now() - 60_000 }),
+  );
+  await test.environment().mutation(api.aiOrchestratorJobs.claim, {
+    ...args,
+    delegationCatalog: changedCatalog,
+  });
+  expect((await registration())!.orchestratorDelegationCatalogAt).toBeGreaterThan(before!);
 });

@@ -1240,19 +1240,32 @@ export const destinations = query({
       .collect();
     const bindings = await ctx.db
       .query("environmentBindings")
-      .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
+      .withIndex("by_company_status_environment", (q) =>
+        q.eq("companyId", actor.company._id).eq("status", "active"),
+      )
       .collect();
-    const projects = await ctx.db
-      .query("cloudProjects")
-      .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-      .collect();
-    const capabilityRows = await ctx.db
-      .query("environmentProviderCapabilities")
-      .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-      .collect();
+    const activeEnvironmentIds = new Set(registrations.map((row) => row.environmentId));
+    const relevantBindings = bindings.filter(
+      (binding) =>
+        activeEnvironmentIds.has(binding.environmentId) &&
+        (!thread || binding.cloudProjectId === thread.cloudProjectId),
+    );
+    const projects = await Promise.all(
+      [...new Set(relevantBindings.map((row) => row.cloudProjectId))].map((id) => ctx.db.get(id)),
+    );
+    const capabilityRows = await Promise.all(
+      registrations.map((registration) =>
+        ctx.db
+          .query("environmentProviderCapabilities")
+          .withIndex("by_company_and_environment", (q) =>
+            q.eq("companyId", actor.company._id).eq("environmentId", registration.environmentId),
+          )
+          .unique(),
+      ),
+    );
     return registrations.map((registration) => {
       const capabilities = capabilityRows.find(
-        (row) => row.environmentId === registration.environmentId,
+        (row) => row?.environmentId === registration.environmentId,
       );
       return {
         environmentId: registration.environmentId,
@@ -1261,7 +1274,7 @@ export const destinations = query({
           typeof registration.descriptor?.label === "string"
             ? registration.descriptor.label
             : registration.environmentId,
-        projects: bindings
+        projects: relevantBindings
           .filter(
             (binding) =>
               binding.environmentId === registration.environmentId &&
@@ -1271,6 +1284,8 @@ export const destinations = query({
           .flatMap((binding) => {
             const project = projects.find(
               (row) =>
+                row !== null &&
+                row.companyId === actor.company._id &&
                 row._id === binding.cloudProjectId &&
                 row.deletedAt === null &&
                 row.archivedAt === null,

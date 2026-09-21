@@ -540,8 +540,11 @@ export const ensureEnvironmentProject = mutation({
       : ((
           await ctx.db
             .query("environmentBindings")
-            .withIndex("by_company_and_environment", (q) =>
-              q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
+            .withIndex("by_company_environment_local_project", (q) =>
+              q
+                .eq("companyId", actor.company._id)
+                .eq("environmentId", environmentId)
+                .eq("localProjectId", localProjectId),
             )
             .collect()
         ).find((row) => row.localProjectId === localProjectId && row.status !== "revoked") ?? null);
@@ -589,7 +592,9 @@ export const ensureEnvironmentProject = mutation({
       const foreignBinding = (
         await ctx.db
           .query("environmentBindings")
-          .withIndex("by_environment", (q) => q.eq("environmentId", environmentId))
+          .withIndex("by_environment_local_project", (q) =>
+            q.eq("environmentId", environmentId).eq("localProjectId", localProjectId),
+          )
           .collect()
       ).find(
         (row) =>
@@ -819,8 +824,11 @@ export const releaseEnvironmentProject = mutation({
     const binding = (
       await ctx.db
         .query("environmentBindings")
-        .withIndex("by_company_and_environment", (q) =>
-          q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
+        .withIndex("by_company_environment_local_project", (q) =>
+          q
+            .eq("companyId", actor.company._id)
+            .eq("environmentId", environmentId)
+            .eq("localProjectId", localProjectId),
         )
         .collect()
     ).find((row) => row.localProjectId === localProjectId && row.status !== "revoked");

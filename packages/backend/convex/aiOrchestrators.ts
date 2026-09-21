@@ -70,9 +70,13 @@ export async function hasChatAccess(
   ctx: QueryCtx,
   chat: Doc<"aiOrchestratorChats">,
   user: Doc<"users">,
+  companyAccess = new Map<string, Promise<boolean>>(),
 ) {
-  for (const companyId of chat.companyIds)
-    if (!(await hasCompanyAccess(ctx, companyId, user))) return false;
+  for (const companyId of chat.companyIds) {
+    if (!companyAccess.has(companyId))
+      companyAccess.set(companyId, hasCompanyAccess(ctx, companyId, user));
+    if (!(await companyAccess.get(companyId)!)) return false;
+  }
   return true;
 }
 export async function readableOrchestrator(ctx: QueryCtx, id: string) {
@@ -553,6 +557,8 @@ export const listChats = query({
   args: {},
   handler: async (ctx) => {
     const user = await requireUser(ctx);
+    // Share permission reads only within this request; subsequent calls recheck live membership.
+    const companyAccess = new Map<string, Promise<boolean>>();
     const memberships = await ctx.db
       .query("aiOrchestratorChatMembers")
       .withIndex("by_subject", (q) => q.eq("subject", user.clerkSubject))
@@ -568,7 +574,7 @@ export const listChats = query({
           !chat ||
           chat.lifecycle === "deleted" ||
           !chat.participantSubjects.includes(user.clerkSubject) ||
-          !(await hasChatAccess(ctx, chat, user))
+          !(await hasChatAccess(ctx, chat, user, companyAccess))
         )
           return null;
         // Internal wake messages remain available to reasoning, not the human conversation.
@@ -585,7 +591,7 @@ export const listChats = query({
         // Cap the projection at 100; the client displays 99+ without loading history.
         let unreadCount = 0;
         let cursor: number | null = Math.max(member.fromSequence, member.readSequence + 1);
-        do {
+        while (!member.muted && cursor !== null && unreadCount < 100) {
           const page = await ctx.db
             .query("aiOrchestratorMessages")
             .withIndex("by_chat_sequence", (q) => q.eq("chatId", chat.id).gte("sequence", cursor!))
@@ -608,7 +614,7 @@ export const listChats = query({
           );
           unreadCount += eligibility.filter(Boolean).length;
           cursor = page.length < 100 ? null : page[page.length - 1]!.sequence + 1;
-        } while (cursor && unreadCount < 100);
+        }
         const {
           _id,
           _creationTime,
@@ -617,14 +623,17 @@ export const listChats = query({
           notification,
           ...record
         } = chat;
-        const notificationMessage = notification
-          ? await ctx.db
-              .query("aiOrchestratorMessages")
-              .withIndex("by_chat_sequence", (q) =>
-                q.eq("chatId", chat.id).eq("sequence", notification.sequence),
-              )
-              .unique()
-          : null;
+        const notificationMessage =
+          !member.muted && notification && notification.sequence >= member.fromSequence
+            ? latest?.sequence === notification.sequence
+              ? latest
+              : await ctx.db
+                  .query("aiOrchestratorMessages")
+                  .withIndex("by_chat_sequence", (q) =>
+                    q.eq("chatId", chat.id).eq("sequence", notification.sequence),
+                  )
+                  .unique()
+            : null;
         const attention = notificationMessage
           ? await messageAttention(ctx, chat, notificationMessage)
           : null;

@@ -2,12 +2,16 @@
 import { api } from "@spiritdevs/backend/convexApi";
 import type { EnvironmentId, Project } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
+import type { FunctionArgs } from "convex/server";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/unstable/http/HttpClient";
@@ -35,6 +39,7 @@ import {
 import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "./environmentKeys.ts";
 
 export const DEFAULT_CLOUD_PROJECT_RECONCILE_INTERVAL = Duration.minutes(1);
+export const CLOUD_PROJECT_REFRESH_INTERVAL = Duration.minutes(5);
 
 export interface CloudProjectPublisherOptions {
   readonly companyId: CompanyId;
@@ -56,6 +61,13 @@ export const makeCloudProjectPublisher = Effect.fn("cloud.project_publisher.make
 ) {
   const client = options.client ?? convexHttpClientLike(options.convexUrl);
   const lock = yield* Semaphore.make(1);
+  const publishLock = yield* Semaphore.make(1);
+  const published = yield* Ref.make<
+    ReadonlyMap<
+      Project["id"],
+      { identity: FunctionArgs<typeof api.cloudProjects.ensureEnvironmentProject>; at: number }
+    >
+  >(new Map());
 
   const call = <A>(token: string, issue: (client: ConvexClientLike) => Promise<A>) =>
     lock.withPermits(1)(
@@ -93,26 +105,54 @@ export const makeCloudProjectPublisher = Effect.fn("cloud.project_publisher.make
     // blanket creation would copy every checkout into each of them. A project lives in exactly
     // one company (ADR 0011); ownership is minted only by an explicit assignment.
     publish: (project: Project) =>
-      authorized((convex) =>
-        convex.mutation(api.cloudProjects.ensureEnvironmentProject, {
-          companyId: options.companyId,
-          environmentId: options.environmentId,
-          localProjectId: project.id,
-          localWorkspaceRoot: project.workspaceRoot,
-          internalWorkspaceRoot: project.internalWorkspaceRoot ?? null,
-          repositoryIdentity: project.repositoryIdentity ?? null,
-          name: project.title,
-          allowCreate: false,
+      publishLock.withPermits(1)(
+        Effect.gen(function* () {
+          const args = {
+            companyId: options.companyId,
+            environmentId: options.environmentId,
+            localProjectId: project.id,
+            localWorkspaceRoot: project.workspaceRoot,
+            internalWorkspaceRoot: project.internalWorkspaceRoot ?? null,
+            repositoryIdentity: project.repositoryIdentity ?? null,
+            name: project.title,
+            allowCreate: false,
+          };
+          const now = yield* Clock.currentTimeMillis;
+          const previous = (yield* Ref.get(published)).get(project.id);
+          if (
+            previous &&
+            Equal.equals(previous.identity, args) &&
+            now - previous.at < Duration.toMillis(CLOUD_PROJECT_REFRESH_INTERVAL)
+          )
+            return;
+          yield* authorized((convex) =>
+            convex.mutation(api.cloudProjects.ensureEnvironmentProject, args),
+          );
+          // Refresh unchanged and unowned projects periodically so remote assignment/revocation still converges.
+          yield* Ref.update(published, (current) =>
+            new Map(current).set(project.id, { identity: args, at: now }),
+          );
         }),
-      ).pipe(Effect.asVoid),
+      ),
     release: (localProjectId: Project["id"]) =>
-      authorized((convex) =>
-        convex.mutation(api.cloudProjects.releaseEnvironmentProject, {
-          companyId: options.companyId,
-          environmentId: options.environmentId,
-          localProjectId,
-        }),
-      ).pipe(Effect.asVoid),
+      publishLock.withPermits(1)(
+        authorized((convex) =>
+          convex.mutation(api.cloudProjects.releaseEnvironmentProject, {
+            companyId: options.companyId,
+            environmentId: options.environmentId,
+            localProjectId,
+          }),
+        ).pipe(
+          Effect.tap(() =>
+            Ref.update(published, (current) => {
+              const next = new Map(current);
+              next.delete(localProjectId);
+              return next;
+            }),
+          ),
+          Effect.asVoid,
+        ),
+      ),
   } as const;
 });
 

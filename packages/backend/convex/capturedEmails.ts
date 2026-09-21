@@ -9,10 +9,15 @@ import { backendError } from "./lib/errors.ts";
 import {
   actorRecord,
   requireCompanyActor,
+  type EnvironmentActor,
   requirePermission,
   requireRecordPermission,
 } from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
+import {
+  publisherInventoryFingerprint,
+  publisherReconciliationDue,
+} from "./lib/publisherReconciliation.ts";
 
 const MAX_RECONCILE_REMOVALS = 100;
 /** Leaves room for the change envelope below Convex's one-megabyte document/read limit. */
@@ -48,7 +53,7 @@ function requireTrimmed(value: string, label: string): string {
 function requireEnvironmentActor(
   actor: Awaited<ReturnType<typeof requireCompanyActor>>,
   environmentId: string,
-) {
+): asserts actor is EnvironmentActor {
   requirePermission(actor, "projects.manage");
   if (actor.kind !== "environment" || actor.registration.environmentId !== environmentId) {
     throw backendError(
@@ -110,8 +115,11 @@ async function activeBinding(
   return (
     await ctx.db
       .query("environmentBindings")
-      .withIndex("by_company_and_environment", (q) =>
-        q.eq("companyId", companyId).eq("environmentId", environmentId),
+      .withIndex("by_company_environment_local_project", (q) =>
+        q
+          .eq("companyId", companyId)
+          .eq("environmentId", environmentId)
+          .eq("localProjectId", localProjectId),
       )
       .collect()
   ).find((binding) => binding.localProjectId === localProjectId && binding.status === "active");
@@ -376,6 +384,12 @@ export const reconcile = mutation({
     const environmentId = requireTrimmed(args.environmentId, "Environment id");
     requireEnvironmentActor(actor, environmentId);
     const current = new Set(args.currentMessageIds.map((id) => requireTrimmed(id, "Message id")));
+    const fingerprint = await publisherInventoryFingerprint(current);
+    const now = Date.now();
+    if (
+      !publisherReconciliationDue(actor.registration.capturedEmailReconciliation, fingerprint, now)
+    )
+      return null;
     const stale = (
       await ctx.db
         .query("capturedEmails")
@@ -387,6 +401,11 @@ export const reconcile = mutation({
       .filter((row) => !current.has(row.messageId))
       .slice(0, MAX_RECONCILE_REMOVALS);
     await removeRows(ctx, actor, stale);
+    if (stale.length < MAX_RECONCILE_REMOVALS) {
+      await ctx.db.patch(actor.registration._id, {
+        capturedEmailReconciliation: { fingerprint, completedAt: now },
+      });
+    }
     return null;
   },
 });
