@@ -13,6 +13,7 @@ function setup() {
   const decoders: FakeDecoder[] = [];
   class FakeDecoder {
     static isConfigSupported = async () => ({ supported: true });
+    readonly callbacks: VideoDecoderInit;
     state = "unconfigured";
     decodeQueueSize = 0;
     close = vi.fn(() => {
@@ -22,7 +23,8 @@ function setup() {
       this.state = "configured";
     });
     decode = vi.fn();
-    constructor(readonly callbacks: VideoDecoderInit) {
+    constructor(callbacks: VideoDecoderInit) {
+      this.callbacks = callbacks;
       decoders.push(this);
     }
   }
@@ -30,7 +32,10 @@ function setup() {
   vi.stubGlobal(
     "EncodedVideoChunk",
     class {
-      constructor(readonly init: EncodedVideoChunkInit) {}
+      readonly init: EncodedVideoChunkInit;
+      constructor(init: EncodedVideoChunkInit) {
+        this.init = init;
+      }
     },
   );
   const responses: ReadableStreamDefaultController<Uint8Array>[] = [];
