@@ -53,7 +53,7 @@ Every agent device tool rechecks both the invocation capability and current envi
 The two PRs' implemented behavior is internally consistent. Important upstream release gaps remain:
 
 - Duo requires a patched native helper that is not in the pinned official hub release. Pathway keeps the default hub pinned to `0.9.0` and accepts the experimental archive only through an explicit local environment configuration. SSH hosts use the official build.
-- Redistribution rights for the Apple model assets were not established. Those assets are excluded. Pathway uses original procedural phone/foldable geometry; no Apple GLB or proprietary logo path is bundled.
+- Redistribution rights for the Apple model assets were not established. Those assets are excluded. Pathway uses original procedural phone/foldable geometry; no Apple GLB or proprietary logo path is bundled. The foldable enclosure uses rounded display corners, beveled metal, inset glass and articulated hinge leaves. Each inner leaf samples exactly half of the native framebuffer, so the physical seam cannot crop image content.
 - The native prototype needs broader hardware, orientation and CPU qualification. Cover-display orientation is a known upstream concern. Native acknowledgement and a fresh matching display frame gate input; a failed handoff rolls back rather than sending touches to an unconfirmed display.
 - A live Android verification pass requires an Android SDK and emulator. Automated Android transport/control coverage is retained.
 - The pinned hub deliberately filters out simulators that have never been used. Start a new simulator once in Xcode before refreshing Pathway's device list. Empty-state guidance reflects this limitation.

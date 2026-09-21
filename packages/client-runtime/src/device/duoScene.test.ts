@@ -10,6 +10,7 @@ import {
 } from "three";
 import { expect, it } from "vite-plus/test";
 import { createDuoScene, duoDisplayKey, duoRawPoint } from "./duoScene.ts";
+import { createProceduralDuo } from "./proceduralDuo.ts";
 
 function fixture() {
   const asset = new Group();
@@ -105,4 +106,46 @@ it("maps active display input through hardware mounting and blocks rear, inactiv
   expect(scene.screenPoint(x, 1.1, camera, screen, key, true)?.x).toBeGreaterThan(1);
   expect(duoRawPoint(1, 0.2, 0.7)).toEqual({ x: 0.2, y: 0.7 });
   scene.dispose();
+});
+
+it("preserves all framebuffer pixels across the procedural fold and keeps its enclosure behind the glass", () => {
+  const procedural = createProceduralDuo();
+  const scene = createDuoScene(procedural.asset, { 1: new Texture(), 3: new Texture() });
+  const left = procedural.asset.getObjectByName("inner-display-left") as Mesh;
+  const right = procedural.asset.getObjectByName("inner-display-right") as Mesh;
+  const range = (mesh: Mesh) => {
+    const uv = mesh.geometry.getAttribute("uv");
+    const values = Array.from({ length: uv.count }, (_, i) => uv.getX(i));
+    return [Math.min(...values), Math.max(...values)];
+  };
+  expect(range(left)).toEqual([0, 0.5]);
+  expect(range(right)).toEqual([0.5, 1]);
+  // A frame at the physical seam must not lose a strip of native image pixels.
+  expect(left.geometry.boundingBox!.max.x).toBeLessThan(0);
+  expect(right.geometry.boundingBox!.min.x).toBeGreaterThan(0);
+  const camera = new PerspectiveCamera(36, 1.4, 0.1, 50);
+  camera.position.z = 4;
+  camera.updateMatrixWorld();
+  const screen = { width: 2007, height: 2853, orientation: "portrait" as const, screenId: 3 };
+  for (const angle of [180, 90]) {
+    scene.setAngle(angle);
+    scene.root.updateMatrixWorld(true);
+    for (const [mesh, localX] of [
+      [left, -0.5],
+      [right, 0.5],
+    ] as const) {
+      const point = mesh.localToWorld(new Vector3(localX, 0, 0.001)).project(camera);
+      const hit = scene.screenPoint(
+        (point.x + 1) / 2,
+        (1 - point.y) / 2,
+        camera,
+        screen,
+        duoDisplayKey(screen),
+      );
+      expect(hit?.x).toBeCloseTo(0.5, 2);
+      expect(hit?.y).toBeCloseTo(mesh === left ? 0.75 : 0.25, 2);
+    }
+  }
+  scene.dispose();
+  procedural.dispose();
 });

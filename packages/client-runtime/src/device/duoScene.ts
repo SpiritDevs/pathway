@@ -77,15 +77,17 @@ export function createDuoScene(asset: Group, textures: Record<DuoPanelId, Textur
     3: new MeshBasicMaterial({ map: textures[3], toneMapped: false }),
   };
   const originals = new Map<Mesh, Mesh["material"]>();
-  // The two inner meshes sample halves of one framebuffer. Cover UVs face outward on the rear leaf.
+  // Each inner leaf samples exactly half the framebuffer, regardless of a physical hinge gap. Cover UVs face outward.
   for (const id of [1, 3] as const) {
     const { bounds, size } = boundsByPanel[id === 1 ? 0 : 1]!;
     for (const mesh of surfaces[id]) {
+      const leafBounds = mesh.geometry.boundingBox!;
+      const leafWidth = leafBounds.max.x - leafBounds.min.x;
       const position = mesh.geometry.getAttribute("position");
       const uv = new Float32Array(position.count * 2);
       for (let i = 0; i < position.count; i++) {
-        const x = (position.getX(i) - bounds.min.x) / size.x;
-        uv[i * 2] = id === 1 ? 1 - x : x;
+        const x = (position.getX(i) - leafBounds.min.x) / leafWidth;
+        uv[i * 2] = id === 1 ? 1 - x : (x + (mesh === innerRight ? 1 : 0)) / 2;
         uv[i * 2 + 1] = (position.getY(i) - bounds.min.y) / size.y;
       }
       mesh.geometry.setAttribute("uv", new BufferAttribute(uv, 2));
