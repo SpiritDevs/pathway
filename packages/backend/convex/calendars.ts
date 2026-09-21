@@ -1,6 +1,10 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Online CRUD and sharing for Pathway-owned calendars and events. */
 import { v } from "convex/values";
+import {
+  CALENDAR_ALERT_WINDOW_MS,
+  MAX_CALENDAR_REMINDER_MINUTES,
+} from "@spiritdevs/contracts/calendarAlerts";
 
 import {
   hasAnyScopePermission,
@@ -98,7 +102,12 @@ function remindersOf(values: readonly number[]): number[] {
     throw backendError("invalid-arguments", `Choose at most ${MAX_REMINDERS} reminders.`);
   }
   const unique = [...new Set(values)];
-  if (unique.some((value) => !Number.isSafeInteger(value) || value <= 0 || value > 40_320)) {
+  if (
+    unique.some(
+      (value) =>
+        !Number.isSafeInteger(value) || value <= 0 || value > MAX_CALENDAR_REMINDER_MINUTES,
+    )
+  ) {
     throw backendError(
       "invalid-arguments",
       "Reminder lead times must be whole minutes within four weeks.",
@@ -339,7 +348,7 @@ function canReadCalendar(
 }
 
 export const listAlertEvents = query({
-  args: { companyId: domainIdArg, after: v.number() },
+  args: { companyId: domainIdArg, after: v.number(), before: v.optional(v.number()) },
   returns: v.array(
     v.object({
       id: domainIdArg,
@@ -350,6 +359,15 @@ export const listAlertEvents = query({
     }),
   ),
   handler: async (ctx, args) => {
+    if (
+      !Number.isFinite(args.after) ||
+      (args.before !== undefined &&
+        (!Number.isFinite(args.before) ||
+          args.before <= args.after ||
+          args.before - args.after > CALENDAR_ALERT_WINDOW_MS))
+    ) {
+      throw backendError("invalid-arguments", "Choose a valid calendar alert window.");
+    }
     const actor = await requireCompanyActor(ctx, args.companyId);
     const grants =
       actor.kind === "member"
@@ -383,7 +401,8 @@ export const listAlertEvents = query({
             .eq("companyId", actor.company._id)
             .eq("calendarId", calendar.id)
             .eq("deletedAt", null)
-            .gt("startAt", args.after),
+            .gt("startAt", args.after)
+            .lte("startAt", args.before ?? Number.MAX_SAFE_INTEGER),
         )
         .collect();
       for (const event of events) {

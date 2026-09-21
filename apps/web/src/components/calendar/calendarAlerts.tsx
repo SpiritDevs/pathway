@@ -1,5 +1,6 @@
 import { useAuth } from "@clerk/react";
 import type { CalendarEventId } from "@spiritdevs/contracts";
+import { CALENDAR_ALERT_WINDOW_MS } from "@spiritdevs/contracts/calendarAlerts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
@@ -12,6 +13,7 @@ import { makeClerkConvexTokenFetcher } from "~/cloud/syncTransportAuth";
 const DELIVERED_KEY = "pathway:calendar-alerts:delivered:v1";
 const ALERTS_ENABLED_EVENT = "pathway:calendar-alerts-enabled";
 const DELIVERY_GRACE_MS = 60_000;
+export const CALENDAR_ALERT_REFRESH_MS = 15 * 60_000;
 const MAX_TIMER_MS = 2_147_000_000;
 let audioContext: AudioContext | null = null;
 const deliveredThisSession = new Set<string>();
@@ -29,7 +31,7 @@ type CalendarAlertEventWire = Omit<CalendarAlertEvent, "companyId">;
 
 const listAlertEventsReference = makeFunctionReference<
   "query",
-  { readonly companyId: CompanyId; readonly after: number },
+  { readonly companyId: CompanyId; readonly after: number; readonly before: number },
   ReadonlyArray<CalendarAlertEventWire>
 >("calendars:listAlertEvents");
 
@@ -88,6 +90,12 @@ export function calendarAlertOccurrences(
   return occurrences.sort((left, right) => left.dueAt - right.dueAt);
 }
 
+export function calendarAlertWindow(now: number) {
+  const after =
+    Math.floor(now / CALENDAR_ALERT_REFRESH_MS) * CALENDAR_ALERT_REFRESH_MS - DELIVERY_GRACE_MS;
+  return { after, before: after + CALENDAR_ALERT_WINDOW_MS };
+}
+
 function useCalendarAlertEvents(): ReadonlyArray<CalendarAlertEvent> {
   const companyIds = useCalendarAlertCompanyIds();
   const { getToken, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
@@ -106,21 +114,40 @@ function useCalendarAlertEvents(): ReadonlyArray<CalendarAlertEvent> {
     client.setAuth((args) => makeClerkConvexTokenFetcher(getTokenRef.current)(args));
     const byCompany = new Map<CompanyId, ReadonlyArray<CalendarAlertEvent>>();
     const publish = () => setEvents([...byCompany.values()].flat());
-    const unsubscribes = companyIds.map((companyId) =>
-      client.onUpdate(
-        listAlertEventsReference,
-        { companyId, after: Date.now() - DELIVERY_GRACE_MS },
-        (value) => {
-          byCompany.set(
-            companyId,
-            value.map((event) => ({ ...event, companyId })),
-          );
-          publish();
-        },
-        (error) => console.warn("Could not subscribe to calendar alerts.", error),
-      ),
-    );
+    let unsubscribes: Array<() => void> = [];
+    let windowAfter: number | undefined;
+    let generation = 0;
+    const refresh = () => {
+      const window = calendarAlertWindow(Date.now());
+      if (windowAfter === window.after) return;
+      windowAfter = window.after;
+      const current = ++generation;
+      for (const unsubscribe of unsubscribes) unsubscribe();
+      unsubscribes = companyIds.map((companyId) =>
+        client.onUpdate(
+          listAlertEventsReference,
+          { companyId, ...window },
+          (value) => {
+            if (current !== generation) return;
+            byCompany.set(
+              companyId,
+              value.map((event) => ({ ...event, companyId })),
+            );
+            publish();
+          },
+          (error) => console.warn("Could not subscribe to calendar alerts.", error),
+        ),
+      );
+    };
+    refresh();
+    const interval = window.setInterval(refresh, CALENDAR_ALERT_REFRESH_MS);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
     return () => {
+      generation++;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
       for (const unsubscribe of unsubscribes) unsubscribe();
       void client.close();
     };

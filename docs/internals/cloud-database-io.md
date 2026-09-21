@@ -283,3 +283,18 @@ The regression fixture with 503 historical messages plus a concurrent append
 reads zero message bodies, three attention records, and under 10 KB for its
 migrated list query. The previous audit's similar 500-message fixture read over
 1 MB. This is a fixture-level read reduction, not a production billing estimate.
+
+## Calendar reminder windows
+
+The web/desktop alert subscription now reads a rolling four-week-plus-one-hour
+start-time window through the existing calendar/start index. It renews every 15
+minutes and on focus or visibility changes. The extra hour covers the longest
+supported reminder (four weeks) through the next renewal; delivery retains its
+one-minute wake grace and stable deduplication ids. No event-count limit drops
+busy calendars' reminders.
+
+The backend accepts the new optional `before` argument and validates its span.
+Older clients retain their previous behavior until updated. Deploy the backend
+before the new client. Savings depend on how many events lie beyond four weeks;
+for an evenly populated year-ahead calendar this excludes about 92% of future
+event rows. This is an illustrative read-count estimate, not measured billing.

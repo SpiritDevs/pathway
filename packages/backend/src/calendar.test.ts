@@ -275,6 +275,52 @@ describe("calendar change-feed visibility", () => {
   });
 });
 
+it("bounds reminder reads by event start without truncating matching events", async () => {
+  const t = harness();
+  await buildCalendarFixture(t);
+  const current = (
+    await asUser(t, "bob").query(api.calendars.listAlertEvents, {
+      companyId: COMPANY,
+      after: 1_700_000_000_000,
+    })
+  )[0]!;
+  await t.run(async (ctx) => {
+    const source = (await ctx.db.query("calendarEvent").collect()).find(
+      (row) => row.id === PUBLIC_EVENT,
+    )!;
+    const { _id, _creationTime, ...fields } = source;
+    void _id;
+    void _creationTime;
+    await ctx.db.insert("calendarEvent", {
+      ...fields,
+      id: "far-future",
+      startAt: current.startAt + 90 * 86_400_000,
+      endAt: current.startAt + 90 * 86_400_000 + 60_000,
+    });
+  });
+  await expect(
+    asUser(t, "bob").query(api.calendars.listAlertEvents, {
+      companyId: COMPANY,
+      after: current.startAt - 60_000,
+      before: current.startAt,
+    }),
+  ).resolves.toEqual([current]);
+  await expect(
+    asUser(t, "bob").query(api.calendars.listAlertEvents, {
+      companyId: COMPANY,
+      after: current.startAt,
+      before: current.startAt + 60_000,
+    }),
+  ).resolves.toEqual([]);
+  await expect(
+    asUser(t, "bob").query(api.calendars.listAlertEvents, {
+      companyId: COMPANY,
+      after: 0,
+      before: 90 * 86_400_000,
+    }),
+  ).rejects.toThrow("valid calendar alert window");
+});
+
 describe("calendar revocation cascades", () => {
   it("emits one grantee-addressed calendar tombstone without changing authorizationEpoch", async () => {
     const t = harness();

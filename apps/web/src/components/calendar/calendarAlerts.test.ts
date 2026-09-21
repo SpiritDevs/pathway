@@ -2,7 +2,12 @@ import type { CalendarEventId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { describe, expect, it } from "vite-plus/test";
 
-import { calendarAlertOccurrences, type CalendarAlertEvent } from "./calendarAlerts";
+import {
+  calendarAlertOccurrences,
+  calendarAlertWindow,
+  CALENDAR_ALERT_REFRESH_MS,
+  type CalendarAlertEvent,
+} from "./calendarAlerts";
 
 function event(overrides: Partial<CalendarAlertEvent> = {}): CalendarAlertEvent {
   return {
@@ -41,4 +46,15 @@ describe("calendar alert occurrences", () => {
 
     expect(after).toEqual(before);
   });
+});
+
+it("rolls the alert window while retaining the maximum reminder lead and wake grace", () => {
+  const now = 1_800_000_000_000;
+  const first = calendarAlertWindow(now);
+  expect(first.after).toBeLessThanOrEqual(now - 60_000);
+  expect(first.before).toBeGreaterThan(now + 40_320 * 60_000 + CALENDAR_ALERT_REFRESH_MS);
+  expect(calendarAlertWindow(now + CALENDAR_ALERT_REFRESH_MS).after).toBe(
+    first.after + CALENDAR_ALERT_REFRESH_MS,
+  );
+  expect(calendarAlertWindow(now + 90 * 86_400_000).after).toBeGreaterThan(first.before);
 });

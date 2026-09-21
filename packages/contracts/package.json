@@ -7,6 +7,7 @@
   ],
   "type": "module",
   "exports": {
+    "./calendarAlerts": "./src/calendarAlerts.ts",
     "./orchestratorInspection": {
       "types": "./src/orchestratorInspection.ts",
       "import": "./src/orchestratorInspection.ts"
