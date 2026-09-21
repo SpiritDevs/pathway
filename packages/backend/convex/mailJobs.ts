@@ -1,3 +1,4 @@
+import { readEnvironmentPresence } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex provides deterministic transaction time without an Effect runtime.
 /** Fenced, renewable analysis work on the mailbox owner's selected environments. */
 import { v } from "convex/values";
@@ -42,7 +43,7 @@ async function eligible(
   return (
     !primary ||
     primary.state !== "active" ||
-    (primary.lastSeenAt ?? 0) < Date.now() - LEASE_MS ||
+    ((await readEnvironmentPresence(ctx, primary)).lastSeenAt ?? 0) < Date.now() - LEASE_MS ||
     createdAt < Date.now() - LEASE_MS
   );
 }

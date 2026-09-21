@@ -13,6 +13,7 @@ const RELAY = "https://relay.example.test";
 process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY;
 process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY}/.well-known/jwks.json`;
 const modules = {
+  "../convex/workerWakeups.ts": () => import("../convex/workerWakeups.ts"),
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
   "../convex/_generated/server.js": () => import("../convex/_generated/server.js"),
   "../convex/mail.ts": () => import("../convex/mail.ts"),
@@ -1384,4 +1385,34 @@ describe("connected mail", () => {
       human(t, "colleague").query(api.mail.listSenderRules, { companyId: COMPANY, accountId }),
     ).rejects.toThrow("another member");
   });
+});
+
+it("wakes mail workers for new work and retains backup recovery while jobs exist", async () => {
+  const t = harness();
+  const accountId = await seed(t);
+  const check = (id = "primary") =>
+    environment(t, id).query(api.workerWakeups.pending, { companyId: COMPANY, kind: "mail" });
+  expect(await check()).toBe(false);
+  expect(await check("backup")).toBe(false);
+  await intake(t, accountId);
+  expect(await check()).toBe(true);
+  expect(await check("backup")).toBe(true);
+  await environment(t).mutation(api.mailJobs.claim, { companyId: COMPANY });
+  expect(await check("backup")).toBe(true);
+  await t.run(async (ctx) => {
+    for (const job of await ctx.db.query("mailJobs").collect())
+      await ctx.db.patch(job._id, { status: "failed" });
+  });
+  expect(await check()).toBe(false);
+  await expect(
+    human(t).query(api.workerWakeups.pending, { companyId: COMPANY, kind: "mail" }),
+  ).rejects.toThrow();
+});
+
+it("keeps oversized mail account groups rotating even when the visible group is idle", async () => {
+  const t = harness();
+  await seedAccountGroup(t, 26);
+  expect(
+    await environment(t).query(api.workerWakeups.pending, { companyId: COMPANY, kind: "mail" }),
+  ).toBe(true);
 });

@@ -299,6 +299,16 @@ async function firstOutstanding(ctx: QueryCtx, thread: Doc<"threadQueueThreads">
   );
   return heads.filter((row) => row !== null).sort((a, b) => a.sequence - b.sequence)[0] ?? null;
 }
+function workerHead(head: Doc<"threadQueueMessages"> | null) {
+  return head && head.state !== "blocked"
+    ? {
+        commandId: head.commandId,
+        revision: head.revision,
+        deliveryAttempt: head.deliveryAttempt ?? 0,
+        state: head.acceptedAt === null ? ("queued" as const) : ("accepted" as const),
+      }
+    : null;
+}
 async function refreshThread(ctx: MutationCtx, thread: Doc<"threadQueueThreads">) {
   const head = await firstOutstanding(ctx, thread);
   const hasCanceled =
@@ -306,6 +316,7 @@ async function refreshThread(ctx: MutationCtx, thread: Doc<"threadQueueThreads">
   const published = !head && !hasCanceled && (await publishedThread(ctx, thread)) !== null;
   await ctx.db.patch(thread._id, {
     listingExpiresAt: published ? Date.now() + QUEUE_DELIVERED_RETENTION_MS : KEEP_QUEUE_LISTED,
+    workerHead: workerHead(head),
     state: head?.state ?? "delivered",
     error: head?.error ?? null,
     updatedAt: Date.now(),
@@ -697,16 +708,11 @@ export const environmentHead = query({
     ).flat();
     const heads: ThreadQueueHead[] = [];
     for (const thread of threads) {
-      const head = await firstOutstanding(ctx, thread);
-      if (head && head.state !== "blocked")
-        heads.push({
-          queueId: thread._id,
-          threadId: head.threadId,
-          commandId: head.commandId,
-          revision: head.revision,
-          deliveryAttempt: head.deliveryAttempt ?? 0,
-          state: head.acceptedAt === null ? "queued" : "accepted",
-        });
+      const head =
+        thread.workerHead === undefined
+          ? workerHead(await firstOutstanding(ctx, thread))
+          : thread.workerHead;
+      if (head) heads.push({ queueId: thread._id, threadId: thread.threadId, ...head });
     }
     return heads;
   },
@@ -818,6 +824,11 @@ export const accept = mutation({
       error: null,
     });
     await ctx.db.patch(thread._id, {
+      workerHead: workerHead({
+        ...message,
+        state: "accepted",
+        acceptedAt: message.acceptedAt ?? now,
+      }),
       state: "accepted",
       acceptedAt: thread.acceptedAt ?? now,
       updatedAt: now,
@@ -922,7 +933,10 @@ export const edit = mutation({
       revision: message.revision + 1,
       updatedAt: Date.now(),
     });
-    await ctx.db.patch(thread._id, { updatedAt: Date.now() });
+    await ctx.db.patch(thread._id, {
+      workerHead: workerHead(await firstOutstanding(ctx, thread)),
+      updatedAt: Date.now(),
+    });
     return null;
   },
 });
@@ -1012,6 +1026,7 @@ export const steer = mutation({
       revision: moved.revision + 1,
       updatedAt: Date.now(),
     });
+    await refreshThread(ctx, thread);
     return null;
   },
 });
@@ -1044,6 +1059,7 @@ export const cancel = mutation({
         });
       }
       await ctx.db.patch(thread._id, {
+        workerHead: null,
         state: "canceled",
         queuedCount: 0,
         error: null,

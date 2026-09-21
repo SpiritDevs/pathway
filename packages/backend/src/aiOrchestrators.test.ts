@@ -1,3 +1,9 @@
+import { heartbeat as workerHeartbeat } from "../convex/aiOrchestratorJobs.ts";
+import { pending as workerPending } from "../convex/workerWakeups.ts";
+import {
+  patchEnvironmentPresence,
+  patchEnvironmentRuntime,
+} from "../convex/lib/environmentRuntime.ts";
 import { notifyOrchestratorIssueChanges } from "../convex/lib/aiOrchestratorIssueSignals.ts";
 // @effect-diagnostics globalDate:off -- Convex transaction time in fixtures.
 import { convexTest } from "convex-test";
@@ -17,6 +23,7 @@ import {
 process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
 process.env.PATHWAY_RELAY_JWKS_URL = "https://relay.example.test/.well-known/jwks.json";
 const modules = {
+  "../convex/workerWakeups.ts": () => import("../convex/workerWakeups.ts"),
   "../convex/aiOrchestratorControls.ts": () => import("../convex/aiOrchestratorControls.ts"),
   "../convex/aiOrchestratorAttachments.ts": () => import("../convex/aiOrchestratorAttachments.ts"),
   "../convex/http.ts": () => import("../convex/http.ts"),
@@ -2862,7 +2869,7 @@ describe("environment presence signals", () => {
       const row = (await ctx.db.query("environmentRegistrations").collect()).find(
         (r) => r.environmentId === "studio",
       )!;
-      await ctx.db.patch(row._id, { lastSeenAt: Date.now() - 91000 });
+      await patchEnvironmentPresence(ctx, row, { lastSeenAt: Date.now() - 91000 });
     });
     await test.t.mutation(internal.aiOrchestratorEvents.checkOffline, {});
     await test.t.mutation(internal.aiOrchestratorEvents.checkOffline, {});
@@ -3836,7 +3843,9 @@ describe("task-aware worker selections", () => {
         const registration = (await ctx.db.query("environmentRegistrations").collect()).find(
           (row) => row.environmentId === "studio",
         )!;
-        await ctx.db.patch(registration._id, { orchestratorDelegationCatalogAt: publishedAt });
+        await patchEnvironmentRuntime(ctx, registration, {
+          orchestratorDelegationCatalogAt: publishedAt,
+        });
       });
       const requested = { instanceId: "codex", model: "newly-discovered" };
       await test.delegate(requested);
@@ -3852,7 +3861,7 @@ describe("task-aware worker selections", () => {
         const registration = (await ctx.db.query("environmentRegistrations").collect()).find(
           (row) => row.environmentId === "studio",
         )!;
-        await ctx.db.patch(registration._id, {
+        await patchEnvironmentRuntime(ctx, registration, {
           orchestratorDelegationCatalog: { ...workerCatalog, truncated: true },
         });
       });
@@ -6033,13 +6042,7 @@ it("does not rewrite unchanged worker catalogs on every claim, but refreshes the
     delegationCatalog: workerCatalog,
   };
   await test.environment().mutation(api.aiOrchestratorJobs.claim, args);
-  const registration = () =>
-    test.t.run((ctx) =>
-      ctx.db
-        .query("environmentRegistrations")
-        .withIndex("by_environment", (q) => q.eq("environmentId", "studio"))
-        .unique(),
-    );
+  const registration = () => test.t.run((ctx) => ctx.db.query("environmentRuntime").unique());
   const first = (await registration())!;
   await test.t.run((ctx) =>
     ctx.db.patch(first._id, { orchestratorDelegationCatalogAt: Date.now() - 10_000 }),
@@ -6062,4 +6065,70 @@ it("does not rewrite unchanged worker catalogs on every claim, but refreshes the
     delegationCatalog: changedCatalog,
   });
   expect((await registration())!.orchestratorDelegationCatalogAt).toBeGreaterThan(before!);
+});
+
+it("renews idle worker presence without scanning work or changing authorization", async () => {
+  const test = await coordinatorHarness();
+  const args = { companyId: "workspace", delegationCatalog: workerCatalog };
+  await test.environment().mutation(api.aiOrchestratorJobs.heartbeat, args);
+  const registration = () =>
+    test.t.run((ctx) =>
+      ctx.db
+        .query("environmentRegistrations")
+        .withIndex("by_environment", (q) => q.eq("environmentId", "studio"))
+        .unique(),
+    );
+  const before = await registration();
+  await test.t.run(async (ctx) => {
+    const presence = (await ctx.db.query("environmentPresence").first())!;
+    await ctx.db.patch(presence._id, { lastSeenAt: 1 });
+  });
+  const measured = await test.environment().run(async (ctx) => {
+    const meter = measureDatabaseReads(ctx.db);
+    await functionHandler(workerHeartbeat)({ ...ctx, db: meter.db }, { companyId: "workspace" });
+    return Object.fromEntries(meter.documents);
+  });
+  expect(measured["environmentRuntime"] ?? 0).toBe(0);
+  expect(measured["aiOrchestratorJobs"] ?? 0).toBe(0);
+  expect(measured["aiOrchestratorWork"] ?? 0).toBe(0);
+  expect(await registration()).toEqual(before);
+  const runtime = await test.t.run((ctx) => ctx.db.query("environmentRuntime").first());
+  expect(runtime?.orchestratorDelegationCatalog).toEqual(workerCatalog);
+  expect(before?.orchestratorDelegationCatalog).toBeUndefined();
+});
+
+it("watches bounded worker readiness without loading chat history or presence", async () => {
+  const test = await coordinatorHarness();
+  const check = (kind: "reasoning" | "inspections" | "results") =>
+    test.environment().query(api.workerWakeups.pending, { companyId: "workspace", kind });
+  expect(await check("reasoning")).toBe(true);
+  expect(await check("inspections")).toBe(false);
+  expect(await check("results")).toBe(false);
+  const measured = await test.environment().run(async (ctx) => {
+    const meter = measureDatabaseReads(ctx.db);
+    await functionHandler(workerPending)(
+      { ...ctx, db: meter.db },
+      { companyId: "workspace", kind: "reasoning" },
+    );
+    return Object.fromEntries(meter.documents);
+  });
+  expect(measured["aiOrchestratorJobs"]).toBe(1);
+  expect(measured["aiOrchestratorMessages"] ?? 0).toBe(0);
+  expect(measured["environmentPresence"] ?? 0).toBe(0);
+  await test.t.run(async (ctx) => {
+    for (const job of await ctx.db.query("aiOrchestratorJobs").collect())
+      await ctx.db.patch(job._id, { status: "completed" });
+  });
+  expect(await check("reasoning")).toBe(false);
+  await expect(
+    test.owner.query(api.workerWakeups.pending, { companyId: "workspace", kind: "reasoning" }),
+  ).rejects.toThrow();
+  await test.t.run(async (ctx) => {
+    const row = (await ctx.db
+      .query("environmentRegistrations")
+      .withIndex("by_environment", (q) => q.eq("environmentId", "studio"))
+      .unique())!;
+    await ctx.db.patch(row._id, { state: "revoked" });
+  });
+  await expect(check("reasoning")).rejects.toThrow();
 });

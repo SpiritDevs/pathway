@@ -1,3 +1,4 @@
+import { readEnvironmentRuntime, readEnvironmentPresence } from "./environmentRuntime.ts";
 import { assertConversationDispatch } from "./conversationLifecycle.ts";
 import { resolveWorkAssignments } from "./aiOrchestratorContext.ts";
 // @effect-diagnostics globalDate:off -- Convex supplies transaction time.
@@ -102,12 +103,13 @@ export async function queueOrchestratorWork(
       );
   const selection = action.selection ?? preset?.selection ?? null;
   let selectionProblem: string | null = null;
+  const runtime = await readEnvironmentRuntime(ctx, registration);
   if (
     selection &&
-    registration.orchestratorDelegationCatalog &&
-    Date.now() - (registration.orchestratorDelegationCatalogAt ?? 0) <= 120000
+    runtime.orchestratorDelegationCatalog &&
+    Date.now() - (runtime.orchestratorDelegationCatalogAt ?? 0) <= 120000
   ) {
-    const catalog = decodeCatalog(registration.orchestratorDelegationCatalog);
+    const catalog = decodeCatalog(runtime.orchestratorDelegationCatalog);
     selectionProblem = delegationSelectionProblem(decodeSelection(selection), catalog, true);
   }
   const selectionReason = continuationThreadId
@@ -285,7 +287,7 @@ export async function refreshOrchestratorWork(
     const offline =
       !registration ||
       registration.state !== "active" ||
-      (registration.lastSeenAt ?? 0) < Date.now() - 90_000;
+      ((await readEnvironmentPresence(ctx, registration)).lastSeenAt ?? 0) < Date.now() - 90_000;
     let resultRunId = work.resultRunId;
     let status: Doc<"aiOrchestratorWork">["status"] = threadId ? "working" : "queued";
     let detail = threadId

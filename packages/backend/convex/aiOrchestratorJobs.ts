@@ -1,3 +1,9 @@
+import {
+  readEnvironmentPresence,
+  patchEnvironmentPresence,
+  readEnvironmentRuntime,
+  patchEnvironmentRuntime,
+} from "./lib/environmentRuntime.ts";
 import { canonicalQueueJson } from "../src/threadQueue.ts";
 import { assignmentForExecution } from "./lib/aiOrchestratorAuthority.ts";
 import { reconcileConversationLifecycle } from "./lib/conversationLifecycle.ts";
@@ -414,9 +420,11 @@ async function contextFor(
   const environments = [];
   let catalogBudget = 64000;
   for (const registration of registrations) {
+    const runtime = await readEnvironmentRuntime(ctx, registration);
+    const presence = await readEnvironmentPresence(ctx, registration);
     const catalog =
-      Date.now() - (registration.orchestratorDelegationCatalogAt ?? 0) <= 120000
-        ? (registration.orchestratorDelegationCatalog ?? null)
+      Date.now() - (runtime.orchestratorDelegationCatalogAt ?? 0) <= 120000
+        ? (runtime.orchestratorDelegationCatalog ?? null)
         : null;
     const catalogSize = catalog ? JSON.stringify(catalog).length : 0;
     const includeCatalog = catalogSize <= catalogBudget;
@@ -435,10 +443,10 @@ async function contextFor(
           (choice) => choice.environmentId === registration.environmentId,
         ),
         id: registration.environmentId,
-        online: (registration.lastSeenAt ?? 0) > Date.now() - LEASE_MS,
-        lastSeenAt: registration.lastSeenAt,
+        online: (presence.lastSeenAt ?? 0) > Date.now() - LEASE_MS,
+        lastSeenAt: presence.lastSeenAt,
         resources: (() => {
-          const parsed = inspectResources(registration.orchestratorResources);
+          const parsed = inspectResources(runtime.orchestratorResources);
           return parsed._tag === "Success" && Date.now() - parsed.value.sampledAt <= 90000
             ? parsed.value
             : null;
@@ -759,6 +767,54 @@ async function notifyFinishedWork(ctx: MutationCtx, orchestrator: Doc<"aiOrchest
   }
 }
 
+async function publishWorkerPresence(
+  ctx: MutationCtx,
+  registration: Doc<"environmentRegistrations">,
+  delegationCatalog?: unknown,
+) {
+  const now = Date.now();
+  const presence = await readEnvironmentPresence(ctx, registration);
+  if (delegationCatalog !== undefined) {
+    const runtime = await readEnvironmentRuntime(ctx, registration);
+    if (JSON.stringify(delegationCatalog).length > 100000)
+      return fail("Worker catalog is too large.");
+    const catalog = decodeDelegationCatalog(delegationCatalog);
+    // Renew unchanged catalogs halfway through their freshness window. Presence lives separately.
+    if (
+      canonicalQueueJson(runtime.orchestratorDelegationCatalog ?? null) !==
+        canonicalQueueJson(catalog) ||
+      now - (runtime.orchestratorDelegationCatalogAt ?? 0) >= 60_000
+    ) {
+      await patchEnvironmentRuntime(ctx, registration, {
+        orchestratorDelegationCatalog: catalog,
+        orchestratorDelegationCatalogAt: now,
+      });
+    }
+  }
+  if ((presence.lastSeenAt ?? 0) < now - 30_000 || presence.orchestratorPresence !== "online") {
+    await patchEnvironmentPresence(ctx, registration, {
+      lastSeenAt: now,
+      orchestratorPresence: "online",
+    });
+    if (presence.orchestratorPresence === "offline")
+      await notifyOrchestratorEnvironmentChange(ctx, {
+        ...registration,
+        lastSeenAt: now,
+        orchestratorPresence: "online",
+      });
+  }
+}
+
+/** Presence and catalog renewal must continue while the reasoning queue is idle. */
+export const heartbeat = mutation({
+  args: { companyId: v.string(), delegationCatalog: v.optional(v.any()) },
+  handler: async (ctx, args) => {
+    const actor = await environmentActor(ctx, args.companyId);
+    await publishWorkerPresence(ctx, actor.registration, args.delegationCatalog);
+    return null;
+  },
+});
+
 export const claim = mutation({
   args: {
     companyId: v.string(),
@@ -768,39 +824,8 @@ export const claim = mutation({
   handler: async (ctx, args): Promise<OrchestratorRun | null> => {
     if (args.providers.length > 50) return fail("Too many provider instances.");
     const actor = await environmentActor(ctx, args.companyId);
+    await publishWorkerPresence(ctx, actor.registration, args.delegationCatalog);
     const now = Date.now();
-    if (args.delegationCatalog !== undefined) {
-      if (JSON.stringify(args.delegationCatalog).length > 100000)
-        return fail("Worker catalog is too large.");
-      const catalog = decodeDelegationCatalog(args.delegationCatalog);
-      // A changed timestamp invalidates every registration reader. Renew unchanged catalogs
-      // halfway through their two-minute freshness window, rather than on every idle poll.
-      if (
-        canonicalQueueJson(actor.registration.orchestratorDelegationCatalog ?? null) !==
-          canonicalQueueJson(catalog) ||
-        now - (actor.registration.orchestratorDelegationCatalogAt ?? 0) >= 60_000
-      ) {
-        await ctx.db.patch(actor.registration._id, {
-          orchestratorDelegationCatalog: catalog,
-          orchestratorDelegationCatalogAt: now,
-        });
-      }
-    }
-    if (
-      (actor.registration.lastSeenAt ?? 0) < now - 30_000 ||
-      actor.registration.orchestratorPresence !== "online"
-    ) {
-      await ctx.db.patch(actor.registration._id, {
-        lastSeenAt: now,
-        orchestratorPresence: "online",
-      });
-      if (actor.registration.orchestratorPresence === "offline")
-        await notifyOrchestratorEnvironmentChange(ctx, {
-          ...actor.registration,
-          lastSeenAt: now,
-          orchestratorPresence: "online",
-        });
-    }
     const tracked = await Promise.all(
       (["queued", "working", "unknown"] as const).map((status) =>
         ctx.db
@@ -934,7 +959,7 @@ export const claim = mutation({
         if (
           preferred &&
           preferred.state === "active" &&
-          (preferred.lastSeenAt ?? 0) > now - LEASE_MS &&
+          ((await readEnvironmentPresence(ctx, preferred)).lastSeenAt ?? 0) > now - LEASE_MS &&
           job.updatedAt > now - LEASE_MS
         )
           continue;
@@ -1662,7 +1687,8 @@ export const failRun = mutation({
     for (const registration of registrations)
       if (
         !failedEnvironmentIds.includes(registration.environmentId) &&
-        (registration.lastSeenAt ?? 0) > Date.now() - LEASE_MS &&
+        ((await readEnvironmentPresence(ctx, registration)).lastSeenAt ?? 0) >
+          Date.now() - LEASE_MS &&
         (await eligibleOrchestratorEnvironment(ctx, claim.orchestrator, registration))
       )
         anotherEnvironment = true;
@@ -1991,7 +2017,7 @@ export const reportHostResources = mutation({
     const resources = decodeResources(args.resources);
     const age = Date.now() - resources.sampledAt;
     if (age < -5000 || age > 90000) return fail("A fresh host resource observation is required.");
-    await ctx.db.patch(actor.registration._id, { orchestratorResources: resources });
+    await patchEnvironmentRuntime(ctx, actor.registration, { orchestratorResources: resources });
   },
 });
 

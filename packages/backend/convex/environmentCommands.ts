@@ -1,3 +1,4 @@
+import { readEnvironmentPresence, patchEnvironmentPresence } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock directly.
 /**
  * Remote dispatch through Convex command records — layer 2 of cross-machine agent control.
@@ -392,6 +393,34 @@ export const list = query({
   },
 });
 
+async function refreshCommandPresence(
+  ctx: MutationCtx,
+  registration: Doc<"environmentRegistrations">,
+  now: number,
+) {
+  const presence = await readEnvironmentPresence(ctx, registration);
+  if (
+    presence.lastSeenAt === null ||
+    now - presence.lastSeenAt >= ENVIRONMENT_REGISTRATION_HEARTBEAT_INTERVAL_MS
+  ) {
+    await patchEnvironmentPresence(ctx, registration, { lastSeenAt: now });
+    // Presence is operational state, kept outside the replicated company feed.
+  }
+}
+
+/** Renew presence without loading pending commands on idle servers. */
+export const heartbeat = mutation({
+  args: { companyId: domainIdArg },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    if (actor.kind !== "environment")
+      throw backendError("permission-denied", "Only environments may heartbeat command workers.");
+    await refreshCommandPresence(ctx, actor.registration, Date.now());
+    return null;
+  },
+});
+
 /**
  * An environment claims its own pending work.
  *
@@ -414,14 +443,7 @@ export const claim = mutation({
     const ttl = claimTtl(args.claimTtlMs);
     const now = Date.now();
     const environmentId = actor.registration.environmentId;
-    if (
-      actor.registration.lastSeenAt === null ||
-      now - actor.registration.lastSeenAt >= ENVIRONMENT_REGISTRATION_HEARTBEAT_INTERVAL_MS
-    ) {
-      await ctx.db.patch(actor.registration._id, { lastSeenAt: now });
-      // Presence is operational state, not a replicated company change. The claimant already
-      // polls this mutation, so this adds no function calls and at most two tiny writes a minute.
-    }
+    await refreshCommandPresence(ctx, actor.registration, now);
     const pending = await ctx.db
       .query("environmentCommands")
       .withIndex("by_company_target_state", (q) =>

@@ -25,6 +25,7 @@ import type * as companies from "../companies.js";
 import type * as connectGrants from "../connectGrants.js";
 import type * as contacts from "../contacts.js";
 import type * as crons from "../crons.js";
+import type * as dictationDictionary from "../dictationDictionary.js";
 import type * as emailTags from "../emailTags.js";
 import type * as environmentCommands from "../environmentCommands.js";
 import type * as environments from "../environments.js";
@@ -48,15 +49,19 @@ import type * as lib_aiOrchestratorWork from "../lib/aiOrchestratorWork.js";
 import type * as lib_automationJobs from "../lib/automationJobs.js";
 import type * as lib_businessToolsSchema from "../lib/businessToolsSchema.js";
 import type * as lib_companyApply from "../lib/companyApply.js";
+import type * as lib_conversationLifecycle from "../lib/conversationLifecycle.js";
 import type * as lib_delegatedBusinessOwner from "../lib/delegatedBusinessOwner.js";
+import type * as lib_dictationDictionary from "../lib/dictationDictionary.js";
 import type * as lib_directIssueApply from "../lib/directIssueApply.js";
 import type * as lib_domainIds from "../lib/domainIds.js";
+import type * as lib_environmentRuntime from "../lib/environmentRuntime.js";
 import type * as lib_errors from "../lib/errors.js";
 import type * as lib_identity from "../lib/identity.js";
 import type * as lib_issueApply from "../lib/issueApply.js";
 import type * as lib_mail from "../lib/mail.js";
 import type * as lib_mailSchema from "../lib/mailSchema.js";
 import type * as lib_providerAllowanceSchema from "../lib/providerAllowanceSchema.js";
+import type * as lib_publisherReconciliation from "../lib/publisherReconciliation.js";
 import type * as lib_relayIdentity from "../lib/relayIdentity.js";
 import type * as lib_slackOutbound from "../lib/slackOutbound.js";
 import type * as lib_threadAlertPolicy from "../lib/threadAlertPolicy.js";
@@ -81,6 +86,7 @@ import type * as threadAlertPolicies from "../threadAlertPolicies.js";
 import type * as threadQueue from "../threadQueue.js";
 import type * as timeTracking from "../timeTracking.js";
 import type * as trustedEmailSenders from "../trustedEmailSenders.js";
+import type * as workerWakeups from "../workerWakeups.js";
 
 import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server";
 
@@ -102,6 +108,7 @@ declare const fullApi: ApiFromModules<{
   connectGrants: typeof connectGrants;
   contacts: typeof contacts;
   crons: typeof crons;
+  dictationDictionary: typeof dictationDictionary;
   emailTags: typeof emailTags;
   environmentCommands: typeof environmentCommands;
   environments: typeof environments;
@@ -125,15 +132,19 @@ declare const fullApi: ApiFromModules<{
   "lib/automationJobs": typeof lib_automationJobs;
   "lib/businessToolsSchema": typeof lib_businessToolsSchema;
   "lib/companyApply": typeof lib_companyApply;
+  "lib/conversationLifecycle": typeof lib_conversationLifecycle;
   "lib/delegatedBusinessOwner": typeof lib_delegatedBusinessOwner;
+  "lib/dictationDictionary": typeof lib_dictationDictionary;
   "lib/directIssueApply": typeof lib_directIssueApply;
   "lib/domainIds": typeof lib_domainIds;
+  "lib/environmentRuntime": typeof lib_environmentRuntime;
   "lib/errors": typeof lib_errors;
   "lib/identity": typeof lib_identity;
   "lib/issueApply": typeof lib_issueApply;
   "lib/mail": typeof lib_mail;
   "lib/mailSchema": typeof lib_mailSchema;
   "lib/providerAllowanceSchema": typeof lib_providerAllowanceSchema;
+  "lib/publisherReconciliation": typeof lib_publisherReconciliation;
   "lib/relayIdentity": typeof lib_relayIdentity;
   "lib/slackOutbound": typeof lib_slackOutbound;
   "lib/threadAlertPolicy": typeof lib_threadAlertPolicy;
@@ -158,6 +169,7 @@ declare const fullApi: ApiFromModules<{
   threadQueue: typeof threadQueue;
   timeTracking: typeof timeTracking;
   trustedEmailSenders: typeof trustedEmailSenders;
+  workerWakeups: typeof workerWakeups;
 }>;
 
 /**

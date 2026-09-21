@@ -1,3 +1,4 @@
+import { readEnvironmentPresence } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off globalFetch:off -- Convex actions use platform fetch and mutations use the transaction clock.
 /** Company-owned Slack configuration, encrypted credentials, and controller coordination. */
 import { v } from "convex/values";
@@ -829,6 +830,7 @@ export const activate = mutation({
     const now = Date.now();
     for (const environmentId of selected) {
       const registration = await requireActiveRegistration(ctx, actor.company._id, environmentId);
+      const presence = await readEnvironmentPresence(ctx, registration);
       const capabilities = await ctx.db
         .query("environmentProviderCapabilities")
         .withIndex("by_company_and_environment", (q) =>
@@ -839,8 +841,8 @@ export const activate = mutation({
         capabilities === null ||
         !capabilities.supportsSlackCoordination ||
         now - capabilities.publishedAt > CONTENDER_FRESH_MS ||
-        registration.lastSeenAt === null ||
-        now - registration.lastSeenAt > CONTENDER_FRESH_MS
+        presence.lastSeenAt === null ||
+        now - presence.lastSeenAt > CONTENDER_FRESH_MS
       ) {
         throw backendError(
           "activation-unsafe",

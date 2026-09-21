@@ -1,3 +1,4 @@
+import { patchEnvironmentPresence } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations are not Effect programs; the transaction clock is `Date.now()`.
 /**
  * Company environment registry and discovery.
@@ -478,13 +479,13 @@ export const register = mutation({
       descriptor: args.descriptor,
       relayLinkState: args.relayLinkState,
       managedEndpointAvailable: args.managedEndpointAvailable,
-      lastSeenAt: now,
       serviceRoleIds: [...serviceRoleIds],
       teamIds: [...teamIds],
       state: "active" as const,
       ...(publishedChanged ? { updatedAt: now } : {}),
     };
-    await ctx.db.patch(existing._id, patch);
+    await patchEnvironmentPresence(ctx, existing, { lastSeenAt: now });
+    if (publishedChanged) await ctx.db.patch(existing._id, patch);
     if (!publishedChanged) return null;
     await appendCompanyChanges(ctx, {
       companyId: actor.company._id,
@@ -527,10 +528,10 @@ export const heartbeat = mutation({
     const patch = {
       relayLinkState: args.relayLinkState,
       managedEndpointAvailable: args.managedEndpointAvailable,
-      lastSeenAt: now,
       ...(publishedChanged ? { updatedAt: now } : {}),
     };
-    await ctx.db.patch(registration._id, patch);
+    await patchEnvironmentPresence(ctx, registration, { lastSeenAt: now });
+    if (publishedChanged) await ctx.db.patch(registration._id, patch);
 
     // `lastSeenAt` is freshness metadata read directly by discovery queries. Appending every beat
     // would advance the company-wide feed forever while no durable registry choice changed, so a

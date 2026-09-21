@@ -1,3 +1,4 @@
+import { patchEnvironmentPresence } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- The presence sweep uses Convex transaction time.
 import { notifyOrchestratorEnvironmentChange } from "./lib/aiOrchestratorEnvironmentSignals.ts";
 /** Event fan-out runs after the originating domain transaction commits. */
@@ -27,8 +28,20 @@ export const checkOffline = internalMutation({
           .lt("lastSeenAt", Date.now() - 90000),
       )
       .take(100);
+    const presenceRows = await ctx.db
+      .query("environmentPresence")
+      .withIndex("by_presence", (q) =>
+        q.eq("orchestratorPresence", "online").lt("lastSeenAt", Date.now() - 90000),
+      )
+      .take(100);
+    for (const presence of presenceRows) {
+      await ctx.db.patch(presence._id, { orchestratorPresence: "offline" });
+      const registration = await ctx.db.get(presence.registrationId);
+      if (registration?.state === "active")
+        await notifyOrchestratorEnvironmentChange(ctx, registration);
+    }
     for (const registration of registrations) {
-      await ctx.db.patch(registration._id, { orchestratorPresence: "offline" });
+      await patchEnvironmentPresence(ctx, registration, { orchestratorPresence: "offline" });
       await notifyOrchestratorEnvironmentChange(ctx, registration);
     }
   },

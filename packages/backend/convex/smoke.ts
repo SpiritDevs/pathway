@@ -1,3 +1,4 @@
+import { deleteEnvironmentRuntime } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations are not Effect programs; the transaction clock is `Date.now()`.
 /**
  * Internal-only seed and teardown for the relay → Convex trust-chain smoke test.
@@ -430,6 +431,7 @@ export const cleanup = internalMutation({
 
     const registration = await findSmokeRegistration(ctx, company, environmentId);
     if (registration !== null) {
+      await deleteEnvironmentRuntime(ctx, registration);
       await ctx.db.delete(registration._id);
       counts.registrations += 1;
     }
@@ -449,6 +451,7 @@ export const cleanup = internalMutation({
           now,
         })
       ) {
+        await deleteEnvironmentRuntime(ctx, other);
         await ctx.db.delete(other._id);
         counts.sweptRegistrations += 1;
       } else {

@@ -14,8 +14,8 @@ Environment publishers send their current thread and captured-email IDs every
 15 seconds. Reconciliation previously read every published document on every
 tick, including large shell and message payloads, even when no IDs changed.
 
-Each environment registration now stores an optional fingerprint and completion
-time for each inventory. Authorization still runs on every invocation. An
+Each environment runtime row stores an optional fingerprint and completion
+time for each inventory (legacy registrations remain readable until their next write). Authorization still runs on every invocation. An
 unchanged inventory skips the full scan for five minutes. A changed inventory
 scans immediately. A missing checkpoint also scans immediately, so existing
 registrations need no data migration. A checkpoint is saved only when fewer
@@ -65,7 +65,7 @@ shared authorization reads, destination metadata, catalog renewal, and server
 publisher retry behavior. Document counts and serialized bytes in these tests
 are regression indicators, not measurements of Convex's billed I/O.
 
-The six affected test suites pass 258 tests. Backend and server typechecks and
+The first pass was verified with 258 tests across six affected suites. Backend and server typechecks and
 targeted lint pass. The production deployment dry run validates the schema and
 index changes; it does not activate the fix.
 
@@ -137,19 +137,82 @@ fields, indexes, or client changes are required for this second pass.
 The combined production deployment dry run also passes; the changes have not
 been activated in production.
 
-## Deferred opportunities
+## Heartbeat isolation and worker wakeups
 
-- **Heartbeat invalidations:** registration documents still combine authority,
-  capabilities, catalogs, and frequently changing presence timestamps. Splitting
-  presence and catalog data from authority would reduce both read size and
-  subscription invalidations. This spans several writers and readers and needs
-  an explicit compatibility and migration plan.
-- **Worker polling and queue headers:** claims and pending-inspection checks
-  continue every ten seconds while idle. Lightweight work-availability wakeups
-  need timed recovery for lease expiry and delayed work. Queue head subscriptions
-  read complete queued messages to return a handful of IDs; compact delivery
-  metadata could avoid repeatedly loading prompt bodies. Both changes need
-  coverage for reconnects, retries, and older stored records.
+Authorization stays on `environmentRegistrations`. `environmentPresence` holds
+freshness and online/offline state; `environmentRuntime` holds catalogs, resource
+observations, and reconciliation checkpoints. Both companions belong to the
+exact registration, not merely an environment ID. Presence readers explicitly
+join the small presence row, including discovery, mail failover, automation
+readiness, Slack activation, and coordinator routing. Heartbeats do not read the
+catalog, rewrite grants, or advance the company feed. Catalog and publisher
+updates no longer invalidate authorization readers either.
+
+These are additive tables. Reads fall back to legacy fields until the first
+write copies those fields atomically into their companion and clears the old
+runtime fields. The legacy `lastSeenAt` stays nullable in the schema. Offline
+sweeps cover both indexed layouts with bounded batches. No full-table migration
+is needed to enable the change; inactive registrations remain readable. Synthetic
+smoke cleanup deletes companions alongside their registration.
+
+`workerWakeups.pending` uses bounded indexed existence checks and returns only a
+boolean. It does not read transcripts, email bodies, catalogs, or presence. Mail,
+coordinator reasoning, inspection, result-collection, and environment-command
+workers subscribe within each company's lifetime. A wakeup is a hint; every
+claim still applies the original authorization, readiness, and lease fencing.
+
+An empty queue reduces recovery checks to once a minute. Pending work keeps the
+previous ten-second recovery cadence (five seconds for commands), preserving
+lease expiry, delayed jobs, backup selection, and local-result recovery even
+without a new database write. Oversized mailbox groups retain their rotation.
+Command workers still drain successful claims at their existing fast cadence.
+Dedicated 30-second heartbeats maintain presence and catalog renewal while
+claims are parked. Failed subscriptions retry and retain polling; token renewal
+and scope cleanup are covered by tests. A disconnected client can fall back to
+the one-minute recovery check until reconnection; claims remain authoritative.
+
+`threadQueueThreads.workerHead` stores only command ID, revision, delivery
+attempt, and state. All queue-changing mutations maintain it transactionally.
+Undefined means an older row requiring the existing indexed lookup; null means
+no runnable head. Queue acceptance still checks the actual message and revision.
+Prompt bodies are read when preparing/accepting delivery, not when watching
+saved queue heads.
+
+The integrated verification covers 360 tests across 13 targeted backend and server
+suites, plus backend/server typechecks and lint on changed TypeScript files. The
+production schema and function deployment dry run passes without activating any
+changes. The tests include scoped subscription cleanup and re-subscription,
+authentication refresh, idle recovery clocks, mail failover, command targeting,
+legacy storage, canceled-message editing, and stale delivery revisions.
+
+### Expected savings and limits
+
+- Empty mail/reasoning/inspection/result loops: six calls per minute become one,
+  an **83.3% reduction** in those recurring calls.
+- Empty environment-command loops: approximately twelve calls per minute become
+  one, a **91.7% reduction** in idle claims (the former loop used jitter).
+- Across those five loops for one company/environment, the steady idle baseline
+  changes from about 51,840 calls/day to 7,200 queue checks plus 5,760 dedicated
+  heartbeat calls: approximately **75% fewer calls**, before subscription
+  evaluations and reconnects. These are call-rate estimates, not billed I/O.
+- A regression fixture with a 50 KB prompt reads **zero message documents** for
+  the saved head and **over 90% fewer serialized document bytes** than its
+  legacy head lookup. Actual savings depend on prompt sizes and queue length.
+- Once copied, routine heartbeats issue **zero registration patches**. The
+  reduction in subscription invalidations and OCC retries requires production
+  measurement; the earlier 3,437 retries cannot be converted directly into GB.
+
+Deploy the backend first, then release/restart updated environment servers.
+Older servers keep using the same claim APIs and benefit from storage isolation;
+wakeups require the updated server. New servers also retain recovery polling
+when the new subscription is unavailable. Clients and provider adapters keep
+the same contracts across local, remote, desktop, web, and mobile connections.
+
+Do not remove legacy schema fields yet. Roll back server binaries independently
+if needed. Rolling the backend back to code that predates the split requires a
+bounded reverse copy from companions to legacy fields first, plus clearing saved
+queue heads before reintroducing older queue writers. Prefer a forward fix; an
+unprepared backend rollback would leave its old readers with stale presence.
 
 Convex's [performance guidance](https://docs.convex.dev/understanding/best-practices/)
 explains why indexed ranges and smaller subscription read sets matter.

@@ -1,3 +1,4 @@
+import { readEnvironmentPresence } from "./environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Transactional automation-job scheduling helpers shared by issue and Slack mutations. */
 import type { Doc } from "../_generated/dataModel.js";
@@ -48,11 +49,14 @@ export async function automationReadiness(
       q.eq("companyId", companyId).eq("environmentId", environmentId),
     )
     .unique();
+  const lastSeenAt = registration
+    ? (await readEnvironmentPresence(ctx, registration)).lastSeenAt
+    : null;
   if (
     registration === null ||
     registration.state !== "active" ||
-    registration.lastSeenAt === null ||
-    Date.now() - registration.lastSeenAt > ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS
+    lastSeenAt === null ||
+    Date.now() - (lastSeenAt ?? 0) > ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS
   ) {
     return {
       state: "blocked" as const,

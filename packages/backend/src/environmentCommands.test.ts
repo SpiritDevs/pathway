@@ -1,3 +1,4 @@
+import { readEnvironmentPresence } from "../convex/lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Fixtures and lease transitions use Convex epoch milliseconds.
 /** End-to-end remote command authorization, leasing, feed, expiry, and bootstrap coverage. */
 import { convexTest } from "convex-test";
@@ -13,6 +14,7 @@ process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
 process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY_ISSUER}/.well-known/jwks.json`;
 
 const modules = {
+  "../convex/workerWakeups.ts": () => import("../convex/workerWakeups.ts"),
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
   "../convex/_generated/server.js": () => import("../convex/_generated/server.js"),
   "../convex/environmentCommands.ts": () => import("../convex/environmentCommands.ts"),
@@ -368,7 +370,9 @@ describe("environment commands", () => {
               q.eq("companyId", seeded.companyDocId).eq("environmentId", ENVIRONMENT_ONE),
             )
             .unique();
-          return registration?.lastSeenAt ?? null;
+          return registration
+            ? (await readEnvironmentPresence(ctx, registration)).lastSeenAt
+            : null;
         });
 
       for (const elapsed of [0, 30_000, 60_000, 90_000, 120_000, 150_000]) {
@@ -397,7 +401,7 @@ describe("environment commands", () => {
             q.eq("companyId", seeded.companyDocId).eq("environmentId", REVOKED_ENVIRONMENT),
           )
           .unique();
-        return registration?.lastSeenAt ?? null;
+        return registration ? (await readEnvironmentPresence(ctx, registration)).lastSeenAt : null;
       });
     const before = await lastSeenAt();
 
@@ -578,4 +582,40 @@ describe("environment commands", () => {
       },
     });
   });
+});
+
+it("wakes only the command target and heartbeats without claiming work", async () => {
+  const t = harness();
+  await seed(t);
+  const check = (environmentId = ENVIRONMENT_ONE) =>
+    asEnvironment(t, environmentId).query(api.workerWakeups.pending, {
+      companyId: COMPANY_ID,
+      kind: "commands",
+    });
+  expect(await check()).toBe(false);
+  await issue(t, "01990000-0000-7000-8000-000000001290", ENVIRONMENT_TWO);
+  expect(await check()).toBe(false);
+  expect(await check(ENVIRONMENT_TWO)).toBe(true);
+  await asEnvironment(t).mutation(api.environmentCommands.heartbeat, { companyId: COMPANY_ID });
+  const before = await t.run((ctx) =>
+    ctx.db
+      .query("environmentRegistrations")
+      .withIndex("by_environment", (q) => q.eq("environmentId", ENVIRONMENT_ONE))
+      .unique(),
+  );
+  await asEnvironment(t).mutation(api.environmentCommands.heartbeat, { companyId: COMPANY_ID });
+  expect(
+    await t.run((ctx) =>
+      ctx.db
+        .query("environmentRegistrations")
+        .withIndex("by_environment", (q) => q.eq("environmentId", ENVIRONMENT_ONE))
+        .unique(),
+    ),
+  ).toEqual(before);
+  expect(await check(ENVIRONMENT_TWO)).toBe(true);
+  await expect(
+    asEnvironment(t, REVOKED_ENVIRONMENT).mutation(api.environmentCommands.heartbeat, {
+      companyId: COMPANY_ID,
+    }),
+  ).rejects.toThrow();
 });

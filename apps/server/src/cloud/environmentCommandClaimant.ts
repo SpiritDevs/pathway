@@ -1,3 +1,4 @@
+import { makeWorkerWakeups } from "./workerWakeups.ts";
 // @effect-diagnostics anyUnknownInErrorContext:off
 // @effect-diagnostics unknownInEffectCatch:off
 /**
@@ -6,9 +7,9 @@
  * Convex discovery supervises one claimant for every company that registered this environment.
  * Within each company, `environmentCommands.claim` is both command discovery and lease acquisition:
  * it orders work by creation time and returns an existing live claim unchanged. The same
- * authenticated call refreshes that company's registration at a backend-throttled 30-second
- * cadence. A command is renewed once before any local side effect and then periodically while it
- * runs; losing that fence interrupts local work and suppresses the terminal report.
+ * authenticated call refreshes presence at a backend-throttled 30-second cadence; a separate
+ * heartbeat keeps idle environments fresh while queue subscriptions park their claim loops. A
+ * command is renewed before any local side effect and then periodically while it runs; losing that fence interrupts local work and suppresses the terminal report.
  *
  * @module cloud/environmentCommandClaimant
  */
@@ -89,6 +90,7 @@ type ClaimResponse = FunctionReturnType<typeof api.environmentCommands.claim>;
 export type ClaimedEnvironmentCommand = ClaimResponse[number];
 
 export interface EnvironmentCommandBackend {
+  readonly heartbeat?: (companyId: string) => Effect.Effect<null, unknown>;
   readonly claim: (input: {
     readonly companyId: string;
     readonly limit: number;
@@ -152,6 +154,7 @@ export interface EnvironmentCommandClaimantRuntime {
   readonly executor: EnvironmentCommandExecutor;
   readonly isBootstrapped: Effect.Effect<boolean, unknown>;
   readonly timing?: Partial<EnvironmentCommandTiming>;
+  readonly idleWait?: Effect.Effect<void>;
 }
 
 export type EnvironmentCommandClaimCycle = "unready" | "idle" | "claimed" | "transport-error";
@@ -523,7 +526,9 @@ export const runEnvironmentCommandClaimant = Effect.fn("cloud.environment_comman
           : outcome === "transport-error"
             ? timing.errorPollMs
             : timing.idlePollMs;
-      yield* timing.sleep(jittered(base, timing));
+      yield* outcome === "idle" && runtime.idleWait
+        ? runtime.idleWait
+        : timing.sleep(jittered(base, timing));
     }).pipe(Effect.forever);
   },
 );
@@ -571,6 +576,8 @@ export const makeEnvironmentCommandBackend = Effect.fn(
     );
 
   return {
+    heartbeat: (companyId: string) =>
+      authorized((convex) => convex.mutation(api.environmentCommands.heartbeat, { companyId })),
     claim: (args) => authorized((convex) => convex.mutation(api.environmentCommands.claim, args)),
     renewClaim: (args) =>
       authorized((convex) => convex.mutation(api.environmentCommands.renewClaim, args)),
@@ -818,7 +825,29 @@ export const startEnvironmentCommandClaimant = Effect.fn(
           isBootstrapped,
           ...(options.timing === undefined ? {} : { timing: options.timing }),
         } satisfies EnvironmentCommandClaimantRuntime;
-        return runEnvironmentCommandClaimant(runtime);
+        // Injected backends retain their deterministic test timing and do not open a live socket.
+        if (options.backend) return runEnvironmentCommandClaimant(runtime);
+        return Effect.gen(function* () {
+          const wakeups = yield* makeWorkerWakeups({
+            companyId,
+            convexUrl: activation.convexUrl,
+            tokens,
+            kinds: ["commands"],
+          });
+          if (backend.heartbeat)
+            yield* backend.heartbeat(companyId).pipe(
+              Effect.catch(() =>
+                Effect.logDebug("Command worker heartbeat will retry", { companyId }),
+              ),
+              Effect.andThen(Effect.sleep("30 seconds")),
+              Effect.forever,
+              Effect.forkScoped,
+            );
+          return yield* runEnvironmentCommandClaimant({
+            ...runtime,
+            idleWait: wakeups.wait("commands"),
+          });
+        });
       };
 
       yield* superviseCloudSyncCompanies({

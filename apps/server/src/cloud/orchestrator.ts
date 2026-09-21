@@ -1,3 +1,4 @@
+import { makeWorkerWakeups } from "./workerWakeups.ts";
 import * as WorkerReceipts from "../orchestration-v2/CommandReceiptStore.ts";
 import { runOrchestratorControls } from "./orchestratorControls.ts";
 import * as HttpClient from "effect/unstable/http/HttpClient";
@@ -216,6 +217,7 @@ export interface OrchestratorBackend {
   readonly collectResult: (
     result: OrchestratorWorkResult,
   ) => Effect.Effect<boolean, OrchestratorError>;
+  readonly heartbeat?: Effect.Effect<void, OrchestratorError>;
   readonly claim: Effect.Effect<OrchestratorRun | null, OrchestratorError>;
   readonly confirmStopped?: (job: OrchestratorRun) => Effect.Effect<void, OrchestratorError>;
   readonly renew: (job: OrchestratorRun) => Effect.Effect<boolean, OrchestratorError>;
@@ -542,6 +544,28 @@ export const makeOrchestratorBackend = Effect.fn("cloud.orchestrator.backend")(f
     generation: job.generation,
   });
   return {
+    heartbeat: Effect.gen(function* () {
+      yield* Effect.forEach([...stopReceipts.values()], confirmStopped, { discard: true });
+      const catalog = options.delegationCatalog ? yield* options.delegationCatalog : undefined;
+      const fingerprint = catalog ? encodeCatalog(catalog) : "";
+      const now = yield* Clock.currentTimeMillis;
+      const publish = fingerprint !== publishedCatalog || now - catalogPublishedAt >= 60000;
+      yield* call(() =>
+        client.mutation(
+          makeFunctionReference<
+            "mutation",
+            { companyId: string; delegationCatalog?: unknown },
+            null
+          >("aiOrchestratorJobs:heartbeat"),
+          {
+            companyId: options.companyId,
+            ...(catalog && publish ? { delegationCatalog: catalog } : {}),
+          },
+        ),
+      );
+      publishedCatalog = fingerprint;
+      if (publish) catalogPublishedAt = now;
+    }),
     readAttachment: (job: OrchestratorRun, id: string, maxBytes: number) =>
       Effect.gen(function* () {
         const url = yield* call(() =>
@@ -906,11 +930,25 @@ export const orchestratorLayer = () =>
                     ),
                   ),
                 });
+                const wakeups = yield* makeWorkerWakeups({
+                  companyId,
+                  convexUrl: config.settings.convexUrl,
+                  tokens,
+                  kinds: ["reasoning", "inspections", "results"],
+                });
+                yield* backend.heartbeat.pipe(
+                  Effect.catch(() =>
+                    Effect.logDebug("Coordinator heartbeat will retry", { companyId }),
+                  ),
+                  Effect.andThen(Effect.sleep("30 seconds")),
+                  Effect.forever,
+                  Effect.forkScoped,
+                );
                 yield* collectOrchestratorResults(backend, threads.getThreadProjection).pipe(
                   Effect.catch(() =>
                     Effect.logDebug("Worker result collection will retry", { companyId }),
                   ),
-                  Effect.andThen(Effect.sleep(Duration.seconds(10))),
+                  Effect.andThen(wakeups.wait("results")),
                   Effect.forever,
                   Effect.forkScoped,
                 );
@@ -988,7 +1026,7 @@ export const orchestratorLayer = () =>
                       }),
                     { concurrency: 2, discard: true },
                   );
-                  yield* Effect.sleep(Duration.seconds(pending.length ? 1 : 10));
+                  yield* pending.length ? Effect.sleep("1 second") : wakeups.wait("inspections");
                 }).pipe(
                   Effect.catch(() =>
                     Effect.logDebug("Coordinator inspections will retry", { companyId }).pipe(
@@ -1021,7 +1059,7 @@ export const orchestratorLayer = () =>
                         },
                       ),
                     ),
-                    Effect.andThen(Effect.sleep(Duration.seconds(10))),
+                    Effect.andThen(wakeups.wait("reasoning")),
                     Effect.forever,
                   );
               }),

@@ -1,3 +1,4 @@
+import { readEnvironmentRuntime, patchEnvironmentRuntime } from "./lib/environmentRuntime.ts";
 import { notifyOrchestratorThreadUpdate } from "./lib/aiOrchestratorSignals.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Environment-published, cloud-safe Agent Thread discovery metadata. */
@@ -373,9 +374,10 @@ export const reconcile = mutation({
     requireEnvironmentActor(actor, environmentId);
     const current = new Set(args.currentThreadIds.map((id) => requireTrimmed(id, "Thread id")));
     // Authorization is checked on every call, including calls that skip the inventory scan.
+    const runtime = await readEnvironmentRuntime(ctx, actor.registration);
     const fingerprint = await publisherInventoryFingerprint(current);
     const now = Date.now();
-    if (!publisherReconciliationDue(actor.registration.agentThreadReconciliation, fingerprint, now))
+    if (!publisherReconciliationDue(runtime.agentThreadReconciliation, fingerprint, now))
       return null;
     const stale = (
       await ctx.db
@@ -390,7 +392,7 @@ export const reconcile = mutation({
     await removeRows(ctx, actor, stale);
     // Keep draining bounded removal batches on subsequent ticks until the entire inventory agrees.
     if (stale.length < MAX_RECONCILE_REMOVALS) {
-      await ctx.db.patch(actor.registration._id, {
+      await patchEnvironmentRuntime(ctx, actor.registration, {
         agentThreadReconciliation: { fingerprint, completedAt: now },
       });
     }

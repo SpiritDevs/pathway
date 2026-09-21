@@ -24,6 +24,7 @@ import {
   makeLocalEnvironmentCommandExecutor,
   resolveEnvironmentCommandClaimantActivation,
   runEnvironmentCommandClaimCycle,
+  runEnvironmentCommandClaimant,
   type ClaimedEnvironmentCommand,
   type EnvironmentCommandBackend,
   type EnvironmentCommandClaimantRuntime,
@@ -710,4 +711,38 @@ it.effect(
       expect(outcome._tag).toBe("Success");
       expect(launched).toBe(true);
     }),
+);
+
+it.effect("parks an idle claimant on a queue wakeup and resumes on its receipt", () =>
+  Effect.gen(function* () {
+    const waiting = yield* Deferred.make<void>();
+    const wake = yield* Deferred.make<void>();
+    const resumed = yield* Deferred.make<void>();
+    let calls = 0;
+    const fixture = backendHarness({
+      claim: () =>
+        Effect.gen(function* () {
+          calls++;
+          if (calls === 2) yield* Deferred.succeed(resumed, undefined);
+          return [];
+        }),
+    });
+    const fiber = yield* runEnvironmentCommandClaimant({
+      ...runtime({
+        backend: fixture.backend,
+        executor: { execute: () => Effect.die("No work expected") },
+      }),
+      idleWait: Effect.suspend(() =>
+        calls === 1
+          ? Deferred.succeed(waiting, undefined).pipe(Effect.andThen(Deferred.await(wake)))
+          : Effect.never,
+      ),
+    }).pipe(Effect.forkScoped);
+    yield* Deferred.await(waiting);
+    expect(calls).toBe(1);
+    yield* Deferred.succeed(wake, undefined);
+    yield* Deferred.await(resumed);
+    yield* Fiber.interrupt(fiber);
+    expect(calls).toBeGreaterThanOrEqual(2);
+  }),
 );

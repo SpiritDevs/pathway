@@ -1,3 +1,4 @@
+import { readEnvironmentPresence } from "./environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations are not Effect programs; the transaction clock is `Date.now()`.
 /**
  * The company domain's half of the change feed: payload encoders plus the one writer every
@@ -357,7 +358,7 @@ export async function encodeEnvironmentRegistration(
     descriptor: doc.descriptor,
     relayLinkState: doc.relayLinkState,
     managedEndpointAvailable: doc.managedEndpointAvailable,
-    lastSeenAt: doc.lastSeenAt,
+    lastSeenAt: (await readEnvironmentPresence(ctx, doc)).lastSeenAt,
     serviceRoleIds: doc.serviceRoleIds,
     teamIds: doc.teamIds,
     state: doc.state,

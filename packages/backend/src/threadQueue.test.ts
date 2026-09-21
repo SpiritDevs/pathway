@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { api, internal } from "../convex/_generated/api.js";
 import type { Id } from "../convex/_generated/dataModel.js";
 import schema from "../convex/schema.ts";
-import { destinations as queueDestinations } from "../convex/threadQueue.ts";
+import {
+  destinations as queueDestinations,
+  environmentHead as queueHead,
+} from "../convex/threadQueue.ts";
 import { functionHandler, measureDatabaseReads } from "./testDatabaseReads.ts";
 import type { ThreadQueuePage } from "@spiritdevs/contracts/threadQueue";
 import {
@@ -952,7 +955,16 @@ describe("durable thread queue", () => {
     expect(detail.messages[0]?.submission).toMatchObject({
       input: { initialMessage: { text: "Updated request" } },
     });
-    await client.mutation(api.threadQueue.retry, { ...firstFence, revision: 3 });
+    await client.mutation(api.threadQueue.edit, {
+      ...firstFence,
+      revision: 3,
+      text: "Edited while canceled",
+    });
+    expect(await t.run((ctx) => ctx.db.query("threadQueueThreads").first())).toMatchObject({
+      state: "canceled",
+      workerHead: null,
+    });
+    await client.mutation(api.threadQueue.retry, { ...firstFence, revision: 4 });
     detail = await client.query(api.threadQueue.getThread, queueIdentity);
     expect(detail.thread.state).toBe("queued");
     expect(detail.thread.queuedCount).toBe(1);
@@ -1632,4 +1644,43 @@ describe("orphaned queue cleanup", () => {
     expect(await t.run((ctx) => ctx.db.get(attachmentId))).toBeNull();
     expect(await t.run((ctx) => ctx.storage.get(storageId))).toBeNull();
   });
+});
+
+it("reads compact queue heads without prompt bodies and repairs legacy heads on edit", async () => {
+  const t = harness();
+  await seed(t);
+  await enqueue(t, launch("thread-one", "launch-one", "x".repeat(50_000)));
+  const measure = () =>
+    asEnvironment(t).run(async (ctx) => {
+      const meter = measureDatabaseReads(ctx.db);
+      const heads = await functionHandler(queueHead)(
+        { ...ctx, db: meter.db },
+        { companyId: COMPANY_ID },
+      );
+      return {
+        heads,
+        bytes: meter.bytes(),
+        messages: meter.documents.get("threadQueueMessages") ?? 0,
+      };
+    });
+  const compact = await measure();
+  expect(compact.messages).toBe(0);
+  expect(compact.heads).toHaveLength(1);
+  await t.run(async (ctx) => {
+    const thread = (await ctx.db.query("threadQueueThreads").first())!;
+    await ctx.db.patch(thread._id, { workerHead: undefined });
+  });
+  const legacy = await measure();
+  expect(legacy.heads).toEqual(compact.heads);
+  expect(legacy.messages).toBe(1);
+  expect(compact.bytes).toBeLessThan(legacy.bytes / 10);
+  await asMember(t, "manager").mutation(api.threadQueue.edit, { ...firstFence, text: "changed" });
+  const edited = await measure();
+  expect(edited.messages).toBe(0);
+  expect(edited.heads[0]?.revision).toBe(2);
+  await expect(asEnvironment(t).mutation(api.threadQueue.accept, firstFence)).resolves.toBeNull();
+  await asEnvironment(t).mutation(api.threadQueue.accept, { ...firstFence, revision: 2 });
+  expect((await measure()).heads[0]?.state).toBe("accepted");
+  await asEnvironment(t).mutation(api.threadQueue.acknowledge, { ...firstFence, revision: 2 });
+  expect((await measure()).heads).toEqual([]);
 });

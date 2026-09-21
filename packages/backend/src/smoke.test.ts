@@ -1,3 +1,7 @@
+import {
+  patchEnvironmentPresence,
+  patchEnvironmentRuntime,
+} from "../convex/lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Test rows mirror Convex documents, whose clock is `Date.now()`.
 /**
  * Exercises `convex/smoke.ts` — the internal-only seed for the relay → Convex trust-chain smoke
@@ -285,7 +289,17 @@ describe("smoke.cleanup", () => {
     // means the smoke role and the sync surface's write gate have drifted apart.
     expect(applied.receipts.map((receipt) => receipt.status)).toEqual(["accepted", "accepted"]);
 
+    await t.run(async (ctx) => {
+      const row = (await ctx.db
+        .query("environmentRegistrations")
+        .withIndex("by_environment", (q) => q.eq("environmentId", "environment-one"))
+        .unique())!;
+      await patchEnvironmentPresence(ctx, row, { lastSeenAt: Date.now() });
+      await patchEnvironmentRuntime(ctx, row, { orchestratorResources: { sampledAt: Date.now() } });
+    });
     const first = await t.mutation(internal.smoke.cleanup, { environmentId: "environment-one" });
+    expect(await t.run((ctx) => ctx.db.query("environmentPresence").collect())).toEqual([]);
+    expect(await t.run((ctx) => ctx.db.query("environmentRuntime").collect())).toEqual([]);
     // "environment-two" lacks the synthetic prefix, so the sweep must leave it alone.
     expect(first).toMatchObject({
       registrations: 1,

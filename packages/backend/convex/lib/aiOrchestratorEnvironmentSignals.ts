@@ -1,3 +1,4 @@
+import { readEnvironmentPresence } from "./environmentRuntime.ts";
 import { queueOrchestratorSignal } from "./aiOrchestratorRouting.ts";
 // @effect-diagnostics globalDate:off -- Presence transitions use the cloud transaction clock.
 import type { Doc } from "../_generated/dataModel.js";
@@ -36,10 +37,11 @@ export async function readableOrchestratorEnvironment(
     .unique();
   if (!registration || !(await eligibleOrchestratorEnvironment(ctx, contact, registration)))
     return null;
+  const presence = await readEnvironmentPresence(ctx, registration);
   return {
     environmentId,
-    online: (registration.lastSeenAt ?? 0) > Date.now() - 90000,
-    lastSeenAt: registration.lastSeenAt,
+    online: (presence.lastSeenAt ?? 0) > Date.now() - 90000,
+    lastSeenAt: presence.lastSeenAt,
     source: "environment-presence",
   };
 }
@@ -108,11 +110,12 @@ export async function notifyOrchestratorEnvironmentChange(
       continue;
     candidates.push({ contact, chat });
   }
+  const presence = await readEnvironmentPresence(ctx, registration);
   await queueOrchestratorSignal(ctx, candidates, {
-    key: `environment:${company.id}:${registration.environmentId}:${registration.orchestratorPresence}:${registration.lastSeenAt}`,
+    key: `environment:${company.id}:${registration.environmentId}:${presence.orchestratorPresence}:${presence.lastSeenAt}`,
     companyId: company.id,
     environmentSignalId: registration.environmentId,
-    topic: `Environment ${registration.environmentId} is ${registration.orchestratorPresence}.`,
+    topic: `Environment ${registration.environmentId} is ${presence.orchestratorPresence}.`,
     text: "Environment availability changed. You are the selected responder. Review affected assignments; accepted work may still be running offline. Never duplicate accepted work. Report only what needs attention and has not already been reported.",
   });
 }

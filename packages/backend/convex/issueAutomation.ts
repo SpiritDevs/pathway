@@ -1,3 +1,4 @@
+import { readEnvironmentPresence } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex functions use the transaction clock directly.
 /** Company automation settings and durable, generation-fenced execution jobs. */
 import { v } from "convex/values";
@@ -1031,11 +1032,14 @@ export const recoverBlocked = internalMutation({
             q.eq("companyId", row.companyId).eq("environmentId", targetEnvironmentId!),
           )
           .unique();
+        const lastSeenAt = registration
+          ? (await readEnvironmentPresence(ctx, registration)).lastSeenAt
+          : null;
         if (
           registration === null ||
           registration.state !== "active" ||
-          registration.lastSeenAt === null ||
-          now - registration.lastSeenAt > ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS
+          lastSeenAt === null ||
+          now - (lastSeenAt ?? 0) > ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS
         ) {
           block = {
             code:

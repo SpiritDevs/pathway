@@ -1,3 +1,4 @@
+import { readEnvironmentRuntime, patchEnvironmentRuntime } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Environment-published parsed SMTP captures for cross-environment reading. */
 import { v } from "convex/values";
@@ -384,11 +385,10 @@ export const reconcile = mutation({
     const environmentId = requireTrimmed(args.environmentId, "Environment id");
     requireEnvironmentActor(actor, environmentId);
     const current = new Set(args.currentMessageIds.map((id) => requireTrimmed(id, "Message id")));
+    const runtime = await readEnvironmentRuntime(ctx, actor.registration);
     const fingerprint = await publisherInventoryFingerprint(current);
     const now = Date.now();
-    if (
-      !publisherReconciliationDue(actor.registration.capturedEmailReconciliation, fingerprint, now)
-    )
+    if (!publisherReconciliationDue(runtime.capturedEmailReconciliation, fingerprint, now))
       return null;
     const stale = (
       await ctx.db
@@ -402,7 +402,7 @@ export const reconcile = mutation({
       .slice(0, MAX_RECONCILE_REMOVALS);
     await removeRows(ctx, actor, stale);
     if (stale.length < MAX_RECONCILE_REMOVALS) {
-      await ctx.db.patch(actor.registration._id, {
+      await patchEnvironmentRuntime(ctx, actor.registration, {
         capturedEmailReconciliation: { fingerprint, completedAt: now },
       });
     }

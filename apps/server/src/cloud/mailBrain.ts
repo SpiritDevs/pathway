@@ -1,3 +1,4 @@
+import { makeWorkerWakeups } from "./workerWakeups.ts";
 /** Executes private mailbox analysis on the owner's selected environment. */
 import { makeFunctionReference } from "convex/server";
 import {
@@ -308,6 +309,12 @@ export const mailBrainLayer = () =>
                   convexUrl: config.settings.convexUrl,
                   tokens,
                 });
+                const wakeups = yield* makeWorkerWakeups({
+                  companyId,
+                  convexUrl: config.settings.convexUrl,
+                  tokens,
+                  kinds: ["mail"],
+                });
                 return yield* inference
                   .withPermits(1)(
                     Effect.gen(function* () {
@@ -321,7 +328,7 @@ export const mailBrainLayer = () =>
                         companyId,
                       }),
                     ),
-                    Effect.andThen(Effect.sleep(Duration.seconds(10))),
+                    Effect.andThen(wakeups.wait("mail")),
                     Effect.forever,
                   );
               }),

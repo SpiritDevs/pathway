@@ -1,7 +1,13 @@
+import { heartbeat as registryHeartbeat } from "../convex/environments.ts";
+import {
+  readEnvironmentPresence,
+  readEnvironmentRuntime,
+  patchEnvironmentRuntime,
+} from "../convex/lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Test fixtures mirror Convex documents and use epoch milliseconds.
 /** End-to-end company environment registry, authorization, feed, and bootstrap coverage. */
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { api } from "../convex/_generated/api.js";
 import type { MutationCtx } from "../convex/_generated/server.js";
@@ -804,7 +810,10 @@ describe("environment registry", () => {
           q.eq("companyId", company._id).eq("environmentId", ENVIRONMENT_ID),
         )
         .unique();
-      expect(registration).toMatchObject({ lastSeenAt: expect.any(Number), version: 1 });
+      expect(registration).toMatchObject({ lastSeenAt: null, version: 1 });
+      expect(await readEnvironmentPresence(ctx, registration!)).toMatchObject({
+        lastSeenAt: expect.any(Number),
+      });
     });
 
     await publish(t, "Registry machine renamed");
@@ -1566,8 +1575,8 @@ describe("publisher reconciliation read budget", () => {
         const registration = (await ctx.db.query("environmentRegistrations").unique())!;
         const key =
           kind === "threads" ? "agentThreadReconciliation" : "capturedEmailReconciliation";
-        const checkpoint = registration[key]!;
-        await ctx.db.patch(registration._id, {
+        const checkpoint = (await readEnvironmentRuntime(ctx, registration))[key]!;
+        await patchEnvironmentRuntime(ctx, registration, {
           [key]: { ...checkpoint, completedAt: Date.now() - PUBLISHER_RECONCILIATION_INTERVAL_MS },
         });
       });
@@ -1609,4 +1618,52 @@ describe("publisher reconciliation read budget", () => {
       ).toBe(remaining);
     }
   });
+});
+
+it("keeps heartbeats off the authorization row while discovery stays fresh", async () => {
+  const t = harness();
+  await seedRegistration(t);
+  const beat = () =>
+    asEnvironment(t).mutation(api.environments.heartbeat, {
+      companyId: COMPANY_ID,
+      relayLinkState: "linked",
+      managedEndpointAvailable: true,
+    });
+  await beat();
+  const before = await t.run((ctx) => ctx.db.query("environmentRegistrations").first());
+  await t.run(async (ctx) => {
+    const presence = (await ctx.db.query("environmentPresence").first())!;
+    await ctx.db.patch(presence._id, { lastSeenAt: 1 });
+  });
+  const presenceWrites = await asEnvironment(t).run(async (ctx) => {
+    const writes = vi.spyOn(ctx.db, "patch");
+    try {
+      await functionHandler(registryHeartbeat)(ctx, {
+        companyId: COMPANY_ID,
+        relayLinkState: "linked",
+        managedEndpointAvailable: true,
+      });
+      expect(writes.mock.calls.some(([id]) => id === before!._id)).toBe(false);
+      return writes.mock.calls.length;
+    } finally {
+      writes.mockRestore();
+    }
+  });
+  expect(presenceWrites).toBe(1);
+  expect(await t.run((ctx) => ctx.db.query("environmentRegistrations").first())).toEqual(before);
+  expect(
+    await asUser(t, "manager").query(api.environments.get, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+    }),
+  ).toMatchObject({ lastSeenAt: expect.any(Number) });
+  expect(
+    await t.run(async (ctx) => (await ctx.db.query("environmentPresence").first())!.lastSeenAt),
+  ).toBeGreaterThan(1);
+  expect(await feedRows(t)).toEqual([]);
+  await asUser(t, "manager").mutation(api.environments.deactivate, {
+    companyId: COMPANY_ID,
+    environmentId: ENVIRONMENT_ID,
+  });
+  await expect(beat()).rejects.toThrow();
 });

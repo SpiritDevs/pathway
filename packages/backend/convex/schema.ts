@@ -726,6 +726,7 @@ export default defineSchema({
     publicKeyThumbprint: v.string(),
     /** `ExecutionEnvironmentDescriptor` from `contracts/environment`. */
     descriptor: v.any(),
+    /** Legacy runtime fields are moved lazily to companion rows on the next write. */
     orchestratorResources: v.optional(v.any()),
     orchestratorDelegationCatalog: v.optional(v.any()),
     orchestratorDelegationCatalogAt: v.optional(v.number()),
@@ -761,6 +762,35 @@ export default defineSchema({
     .index("by_orchestrator_presence", ["state", "orchestratorPresence", "lastSeenAt"])
     .index("by_company_and_state", ["companyId", "state"])
     .index("by_environment", ["environmentId"]),
+
+  /** Hot presence never invalidates authorization, catalogs, or queue subscriptions. */
+  environmentPresence: defineTable({
+    companyId: v.id("companies"),
+    registrationId: v.id("environmentRegistrations"),
+    lastSeenAt: v.union(v.number(), v.null()),
+    orchestratorPresence: v.optional(v.union(v.literal("online"), v.literal("offline"))),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_registration", ["registrationId"])
+    .index("by_presence", ["orchestratorPresence", "lastSeenAt"]),
+
+  /** Storage-only worker observations and publisher checkpoints, separate from grants/presence. */
+  environmentRuntime: defineTable({
+    companyId: v.id("companies"),
+    registrationId: v.id("environmentRegistrations"),
+    orchestratorResources: v.optional(v.any()),
+    orchestratorDelegationCatalog: v.optional(v.any()),
+    orchestratorDelegationCatalogAt: v.optional(v.number()),
+    /** Storage-only checkpoints bound idle publisher scans; absent rows reconcile on first use. */
+    agentThreadReconciliation: v.optional(
+      v.object({ fingerprint: v.string(), completedAt: v.number() }),
+    ),
+    capturedEmailReconciliation: v.optional(
+      v.object({ fingerprint: v.string(), completedAt: v.number() }),
+    ),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_registration", ["registrationId"]),
 
   /**
    * Transient, single-use authorization for one relay connection. These rows deliberately stay
@@ -1230,6 +1260,18 @@ export default defineSchema({
     companyId: v.id("companies"),
     threadId: v.string(),
     queueVersion: v.optional(v.literal(1)),
+    /** Compact subscription head; undefined falls back to legacy messages, null means no runnable head. */
+    workerHead: v.optional(
+      v.union(
+        v.null(),
+        v.object({
+          commandId: v.string(),
+          revision: v.number(),
+          deliveryAttempt: v.number(),
+          state: v.union(v.literal("queued"), v.literal("accepted")),
+        }),
+      ),
+    ),
     listingExpiresAt: v.optional(v.number()),
     originEnvironmentId: v.optional(v.string()),
     environmentId: v.string(),
