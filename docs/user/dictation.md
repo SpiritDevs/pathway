@@ -77,9 +77,11 @@ still loading, your recognized text is delivered immediately while the model get
 recordings. Once loaded, cleanup has a five-second limit so a slow pass does not leave your
 transcript waiting indefinitely.
 
-Cleanup runs after speech recognition. For the fastest delivery, turn off **Clean up
-dictation**; your dictionary corrections still apply, but the cleanup model will no
-longer remove fillers, repetitions or spoken self-corrections.
+Cleanup runs after speech recognition. For the fastest delivery, open **Settings > Dictation >
+Settings** and turn off **Clean up dictation** under **Text cleanup**. Your dictionary corrections
+still apply, but the cleanup model will no longer remove fillers, repetitions or spoken
+self-corrections. Changes apply to your next recording. You can turn cleanup back on at any time;
+the switch in Models controls the same preference.
 
 Removing the selected speech model turns dictation off. Select another downloaded speech model and
 enable it again. Removing models does not delete your dictionary or history.
@@ -105,10 +107,11 @@ existing entries still follow retention and deletion settings.
 
 ## Bar, language, and memory settings
 
-The idle bar keeps Record, Settings, History, and **Hide bar** visible near the bottom of your screen.
-Select Record to start without hovering first. Panels open upward above the Dock or taskbar, and the
-bar adjusts when the display layout changes. Hiding it leaves your recording shortcut working and
-brings the bar back when you activate dictation. You can also show it again from the tray or menu-bar
+The idle bar is a small, semi-transparent pill near the bottom of your screen. Hover over it to
+reveal Record, Settings, History, and **Hide bar**. It shrinks again when you move away. Recording,
+processing, and result panels remain visible without hovering. Panels open upward above the Dock
+or taskbar, and the bar adjusts when the display layout changes. Hiding it leaves your recording
+shortcut working and brings the bar back when you activate dictation. You can also show it again from the tray or menu-bar
 control.
 History opens the five latest dictations with Copy actions and a link to the full History page.
 Turn off **Show idle bar** in Settings to hide it between every recording. Recording and processing

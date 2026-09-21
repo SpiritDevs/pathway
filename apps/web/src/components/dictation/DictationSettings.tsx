@@ -1,4 +1,4 @@
-import { EyeIcon, LanguagesIcon } from "lucide-react";
+import { EyeIcon, LanguagesIcon, SparklesIcon } from "lucide-react";
 import { Switch } from "../ui/switch";
 import { SettingsRow, SettingsSection } from "../settings/settingsLayout";
 import {
@@ -172,13 +172,30 @@ export function DictationSettings(props: DictationActions) {
         />
       </SettingsSection>
       <SettingsSection
+        title="Text cleanup"
+        id="dictation-cleanup"
+        icon={<SparklesIcon className="size-4" />}
+      >
+        <SettingsRow
+          title="Clean up dictation"
+          description="Remove fillers, repetitions, and spoken self-corrections after recognition. Turn off for faster delivery; dictionary corrections still apply. Changes apply to your next recording."
+          control={
+            <Switch
+              aria-label="Clean up dictation"
+              checked={preferences.cleanupEnabled}
+              onCheckedChange={(cleanupEnabled) => void updatePreferences({ cleanupEnabled })}
+            />
+          }
+        />
+      </SettingsSection>
+      <SettingsSection
         title="Bar and memory"
         id="dictation-bar"
         icon={<EyeIcon className="size-4" />}
       >
         <SettingsRow
           title="Show idle bar"
-          description="Keep the small bar at the bottom of your screen. Recording and processing remain visible when this is off."
+          description="Keep a small translucent pill at the bottom of your screen. Hover to show controls. Recording and processing remain visible when this is off."
           control={
             <Switch
               aria-label="Show idle bar"

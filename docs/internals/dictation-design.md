@@ -108,7 +108,10 @@ of retaining audio for retry.
 
 ## Bar and text delivery
 
-The idle bar is static and visible by default, with Record, Settings, History, and Hide always available.
+The idle bar defaults to a static, translucent 44 × 8 pill in an 80 × 32 native window. Hover or
+keyboard focus expands it to Record, Settings, History, and Hide in a 296 × 72 window. Expanding
+preserves the control elements and bottom edge; collapsing also shrinks the native window so the
+old toolbar area does not intercept clicks. Active recording, processing, and panels stay visible.
 Quick hide is local to the overlay and resets when recording starts; it does not disable shortcuts
 or change the persistent idle-bar preference. The tray can also show it again. History
 opens five recent entries with Copy actions and View all history. Hiding the idle bar keeps active

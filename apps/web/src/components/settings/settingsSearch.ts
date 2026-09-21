@@ -302,8 +302,8 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "dictation-cleanup",
     title: "Dictation text cleanup",
-    to: "/settings/dictation/models",
-    searchTerms: ["qwen", "fillers"],
+    to: "/settings/dictation/settings",
+    searchTerms: ["qwen", "fillers", "speed", "clean up"],
   },
   { id: "dictation-history", title: "Dictation history", to: "/settings/dictation/history" },
   {

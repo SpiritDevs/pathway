@@ -109,15 +109,42 @@ describe("desktop dictation lifecycle", () => {
     prepared.resolve();
   });
 
-  it("prepares only speech when cleanup is disabled", async () => {
+  it("persists the cleanup switch, skips cleanup while off, and restores it for the next recording", async () => {
     const prepare = vi.fn<DictationInferencePort["prepare"]>(async () => {});
-    const { controller } = await setup({ prepare });
+    const cleanup = vi.fn<DictationInferencePort["cleanup"]>(async () => "Hello from Pathway.");
+    const { controller, storage, insert } = await setup({ prepare, cleanup });
+    expect(controller.getState().preferences.cleanupEnabled).toBe(true);
+    await controller.execute({
+      type: "dictionary",
+      lists: [
+        {
+          id: "personal",
+          name: "Personal",
+          terms: [{ id: "pathway", spelling: "Pathway", aliases: ["path way"] }],
+        },
+      ],
+      connected: true,
+    });
     await controller.execute({
       type: "preferences",
       preferences: { ...controller.getState().preferences, cleanupEnabled: false },
     });
     await controller.start("hold");
+    await controller.stop();
     expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ cleanup: false }));
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(insert).toHaveBeenCalledWith("Hello from Pathway.");
+    expect(await controller.listHistory()).toMatchObject([{ cleanup: "disabled" }]);
+    expect(await storage.preferences("darwin")).toMatchObject({ cleanupEnabled: false });
+    await controller.execute({
+      type: "preferences",
+      preferences: { ...controller.getState().preferences, cleanupEnabled: true },
+    });
+    await controller.start("hold");
+    await controller.stop();
+    expect(prepare).toHaveBeenLastCalledWith(expect.objectContaining({ cleanup: true }));
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(await storage.preferences("darwin")).toMatchObject({ cleanupEnabled: true });
   });
 
   it("still processes a recording when eager loading fails", async () => {

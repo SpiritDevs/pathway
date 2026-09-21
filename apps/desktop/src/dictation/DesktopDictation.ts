@@ -63,7 +63,7 @@ const make = Effect.gen(function* () {
   let widgetLoading = false;
   let idleBarHidden = false;
   let displayId: number | undefined;
-  let widgetSize = { width: 296, height: 72 };
+  let widgetSize = { width: 80, height: 32 };
   let controller: DictationController | undefined;
   const boundOwners = new Set<number>();
 

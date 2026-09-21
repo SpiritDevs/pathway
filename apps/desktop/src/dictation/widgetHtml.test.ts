@@ -48,12 +48,13 @@ function makeDictationFixture(phase: string = "idle"): DictationState {
 class Element {
   children: Element[] = [];
   attributes = new Map<string, string>();
-  events = new Map<string, (() => void)[]>();
+  events = new Map<string, ((event: { relatedTarget: Element | null }) => void)[]>();
   style: Record<string, string> = {};
   className = "";
   textContent = "";
   innerHTML = "";
   id = "";
+  hidden = false;
   replacements = 0;
   readonly tag: string;
   constructor(tag: string) {
@@ -69,11 +70,17 @@ class Element {
   setAttribute(key: string, value: string) {
     this.attributes.set(key, value);
   }
-  addEventListener(event: string, action: () => void) {
+  addEventListener(event: string, action: (event: { relatedTarget: Element | null }) => void) {
     this.events.set(event, [...(this.events.get(event) ?? []), action]);
   }
-  trigger(event: string) {
-    for (const action of this.events.get(event) ?? []) action();
+  trigger(event: string, relatedTarget: Element | null = null) {
+    for (const action of this.events.get(event) ?? []) action({ relatedTarget });
+  }
+  contains(node: Element | null) {
+    return node !== null && this.all().includes(node);
+  }
+  visible(): Element[] {
+    return this.hidden ? [] : [this, ...this.children.flatMap((child) => child.visible())];
   }
   all(): Element[] {
     return [this, ...this.children.flatMap((child) => child.all())];
@@ -131,7 +138,7 @@ async function mount(state: DictationState) {
   });
   await bridge.getState();
   const click = (label: string) => {
-    const button = root.all().find((node) => node.attributes.get("aria-label") === label);
+    const button = root.visible().find((node) => node.attributes.get("aria-label") === label);
     if (!button) throw new Error(`Missing button: ${label}`);
     button.trigger("click");
   };
@@ -249,6 +256,7 @@ describe("dictation overlay", () => {
   it("offers quick hide directly without disabling dictation or changing preferences", async () => {
     const state = makeDictationFixture();
     const overlay = await mount(state);
+    overlay.root.trigger("pointerenter");
     overlay.click("Hide dictation bar");
     expect(overlay.bridge.hide).toHaveBeenCalledOnce();
     expect(overlay.bridge.execute).not.toHaveBeenCalled();
@@ -258,25 +266,57 @@ describe("dictation overlay", () => {
   });
   it("uses locked recording for the idle Record button and canonical navigation commands", async () => {
     const overlay = await mount(makeDictationFixture());
+    overlay.root.trigger("pointerenter");
     overlay.click("Record");
     expect(overlay.bridge.execute).toHaveBeenCalledWith({ type: "start", mode: "locked" });
     overlay.click("Settings");
     expect(overlay.bridge.execute).toHaveBeenCalledWith({ type: "open", page: "settings" });
   });
-  it("keeps idle controls in place when the pointer enters or leaves", async () => {
-    const overlay = await mount(makeDictationFixture());
+  it("expands the tiny idle pill on hover without rebuilding controls or blocking the old window area", async () => {
+    const state = makeDictationFixture();
+    const overlay = await mount(state);
     const record = overlay.root
       .all()
       .find((node) => node.attributes.get("aria-label") === "Record");
     expect(record).toBeDefined();
+    expect(overlay.root.visible()).not.toContain(record);
+    expect(overlay.bridge.resize).toHaveBeenLastCalledWith(80, 32);
     const replacements = overlay.root.replacements;
     overlay.bridge.resize.mockClear();
     overlay.root.trigger("pointerenter");
+    expect(overlay.root.visible()).toContain(record);
+    expect(overlay.bridge.resize).toHaveBeenLastCalledWith(296, 72);
+    overlay.emit({ ...state, level: 0.5 });
+    overlay.root.trigger("pointerenter");
+    expect(overlay.bridge.resize).toHaveBeenCalledTimes(1);
     overlay.root.trigger("pointerleave");
+    expect(overlay.root.visible()).not.toContain(record);
+    expect(overlay.bridge.resize).toHaveBeenLastCalledWith(80, 32);
     expect(overlay.root.replacements).toBe(replacements);
-    expect(overlay.bridge.resize).not.toHaveBeenCalled();
     expect(overlay.root.all()).toContain(record);
   });
+  it("keeps controls expanded while focus moves within them and collapses on focus exit", async () => {
+    const overlay = await mount(makeDictationFixture());
+    overlay.root.trigger("focusin");
+    expect(overlay.bridge.resize).toHaveBeenLastCalledWith(296, 72);
+    overlay.root.trigger("pointerleave");
+    overlay.root.trigger("focusout", overlay.root.querySelector(".idle-action")!);
+    expect(overlay.bridge.resize).toHaveBeenLastCalledWith(296, 72);
+    overlay.root.trigger("focusout");
+    expect(overlay.bridge.resize).toHaveBeenLastCalledWith(80, 32);
+  });
+  it.each(["recording-locked", "processing"])(
+    "keeps %s visible after the pointer leaves",
+    async (phase) => {
+      const overlay = await mount(makeDictationFixture(phase));
+      const size = overlay.bridge.resize.mock.lastCall;
+      overlay.root.trigger("pointerenter");
+      overlay.root.trigger("pointerleave");
+      expect(overlay.bridge.resize.mock.lastCall).toEqual(size);
+      overlay.emit(makeDictationFixture());
+      expect(overlay.bridge.resize).toHaveBeenLastCalledWith(80, 32);
+    },
+  );
   it("updates recording indicators without replacing accept/cancel controls", async () => {
     const state = makeDictationFixture("recording-locked");
     const overlay = await mount(state);
@@ -302,8 +342,12 @@ describe("dictation overlay", () => {
   });
   it("limits recent history to five entries and copies their actual text", async () => {
     const overlay = await mount(makeDictationFixture());
+    overlay.root.trigger("pointerenter");
     overlay.click("History");
     await overlay.recentLoaded;
+    const size = overlay.bridge.resize.mock.lastCall;
+    overlay.root.trigger("pointerleave");
+    expect(overlay.bridge.resize.mock.lastCall).toEqual(size);
     expect(overlay.root.all().filter((node) => node.className === "recent-row")).toHaveLength(5);
     overlay.click("Copy dictation");
     expect(overlay.bridge.execute).toHaveBeenCalledWith({
@@ -311,6 +355,8 @@ describe("dictation overlay", () => {
       text: dictationHistoryFixtures[0]!.text,
     });
     overlay.click("Close recent dictations");
+    expect(overlay.bridge.resize).toHaveBeenLastCalledWith(80, 32);
+    overlay.root.trigger("pointerenter");
     overlay.click("Record");
     expect(overlay.bridge.execute).toHaveBeenCalledWith({ type: "start", mode: "locked" });
   });

@@ -21,7 +21,7 @@ const native = vi.hoisted(() => ({
   screenRemoveListener: vi.fn(),
   displays: [{ id: 1, workArea: { x: 0, y: 25, width: 1440, height: 795 } }],
   cursorDisplay: 1,
-  bounds: { x: 0, y: 0, width: 296, height: 72 },
+  bounds: { x: 0, y: 0, width: 80, height: 32 },
   setBounds: vi.fn(),
   setAlwaysOnTop: vi.fn(),
   windowOptions: vi.fn(),
@@ -198,7 +198,7 @@ beforeEach(() => {
   native.createOverlay.mockReset();
   native.displays = [{ id: 1, workArea: { x: 0, y: 25, width: 1440, height: 795 } }];
   native.cursorDisplay = 1;
-  native.bounds = { x: 0, y: 0, width: 296, height: 72 };
+  native.bounds = { x: 0, y: 0, width: 80, height: 32 };
   native.shown = Promise.withResolvers<void>();
 });
 describe("dictation background window lifecycle", () => {
@@ -342,7 +342,7 @@ describe("dictation overlay placement", () => {
       expect(native.windowOptions).toHaveBeenCalledWith(
         expect.objectContaining({ focusable: false }),
       );
-      resize(296, 72);
+      resize(80, 32);
       expect(native.bounds).toEqual(idle);
     }),
   );
@@ -379,7 +379,7 @@ describe("dictation overlay placement", () => {
   it.effect("ignores invalid or untrusted resize requests and avoids redundant native moves", () =>
     checkOverlay((resize) => {
       native.setBounds.mockClear();
-      resize(296, 72);
+      resize(80, 32);
       resize(424, 440, 99);
       resize(Number.NaN, 440);
       resize(424, Number.POSITIVE_INFINITY);

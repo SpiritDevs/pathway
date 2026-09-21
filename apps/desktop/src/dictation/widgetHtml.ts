@@ -93,6 +93,20 @@ function mountDictationOverlay() {
     preferredSize = next;
     bridge.resize?.(width, height);
   }
+  function updateIdle() {
+    const pill = root.querySelector<HTMLElement>(".idle");
+    const handle = root.querySelector<HTMLButtonElement>(".idle-handle");
+    const controls = root.querySelector<HTMLElement>(".idle-controls");
+    if (!pill || !handle || !controls) return;
+    const expanded = resultHovered || resultFocused;
+    const handleFocused = document.activeElement === handle;
+    pill.className = expanded ? "pill idle" : "pill idle compact";
+    handle.setAttribute("aria-expanded", String(expanded));
+    controls.hidden = !expanded;
+    if (expanded && handleFocused) controls.querySelector<HTMLButtonElement>("button")?.focus();
+    handle.hidden = expanded;
+    size(expanded ? 296 : 80, expanded ? 72 : 32);
+  }
   async function execute(command: DictationCommand) {
     actionError = null;
     const startedAt = revision;
@@ -422,7 +436,14 @@ function mountDictationOverlay() {
     } else if (state.preferences.showIdleBar) {
       const pill = element("div", "pill idle");
       pill.setAttribute("aria-label", "Dictation controls");
-      pill.append(
+      const handle = document.createElement("button");
+      handle.type = "button";
+      handle.className = "idle-handle";
+      handle.setAttribute("aria-label", "Show dictation controls");
+      handle.setAttribute("aria-controls", "idle-controls");
+      const controls = element("div", "idle-controls");
+      controls.id = "idle-controls";
+      controls.append(
         button("Record", "mic", () => void execute({ type: "start", mode: "locked" })),
         element("span", "divider"),
         button(
@@ -443,9 +464,12 @@ function mountDictationOverlay() {
           true,
         ),
       );
-      pill.append(button("Hide dictation bar", "close", () => bridge.hide(), "idle-action", true));
+      controls.append(
+        button("Hide dictation bar", "close", () => bridge.hide(), "idle-action", true),
+      );
+      pill.append(handle, controls);
       root.append(pill);
-      size(296, 72);
+      updateIdle();
     } else size(112, 48);
     if (actionError && (recentOpen || state.phase === "result")) {
       const panel = root.querySelector<HTMLElement>(".panel");
@@ -469,6 +493,8 @@ function mountDictationOverlay() {
       recent = [];
       copied = null;
       recentOpen = false;
+      resultHovered = false;
+      resultFocused = false;
       historyRequest++;
     }
     if (["starting", "recording", "processing"].includes(next.phase)) recentOpen = false;
@@ -491,15 +517,20 @@ function mountDictationOverlay() {
     });
   root.addEventListener("pointerenter", () => {
     resultHovered = true;
+    updateIdle();
   });
   root.addEventListener("pointerleave", () => {
     resultHovered = false;
+    updateIdle();
   });
-  root.addEventListener("focusout", () => {
+  root.addEventListener("focusout", (event) => {
+    if (root.contains(event.relatedTarget as Node | null)) return;
     resultFocused = false;
+    updateIdle();
   });
   root.addEventListener("focusin", () => {
     resultFocused = true;
+    updateIdle();
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
@@ -529,6 +560,6 @@ export function createDictationWidgetHtml(): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pathway dictation</title>
 <style>
-*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#f5f5f6;font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{display:flex;align-items:flex-end;justify-content:center;padding:12px}button{font:inherit;color:inherit;border:0;cursor:pointer;background:transparent;display:inline-flex;align-items:center;justify-content:center;gap:7px;border-radius:20px;padding:8px 10px;white-space:nowrap;-webkit-app-region:no-drag}button:hover{background:#29292d}button:focus-visible{outline:2px solid #c1b5fc;outline-offset:2px}button:disabled{opacity:.4;pointer-events:none}h2,p{margin:0}#widget{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:9px;max-width:100%;max-height:100%}.icon{display:inline-flex;width:16px;height:16px;flex-shrink:0}.icon svg{width:100%;height:100%}.pill{display:flex;align-items:center;justify-content:center;gap:10px;background:#101012;border:1px solid #323236;border-radius:99px;box-shadow:0 4px 12px #0005;flex-shrink:0;min-height:44px;padding:5px 8px}.idle{height:48px;width:272px;padding:5px 8px;gap:6px}.idle button{height:36px;font-size:12px}.idle-action{width:36px;padding:8px;flex-shrink:0}.divider{height:18px;width:1px;background:#39393e;margin:0 3px}.round{height:29px;width:29px;padding:6px;flex-shrink:0}.recording{gap:10px;padding:1px 6px;min-height:24px;height:24px}.recording .round{height:20px;width:20px;padding:3px}.recording .icon{width:12px;height:12px}.recording .wave{height:14px}.dismiss{position:relative}.dismiss-countdown{position:absolute;inset:0;pointer-events:none}.dismiss-countdown svg{width:100%;height:100%}.cutoff-reveal{animation:cutoff-reveal .25s ease-out}@keyframes cutoff-reveal{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}.accept{background:#eeedf1;color:#141416}.accept:hover{background:#fff}.wave{height:26px;display:flex;align-items:center;justify-content:center;gap:3px;width:auto}.wave-bar{display:block;width:3px;height:4px;border-radius:3px;background:#eeeeef}.duration{font-size:11px;font-variant-numeric:tabular-nums;color:#aaaab3;min-width:30px}.hint{font-size:10px;letter-spacing:.01em;background:#131315;color:#c5c5cc;border:1px solid #34343a;padding:5px 10px;border-radius:12px}.processing{padding-left:16px;gap:12px}.processing-label{font-size:12px;color:#d4d4db;padding-right:6px}.panel{width:380px;max-width:100%;max-height:100%;background:#111113;border:1px solid #35353b;box-shadow:0 4px 12px #0005;border-radius:18px;overflow:hidden;display:flex;flex-direction:column}.result,.failure{width:396px}.panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px 8px 18px;flex-shrink:0}.panel h2{font-size:13px;font-weight:600;letter-spacing:-.1px}.panel .round{color:#a3a3ad}.description{font-size:11px;line-height:1.55;color:#a8a8b2;padding:0 18px 10px}.transcript{white-space:pre-wrap;overflow-wrap:anywhere;overflow-y:auto;padding:5px 18px 14px;font-size:14px;line-height:1.6;user-select:text;min-height:44px;flex:1}.panel-footer{padding:10px 14px;border-top:1px solid #29292f;display:flex;justify-content:flex-end;gap:7px;flex-shrink:0}.primary{background:#eae9ef;color:#131315;border-radius:9px;font-size:12px;padding:8px 12px}.primary:hover{background:#fff}.subtle{color:#c8c8d1;font-size:11px;border-radius:8px}.recent-row{display:flex;gap:14px;align-items:center;padding:12px 16px;border-top:1px solid #26262c;min-height:70px}.recent-content{min-width:0;flex:1}.recent-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:12px;line-height:1.45;color:#dedee5;overflow-wrap:anywhere}.meta{display:block;margin-top:5px;color:#83838f;font-size:10px}.empty{font-size:12px;line-height:1.6;color:#9999a5;padding:22px 18px}.error{color:#ffb0b5;font-size:12px;line-height:1.55;padding:8px 18px 16px;overflow-y:auto}.recent{overflow-y:auto}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+*{box-sizing:border-box}[hidden]{display:none!important}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#f5f5f6;font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{display:flex;align-items:flex-end;justify-content:center;padding:12px}button{font:inherit;color:inherit;border:0;cursor:pointer;background:transparent;display:inline-flex;align-items:center;justify-content:center;gap:7px;border-radius:20px;padding:8px 10px;white-space:nowrap;-webkit-app-region:no-drag}button:hover{background:#29292d}button:focus-visible{outline:2px solid #c1b5fc;outline-offset:2px}button:disabled{opacity:.4;pointer-events:none}h2,p{margin:0}#widget{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:9px;max-width:100%;max-height:100%}.icon{display:inline-flex;width:16px;height:16px;flex-shrink:0}.icon svg{width:100%;height:100%}.pill{display:flex;align-items:center;justify-content:center;gap:10px;background:#101012;border:1px solid #323236;border-radius:99px;box-shadow:0 4px 12px #0005;flex-shrink:0;min-height:44px;padding:5px 8px}.idle{height:48px;width:272px;padding:5px 8px;gap:6px}.idle-controls{display:flex;align-items:center;gap:6px}.idle button{height:36px;font-size:12px}.idle.compact{width:44px;height:8px;min-height:8px;padding:0;background:#10101266;border-color:#ffffff60;box-shadow:none}.idle .idle-handle{width:100%;height:100%;padding:0}.idle-action{width:36px;padding:8px;flex-shrink:0}.divider{height:18px;width:1px;background:#39393e;margin:0 3px}.round{height:29px;width:29px;padding:6px;flex-shrink:0}.recording{gap:10px;padding:1px 6px;min-height:24px;height:24px}.recording .round{height:20px;width:20px;padding:3px}.recording .icon{width:12px;height:12px}.recording .wave{height:14px}.dismiss{position:relative}.dismiss-countdown{position:absolute;inset:0;pointer-events:none}.dismiss-countdown svg{width:100%;height:100%}.cutoff-reveal{animation:cutoff-reveal .25s ease-out}@keyframes cutoff-reveal{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}.accept{background:#eeedf1;color:#141416}.accept:hover{background:#fff}.wave{height:26px;display:flex;align-items:center;justify-content:center;gap:3px;width:auto}.wave-bar{display:block;width:3px;height:4px;border-radius:3px;background:#eeeeef}.duration{font-size:11px;font-variant-numeric:tabular-nums;color:#aaaab3;min-width:30px}.hint{font-size:10px;letter-spacing:.01em;background:#131315;color:#c5c5cc;border:1px solid #34343a;padding:5px 10px;border-radius:12px}.processing{padding-left:16px;gap:12px}.processing-label{font-size:12px;color:#d4d4db;padding-right:6px}.panel{width:380px;max-width:100%;max-height:100%;background:#111113;border:1px solid #35353b;box-shadow:0 4px 12px #0005;border-radius:18px;overflow:hidden;display:flex;flex-direction:column}.result,.failure{width:396px}.panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px 8px 18px;flex-shrink:0}.panel h2{font-size:13px;font-weight:600;letter-spacing:-.1px}.panel .round{color:#a3a3ad}.description{font-size:11px;line-height:1.55;color:#a8a8b2;padding:0 18px 10px}.transcript{white-space:pre-wrap;overflow-wrap:anywhere;overflow-y:auto;padding:5px 18px 14px;font-size:14px;line-height:1.6;user-select:text;min-height:44px;flex:1}.panel-footer{padding:10px 14px;border-top:1px solid #29292f;display:flex;justify-content:flex-end;gap:7px;flex-shrink:0}.primary{background:#eae9ef;color:#131315;border-radius:9px;font-size:12px;padding:8px 12px}.primary:hover{background:#fff}.subtle{color:#c8c8d1;font-size:11px;border-radius:8px}.recent-row{display:flex;gap:14px;align-items:center;padding:12px 16px;border-top:1px solid #26262c;min-height:70px}.recent-content{min-width:0;flex:1}.recent-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:12px;line-height:1.45;color:#dedee5;overflow-wrap:anywhere}.meta{display:block;margin-top:5px;color:#83838f;font-size:10px}.empty{font-size:12px;line-height:1.6;color:#9999a5;padding:22px 18px}.error{color:#ffb0b5;font-size:12px;line-height:1.55;padding:8px 18px 16px;overflow-y:auto}.recent{overflow-y:auto}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body><main id="widget" aria-label="Pathway dictation"></main><script>(${mountDictationOverlay.toString()})();</script></body></html>`;
 }
