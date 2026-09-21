@@ -1,9 +1,11 @@
-import { useCallback } from "react";
+import { lazy, Suspense, useCallback } from "react";
 
 import { useTheme } from "../../hooks/useTheme";
 import { getThemeDefinition, type ThemeAppearance, type ThemeDefinition } from "../../themePalette";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { ThemeEditorPanel } from "./ThemeEditorPanel";
+const ThemeEditorPanel = lazy(() =>
+  import("./ThemeEditorPanel").then((module) => ({ default: module.ThemeEditorPanel })),
+);
 import { useThemeEditorStore } from "./themeEditorStore";
 
 /**
@@ -97,18 +99,20 @@ export function ThemeEditorHost() {
   const seedTheme = session.seedThemeId ? (getThemeDefinition(session.seedThemeId) ?? null) : null;
 
   return (
-    <ThemeEditorPanel
-      editingTheme={editingTheme}
-      initialAppearance={session.initialAppearance}
-      key={session.id}
-      onOpenChange={(open) => {
-        if (!open) closeThemeEditor();
-      }}
-      onSaved={handleSaved}
-      open
-      restoreTheme={refreshTheme}
-      seedName={session.seedName ?? undefined}
-      seedTheme={seedTheme}
-    />
+    <Suspense fallback={null}>
+      <ThemeEditorPanel
+        editingTheme={editingTheme}
+        initialAppearance={session.initialAppearance}
+        key={session.id}
+        onOpenChange={(open) => {
+          if (!open) closeThemeEditor();
+        }}
+        onSaved={handleSaved}
+        open
+        restoreTheme={refreshTheme}
+        seedName={session.seedName ?? undefined}
+        seedTheme={seedTheme}
+      />
+    </Suspense>
   );
 }

@@ -1,8 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { ClerkProvider } from "@clerk/react";
-import { passkeys } from "@clerk/electron/passkeys";
-import { ClerkProvider as ElectronClerkProvider } from "@clerk/electron/react";
 import { createHashHistory, createBrowserHistory } from "@tanstack/react-router";
 
 import "./index.css";
@@ -18,6 +16,10 @@ import {
 } from "./lib/windowControlsOverlay";
 import { AppRoot } from "./AppRoot";
 import { ClerkStartupBoundary } from "./components/clerk/ClerkStartupBoundary";
+
+import { SplashScreen } from "./components/SplashScreen";
+
+const ElectronClerkProvider = React.lazy(() => import("./components/clerk/ElectronClerkProvider"));
 
 // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
 const history = isElectron ? createHashHistory() : createBrowserHistory();
@@ -48,9 +50,11 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     {clerkPublishableKey && hasClerkPublicConfig() ? (
       isElectron ? (
-        <ElectronClerkProvider publishableKey={clerkPublishableKey} passkeys={passkeys}>
-          {configuredApp}
-        </ElectronClerkProvider>
+        <React.Suspense fallback={<SplashScreen reason="account" />}>
+          <ElectronClerkProvider publishableKey={clerkPublishableKey}>
+            {configuredApp}
+          </ElectronClerkProvider>
+        </React.Suspense>
       ) : (
         <ClerkProvider publishableKey={clerkPublishableKey}>
           <ClerkStartupBoundary>{configuredApp}</ClerkStartupBoundary>

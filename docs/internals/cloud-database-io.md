@@ -317,3 +317,17 @@ Tests cover shared consumers in React Strict Mode, account/session/deployment
 separation, partial unmount, token refresh, and final cleanup. N simultaneous
 feature clients now use one socket (for example, six becomes one: 83% fewer).
 Server query caching means database savings must still be measured separately.
+
+## Platform and optional startup chunks
+
+The ordinary web entry no longer statically imports the Electron Clerk SDK and
+its bundled Clerk JS. Electron loads its provider and passkey integration through
+a dedicated chunk, using the existing account splash while loading. Browser
+Clerk startup and authentication gates are unchanged. The theme editor panel
+loads only when an editing session opens.
+
+Fresh production builds before/after this change, using the same configuration,
+measured HTML-referenced initial JavaScript at 5,610,892 -> 4,068,390 raw bytes and
+1,845,324 -> 1,273,346 gzip bytes: 1.54 MB raw and 572 KB gzip saved (31% compressed).
+Neither deferred chunk appears in the initial preload list. This excludes Clerk's
+runtime network requests and is not a browser latency or desktop startup claim.
