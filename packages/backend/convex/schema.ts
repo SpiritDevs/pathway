@@ -850,6 +850,8 @@ export default defineSchema({
     /** Feed version of the last change touching this row. */
     version: v.optional(v.number()),
   })
+    .index("by_status", ["status"])
+    .index("by_company_project_status", ["companyId", "cloudProjectId", "status"])
     .index("by_company", ["companyId"])
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_project", ["companyId", "cloudProjectId"])

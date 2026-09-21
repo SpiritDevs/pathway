@@ -1,3 +1,4 @@
+import { readCompanySyncVersion } from "../convex/lib/companySyncHead.ts";
 import { heartbeat as registryHeartbeat } from "../convex/environments.ts";
 import {
   readEnvironmentPresence,
@@ -759,7 +760,8 @@ describe("environment registry", () => {
         .query("companies")
         .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
         .unique();
-      expect(company).toMatchObject({ updatedAt: 1_700_000_000_000, syncVersion: 1 });
+      expect(company).toMatchObject({ updatedAt: 1_700_000_000_000, syncVersion: 0 });
+      expect(await readCompanySyncVersion(ctx, company!)).toBe(1);
     });
   });
 

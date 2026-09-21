@@ -356,3 +356,20 @@ and all sync-lease renewal writes from that document; the compact runtime writes
 still occur. Production retry and I/O savings need post-deployment measurement.
 Rollback to an older backend requires copying current runtime fields back into
 accounts with workers stopped, to preserve cursors and fencing generations.
+
+## Environment binding maintenance
+
+Revoking an environment now schedules cleanup scoped to that company/environment.
+It drains active and missing bindings in batches of 50. The historical repair
+backstop runs daily instead of hourly and paginates a status index, excluding
+stale and revoked history. Each batch shares registration lookups and selects a
+replacement preferred binding through a project/status index.
+
+The 421-binding regression verifies a backstop page reads 50 eligible bindings
+and one shared registration, then confirms real revocation drains all 121 live
+bindings while retaining the 300 existing tombstones. Re-registration is checked
+before cleanup so a delayed job cannot retire an active environment.
+
+Daily instead of hourly repair removes about 96% of periodic scan frequency;
+excluding terminal rows reduces each pass further. Revocation-triggered work is
+additional but targeted. This is scan work avoided, not measured production GB.

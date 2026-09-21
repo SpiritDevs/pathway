@@ -1,3 +1,4 @@
+import { internal } from "./_generated/api.js";
 import { patchEnvironmentPresence } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations are not Effect programs; the transaction clock is `Date.now()`.
 /**
@@ -578,6 +579,10 @@ export const deactivate = mutation({
       state: "revoked",
       relayLinkState: "revoked",
       updatedAt: now,
+    });
+    await ctx.scheduler.runAfter(0, internal.cloudProjects.revokeEnvironmentBindings, {
+      companyId: actor.company._id,
+      environmentId: registration.environmentId,
     });
     const heldLeases = await ctx.db
       .query("slackCoordinatorLeases")

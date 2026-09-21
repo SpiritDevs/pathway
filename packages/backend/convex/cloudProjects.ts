@@ -894,73 +894,139 @@ export const releaseEnvironmentProject = mutation({
  * every client. Stale, not revoked — revocation is the durable "this checkout was deleted" signal
  * environments consume, while staleness just means "this machine is no longer one of ours".
  */
-export const revokeStaleEnvironmentBindings = internalMutation({
-  args: {},
-  returns: v.null(),
-  handler: async (ctx) => {
-    const candidates = (await ctx.db.query("environmentBindings").collect()).filter(
-      (binding) => binding.status === "active" || binding.status === "missing",
-    );
-    const now = Date.now();
-    const changesByCompany = new Map<Id<"companies">, CompanyChange[]>();
-    for (const binding of candidates) {
+async function retireUnregisteredBindings(
+  ctx: MutationCtx,
+  candidates: Doc<"environmentBindings">[],
+) {
+  const now = Date.now();
+  const registrations = new Map<string, boolean>();
+  let retired = 0;
+  const changesByCompany = new Map<Id<"companies">, CompanyChange[]>();
+  for (const binding of candidates) {
+    const key = `${binding.companyId}:${binding.environmentId}`;
+    let active = registrations.get(key);
+    if (active === undefined) {
       const registration = await ctx.db
         .query("environmentRegistrations")
         .withIndex("by_company_and_environment", (q) =>
           q.eq("companyId", binding.companyId).eq("environmentId", binding.environmentId),
         )
         .unique();
-      if (registration !== null && registration.state === "active") continue;
+      active = registration?.state === "active";
+      registrations.set(key, active);
+    }
+    if (active) continue;
+    retired++;
 
-      await ctx.db.patch(binding._id, { status: "stale", lastSeenAt: now, updatedAt: now });
-      const stale = await ctx.db.get(binding._id);
-      if (stale === null) throw backendError("entity-not-found", "A project binding vanished.");
-      const changes = changesByCompany.get(binding.companyId) ?? [];
-      changes.push({
-        entityKind: "environmentBinding",
-        entityId: stale.id,
-        changeKind: "upsert",
-        versionDocId: stale._id,
-        payload: await encodeEnvironmentBinding(ctx, stale),
+    await ctx.db.patch(binding._id, { status: "stale", lastSeenAt: now, updatedAt: now });
+    const stale = await ctx.db.get(binding._id);
+    if (stale === null) throw backendError("entity-not-found", "A project binding vanished.");
+    const changes = changesByCompany.get(binding.companyId) ?? [];
+    changes.push({
+      entityKind: "environmentBinding",
+      entityId: stale.id,
+      changeKind: "upsert",
+      versionDocId: stale._id,
+      payload: await encodeEnvironmentBinding(ctx, stale),
+    });
+
+    const project = await ctx.db.get(stale.cloudProjectId);
+    if (project !== null && project.preferredBindingId === stale.id) {
+      const replacement = await ctx.db
+        .query("environmentBindings")
+        .withIndex("by_company_project_status", (q) =>
+          q
+            .eq("companyId", binding.companyId)
+            .eq("cloudProjectId", project._id)
+            .eq("status", "active"),
+        )
+        .first();
+      await ctx.db.patch(project._id, {
+        preferredBindingId: replacement?.id ?? null,
+        updatedAt: now,
       });
-
-      const project = await ctx.db.get(stale.cloudProjectId);
-      if (project !== null && project.preferredBindingId === stale.id) {
-        const replacement = (
-          await ctx.db
-            .query("environmentBindings")
-            .withIndex("by_company_and_project", (q) =>
-              q.eq("companyId", binding.companyId).eq("cloudProjectId", project._id),
-            )
-            .collect()
-        ).find((row) => row._id !== stale._id && row.status === "active");
-        await ctx.db.patch(project._id, {
-          preferredBindingId: replacement?.id ?? null,
-          updatedAt: now,
-        });
-        const changedProject = await ctx.db.get(project._id);
-        if (changedProject === null) {
-          throw backendError("entity-not-found", "The project vanished.");
-        }
-        changes.push({
-          entityKind: "cloudProject",
-          entityId: changedProject.id,
-          changeKind: "upsert",
-          versionDocId: changedProject._id,
-          payload: encodeCloudProject(changedProject),
-        });
+      const changedProject = await ctx.db.get(project._id);
+      if (changedProject === null) {
+        throw backendError("entity-not-found", "The project vanished.");
       }
-      changesByCompany.set(binding.companyId, changes);
-    }
-
-    for (const [companyId, changes] of changesByCompany) {
-      if (changes.length === 0) continue;
-      await appendCompanyChanges(ctx, {
-        companyId,
-        actor: { kind: "system", source: "automation" },
-        changes,
+      changes.push({
+        entityKind: "cloudProject",
+        entityId: changedProject.id,
+        changeKind: "upsert",
+        versionDocId: changedProject._id,
+        payload: encodeCloudProject(changedProject),
       });
     }
+    changesByCompany.set(binding.companyId, changes);
+  }
+
+  for (const [companyId, changes] of changesByCompany) {
+    if (changes.length === 0) continue;
+    await appendCompanyChanges(ctx, {
+      companyId,
+      actor: { kind: "system", source: "automation" },
+      changes,
+    });
+  }
+  return retired;
+}
+
+/** Daily backstop for missing registrations; each transaction reads one indexed page. */
+export const revokeStaleEnvironmentBindings = internalMutation({
+  args: {
+    cursor: v.optional(v.string()),
+    status: v.optional(v.union(v.literal("active"), v.literal("missing"))),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const status = args.status ?? "active";
+    const page = await ctx.db
+      .query("environmentBindings")
+      .withIndex("by_status", (q) => q.eq("status", status))
+      .paginate({ cursor: args.cursor ?? null, numItems: 50 });
+    await retireUnregisteredBindings(ctx, page.page);
+    if (!page.isDone)
+      await ctx.scheduler.runAfter(0, internal.cloudProjects.revokeStaleEnvironmentBindings, {
+        status,
+        cursor: page.continueCursor,
+      });
+    else if (status === "active")
+      await ctx.scheduler.runAfter(0, internal.cloudProjects.revokeStaleEnvironmentBindings, {
+        status: "missing",
+      });
+    return null;
+  },
+});
+
+/** Registration revocation retires only that environment's bindings, without a global scan. */
+export const revokeEnvironmentBindings = internalMutation({
+  args: { companyId: v.id("companies"), environmentId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const registration = await ctx.db
+      .query("environmentRegistrations")
+      .withIndex("by_company_and_environment", (q) =>
+        q.eq("companyId", args.companyId).eq("environmentId", args.environmentId),
+      )
+      .unique();
+    if (registration?.state === "active") return null;
+    const groups = await Promise.all(
+      (["active", "missing"] as const).map((status) =>
+        ctx.db
+          .query("environmentBindings")
+          .withIndex("by_company_status_environment", (q) =>
+            q
+              .eq("companyId", args.companyId)
+              .eq("status", status)
+              .eq("environmentId", args.environmentId),
+          )
+          .take(50),
+      ),
+    );
+    const candidates = groups.flat().slice(0, 50);
+    const retired = await retireUnregisteredBindings(ctx, candidates);
+    if (retired && candidates.length === 50)
+      await ctx.scheduler.runAfter(0, internal.cloudProjects.revokeEnvironmentBindings, args);
     return null;
   },
 });

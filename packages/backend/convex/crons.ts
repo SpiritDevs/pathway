@@ -36,10 +36,11 @@ crons.interval(
   {},
 );
 
-crons.hourly(
+crons.daily(
   "mark environment bindings stale when their registration is gone",
-  { minuteUTC: 41 },
+  { hourUTC: 3, minuteUTC: 41 },
   internal.cloudProjects.revokeStaleEnvironmentBindings,
+  {},
 );
 
 crons.interval(

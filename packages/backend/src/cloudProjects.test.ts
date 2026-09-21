@@ -1,6 +1,8 @@
+import { revokeStaleEnvironmentBindings } from "../convex/cloudProjects.ts";
+import { functionHandler, measureDatabaseReads } from "./testDatabaseReads.ts";
 // @effect-diagnostics globalDate:off -- Test rows mirror Convex documents.
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { api, internal } from "../convex/_generated/api.js";
 import schema from "../convex/schema.ts";
@@ -9,6 +11,7 @@ process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
 process.env.PATHWAY_RELAY_JWKS_URL = "https://relay.example.test/.well-known/jwks.json";
 
 const modules = {
+  "../convex/environments.ts": () => import("../convex/environments.ts"),
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
   "../convex/_generated/server.js": () => import("../convex/_generated/server.js"),
   "../convex/agentThreads.ts": () => import("../convex/agentThreads.ts"),
@@ -1528,6 +1531,54 @@ describe("single-company project ownership", () => {
 });
 
 describe("stale environment binding reclamation", () => {
+  it("pages the backstop, skips terminal bindings, and shares registration lookups", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = harness();
+      const ids = await seed(t);
+      await registerEnvironment(t, ids.companyId);
+      await t.run(async (ctx) => {
+        const { _id, _creationTime, ...binding } = (await ctx.db.get(ids.bindingId))!;
+        void _id;
+        void _creationTime;
+        for (let index = 0; index < 120; index++)
+          await ctx.db.insert("environmentBindings", {
+            ...binding,
+            id: `paged-${index}`,
+            status: index < 60 ? "active" : "missing",
+          });
+        for (let index = 0; index < 300; index++)
+          await ctx.db.insert("environmentBindings", {
+            ...binding,
+            id: `terminal-${index}`,
+            status: "stale",
+          });
+      });
+      const measured = await t.run(async (ctx) => {
+        const meter = measureDatabaseReads(ctx.db);
+        await functionHandler(revokeStaleEnvironmentBindings)({ ...ctx, db: meter.db }, {});
+        return {
+          registrations: meter.documents.get("environmentRegistrations") ?? 0,
+          bindings: meter.documents.get("environmentBindings") ?? 0,
+        };
+      });
+      expect(measured).toEqual({ registrations: 1, bindings: 50 });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      // Real revocation must schedule targeted cleanup and eventually drain every page.
+      await asOwner(t).mutation(api.environments.deactivate, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+      });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      const bindings = await t.run((ctx) => ctx.db.query("environmentBindings").collect());
+      expect(bindings).toHaveLength(421);
+      expect(bindings.every((binding) => binding.status === "stale")).toBe(true);
+      expect((await t.run((ctx) => ctx.db.get(ids.projectId)))?.preferredBindingId).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("marks bindings stale when the environment has no active registration", async () => {
     const t = harness();
     const ids = await seed(t);

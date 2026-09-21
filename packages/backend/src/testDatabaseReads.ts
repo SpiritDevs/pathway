@@ -2,8 +2,14 @@ import type { RegisteredMutation, RegisteredQuery } from "convex/server";
 import type { MutationCtx } from "../convex/_generated/server.js";
 
 /** Invoke the registered function with an instrumented real database inside convex-test's transaction. */
-export function functionHandler<Args extends Record<string, unknown>, Result>(
-  registered: RegisteredMutation<"public", Args, Result> | RegisteredQuery<"public", Args, Result>,
+export function functionHandler<
+  Visibility extends "public" | "internal",
+  Args extends Record<string, unknown>,
+  Result,
+>(
+  registered:
+    | RegisteredMutation<Visibility, Args, Result>
+    | RegisteredQuery<Visibility, Args, Result>,
 ): (ctx: MutationCtx, args: Args) => Result {
   const handler: unknown = Reflect.get(registered, "_handler");
   if (typeof handler !== "function") throw new Error("Missing Convex test handler");
@@ -26,9 +32,14 @@ export function measureDatabaseReads<T extends object>(db: T) {
         if (typeof value !== "function") return value;
         return (...args: unknown[]) => {
           const result: unknown = Reflect.apply(value, object, args);
-          if (["get", "collect", "take", "first", "unique"].includes(String(key))) {
+          if (["get", "collect", "take", "first", "unique", "paginate"].includes(String(key))) {
             return Promise.resolve(result).then((rows) => {
-              record(table, rows);
+              record(
+                table,
+                key === "paginate" && rows !== null && typeof rows === "object"
+                  ? Reflect.get(rows, "page")
+                  : rows,
+              );
               return rows;
             });
           }
