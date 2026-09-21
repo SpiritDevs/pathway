@@ -481,6 +481,26 @@ describe("DesktopWindow", () => {
     );
   }
 
+  it.effect("can reopen the renderer during cold boot without marking the backend ready", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({ window: fakeWindow.window, createCount, mainWindow });
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleRendererReady(new URL("http://127.0.0.1:3773"));
+        assert.equal(yield* Ref.get(createCount), 1);
+        // Simulate closing the first window while the server is recovering.
+        yield* Ref.set(mainWindow, Option.none());
+        yield* desktopWindow.createMainIfBackendReady;
+        assert.equal(yield* Ref.get(createCount), 1);
+        yield* desktopWindow.activate;
+        assert.equal(yield* Ref.get(createCount), 2);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
   it.effect("blocks only repeated Cmd+W input before it reaches the native window menu", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();

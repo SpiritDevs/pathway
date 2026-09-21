@@ -269,6 +269,71 @@ describe("resolveInitialServerAuthGateState", () => {
     expect(attempts).toBe(4);
   });
 
+  for (const failure of ["transport", "fetch"] as const) {
+    it(`waits for a desktop cold boot after an initial ${failure} failure`, async () => {
+      vi.useFakeTimers();
+      installDesktopBootstrap();
+      const startedAt = Date.now();
+      const request = HttpClientRequest.get("http://localhost:3773/api/auth/session");
+      let attempts = 0;
+      const runner: PrimaryHttpEffectRunner = async <A>() => {
+        attempts += 1;
+        if (Date.now() - startedAt < 18_000) {
+          if (failure === "fetch") throw new TypeError("Failed to fetch");
+          throw new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({
+              request,
+              cause: new TypeError("Connection refused"),
+            }),
+          });
+        }
+        return authenticatedSession(DESKTOP_AUTH) as A;
+      };
+      __setPrimaryHttpRunnerForTests(runner);
+      const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+      const result = resolveInitialServerAuthGateState();
+      await vi.advanceTimersByTimeAsync(18_000);
+      await expect(result).resolves.toEqual({ status: "authenticated" });
+      expect(attempts).toBe(37);
+    });
+  }
+
+  for (const desktop of [false, true]) {
+    it(`bounds ${desktop ? "desktop" : "web"} startup retries when the server stays unavailable`, async () => {
+      vi.useFakeTimers();
+      if (desktop) installDesktopBootstrap();
+      let attempts = 0;
+      __setPrimaryHttpRunnerForTests(async () => {
+        attempts += 1;
+        throw new TypeError("Failed to fetch");
+      });
+      const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+      const result = resolveInitialServerAuthGateState().catch((error: unknown) => error);
+      const timeout = desktop ? 60_000 : 15_000;
+      await vi.advanceTimersByTimeAsync(timeout);
+      expect(await result).toMatchObject({ _tag: "PrimaryEnvironmentRequestError" });
+      expect(attempts).toBe(timeout / 500 + 1);
+    });
+  }
+
+  for (const status of [401, 403, 500]) {
+    it(`does not retry an HTTP ${status} response as a cold-boot transport failure`, async () => {
+      installDesktopBootstrap();
+      const request = HttpClientRequest.get("http://localhost:3773/api/auth/session");
+      const response = HttpClientResponse.fromWeb(request, new Response(null, { status }));
+      let attempts = 0;
+      __setPrimaryHttpRunnerForTests(async () => {
+        attempts += 1;
+        throw new HttpClientError.HttpClientError({
+          reason: new HttpClientError.StatusCodeError({ request, response }),
+        });
+      });
+      const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+      await expect(resolveInitialServerAuthGateState()).rejects.toMatchObject({ status });
+      expect(attempts).toBe(1);
+    });
+  }
+
   it("takes a pairing token from the location hash and strips it immediately", async () => {
     const testWindow = installTestBrowser("http://localhost/#token=pairing-token");
     const { takePairingTokenFromUrl } = await import("./environments/primary");

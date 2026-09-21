@@ -187,6 +187,9 @@ const bootstrap = Effect.gen(function* () {
     targetOrigin: rendererTarget,
     backendOrigin: backendConfig.httpBaseUrl,
     clerkFrontendApiHostname: DesktopClerk.desktopClerkFrontendApiHostname,
+    ...(environment.bundledRendererDirectory === undefined
+      ? {}
+      : { bundledRendererDirectory: environment.bundledRendererDirectory }),
   });
   yield* logBootstrapInfo("bootstrap resolved backend endpoint", {
     baseUrl: backendConfig.httpBaseUrl.href,
@@ -208,8 +211,8 @@ const bootstrap = Effect.gen(function* () {
 
   if (!(yield* Ref.get(state.quitting))) {
     // The backend takes seconds to become ready (login-shell PATH fix, DB
-    // migrations, startup phases). The renderer opens as soon as its routes are
-    // available, while command readiness continues independently.
+    // migrations, startup phases). Packaged UI loads directly from the bundle;
+    // development waits for renderer routes. Commands still wait for recovery.
     // Show a splash immediately so every boot has visible feedback; WSL-only
     // boots name the actual wait, which can be a slow first wsl.exe spawn.
     yield* desktopWindow.showConnectingSplash({
@@ -220,6 +223,21 @@ const bootstrap = Effect.gen(function* () {
     });
     yield* primaryBackend.start;
     yield* logBootstrapInfo("bootstrap backend start requested");
+    if (environment.bundledRendererDirectory !== undefined) {
+      const config = yield* primaryBackend.currentConfig;
+      // start publishes the endpoint and credential before returning. Opening
+      // sooner would let the renderer read an incomplete synchronous bootstrap.
+      // A failed WSL preflight keeps the splash until its fallback is ready.
+      if (Option.isSome(config) && Option.isNone(config.value.preflightFailure)) {
+        yield* desktopWindow.handleRendererReady(config.value.httpBaseUrl).pipe(
+          Effect.catch((error) =>
+            logBootstrapWarning("failed to open bundled renderer during startup", {
+              error: error.message,
+            }),
+          ),
+        );
+      }
+    }
     // Bring up the WSL backend if the user previously enabled it. The
     // primary is already starting; reconcile fires off the WSL register
     // in parallel rather than blocking primary readiness on a possibly

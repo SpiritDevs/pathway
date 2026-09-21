@@ -68,6 +68,7 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.appRoot, "/repo");
       assert.equal(environment.backendEntryPath, "/repo/apps/server/dist/bin.mjs");
       assert.equal(environment.backendCwd, "/repo");
+      assert.isUndefined(environment.bundledRendererDirectory);
       assert.equal(environment.appUserModelId, "com.spiritdevs.pathway.dev");
       assert.equal(environment.linuxWmClass, "pathway-dev");
       assert.equal(environment.linuxDesktopEntryName, "com.spiritdevs.Pathway.Development.desktop");
@@ -117,6 +118,7 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.appRoot, "/repo");
       assert.equal(environment.backendEntryPath, "/repo/apps/server/dist/bin.mjs");
       assert.equal(environment.backendCwd, "/repo");
+      assert.isUndefined(environment.bundledRendererDirectory);
     }),
   );
 
@@ -131,6 +133,10 @@ describe("DesktopEnvironment", () => {
         "/Applications/Pathway.app/Contents/Resources/app.asar/apps/server/dist/bin.mjs",
       );
       assert.equal(environment.backendCwd, "/Users/alice");
+      assert.equal(
+        environment.bundledRendererDirectory,
+        "/Applications/Pathway.app/Contents/Resources/app.asar/apps/server/dist/client",
+      );
     }),
   );
 

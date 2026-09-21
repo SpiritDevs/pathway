@@ -55,6 +55,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly rootDir: string;
     readonly appRoot: string;
     readonly backendEntryPath: string;
+    readonly bundledRendererDirectory: string | undefined;
     readonly backendCwd: string;
     readonly preloadPath: string;
     readonly appUpdateYmlPath: string;
@@ -201,6 +202,10 @@ const make = Effect.fn("desktop.environment.make")(function* (
     rootDir,
     appRoot,
     backendEntryPath: path.join(appRoot, "apps/server/dist/bin.mjs"),
+    bundledRendererDirectory:
+      input.isPackaged && !isDevelopment
+        ? path.join(appRoot, "apps/server/dist/client")
+        : undefined,
     backendCwd: input.isPackaged && !isDevelopment ? homeDirectory : appRoot,
     preloadPath: path.join(input.dirname, "preload.cjs"),
     appUpdateYmlPath: input.isPackaged

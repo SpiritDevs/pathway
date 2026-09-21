@@ -2,11 +2,15 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NodeTimersPromises from "node:timers/promises";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as NodeURL from "node:url";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import * as Electron from "electron";
+import { isDevProxiedPath } from "@spiritdevs/shared/devProxy";
 
 export const DESKTOP_HOST = "app";
 export const DESKTOP_PRODUCTION_SCHEME = "pathway";
@@ -111,6 +115,7 @@ export interface DesktopProtocolRegistrationInput {
   readonly targetOrigin: URL;
   readonly backendOrigin: URL;
   readonly clerkFrontendApiHostname: string | undefined;
+  readonly bundledRendererDirectory?: string;
 }
 
 export class ElectronProtocol extends Context.Service<
@@ -242,6 +247,54 @@ async function proxyRequest(
 
 const TRANSIENT_FETCH_RETRY_DELAYS_MS = [0, 50, 150] as const;
 
+async function serveBundledRenderer(
+  request: Request,
+  directory: string,
+  contentSecurityPolicy: string,
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+): Promise<Response> {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response(null, { status: 405, headers: { Allow: "GET, HEAD" } });
+  }
+
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(new URL(request.url).pathname);
+  } catch {
+    return new Response(null, { status: 400 });
+  }
+  const root = path.resolve(directory);
+  let filePath = path.resolve(root, `.${pathname}`);
+  const relativePath = path.relative(root, filePath);
+  if (
+    pathname.includes("\0") ||
+    pathname.includes("\\") ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
+    return new Response(null, { status: 400 });
+  }
+
+  // Client routes use the same SPA entry on navigation and reload. Missing
+  // assets stay 404s so a missing script never receives HTML as JavaScript.
+  if (pathname === "/" || !path.extname(filePath)) {
+    filePath = path.join(root, "index.html");
+  }
+  const info = await Effect.runPromise(
+    fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => undefined)),
+  );
+  if (info?.type !== "File") return new Response(null, { status: 404 });
+
+  // Electron's file loader understands ASAR paths and supplies MIME types and
+  // streaming without copying every asset through the backend and main process.
+  const response = await Electron.net.fetch(NodeURL.pathToFileURL(filePath).href, {
+    method: request.method,
+  });
+  return withContentSecurityPolicy(response, contentSecurityPolicy);
+}
+
 async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<Response> {
   let lastError: unknown;
 
@@ -261,6 +314,8 @@ async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<
 }
 
 export const make = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const registered = yield* Ref.make(false);
 
   const registerDesktopProtocol = Effect.fn("desktop.electron.protocol.registerDesktopProtocol")(
@@ -281,9 +336,24 @@ export const make = Effect.gen(function* () {
       yield* Effect.acquireRelease(
         Effect.try({
           try: () => {
-            Electron.protocol.handle(input.scheme, (request) =>
-              proxyRequest(request, input.targetOrigin, contentSecurityPolicy),
-            );
+            Electron.protocol.handle(input.scheme, async (request) => {
+              const url = new URL(request.url);
+              if (url.host !== DESKTOP_HOST) return new Response(null, { status: 404 });
+              if (input.bundledRendererDirectory && !isDevProxiedPath(url.pathname)) {
+                return serveBundledRenderer(
+                  request,
+                  input.bundledRendererDirectory,
+                  contentSecurityPolicy,
+                  fileSystem,
+                  path,
+                );
+              }
+              return proxyRequest(
+                request,
+                input.bundledRendererDirectory ? input.backendOrigin : input.targetOrigin,
+                contentSecurityPolicy,
+              );
+            });
             if (input.clerkFrontendApiHostname) {
               const clerkUrls = { urls: [`https://${input.clerkFrontendApiHostname}/*`] };
               Electron.session.defaultSession.webRequest.onBeforeSendHeaders(

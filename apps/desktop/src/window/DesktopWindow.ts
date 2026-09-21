@@ -283,9 +283,10 @@ export const make = Effect.gen(function* () {
   // Window-side latch for the primary backend's readiness. Set by
   // handleBackendReady (driven by the pool's onReady callback), cleared
   // by handleBackendNotReady (driven by onShutdown). Only consumed by
-  // createMainIfBackendReady, which gates the post-readiness window
-  // open in development and the macOS "activate without windows" path.
+  // createMainIfBackendReady gates operations that need the local server.
+  // Renderer readiness separately allows reopening the UI during recovery.
   const backendReadyRef = yield* Ref.make(false);
+  const rendererReadyRef = yield* Ref.make(false);
   const mainCreation = yield* Semaphore.make(1);
   // The transient boot splash window, tracked separately so it is never
   // mistaken for the real main window.
@@ -869,23 +870,25 @@ export const make = Effect.gen(function* () {
       }
       // No real main window yet. While the backend is still cold-booting,
       // re-reveal the connecting splash so taskbar/dock activation brings it
-      // back instead of doing nothing. Once the backend is ready we fall
+      // back instead of doing nothing. Once the renderer is ready we fall
       // through to (re)create the real main -- including retrying a previously
       // failed open the pool swallowed -- rather than latching onto the splash.
-      const backendReady = yield* Ref.get(backendReadyRef);
-      if (!backendReady) {
+      const canOpenRenderer =
+        (yield* Ref.get(rendererReadyRef)) || (yield* Ref.get(backendReadyRef));
+      if (!canOpenRenderer) {
         const splash = yield* Ref.get(splashWindowRef);
         if (Option.isSome(splash)) {
           yield* electronWindow.reveal(splash.value);
           return;
         }
       }
-      yield* createMainIfBackendReady;
+      if (canOpenRenderer) yield* ensureMain;
     }).pipe(Effect.withSpan("desktop.window.activate")),
     createMainIfBackendReady,
     showConnectingSplash,
     handleRendererReady: Effect.fn("desktop.window.handleRendererReady")(function* (httpBaseUrl) {
-      yield* logWindowInfo("renderer routes ready; backend recovery may still be running", {
+      yield* Ref.set(rendererReadyRef, true);
+      yield* logWindowInfo("renderer ready; backend recovery may still be running", {
         url: httpBaseUrl.href,
       });
       yield* ensureMain;

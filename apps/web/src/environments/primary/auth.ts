@@ -280,10 +280,16 @@ async function waitForAuthenticatedSessionAfterBootstrap(): Promise<AuthSessionS
 
 const TRANSIENT_BOOTSTRAP_STATUS_CODES = new Set([502, 503, 504]);
 const BOOTSTRAP_RETRY_TIMEOUT_MS = 15_000;
+// Bundled desktop UI can open before the local HTTP listener exists. Give its
+// cold boot the same one-minute budget as the desktop backend readiness probe.
+const DESKTOP_BOOTSTRAP_RETRY_TIMEOUT_MS = 60_000;
 const BOOTSTRAP_RETRY_STEP_MS = 500;
 
 export async function retryTransientBootstrap<T>(operation: () => Promise<T>): Promise<T> {
   const startedAt = Date.now();
+  const timeoutMs = getDesktopBootstrapCredential()
+    ? DESKTOP_BOOTSTRAP_RETRY_TIMEOUT_MS
+    : BOOTSTRAP_RETRY_TIMEOUT_MS;
   while (true) {
     try {
       return await operation();
@@ -292,7 +298,7 @@ export async function retryTransientBootstrap<T>(operation: () => Promise<T>): P
         throw error;
       }
 
-      if (Date.now() - startedAt >= BOOTSTRAP_RETRY_TIMEOUT_MS) {
+      if (Date.now() - startedAt >= timeoutMs) {
         throw error;
       }
 
@@ -309,7 +315,18 @@ function waitForBootstrapRetry(delayMs: number): Promise<void> {
 
 function isTransientBootstrapError(error: unknown): boolean {
   if (isPrimaryEnvironmentRequestError(error)) {
-    return TRANSIENT_BOOTSTRAP_STATUS_CODES.has(error.status);
+    return (
+      TRANSIENT_BOOTSTRAP_STATUS_CODES.has(error.status) ||
+      isTransientBootstrapTransportError(error.cause)
+    );
+  }
+
+  return isTransientBootstrapTransportError(error);
+}
+
+function isTransientBootstrapTransportError(error: unknown): boolean {
+  if (HttpClientError.isHttpClientError(error)) {
+    return error.reason._tag === "TransportError";
   }
 
   if (error instanceof TypeError) {
