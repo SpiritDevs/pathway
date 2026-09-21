@@ -28,6 +28,7 @@ final class PathwayIssuesModel {
     @ObservationIgnored let cloudRequest: CloudRequest?
     @ObservationIgnored private var companies: [PathwayCompany] = []
     @ObservationIgnored private var versions: [String: Int] = [:]
+    @ObservationIgnored private var visibleReplicaCompanies: Set<String> = []
     @ObservationIgnored private var writesInFlight = 0
     @ObservationIgnored private var overlays: [String: [PendingIssuePatch]] = [:]
     @ObservationIgnored private var replicaRecords: [PathwayIssueRecord] = []
@@ -48,18 +49,25 @@ final class PathwayIssuesModel {
         pendingChangeCount = pendingOperations.count
     }
 
-    func replaceReplica(
-        _ changesByCompany: [String: [PathwaySyncChange]],
-        companies: [PathwayCompany] = [], versions: [String: Int] = [:]
-    ) {
+    func updateReplicaContext(companies: [PathwayCompany], versions: [String: Int], visibleCompanyIDs: Set<String>) {
         self.companies = companies
-        let visibleCompanies = Set(changesByCompany.keys)
+        self.versions = versions
+        guard visibleReplicaCompanies != visibleCompanyIDs else { return }
+        visibleReplicaCompanies = visibleCompanyIDs
+        let visibleCompanies = visibleCompanyIDs
         liveComments = liveComments.filter { visibleCompanies.contains($0.value.companyId) }
         liveRuns = liveRuns.filter { visibleCompanies.contains($0.value.companyId) }
         liveEnvironmentSettings = liveEnvironmentSettings.filter { key, _ in
             visibleCompanies.contains(key.components(separatedBy: ":").first ?? "")
         }
-        self.versions = versions
+    }
+
+    func replaceReplica(
+        _ changesByCompany: [String: [PathwaySyncChange]],
+        companies: [PathwayCompany] = [], versions: [String: Int] = [:]
+    ) {
+        updateReplicaContext(companies: companies, versions: versions, visibleCompanyIDs: Set(changesByCompany.keys))
+        let visibleCompanies = Set(changesByCompany.keys)
         var projectionVersions: [String: Int] = [:]
         for (companyID, changes) in changesByCompany {
             for change in changes where Self.includesEntityKind(change.entityKind) {
@@ -146,7 +154,7 @@ final class PathwayIssuesModel {
         return false
     }
 
-    private static func includesEntityKind(_ kind: String) -> Bool {
+    static func includesEntityKind(_ kind: String) -> Bool {
         kind.hasPrefix("issue") || kind == "membership" || kind == "role" || kind == "roleAssignment"
     }
 

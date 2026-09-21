@@ -390,3 +390,31 @@ Focused route and desktop lifecycle tests cover the pending command gate, early
 renderer signal and concurrent window creation. Server and desktop package
 checks validate the shared route contract. No browser/app was launched, so this
 change establishes safe overlap but does not claim a measured startup-time saving.
+
+## 10. Target native replica publication by entity kind
+
+The Swift client stores each company's replica in kind buckets. Change pages
+update those buckets directly, decode only changed discovery records, and refresh
+only affected feature projections. Email changes no longer rebuild issue,
+calendar, environment, project or thread projections. Discovery publication also
+selects only the affected kind. Issue write cursors stay current even when its
+projection is skipped.
+
+Pages available within one actor turn share a publication. Publication progresses
+while the next network page is pending and flushes at drain completion. Bootstrap,
+cache restore, authorization changes and removal still replace projections
+immediately; persistence retains its existing separate actor and coalescing.
+
+A local optimized Swift microbenchmark with 30,000 mixed records and 200 single-email
+pages reduced input selection from 5.42 seconds to 0.53 seconds, and selected rows
+from 8 million to 2 million. This measures replica input selection, not end-to-end
+frame time, battery use or Convex billing. Relevant feature projections still
+reconcile their own complete subset to preserve ordering and optimistic overlays.
+
+Validation: the three index tests pass in a standalone macOS harness using the
+actual index source and sync value types. The iOS application and native test
+bundle compile successfully. The focused simulator lifecycle test run stalled
+before starting tests; even querying that isolated device's installed apps hung.
+Those lifecycle tests were compiled but are not claimed as passing. Scoped
+SwiftLint still reports the existing cloud/issue class-length errors (confirmed
+against the previous commit); the new index and its tests pass lint.

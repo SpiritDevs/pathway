@@ -38,8 +38,10 @@ final class PathwayEmailModel {
     init(cloudRequest: PathwayIssuesModel.CloudRequest? = nil, environmentRequest: EnvironmentRequest? = nil) {
         self.cloudRequest = cloudRequest; self.environmentRequest = environmentRequest
     }
+    static let replicaKinds: Set<String> = ["capturedEmail", "emailTag", "trustedEmailSender"]
+
     func replaceReplica(_ changes: [String: [PathwaySyncChange]], companies: [PathwayCompany] = []) {
-        let included: Set<String> = ["capturedEmail", "emailTag", "trustedEmailSender"]
+        let included = Self.replicaKinds
         var nextVersions: [String: Int] = [:]
         for (companyID, entries) in changes {
             for change in entries where included.contains(change.entityKind) { nextVersions["\(companyID):\(change.entityKind):\(change.entityId)"] = change.version }

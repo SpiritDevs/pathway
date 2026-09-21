@@ -139,8 +139,10 @@ final class PathwayCloudModel {
     @ObservationIgnored private var bootstrapTaskIDs: [String: UUID] = [:]
     @ObservationIgnored private var drainTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var drainTaskIDs: [String: UUID] = [:]
-    @ObservationIgnored private var entitiesByCompany: [String: [PathwaySyncEntityKey: PathwaySyncChange]] = [:]
-    @ObservationIgnored private var decodedDiscovery: [String: [PathwaySyncEntityKey: PathwayDecodedDiscovery]] = [:]
+    @ObservationIgnored private var entitiesByCompany: [String: PathwayReplicaEntities] = [:]
+    @ObservationIgnored private var publicationTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingKinds: Set<String>?
+    @ObservationIgnored private var decodedDiscovery: [String: [String: [String: PathwayDecodedDiscovery]]] = [:]
     @ObservationIgnored private var discoveryThreads: [PathwayAgentThread] = []
     @ObservationIgnored private var cursorByCompany: [String: Int] = [:]
     @ObservationIgnored private var latestVersionByCompany: [String: Int] = [:]
@@ -189,11 +191,7 @@ final class PathwayCloudModel {
               lifecycleGeneration == generation, entitiesByCompany.isEmpty,
               !Task.isCancelled, let snapshot else { return }
         companies = snapshot.companies
-        entitiesByCompany = snapshot.entities.mapValues { changes in
-            Dictionary(uniqueKeysWithValues: changes.map {
-                (PathwaySyncEntityKey(kind: $0.entityKind, id: $0.entityId), $0)
-            })
-        }
+        entitiesByCompany = snapshot.entities.mapValues { PathwayReplicaEntities($0) }
         cachedAt = snapshot.savedAt
         cursorByCompany = [:]
         rebuildDiscoveryModels(persist: false)
@@ -201,10 +199,7 @@ final class PathwayCloudModel {
 
     func entities(kind: String, companyID: String) -> [JSONValue] {
         _ = replicaRevision
-        return (entitiesByCompany[companyID] ?? [:]).values.compactMap { change in
-            guard change.entityKind == kind, change.changeKind != "tombstone" else { return nil }
-            return change.payload
-        }
+        return entitiesByCompany[companyID]?.changes(ofKind: kind).compactMap(\.payload) ?? []
     }
 
     func browserPasswordRequest(_ operation: String, arguments: JSONValue) async throws -> JSONValue {
@@ -294,9 +289,7 @@ final class PathwayCloudModel {
     func installIssueSimulatorSnapshot(company: PathwayCompany, changes: [PathwaySyncChange], version: Int) {
         guard client == nil else { return }
         companies = [company]
-        entitiesByCompany = [company.id: Dictionary(uniqueKeysWithValues: changes.map {
-            (PathwaySyncEntityKey(kind: $0.entityKind, id: $0.entityId), $0)
-        })]
+        entitiesByCompany = [company.id: PathwayReplicaEntities(changes)]
         cursorByCompany = [company.id: version]
         rebuildDiscoveryModels()
         connectionState = .connected
@@ -437,6 +430,9 @@ final class PathwayCloudModel {
     }
 
     private func clearDiscoveryContent() {
+        publicationTask?.cancel()
+        publicationTask = nil
+        pendingKinds = nil
         cachedAt = nil
         companies = []
         environments = []
@@ -598,6 +594,7 @@ extension PathwayCloudModel {
         removeCompanies(notIn: unchangedMemberships)
         companies = newCompanies.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         removeCompanies(notIn: Set(newCompanies.map(\.id)))
+        publishReplica(changedKinds: ["membership"])
 
         if newCompanies.isEmpty {
             guard !isProvisioning else { return }
@@ -668,7 +665,7 @@ extension PathwayCloudModel {
         guard let client else { return }
         while true {
             var bootstrapCursor: String?
-            var snapshot: [PathwaySyncEntityKey: PathwaySyncChange] = [:]
+            var snapshot = PathwayReplicaEntities()
             var snapshotVersion: Int?
             var snapshotEpoch: Int?
             var restart = false
@@ -691,7 +688,7 @@ extension PathwayCloudModel {
                 }
                 snapshotEpoch = page.authorizationEpoch
                 snapshotVersion = page.version
-                apply(page.entities, to: &snapshot)
+                snapshot.apply(page.entities)
                 if page.isDone { break }
                 guard let next = page.cursor, next != bootstrapCursor else {
                     throw PathwayThreadConversationError.message("The workspace bootstrap did not advance.")
@@ -783,6 +780,7 @@ extension PathwayCloudModel {
 
     private func drainChanges(companyId: String, membershipID: String, generation: Int, taskID: UUID) async throws {
         guard let client else { return }
+        defer { flushReplicaPublication() }
         while let cursor = cursorByCompany[companyId], cursor < (latestVersionByCompany[companyId] ?? cursor) {
             try validateWork(companyId: companyId, membershipID: membershipID, generation: generation, taskID: taskID, bootstrap: false)
             let page = try await client.listChanges(companyId: companyId, cursor: cursor)
@@ -796,12 +794,12 @@ extension PathwayCloudModel {
             guard let nextCursor = page.cursor, nextCursor > cursor else {
                 throw PathwayThreadConversationError.message("The workspace change feed did not advance.")
             }
-            var entities = entitiesByCompany[companyId] ?? [:]
-            apply(page.changes ?? [], to: &entities)
-            entitiesByCompany[companyId] = entities
+            let changes = page.changes ?? []
+            let changedKinds = entitiesByCompany[companyId, default: PathwayReplicaEntities()].apply(changes)
+            updateDecodedDiscovery(changes, companyId: companyId)
             cursorByCompany[companyId] = nextCursor
             latestVersionByCompany[companyId] = max(latestVersionByCompany[companyId] ?? 0, page.latestVersion)
-            rebuildDiscoveryModels()
+            scheduleReplicaPublication(changedKinds: changedKinds)
             if page.hasMore != true, nextCursor >= page.latestVersion { break }
         }
     }
@@ -816,50 +814,72 @@ extension PathwayCloudModel {
     private func invalidateReplica(companyId: String) {
         drainTasks.removeValue(forKey: companyId)?.cancel()
         drainTaskIDs.removeValue(forKey: companyId)
-        entitiesByCompany[companyId] = [:]
+        entitiesByCompany[companyId] = PathwayReplicaEntities()
         cursorByCompany.removeValue(forKey: companyId)
         authorizationEpochByCompany.removeValue(forKey: companyId)
         rebuildDiscoveryModels()
     }
 
-    private func apply(
-        _ changes: [PathwaySyncChange],
-        to entities: inout [PathwaySyncEntityKey: PathwaySyncChange]
-    ) {
-        for change in changes {
-            let key = PathwaySyncEntityKey(kind: change.entityKind, id: change.entityId)
+    private static let discoveryKinds: Set<String> = ["environmentRegistration", "cloudProject", "environmentBinding", "agentThread"]
+
+    private func updateDecodedDiscovery(_ changes: [PathwaySyncChange], companyId: String) {
+        for change in changes where Self.discoveryKinds.contains(change.entityKind) {
             if change.changeKind == "tombstone" {
-                entities.removeValue(forKey: key)
-            } else {
-                entities[key] = change
+                decodedDiscovery[companyId]?[change.entityKind]?.removeValue(forKey: change.entityId)
+            } else if decodedDiscovery[companyId]?[change.entityKind]?[change.entityId]?.change != change {
+                var item = PathwayDiscoverySnapshot()
+                item.apply(change, companyId: companyId)
+                decodedDiscovery[companyId, default: [:]][change.entityKind, default: [:]][change.entityId] = PathwayDecodedDiscovery(change: change, snapshot: item)
             }
         }
     }
 
+    /// Full replacement is reserved for bootstrap, cache restore and authorization changes.
     private func rebuildDiscoveryModels(persist: Bool = true) {
-        var snapshot = PathwayDiscoverySnapshot()
-        var nextDecoded: [String: [PathwaySyncEntityKey: PathwayDecodedDiscovery]] = [:]
-        let discoveryKinds: Set<String> = ["environmentRegistration", "cloudProject", "environmentBinding", "agentThread"]
+        publicationTask?.cancel()
+        publicationTask = nil
+        pendingKinds = nil
+        decodedDiscovery = [:]
         for (companyId, entities) in entitiesByCompany {
-            var companyDecoded: [PathwaySyncEntityKey: PathwayDecodedDiscovery] = [:]
-            for (key, change) in entities where discoveryKinds.contains(change.entityKind) {
-                let decoded: PathwayDecodedDiscovery
-                if let cached = decodedDiscovery[companyId]?[key], cached.change == change {
-                    decoded = cached
-                } else {
-                    var item = PathwayDiscoverySnapshot()
-                    item.apply(change, companyId: companyId)
-                    decoded = PathwayDecodedDiscovery(change: change, snapshot: item)
-                }
-                companyDecoded[key] = decoded
-                snapshot.environments += decoded.snapshot.environments
-                snapshot.projects += decoded.snapshot.projects
-                snapshot.bindings += decoded.snapshot.bindings
-                snapshot.threads += decoded.snapshot.threads
-            }
-            nextDecoded[companyId] = companyDecoded
+            updateDecodedDiscovery(entities.changes(matching: Self.discoveryKinds.contains), companyId: companyId)
         }
-        decodedDiscovery = nextDecoded
+        publishReplica(persist: persist)
+    }
+
+    /// Coalesce pages available in the same actor turn; publish while awaiting the next network page.
+    private func scheduleReplicaPublication(changedKinds: Set<String>) {
+        pendingKinds = (pendingKinds ?? []).union(changedKinds)
+        guard publicationTask == nil else { return }
+        publicationTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            self?.flushReplicaPublication()
+        }
+    }
+
+    private func flushReplicaPublication() {
+        publicationTask?.cancel()
+        publicationTask = nil
+        guard let changedKinds = pendingKinds else { return }
+        pendingKinds = nil
+        publishReplica(changedKinds: changedKinds)
+    }
+
+    private func publishReplica(changedKinds: Set<String>? = nil, persist: Bool = true) {
+        func includes(_ kind: String) -> Bool { changedKinds?.contains(kind) ?? true }
+        var snapshot = PathwayDiscoverySnapshot()
+        if changedKinds == nil || !Self.discoveryKinds.isDisjoint(with: changedKinds ?? []) {
+            for company in decodedDiscovery.values {
+                for (kind, entries) in company where includes(kind) {
+                    for decoded in entries.values {
+                        snapshot.environments += decoded.snapshot.environments
+                        snapshot.projects += decoded.snapshot.projects
+                        snapshot.bindings += decoded.snapshot.bindings
+                        snapshot.threads += decoded.snapshot.threads
+                    }
+                }
+            }
+        }
 
         let nextEnvironments = snapshot.environments.sorted {
             $0.environment.label.localizedStandardCompare($1.environment.label) == .orderedAscending
@@ -869,10 +889,10 @@ extension PathwayCloudModel {
         }
         let nextBindings = snapshot.bindings.sorted { $0.id < $1.id }
         let nextThreads = snapshot.threads.sorted { $0.id < $1.id }
-        if environments != nextEnvironments { environments = nextEnvironments }
-        if projects != nextProjects { projects = nextProjects }
-        if environmentBindings != nextBindings { environmentBindings = nextBindings }
-        if discoveryThreads != nextThreads {
+        if includes("environmentRegistration"), environments != nextEnvironments { environments = nextEnvironments }
+        if includes("cloudProject"), projects != nextProjects { projects = nextProjects }
+        if includes("environmentBinding"), environmentBindings != nextBindings { environmentBindings = nextBindings }
+        if includes("agentThread"), discoveryThreads != nextThreads {
             let previous = Dictionary(uniqueKeysWithValues: discoveryThreads.map { ($0.id, $0) })
             for thread in nextThreads {
                 if let old = previous[thread.id], PathwayThreadChangeRequestSource(old.shell) != PathwayThreadChangeRequestSource(thread.shell) {
@@ -884,14 +904,17 @@ extension PathwayCloudModel {
             rebuildThreadPartition()
             threadQueue.retry()
         }
-        let replica = entitiesByCompany.mapValues { Array($0.values) }
-        issues.replaceReplica(
-            replica,
-            companies: companies,
-            versions: cursorByCompany
-        )
-        calendar.replaceReplica(replica, companies: companies)
-        email.replaceReplica(replica, companies: companies)
+        issues.updateReplicaContext(companies: companies, versions: cursorByCompany, visibleCompanyIDs: Set(entitiesByCompany.keys))
+        if changedKinds.map({ $0.contains(where: PathwayIssuesModel.includesEntityKind) }) ?? true {
+            issues.replaceReplica(entitiesByCompany.mapValues { $0.changes(matching: PathwayIssuesModel.includesEntityKind) },
+                                  companies: companies, versions: cursorByCompany)
+        }
+        if changedKinds.map({ !PathwayCalendarModel.replicaKinds.isDisjoint(with: $0) }) ?? true {
+            calendar.replaceReplica(entitiesByCompany.mapValues { $0.changes(matching: PathwayCalendarModel.replicaKinds.contains) }, companies: companies)
+        }
+        if changedKinds.map({ !PathwayEmailModel.replicaKinds.isDisjoint(with: $0) }) ?? true {
+            email.replaceReplica(entitiesByCompany.mapValues { $0.changes(matching: PathwayEmailModel.replicaKinds.contains) }, companies: companies)
+        }
         replicaRevision += 1
         if persist { persistDiscovery() }
     }
@@ -906,7 +929,7 @@ extension PathwayCloudModel {
             let generation = lifecycleGeneration
             let directory = storageDirectory
             let snapshot = PathwayDiscoveryCache.Snapshot(companies: companies,
-                entities: entitiesByCompany.mapValues { Array($0.values) }, versions: cursorByCompany, savedAt: date)
+                entities: entitiesByCompany.mapValues(\.values), versions: cursorByCompany, savedAt: date)
             await cache.save(snapshot, revision: DispatchTime.now().uptimeNanoseconds)
             if storageDirectory == directory, lifecycleGeneration == generation, !Task.isCancelled { cachedAt = date }
         }
@@ -1001,6 +1024,7 @@ extension PathwayCloudModel {
     }
 
     private func cancelWork() {
+        flushReplicaPublication()
         lifecycleGeneration += 1
         cacheTask?.cancel()
         cacheTask = nil
@@ -1018,11 +1042,6 @@ extension PathwayCloudModel {
         drainTaskIDs = [:]
         isProvisioning = false
     }
-}
-
-private struct PathwaySyncEntityKey: Hashable {
-    let kind: String
-    let id: String
 }
 
 private struct PathwayAgentThreadPayload: Decodable {

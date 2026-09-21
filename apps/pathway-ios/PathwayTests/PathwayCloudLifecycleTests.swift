@@ -270,6 +270,41 @@ import Testing
         await model.stop()
     }
 
+    @Test func emailDeltasAndTombstonesPreserveUnchangedFeatureProjections() async throws {
+        let client = ControlledCloudClient()
+        let model = PathwayCloudModel(client: client)
+        await model.received(companies: [company()])
+        var bootstrap = client.bootstrapEvents.makeAsyncIterator()
+        var drains = client.changeEvents.makeAsyncIterator()
+        let issue = PathwaySyncChange(version: 10, entityKind: "issue", entityId: "task", changeKind: "upsert",
+            payload: .object(["id": .string("task"), "title": .string("Unchanged task")]))
+        let email = PathwaySyncChange(version: 10, entityKind: "capturedEmail", entityId: "mail", changeKind: "upsert",
+            payload: .object(["id": .string("mail"), "message": .object(["id": .string("mail"), "isRead": .bool(false)])]))
+        try #require(await bootstrap.next()).resume(page(epoch: 1, entities: [issue, email]))
+        await observed { model.email.messages.count == 1 }
+        #expect(model.issues.records.first?.title == "Unchanged task")
+        model.received(head: .init(version: 12, authorizationEpoch: 1), companyId: "company")
+        try #require(await drains.next()).resume(.init(tag: "Changes", changes: [
+            .init(version: 11, entityKind: "capturedEmail", entityId: "mail", changeKind: "upsert",
+                  payload: .object(["id": .string("mail"), "message": .object(["id": .string("mail"), "isRead": .bool(true)])]))
+        ], cursor: 11, hasMore: true, latestVersion: 12, authorizationEpoch: 1))
+        // Publication must progress even while the next network page is suspended.
+        let lastPage = try #require(await drains.next())
+        await observed { model.email.messages.first?.isRead == true }
+        #expect(model.issues.records.first?.title == "Unchanged task")
+        lastPage.resume(.init(tag: "Changes", changes: [
+            .init(version: 12, entityKind: "capturedEmail", entityId: "mail", changeKind: "tombstone", payload: nil)
+        ], cursor: 12, hasMore: false, latestVersion: 12, authorizationEpoch: 1))
+        await observed { model.email.messages.isEmpty }
+        #expect(model.issues.records.first?.title == "Unchanged task")
+        model.received(head: .init(version: 12, authorizationEpoch: 2), companyId: "company")
+        #expect(model.issues.records.isEmpty)
+        let revokedBootstrap = try #require(await bootstrap.next())
+        revokedBootstrap.resume(page(epoch: 2, version: 12, entities: []))
+        await observed { model.connectionState == .connected }
+        await model.stop()
+    }
+
     private func company(membership: String = "member", name: String = "Workspace") -> PathwayCompany {
         .init(id: "company", membershipId: membership, name: name, workspaceKind: "personal", issueKeyPrefix: "P", lifecycleState: "active", syncVersion: 10, isOwner: true)
     }
