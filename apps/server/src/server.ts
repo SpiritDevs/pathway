@@ -1,3 +1,5 @@
+import * as DeviceService from "./device/DeviceService.ts";
+import { deviceHubProxyRouteLayer } from "./device/DeviceHubProxy.ts";
 import { commandReadinessLayer, rendererShellReadinessRouteLayer } from "./httpStartupReadiness.ts";
 import * as StorageManagement from "./storage/StorageService.ts";
 import { EnvironmentHttpApi } from "@spiritdevs/contracts";
@@ -431,6 +433,12 @@ const PreviewLayerLive = Layer.empty.pipe(
   Layer.provideMerge(PortScannerLayerLive),
 );
 
+const DeviceLayerLive = DeviceService.layer.pipe(
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.provide(ProcessRunner.layer),
+  Layer.provide(NetService.layer),
+);
+
 const WorkspaceEntriesLayerLive = WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer));
 
 const WorkspaceFileSystemLayerLive = WorkspaceFileSystem.layer.pipe(
@@ -497,7 +505,7 @@ const RuntimeCoreDependenciesBaseLive = AgentAwarenessRelay.layer.pipe(
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
-  Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
+  Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, DeviceLayerLive)),
   // The poller merges the tracker out, so this one entry is both the service and its loops.
   Layer.provideMerge(SlackIntakePollerLayerLive),
   Layer.provideMerge(Keybindings.layer),
@@ -627,6 +635,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       // #endregion DEBUG
       assetRouteLayer,
       attachmentUploadRouteLayer,
+      deviceHubProxyRouteLayer,
       websocketRpcRouteLayer,
     ),
     // The MCP session registry is provided globally (shared with V2 provider

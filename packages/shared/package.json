@@ -254,6 +254,10 @@
     "./mailSlug": {
       "types": "./src/mailSlug.ts",
       "import": "./src/mailSlug.ts"
+    },
+    "./nodeRuntime": {
+      "types": "./src/nodeRuntime.ts",
+      "import": "./src/nodeRuntime.ts"
     }
   },
   "scripts": {

@@ -677,6 +677,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/integrations",
   },
   {
+    id: "device-support",
+    title: "Device support",
+    to: "/settings/integrations",
+  },
+  { id: "agent-device-access", title: "Agent device access", to: "/settings/integrations" },
+  { id: "device-hosts", title: "Remote device hosts", to: "/settings/integrations" },
+  {
     id: "slack-bot-token",
     title: "Slack bot token",
     to: "/settings/integrations",

@@ -1,3 +1,4 @@
+import { DeviceSettings } from "../DeviceSettings";
 import {
   CloudProjectSyncEntity,
   EnvironmentBindingEntity,
@@ -2069,6 +2070,7 @@ export function IntegrationsSettingsPanel() {
   if (filteredCompanyId !== null && !readGate.enabled)
     return (
       <SettingsPageContainer>
+        <DeviceSettings />
         <CompanySettingsEmptyState
           title="Integrations are restricted"
           description={
@@ -2096,6 +2098,7 @@ export function IntegrationsSettingsPanel() {
     visibleJobs.filter((job) => job.state === "blocked" || job.state === "failed").length;
   return (
     <SettingsPageContainer>
+      <DeviceSettings />
       <SettingsSection {...searchableSetting("issue-intake")}>
         <div className="mb-3 flex items-center justify-between">
           <div>
