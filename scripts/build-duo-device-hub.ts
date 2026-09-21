@@ -1,9 +1,12 @@
 /** Build the audited Duo prototype outside the checkout. Usage: node scripts/build-duo-device-hub.ts /absolute/output-directory */
+// @effect-diagnostics nodeBuiltinImport:off -- Standalone build entry point uses synchronous filesystem and subprocess steps.
 import * as NodeCrypto from "node:crypto";
 import * as NodeURL from "node:url";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
+import * as Console from "effect/Console";
+import * as Effect from "effect/Effect";
 
 const commit = "bb265b11c13b395e5302d121458e2d42224a2e9f";
 const hubVersion = "0.9.0";
@@ -85,6 +88,8 @@ NodeFS.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
 const archive = JSON.parse(
   run("npm", ["pack", hub, "--pack-destination", output, "--json"], output, true),
 )[0];
-console.log(
-  `\nPinned build: ${NodePath.join(output, archive.filename)}\nStart Pathway with PATHWAY_DEVICE_HUB_ARCHIVE set to this absolute path. SSH device hosts continue using the official release.`,
+Effect.runSync(
+  Console.log(
+    `\nPinned build: ${NodePath.join(output, archive.filename)}\nStart Pathway with PATHWAY_DEVICE_HUB_ARCHIVE set to this absolute path. SSH device hosts continue using the official release.`,
+  ),
 );
