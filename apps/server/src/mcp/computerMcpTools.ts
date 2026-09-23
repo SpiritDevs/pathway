@@ -28,6 +28,7 @@ import * as Schema from "effect/Schema";
 import {
   ComputerApprovalGate,
   ComputerApprovalPublishError,
+  computerApprovalPolicy,
 } from "../computer/ComputerApprovalGate.ts";
 import { ComputerService } from "../computer/Services/ComputerService.ts";
 import { computerSpaceDesignationForMessages } from "../computer/computerSpaceDesignation.ts";
@@ -234,6 +235,17 @@ export const makeComputerMcpTools = Effect.gen(function* () {
     return !apps.has(app);
   };
 
+  /** The autonomy the caller acts under now: the environment ceiling bounds the thread's own mode (ADR 0043). */
+  const callerAutonomy = (threadId: string) =>
+    Effect.gen(function* () {
+      const projection = yield* projectionOf(threadId);
+      const { computer: policy } = yield* settings.getSettings.pipe(Effect.orDie);
+      return resolveComputerAutonomy(
+        policy.autonomy,
+        Option.isNone(projection) ? null : projection.value.thread.runtimeMode,
+      );
+    });
+
   const authorizeAction: ComputerAuthorizeAction = (name, args, context) =>
     Effect.gen(function* () {
       yield* context
@@ -243,13 +255,7 @@ export const makeComputerMcpTools = Effect.gen(function* () {
             (error) => new ComputerApprovalPublishError({ message: error.message, cause: error }),
           ),
         );
-      const projection = yield* projectionOf(context.callerThreadId);
-      const { computer: policy } = yield* settings.getSettings.pipe(Effect.orDie);
-      // The environment ceiling bounds the thread's own mode; the stricter wins.
-      const autonomy = resolveComputerAutonomy(
-        policy.autonomy,
-        Option.isNone(projection) ? null : projection.value.thread.runtimeMode,
-      );
+      const autonomy = yield* callerAutonomy(context.callerThreadId);
       const turnId = context.callerTurnId ?? undefined;
       const detail = computerApprovalDetail(args);
       const call = {
@@ -279,15 +285,18 @@ export const makeComputerMcpTools = Effect.gen(function* () {
       return appOutcome;
     });
 
+  // Full access allows foreground outright; below it only the task's own request does.
   // Both toolkits read a resolver defect as "not asked"; interruption stays interruption.
   const resolveForegroundAuthorization = (context: ToolContext) =>
-    messagesOf(context).pipe(
-      Effect.map((messages) =>
-        computerForegroundAuthorizationForMessages(messages, {
-          knownAppNames: manager.observedAppNames(),
-        }),
-      ),
-    );
+    Effect.gen(function* () {
+      const autonomy = yield* callerAutonomy(context.callerThreadId);
+      if (computerApprovalPolicy(autonomy).foreground === "allowed") {
+        return { userRequestedVisibleUse: true };
+      }
+      return computerForegroundAuthorizationForMessages(yield* messagesOf(context), {
+        knownAppNames: manager.observedAppNames(),
+      });
+    });
 
   const resolveSpaceDesignation = (context: ToolContext) =>
     messagesOf(context).pipe(Effect.map(computerSpaceDesignationForMessages));

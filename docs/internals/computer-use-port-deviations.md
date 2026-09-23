@@ -177,6 +177,7 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - `authorizeAction` returns `approved | denied | pending`. A pending approval is a non-error `{status: "approval_pending"}` result that writes no audit or progress entry, `approval_queue_full` is retryable, and a card that cannot be posted reads as `approval_unavailable`.
 - `authorizeApp` runs only for the second and later distinct apps in a turn, because the task consent already covers the first app.
 - Autonomy is `resolveComputerAutonomy(environment ceiling, thread runtime mode)`, and the stricter one wins. Scheduled and subagent turns are not detected, so they also use the thread's mode.
+- Full-access autonomy authorizes foreground use without a visible-use request in the task, per ADR 0043's foreground column. Synara always required the request. The user-interaction window and the other raise guards still apply.
 - `caller_session_inactive` is not checked. A turn check that is re-read after every wait covers the same stale-authority cases.
 - Setup-required and capability-denied notices are `dynamic_tool` turn items (`computer_setup_required`, `computer_capability_denied`), posted at most once per turn and reason. The disclosure text appears only in the agent's result.
 - Visible-use message sources map from Pathway's `createdBy`: user, agent, and everything else as automation. Async user input and handoff imports have no source of their own.
