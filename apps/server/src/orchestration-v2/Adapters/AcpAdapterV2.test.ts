@@ -108,6 +108,37 @@ function permissionRequest(
 }
 
 describe("acpPermissionDisposition", () => {
+  it("allows a Pathway Computer call once on an admitted turn, before any approval policy", () => {
+    const admitted = ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      cwd: null,
+      enableComputerControl: true,
+    });
+    const computerCall = (title: string): EffectAcpSchema.RequestPermissionRequest => ({
+      ...permissionRequest("other"),
+      toolCall: { ...permissionRequest("other").toolCall, title },
+    });
+    assert.equal(
+      acpPermissionDisposition(admitted, computerCall("mcp__pathway__computer_click")),
+      "allow-once",
+    );
+    assert.equal(acpPermissionDisposition(admitted, computerCall("computer_click")), "ask");
+    assert.equal(
+      acpPermissionDisposition(
+        { ...admitted, enableComputerControl: false },
+        computerCall("mcp__pathway__computer_click"),
+      ),
+      "ask",
+    );
+    assert.equal(
+      acpPermissionDisposition(
+        { ...admitted, interactionMode: "plan" },
+        computerCall("mcp__pathway__computer_click"),
+      ),
+      "ask",
+    );
+  });
   it("allows edits in the retained conversation folder while preserving other directory restrictions", () => {
     const conversationPath = NodePath.resolve(process.cwd(), "retained-conversation-folder");
     const retained = { ...policy, additionalDirectories: [conversationPath] };
