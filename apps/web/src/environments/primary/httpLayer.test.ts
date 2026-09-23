@@ -65,4 +65,28 @@ describe.sequential("primary environment HTTP layer", () => {
       expect(request.headers.get("authorization")).toBe("Bearer desktop-bearer-token");
     }).pipe(Effect.provide(makePrimaryEnvironmentHttpLayer()));
   });
+
+  it.effect("reports a failed desktop bearer mint as a retryable transport error", () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: { origin: "pathway://app" },
+        desktopBridge: {
+          getLocalEnvironmentBootstraps: () => [],
+          getLocalEnvironmentBearerToken: vi
+            .fn()
+            .mockRejectedValue(new Error("Local backend is not listening yet.")),
+        } as unknown as DesktopBridge,
+      },
+    });
+
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(HttpClient.get("http://127.0.0.1:3773/api/auth/session"));
+
+      expect(error.reason._tag).toBe("TransportError");
+      expect(fetchMock).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(makePrimaryEnvironmentHttpLayer()));
+  });
 });
