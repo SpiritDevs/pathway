@@ -302,12 +302,14 @@ const fixture = (options?: FixtureOptions) =>
         hostPlatform: options?.hostPlatform ?? "darwin",
       };
     };
-    const request = vi.fn(async (endpoint: string, body: unknown) => ({
-      ...((await respond(endpoint, body as HostCall)) as Record<string, unknown>),
-      ...(options?.nativeRevision === null
-        ? {}
-        : { driverNativeRevision: options?.nativeRevision ?? 34 }),
-    }));
+    const request = vi.fn(
+      async (endpoint: string, body: unknown, _options?: Parameters<CuaRequest>[2]) => ({
+        ...((await respond(endpoint, body as HostCall)) as Record<string, unknown>),
+        ...(options?.nativeRevision === null
+          ? {}
+          : { driverNativeRevision: options?.nativeRevision ?? 34 }),
+      }),
+    );
     const backend = yield* makeCuaComputerBackend({
       endpoint: options?.endpoint === null ? undefined : (options?.endpoint ?? "/fixture-only"),
       request: request as CuaRequest,
@@ -2314,7 +2316,7 @@ describe("Cua native boundary", () => {
         code: "computer_input_paused",
         inputPause: { windowId: "cua:4294967296:21" },
       });
-      expect(error.inputPause).not.toHaveProperty("pid");
+      expect(error._tag === "ComputerBackendError" && error.inputPause).not.toHaveProperty("pid");
     }),
   );
 
