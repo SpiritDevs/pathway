@@ -54,9 +54,11 @@ function makeEnvironmentLayer(
     readonly devServerUrl?: string;
     readonly platform?: NodeJS.Platform;
     readonly resourcesPath?: string;
+    readonly flavor?: DesktopEnvironment.MakeDesktopEnvironmentInput["flavor"];
   },
 ) {
   return DesktopEnvironment.layer({
+    flavor: options?.flavor,
     dirname: options?.dirname ?? "/repo/apps/desktop/src",
     homeDirectory: baseDir,
     platform: options?.platform ?? "darwin",
@@ -99,6 +101,7 @@ const withHarness = <A, E, R>(
     | FileSystem.FileSystem
     | DesktopBackendConfiguration.DesktopBackendConfiguration
   >,
+  environmentOptions?: Parameters<typeof makeEnvironmentLayer>[1],
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -112,7 +115,7 @@ const withHarness = <A, E, R>(
           Layer.provideMerge(serverExposureLayer),
           Layer.provideMerge(DesktopAppSettings.layerTest()),
           Layer.provideMerge(DesktopWslEnvironment.layerTest()),
-          Layer.provideMerge(makeEnvironmentLayer(baseDir)),
+          Layer.provideMerge(makeEnvironmentLayer(baseDir, environmentOptions)),
         ),
       ),
     );
@@ -137,6 +140,7 @@ describe("DesktopBackendConfiguration", () => {
         assert.isUndefined(first.env.PATHWAY_PORT);
         assert.isUndefined(first.env.PATHWAY_MODE);
         assert.isUndefined(first.env.PATHWAY_DESKTOP_LAN_HOST);
+        assert.notProperty(first.env, "PATHWAY_HOME");
 
         assert.equal(first.bootstrap.mode, "desktop");
         assert.equal(first.bootstrap.noBrowser, true);
@@ -153,6 +157,22 @@ describe("DesktopBackendConfiguration", () => {
           first.bootstrap.desktopEnvironmentId,
         );
       }),
+    ),
+  );
+
+  it.effect("resolvePrimary pins the cua flavor's home over an inherited PATHWAY_HOME", () =>
+    withHarness(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+
+        const primary = yield* configuration.resolvePrimary;
+
+        assert.equal(environment.flavor, "cua");
+        assert.equal(primary.env.PATHWAY_HOME, environment.baseDir);
+        assert.equal(primary.bootstrap.pathwayHome, environment.baseDir);
+      }),
+      { flavor: "cua" },
     ),
   );
 
