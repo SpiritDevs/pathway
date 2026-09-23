@@ -15,6 +15,7 @@ import * as Fiber from "effect/Fiber";
 import * as FiberSet from "effect/FiberSet";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -479,7 +480,10 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
   const platform = yield* HostProcessPlatform;
   const clock = yield* Clock.Clock;
   const runFork = yield* FiberSet.makeRuntime<ChildProcessSpawner.ChildProcessSpawner>();
-  const hostScope = yield* Effect.scope;
+  // Forked before the dispose finalizer is added, so closing the host scope
+  // disposes the host (cancel_input, held-input release) before it kills the
+  // driver processes spawned here.
+  const processScope = yield* Scope.fork(yield* Effect.scope);
   const linux = platform === "linux" ? options.linuxAdmission : undefined;
   const now = () => clock.currentTimeMillisUnsafe();
   const isoNow = () => DateTime.formatIso(DateTime.makeUnsafe(now()));
@@ -1218,7 +1222,7 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
         // fact; payloads may be private, so only lines are kept, on exit.
         const stderrTail: string[] = [];
         let spawned: Generation | undefined;
-        const child = yield* spawnHelper(hostScope, {
+        const child = yield* spawnHelper(processScope, {
           command: options.binaryPath,
           args: [
             "serve",
