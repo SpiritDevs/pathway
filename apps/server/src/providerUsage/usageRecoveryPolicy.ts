@@ -50,6 +50,42 @@ export function recoveryRetryAt(
   return DateTime.formatIso(DateTime.makeUnsafe(Math.max(now + RECOVERY_DELAY_MS, ...reported)));
 }
 
+/** When a child's usage-limit failure happened; later bookkeeping can bump `updatedAt`. */
+export function childFailedAt(task: OrchestrationV2Subagent) {
+  return DateTime.toEpochMillis(task.completedAt ?? task.updatedAt);
+}
+
+/**
+ * Delegated tasks track only their spawn run. When a child thread is resumed in place,
+ * its newest run is the child's real state, so a stale failure no longer blocks recovery.
+ */
+export function resumedChildTask(
+  task: OrchestrationV2Subagent,
+  child: OrchestrationV2ThreadProjection,
+): OrchestrationV2Subagent {
+  const run = recoveryLatestRun(child);
+  if (
+    !run ||
+    task.completedAt === null ||
+    DateTime.toEpochMillis(run.requestedAt) <= DateTime.toEpochMillis(task.completedAt)
+  )
+    return task;
+  const error = child.turnItems.findLast((item) => item.type === "error" && item.runId === run.id);
+  const working = runIsWorking(run);
+  return {
+    ...task,
+    status:
+      run.status === "completed" || run.status === "failed" || run.status === "interrupted"
+        ? run.status
+        : working
+          ? "running"
+          : "cancelled",
+    result: error?.type === "error" ? error.failure.message : null,
+    completedAt: working ? null : run.completedAt,
+    updatedAt: run.completedAt ?? run.requestedAt,
+  };
+}
+
 export type RecoveryChild = {
   readonly ownerThreadId: ThreadId;
   readonly task: OrchestrationV2Subagent;

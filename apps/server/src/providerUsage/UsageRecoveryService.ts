@@ -24,12 +24,14 @@ import { forkParked } from "../serverActivation.ts";
 import { parseUsageLimitResetAt } from "@spiritdevs/shared/usageLimitRecovery";
 import {
   canResumeUsageRecovery,
+  childFailedAt,
   isUsageLimitText,
   RECOVERY_MAX_ATTEMPTS,
   recoveryLatestRun,
   recoveryMarker,
   recoveryPrompt,
   recoveryRetryAt,
+  resumedChildTask,
   runIsWorking,
   usageFailureForRun,
   type RecoveryChild,
@@ -158,7 +160,7 @@ export const layer = Layer.effect(
               : []),
             ...blocked.map(({ task }) => ({
               text: task.result!,
-              at: DateTime.toEpochMillis(task.updatedAt),
+              at: childFailedAt(task),
             })),
           ];
           const now = DateTime.toEpochMillis(yield* DateTime.now);
@@ -201,6 +203,7 @@ export const layer = Layer.effect(
           );
           result[parentIndex] = {
             ...entry,
+            task: resumedChildTask(entry.task, projection),
             nativeThreadId: providerThread?.nativeThreadRef?.nativeId ?? null,
           };
         }
@@ -407,7 +410,7 @@ export const layer = Layer.effect(
             .filter(({ task }) => isUsageLimitText(task.result ?? ""))
             .map(({ task }) => ({
               text: task.result!,
-              at: DateTime.toEpochMillis(task.updatedAt),
+              at: childFailedAt(task),
             })),
         ];
         yield* save({
