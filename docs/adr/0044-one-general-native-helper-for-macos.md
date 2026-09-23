@@ -1,6 +1,6 @@
 # One general native helper for macOS
 
-Synara's Swift helper ("AppSnap") is ported as Pathway's general macOS native helper, in `apps/desktop/native/pathway-helper/`. It is one binary with one line-delimited JSON protocol over stdio, one parent-exit monitor, and one build and signing step. Electron starts it in named modes.
+Synara's Swift helper ("AppSnap") is ported as Pathway's general macOS native helper, in `native/pathway-helper/` (beside the other native hosts). It is one binary with one line-delimited JSON protocol over stdio, one parent-exit monitor, and one build and signing step. Electron starts it in named modes.
 
 Its first modes are the six that Computer Use needs:
 
