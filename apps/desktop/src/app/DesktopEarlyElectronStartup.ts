@@ -100,8 +100,6 @@ function resolveEarlyDesktopSettingsPath(input: {
     flavor: input.flavor,
   });
   const pathwayHome = resolveFlavorPathwayHome({
-    homeDirectory: input.homeDirectory,
-    joinPath: input.joinPath,
     pathwayHome: Option.fromUndefinedOr(input.env.PATHWAY_HOME),
     isolated: identity.flavor === "cua",
   });
