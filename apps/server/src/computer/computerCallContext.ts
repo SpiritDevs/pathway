@@ -107,7 +107,7 @@ export function cuaCaptureReuseEnabled(): boolean {
 
 /**
  * `PATHWAY_CUA_PREVIEW_STILL_MS` overrides the pane's still-capture cadence
- * (default 2000 ms). Unset or unparsable means the compiled-in default; the
+ * (the backend default is 1000 ms). Unset or unparsable means the compiled-in default; the
  * caller clamps the resolved value to the publisher's floor.
  */
 export function cuaPreviewStillMsOverride(): number | undefined {
