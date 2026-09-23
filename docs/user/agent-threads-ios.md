@@ -84,7 +84,7 @@ If an upload fails while sending or queuing a message, the alert shows the failu
 Your text and attachments stay in the composer so you can retry.
 
 Queued threads have their own actions: swipe left or long-press to **Cancel** pending work.
-Canceled entries offer **Remove from list**, which remembers your choice on this device.
+Canceled entries offer **Remove from list**, which deletes their saved messages from every device.
 If the entry is retried or changes elsewhere, it appears again. These actions are also
 available in the queued thread’s menu, even if its environment cannot be opened.
 

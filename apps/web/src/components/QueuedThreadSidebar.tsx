@@ -5,6 +5,8 @@ import {
   threadQueueDestinationsAtom,
   isCompletedQueueEntry,
 } from "../cloud/threadQueueState";
+import { useDiscardQueuedThread } from "../cloud/threadQueue";
+import { readLocalApi } from "../localApi";
 import { useThreadRefs } from "../state/entities";
 
 export function QueuedThreadSidebar(props: {
@@ -14,6 +16,7 @@ export function QueuedThreadSidebar(props: {
   const entries = useAtomValue(threadQueueEntriesAtom);
   const refs = useThreadRefs();
   const destinations = useAtomValue(threadQueueDestinationsAtom);
+  const discard = useDiscardQueuedThread();
   const existing = new Set(refs.map((ref) => `${ref.environmentId}:${ref.threadId}`));
   const visible = entries.filter(
     (row) =>
@@ -50,6 +53,17 @@ export function QueuedThreadSidebar(props: {
               activeProps={{ className: "bg-sidebar-row-active" }}
               title={environment?.label}
               className="block rounded-md px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)] hover:bg-sidebar-row-hover"
+              onContextMenu={(event) => {
+                const api = readLocalApi();
+                if (row.state !== "canceled" || row.waitingToSync || !api) return;
+                event.preventDefault();
+                void api.contextMenu
+                  .show([{ id: "delete", label: "Delete", destructive: true }], {
+                    x: event.clientX,
+                    y: event.clientY,
+                  })
+                  .then((clicked) => (clicked === "delete" ? discard(row) : undefined));
+              }}
             >
               <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                 <span className="truncate">
