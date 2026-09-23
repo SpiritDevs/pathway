@@ -139,27 +139,23 @@ it.layer(NodeServices.layer)("computer_browser_* gateway tools", (it) => {
     ),
   );
 
-  it.effect(
-    "registers the whole family on the computer:control capability with active-turn dispatch",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { tools } = yield* setup();
-          expect(tools.map((tool) => tool.definition.name)).toEqual([
-            ...COMPUTER_BROWSER_TOOL_NAMES,
-          ]);
-          for (const tool of tools) {
-            expect(tool.requiredCapability).toBe("computer");
-            expect(tool.requiresActiveTurn).toBe(true);
-          }
-          const state = tools.find((tool) => tool.definition.name === "computer_browser_state");
-          expect(state?.definition.annotations?.readOnlyHint).toBe(true);
-          for (const tool of tools) {
-            if (tool === state) continue;
-            expect(tool.definition.annotations?.readOnlyHint).toBe(false);
-          }
-        }),
-      ),
+  it.effect("registers the whole family on the computer capability with active-turn dispatch", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { tools } = yield* setup();
+        expect(tools.map((tool) => tool.definition.name)).toEqual([...COMPUTER_BROWSER_TOOL_NAMES]);
+        for (const tool of tools) {
+          expect(tool.requiredCapability).toBe("computer");
+          expect(tool.requiresActiveTurn).toBe(true);
+        }
+        const state = tools.find((tool) => tool.definition.name === "computer_browser_state");
+        expect(state?.definition.annotations?.readOnlyHint).toBe(true);
+        for (const tool of tools) {
+          if (tool === state) continue;
+          expect(tool.definition.annotations?.readOnlyHint).toBe(false);
+        }
+      }),
+    ),
   );
 
   it.effect(
