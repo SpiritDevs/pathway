@@ -25,3 +25,11 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - The OAuth token endpoint now derives its allowed scopes from `AuthEnvironmentScope` instead of a hardcoded list. Without this, `computer:operate` would have been rejected with `invalid_scope`.
 - `computer:operate` is optional during token exchange. The server drops it when the pairing grant lacks it, rather than failing with `scope_not_granted`, so pairings from before the upgrade, or created without "Use Computer", still redeem. Those sessions cannot start Computer tasks under the `scoped` policy.
 - Servers advertise the `computerOperateScope` descriptor capability. Clients request `computer:operate` only when it is advertised (`requestableEnvironmentScopes`), because older servers reject the whole token request with `invalid_scope`.
+
+## P3 desktop host
+
+- The desktop Computer modules live in `apps/desktop/src/computer/` with Pathway's PascalCase file names (`CuaDriverHost.ts`, not `cuaDriverHost.ts`). This follows the desktop app's layout.
+- The Cua runtime directories, their ownership marker and its schema are `pathway-cua-XXXXXX`, `.pathway-cua-runtime.json` and `pathway-cua-runtime`, not `synara-cua-*`. This is a product rename. Runtime directories left behind by Synara are not swept.
+- `markCuaRuntimeDirectory` and `sweepOwnedCuaRuntimeDirectories` are Effects that read time from `Clock`, and the marker is encoded and decoded with Schema. The ownership checks are unchanged. The sweep's `now` option is dropped, because tests control time through `Clock`.
+- `clearStaleCuaHostSocket` reads the platform from `HostProcessPlatform` and takes its filesystem and socket calls as an injectable `CuaHostSocketIo`. Synara's tests used `vi.mock` of `node:fs/promises` and `node:net` for the same seams. The 1s probe timeout runs on the Effect clock.
+- `clearStaleCuaHostSocket` fails with a typed `CuaHostSocketError` (reason `live-listener | inconclusive | changed | non-socket | foreign`), or with `CuaHostSocketIoError` carrying the original Node error. Synara threw plain `Error`s. The messages are unchanged.
