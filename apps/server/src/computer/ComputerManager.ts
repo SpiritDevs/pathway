@@ -419,14 +419,16 @@ export class ComputerManager {
     return Effect.gen(function* () {
       const path = yield* Path.Path;
       const clock = yield* Clock.Clock;
-      const runFork = yield* FiberSet.makeRuntime<never, unknown, unknown>();
-      const events = yield* PubSub.unbounded<ComputerEvent>();
-      const controlState = yield* makeComputerControlState(options.stateDir);
+      // Opened before the fiber set so it closes after it: operation fibers
+      // unwinding at shutdown can still record what they did.
       const auditLog = yield* makeComputerAuditLog(
         options.stateDir === undefined
           ? undefined
           : path.join(options.stateDir, COMPUTER_AUDIT_LOG_FILE),
       );
+      const runFork = yield* FiberSet.makeRuntime<never, unknown, unknown>();
+      const events = yield* PubSub.unbounded<ComputerEvent>();
+      const controlState = yield* makeComputerControlState(options.stateDir);
       const scrollGearingFile = yield* ScrollGearingFile.load(options.stateDir);
       let manager: ComputerManager | undefined;
       const cursorActivity = yield* makeCursorActivity((text) =>
