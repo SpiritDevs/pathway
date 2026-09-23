@@ -8,6 +8,13 @@ export const pathwayMcpToolName = (toolName: string): string =>
 
 export const PATHWAY_MCP_TOOL_WILDCARD = pathwayMcpToolName("*");
 
+/**
+ * The per-call limit providers apply to Pathway tools. A Computer call can wait
+ * five minutes for approval and then run up to 25 steps, so provider defaults
+ * (Codex allows 60 s) would abandon calls Pathway is still completing.
+ */
+export const PATHWAY_MCP_TOOL_TIMEOUT_MS = 20 * 60_000;
+
 export interface McpProviderSessionConfig {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;

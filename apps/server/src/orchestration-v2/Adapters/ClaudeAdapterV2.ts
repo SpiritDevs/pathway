@@ -929,6 +929,7 @@ export function claudeMcpQueryOverrides(input: {
         headers: {
           Authorization: session.authorizationHeader,
         },
+        timeout: McpProviderSession.PATHWAY_MCP_TOOL_TIMEOUT_MS,
       },
     },
   };
