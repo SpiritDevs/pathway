@@ -19,7 +19,6 @@ import {
   CuaActionError,
   makeCuaComputerBackend,
   type CuaComputerBackend,
-  type CuaRequest,
 } from "./CuaComputerBackend.ts";
 import {
   abortDesktop,
@@ -29,11 +28,12 @@ import {
   withDesktopOperationSignal,
 } from "./DesktopOperationQueue.ts";
 import { withModelDesktopObservation } from "./modelDesktopObservation.ts";
+import { fakeCuaRequest } from "./testing/FakeCuaRequest.ts";
 
 /**
  * Ported from Synara's `CuaComputerBackend.test.ts`. The fake driver keeps its
- * Promise shape because it stands in for the socket client; everything that
- * waits on time runs on the TestClock through `run`.
+ * Promise shape and reaches the backend through `fakeCuaRequest`; everything
+ * that waits on time runs on the TestClock through `run`.
  */
 
 /** A realistic wall clock, so the one-second snapshot cache starts cold. */
@@ -302,17 +302,19 @@ const fixture = (options?: FixtureOptions) =>
         hostPlatform: options?.hostPlatform ?? "darwin",
       };
     };
-    const request = vi.fn(
-      async (endpoint: string, body: unknown, _options?: Parameters<CuaRequest>[2]) => ({
+    const aborted: HostCall[] = [];
+    const request = fakeCuaRequest(
+      async (endpoint, body) => ({
         ...((await respond(endpoint, body as HostCall)) as Record<string, unknown>),
         ...(options?.nativeRevision === null
           ? {}
           : { driverNativeRevision: options?.nativeRevision ?? 34 }),
       }),
+      aborted,
     );
     const backend = yield* makeCuaComputerBackend({
       endpoint: options?.endpoint === null ? undefined : (options?.endpoint ?? "/fixture-only"),
-      request: request as CuaRequest,
+      request,
       ...(options?.semanticTextLaneHoldMs !== undefined
         ? { semanticTextLaneHoldMs: options.semanticTextLaneHoldMs }
         : {}),
@@ -325,7 +327,7 @@ const fixture = (options?: FixtureOptions) =>
     }).pipe(Effect.provideService(HostProcessPlatform, options?.localPlatform ?? "darwin"));
     return {
       backend,
-      request,
+      aborted,
       setElements: (value: Record<string, unknown>[]) => {
         elements = value;
       },
@@ -461,7 +463,7 @@ const cancelled = () => new ComputerBackendError({ message: "Caller cancelled" }
 
 /** A backend over a hand-rolled driver, for cases the fixture's fake cannot express. */
 const bareBackend = (request: (endpoint: string, body: unknown) => Promise<unknown>) =>
-  makeCuaComputerBackend({ endpoint: "/fixture-only", request: request as CuaRequest }).pipe(
+  makeCuaComputerBackend({ endpoint: "/fixture-only", request: fakeCuaRequest(request) }).pipe(
     Effect.provideService(HostProcessPlatform, "darwin"),
   );
 
@@ -1289,13 +1291,10 @@ describe("Cua native boundary", () => {
       f.gateTypeText(typing.promise);
       const caller = yield* start(f.backend.typeText("alpha", "cua:10:20", target));
       yield* waitUntil(() => callsNamed(f, "type_text").length === 1);
-      const nativeSignal = f.request.mock.calls.find(
-        ([, body]) => (body as HostCall).name === "type_text",
-      )?.[2]?.signal;
-      expect(nativeSignal?.aborted).toBe(false);
+      expect(f.aborted).toHaveLength(0);
 
       yield* Fiber.interrupt(caller);
-      yield* waitUntil(() => nativeSignal?.aborted === true);
+      yield* waitUntil(() => f.aborted.some((call) => call.name === "type_text"));
 
       // The lane still drains in order: the next write waits out the gap.
       f.gateTypeText(undefined);
@@ -1414,7 +1413,7 @@ describe("Cua native boundary", () => {
     () =>
       Effect.gen(function* () {
         const requests: Array<{ method: string; timeoutMs: number | undefined }> = [];
-        const request: CuaRequest = async (_endpoint, body, options) => {
+        const request = fakeCuaRequest(async (_endpoint, body, options) => {
           requests.push({
             method: (body as { method: string }).method,
             timeoutMs: options?.timeoutMs,
@@ -1423,7 +1422,7 @@ describe("Cua native boundary", () => {
             ok: true,
             result: { structuredContent: { accessibility: false, screen_recording: false } },
           };
-        };
+        });
         const backend = yield* makeCuaComputerBackend({ endpoint: "/fixture-only", request }).pipe(
           Effect.provideService(HostProcessPlatform, "darwin"),
         );
@@ -1919,7 +1918,12 @@ describe("Cua native boundary", () => {
         effect: "not-dispatched",
         inputPause: { windowId: "cua:10:20" },
       });
-      f.fail(new CuaTransportError("Space changed after dispatch", "dispatched-unknown"));
+      f.fail(
+        new CuaTransportError({
+          message: "Space changed after dispatch",
+          effect: "dispatched-unknown",
+        }),
+      );
       const error = yield* fails(f.backend.typeText("abc", "cua:10:20"));
       expect(error).toMatchObject({ effect: "dispatched-unknown" });
       expect(error).not.toHaveProperty("inputPause");
@@ -3247,7 +3251,7 @@ describe("Cua native boundary", () => {
     Effect.gen(function* () {
       const f = yield* fixture();
       yield* run(f.backend.availability());
-      f.fail(new CuaTransportError("timeout", "dispatched-unknown"));
+      f.fail(new CuaTransportError({ message: "timeout", effect: "dispatched-unknown" }));
       expect(yield* fails(f.backend.typeText("abc", "cua:10:20"))).toMatchObject({
         effect: "dispatched-unknown",
       });
@@ -3659,7 +3663,7 @@ describe("Cua hardening", () => {
     Effect.gen(function* () {
       const f = yield* fixture();
       yield* observe(f);
-      f.fail(new CuaTransportError("timeout", "dispatched-unknown"));
+      f.fail(new CuaTransportError({ message: "timeout", effect: "dispatched-unknown" }));
       expect(yield* fails(f.backend.typeText("abc", "cua:10:20"))).toMatchObject({
         effect: "dispatched-unknown",
       });

@@ -6,6 +6,7 @@ import * as Fiber from "effect/Fiber";
 
 import { ComputerApprovalRequester, make as makeApprovalGate } from "./ComputerApprovalGate.ts";
 import { makeCuaComputerBackend } from "./CuaComputerBackend.ts";
+import { fakeCuaRequest } from "./testing/FakeCuaRequest.ts";
 
 const PNG_400x200 = (() => {
   const header = Buffer.alloc(24);
@@ -108,7 +109,10 @@ const guardFixture = Effect.fn(function* () {
     ...respond(req as Record<string, unknown>),
     hostPlatform: "darwin",
   });
-  const backend = yield* makeCuaComputerBackend({ endpoint: "/foreground-guard", request });
+  const backend = yield* makeCuaComputerBackend({
+    endpoint: "/foreground-guard",
+    request: fakeCuaRequest(request),
+  });
   const controls: GuardControls = {
     refuseReadinessAsAuthSheet: () => {
       readinessRefusal = {
