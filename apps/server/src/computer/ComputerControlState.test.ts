@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -86,6 +87,25 @@ it.layer(NodeServices.layer)("ComputerControlState", (it) => {
         yield* fs.makeDirectory(path.join(dir, `${COMPUTER_CONTROL_STATE_FILE}.tmp`));
         const error = yield* Effect.flip(state.recordChatIntent("thread", true, 0));
         expect(error.message).toBe("Computer authorization state could not be saved.");
+        expect(state.get("thread").chatGeneration).toBeUndefined();
+      }),
+    );
+
+    it.effect("an interrupted chat-intent write rolls the intent back", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped();
+        const writing = yield* Deferred.make<void>();
+        const state = yield* makeComputerControlState(dir).pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            writeFileString: () =>
+              Deferred.succeed(writing, undefined).pipe(Effect.andThen(Effect.never)),
+          }),
+        );
+        const save = yield* Effect.forkChild(state.recordChatIntent("thread", true, 0));
+        yield* Deferred.await(writing);
+        yield* Fiber.interrupt(save);
         expect(state.get("thread").chatGeneration).toBeUndefined();
       }),
     );
