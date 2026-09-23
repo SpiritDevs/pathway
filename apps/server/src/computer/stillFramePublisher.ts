@@ -41,6 +41,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -172,7 +173,7 @@ export interface StillFramePublisher {
    * interval. Supersedes any earlier or in-progress attach.
    */
   readonly attach: Effect.Effect<void, ComputerOperationError>;
-  /** Stops the interval loop and forgets what the last receiver saw. */
+  /** Stops the interval loop and any capture, and forgets what the last receiver saw. */
   readonly detach: Effect.Effect<void>;
   /** Publishes a still even when it is byte-identical to the last one. No-op when detached. */
   readonly requestKeyframe: Effect.Effect<void>;
@@ -191,11 +192,16 @@ export const makeStillFramePublisher = (
     const scope = yield* Effect.scope;
     /** Suppresses stills identical to the one the pane already has. */
     const dedupe = new StillFrameDedupe();
+    /** The one capture in flight, wherever it runs: the loop, an attach or a keyframe. */
+    interface InFlight {
+      readonly cancel: Deferred.Deferred<void>;
+      readonly done: Deferred.Deferred<void>;
+    }
     const state = {
       attached: false,
       generation: 0,
       loop: undefined as Fiber.Fiber<never> | undefined,
-      inFlight: false,
+      inFlight: undefined as InFlight | undefined,
       nextSequence: 1,
       forceRetries: 0,
     };
@@ -230,12 +236,15 @@ export const makeStillFramePublisher = (
           }
           return Effect.void;
         }
-        state.inFlight = true;
+        const inFlight: InFlight = { cancel: Deferred.makeUnsafe(), done: Deferred.makeUnsafe() };
+        state.inFlight = inFlight;
         // A fresh explicit request gets its own retry budget: the previous
         // receiver's exhausted one says nothing about this one.
         if (request.force === true) state.forceRetries = 0;
         const force = dedupe.takeForce(request.force === true);
         return options.capture(force).pipe(
+          // A detach cancels the capture and the tick publishes nothing.
+          Effect.raceFirst(Effect.as(Deferred.await(inFlight.cancel), undefined)),
           Effect.flatMap((bytes) =>
             // An idle target encodes the same bytes every tick; republishing
             // them spends about a megabyte of socket to convey nothing.
@@ -263,7 +272,8 @@ export const makeStillFramePublisher = (
           }),
           Effect.ensuring(
             Effect.sync(() => {
-              state.inFlight = false;
+              state.inFlight = undefined;
+              Deferred.doneUnsafe(inFlight.done, Effect.void);
             }),
           ),
           // A forced request that arrived mid-flight is served now rather than
@@ -282,14 +292,22 @@ export const makeStillFramePublisher = (
     const stopLoop = (fiber: Fiber.Fiber<never> | undefined) =>
       fiber === undefined ? Effect.void : Fiber.interrupt(fiber);
 
-    /** Invalidates every earlier attach and stops its loop; returns the new generation. */
+    /**
+     * Invalidates every earlier attach, stops its loop and cancels the capture
+     * in flight, so a replacement never waits on it; returns the new generation.
+     */
     const supersede = Effect.suspend(() => {
       const generation = ++state.generation;
       const previous = state.loop;
+      const inFlight = state.inFlight;
       state.attached = false;
       state.loop = undefined;
       dedupe.reset();
-      return Effect.as(stopLoop(previous), generation);
+      if (inFlight) Deferred.doneUnsafe(inFlight.cancel, Effect.void);
+      return stopLoop(previous).pipe(
+        Effect.andThen(inFlight ? Deferred.await(inFlight.done) : Effect.void),
+        Effect.as(generation),
+      );
     });
 
     const attach = Effect.gen(function* () {
