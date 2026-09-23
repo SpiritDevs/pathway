@@ -40,7 +40,11 @@ const backend = new FakeComputerBackend();
 const ComputerServiceTest = Layer.effect(
   ComputerService,
   Effect.gen(function* () {
-    const manager = yield* ComputerManager.make({ backend, actionSettleMs: 0 });
+    const manager = yield* ComputerManager.make({
+      backend,
+      actionSettleMs: 0,
+      approvals: yield* ComputerApprovalGate,
+    });
     return { supported: true, availability: { kind: "available", backend: "fake" }, manager };
   }),
 );
@@ -404,6 +408,75 @@ it.layer(TestLayer)("computerMcpTools", (it) => {
       yield* Fiber.join(holder);
       assert.equal(errorCode(yield* Fiber.join(queued)), "computer_policy_changed");
       assert.equal(callsTo("typeText"), typedBefore);
+      yield* manager.releaseDesktopControl(threadId);
+    }),
+  );
+  it.effect("asks once for each further app the task's input reaches", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* ComputerService;
+      const orchestrator = yield* OrchestratorV2;
+      const { tools } = yield* toolsUnderCeiling("per-task");
+      const { threadId } = yield* seedRunningTurn("second-app", "full-access");
+      const call = (name: string, args: Record<string, unknown>) =>
+        tools.call({
+          invocation: invocationFor(threadId, ["computer"]),
+          name,
+          args,
+          jsonRpcRequestId: 1,
+        });
+      const typeInto = (window_id: string) =>
+        call("computer_type_text", { text: window_id, window_id, include_screenshot: false });
+      // A run step aims at the second app; nothing in the call names it.
+      const frameCalculator = () =>
+        call("computer_run", {
+          steps: [
+            {
+              type: "set_window_frame",
+              window_id: "fake-calculator",
+              x: 10,
+              y: 10,
+              width: 500,
+              height: 400,
+            },
+          ],
+        });
+      const cardPrompt = Effect.fn("cardPrompt")(function* () {
+        const { request, projection } = yield* pendingComputerRequest(threadId);
+        const card = projection.turnItems.find(
+          (item) => item.type === "approval_request" && item.requestId === request.id,
+        );
+        return card?.type === "approval_request" ? card.prompt : null;
+      });
+
+      const first = yield* Effect.forkChild(typeInto("fake-terminal"));
+      assert.equal(yield* cardPrompt(), "Allow Computer for this task");
+      yield* acceptCard(threadId, "second-app-task");
+      assert.notEqual((yield* Fiber.join(first))?.isError, true);
+
+      const framedBefore = callsTo("setWindowFrame");
+      // A run reports a refused step in its result rather than failing the call.
+      const refused = (yield* frameCalculator())?.content[0];
+      assert.include(
+        refused?.type === "text" ? refused.text : "",
+        '"computer_app_approval_required"',
+      );
+      assert.equal(callsTo("setWindowFrame"), framedBefore);
+
+      const retry = yield* Effect.forkChild(frameCalculator());
+      assert.equal(yield* cardPrompt(), "Allow Computer to use org.kde.kcalc in this task");
+      yield* acceptCard(threadId, "second-app-app");
+      assert.notEqual((yield* Fiber.join(retry))?.isError, true);
+      assert.equal(callsTo("setWindowFrame"), framedBefore + 1);
+
+      // Allowed once, the app takes further input without another card.
+      const typedBefore = callsTo("typeText");
+      assert.notEqual((yield* typeInto("fake-calculator"))?.isError, true);
+      assert.equal(callsTo("typeText"), typedBefore + 1);
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.lengthOf(
+        projection.runtimeRequests.filter((request) => request.kind === "computer"),
+        2,
+      );
       yield* manager.releaseDesktopControl(threadId);
     }),
   );

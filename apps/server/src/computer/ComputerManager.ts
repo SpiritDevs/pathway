@@ -103,6 +103,7 @@ import {
 } from "./ComputerControlState.ts";
 import { ComputerDenylistError, computerDenylistMatch } from "./computerDenylist.ts";
 import {
+  ComputerAppApprovalRequiredError,
   ComputerBackendError,
   ComputerLeaseError,
   ComputerSpaceError,
@@ -299,17 +300,19 @@ interface BackgroundLease extends DesktopLease {
 
 /**
  * The approval gate half the manager drives: an Off or Stop withdraws the
- * thread's cards, and a desktop interruption revokes standing grants.
- * `ComputerApprovalGate` satisfies it.
+ * thread's cards, a desktop interruption revokes standing grants, and input
+ * reaches only apps the turn may drive. `ComputerApprovalGate` satisfies it.
  */
 export interface ComputerManagerApprovals {
   readonly cancelThread: (threadId: string, turnId?: string) => Effect.Effect<void>;
   readonly revokeTaskGrants: Effect.Effect<void>;
+  readonly appAllowed: (threadId: string, turnId: string, app: string) => boolean;
 }
 
 const NO_APPROVALS: ComputerManagerApprovals = {
   cancelThread: () => Effect.void,
   revokeTaskGrants: Effect.void,
+  appAllowed: () => true,
 };
 
 export interface ComputerManagerOptions {
@@ -894,6 +897,26 @@ export class ComputerManager {
       const window = (yield* this.readWindows()).find((candidate) => candidate.id === windowId);
       if (window === undefined) return;
       yield* this.assertWindowInputAllowedWindow(threadId, window);
+      yield* this.assertAppConsented(threadId, window.appName ?? window.id);
+    });
+  }
+
+  /**
+   * Once-per-app consent (ADR 0043), keyed by the app the input resolved to
+   * rather than anything the call declared. Only an agent's call inside its
+   * task is asked about; the human at the pane never is.
+   */
+  private assertAppConsented(
+    threadId: string | undefined,
+    app: string,
+  ): Effect.Effect<void, ComputerOperationError> {
+    return Effect.gen({ self: this }, function* () {
+      const owner = agentThreadId(threadId);
+      const turnId = (yield* currentComputerTask)?.turnId;
+      if (owner === undefined || turnId === undefined) return;
+      if (!this.approvals.appAllowed(owner, turnId, app)) {
+        return yield* new ComputerAppApprovalRequiredError(app);
+      }
     });
   }
 
@@ -1955,8 +1978,8 @@ export class ComputerManager {
 
   /**
    * The admission half every window-grain mutation shares once the exact
-   * window row is in hand: owning-app consent backstop, then the denylist
-   * input check — in that order, before any dispatch.
+   * window row is in hand: owning-app denylist backstop, then the window
+   * input check, then once-per-app consent — in that order, before any dispatch.
    * `target.appName ?? windowId` is the consent key a nameless window falls
    * back to, matching the pre-queue resolution the tool layer makes.
    */
@@ -1964,9 +1987,9 @@ export class ComputerManager {
     threadId: string | undefined,
     target: ComputerWindow,
   ): Effect.Effect<void, ComputerOperationError> {
-    return Effect.andThen(
-      this.assertDrivenAppAllowed(target.appName ?? target.id),
-      this.assertWindowInputAllowedWindow(threadId, target),
+    return this.assertDrivenAppAllowed(target.appName ?? target.id).pipe(
+      Effect.andThen(this.assertWindowInputAllowedWindow(threadId, target)),
+      Effect.andThen(this.assertAppConsented(threadId, target.appName ?? target.id)),
     );
   }
 
@@ -2071,6 +2094,7 @@ export class ComputerManager {
             if (denied) return yield* new ComputerDenylistError(denied.app, denied.matched);
           }
           yield* this.assertSpaceAppMutationAllowed(threadId, resolved.pid);
+          yield* this.assertAppConsented(threadId, resolved.name ?? consentKey);
           const result = yield* timedComputerLeg("dispatch", invoke({ pid: resolved.pid }, path));
           return yield* this.actionResult(threadId, "computer_invoke_menu", undefined, result);
         }),
@@ -2193,6 +2217,7 @@ export class ComputerManager {
           if (denied) return yield* new ComputerDenylistError(denied.app, denied.matched);
         }
         yield* this.assertSpaceAppMutationAllowed(threadId, pid);
+        yield* this.assertAppConsented(threadId, named ?? `pid ${pid}`);
         const result = yield* timedComputerLeg("dispatch", setter(pid, hidden));
         const base = yield* this.actionResult(
           threadId,
@@ -2642,6 +2667,7 @@ export class ComputerManager {
           if (target.pid !== undefined) {
             yield* this.assertSpaceAppMutationAllowed(threadId, target.pid);
           }
+          yield* this.assertAppConsented(threadId, target.appName ?? windowId);
           // The masked-activation shield arms after admission and before the
           // raise: an opt-in that cannot shield refuses here rather than
           // degrading to an unmasked excursion.
