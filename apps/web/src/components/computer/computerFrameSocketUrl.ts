@@ -1,0 +1,27 @@
+import { createComputerFrameSocketAtoms } from "@spiritdevs/client-runtime/state/computer-frame-socket";
+import { runAtomCommand } from "@spiritdevs/client-runtime/state/runtime";
+import type { ComputerId, EnvironmentId } from "@spiritdevs/contracts";
+import { AsyncResult, type AtomRegistry } from "effect/unstable/reactivity";
+
+import { connectionAtomRuntime } from "~/connection/runtime";
+
+const computerFrameSocket = createComputerFrameSocketAtoms(connectionAtomRuntime);
+
+/**
+ * A freshly authorized frame socket URL for one computer on one environment,
+ * or null while the environment cannot mint one (offline, ticket refused).
+ * Remote URLs carry a single-use ticket, so call this once per (re)connect.
+ */
+export async function resolveComputerFrameSocketUrl(
+  registry: AtomRegistry.AtomRegistry,
+  environmentId: EnvironmentId,
+  computerId: ComputerId,
+): Promise<string | null> {
+  const result = await runAtomCommand(
+    registry,
+    computerFrameSocket.resolveUrl,
+    { environmentId, input: { computerId } },
+    { reportFailure: false },
+  );
+  return AsyncResult.isSuccess(result) ? result.value : null;
+}
