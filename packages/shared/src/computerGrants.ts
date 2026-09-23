@@ -13,6 +13,12 @@
 import type { ComputerBuildSignature, ComputerPermission } from "@spiritdevs/contracts";
 
 /**
+ * Set by the desktop shell to its own bundle identifier when it starts the
+ * server. Display/setup identity only; it confers no native authority.
+ */
+export const PATHWAY_DESKTOP_BUNDLE_ID_ENV = "PATHWAY_DESKTOP_BUNDLE_ID";
+
+/**
  * Fixed setup order, shared with the native permission guide.
  */
 export const COMPUTER_PERMISSIONS: readonly ComputerPermission[] = [
