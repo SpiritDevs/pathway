@@ -71,6 +71,14 @@ const watchEvents = (manager: ComputerManager) =>
 
 type EventWatch = Effect.Success<ReturnType<typeof watchEvents>>;
 
+/** Subscribes `sink` in its own scope; the returned effect unsubscribes it. */
+const subscribeFrames = (manager: ComputerManager, sink: FrameSink) =>
+  Effect.gen(function* () {
+    const subscription = yield* Scope.make();
+    yield* manager.subscribeFrames(sink).pipe(Scope.provide(subscription));
+    return Scope.close(subscription, Exit.void);
+  });
+
 /** Emits a window change and waits until the manager has taken it in. */
 const emitWindows = (
   backend: FakeComputerBackend,
@@ -651,7 +659,7 @@ it.layer(NodeServices.layer)("ComputerManager and FakeComputerBackend (observati
         const manager = yield* ComputerManager.make({ backend });
         const sink = new RecordingSink();
         const watch = yield* watchEvents(manager);
-        const unsubscribe = manager.subscribeFrames(sink);
+        const unsubscribe = yield* subscribeFrames(manager, sink);
         yield* manager.flushStreamTransitions;
 
         expect(backend.callsFor("attachStream")).toHaveLength(1);
@@ -662,7 +670,7 @@ it.layer(NodeServices.layer)("ComputerManager and FakeComputerBackend (observati
         yield* sink.waitFor(3);
         expect(sink.received).toHaveLength(3);
 
-        unsubscribe();
+        yield* unsubscribe;
         yield* manager.flushStreamTransitions;
         expect(backend.callsFor("detachStream")).toHaveLength(1);
         const count = sink.received.length;
@@ -685,7 +693,7 @@ it.layer(NodeServices.layer)("ComputerManager and FakeComputerBackend (observati
         const backend = new FakeComputerBackend();
         const manager = yield* ComputerManager.make({ backend });
         const sink = new RecordingSink();
-        const unsubscribe = manager.subscribeFrames(sink);
+        const unsubscribe = yield* subscribeFrames(manager, sink);
         yield* manager.flushStreamTransitions;
         yield* manager.getThreadState("thread-removed");
         yield* manager.handleThreadRemoved("thread-removed");
@@ -700,7 +708,7 @@ it.layer(NodeServices.layer)("ComputerManager and FakeComputerBackend (observati
         const threads = (manager as unknown as { threads: Map<string, unknown> }).threads;
         expect(threads.has("thread-removed")).toBe(false);
 
-        unsubscribe();
+        yield* unsubscribe;
       }),
     ),
   );
@@ -720,7 +728,7 @@ it.layer(NodeServices.layer)("ComputerManager and FakeComputerBackend (observati
         });
       const scope = yield* Scope.make();
       const manager = yield* ComputerManager.make({ backend }).pipe(Scope.provide(scope));
-      const unsubscribe = manager.subscribeFrames(new RecordingSink());
+      const unsubscribe = yield* subscribeFrames(manager, new RecordingSink());
       yield* manager.flushStreamTransitions;
 
       const request = yield* Effect.forkChild(manager.requestKeyframe(), {
@@ -736,7 +744,7 @@ it.layer(NodeServices.layer)("ComputerManager and FakeComputerBackend (observati
 
       expect(backend.callsFor("attachStream")).toHaveLength(1);
       expect(backend.callsFor("detachStream")).toHaveLength(1);
-      unsubscribe();
+      yield* unsubscribe;
     }),
   );
 
@@ -755,7 +763,7 @@ it.layer(NodeServices.layer)("ComputerManager and FakeComputerBackend (observati
         });
       const scope = yield* Scope.make();
       const manager = yield* ComputerManager.make({ backend }).pipe(Scope.provide(scope));
-      const unsubscribe = manager.subscribeFrames(new RecordingSink());
+      const unsubscribe = yield* subscribeFrames(manager, new RecordingSink());
       yield* manager.flushStreamTransitions;
 
       const request = yield* Effect.forkChild(manager.requestKeyframe(), {
@@ -770,7 +778,7 @@ it.layer(NodeServices.layer)("ComputerManager and FakeComputerBackend (observati
       expect(backend.callsFor("attachStream")).toHaveLength(2);
       yield* Scope.close(scope, Exit.void);
       expect(backend.callsFor("detachStream")).toHaveLength(2);
-      unsubscribe();
+      yield* unsubscribe;
     }),
   );
 
@@ -1140,11 +1148,11 @@ it.layer(NodeServices.layer)("ComputerManager and FakeComputerBackend (observati
           const paneBackend = new FakeComputerBackend();
           const paneManager = yield* ComputerManager.make({ backend: paneBackend });
           const sink = new RecordingSink();
-          const detach = paneManager.subscribeFrames(sink);
+          const detach = yield* subscribeFrames(paneManager, sink);
           yield* paneManager.flushStreamTransitions;
           expect(paneBackend.callsFor("attachStream")).toHaveLength(1);
           expect((yield* paneManager.getThreadState("thread-pane")).windows).toHaveLength(2);
-          detach();
+          yield* detach;
         }),
       );
 
