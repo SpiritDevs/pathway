@@ -14,6 +14,7 @@ import * as Electron from "electron";
 import { COMPUTER_PERMISSIONS } from "@spiritdevs/shared/computerGrants";
 import type { CuaToolResult } from "@spiritdevs/shared/cuaDriverProtocol";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
+import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@spiritdevs/shared/modelImageBudget";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
@@ -26,9 +27,6 @@ import * as ComputerShield from "./ComputerShield.ts";
 import { type CuaDriverHost, makeCuaDriverHost, sweepOrphanedCuaDrivers } from "./CuaDriverHost.ts";
 import { DesktopComputer, inertDesktopComputer } from "./DesktopComputer.ts";
 import * as EscapeKillSwitchMonitor from "./EscapeKillSwitchMonitor.ts";
-
-// Default long edge for model-facing screen images.
-const MODEL_SCREEN_IMAGE_MAX_DIMENSION = 1_536;
 
 // Unset or unparseable reads as off.
 const flag = (name: string) =>
