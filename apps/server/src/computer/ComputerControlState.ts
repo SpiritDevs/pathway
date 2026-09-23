@@ -147,6 +147,9 @@ export const makeComputerControlState = Effect.fn("makeComputerControlState")(fu
     Effect.suspend(() => {
       if (loadError) return Effect.fail(loadError);
       if (!disabled && !get(threadId).disabled) return Effect.void;
+      // Uninterruptible once admitted: an interrupted write would leave memory
+      // at the new generation and disk at the old one, so a request frozen
+      // before a disable would regain authority after a restart.
       return lock.withPermit(
         Effect.suspend(() => {
           const current = get(threadId);
@@ -156,7 +159,7 @@ export const makeComputerControlState = Effect.fn("makeComputerControlState")(fu
             generation: current.generation + (disabled ? 1 : 0),
           });
           return persist;
-        }),
+        }).pipe(Effect.uninterruptible),
       );
     });
 
