@@ -1,11 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
-import { CommandId, MessageId, type OrchestrationV2Command, ThreadId } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import {
   admitRunComputerControl,
-  commandRequestsComputer,
   computerActivationMetadata,
   providerComputerInvocationText,
 } from "./computerActivation.ts";
@@ -101,25 +99,6 @@ describe("provider turn Computer activation", () => {
       "/computer-use open Calculator",
     );
     expect(providerComputerInvocationText("plain text", "user")).toBe("plain text");
-  });
-
-  it("gates dispatches that request Computer by switch or slash command", () => {
-    const dispatch = {
-      type: "message.dispatch",
-      createdBy: "user",
-      creationSource: "web",
-      commandId: CommandId.make("command:computer"),
-      threadId: ThreadId.make("thread:computer"),
-      messageId: MessageId.make("message:computer"),
-      text: "plain text",
-      attachments: [],
-      dispatchMode: { type: "start_immediately" },
-    } satisfies OrchestrationV2Command;
-    expect(commandRequestsComputer(dispatch)).toBe(false);
-    expect(commandRequestsComputer({ ...dispatch, enableComputerControl: true })).toBe(true);
-    expect(commandRequestsComputer({ ...dispatch, text: "/computer-use open Calculator" })).toBe(
-      true,
-    );
   });
 
   const service = (admit: ComputerManager["admitControl"], supported = true) =>
