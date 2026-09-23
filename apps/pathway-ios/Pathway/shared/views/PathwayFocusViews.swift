@@ -81,11 +81,7 @@ struct PathwayFocusEditorView: View {
                         }
                     }
                     Picker("Color", selection: $color) {
-                        Text("Indigo").tag("#6366f1")
-                        Text("Blue").tag("#3b82f6")
-                        Text("Green").tag("#22c55e")
-                        Text("Orange").tag("#f97316")
-                        Text("Pink").tag("#ec4899")
+                        ForEach(PathwayFocusIcon.colors, id: \.hex) { Text($0.label).tag($0.hex) }
                     }
                 }
                 Section("Projects") {

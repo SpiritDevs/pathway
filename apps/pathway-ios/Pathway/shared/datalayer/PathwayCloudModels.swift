@@ -52,6 +52,34 @@ struct PathwayCloudProject: Decodable, Equatable, Identifiable, Sendable {
     let archivedAt: Double?
     var teamIds: [String]? = nil
     var defaultWorkflowOwner: JSONValue? = nil
+    /// Replaces the detected favicon on every device; nil uses the favicon.
+    var icon: PathwayProjectIcon? = nil
+}
+
+extension PathwayCloudProject {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, description, archivedAt, teamIds, defaultWorkflowOwner, icon
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        description = try container.decode(String.self, forKey: .description)
+        archivedAt = try container.decodeIfPresent(Double.self, forKey: .archivedAt)
+        teamIds = try container.decodeIfPresent([String].self, forKey: .teamIds)
+        defaultWorkflowOwner = try container.decodeIfPresent(JSONValue.self, forKey: .defaultWorkflowOwner)
+        // An icon this build cannot read falls back to the favicon instead of hiding the project.
+        icon = try? container.decodeIfPresent(PathwayProjectIcon.self, forKey: .icon)
+    }
+}
+
+/// A Focus-library icon chosen for a cloud project; `color` is "#rrggbb".
+struct PathwayProjectIcon: Codable, Equatable, Sendable {
+    let name: String
+    let color: String
+
+    var json: JSONValue { .object(["name": .string(name), "color": .string(color)]) }
 }
 
 struct PathwayCompanyProject: Equatable, Identifiable, Sendable {

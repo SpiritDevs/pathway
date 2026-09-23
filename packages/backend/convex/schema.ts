@@ -720,6 +720,8 @@ export default defineSchema({
     repositoryIdentity: v.optional(v.union(repositoryIdentityArg, v.null())),
     /** Only an explicit merge choice is allowed to rewrite connected Git remotes. */
     repositoryIdentityAuthority: v.optional(v.literal("merge")),
+    /** Built-in icon replacing detected favicons on every device; absent/null uses the favicon. */
+    icon: v.optional(v.union(v.object({ name: v.string(), color: v.string() }), v.null())),
     archivedAt: v.union(v.number(), v.null()),
     createdAt: v.number(),
     updatedAt: v.number(),

@@ -2063,6 +2063,14 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "source-control",
             },
           ),
+        [WS_METHODS.sourceControlListRepositoryOwners]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sourceControlListRepositoryOwners,
+            sourceControlRepositories.listRepositoryOwners(input),
+            {
+              "rpc.aggregate": "source-control",
+            },
+          ),
         [WS_METHODS.projectsSearchEntries]: (input) =>
           observeRpcEffect(
             WS_METHODS.projectsSearchEntries,

@@ -1,3 +1,7 @@
+import {
+  ProjectLibraryIconPicker,
+  useCompanyProjectIcon,
+} from "../projects/ProjectLibraryIconPicker";
 import { alertProjectScopeKey } from "@spiritdevs/contracts/threadAlerts";
 import { ProjectAlertOverride } from "./NotificationsSettings";
 import { useAtomValue } from "@effect/atom-react";
@@ -460,6 +464,7 @@ export function ProjectDetail({
         ) ??
         companies.find((company) => workspaceProject.companyIds.includes(String(company.id))) ??
         null);
+  const libraryIcon = useCompanyProjectIcon(workspaceProject?.cloudProjectId ?? null);
   const mergeTarget =
     workspaceProject === null
       ? null
@@ -1246,9 +1251,24 @@ export function ProjectDetail({
             />
             <SettingsRow
               title="Project icon"
-              description={faviconPath ?? "Automatic"}
+              description={libraryIcon !== null ? "Built-in icon" : (faviconPath ?? "Automatic")}
               resetAction={
-                faviconPath !== null ? (
+                libraryIcon !== null &&
+                owningCompany !== null &&
+                workspaceProject?.cloudProjectId ? (
+                  <SettingResetButton
+                    label="project icon"
+                    onClick={() =>
+                      void companyContext?.environmentControl
+                        ?.setCompanyProjectIcon({
+                          companyId: owningCompany.id as CompanyId,
+                          cloudProjectId: workspaceProject.cloudProjectId!,
+                          icon: null,
+                        })
+                        .catch(() => undefined)
+                    }
+                  />
+                ) : faviconPath !== null ? (
                   <SettingResetButton
                     label="project icon"
                     disabled={isSavingFavicon}
@@ -1264,6 +1284,13 @@ export function ProjectDetail({
                     faviconPath={faviconPath}
                     className="size-6"
                   />
+                  {owningCompany !== null && workspaceProject?.cloudProjectId ? (
+                    <ProjectLibraryIconPicker
+                      companyId={owningCompany.id as CompanyId}
+                      cloudProjectId={workspaceProject.cloudProjectId}
+                      icon={libraryIcon}
+                    />
+                  ) : null}
                   <Button
                     size="xs"
                     variant="outline"

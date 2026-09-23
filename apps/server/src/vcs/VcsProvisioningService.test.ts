@@ -1,6 +1,8 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -62,6 +64,7 @@ it.effect("routes repository initialization through an explicit VCS driver kind"
   const calls: string[] = [];
   const driver = makeDriver(calls);
   const testLayer = VcsProvisioningService.layer.pipe(
+    Layer.provide(NodeServices.layer),
     Layer.provide(
       Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
         get: (kind) => (kind === "git" ? Effect.succeed(driver) : Effect.die("unexpected kind")),
@@ -81,6 +84,7 @@ it.effect("defaults repository initialization to Git until callers choose a VCS 
   const calls: string[] = [];
   const driver = makeDriver(calls);
   const testLayer = VcsProvisioningService.layer.pipe(
+    Layer.provide(NodeServices.layer),
     Layer.provide(
       Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
         get: (kind) => (kind === "git" ? Effect.succeed(driver) : Effect.die("unexpected kind")),
@@ -94,4 +98,28 @@ it.effect("defaults repository initialization to Git until callers choose a VCS 
 
     assert.deepStrictEqual(calls, ["default:/repo"]);
   }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("creates a missing project folder before initializing it", () => {
+  const calls: string[] = [];
+  const driver = makeDriver(calls);
+  const testLayer = VcsProvisioningService.layer.pipe(
+    Layer.provide(NodeServices.layer),
+    Layer.provide(
+      Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+        get: () => Effect.succeed(driver),
+      }),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-vcs-init-" });
+    const cwd = `${root}/new/project`;
+    const provisioning = yield* VcsProvisioningService.VcsProvisioningService;
+    yield* provisioning.initRepository({ cwd, createDirectory: true });
+
+    assert.isTrue(yield* fs.exists(cwd));
+    assert.deepStrictEqual(calls, [`default:${cwd}`]);
+  }).pipe(Effect.scoped, Effect.provide(Layer.merge(testLayer, NodeServices.layer)));
 });

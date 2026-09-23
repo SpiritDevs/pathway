@@ -78,6 +78,7 @@ describe("environment control function references", () => {
       provisionPersonalWorkspace: "companies:provisionCurrentUser",
       createCompanyProject: "cloudProjects:createCompanyProject",
       ensureEnvironmentProject: "cloudProjects:ensureEnvironmentProject",
+      setCompanyProjectIcon: "cloudProjects:setCompanyProjectIcon",
       setPreferredEnvironmentBinding: "cloudProjects:setPreferredEnvironmentBinding",
       releaseEnvironmentProject: "cloudProjects:releaseEnvironmentProject",
       deleteCompanyProject: "cloudProjects:deleteCompanyProject",

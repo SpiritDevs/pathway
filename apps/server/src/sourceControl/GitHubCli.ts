@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 
 import {
   TrimmedNonEmptyString,
+  type SourceControlRepositoryOwner,
   type SourceControlRepositoryVisibility,
   type VcsError,
 } from "@spiritdevs/contracts";
@@ -241,6 +242,11 @@ export class GitHubCli extends Context.Service<
       readonly visibility: SourceControlRepositoryVisibility;
     }) => Effect.Effect<GitHubRepositoryCloneUrls, GitHubCliError>;
 
+    /** The signed-in account, then its organizations. */
+    readonly listRepositoryOwners: (input: {
+      readonly cwd: string;
+    }) => Effect.Effect<ReadonlyArray<SourceControlRepositoryOwner>, GitHubCliError>;
+
     readonly createPullRequest: (input: {
       readonly cwd: string;
       readonly baseBranch: string;
@@ -434,6 +440,28 @@ export const make = Effect.gen(function* () {
         Effect.map((result) =>
           deriveRepositoryCloneUrlsFromCreateOutput(result.stdout, input.repository),
         ),
+      ),
+    listRepositoryOwners: (input) =>
+      Effect.all([
+        execute({ cwd: input.cwd, args: ["api", "user", "--jq", ".login"] }),
+        execute({
+          cwd: input.cwd,
+          args: ["api", "user/orgs", "--paginate", "--jq", ".[].login"],
+        }),
+      ]).pipe(
+        Effect.map(([user, orgs]) => {
+          const lines = (stdout: string) =>
+            stdout
+              .split("\n")
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0);
+          return [
+            ...lines(user.stdout).map((login) => ({ login, kind: "user" as const })),
+            ...lines(orgs.stdout)
+              .toSorted((left, right) => left.localeCompare(right))
+              .map((login) => ({ login, kind: "organization" as const })),
+          ];
+        }),
       ),
     createPullRequest: (input) =>
       execute({

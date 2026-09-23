@@ -60,6 +60,16 @@ export type AgentThreadId = typeof AgentThreadId.Type;
 
 export const CLOUD_PROJECT_NAME_MAX_CHARS = 200;
 
+/**
+ * A built-in icon chosen for a project, drawn from the same library as Focus icons. It replaces
+ * the favicon detected from a checkout on every device; null means use the detected favicon.
+ */
+export const ProjectIcon = Schema.Struct({
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  color: TrimmedNonEmptyString.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/)),
+});
+export type ProjectIcon = typeof ProjectIcon.Type;
+
 // ---------------------------------------------------------------------------
 // Cloud projects
 // ---------------------------------------------------------------------------
@@ -82,6 +92,7 @@ export const CloudProject = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   /** Present only when a merge explicitly made the repository authoritative for every checkout. */
   repositoryIdentityAuthority: Schema.optional(Schema.Literal("merge")),
+  icon: Schema.optional(Schema.NullOr(ProjectIcon)),
   archivedAt: Schema.NullOr(CloudTimestamp),
   createdAt: CloudTimestamp,
   updatedAt: CloudTimestamp,

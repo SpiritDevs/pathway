@@ -189,7 +189,7 @@ import {
   clearProjectAutomaticAssignmentPending,
   markProjectAutomaticAssignmentPending,
 } from "./projects/projectAutomaticAssignmentState";
-import { QuickCreateProjectDialog } from "./projects/QuickCreateProjectDialog";
+import { CreateProjectDialog } from "./projects/CreateProjectDialog";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
@@ -802,7 +802,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         }}
       >
         {children}
-        <QuickCreateProjectDialog
+        <CreateProjectDialog
           {...(quickCreateProjectOwner === undefined
             ? {}
             : { initialOwner: quickCreateProjectOwner })}
@@ -1963,8 +1963,18 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
     clearOpenIntent();
-    openAddProjectFlow();
-  }, [clearOpenIntent, openAddProjectFlow, openIntent]);
+    // The Create project dialog is the add-project flow; the palette's own path only remains for
+    // connecting an environment when none is online yet.
+    if (defaultAddProjectEnvironmentId === null) openAddProjectFlow();
+    else onQuickCreateProject(defaultAddProjectEnvironmentId, projectOwner);
+  }, [
+    clearOpenIntent,
+    defaultAddProjectEnvironmentId,
+    onQuickCreateProject,
+    openAddProjectFlow,
+    openIntent,
+    projectOwner,
+  ]);
 
   useLayoutEffect(() => {
     if (openIntent?.kind !== "new-thread-in" || projectThreadItems.length === 0) {
@@ -2339,7 +2349,8 @@ function OpenCommandPaletteDialog(props: {
     icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
     keepOpen: true,
     run: async () => {
-      openAddProjectFlow();
+      if (defaultAddProjectEnvironmentId === null) openAddProjectFlow();
+      else onQuickCreateProject(defaultAddProjectEnvironmentId, projectOwner);
     },
   });
 

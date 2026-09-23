@@ -808,6 +808,59 @@ export const setPreferredEnvironmentBinding = mutation({
   },
 });
 
+/** Built-in icon (Focus icon library name plus accent color) shown instead of detected favicons. */
+export const setCompanyProjectIcon = mutation({
+  args: {
+    companyId: domainIdArg,
+    cloudProjectId: domainIdArg,
+    icon: v.union(v.object({ name: v.string(), color: v.string() }), v.null()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requirePermission(actor, "projects.manage");
+    const project = await ctx.db
+      .query("cloudProjects")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.cloudProjectId),
+      )
+      .unique();
+    if (project === null || project.deletedAt !== null) {
+      throw backendError("entity-not-found", "The project is no longer available.");
+    }
+    const icon =
+      args.icon === null
+        ? null
+        : {
+            name: trimmed(args.icon.name, "An icon name"),
+            color: args.icon.color.trim().toLowerCase(),
+          };
+    if (icon !== null && (icon.name.length > 64 || !/^#[0-9a-f]{6}$/.test(icon.color))) {
+      throw backendError(
+        "invalid-arguments",
+        "A project icon needs a name and a six-digit hex color.",
+      );
+    }
+    await ctx.db.patch(project._id, { icon, updatedAt: Date.now() });
+    const changedProject = await ctx.db.get(project._id);
+    if (changedProject === null) throw backendError("entity-not-found", "The project vanished.");
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes: [
+        {
+          entityKind: "cloudProject",
+          entityId: changedProject.id,
+          changeKind: "upsert",
+          versionDocId: changedProject._id,
+          payload: encodeCloudProject(changedProject),
+        },
+      ],
+    });
+    return null;
+  },
+});
+
 /** Revokes this machine's binding when its local project is removed. */
 export const releaseEnvironmentProject = mutation({
   args: {

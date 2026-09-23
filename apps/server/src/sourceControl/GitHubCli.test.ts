@@ -325,6 +325,30 @@ describe("GitHubCli.layer", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("lists the signed-in account before its organizations", () =>
+    Effect.gen(function* () {
+      mockRun
+        .mockReturnValueOnce(Effect.succeed(processOutput("octocat\n")))
+        .mockReturnValueOnce(Effect.succeed(processOutput("zeta-org\nacme\n")));
+
+      const gh = yield* GitHubCli.GitHubCli;
+      const owners = yield* gh.listRepositoryOwners({ cwd: "/repo" });
+
+      assert.deepStrictEqual(owners, [
+        { login: "octocat", kind: "user" },
+        { login: "acme", kind: "organization" },
+        { login: "zeta-org", kind: "organization" },
+      ]);
+      expect(mockRun).toHaveBeenNthCalledWith(2, {
+        operation: "GitHubCli.execute",
+        command: "gh",
+        args: ["api", "user/orgs", "--paginate", "--jq", ".[].login"],
+        cwd: "/repo",
+        timeoutMs: 30_000,
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("falls back to constructed URLs when create output omits a URL", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(Effect.succeed(processOutput("")));

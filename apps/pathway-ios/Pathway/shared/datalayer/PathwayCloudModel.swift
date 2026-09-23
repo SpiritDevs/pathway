@@ -244,11 +244,20 @@ final class PathwayCloudModel {
     }
 
     func environmentRequest(environment: PathwayCompanyEnvironment, method: String, payload: JSONValue) async throws -> JSONValue {
+        try await environmentOperation(environment: environment, method: method, payload: payload, timeout: .seconds(30))
+    }
+
+    /// Clones and repository publishing can outlast the default request timeout.
+    func environmentOperation(
+        environment: PathwayCompanyEnvironment, method: String, payload: JSONValue, timeout: Duration
+    ) async throws -> JSONValue {
         guard let connect, environments.contains(where: { $0.id == environment.id }) else {
             throw URLError(.notConnectedToInternet)
         }
         observeEnvironmentEvents()
-        return try await issueEnvironmentClient.request(environment: environment, connect: connect, method: method, payload: payload)
+        return try await issueEnvironmentClient.request(
+            environment: environment, connect: connect, method: method, payload: payload, timeout: timeout
+        )
     }
 
     /// Placement probes open a temporary connection for the two reads, without subscribing to app data.
@@ -522,6 +531,10 @@ final class PathwayCloudModel {
 
     func projectName(companyId: String, projectId: String?) -> String? {
         projects.first { $0.companyId == companyId && $0.project.id == projectId }?.project.name
+    }
+
+    func projectIcon(companyId: String, projectId: String?) -> PathwayProjectIcon? {
+        projects.first { $0.companyId == companyId && $0.project.id == projectId }?.project.icon
     }
 
     func refreshLifecycleMetadata(using connect: PathwayConnectClient) async {

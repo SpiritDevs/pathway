@@ -247,6 +247,20 @@ export const make = Effect.gen(function* () {
             }),
         ),
       ),
+    listRepositoryOwners: (input) =>
+      github.listRepositoryOwners(input).pipe(
+        Effect.mapError(
+          (error) =>
+            new SourceControlProviderError({
+              provider: "github",
+              operation: "listRepositoryOwners",
+              command: error.command,
+              cwd: input.cwd,
+              detail: error.detail,
+              cause: error,
+            }),
+        ),
+      ),
     createRepository: (input) =>
       github.createRepository(input).pipe(
         Effect.mapError(

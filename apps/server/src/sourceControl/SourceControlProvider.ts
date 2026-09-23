@@ -7,6 +7,7 @@ import type {
   SourceControlProviderInfo,
   SourceControlProviderKind,
   SourceControlRepositoryCloneUrls,
+  SourceControlRepositoryOwner,
   SourceControlRepositoryVisibility,
 } from "@spiritdevs/contracts";
 
@@ -116,6 +117,10 @@ export class SourceControlProvider extends Context.Service<
       readonly repository: string;
       readonly visibility: SourceControlRepositoryVisibility;
     }) => Effect.Effect<SourceControlRepositoryCloneUrls, SourceControlProviderError>;
+    /** Owners a new repository can be created under; absent where the provider cannot list them. */
+    readonly listRepositoryOwners?: (input: {
+      readonly cwd: string;
+    }) => Effect.Effect<ReadonlyArray<SourceControlRepositoryOwner>, SourceControlProviderError>;
     readonly getDefaultBranch: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProviderContext;

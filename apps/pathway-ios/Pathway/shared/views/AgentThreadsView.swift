@@ -35,6 +35,7 @@ struct AgentThreadsView: View {
     @State private var attachingThread: PathwayAgentThread?
     @State private var focuses = PathwayFocusModel()
     @State private var creatingFocus = false
+    @State private var creatingProject = false
     @State private var showingNotifications = false
     @State private var refresh = PathwayThreadRefresh()
     init(newThreadAction: @escaping () -> Void, initialFilter: PathwayThreadListFilter = .all) {
@@ -99,6 +100,7 @@ struct AgentThreadsView: View {
         .task(id: appModel.cloud.threadQueue.threads.map(\.id)) { await openPendingThread() }
         .task(id: appModel.localStorageDirectory) { await focuses.observe(cloud: appModel.cloud, storageDirectory: appModel.localStorageDirectory) }
         .sheet(isPresented: $creatingFocus) { PathwayFocusEditorView(model: focuses) }
+        .sheet(isPresented: $creatingProject) { PathwayCreateProjectView(focuses: focuses) }
         .sheet(isPresented: $showingNotifications) { PathwayFocusNotificationsView(model: focuses) }
         .sheet(item: $sleepingThread) { thread in
             sleepSheet(for: thread)
@@ -508,6 +510,7 @@ struct AgentThreadsView: View {
                 }
             }
             Button("New Focus", systemImage: "plus") { creatingFocus = true }
+            Button("New Project", systemImage: "folder.badge.plus") { creatingProject = true }
             if let error = focuses.errorMessage { Text(error) }
     }
 
@@ -859,15 +862,22 @@ private struct AgentThreadRow: View {
         .accessibilityHint("Open thread")
         .accessibilityCustomContent("Model", thread.shell.modelSelection.model)
         .accessibilityCustomContent("Company", companyName ?? "Unknown")
-        .task(id: projectIconContext?.key) {
-            guard let context = projectIconContext, let connect = appModel.connect else { return }
+        .task(id: syncedProjectIcon == nil ? projectIconContext?.key : nil) {
+            guard syncedProjectIcon == nil, let context = projectIconContext, let connect = appModel.connect else { return }
             await appModel.projectIcons.load(context, using: connect)
         }
     }
 
+    private var syncedProjectIcon: PathwayProjectIcon? {
+        thread.shell.isConversation ? nil : appModel.cloud.projectIcon(companyId: thread.companyId, projectId: thread.cloudProjectId)
+    }
+
     private var projectIcon: some View {
         Group {
-            if let context = projectIconContext, let image = appModel.projectIcons.images[context.key] {
+            if let icon = syncedProjectIcon {
+                PathwayFocusIcon(name: icon.name, size: 14)
+                    .foregroundStyle(PathwayFocusIcon.color(icon.color))
+            } else if let context = projectIconContext, let image = appModel.projectIcons.images[context.key] {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()

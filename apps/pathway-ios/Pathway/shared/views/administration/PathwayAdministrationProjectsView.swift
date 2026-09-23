@@ -96,6 +96,7 @@ struct PathwayAdministrationProjectEditor: View {
                 Button("Browse directories") { Task { await browse() } }.disabled(root.isEmpty)
                 ForEach(folders) { folder in Button(folder.fullPath) { root = folder.fullPath; folders = [] } }
             }
+            if let project { PathwayProjectIconSettingsRow(environment: client.environment, localProjectID: project.id) }
             Section("Defaults") {
                 Picker("Workspace", selection: $mode) { Text("Environment default").tag(""); Text("Local checkout").tag("local"); Text("Worktree").tag("worktree") }
                 Picker("Provider", selection: $instanceID) { Text("No project default").tag(""); ForEach(providers) { Text($0.name).tag($0.id) } }

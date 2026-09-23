@@ -374,6 +374,8 @@ import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
+  SourceControlListRepositoryOwnersInput,
+  SourceControlListRepositoryOwnersResult,
   SourceControlPublishRepositoryInput,
   SourceControlPublishRepositoryResult,
   SourceControlRepositoryError,
@@ -532,6 +534,7 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
+  sourceControlListRepositoryOwners: "sourceControl.listRepositoryOwners",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -945,6 +948,15 @@ export const WsSourceControlPublishRepositoryRpc = Rpc.make(
   {
     payload: SourceControlPublishRepositoryInput,
     success: SourceControlPublishRepositoryResult,
+    error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsSourceControlListRepositoryOwnersRpc = Rpc.make(
+  WS_METHODS.sourceControlListRepositoryOwners,
+  {
+    payload: SourceControlListRepositoryOwnersInput,
+    success: SourceControlListRepositoryOwnersResult,
     error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
   },
 );
@@ -2100,6 +2112,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
+  WsSourceControlListRepositoryOwnersRpc,
   WsProjectsListEntriesRpc,
   WsProjectsReadFileRpc,
   WsProjectsSearchContentsRpc,
