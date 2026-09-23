@@ -60,6 +60,7 @@ import {
   setSnapShotAnimationDestination,
   setSnapShotShortcutSuppressed,
 } from "./methods/snapShot.ts";
+import * as ComputerIpc from "./methods/computer.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
 
@@ -134,4 +135,12 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   for (const previewMethod of PreviewIpc.methods) {
     yield* ipc.handle(previewMethod);
   }
+  yield* ipc.handle(ComputerIpc.getComputerState);
+  yield* ipc.handle(ComputerIpc.requestComputerPermissions);
+  yield* ipc.handle(ComputerIpc.startComputerPermissionSetup);
+  yield* ipc.handle(ComputerIpc.openComputerPermissionSettings);
+  yield* ipc.handle(ComputerIpc.showComputerPermissionGuide);
+  yield* ipc.handle(ComputerIpc.hideComputerPermissionGuide);
+  yield* ipc.handle(ComputerIpc.restartComputerApp);
+  yield* ipc.handle(ComputerIpc.setComputerCursorStyle);
 });

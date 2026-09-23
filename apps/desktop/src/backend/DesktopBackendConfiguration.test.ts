@@ -14,7 +14,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { CUA_HOST_SOCKET_ENV } from "@spiritdevs/shared/cuaDriverProtocol";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import { DesktopComputer } from "../computer/DesktopComputer.ts";
+import { DesktopComputer, inertDesktopComputer } from "../computer/DesktopComputer.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
@@ -391,13 +391,11 @@ describe("DesktopBackendConfiguration", () => {
       }),
     ).pipe(
       Effect.provideService(DesktopComputer, {
+        ...inertDesktopComputer,
         handoff: Option.some({
           endpoint: "/tmp/pathway-cua-host.sock",
           capability: "fixture-capability",
         }),
-        suspend: Effect.void,
-        resume: Effect.void,
-        setEmergencyStopNotice: () => Effect.void,
       }),
     ),
   );
