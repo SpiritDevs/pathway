@@ -856,10 +856,10 @@ export class InvalidAppleTeamIdError extends Schema.TaggedErrorClass<InvalidAppl
 
 export class MissingMacPasskeyProvisioningProfileError extends Schema.TaggedErrorClass<MissingMacPasskeyProvisioningProfileError>()(
   "MissingMacPasskeyProvisioningProfileError",
-  {},
+  { variable: Schema.String },
 ) {
   override get message(): string {
-    return "PATHWAY_MACOS_PROVISIONING_PROFILE must point to an Associated Domains provisioning profile.";
+    return `${this.variable} must point to an Associated Domains provisioning profile.`;
   }
 }
 
@@ -944,17 +944,31 @@ function normalizePasskeyRpDomain(value: string): string {
   return parsed.hostname;
 }
 
+/**
+ * Each flavor signs as its own App ID, so it needs its own provisioning profile and keychain
+ * group. A cua build never borrows production's profile.
+ */
+const MAC_SIGNING_IDENTITIES = {
+  production: { appId: DESKTOP_APP_ID, profileVariable: "PATHWAY_MACOS_PROVISIONING_PROFILE" },
+  cua: {
+    appId: PATHWAY_CUA_DESKTOP_IDENTITY.bundleId,
+    profileVariable: "PATHWAY_MACOS_CUA_PROVISIONING_PROFILE",
+  },
+} as const satisfies Record<PathwayDesktopFlavor, { appId: string; profileVariable: string }>;
+
 export function resolveMacPasskeySigningConfiguration(
   env: Readonly<Record<string, string | undefined>>,
+  flavor: PathwayDesktopFlavor = "production",
 ): MacPasskeySigningConfiguration {
   const teamId = env.PATHWAY_APPLE_TEAM_ID?.trim().toUpperCase() ?? "";
   if (!APPLE_TEAM_ID_PATTERN.test(teamId)) {
     throw new InvalidAppleTeamIdError({ teamId });
   }
 
-  const provisioningProfilePath = env.PATHWAY_MACOS_PROVISIONING_PROFILE?.trim() ?? "";
+  const { appId, profileVariable } = MAC_SIGNING_IDENTITIES[flavor];
+  const provisioningProfilePath = env[profileVariable]?.trim() ?? "";
   if (provisioningProfilePath.length === 0) {
-    throw new MissingMacPasskeyProvisioningProfileError();
+    throw new MissingMacPasskeyProvisioningProfileError({ variable: profileVariable });
   }
 
   const configuredRpDomains = env.PATHWAY_CLERK_PASSKEY_RP_DOMAINS?.trim();
@@ -981,7 +995,7 @@ export function resolveMacPasskeySigningConfiguration(
   }
 
   return {
-    appId: DESKTOP_APP_ID,
+    appId,
     teamId,
     rpDomains: uniqueRpDomains,
     provisioningProfilePath,
@@ -2328,7 +2342,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const configuredMacPasskeySigning =
     options.platform === "mac" && options.signed
       ? yield* Effect.try({
-          try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
+          try: () =>
+            resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot }), options.flavor),
           catch: MacPasskeySigningConfigurationResolutionError.fromCause,
         })
       : undefined;
