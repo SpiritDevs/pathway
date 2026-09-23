@@ -16,6 +16,7 @@ import {
   decodeUtf8,
   type CollectedUint8StreamText,
 } from "./stream/collectUint8StreamText.ts";
+import { providerChildEnvironment } from "./provider/ProviderInstanceEnvironment.ts";
 
 export interface ProcessRunInput {
   readonly command: string;
@@ -295,23 +296,15 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
   const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const outputMode = input.outputMode ?? "error";
   const truncatedMarker = input.truncatedMarker ?? "";
-  const extendEnv = input.env !== undefined;
-  const spawnCommand = yield* resolveSpawnCommand(
-    input.command,
-    input.args,
-    input.env === undefined ? {} : { env: input.env, extendEnv },
-  );
+  // `input.env` extends the host environment; Computer host keys never reach the child.
+  const environment = yield* providerChildEnvironment({ env: input.env, extendEnv: true });
+  const spawnCommand = yield* resolveSpawnCommand(input.command, input.args, environment);
 
   const child = yield* spawner
     .spawn(
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         ...((input.spawnCwd ?? input.cwd) ? { cwd: input.spawnCwd ?? input.cwd } : {}),
-        ...(input.env !== undefined
-          ? {
-              env: input.env,
-              extendEnv,
-            }
-          : {}),
+        ...environment,
         shell: spawnCommand.shell,
       }),
     )

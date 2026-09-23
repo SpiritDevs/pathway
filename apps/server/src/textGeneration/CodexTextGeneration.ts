@@ -37,6 +37,7 @@ import {
 } from "./TextGenerationUtils.ts";
 import { getModelSelectionStringOptionValue } from "@spiritdevs/shared/model";
 import { getCodexServiceTierOptionValue } from "../codexModelOptions.ts";
+import { providerChildEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 
 const CODEX_TIMEOUT_MS = 180_000;
 
@@ -64,7 +65,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const serverConfig = yield* Effect.service(ServerConfig.ServerConfig);
-  const resolvedEnvironment = environment ?? process.env;
+  const { env: resolvedEnvironment } = yield* providerChildEnvironment({ env: environment });
 
   type MaterializedImageAttachments = {
     readonly imagePaths: ReadonlyArray<string>;
