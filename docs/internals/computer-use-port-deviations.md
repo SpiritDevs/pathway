@@ -108,3 +108,11 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - `withAgentActivity` and `browserCall` take a `DesktopSignal` instead of an `AbortSignal`, and a browser call is cancelled by interruption.
 - Launch-window waits stop on interruption, the stream attach/detach chain is a `Deferred` tail, per-thread publishes serialise on a `Semaphore`, and timers are scoped fibers.
 - The masked-activation shield label reads "Pathway is activating …" and shield ids come from `Random`.
+- The manager tests are split by topic into `ComputerManager.test.ts`, `.control`, `.observation`, `.lifecycle` and `.foreground`, because Synara's one 4.7k-line file is too large to review.
+- `makeComputerServiceLayer` requires `ComputerApprovalGate` and passes it to the manager as `approvals`. It reads the platform and environment from `HostProcessPlatform`/`HostProcessEnvironment`; Synara used `process` and a `platform` option. It passes the manager `stateDir` rather than two file paths.
+- The service layer reads the host capability from `PATHWAY_BROWSER_HOST_CAPABILITY`, or from `PATHWAY_BROWSER_HOST_CAPABILITY_FD` through `/dev/fd/N`. This replaces Synara's `browserHostRpcClient`, which has no Pathway counterpart. A failed boot probe reads as `backend-unavailable` rather than a defect.
+- `makeCuaComputerBackend(options)` is a scope-bound factory. The still loop, the semantic text lanes and the event `PubSub` live in its scope, and `dispose` is idempotent and also a scope finalizer.
+- Cua frames arrive on `events` as `{ type: "frame" }` rather than through an `attachStream` callback. Browser calls and aborts are cancelled by interruption through the operation's `DesktopSignal`, not an `AbortSignal`.
+- A Cua driver failure other than `CuaTransportError` becomes `CuaActionError`: `dispatched-unknown` for a mutation, `not-dispatched` otherwise. An invalid key is a typed failure rather than a synchronous throw, and the semantic text lane skips its gap after an interrupted write.
+- The Cua backend reads the server platform from `HostProcessPlatform`, and `launchApp` takes an explicit args array.
+- Six Cua suite cases that go through the agent gateway's computer tools wait for P4. Synara's "Computer authority" describe in that suite exercises only the manager, so it lives in `ComputerManager.authority.test.ts`.
