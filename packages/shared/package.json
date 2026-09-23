@@ -227,6 +227,10 @@
       "types": "./src/cuaActionDiagnostics.ts",
       "import": "./src/cuaActionDiagnostics.ts"
     },
+    "./cuaDriverProtocol": {
+      "types": "./src/cuaDriverProtocol.ts",
+      "import": "./src/cuaDriverProtocol.ts"
+    },
     "./frameTransport": {
       "types": "./src/frameTransport.ts",
       "import": "./src/frameTransport.ts"
