@@ -1,5 +1,11 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, vi } from "@effect/vitest";
-import { ComputerAvailability, ComputerScreenshot, ComputerState } from "@spiritdevs/contracts";
+import {
+  ComputerAvailability,
+  ComputerScreenshot,
+  ComputerState,
+  ProviderDriverKind,
+} from "@spiritdevs/contracts";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import {
   CUA_SETUP_TIMEOUT_MS,
@@ -12,8 +18,11 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import { makeComputerTools } from "../mcp/toolkits/computer/computerTools.ts";
+import type { McpToolCallResult, ToolContext } from "../mcp/toolkits/computer/toolRuntime.ts";
 import type { ComputerBackendEvent, ComputerStreamFrame } from "./ComputerBackend.ts";
 import { ComputerBackendError, type ComputerOperationError } from "./computerErrors.ts";
+import { ComputerManager } from "./ComputerManager.ts";
 import { withComputerTask } from "./computerTaskContext.ts";
 import {
   CuaActionError,
@@ -491,6 +500,73 @@ const exactTarget = (f: Fixture, label: string, windowId = "cua:10:20", index = 
     return { target: { label, windowId }, node, point: node.activationPoint! };
   });
 
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeObservedElements = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      elements: Schema.Array(
+        Schema.Struct({
+          ref: Schema.Number,
+          label: Schema.String,
+          value: Schema.optional(Schema.String),
+        }),
+      ),
+    }),
+  ),
+);
+
+const gatewayContext: ToolContext = {
+  callerThreadId: "test-thread",
+  callerThreadLabel: null,
+  callerSessionKey: "test-session",
+  callerProvider: ProviderDriverKind.make("claudeAgent"),
+  callerCapabilities: new Set(["computer"]),
+  callerTurnId: "test-turn",
+  assertCallerTurnActive: () => Effect.void,
+  jsonRpcRequestId: 1,
+};
+
+/** The elements a `computer_get_state` result lists. */
+const elementsOf = (result: { readonly content: ReadonlyArray<{ readonly type: string }> }) => {
+  const text = result.content.find((entry) => entry.type === "text");
+  return decodeObservedElements(text !== undefined && "text" in text ? text.text : "{}").elements;
+};
+
+/**
+ * Runs `body` against the fixture driven through ComputerManager and the
+ * Computer MCP tools, the route a provider's calls take.
+ */
+const withGateway = <A, E>(
+  options: FixtureOptions,
+  body: (
+    f: Fixture,
+    tools: {
+      readonly call: (
+        name: string,
+        args: Record<string, unknown>,
+      ) => Effect.Effect<McpToolCallResult>;
+      readonly list: Effect.Effect<ReturnType<typeof elementsOf>>;
+    },
+  ) => Effect.Effect<A, E>,
+) =>
+  Effect.gen(function* () {
+    const f = yield* fixture(options);
+    const manager = yield* ComputerManager.make({ backend: f.backend, actionSettleMs: 0 });
+    const tools = new Map(
+      makeComputerTools({ manager }).map((tool) => [tool.definition.name, tool] as const),
+    );
+    const call = (name: string, args: Record<string, unknown>) =>
+      run(tools.get(name)!.handler(args, gatewayContext));
+    const list = Effect.map(
+      call("computer_get_state", { window_id: "cua:10:20", include_screenshot: false }),
+      (result) => {
+        expect(result.isError).not.toBe(true);
+        return elementsOf(result);
+      },
+    );
+    return yield* body(f, { call, list });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+
 describe("Cua native boundary", () => {
   it.effect(
     "requests AX keyboard focus only for explicit observations, not input revalidation",
@@ -511,11 +587,220 @@ describe("Cua native boundary", () => {
       }),
   );
 
-  // Synara's gateway-through-manager cases ("carries a provider's observed
-  // field ref through the gateway…", the retained-ref it.each, the retained
-  // web append refusals, and the bounded ref table eviction) drive
-  // ComputerManager plus the agent gateway's computer tools. Those layers
-  // are ported in later phases and own those cases.
+  it.effect(
+    "carries a provider's observed field ref through the tools and manager to native Return",
+    () =>
+      withGateway({ nativeRevision: 37 }, (f, { call }) =>
+        Effect.gen(function* () {
+          f.setElements([messageField({ label: "Address", element_token: "address-token" })]);
+          const state = yield* call("computer_get_state", { window_id: "cua:10:20" });
+          expect(state.isError).not.toBe(true);
+          const field = elementsOf(state).find((element) => element.label === "Address")!;
+          expect(field.ref).toEqual(expect.any(Number));
+          const result = yield* call("computer_press_key", {
+            key: "enter",
+            ref: field.ref,
+            include_screenshot: false,
+          });
+          expect(result.isError).not.toBe(true);
+          expect(lastCall(f, "press_key")?.args).toMatchObject({
+            key: "enter",
+            element_token: "address-token",
+            pid: 10,
+            window_id: 20,
+          });
+          const batch = yield* call("computer_run", {
+            steps: [{ type: "press_key", key: "enter", ref: field.ref }],
+            include_screenshot: false,
+          });
+          expect(batch.isError).not.toBe(true);
+          expect(callsNamed(f, "press_key")).toHaveLength(2);
+          expect(lastCall(f, "press_key")?.args).toHaveProperty("element_token", "address-token");
+        }),
+      ),
+  );
+
+  it.effect.each(["press_key", "click", "set_value", "type_text"] as const)(
+    "keeps the original native identity after identical-label controls reorder for %s",
+    (action) =>
+      withGateway({ nativeRevision: 37 }, (f, { call, list }) =>
+        Effect.gen(function* () {
+          const first = {
+            role: action === "click" ? "AXButton" : "AXTextField",
+            label: "Duplicate",
+            value: "first",
+            frame: { x: -290, y: 30, width: 70, height: 20 },
+            element_token: "original-first-token",
+            actions: ["AXPress"],
+            in_web_content: true,
+          };
+          const second = {
+            ...first,
+            value: "second",
+            frame: { ...first.frame, x: -200 },
+            element_token: "original-second-token",
+          };
+          f.setElements([first, second]);
+          f.onTool("set_value", () => ({
+            structuredContent: { effect: "confirmed", evidence: [{ kind: "value_readback" }] },
+          }));
+          const original = yield* list;
+          const firstRef = original[0]!.ref;
+          expect(encodeJson(original)).not.toContain("original-first-token");
+          f.setElements([second, first]);
+          const reordered = yield* list;
+          expect(reordered.map((element) => element.ref)).toEqual([original[1]!.ref, firstRef]);
+          const beforeAction = f.calls.length;
+          const result = yield* call(`computer_${action}`, {
+            ref: firstRef,
+            include_screenshot: false,
+            ...(action === "press_key" ? { key: "enter" } : {}),
+            ...(action === "set_value" ? { value: "updated" } : {}),
+            ...(action === "type_text" ? { text: " appended" } : {}),
+          });
+          expect(result.isError).not.toBe(true);
+          const nativeAction = action === "type_text" ? "set_value" : action;
+          expect(lastCall(f, nativeAction)?.args).toHaveProperty(
+            "element_token",
+            "original-first-token",
+          );
+          const actionCalls = f.calls.slice(beforeAction);
+          const writeIndex = actionCalls.findIndex((call) => call.name === nativeAction);
+          expect(
+            actionCalls.slice(0, writeIndex).some((call) => call.name === "get_window_state"),
+          ).toBe(false);
+          if (action === "type_text") {
+            expect(actionCalls[writeIndex]?.args).toMatchObject({
+              append: true,
+              value: " appended",
+            });
+            expect(first.value).toBe("first appended");
+            expect(second.value).toBe("second");
+          }
+        }),
+      ),
+  );
+
+  it.effect(
+    "refuses a retained web append when an identical replacement occupies the same geometry",
+    () =>
+      withGateway({ nativeRevision: 37 }, (f, { call, list }) =>
+        Effect.gen(function* () {
+          const field = {
+            role: "AXTextField",
+            label: "Search",
+            value: "old",
+            frame: { x: -290, y: 30, width: 120, height: 20 },
+            element_token: "original-token",
+            in_web_content: true,
+          };
+          f.setElements([field]);
+          const original = (yield* list)[0]!;
+          f.setElements([{ ...field, value: "replacement", element_token: "replacement-token" }]);
+          yield* list;
+          f.onTool("set_value", () => ({
+            isError: true,
+            structuredContent: {
+              effect: "not-dispatched",
+              code: "stale_target",
+              message: "The original token expired.",
+            },
+          }));
+          const beforeAction = f.calls.length;
+          const result = yield* call("computer_type_text", {
+            ref: original.ref,
+            text: " appended",
+            include_screenshot: false,
+          });
+          expect(result.isError).toBe(true);
+          const writes = f.calls
+            .slice(beforeAction)
+            .filter((call) => call.name === "set_value" || call.name === "type_text");
+          expect(writes).toHaveLength(1);
+          expect(writes[0]?.args).toMatchObject({ element_token: "original-token", append: true });
+          expect(f.calls.slice(beforeAction).some((call) => call.name === "get_window_state")).toBe(
+            false,
+          );
+        }),
+      ),
+  );
+
+  it.effect(
+    "refuses retained web append on older native revisions without a snapshot or write",
+    () =>
+      withGateway({ nativeRevision: 36 }, (f, { call, list }) =>
+        Effect.gen(function* () {
+          f.setElements([
+            {
+              role: "AXTextField",
+              label: "Search",
+              value: "old",
+              frame: { x: -290, y: 30, width: 120, height: 20 },
+              element_token: "original-token",
+              in_web_content: true,
+            },
+          ]);
+          const original = (yield* list)[0]!;
+          const beforeAction = f.calls.length;
+          const result = yield* call("computer_type_text", {
+            ref: original.ref,
+            text: " appended",
+            include_screenshot: false,
+          });
+          expect(result.isError).toBe(true);
+          expect(
+            f.calls
+              .slice(beforeAction)
+              .filter((call) =>
+                ["get_window_state", "set_value", "type_text"].includes(call.name ?? ""),
+              ),
+          ).toHaveLength(0);
+        }),
+      ),
+  );
+
+  it.effect(
+    "refuses a native retained ref without a semantic click instead of using its stale coordinates",
+    () =>
+      withGateway({ nativeRevision: 37 }, (f, { call, list }) =>
+        Effect.gen(function* () {
+          f.setElements([messageField({ label: "Search", element_token: "original-token" })]);
+          const original = (yield* list)[0]!;
+          const result = yield* call("computer_click", {
+            ref: original.ref,
+            include_screenshot: false,
+          });
+          expect(result.isError).toBe(true);
+          expect(callsNamed(f, "click")).toHaveLength(0);
+        }),
+      ),
+  );
+
+  it.effect("never recycles a native ref when its bounded table is evicted", () =>
+    withGateway({ nativeRevision: 37 }, (f, { call, list }) =>
+      Effect.gen(function* () {
+        let firstRef: number | undefined;
+        let latestRefs: number[] = [];
+        for (let batch = 0; batch < 9; batch += 1) {
+          f.setElements(
+            Array.from({ length: 60 }, (_, index) => ({
+              role: "AXButton",
+              label: `Button ${batch}-${index}`,
+              frame: { x: -290, y: 30, width: 20, height: 20 },
+              element_token: `token-${batch}-${index}`,
+              actions: ["AXPress"],
+            })),
+          );
+          latestRefs = (yield* list).map((element) => element.ref);
+          firstRef ??= latestRefs[0];
+        }
+        expect(Math.min(...latestRefs)).toBeGreaterThan(firstRef!);
+        const stale = yield* call("computer_click", { ref: firstRef, include_screenshot: false });
+        expect(stale.isError).toBe(true);
+        expect(callsNamed(f, "click")).toHaveLength(0);
+      }),
+    ),
+  );
 
   it.effect(
     "keeps advertised retained AX actions available off-Space without dispatching pointer input",
