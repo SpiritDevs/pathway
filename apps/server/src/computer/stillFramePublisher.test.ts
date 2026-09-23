@@ -316,6 +316,49 @@ describe("StillFramePublisher", () => {
     }),
   );
 
+  it.effect("cancels the first capture of an attach on detach", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      let cancelled = false;
+      const harness = yield* makeHarness(() =>
+        Effect.andThen(Deferred.succeed(started, undefined), Effect.never).pipe(
+          Effect.onInterrupt(() => Effect.sync(() => (cancelled = true))),
+        ),
+      );
+      const attaching = yield* Effect.forkChild(harness.publisher.attach);
+      yield* Deferred.await(started);
+      yield* harness.publisher.detach;
+      expect(cancelled).toBe(true);
+      yield* Fiber.join(attaching);
+      expect(harness.frames).toHaveLength(0);
+    }),
+  );
+
+  it.effect("cancels a keyframe capture on detach so the next attach can capture", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      let hang = false;
+      let cancelled = false;
+      const harness = yield* makeHarness(() => {
+        if (!hang) return Effect.succeed(FRAME_A);
+        hang = false;
+        return Effect.andThen(Deferred.succeed(started, undefined), Effect.never).pipe(
+          Effect.onInterrupt(() => Effect.sync(() => (cancelled = true))),
+        );
+      });
+      yield* harness.publisher.attach;
+      hang = true;
+      const keyframe = yield* Effect.forkChild(harness.publisher.requestKeyframe);
+      yield* Deferred.await(started);
+      yield* harness.publisher.detach;
+      expect(cancelled).toBe(true);
+      yield* Fiber.join(keyframe);
+      // The slot is free: a replacement attach captures and publishes at once.
+      yield* harness.publisher.attach;
+      expect(harness.frames).toHaveLength(2);
+    }),
+  );
+
   it.effect("stops the loop when its scope closes", () =>
     Effect.gen(function* () {
       const counts = { captures: 0 };
