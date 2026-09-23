@@ -3367,3 +3367,299 @@ it.layer(ConversationTestLayer)("Conversations and temporary retention", (it) =>
       }),
   );
 });
+
+// Port of Synara's decider.computerControl.test.ts: Computer intent is frozen
+// onto the run at send time and never re-derived from stored text.
+it.layer(TestLayer)("decider computer-control pass-through", (it) => {
+  type DispatchCommand = Extract<
+    Parameters<OrchestratorV2["Service"]["dispatch"]>[0],
+    { readonly type: "message.dispatch" }
+  >;
+
+  const startThread = Effect.fn("startComputerThread")(function* (name: string) {
+    const orchestrator = yield* OrchestratorV2;
+    const threadId = ThreadId.make(`computer-${name}-thread`);
+    const projectId = yield* seedProject(ProjectId.make(`computer-${name}-project`));
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      createdBy: "user",
+      creationSource: "web",
+      commandId: CommandId.make(`computer-${name}-create`),
+      threadId,
+      projectId,
+      title: "Computer control",
+      modelSelection,
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: process.cwd(),
+    });
+    return threadId;
+  });
+
+  const send = Effect.fn("sendComputerMessage")(function* (
+    threadId: ThreadId,
+    id: string,
+    input: Partial<DispatchCommand>,
+  ) {
+    const orchestrator = yield* OrchestratorV2;
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      createdBy: "user",
+      creationSource: "web",
+      commandId: CommandId.make(`${id}-command`),
+      threadId,
+      messageId: MessageId.make(id),
+      text: "Open Calculator",
+      attachments: [],
+      modelSelection,
+      dispatchMode: { type: "start_immediately" },
+      ...input,
+    });
+    const projection = yield* orchestrator.getThreadProjection(threadId);
+    const run = projection.runs.find((candidate) => candidate.userMessageId === id);
+    assert.isDefined(run);
+    return run;
+  });
+
+  /** Completes a run; a first run also gets the baseline that lets its message be edited. */
+  const completeRun = Effect.fn("completeComputerRun")(function* (
+    threadId: ThreadId,
+    runId: RunId,
+  ) {
+    const orchestrator = yield* OrchestratorV2;
+    const eventSink = yield* EventSinkV2;
+    const projection = yield* orchestrator.getThreadProjection(threadId);
+    const run = projection.runs.find((candidate) => candidate.id === runId);
+    assert.isDefined(run);
+    const scope = projection.checkpointScopes.find(
+      (candidate) => candidate.runId === runId && candidate.kind === "root_run",
+    );
+    const completedAt = yield* DateTime.now;
+    yield* eventSink.write({
+      events: [
+        ...(run.ordinal !== 1 || scope === undefined || run.rootNodeId === null
+          ? []
+          : [
+              {
+                id: EventId.make(`${runId}-baseline`),
+                type: "checkpoint.captured" as const,
+                threadId,
+                nodeId: run.rootNodeId,
+                providerInstanceId: run.providerInstanceId,
+                occurredAt: completedAt,
+                payload: {
+                  id: CheckpointId.make(`${runId}-baseline`),
+                  threadId,
+                  scopeId: scope.id,
+                  runId: null,
+                  nodeId: run.rootNodeId,
+                  parentCheckpointId: null,
+                  ordinalWithinScope: 0,
+                  appRunOrdinal: null,
+                  ref: CheckpointRef.make(`refs/pathway/${runId}-baseline`),
+                  status: "ready" as const,
+                  files: [],
+                  capturedAt: completedAt,
+                },
+              },
+            ]),
+        {
+          id: EventId.make(`${runId}-completed`),
+          type: "run.updated",
+          threadId,
+          runId,
+          ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: completedAt,
+          payload: { ...run, status: "completed", completedAt },
+        },
+      ],
+    });
+  });
+
+  const editAndRestart = Effect.fn("editComputerMessage")(function* (
+    threadId: ThreadId,
+    messageId: string,
+    replacementId: string,
+    input: {
+      readonly text: string;
+      readonly enableComputerControl?: boolean;
+      readonly computerControlGeneration?: number;
+    },
+  ) {
+    const orchestrator = yield* OrchestratorV2;
+    yield* orchestrator.dispatch({
+      type: "message.edit-and-restart",
+      commandId: CommandId.make(`${replacementId}-command`),
+      createdBy: "user",
+      creationSource: "web",
+      threadId,
+      messageId: MessageId.make(messageId),
+      replacementMessageId: MessageId.make(replacementId),
+      ...input,
+    });
+    const projection = yield* orchestrator.getThreadProjection(threadId);
+    const run = projection.runs.find((candidate) => candidate.userMessageId === replacementId);
+    assert.isDefined(run);
+    return run;
+  });
+
+  for (const queued of [false, true]) {
+    it.effect(`freezes a deliberate Computer invocation for this turn (queued=${queued})`, () =>
+      Effect.gen(function* () {
+        const threadId = yield* startThread(`invocation-${queued}`);
+        if (queued) yield* send(threadId, `computer-invocation-${queued}-active`, {});
+        const run = yield* send(threadId, `computer-invocation-${queued}`, {
+          text: "/computer-use open Calculator",
+          computerControlGeneration: 7,
+          ...(queued ? { dispatchMode: { type: "queue_after_active" } as const } : {}),
+        });
+        assert.equal(run.status, queued ? "queued" : "starting");
+        assert.deepEqual(run.computerControl, { mode: "request", generation: 7 });
+      }),
+    );
+  }
+
+  for (const enableComputerControl of [true, false]) {
+    it.effect(
+      `carries the switch and generation when slash text is present (switch=${enableComputerControl})`,
+      () =>
+        Effect.gen(function* () {
+          const threadId = yield* startThread(`slash-switch-${enableComputerControl}`);
+          const run = yield* send(threadId, `computer-slash-switch-${enableComputerControl}`, {
+            text: "/computer-use open Calculator",
+            enableComputerControl,
+            computerControlGeneration: 7,
+          });
+          assert.deepEqual(run.computerControl, {
+            mode: enableComputerControl ? "chat" : "request",
+            generation: 7,
+          });
+        }),
+    );
+  }
+
+  it.effect("does not reinterpret frozen request and off queue metadata", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const eventSink = yield* EventSinkV2;
+      const threadId = yield* startThread("frozen-queue");
+      const active = yield* send(threadId, "computer-frozen-queue-active", {});
+      const requested = yield* send(threadId, "computer-frozen-queue-request", {
+        text: "/computer-use open Calculator",
+        computerControlGeneration: 9,
+        dispatchMode: { type: "queue_after_active" },
+      });
+      // Agent-authored slash text never opts in, so this run is frozen off.
+      const off = yield* send(threadId, "computer-frozen-queue-off", {
+        createdBy: "agent",
+        text: "/computer-use open Calculator",
+        dispatchMode: { type: "queue_after_active" },
+      });
+
+      const promoted = yield* Queue.unbounded<RunId>();
+      yield* eventSink
+        .stream({ threadId, afterSequence: yield* orchestrator.getThreadEventSequence(threadId) })
+        .pipe(
+          Stream.runForEach((stored) =>
+            stored.event.type === "run.updated" && stored.event.payload.status === "starting"
+              ? Queue.offer(promoted, stored.event.payload.id)
+              : Effect.void,
+          ),
+          Effect.forkScoped,
+        );
+      yield* Effect.yieldNow;
+
+      yield* completeRun(threadId, active.id);
+      assert.equal(yield* Queue.take(promoted), requested.id);
+      yield* completeRun(threadId, requested.id);
+      assert.equal(yield* Queue.take(promoted), off.id);
+
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      const runOf = (id: RunId) => projection.runs.find((run) => run.id === id);
+      assert.deepEqual(runOf(requested.id)?.computerControl, { mode: "request", generation: 9 });
+      assert.isUndefined(runOf(off.id)?.computerControl);
+    }),
+  );
+
+  it.effect("resolves a fresh edit without inheriting a prior invocation", () =>
+    Effect.gen(function* () {
+      for (const [name, originalText, text, expectedMode] of [
+        ["explain", "/computer-use open Calculator", "Explain the result", undefined],
+        ["invoke", "Explain the result", "/computer-use open Calculator", "request"],
+      ] as const) {
+        const threadId = yield* startThread(`fresh-edit-${name}`);
+        const original = yield* send(threadId, `computer-fresh-edit-${name}`, {
+          text: originalText,
+        });
+        yield* completeRun(threadId, original.id);
+        const edited = yield* editAndRestart(
+          threadId,
+          `computer-fresh-edit-${name}`,
+          `computer-fresh-edit-${name}-replacement`,
+          { text },
+        );
+        assert.equal(edited.computerControl?.mode, expectedMode);
+      }
+    }),
+  );
+
+  for (const createdBy of ["agent", "system"] as const) {
+    it.effect(`does not infer consent from a ${createdBy} message`, () =>
+      Effect.gen(function* () {
+        const threadId = yield* startThread(`origin-${createdBy}`);
+        const run = yield* send(threadId, `computer-origin-${createdBy}`, {
+          createdBy,
+          text: "/computer-use open Calculator",
+        });
+        assert.isUndefined(run.computerControl);
+      }),
+    );
+  }
+
+  for (const [enableComputerControl, expected] of [
+    [true, { mode: "chat", generation: 7 }],
+    [false, undefined],
+    [undefined, undefined],
+  ] as const) {
+    it.effect(
+      `freezes the switch and generation across every dispatch path (switch=${enableComputerControl})`,
+      () =>
+        Effect.gen(function* () {
+          const flags = {
+            ...(enableComputerControl === undefined ? {} : { enableComputerControl }),
+            computerControlGeneration: 7,
+          };
+          const threadId = yield* startThread(`every-path-${enableComputerControl}`);
+          const started = yield* send(
+            threadId,
+            `computer-every-path-${enableComputerControl}`,
+            flags,
+          );
+          const queued = yield* send(
+            threadId,
+            `computer-every-path-${enableComputerControl}-queued`,
+            { ...flags, dispatchMode: { type: "queue_after_active" } },
+          );
+          assert.deepEqual(started.computerControl, expected);
+          assert.deepEqual(queued.computerControl, expected);
+
+          const editThreadId = yield* startThread(`every-path-edit-${enableComputerControl}`);
+          const original = yield* send(
+            editThreadId,
+            `computer-every-path-edit-${enableComputerControl}`,
+            {},
+          );
+          yield* completeRun(editThreadId, original.id);
+          const edited = yield* editAndRestart(
+            editThreadId,
+            `computer-every-path-edit-${enableComputerControl}`,
+            `computer-every-path-edit-${enableComputerControl}-replacement`,
+            { text: "Open Calculator", ...flags },
+          );
+          assert.deepEqual(edited.computerControl, expected);
+        }),
+    );
+  }
+});
