@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { expect } from "vite-plus/test";
 
-import { cuaRequest } from "@spiritdevs/shared/cuaDriverProtocol";
+import { type CuaReply, cuaRequest } from "@spiritdevs/shared/cuaDriverProtocol";
 
 import { type CuaInputMonitorState, ESCAPE_INPUT_COOLDOWN_MS } from "./CuaDriverHost.ts";
 import { CAPABILITY, type Fixture, makeFixture } from "./testing/CuaDriverFixture.ts";
@@ -563,24 +563,22 @@ describe("physical Escape interrupt", () => {
       () =>
         Effect.gen(function* () {
           const f = yield* makeFixture({ browserHang: true, inputDelayMs: 150 });
-          const controller = new AbortController();
-          // The raw client, not f.send: the caller-side rejection carries the
+          const cancel = yield* Deferred.make<void>();
+          // The raw client, not f.send: the caller-side failure carries the
           // `effect` verdict this case asserts.
-          const call = yield* Effect.promise(() =>
-            cuaRequest(
-              f.endpoint,
-              {
-                capability: CAPABILITY,
-                method: "call",
-                name,
-                args: { text: "fixture" },
-                task: { threadId: "disconnect", turnId: "turn" },
-              },
-              { mutation: true, signal: controller.signal },
-            ).catch((error: unknown) => error),
-          ).pipe(Effect.forkChild);
+          const call = yield* cuaRequest<CuaReply>(
+            f.endpoint,
+            {
+              capability: CAPABILITY,
+              method: "call",
+              name,
+              args: { text: "fixture" },
+              task: { threadId: "disconnect", turnId: "turn" },
+            },
+            { mutation: true, cancel: Deferred.await(cancel) },
+          ).pipe(Effect.flip, Effect.forkChild);
           yield* f.waitForEvent(name === "browser_type" ? "browser-dispatch" : "dispatch");
-          controller.abort();
+          yield* Deferred.succeed(cancel, undefined);
           expect(yield* Fiber.join(call)).toMatchObject({ effect: "dispatched-unknown" });
           yield* f.waitForEvent("interrupt");
           // The next call is admitted behind the matching native cleanup ACK.
