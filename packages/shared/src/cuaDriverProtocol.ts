@@ -24,7 +24,7 @@ export const CUA_MAX_RESPONSE_BYTES = 96 * 1024 * 1024;
  * and {@link CUA_ACTION_TOOLS}.
  *
  * `metadata` — the handshake. A fresh generation answers
- * `synara_native_revision`, which the host compares to
+ * `pathway_native_revision`, which the host compares to
  * {@link CUA_NATIVE_REVISION} before any action tool may be dispatched: a
  * driver that cannot prove the patched cancellation revision is retired
  * seconds after spawn rather than trusted with held OS input.
@@ -415,7 +415,7 @@ export interface CuaReply {
    */
   desktopInterruptions?: number;
   /**
-   * The `synara_native_revision` the running driver reported at handshake —
+   * The `pathway_native_revision` the running driver reported at handshake —
    * a positive number for the patched build, `0` for an unpatched upstream
    * driver. Absent until the first driver spawn answers, and absent on
    * direct native replies. Backends use it to advertise only the
