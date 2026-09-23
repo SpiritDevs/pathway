@@ -1,4 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
 
 import {
   decodeFrameEnvelope,
@@ -126,59 +129,65 @@ describe("shared frame transport", () => {
     });
   });
 
-  it("gates new subscribers and primes them with codec config and keyframe", () => {
-    const transport = makeTransport();
-    const early = new Sink();
-    transport.subscribe("desktop", early);
-    transport.publish("desktop", { sequence: 1, keyframe: false, codecConfig: true });
-    transport.publish("desktop", { sequence: 2, keyframe: true, codecConfig: false });
-    transport.publish("desktop", { sequence: 3, keyframe: false, codecConfig: false });
+  it.effect("gates new subscribers and primes them with codec config and keyframe", () =>
+    Effect.gen(function* () {
+      const transport = makeTransport();
+      const early = new Sink();
+      yield* transport.subscribe("desktop", early);
+      transport.publish("desktop", { sequence: 1, keyframe: false, codecConfig: true });
+      transport.publish("desktop", { sequence: 2, keyframe: true, codecConfig: false });
+      transport.publish("desktop", { sequence: 3, keyframe: false, codecConfig: false });
 
-    const late = new Sink();
-    transport.subscribe("desktop", late);
-    expect(late.received).toEqual([1, 2]);
+      const late = new Sink();
+      yield* transport.subscribe("desktop", late);
+      expect(late.received).toEqual([1, 2]);
 
-    transport.publish("desktop", { sequence: 4, keyframe: false, codecConfig: false });
-    expect(early.received).toEqual([1, 2, 3, 4]);
-  });
+      transport.publish("desktop", { sequence: 4, keyframe: false, codecConfig: false });
+      expect(early.received).toEqual([1, 2, 3, 4]);
+    }),
+  );
 
-  it("drops a stalled backlog until the next keyframe", () => {
-    const transport = makeTransport({ queueLimit: 2, socketBudgetBytes: 0 });
-    const sink = new Sink();
-    transport.subscribe("desktop", sink);
-    transport.publish("desktop", { sequence: 1, keyframe: true, codecConfig: false });
-    sink.buffered = 100;
-    transport.publish("desktop", { sequence: 2, keyframe: false, codecConfig: false });
-    transport.publish("desktop", { sequence: 3, keyframe: false, codecConfig: false });
-    transport.publish("desktop", { sequence: 4, keyframe: false, codecConfig: false });
-    sink.buffered = 0;
-    transport.publish("desktop", { sequence: 5, keyframe: true, codecConfig: false });
-    transport.publish("desktop", { sequence: 6, keyframe: false, codecConfig: false });
+  it.effect("drops a stalled backlog until the next keyframe", () =>
+    Effect.gen(function* () {
+      const transport = makeTransport({ queueLimit: 2, socketBudgetBytes: 0 });
+      const sink = new Sink();
+      yield* transport.subscribe("desktop", sink);
+      transport.publish("desktop", { sequence: 1, keyframe: true, codecConfig: false });
+      sink.buffered = 100;
+      transport.publish("desktop", { sequence: 2, keyframe: false, codecConfig: false });
+      transport.publish("desktop", { sequence: 3, keyframe: false, codecConfig: false });
+      transport.publish("desktop", { sequence: 4, keyframe: false, codecConfig: false });
+      sink.buffered = 0;
+      transport.publish("desktop", { sequence: 5, keyframe: true, codecConfig: false });
+      transport.publish("desktop", { sequence: 6, keyframe: false, codecConfig: false });
 
-    expect(sink.received).toEqual([1, 5, 6]);
-    expect(transport.statsFor("desktop")[0]?.awaitingKeyframe).toBe(false);
-  });
+      expect(sink.received).toEqual([1, 5, 6]);
+      expect(transport.statsFor("desktop")[0]?.awaitingKeyframe).toBe(false);
+    }),
+  );
 
-  it("keeps only the latest codec config for a stalled subscriber", () => {
-    const transport = makeTransport({ queueLimit: 2, socketBudgetBytes: 10 });
-    const sink = new Sink();
-    transport.subscribe("desktop", sink);
-    transport.publish("desktop", { sequence: 1, keyframe: true, codecConfig: false });
-    sink.buffered = 100;
-    for (let sequence = 2; sequence <= 40; sequence += 1) {
-      transport.publish("desktop", { sequence, keyframe: false, codecConfig: true });
-    }
-    expect(transport.statsFor("desktop")[0]?.queued).toBe(1);
+  it.effect("keeps only the latest codec config for a stalled subscriber", () =>
+    Effect.gen(function* () {
+      const transport = makeTransport({ queueLimit: 2, socketBudgetBytes: 10 });
+      const sink = new Sink();
+      yield* transport.subscribe("desktop", sink);
+      transport.publish("desktop", { sequence: 1, keyframe: true, codecConfig: false });
+      sink.buffered = 100;
+      for (let sequence = 2; sequence <= 40; sequence += 1) {
+        transport.publish("desktop", { sequence, keyframe: false, codecConfig: true });
+      }
+      expect(transport.statsFor("desktop")[0]?.queued).toBe(1);
 
-    // Deltas before the next keyframe are undecodable under the new config.
-    transport.publish("desktop", { sequence: 41, keyframe: false, codecConfig: false });
-    transport.publish("desktop", { sequence: 42, keyframe: true, codecConfig: false });
-    expect(transport.statsFor("desktop")[0]?.queued).toBe(2);
+      // Deltas before the next keyframe are undecodable under the new config.
+      transport.publish("desktop", { sequence: 41, keyframe: false, codecConfig: false });
+      transport.publish("desktop", { sequence: 42, keyframe: true, codecConfig: false });
+      expect(transport.statsFor("desktop")[0]?.queued).toBe(2);
 
-    sink.buffered = 0;
-    transport.publish("desktop", { sequence: 43, keyframe: false, codecConfig: false });
-    expect(sink.received).toEqual([1, 40, 42, 43]);
-  });
+      sink.buffered = 0;
+      transport.publish("desktop", { sequence: 43, keyframe: false, codecConfig: false });
+      expect(sink.received).toEqual([1, 40, 42, 43]);
+    }),
+  );
 
   it("shares bounded sink accounting and resync parsing", async () => {
     let open = true;
@@ -203,42 +212,62 @@ describe("shared frame transport", () => {
 });
 
 describe("frame drain and still recovery", () => {
-  it("drains the newest still after write settlement with no new publication", async () => {
-    const sent: number[] = [];
-    const releases: Array<() => void> = [];
-    const sink = makeFrameSink({
-      isOpen: () => true,
-      send: (bytes) => {
-        sent.push(bytes[0]!);
-        return new Promise<void>((resolve) => releases.push(resolve));
-      },
-    });
-    const transport = new FrameTransport<string, TestFrame>({
-      encode: (_, f) => Uint8Array.of(f.sequence),
-      socketBudgetBytes: 0,
-      independentStills: true,
-    });
-    const unsubscribe = transport.subscribe("desktop", sink);
-    for (let sequence = 1; sequence <= 4; sequence++)
-      transport.publish("desktop", { sequence, keyframe: true, codecConfig: false });
-    expect(sent).toEqual([1]);
-    releases.shift()!();
-    await Promise.resolve();
-    expect(sent).toEqual([1, 4]);
-    unsubscribe();
-    releases.shift()!();
-    await Promise.resolve();
-    expect(transport.subscriberCount).toBe(0);
-  });
-  it("preserves decoder config across overflow before the next keyframe", () => {
-    const sink = new Sink();
-    sink.buffered = 2;
-    const transport = makeTransport({ queueLimit: 2, socketBudgetBytes: 1 });
-    transport.subscribe("video", sink);
-    transport.publish("video", { sequence: 1, codecConfig: true, keyframe: false });
-    transport.publish("video", { sequence: 2, codecConfig: false, keyframe: true });
-    sink.buffered = 0;
-    transport.publish("video", { sequence: 3, codecConfig: false, keyframe: true });
-    expect(sink.received).toEqual([1, 3]);
-  });
+  it.effect("drains the newest still after write settlement with no new publication", () =>
+    Effect.gen(function* () {
+      const sent: number[] = [];
+      const releases: Array<() => void> = [];
+      const sink = makeFrameSink({
+        isOpen: () => true,
+        send: (bytes) => {
+          sent.push(bytes[0]!);
+          return new Promise<void>((resolve) => releases.push(resolve));
+        },
+      });
+      const transport = new FrameTransport<string, TestFrame>({
+        encode: (_, f) => Uint8Array.of(f.sequence),
+        socketBudgetBytes: 0,
+        independentStills: true,
+      });
+      const subscription = yield* Scope.make();
+      yield* transport.subscribe("desktop", sink).pipe(Scope.provide(subscription));
+      for (let sequence = 1; sequence <= 4; sequence++)
+        transport.publish("desktop", { sequence, keyframe: true, codecConfig: false });
+      expect(sent).toEqual([1]);
+      releases.shift()!();
+      yield* Effect.promise(() => Promise.resolve());
+      expect(sent).toEqual([1, 4]);
+      yield* Scope.close(subscription, Exit.void);
+      releases.shift()!();
+      yield* Effect.promise(() => Promise.resolve());
+      expect(transport.subscriberCount).toBe(0);
+    }),
+  );
+  it.effect("removes a subscriber when its scope closes", () =>
+    Effect.gen(function* () {
+      const transport = makeTransport();
+      const sink = new Sink();
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* transport.subscribe("desktop", sink);
+          expect(transport.streamSubscriberCount("desktop")).toBe(1);
+        }),
+      );
+      expect(transport.subscriberCount).toBe(0);
+      transport.publish("desktop", { sequence: 1, keyframe: true, codecConfig: false });
+      expect(sink.received).toEqual([]);
+    }),
+  );
+  it.effect("preserves decoder config across overflow before the next keyframe", () =>
+    Effect.gen(function* () {
+      const sink = new Sink();
+      sink.buffered = 2;
+      const transport = makeTransport({ queueLimit: 2, socketBudgetBytes: 1 });
+      yield* transport.subscribe("video", sink);
+      transport.publish("video", { sequence: 1, codecConfig: true, keyframe: false });
+      transport.publish("video", { sequence: 2, codecConfig: false, keyframe: true });
+      sink.buffered = 0;
+      transport.publish("video", { sequence: 3, codecConfig: false, keyframe: true });
+      expect(sink.received).toEqual([1, 3]);
+    }),
+  );
 });

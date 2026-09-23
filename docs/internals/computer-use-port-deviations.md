@@ -6,7 +6,9 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 ## P0 foundations
 
 - `CUA_HOST_SOCKET_ENV` is now `PATHWAY_CUA_HOST_SOCKET`, not `SYNARA_CUA_HOST_SOCKET`. This is a product rename. The driver's `synara_native_revision` handshake field keeps its name, because the pinned native patch (`patchSha256` in `cuaDriverRelease.json`) emits it.
-- `CuaTransportError` declares `effect` as a field, not a constructor parameter property. Pathway's `erasableSyntaxOnly` rejects parameter properties.
+- `cuaRequest` returns an `Effect<T, CuaTransportError>`, not a Promise. `CuaTransportError` is a `Schema.TaggedErrorClass` with `message` and `effect` fields. The socket is scoped, so a timeout or interruption always closes it, and the timeout runs on the Effect clock. Framing, the byte budgets and the delivery verdicts are unchanged (ADR 0045).
+- `cuaRequest` takes a `cancel` effect instead of an `AbortSignal`. When it completes, the call fails with a typed verdict. A call cancelled before it connects reports `Cancelled before dispatch.`; Synara used the "input already dispatched" message whenever the abort came after the call started.
+- `FrameTransport.subscribe` returns a scoped `Effect` that removes the subscriber when its scope closes, instead of an unsubscribe function. Only server code subscribes, so no non-Effect adapter is needed.
 - The `cuaDriverProtocol` test points to the tool-classification matrix in `.repos/synara/docs/computer-use-cua/`. Pathway does not port that doc.
 - `computerAudit.test` drops the `ServerReadThreadDiagnosticsInput` case. Pathway has no thread diagnostics RPC to decode.
 - `ComputerAuditEntry.gatewayRequestId` is now `mcpRequestId`. Pathway exposes Computer through its MCP toolkit, not an agent gateway.

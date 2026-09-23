@@ -1,3 +1,6 @@
+import * as Effect from "effect/Effect";
+import type * as Scope from "effect/Scope";
+
 export const FRAME_HEADER_FIXED_BYTES = 17;
 export const FRAME_MAX_STREAM_ID_BYTES = 255;
 export const FRAME_FLAG_KEYFRAME = 0b0000_0001;
@@ -205,7 +208,15 @@ export class FrameTransport<TStreamId extends string, TFrame> {
     return this.subscribersByStream.get(streamId)?.size ?? 0;
   }
 
-  subscribe(streamId: TStreamId, sink: FrameSink): () => void {
+  /** Subscribes `sink` to `streamId` until the surrounding scope closes. */
+  subscribe(streamId: TStreamId, sink: FrameSink): Effect.Effect<void, never, Scope.Scope> {
+    return Effect.acquireRelease(
+      Effect.sync(() => this.addSubscriber(streamId, sink)),
+      (subscriber) => Effect.sync(() => this.removeSubscriber(subscriber)),
+    ).pipe(Effect.asVoid);
+  }
+
+  private addSubscriber(streamId: TStreamId, sink: FrameSink): Subscriber<TStreamId> {
     const subscriber: Subscriber<TStreamId> = {
       id: `${this.subscriberIdPrefix}:${this.nextSubscriberId++}`,
       streamId,
@@ -232,8 +243,7 @@ export class FrameTransport<TStreamId extends string, TFrame> {
       subscriber.awaitingKeyframe = false;
       this.deliver(subscriber, keyframe);
     }
-
-    return () => this.removeSubscriber(subscriber);
+    return subscriber;
   }
 
   publish(streamId: TStreamId, frame: TFrame): void {
