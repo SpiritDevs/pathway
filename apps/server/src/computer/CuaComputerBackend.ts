@@ -47,13 +47,13 @@ import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import {
   CUA_HOST_SOCKET_ENV,
   CUA_SETUP_TIMEOUT_MS,
-  CuaTransportError,
   cuaComputerTaskKey,
   cuaRequest,
   type CuaComputerTask,
   type CuaEffect,
   type CuaReply,
   type CuaToolResult,
+  type CuaTransportError,
 } from "@spiritdevs/shared/cuaDriverProtocol";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -89,7 +89,6 @@ import {
   ComputerBackendError,
   ComputerSpaceError,
   CuaActionError,
-  errorMessage,
   isCuaActionError,
   type ComputerOperationError,
 } from "./computerErrors.ts";
@@ -128,11 +127,10 @@ export type CuaRequest = (
   socketPath: string,
   request: unknown,
   options?: {
-    readonly signal?: AbortSignal | undefined;
     readonly timeoutMs?: number;
     readonly mutation?: boolean;
   },
-) => Promise<unknown>;
+) => Effect.Effect<unknown, CuaTransportError>;
 
 export interface CuaComputerBackendOptions {
   /** The desktop host socket; defaults to `PATHWAY_CUA_HOST_SOCKET`. */
@@ -519,34 +517,23 @@ export const makeCuaComputerBackend = (options: CuaComputerBackendOptions = {}) 
       });
 
     /**
-     * One socket request. A transport verdict keeps its effect; any other
-     * rejection is uncertain for a mutation and a clean miss otherwise.
-     * `abortable` requests stop (and abort the socket) when interrupted;
-     * cleanup requests ride on without the caller's cancellation, as Synara's
-     * signal-less requests do.
+     * One socket request. The transport verdict keeps its effect.
+     * `abortable` requests close the socket when interrupted; cleanup requests
+     * are uninterruptible, so they land even when the caller is cancelled, as
+     * Synara's signal-less requests do.
      */
     const transport = (
       socket: string,
       body: Record<string, unknown>,
       requestOptions: { readonly timeoutMs?: number; readonly mutation?: boolean } | undefined,
       settings: { readonly abortable: boolean; readonly code?: string },
-    ): BackendEffect<CuaReply> =>
-      Effect.tryPromise({
-        try: (signal) =>
-          request(
-            socket,
-            body,
-            settings.abortable ? { signal, ...requestOptions } : requestOptions,
-          ) as Promise<CuaReply>,
-        catch: (error) =>
-          error instanceof CuaTransportError
-            ? new CuaActionError(error.message, error.effect, settings.code)
-            : new CuaActionError(
-                errorMessage(error),
-                requestOptions?.mutation ? "dispatched-unknown" : "not-dispatched",
-                settings.code,
-              ),
-      });
+    ): BackendEffect<CuaReply> => {
+      const exchange = request(socket, body, requestOptions).pipe(
+        Effect.map((reply) => reply as CuaReply),
+        Effect.mapError((error) => new CuaActionError(error.message, error.effect, settings.code)),
+      );
+      return settings.abortable ? exchange : Effect.uninterruptible(exchange);
+    };
 
     /**
      * Adopt the host's interruption count from a reply and announce a real
