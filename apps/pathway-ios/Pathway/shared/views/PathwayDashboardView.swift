@@ -50,6 +50,7 @@ struct PathwayDashboardView: View {
 struct PathwayProjectsDestination: View {
     @Environment(PathwayAppModel.self) private var appModel
     var initialFilter = "all"
+    @State private var creatingProject = false
 
     private struct RecentProject: Identifiable {
         let binding: PathwayCompanyEnvironmentBinding
@@ -110,6 +111,11 @@ struct PathwayProjectsDestination: View {
             }
         }
         .navigationTitle(initialFilter == "recent" ? "Recent projects" : "Projects")
+        .toolbar {
+            Button("New Project", systemImage: "folder.badge.plus") { creatingProject = true }
+                .disabled(appModel.cloud.companies.isEmpty)
+        }
+        .sheet(isPresented: $creatingProject) { PathwayCreateProjectView() }
     }
 
     private func client(_ environment: PathwayCompanyEnvironment) -> PathwayAdministrationClient {

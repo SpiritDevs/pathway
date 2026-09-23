@@ -35,6 +35,7 @@ struct AgentThreadsView: View {
     @State private var attachingThread: PathwayAgentThread?
     @State private var focuses = PathwayFocusModel()
     @State private var creatingFocus = false
+    @State private var creatingProject = false
     @State private var showingNotifications = false
     @State private var refresh = PathwayThreadRefresh()
     init(newThreadAction: @escaping () -> Void, initialFilter: PathwayThreadListFilter = .all) {
@@ -99,6 +100,7 @@ struct AgentThreadsView: View {
         .task(id: appModel.cloud.threadQueue.threads.map(\.id)) { await openPendingThread() }
         .task(id: appModel.localStorageDirectory) { await focuses.observe(cloud: appModel.cloud, storageDirectory: appModel.localStorageDirectory) }
         .sheet(isPresented: $creatingFocus) { PathwayFocusEditorView(model: focuses) }
+        .sheet(isPresented: $creatingProject) { PathwayCreateProjectView(focuses: focuses) }
         .sheet(isPresented: $showingNotifications) { PathwayFocusNotificationsView(model: focuses) }
         .sheet(item: $sleepingThread) { thread in
             sleepSheet(for: thread)
@@ -200,7 +202,25 @@ struct AgentThreadsView: View {
             if listFilter == .archived {
                 ForEach(archivedThreads) { thread in compactThreadLink(thread, icon: "archivebox") }
             } else {
-            ForEach(activeThreads) { thread in
+            if focusView.collapsiblePinned && !pinnedThreads.isEmpty {
+                Section {
+                    if !isPinnedCollapsed {
+                        ForEach(pinnedThreads) { thread in threadLink(thread) }
+                    }
+                } header: {
+                    ThreadLifecycleShelfHeader(
+                        title: "Pinned",
+                        count: pinnedThreads.count,
+                        isExpanded: !isPinnedCollapsed,
+                        tint: .secondary
+                    ) {
+                        focuses.togglePinnedCollapsed(focuses.selectedID)
+                    }
+                }
+            } else {
+                ForEach(pinnedThreads) { thread in threadLink(thread) }
+            }
+            ForEach(sortedUnpinnedThreads) { thread in
                 threadLink(thread)
             }
 
@@ -339,6 +359,15 @@ struct AgentThreadsView: View {
     }
 
     private var activeThreads: [PathwayAgentThread] { appModel.cloud.activeThreads.filter(matches) }
+    private var focusView: PathwayFocusView { focuses.view(for: focuses.selectedID) }
+    private var isPinnedCollapsed: Bool { focuses.collapsedPinnedFocusIDs.contains(focuses.selectedID) }
+    /// Pinned threads keep their arranged order above the Focus's chosen sort.
+    private var pinnedThreads: [PathwayAgentThread] { activeThreads.filter { $0.shell.pinnedAt != nil } }
+    private var sortedUnpinnedThreads: [PathwayAgentThread] {
+        PathwayFocusThreadSorter.sorted(activeThreads.filter { $0.shell.pinnedAt == nil }, by: focusView.sort) { thread in
+            thread.shell.projectId == nil ? nil : appModel.cloud.projectName(companyId: thread.companyId, projectId: thread.cloudProjectId)
+        }
+    }
     private var snoozedThreads: [PathwayAgentThread] { appModel.cloud.snoozedThreads.filter(matches) }
     private var settledThreads: [PathwayAgentThread] { appModel.cloud.settledThreads.filter(matches) }
     private var archivedThreads: [PathwayAgentThread] { appModel.cloud.threads.filter { $0.shell.archivedAt != nil && matches($0) } }
@@ -420,6 +449,7 @@ struct AgentThreadsView: View {
                 }
                 Divider()
                 focusMenu
+                viewMenu
                 filtersMenu
             } label: { Image(systemName: "line.3.horizontal.decrease").frame(minWidth: 44, minHeight: 44) }
             .accessibilityLabel("Thread options")
@@ -433,6 +463,36 @@ struct AgentThreadsView: View {
     private var focusMenu: some View {
         Menu { focusMenuContents } label: {
             Label("Focus", image: PathwayFocusIconCatalog.assetName(for: selectedFocus?.iconName ?? "Layers3"))
+        }
+    }
+
+    /// Sort and pinned-shelf choices for the selected Focus, All included; synced per user.
+    private var viewMenu: some View {
+        Menu {
+            Picker("Sort threads", selection: Binding(
+                get: { focusView.sort },
+                set: { sort in saveFocusView { $0.sort = sort } }
+            )) {
+                ForEach(PathwayFocusThreadSort.allCases) { Text($0.title).tag($0) }
+            }
+            Toggle("Collapsible pinned chats", isOn: Binding(
+                get: { focusView.collapsiblePinned },
+                set: { collapsible in saveFocusView { $0.collapsiblePinned = collapsible } }
+            ))
+        } label: {
+            Label("Sort & view", systemImage: "arrow.up.arrow.down")
+        }
+    }
+
+    private func saveFocusView(_ change: (inout PathwayFocusView) -> Void) {
+        var view = focusView
+        change(&view)
+        let focusID = focuses.selectedID
+        Task {
+            do {
+                try await focuses.saveView(view, for: focusID, cloud: appModel.cloud)
+                focuses.errorMessage = nil
+            } catch { focuses.errorMessage = error.localizedDescription }
         }
     }
 
@@ -450,6 +510,7 @@ struct AgentThreadsView: View {
                 }
             }
             Button("New Focus", systemImage: "plus") { creatingFocus = true }
+            Button("New Project", systemImage: "folder.badge.plus") { creatingProject = true }
             if let error = focuses.errorMessage { Text(error) }
     }
 
@@ -801,15 +862,22 @@ private struct AgentThreadRow: View {
         .accessibilityHint("Open thread")
         .accessibilityCustomContent("Model", thread.shell.modelSelection.model)
         .accessibilityCustomContent("Company", companyName ?? "Unknown")
-        .task(id: projectIconContext?.key) {
-            guard let context = projectIconContext, let connect = appModel.connect else { return }
+        .task(id: syncedProjectIcon == nil ? projectIconContext?.key : nil) {
+            guard syncedProjectIcon == nil, let context = projectIconContext, let connect = appModel.connect else { return }
             await appModel.projectIcons.load(context, using: connect)
         }
     }
 
+    private var syncedProjectIcon: PathwayProjectIcon? {
+        thread.shell.isConversation ? nil : appModel.cloud.projectIcon(companyId: thread.companyId, projectId: thread.cloudProjectId)
+    }
+
     private var projectIcon: some View {
         Group {
-            if let context = projectIconContext, let image = appModel.projectIcons.images[context.key] {
+            if let icon = syncedProjectIcon {
+                PathwayFocusIcon(name: icon.name, size: 14)
+                    .foregroundStyle(PathwayFocusIcon.color(icon.color))
+            } else if let context = projectIconContext, let image = appModel.projectIcons.images[context.key] {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()

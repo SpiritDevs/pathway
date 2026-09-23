@@ -1,4 +1,8 @@
-import { focusOrderKeyAfter, sortFocuses } from "@spiritdevs/client-runtime/state/focuses";
+import {
+  ALL_FOCUS_ID,
+  focusOrderKeyAfter,
+  sortFocuses,
+} from "@spiritdevs/client-runtime/state/focuses";
 import {
   FOCUS_NAME_MAX_CHARS,
   FocusId,
@@ -6,31 +10,159 @@ import {
   type Focus,
   type FocusAssignment,
 } from "@spiritdevs/contracts/focus";
-import { LoaderCircleIcon, Trash2Icon } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { Layers3Icon, LoaderCircleIcon, PencilIcon, SearchIcon, Trash2Icon } from "lucide-react";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 
 import type { FocusMutations } from "../../cloud/focusReadModel";
-import { randomUUID } from "../../lib/utils";
+import { cn, randomUUID } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
-import { FOCUS_ICON_OPTIONS, FocusIcon } from "./FocusIcon";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { Switch } from "../ui/switch";
+import { FocusIcon } from "./FocusIcon";
+import { IconColorPicker, LIBRARY_ICON_COLORS } from "./IconColorPicker";
 import { projectFocusSelection, type FocusProjectOption } from "./FocusStrip.logic";
+import {
+  FOCUS_THREAD_SORT_LABELS,
+  FOCUS_THREAD_SORT_ORDERS,
+  useFocusViews,
+  type FocusViewChoices,
+} from "./focusViewPreferences";
 
 export type { FocusProjectOption } from "./FocusStrip.logic";
 
-export const FOCUS_ACCENT_COLORS = [
-  "#3b82f6",
-  "#06b6d4",
-  "#14b8a6",
-  "#22c55e",
-  "#84cc16",
-  "#f59e0b",
-  "#f97316",
-  "#ef4444",
-  "#ec4899",
-  "#8b5cf6",
-] as const;
+/** Focus and project icons share one palette. */
+export const FOCUS_ACCENT_COLORS = LIBRARY_ICON_COLORS;
+
+/** Projects get a search header once the list outgrows a glance. */
+const PROJECT_SEARCH_THRESHOLD = 4;
+
+const SORT_ITEMS = FOCUS_THREAD_SORT_ORDERS.map((value) => ({
+  value,
+  label: FOCUS_THREAD_SORT_LABELS[value],
+}));
+
+const sameView = (left: FocusViewChoices, right: FocusViewChoices) =>
+  left.sortOrder === right.sortOrder && left.collapsiblePinned === right.collapsiblePinned;
+
+function FocusViewFields(props: {
+  readonly value: FocusViewChoices;
+  readonly disabled: boolean;
+  readonly onChange: (value: FocusViewChoices) => void;
+}) {
+  return (
+    <div className="grid gap-2 text-xs text-foreground">
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-medium">Sort threads</span>
+        <Select
+          value={props.value.sortOrder}
+          items={SORT_ITEMS}
+          disabled={props.disabled}
+          onValueChange={(sortOrder) => {
+            if (sortOrder) props.onChange({ ...props.value, sortOrder });
+          }}
+        >
+          <SelectTrigger size="xs" aria-label="Sort threads" className="h-7 w-44 text-xs sm:h-7">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            {SORT_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value} className="min-h-7 py-1 text-xs">
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <label className="flex cursor-pointer items-center justify-between gap-3">
+        <span className="font-medium">Collapsible pinned chats</span>
+        <Switch
+          checked={props.value.collapsiblePinned}
+          disabled={props.disabled}
+          onCheckedChange={(collapsiblePinned) =>
+            props.onChange({ ...props.value, collapsiblePinned })
+          }
+        />
+      </label>
+    </div>
+  );
+}
+
+function FocusEditorFooter(props: {
+  readonly saving: boolean;
+  readonly canSave: boolean;
+  readonly saveLabel: string;
+  readonly onCancel: () => void;
+  readonly children?: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      {props.children}
+      <div className="ml-auto flex items-center gap-2">
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          disabled={props.saving}
+          onClick={props.onCancel}
+        >
+          Cancel
+        </Button>
+        <Button type="submit" size="xs" disabled={props.saving || !props.canSave}>
+          {props.saving ? (
+            <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" />
+          ) : null}
+          {props.saveLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** All has no name, icon, or projects to edit; only how its sidebar is laid out. */
+export function AllFocusViewEditor(props: { readonly onClose: () => void }) {
+  const { viewFor, saveFocusView, canSave } = useFocusViews();
+  const [view, setView] = useState<FocusViewChoices>(() => viewFor(ALL_FOCUS_ID));
+  const [saving, setSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  return (
+    <form
+      className="flex w-[22rem] max-w-full flex-col gap-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (saving) return;
+        setSaving(true);
+        setErrorMessage(null);
+        void saveFocusView(ALL_FOCUS_ID, view)
+          .then(props.onClose)
+          .catch((error: unknown) => {
+            setErrorMessage(error instanceof Error ? error.message : "Could not save.");
+            setSaving(false);
+          });
+      }}
+    >
+      <div className="flex items-center gap-2.5">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.05]">
+          <Layers3Icon className="size-4" />
+        </span>
+        <h2 className="text-sm font-semibold text-foreground">All</h2>
+      </div>
+      <FocusViewFields value={view} disabled={saving} onChange={setView} />
+      {errorMessage ? (
+        <p role="alert" className="text-xs text-destructive-foreground">
+          {errorMessage}
+        </p>
+      ) : null}
+      <FocusEditorFooter
+        saving={saving}
+        canSave={canSave}
+        saveLabel="Save"
+        onCancel={props.onClose}
+      />
+    </form>
+  );
+}
 
 export function FocusEditor(props: {
   readonly focus: Focus | null;
@@ -55,6 +187,12 @@ export function FocusEditor(props: {
       ),
   );
 
+  // Appearance folds away while editing so the dialog opens at its shortest.
+  const [appearanceOpen, setAppearanceOpen] = useState(focus === null);
+  const [projectQuery, setProjectQuery] = useState("");
+  const { viewFor, saveFocusView } = useFocusViews();
+  const [initialView] = useState<FocusViewChoices>(() => viewFor(focus?.id ?? ""));
+  const [view, setView] = useState(initialView);
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -100,7 +238,9 @@ export function FocusEditor(props: {
           orderKey: focusOrderKeyAfter(ordered.at(-1)?.orderKey ?? null),
           projectKeys: [...selectedProjectKeys],
         });
+        if (!sameView(view, initialView)) await saveFocusView(focusId, view);
       } else {
+        if (!sameView(view, initialView)) await saveFocusView(focus.id, view);
         await props.mutations.update({
           focusId: focus.id,
           name: trimmedName,
@@ -147,98 +287,106 @@ export function FocusEditor(props: {
     }
   };
 
+  const normalizedProjectQuery = projectQuery.trim().toLowerCase();
+  const shownProjects =
+    normalizedProjectQuery.length === 0
+      ? props.projects
+      : props.projects.filter((project) =>
+          project.name.toLowerCase().includes(normalizedProjectQuery),
+        );
+
   return (
-    <form onSubmit={submit} className="flex w-[22rem] max-w-full flex-col gap-4">
-      <div className="flex items-center gap-2.5">
+    <form onSubmit={submit} className="flex w-[22rem] max-w-full flex-col gap-3">
+      <div className="flex items-center gap-2">
         <span
           className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.05]"
           style={{ color: accentColor }}
         >
           <FocusIcon iconName={iconName} className="size-4" />
         </span>
-        <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-foreground">
-            {focus === null ? "Create Focus" : "Edit Focus"}
-          </h2>
-          <p className="text-xs text-muted-foreground">Choose the projects that belong here.</p>
+        <div className="relative min-w-0 flex-1">
+          <Input
+            autoFocus
+            aria-label="Focus name"
+            maxLength={FOCUS_NAME_MAX_CHARS}
+            value={name}
+            onChange={(event) => setName(event.currentTarget.value)}
+            placeholder={focus === null ? "New Focus" : "Focus name"}
+            disabled={saving}
+            className="pe-8"
+          />
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            aria-label={appearanceOpen ? "Hide icon and color" : "Edit icon and color"}
+            title={appearanceOpen ? "Hide icon and color" : "Edit icon and color"}
+            aria-expanded={appearanceOpen}
+            aria-controls="focus-appearance"
+            onClick={() => setAppearanceOpen((open) => !open)}
+            className={cn(
+              "absolute end-1 top-1/2 -translate-y-1/2 text-muted-foreground",
+              appearanceOpen && "bg-accent text-foreground",
+            )}
+          >
+            <PencilIcon />
+          </Button>
         </div>
       </div>
 
-      <label className="grid gap-1.5 text-xs font-medium text-foreground">
-        Name
-        <Input
-          autoFocus
-          maxLength={FOCUS_NAME_MAX_CHARS}
-          value={name}
-          onChange={(event) => setName(event.currentTarget.value)}
-          placeholder="Work"
-          disabled={saving}
-        />
-      </label>
-
-      <fieldset className="grid gap-2">
-        <legend className="text-xs font-medium text-foreground">Icon</legend>
-        <div className="grid grid-cols-10 gap-1" role="radiogroup" aria-label="Focus icon">
-          {FOCUS_ICON_OPTIONS.map((option) => (
-            <button
-              key={option.name}
-              type="button"
-              role="radio"
-              aria-checked={iconName === option.name}
-              aria-label={option.label}
-              title={option.label}
-              disabled={saving}
-              onClick={() => setIconName(option.name)}
-              className="flex aspect-square cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-checked:bg-foreground/[0.09] aria-checked:text-foreground disabled:pointer-events-none disabled:opacity-60"
-            >
-              <option.icon className="size-3.5" />
-            </button>
-          ))}
+      {/* Grid rows animate the fold without measuring content height. */}
+      <div
+        id="focus-appearance"
+        inert={!appearanceOpen}
+        className={cn(
+          "-mt-3 grid transition-[grid-template-rows,opacity,margin] duration-200 ease-out motion-reduce:transition-none",
+          appearanceOpen ? "mt-0 grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        )}
+      >
+        <div className="grid min-h-0 gap-3 overflow-hidden">
+          <IconColorPicker
+            subject="Focus"
+            iconName={iconName}
+            color={accentColor}
+            disabled={saving}
+            onIconChange={setIconName}
+            onColorChange={setAccentColor}
+          />
         </div>
-      </fieldset>
-
-      <fieldset className="grid gap-2">
-        <legend className="text-xs font-medium text-foreground">Color</legend>
-        <div
-          className="flex items-center justify-between"
-          role="radiogroup"
-          aria-label="Focus color"
-        >
-          {FOCUS_ACCENT_COLORS.map((color) => (
-            <button
-              key={color}
-              type="button"
-              role="radio"
-              aria-checked={accentColor.toLowerCase() === color}
-              aria-label={color}
-              disabled={saving}
-              onClick={() => setAccentColor(color)}
-              className="relative flex size-6 cursor-pointer items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-60"
-            >
-              <span
-                className="size-4 rounded-full ring-2 ring-transparent ring-offset-2 ring-offset-popover transition-transform aria-hidden:scale-110"
-                style={{ backgroundColor: color }}
-              />
-              {accentColor.toLowerCase() === color ? (
-                <span
-                  className="pointer-events-none absolute size-5 rounded-full ring-2 ring-current"
-                  style={{ color }}
-                />
-              ) : null}
-            </button>
-          ))}
-        </div>
-      </fieldset>
+      </div>
 
       <fieldset className="grid min-h-0 gap-2">
         <legend className="text-xs font-medium text-foreground">Projects</legend>
-        <div className="max-h-48 overflow-y-auto rounded-lg border border-border/70 p-1">
+        <div className="max-h-48 overflow-y-auto rounded-lg border border-border/70 p-1 pt-0">
+          {props.projects.length > PROJECT_SEARCH_THRESHOLD ? (
+            <label className="sticky top-0 z-10 -mx-1 mb-1 flex items-center gap-2 border-b border-border/70 bg-popover px-3 py-1.5">
+              <SearchIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+              <input
+                type="search"
+                aria-label="Search projects"
+                placeholder="Search projects"
+                value={projectQuery}
+                onChange={(event) => setProjectQuery(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  // Enter filters; it must not submit the Focus.
+                  if (event.key === "Enter") event.preventDefault();
+                }}
+                className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+              />
+            </label>
+          ) : (
+            <div className="h-1" />
+          )}
           {props.projects.length === 0 ? (
             <p className="px-2 py-4 text-center text-xs text-muted-foreground">
               No projects are visible in this company.
             </p>
+          ) : shownProjects.length === 0 ? (
+            <p className="px-2 py-4 text-center text-xs text-muted-foreground">
+              No matching projects.
+            </p>
           ) : (
-            props.projects.map((project) => {
+            shownProjects.map((project) => {
               const selectedCount = project.projectKeys.filter((projectKey) =>
                 selectedProjectKeys.has(projectKey),
               ).length;
@@ -296,13 +444,20 @@ export function FocusEditor(props: {
         </div>
       </fieldset>
 
+      <FocusViewFields value={view} disabled={saving} onChange={setView} />
+
       {errorMessage ? (
         <p role="alert" className="text-xs text-destructive-foreground">
           {errorMessage}
         </p>
       ) : null}
 
-      <div className="flex items-center gap-2">
+      <FocusEditorFooter
+        saving={saving}
+        canSave={props.mutations !== null && name.trim().length > 0}
+        saveLabel={focus === null ? "Create" : "Save"}
+        onCancel={props.onClose}
+      >
         {focus !== null ? (
           confirmingDelete ? (
             <div className="flex items-center gap-1.5">
@@ -339,22 +494,7 @@ export function FocusEditor(props: {
             </Button>
           )
         ) : null}
-        <div className="ml-auto flex items-center gap-2">
-          <Button type="button" size="xs" variant="ghost" disabled={saving} onClick={props.onClose}>
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            size="xs"
-            disabled={saving || props.mutations === null || name.trim().length === 0}
-          >
-            {saving ? (
-              <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" />
-            ) : null}
-            {focus === null ? "Create" : "Save"}
-          </Button>
-        </div>
-      </div>
+      </FocusEditorFooter>
     </form>
   );
 }

@@ -157,12 +157,13 @@ export function AddProjectConnectionDialog({
       const outcome = await addProjectConnection({
         existingCheckout,
         createCheckout: () => quickCreateProject({ environmentId: selectedEnvironmentId, plan }),
-        bindCheckout: (checkout) =>
-          environmentControl.ensureEnvironmentProject({
+        bindCheckout: async (checkout) => {
+          await environmentControl.ensureEnvironmentProject({
             companyId,
             cloudProjectId,
             project: checkout,
-          }),
+          });
+        },
       });
       setSubmitting(false);
       if (!outcome.ok) {

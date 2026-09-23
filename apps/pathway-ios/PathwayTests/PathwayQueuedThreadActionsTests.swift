@@ -23,14 +23,20 @@ struct PathwayQueuedThreadActionsTests {
         #expect(!row(state: "queued").canCancelLaunch)
     }
 
-    @Test func removingCanceledEntryPersistsButRetriedWorkReappears() async throws {
+    @Test func removingCanceledEntryDeletesItFromTheCloudButRetriedWorkReappears() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let queue = model()
+        var discarded: [JSONValue] = []
+        let queue = PathwayThreadQueueModel(request: { _, method, args in
+            #expect(method == "threadQueue:discard")
+            discarded.append(args)
+            return .null
+        }, subscribe: { _, _ in AsyncThrowingStream { _ in } })
         await queue.configure(directory: directory)
         queue.observe(companies: ["company"])
         let canceled = row(state: "canceled")
         try await queue.removeFinishedThread(canceled)
+        #expect(discarded == [.object(canceled.queryFields)])
         #expect(!queue.isVisible(canceled))
         await queue.configure(directory: directory)
         queue.observe(companies: ["company"])

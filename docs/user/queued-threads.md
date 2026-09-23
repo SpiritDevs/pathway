@@ -27,7 +27,9 @@ submitted in order as separate turns.
 Open a queued thread to read its pending messages. You can edit or cancel a message until the
 environment accepts it. Canceling the first message of an unstarted thread cancels its pending
 follow-ups as well. Canceled messages remain available to retry; retrying places them at the end
-of the queue. If a send's acknowledgement is uncertain, reconnect before changing that message
+of the queue. To get rid of a canceled thread instead, right-click it in the sidebar and choose
+**Delete**, or use **Delete** next to its status above the composer. This removes its saved
+messages from every device. If a send's acknowledgement is uncertain, reconnect before changing that message
 so Pathway can confirm whether it was accepted. If a prerequisite is missing, the thread stays
 saved with the reason and a retry action. A connection failure does not discard your work.
 
@@ -62,4 +64,4 @@ removed after seven days.
 On iPhone and iPad, a saved entry marked **Sent to environment** has already been delivered.
 Use **Remove from list** to dismiss that entry on this device. This does not stop an agent in
 the environment. Connect to the environment to stop work that it has already accepted.
-Canceled entries can also be removed; newly queued work appears again.
+Removing a canceled entry deletes its saved messages from every device.

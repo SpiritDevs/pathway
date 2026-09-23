@@ -155,7 +155,7 @@ describe("Focus notification subscription readiness", () => {
 });
 
 describe("Focus definitions across subscription restarts", () => {
-  const model = { focuses: [], assignments: [] };
+  const model = { focuses: [], assignments: [], viewPreferences: [] };
   const definitions = (client: InstanceType<typeof runtime.Client>) =>
     client.subscriptions.find((row) => row.reference === FOCUS_FUNCTION_REFERENCES.readModel)!;
   it("retains a complete same-account view while a replacement subscription loads", () => {

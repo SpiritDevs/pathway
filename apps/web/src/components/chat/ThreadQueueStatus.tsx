@@ -12,6 +12,7 @@ import {
   mutateQueuedThread,
   subscribeQueueDestinations,
   threadQueueErrorMessage,
+  useDiscardQueuedThread,
 } from "../../cloud/threadQueue";
 import type { useThreadQueueChat } from "../../cloud/useThreadQueueChat";
 import { Button } from "../ui/button";
@@ -37,6 +38,7 @@ export function ThreadQueueStatus({ queue }: { queue: ReturnType<typeof useThrea
   const [modelKey, setModelKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const discard = useDiscardQueuedThread();
   useEffect(() => {
     if (!moving || !row?.cloudSaved) return;
     return subscribeQueueDestinations(
@@ -142,6 +144,11 @@ export function ThreadQueueStatus({ queue }: { queue: ReturnType<typeof useThrea
             onClick={() => setMoving(true)}
           >
             Move to another environment
+          </Button>
+        ) : null}
+        {row.state === "canceled" && !waiting ? (
+          <Button size="xs" variant="ghost" onClick={() => void discard(row)}>
+            Delete
           </Button>
         ) : null}
         {destination && !destination.durableThreadQueue ? (

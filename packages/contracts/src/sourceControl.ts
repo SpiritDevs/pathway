@@ -90,6 +90,26 @@ export const SourceControlPublishRepositoryInput = Schema.Struct({
 });
 export type SourceControlPublishRepositoryInput = typeof SourceControlPublishRepositoryInput.Type;
 
+/** Accounts that can own a new repository: the signed-in user first, then their organizations. */
+export const SourceControlRepositoryOwner = Schema.Struct({
+  login: TrimmedNonEmptyString,
+  kind: Schema.Literals(["user", "organization"]),
+});
+export type SourceControlRepositoryOwner = typeof SourceControlRepositoryOwner.Type;
+
+export const SourceControlListRepositoryOwnersInput = Schema.Struct({
+  provider: SourceControlProviderKind,
+});
+export type SourceControlListRepositoryOwnersInput =
+  typeof SourceControlListRepositoryOwnersInput.Type;
+
+/** Empty when the provider cannot list owners; clients then accept a typed owner. */
+export const SourceControlListRepositoryOwnersResult = Schema.Struct({
+  owners: Schema.Array(SourceControlRepositoryOwner),
+});
+export type SourceControlListRepositoryOwnersResult =
+  typeof SourceControlListRepositoryOwnersResult.Type;
+
 export const SourceControlPublishStatus = Schema.Literals(["pushed", "remote_added"]);
 export type SourceControlPublishStatus = typeof SourceControlPublishStatus.Type;
 

@@ -21,6 +21,16 @@ export async function trackQueueAttachments(ctx: MutationCtx, message: Doc<"thre
   await ctx.db.patch(message._id, { attachmentReferencesTracked: true });
 }
 
+/** Dropping a message's references lets the upload sweep reclaim bytes no other message uses. */
+export async function deleteQueueMessage(ctx: MutationCtx, message: Doc<"threadQueueMessages">) {
+  const refs = await ctx.db
+    .query("threadQueueAttachmentReferences")
+    .withIndex("by_message", (q) => q.eq("messageId", message._id))
+    .collect();
+  for (const ref of refs) await ctx.db.delete(ref._id);
+  await ctx.db.delete(message._id);
+}
+
 /** Explicit thread deletion bypasses the publication grace period, never the pending-work checks. */
 export async function scheduleOrphanQueueCleanup(
   ctx: MutationCtx,
@@ -87,14 +97,7 @@ export async function pruneOrphanQueue(
     if (pending) return 0;
   }
   const page = await messages().take(QUEUE_CLEANUP_BATCH_SIZE);
-  for (const message of page) {
-    const refs = await ctx.db
-      .query("threadQueueAttachmentReferences")
-      .withIndex("by_message", (q) => q.eq("messageId", message._id))
-      .collect();
-    for (const ref of refs) await ctx.db.delete(ref._id);
-    await ctx.db.delete(message._id);
-  }
+  for (const message of page) await deleteQueueMessage(ctx, message);
   if (await messages().first())
     await ctx.scheduler.runAfter(0, internal.threadQueue.pruneOrphan, {
       queueId,

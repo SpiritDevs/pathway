@@ -174,6 +174,40 @@ export async function cancelLocalQueuedThread(key: string, revision: number): Pr
   });
 }
 
+/** Deletes this device's canceled intents for one thread; pending sends are never touched. */
+export async function removeCanceledLocalQueuedThread(thread: {
+  readonly accountId: string;
+  readonly companyId: string;
+  readonly environmentId: string;
+  readonly threadId: string;
+  readonly queueId?: string;
+}): Promise<void> {
+  const db = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction("outbox", "readwrite");
+    const store = tx.objectStore("outbox");
+    const request = store.getAll();
+    request.addEventListener("success", () => {
+      for (const row of request.result as ThreadQueueOutboxRecord[])
+        if (
+          row.canceled &&
+          row.accountId === thread.accountId &&
+          row.companyId === thread.companyId &&
+          row.threadId === thread.threadId &&
+          (thread.queueId && row.queueId
+            ? row.queueId === thread.queueId
+            : row.environmentId === thread.environmentId)
+        )
+          store.delete(row.key);
+    });
+    tx.addEventListener("complete", () => resolve());
+    tx.addEventListener("error", () => reject(tx.error));
+    tx.addEventListener("abort", () =>
+      reject(tx.error ?? new Error("Could not delete the canceled messages.")),
+    );
+  });
+}
+
 /** Retrying one message never replaces an existing intent or clears its submission fence. */
 export async function createQueuedIntent(record: ThreadQueueOutboxRecord): Promise<void> {
   const db = await openDatabase();

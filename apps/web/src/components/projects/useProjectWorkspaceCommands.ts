@@ -64,7 +64,10 @@ export function useAttachProjectDirectory() {
       if (plan.initializeGit) {
         const initResult = await initRepository({
           environmentId,
-          input: { cwd: plan.workspaceRoot },
+          input: {
+            cwd: plan.workspaceRoot,
+            ...(plan.createWorkspaceRootIfMissing ? { createDirectory: true } : {}),
+          },
         });
         if (initResult._tag === "Failure") {
           return failureOutcome(initResult);
@@ -111,7 +114,10 @@ export function useQuickCreateProject() {
       if (plan.workspaceRoot !== null && plan.initializeGit) {
         const initResult = await initRepository({
           environmentId,
-          input: { cwd: plan.workspaceRoot },
+          input: {
+            cwd: plan.workspaceRoot,
+            ...(plan.createWorkspaceRootIfMissing ? { createDirectory: true } : {}),
+          },
         });
         if (initResult._tag === "Failure") {
           return failureOutcome(initResult);

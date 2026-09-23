@@ -43,7 +43,7 @@ import { IssueSlackGlyph } from "../../issues/IssueGlyphs";
 import { IssueProjectMenu } from "../../issues/IssuePropertyMenus";
 import { IssueCyclePicker } from "../../issues/IssueSelectors";
 import { reportIssueWriteFailure as reportFailure } from "../../issues/issueWriteFeedback";
-import { QuickCreateProjectDialog } from "../../projects/QuickCreateProjectDialog";
+import { CreateProjectDialog } from "../../projects/CreateProjectDialog";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -631,7 +631,7 @@ export function IntakeSettingsPanel({
 
   return (
     <>
-      <QuickCreateProjectDialog
+      <CreateProjectDialog
         environmentId={primaryEnvironmentId}
         onCreated={(created) => {
           const watch = quickCreateFor;

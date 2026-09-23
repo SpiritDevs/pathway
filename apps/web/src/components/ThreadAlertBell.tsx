@@ -67,9 +67,38 @@ export function ThreadAlertBell({
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
+  // A modifier-hover opens a peek. It closes once the pointer leaves both the bell and the
+  // popup, or the modifier is released away from the popup. Clicking inside keeps it open.
+  const peeking = useRef(false);
+  const overPopup = useRef(false);
+  const peekClose = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelPeekClose = () => {
+    if (peekClose.current !== null) clearTimeout(peekClose.current);
+    peekClose.current = null;
+  };
+  const openMenu = (peek: boolean) => {
+    cancelPeekClose();
+    peeking.current = peek && (!open || peeking.current);
+    setOpen(true);
+  };
+  const closePeek = () => {
+    cancelPeekClose();
+    if (peeking.current && !overPopup.current) {
+      peeking.current = false;
+      setOpen(false);
+    }
+  };
+  const schedulePeekClose = () => {
+    if (!peeking.current) return;
+    cancelPeekClose();
+    // Crossing the gap from the bell into the popup must not close it.
+    peekClose.current = setTimeout(closePeek, 150);
+  };
   useEffect(() => {
-    if (modifierHeld && anchor.current?.matches(":hover")) setOpen(true);
+    if (modifierHeld && anchor.current?.matches(":hover")) openMenu(true);
+    else if (!modifierHeld) closePeek();
   }, [modifierHeld]);
+  useEffect(() => cancelPeekClose, []);
   const longPress = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressClick = useRef(false);
   const clearLongPress = () => {
@@ -94,7 +123,17 @@ export function ThreadAlertBell({
   };
   const label = `Thread alerts ${view.state === "mixed" ? "partly on" : view.state}, ${view.explicit ? "thread override" : "inherited"}`;
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) {
+          cancelPeekClose();
+          peeking.current = false;
+          overPopup.current = false;
+        }
+        setOpen(next);
+      }}
+    >
       <button
         ref={anchor}
         type="button"
@@ -103,29 +142,32 @@ export function ThreadAlertBell({
         aria-haspopup="dialog"
         aria-expanded={open}
         disabled={!mutations || !policiesReady || policies === null || saving}
-        className={`relative inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring ${view.state === "off" && !open ? "opacity-0 group-hover/sidebar-row:opacity-100 group-focus-within/sidebar-row:opacity-100 focus-visible:opacity-100" : ""}`}
+        // An off bell leaves the layout at rest so the pin sits beside the status.
+        className={`relative size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring ${view.state === "off" && !open ? "hidden group-hover/sidebar-row:inline-flex group-focus-within/sidebar-row:inline-flex" : "inline-flex"}`}
         onPointerDown={(event) => {
           event.stopPropagation();
           suppressClick.current = false;
           if (event.pointerType === "touch")
             longPress.current = setTimeout(() => {
               suppressClick.current = true;
-              setOpen(true);
+              openMenu(false);
             }, 500);
         }}
         onPointerUp={clearLongPress}
         onPointerCancel={clearLongPress}
         onPointerLeave={clearLongPress}
         onMouseEnter={(event) => {
-          if (event.ctrlKey || event.metaKey) setOpen(true);
+          if (event.ctrlKey || event.metaKey) openMenu(true);
+          else cancelPeekClose();
         }}
         onMouseMove={(event) => {
-          if (event.ctrlKey || event.metaKey) setOpen(true);
+          if (event.ctrlKey || event.metaKey) openMenu(true);
         }}
+        onMouseLeave={schedulePeekClose}
         onContextMenu={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          setOpen(true);
+          openMenu(false);
         }}
         onKeyDown={(event) => {
           event.stopPropagation();
@@ -135,7 +177,7 @@ export function ThreadAlertBell({
             (event.shiftKey && event.key === "F10")
           ) {
             event.preventDefault();
-            setOpen(true);
+            openMenu(false);
           }
         }}
         onClick={(event) => {
@@ -145,7 +187,7 @@ export function ThreadAlertBell({
             suppressClick.current = false;
             return;
           }
-          if (event.ctrlKey || event.metaKey) setOpen(true);
+          if (event.ctrlKey || event.metaKey) openMenu(false);
           else void save(bulkAlertChoices(view.effective));
         }}
       >
@@ -164,6 +206,17 @@ export function ThreadAlertBell({
         className="w-80"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => event.stopPropagation()}
+        onPointerDown={() => {
+          peeking.current = false;
+        }}
+        onMouseEnter={() => {
+          overPopup.current = true;
+          cancelPeekClose();
+        }}
+        onMouseLeave={() => {
+          overPopup.current = false;
+          schedulePeekClose();
+        }}
       >
         <PopoverTitle>Thread alerts</PopoverTitle>
         <p className="mb-4 text-xs text-muted-foreground">

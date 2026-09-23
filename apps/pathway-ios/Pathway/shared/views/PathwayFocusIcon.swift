@@ -12,6 +12,11 @@ struct PathwayFocusIcon: View {
             .accessibilityHidden(true)
     }
 
+    /// Accent choices shared by Focus and project icons.
+    static let colors: [(label: String, hex: String)] = [
+        ("Indigo", "#6366f1"), ("Blue", "#3b82f6"), ("Green", "#22c55e"), ("Orange", "#f97316"), ("Pink", "#ec4899")
+    ]
+
     static func color(_ hex: String?) -> Color {
         guard let hex, hex.hasPrefix("#"), hex.count == 7,
               let rgb = UInt32(hex.dropFirst(), radix: 16) else { return .accentColor }

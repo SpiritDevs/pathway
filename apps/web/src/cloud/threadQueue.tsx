@@ -27,6 +27,10 @@ import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "@tanstack/react-router";
+import { readLocalApi } from "../localApi";
+import { useClientSettings } from "../hooks/useSettings";
+import { toastManager } from "../components/ui/toast";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { readThreadShell, readThreadProjection } from "../state/entities";
 import { environmentCatalog } from "../connection/catalog";
@@ -53,6 +57,7 @@ import {
   claimQueuedIntent,
   cancelLocalQueuedThread,
   editLocalQueuedIntent,
+  removeCanceledLocalQueuedThread,
   removeQueuedIntent,
   createQueuedIntent,
   type ThreadQueueOutboxRecord,
@@ -104,6 +109,11 @@ const ref = {
   generateUploadUrl: makeFunctionReference<"mutation", { companyId: string }, string>(
     "threadQueue:generateUploadUrl",
   ),
+  discard: makeFunctionReference<
+    "mutation",
+    { companyId: string; threadId: string; environmentId: string; queueId?: string },
+    null
+  >("threadQueue:discard"),
   registerAttachment: makeFunctionReference<
     "mutation",
     { companyId: string; storageId: string; attachment: ChatAttachment },
@@ -667,6 +677,68 @@ export async function mutateQueuedThread(
       ...args,
     }),
     current.closed,
+  );
+}
+
+/** Deletes a canceled queued thread from the cloud and from this device. */
+export async function discardQueuedThread(
+  row: Pick<ThreadQueueThread, "companyId" | "environmentId" | "threadId" | "queueId"> & {
+    cloudSaved: boolean;
+  },
+) {
+  const current = session;
+  if (!current) throw new Error("Cloud authentication is unavailable.");
+  const companyId = row.companyId ?? current.companyId;
+  if (!companyId) throw new Error("Select a company before deleting this thread.");
+  const identity = {
+    companyId,
+    threadId: row.threadId,
+    environmentId: row.environmentId,
+    ...(row.queueId ? { queueId: row.queueId } : {}),
+  };
+  if (row.cloudSaved)
+    await awaitQueueMutation(current.client.mutation(ref.discard, identity), current.closed);
+  if (session !== current) return;
+  current.receipts.delete(queuedThreadKey(row));
+  await removeCanceledLocalQueuedThread({ ...identity, accountId: current.accountId });
+  if (session !== current) return;
+  await announce(current.accountId);
+  notifyOtherTabs();
+}
+
+/** Confirms, deletes, and leaves the queued thread's route if it is open. */
+export function useDiscardQueuedThread() {
+  const router = useRouter();
+  const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
+  return useCallback(
+    async (row: Parameters<typeof discardQueuedThread>[0] & { title: string }) => {
+      const api = readLocalApi();
+      if (confirmThreadDelete && api) {
+        const confirmed = await settlePromise(() =>
+          api.dialogs.confirm(
+            `Delete canceled thread "${row.title}"?\nIts saved messages will be removed.`,
+            { variant: "destructive" },
+          ),
+        );
+        if (confirmed._tag === "Failure" || !confirmed.value) return;
+      }
+      try {
+        await discardQueuedThread(row);
+      } catch (cause) {
+        toastManager.add({
+          type: "error",
+          title: "Could not delete thread",
+          description: threadQueueErrorMessage(cause),
+        });
+        return;
+      }
+      const params = router.state.matches.at(-1)?.params as
+        | { environmentId?: string; threadId?: string }
+        | undefined;
+      if (params?.environmentId === row.environmentId && params.threadId === row.threadId)
+        await router.navigate({ to: "/threads", replace: true });
+    },
+    [confirmThreadDelete, router],
   );
 }
 

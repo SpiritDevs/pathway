@@ -62,6 +62,7 @@ struct PathwayFocusEditorView: View {
     @State private var color = "#6366f1"
     @State private var selectedProjects: Set<String> = []
     @State private var includeConversations = false
+    @State private var view = PathwayFocusView()
     @State private var saving = false
     @State private var errorMessage: String?
     @State private var deleting = false
@@ -80,11 +81,7 @@ struct PathwayFocusEditorView: View {
                         }
                     }
                     Picker("Color", selection: $color) {
-                        Text("Indigo").tag("#6366f1")
-                        Text("Blue").tag("#3b82f6")
-                        Text("Green").tag("#22c55e")
-                        Text("Orange").tag("#f97316")
-                        Text("Pink").tag("#ec4899")
+                        ForEach(PathwayFocusIcon.colors, id: \.hex) { Text($0.label).tag($0.hex) }
                     }
                 }
                 Section("Projects") {
@@ -100,6 +97,16 @@ struct PathwayFocusEditorView: View {
                         }
                     }
                 }
+                Section {
+                    Picker("Sort threads", selection: $view.sort) {
+                        ForEach(PathwayFocusThreadSort.allCases) { Text($0.title).tag($0) }
+                    }
+                    Toggle("Collapsible pinned chats", isOn: $view.collapsiblePinned)
+                } header: {
+                    Text("View")
+                } footer: {
+                    Text("Syncs to your other devices.")
+                }
                 if focus != nil { Button("Delete Focus", role: .destructive) { deleting = true } }
                 if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
             }
@@ -113,6 +120,7 @@ struct PathwayFocusEditorView: View {
                 iconName = focus?.iconName ?? "Briefcase"
                 includeConversations = focus?.includeConversations ?? false
                 selectedProjects = Set(model.assignments.filter { $0.focusId == focus?.id }.map(\.projectKey))
+                view = focus.map { model.view(for: $0.id) } ?? PathwayFocusView()
             }
             .confirmationDialog("Delete this Focus?", isPresented: $deleting, titleVisibility: .visible) {
                 Button("Delete Focus", role: .destructive) {
@@ -141,12 +149,15 @@ struct PathwayFocusEditorView: View {
                 for key in selectedProjects.subtracting(original).sorted() {
                     _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:assignProject", arguments: .object(["focusId": .string(focus.id), "projectKey": .string(key)]))
                 }
+                if view != model.view(for: focus.id) { try await model.saveView(view, for: focus.id, cloud: appModel.cloud) }
             } else {
+                let focusID = UUID().uuidString.lowercased()
                 _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:create", arguments: .object([
-                    "id": .string(UUID().uuidString.lowercased()), "name": .string(name), "iconName": .string(iconName),
+                    "id": .string(focusID), "name": .string(name), "iconName": .string(iconName),
                     "accentColor": .string(color), "projectKeys": .array(selectedProjects.sorted().map(JSONValue.string)),
                     "includeConversations": .bool(includeConversations)
                 ]))
+                if view != PathwayFocusView() { try await model.saveView(view, for: focusID, cloud: appModel.cloud) }
             }
             dismiss()
         } catch { errorMessage = error.localizedDescription }

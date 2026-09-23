@@ -277,6 +277,17 @@ export default defineSchema({
     .index("by_project", ["projectKey"])
     .index("by_focus", ["focusId"]),
 
+  /** Per-user sidebar layout keyed by Focus domain id, "all", or "conversations". */
+  focusViewPreferences: defineTable({
+    userId: v.id("users"),
+    focusId: v.string(),
+    sortOrder: v.optional(v.string()),
+    collapsiblePinned: v.optional(v.boolean()),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_and_focus", ["userId", "focusId"]),
+
   threadAlertPolicies: defineTable({
     userId: v.string(),
     scopeKind: v.union(v.literal("global"), v.literal("project"), v.literal("thread")),
@@ -709,6 +720,8 @@ export default defineSchema({
     repositoryIdentity: v.optional(v.union(repositoryIdentityArg, v.null())),
     /** Only an explicit merge choice is allowed to rewrite connected Git remotes. */
     repositoryIdentityAuthority: v.optional(v.literal("merge")),
+    /** Built-in icon replacing detected favicons on every device; absent/null uses the favicon. */
+    icon: v.optional(v.union(v.object({ name: v.string(), color: v.string() }), v.null())),
     archivedAt: v.union(v.number(), v.null()),
     createdAt: v.number(),
     updatedAt: v.number(),

@@ -87,8 +87,42 @@ export const FocusNotification = Schema.Struct({
 });
 export type FocusNotification = typeof FocusNotification.Type;
 
+/** Reserved view keys beside Focus ids: the All tab and the Conversations tab. */
+export const ALL_FOCUS_VIEW_ID = "all";
+export const CONVERSATIONS_FOCUS_VIEW_ID = "conversations";
+
+export const FOCUS_THREAD_SORT_ORDERS = [
+  "custom",
+  "recent_work",
+  "recent_activity",
+  "created_at",
+  "needs_attention",
+  "project",
+] as const;
+export const FocusThreadSortOrder = Schema.Literals(FOCUS_THREAD_SORT_ORDERS);
+export type FocusThreadSortOrder = typeof FocusThreadSortOrder.Type;
+
+/** A sort written by a newer client reads as Custom order instead of failing the read model. */
+export function focusThreadSortOrder(value: string | undefined): FocusThreadSortOrder {
+  return (FOCUS_THREAD_SORT_ORDERS as readonly string[]).includes(value ?? "")
+    ? (value as FocusThreadSortOrder)
+    : "custom";
+}
+
+/** Per-user sidebar layout for one Focus, All, or Conversations. Synced across devices. */
+export const FocusViewPreference = Schema.Struct({
+  focusId: TrimmedNonEmptyString,
+  sortOrder: Schema.String,
+  collapsiblePinned: Schema.Boolean,
+  updatedAt: CloudTimestamp,
+});
+export type FocusViewPreference = typeof FocusViewPreference.Type;
+
 export const FocusReadModel = Schema.Struct({
   focuses: Schema.Array(Focus),
   assignments: Schema.Array(FocusAssignment),
+  viewPreferences: Schema.Array(FocusViewPreference).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 });
 export type FocusReadModel = typeof FocusReadModel.Type;

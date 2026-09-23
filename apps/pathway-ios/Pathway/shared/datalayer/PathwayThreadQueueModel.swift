@@ -192,6 +192,8 @@ final class PathwayThreadQueueModel {
         guard companyIDs.contains(thread.companyID), let store, thread.canRemoveFromList else {
             throw PathwayThreadConversationError.message("Cancel pending work before removing this thread.")
         }
+        // Canceled work is deleted for every device; delivered receipts are only hidden here.
+        if thread.state == "canceled" { try await mutate("discard", thread: thread) }
         let version = dismissalVersion(thread)
         try await store.dismissThread(id: thread.id, version: version)
         guard current == generation else { throw CancellationError() }
