@@ -1,19 +1,49 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { expect, it } from "@effect/vitest";
+import { expect, it, vi } from "@effect/vitest";
+import { ProviderDriverKind } from "@spiritdevs/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 
+import {
+  makeComputerTools,
+  type ComputerToolsOptions,
+} from "../mcp/toolkits/computer/computerTools.ts";
+import { ComputerToolError, type ToolContext } from "../mcp/toolkits/computer/toolRuntime.ts";
+import type { ComputerApprovalOutcome } from "./ComputerApprovalGate.ts";
 import type { ComputerBackend } from "./ComputerBackend.ts";
 import { ComputerManager } from "./ComputerManager.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 
-// Synara's remaining cases in this suite ("an intervening explicit screenshot
-// must prevent unrelated image reuse", "routes every provider's routine
-// mutations through the same task gate", "lets Synara approve or deny %s
-// actions" and "rechecks original turn authority after waiting for the
-// desktop") drive the agent gateway's computer tools, which are not part of
-// this port; they belong with the gateway tool suite.
+const PATHWAY_PROVIDERS = ["codex", "claudeAgent", "cursor", "grok", "opencode"] as const;
+
+function context(): ToolContext {
+  return {
+    callerThreadId: "audit",
+    callerThreadLabel: "Audit",
+    callerSessionKey: "audit",
+    callerProvider: ProviderDriverKind.make("claudeAgent"),
+    callerCapabilities: new Set(["computer"]),
+    callerTurnId: "turn",
+    assertCallerTurnActive: () => Effect.void,
+    jsonRpcRequestId: 1,
+  };
+}
+
+const setupTools = Effect.fn(function* (
+  backend: FakeComputerBackend = new FakeComputerBackend(),
+  authorizeAction?: ComputerToolsOptions["authorizeAction"],
+) {
+  const manager = yield* ComputerManager.make({ backend, actionSettleMs: 0 });
+  const tools = new Map(
+    makeComputerTools({ manager, ...(authorizeAction ? { authorizeAction } : {}) }).map(
+      (tool) => [tool.definition.name, tool] as const,
+    ),
+  );
+  const call = (name: string, args: Record<string, unknown> = {}, caller = context()) =>
+    tools.get(name)!.handler(args, caller);
+  return { manager, backend, call };
+});
 
 it.layer(NodeServices.layer)("Production audit: desired invariants", (it) => {
   it.effect("hover must not change keyboard focus", () =>
@@ -105,6 +135,20 @@ it.layer(NodeServices.layer)("Production audit: desired invariants", (it) => {
     }),
   );
 
+  it.effect("an intervening explicit screenshot must prevent unrelated image reuse", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { call } = yield* setupTools();
+        yield* call("computer_click", { label: "Calculate", role: "button" });
+        const explicit = yield* call("computer_screenshot", { window_id: "fake-terminal" });
+        expect(explicit.isError).not.toBe(true);
+        expect(explicit.content.some((c) => c.type === "image")).toBe(true);
+        const result = yield* call("computer_click", { label: "Calculate", role: "button" });
+        expect(result.content.some((c) => c.type === "image")).toBe(true);
+      }),
+    ),
+  );
+
   it.effect("a moved window must deliver its new screenshot geometry", () =>
     Effect.gen(function* () {
       const backend = new FakeComputerBackend();
@@ -141,6 +185,97 @@ it.layer(NodeServices.layer)("Provider authority invariants", (it) => {
         );
         // Re-arming this explicit request never authorizes later turns or goals.
         expect(manager.canContinueChatControl("audit")).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("routes every provider's routine mutations through the same task gate", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const authorizeAction = vi.fn((_name: string) =>
+          Effect.succeed<ComputerApprovalOutcome>("approved"),
+        );
+        const { call } = yield* setupTools(new FakeComputerBackend(), authorizeAction);
+        for (const provider of PATHWAY_PROVIDERS) {
+          // A distinct text per provider keeps every call's repeat-guard key
+          // distinct — the guard would refuse a third identical unverified
+          // send before the approval gate this test measures.
+          yield* call(
+            "computer_type_text",
+            { text: `check-${provider}`, window_id: "fake-terminal", include_screenshot: false },
+            { ...context(), callerProvider: ProviderDriverKind.make(provider) },
+          );
+          expect(authorizeAction.mock.calls.at(-1)?.[0]).toBe("computer_type_text");
+        }
+        expect(authorizeAction).toHaveBeenCalledTimes(PATHWAY_PROVIDERS.length);
+      }),
+    ),
+  );
+
+  it.effect.each(PATHWAY_PROVIDERS)("lets Pathway approve or deny %s actions", (provider) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let outcome: ComputerApprovalOutcome = "denied";
+        const authorizeAction = vi.fn(() => Effect.succeed(outcome));
+        const { backend, call } = yield* setupTools(new FakeComputerBackend(), authorizeAction);
+        const caller = { ...context(), callerProvider: ProviderDriverKind.make(provider) };
+        const typed = () => backend.calls.filter((c) => c.method === "typeText");
+        const denied = yield* call(
+          "computer_type_text",
+          { text: "denied", include_screenshot: false },
+          caller,
+        );
+        expect(denied.isError).toBe(true);
+        expect(typed()).toHaveLength(0);
+        outcome = "approved";
+        const accepted = yield* call(
+          "computer_type_text",
+          { text: "approved", include_screenshot: false },
+          caller,
+        );
+        expect(accepted.isError).not.toBe(true);
+        expect(typed()).toHaveLength(1);
+        expect(authorizeAction).toHaveBeenCalledTimes(2);
+      }),
+    ),
+  );
+
+  it.effect("rechecks original turn authority after waiting for the desktop", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { manager, backend, call } = yield* setupTools();
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const first = yield* Effect.forkChild(
+          manager.withAgentActivity(
+            "audit",
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          ),
+        );
+        yield* Deferred.await(entered);
+        let active = true;
+        const caller: ToolContext = {
+          ...context(),
+          assertCallerTurnActive: () =>
+            active
+              ? Effect.void
+              : Effect.fail(
+                  new ComputerToolError({
+                    code: "caller_turn_inactive",
+                    message: "original turn ended",
+                  }),
+                ),
+        };
+        const second = yield* Effect.forkChild(
+          call("computer_type_text", { text: "never", include_screenshot: false }, caller),
+          { startImmediately: true },
+        );
+        yield* Effect.yieldNow;
+        active = false;
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(first);
+        expect((yield* Fiber.join(second)).isError).toBe(true);
+        expect(backend.calls.filter((c) => c.method === "typeText")).toHaveLength(0);
       }),
     ),
   );
