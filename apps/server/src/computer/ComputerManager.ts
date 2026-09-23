@@ -4802,6 +4802,10 @@ export class ComputerManager {
       this.disposed = true;
       this.spaceBroker.dispose();
       yield* this.cursorActivity.dispose;
+      // A disable still writing must reach disk before the scope interrupts it.
+      yield* Effect.ignore(
+        withControlTeardownTimeout(Fiber.awaitAll(this.pendingControlWrites.values())),
+      );
       // Teardown cannot depend on the host still answering: an unreachable
       // endpoint means the input path it owned is already gone, so the wait is
       // bounded like every other teardown leg.
