@@ -12,6 +12,7 @@ import gnomeCaptureBundle from "../apps/desktop/gnome-extension/bundle.json" wit
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
+import { buildPathwayHelper } from "./build-pathway-helper.ts";
 import {
   BRAND_ASSET_PATHS,
   resolveWebAssetBrandForChannel,
@@ -20,6 +21,7 @@ import {
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { provisionCuaDriver } from "./provision-cua-driver.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -726,6 +728,9 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // so the SDK's optional platform packages (each a ~200MB bundled executable)
   // are dead weight. The trailing dash keeps the SDK's own JS package.
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
+  // Computer Use natives ship as extraResources; keep them out of app.asar.
+  "!apps/desktop/prod-resources/cua-driver/**",
+  "!apps/desktop/prod-resources/pathway-helper/**",
 ] as const;
 // The WSL backend launches the server with plain `wsl.exe -- node`, which
 // cannot read inside an asar archive — and the server bundle externalizes its
@@ -746,6 +751,28 @@ export const DICTATION_EXTRA_RESOURCES = [
     from: "apps/desktop/prod-resources/dictation",
     to: "dictation",
   },
+] as const;
+
+// Computer Use spawns these by path, so they live outside app.asar. The Cua
+// driver ships on macOS and Linux; the Swift helper is macOS-only.
+export const CUA_DRIVER_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/cua-driver",
+    to: "cua-driver",
+  },
+] as const;
+
+export const PATHWAY_HELPER_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/pathway-helper",
+    to: "pathway-helper",
+  },
+] as const;
+
+// Signed explicitly so the release identity replaces their ad-hoc signatures.
+export const MAC_COMPUTER_USE_BINARIES = [
+  "Contents/Resources/pathway-helper/pathway-helper",
+  "Contents/Resources/cua-driver/cua-driver",
 ] as const;
 
 export const LINUX_CAPTURE_EXTRA_RESOURCES = [
@@ -1486,6 +1513,32 @@ const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input:
   }
 });
 
+// Cua is verified and re-staged from PATHWAY_CUA_ARTIFACT_DIR when CI provides
+// one, and built from the pinned source otherwise.
+const stageComputerUseNatives = Effect.fn("stageComputerUseNatives")(function* (input: {
+  readonly repoRoot: string;
+  readonly prodResourcesDir: string;
+  readonly platform: typeof BuildPlatform.Type;
+  readonly arch: typeof BuildArch.Type;
+}) {
+  if (input.platform === "win") return;
+  const path = yield* Path.Path;
+  yield* Effect.log("[desktop-artifact] Verifying and staging pinned Cua driver...");
+  yield* provisionCuaDriver({
+    destination: path.join(input.prodResourcesDir, "cua-driver"),
+    platform: input.platform === "mac" ? "darwin" : "linux",
+    arch: input.arch,
+  });
+  if (input.platform !== "mac") return;
+  yield* Effect.log(`[desktop-artifact] Building pathway-helper (${input.arch})...`);
+  yield* buildPathwayHelper({
+    repoRoot: input.repoRoot,
+    arch: input.arch,
+    outputPath: path.join(input.prodResourcesDir, "pathway-helper", "pathway-helper"),
+    release: true,
+  });
+});
+
 function generateMacIconSet(
   sourcePng: string,
   targetIcns: string,
@@ -1784,6 +1837,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : DICTATION_EXTRA_RESOURCES),
+      ...(platform === "win" ? [] : CUA_DRIVER_EXTRA_RESOURCES),
+      ...(platform === "mac" ? PATHWAY_HELPER_EXTRA_RESOURCES : []),
     ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
@@ -1806,6 +1861,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
+      binaries: [...MAC_COMPUTER_USE_BINARIES],
+      // Universal builds stage the helper and driver already lipo'd; this lets
+      // @electron/universal keep those fat binaries instead of merging them.
+      x64ArchFiles: "Contents/Resources/{pathway-helper/pathway-helper,cua-driver/cua-driver}",
       // macOS 15+ gates LAN traffic per app, so without this string Chromium
       // fails dev servers on private IPs with ERR_ADDRESS_UNREACHABLE instead
       // of prompting. The webview and the agent browser both need the grant.
@@ -1813,7 +1872,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         NSMicrophoneUsageDescription:
           "Pathway records your voice when you start dictation. Audio is processed on this computer.",
         NSScreenCaptureUsageDescription:
-          "Pathway captures the active window when you use the SnapShots shortcut.",
+          "Pathway captures the active window when you use the SnapShots shortcut, and the windows you authorize for Computer use.",
+        NSAccessibilityUsageDescription:
+          "Pathway controls the windows you authorize for Computer use.",
         NSLocalNetworkUsageDescription:
           "Pathway connects to development servers running on your local network.",
       },
@@ -2211,7 +2272,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         verbose: options.verbose,
       });
   }
-  yield* fs.copy(stageResourcesDir, path.join(stageAppDir, "apps/desktop/prod-resources"));
+  const prodResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
+  yield* fs.copy(stageResourcesDir, prodResourcesDir);
+  yield* stageComputerUseNatives({
+    repoRoot,
+    prodResourcesDir,
+    platform: options.platform,
+    arch: options.arch,
+  });
 
   const configuredMacPasskeySigning =
     options.platform === "mac" && options.signed
