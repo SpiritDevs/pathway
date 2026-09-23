@@ -280,7 +280,7 @@ boundaries and [the user guide](../user/snap-shot.md) for setup.
 
 ## Computer Use
 
-These terms support the Computer Use design records ([0036](../adr/0036-computer-use-is-a-literal-mirror-of-synara.md), [0037](../adr/0037-computer-use-controls-the-environment-host.md)). They describe the design under discussion, not shipped support.
+These terms support the Computer Use design records ([0039](../adr/0039-computer-use-is-a-literal-mirror-of-synara.md), [0040](../adr/0040-computer-use-controls-the-environment-host.md)). They describe the design under discussion, not shipped support.
 
 **Computer Use**:
 An agent observing and driving desktop applications and a driver-owned browser through Pathway's `computer_*` tools. It is ported from Synara.
@@ -298,10 +298,10 @@ The MIT-licensed native automation daemon (Cua AI, Inc.), pinned to one upstream
 _Avoid_: CUA as a name for the feature.
 
 **Computer access policy**:
-The environment setting that decides which paired clients may start Computer tasks: Any operator, Scoped (the `computer:operate` scope, default) or Admins only. Watching, approving and Stop are never restricted by it. See [0038](../adr/0038-computer-access-is-an-environment-policy.md).
+The environment setting that decides which paired clients may start Computer tasks: Any operator, Scoped (the `computer:operate` scope, default) or Admins only. Watching, approving and Stop are never restricted by it. See [0041](../adr/0041-computer-access-is-an-environment-policy.md).
 
 **Computer autonomy**:
-The environment's ceiling on Computer oversight: Supervised, Per task (default), Auto or Full access. A thread's composer runtime mode maps onto the same levels, and the stricter of the two applies. The denylist, Stop and Escape, and the audit log hold at every level. See [0040](../adr/0040-computer-autonomy-is-an-environment-ceiling-over-thread-mode.md).
+The environment's ceiling on Computer oversight: Supervised, Per task (default), Auto or Full access. A thread's composer runtime mode maps onto the same levels, and the stricter of the two applies. The denylist, Stop and Escape, and the audit log hold at every level. See [0043](../adr/0043-computer-autonomy-is-an-environment-ceiling-over-thread-mode.md).
 _Avoid_: Computer permission mode (runtime mode is the thread's setting; autonomy is the environment's).
 
 **Denylist**:
