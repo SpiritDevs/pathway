@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./cuaDriverRelease.json": "./src/cuaDriverRelease.json",
     "./browserPasswordAutofill": {
       "types": "./src/browserPasswordAutofill.ts",
       "import": "./src/browserPasswordAutofill.ts"
