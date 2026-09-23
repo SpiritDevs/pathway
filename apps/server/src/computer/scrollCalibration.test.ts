@@ -125,6 +125,18 @@ describe("decodePngLuma", () => {
     }),
   );
 
+  it.effect("keeps a shared decode alive when one of its callers is interrupted", () =>
+    Effect.gen(function* () {
+      const luma = Uint8Array.from({ length: 64 }, (_, index) => index);
+      const bytes = grayPng(8, 8, luma);
+      const first = yield* Effect.forkChild(decodePngLuma(bytes), { startImmediately: true });
+      const second = yield* Effect.forkChild(decodePngLuma(bytes), { startImmediately: true });
+      yield* Fiber.interrupt(first);
+      const decoded = yield* Fiber.join(second);
+      expect(Array.from(decoded?.luma ?? [])).toEqual(Array.from(luma));
+    }),
+  );
+
   it.effect("converts RGB samples to luma", () =>
     Effect.gen(function* () {
       // Pure red, green, blue, then white: the coefficients are visible directly.
