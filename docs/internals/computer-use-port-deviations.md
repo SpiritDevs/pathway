@@ -85,3 +85,4 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - `computerDenylist` matches executable paths with a pure last-segment helper instead of `node:path`, so Windows backslash paths are not split.
 - `waitForControl` takes a `read` effect instead of an async function and an `AbortSignal`. Cancelling it is interrupting it, and elapsed time comes from `Clock`.
 - `UnavailableComputerBackend` takes its failure time as epoch millis, and `makeUnavailableComputerBackend` reads it from `Clock`. It has no `events` stream because nothing ever changes.
+- `waitForWindow` takes a `read` effect and optional `checkInputReady` effect; Stop is fiber interruption instead of an `AbortSignal`, and the 2 s budget interrupts a hung probe directly, so Synara's `withDesktopOperationSignal` wrapper is gone.
