@@ -766,8 +766,19 @@ const toolCallOf = (body: unknown) => {
   };
 };
 
+const cancelledRequestIdOf = (body: unknown) => {
+  if (!Predicate.hasProperty(body, "method") || body.method !== "notifications/cancelled") {
+    return undefined;
+  }
+  const params = Predicate.hasProperty(body, "params") ? body.params : undefined;
+  const requestId = Predicate.hasProperty(params, "requestId") ? params.requestId : undefined;
+  return typeof requestId === "string" || typeof requestId === "number" ? requestId : undefined;
+};
+
 const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler => {
   const customSubscriptions = new Map<string, () => void>();
+  /** Running Computer calls by session and JSON-RPC id, so a cancel can interrupt one. */
+  const computerCalls = new Map<string, AbortController>();
   const registeredTools = options.toolkits.flatMap((built) =>
     Object.values(built.tools).map((tool) => ({
       built,
@@ -844,7 +855,7 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
                 : { annotations: definition.annotations }),
               ...(definition._meta === undefined ? {} : { _meta: { ...definition._meta } }),
             },
-            async (payload) =>
+            async (payload, extra) =>
               ((await Effect.runPromiseWith(options.runtimeContext)(
                 computer.call({
                   invocation,
@@ -852,6 +863,7 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
                   args: payload as Record<string, unknown>,
                   jsonRpcRequestId: null,
                 }),
+                { signal: extra.mcpReq.signal },
               )) ?? { content: [], isError: true }) as CallToolResult,
           );
         }
@@ -1175,18 +1187,41 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
           }
         }
       }
+      // Either protocol generation may cancel a Computer call it started.
+      const cancelledId = cancelledRequestIdOf(parsedBody);
+      if (cancelledId !== undefined) {
+        computerCalls.get(invocationSubscriptionKey(invocation, cancelledId))?.abort();
+      }
       const computerCall = classified.kind === "reject" ? undefined : toolCallOf(parsedBody);
       if (options.computer !== undefined && computerCall !== undefined) {
         const computer = options.computer;
         if (computer.handles(computerCall.name)) {
-          const result = await Effect.runPromiseWith(options.runtimeContext)(
-            computer.call({
-              invocation,
-              name: computerCall.name,
-              args: computerCall.args,
-              jsonRpcRequestId: computerCall.id,
-            }),
-          );
+          // A cancel notification, the caller hanging up, or handler shutdown
+          // interrupts the call, so nothing it had not yet sent is sent.
+          const key = invocationSubscriptionKey(invocation, computerCall.id);
+          const cancel = new AbortController();
+          const abort = () => cancel.abort();
+          computerCalls.set(key, cancel);
+          request.signal.addEventListener("abort", abort, { once: true });
+          if (request.signal.aborted) abort();
+          let result: Effect.Success<ReturnType<ComputerMcpTools["call"]>>;
+          try {
+            result = await Effect.runPromiseWith(options.runtimeContext)(
+              computer.call({
+                invocation,
+                name: computerCall.name,
+                args: computerCall.args,
+                jsonRpcRequestId: computerCall.id,
+              }),
+              { signal: cancel.signal },
+            );
+          } catch (error) {
+            if (!cancel.signal.aborted) throw error;
+            return jsonRpcError(computerCall.id, -32800, "Request cancelled.");
+          } finally {
+            request.signal.removeEventListener("abort", abort);
+            if (computerCalls.get(key) === cancel) computerCalls.delete(key);
+          }
           if (result !== undefined) {
             return classified.kind === "modern"
               ? jsonRpcResult(computerCall.id, result)
@@ -1212,6 +1247,7 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
     },
     close: async () => {
       for (const close of customSubscriptions.values()) close();
+      for (const call of computerCalls.values()) call.abort();
       await sdk.close();
     },
     notify: sdk.notify,
@@ -1432,9 +1468,14 @@ const McpRouteLive = Layer.unwrap(
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
         const invocation = yield* McpInvocationContext.McpInvocationContext;
-        const webRequest = yield* HttpServerRequest.toWeb(request);
+        // The server interrupts this fiber when the caller hangs up; the
+        // request's signal carries that into a running Computer call.
+        const hangUp = new AbortController();
+        const webRequest = yield* HttpServerRequest.toWeb(request, { signal: hangUp.signal });
         return HttpServerResponse.fromWeb(
-          yield* Effect.promise(() => handler.fetch(webRequest, invocation)),
+          yield* Effect.promise(() => handler.fetch(webRequest, invocation)).pipe(
+            Effect.onInterrupt(() => Effect.sync(() => hangUp.abort())),
+          ),
         );
       }),
     ),
