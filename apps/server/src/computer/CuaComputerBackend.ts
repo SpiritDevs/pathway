@@ -90,6 +90,7 @@ import {
   ComputerSpaceError,
   CuaActionError,
   errorMessage,
+  isCuaActionError,
   type ComputerOperationError,
 } from "./computerErrors.ts";
 import {
@@ -147,12 +148,6 @@ export interface CuaComputerBackendOptions {
    * `PATHWAY_CUA_PREVIEW_STILL_MS`, then 1000 ms.
    */
   readonly stillIntervalMs?: number;
-}
-
-/** `instanceof` for the one error subclass whose verdict fields callers branch on. */
-function isCuaActionError(error: unknown): error is CuaActionError {
-  // @effect-diagnostics-next-line instanceOfSchema:off -- CuaActionError is a subclass with its own fields; Schema.is would accept any ComputerBackendError.
-  return error instanceof CuaActionError;
 }
 
 const actionError = (
