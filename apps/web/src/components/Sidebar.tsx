@@ -81,7 +81,6 @@ import {
   MessageSquareIcon,
   MessagesSquareIcon,
   Layers3Icon,
-  MoreHorizontalIcon,
   PinIcon,
   PlusIcon,
   SearchIcon,
@@ -1206,18 +1205,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     },
     [onContextMenu, threadRef],
   );
-  const handleActionsClick = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const bounds = event.currentTarget.getBoundingClientRect();
-      onContextMenu(threadRef, { x: bounds.right, y: bounds.bottom });
-    },
-    [onContextMenu, threadRef],
-  );
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent) => {
       if (event.target !== event.currentTarget) return;
+      // Keyboard equivalent of right-click: the row has no visible actions button.
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+        event.preventDefault();
+        const bounds = event.currentTarget.getBoundingClientRect();
+        onContextMenu(threadRef, { x: bounds.left, y: bounds.bottom });
+        return;
+      }
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
       onThreadActivate(threadRef);
@@ -1624,21 +1621,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     <TooltipPopup>{settleTooltip}</TooltipPopup>
                   </Tooltip>
                 )}
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        aria-label="More thread actions"
-                        onClick={handleActionsClick}
-                        className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground hover:text-foreground"
-                      />
-                    }
-                  >
-                    <MoreHorizontalIcon className="size-4" />
-                  </TooltipTrigger>
-                  <TooltipPopup>More thread actions</TooltipPopup>
-                </Tooltip>
               </span>
             </span>
             {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
@@ -1751,7 +1733,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   actions on hover/keyboard focus or while the popover is open. Keeping
                   the hidden state out of flow lets the project label reclaim
                   space without either state overlapping it. */}
-              <span className="group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end text-xs">
+              <span className="group/sidebar-status-slot relative ml-auto flex h-5 shrink-0 items-stretch justify-end text-xs">
                 {/* Read-only status labels yield to the hover actions. Woke is
                     itself an action, so it stays pointer-enabled and visible
                     while the other controls appear beside it. */}
@@ -1850,21 +1832,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       <TooltipPopup>{settleTooltip}</TooltipPopup>
                     </Tooltip>
                   ) : null}
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <button
-                          type="button"
-                          aria-label="More thread actions"
-                          onClick={handleActionsClick}
-                          className="-mr-1 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground hover:text-foreground"
-                        />
-                      }
-                    >
-                      <MoreHorizontalIcon className="size-4" />
-                    </TooltipTrigger>
-                    <TooltipPopup>More thread actions</TooltipPopup>
-                  </Tooltip>
                 </span>
               </span>
             </div>
