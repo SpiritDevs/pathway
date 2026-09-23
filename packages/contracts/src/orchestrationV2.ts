@@ -2,6 +2,7 @@ import { OrchestratorAssignmentOrigin } from "./aiOrchestrator.ts";
 import { CompanyId } from "./company.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import {
   CheckpointId,
@@ -798,7 +799,42 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
 });
 export type OrchestrationV2ProviderTurn = typeof OrchestrationV2ProviderTurn.Type;
 
-export const OrchestrationV2RuntimeRequest = Schema.Struct({
+/**
+ * Wire codec for structs that carry a runtime request kind. Clients built
+ * before Computer use (ADR 0048) decode the kind as a closed enum, and one
+ * unknown kind fails the whole shell snapshot or thread event batch. So a
+ * `computer` kind is encoded as `command` plus `serverKind: "computer"`:
+ * older clients see an ordinary command approval and ignore the extra key,
+ * while current builds decode `computer` again. A bare `computer` kind still
+ * decodes. The decoded type is unchanged.
+ */
+const computerKindOnLegacyWire = <Fields extends Schema.Struct.Fields>(
+  key: "kind" | "requestKind",
+  schema: Schema.Struct<Fields>,
+) =>
+  Schema.Struct({
+    ...schema.fields,
+    serverKind: Schema.optionalKey(Schema.Literal("computer")),
+  }).pipe(
+    Schema.decodeTo(
+      Schema.toType(schema),
+      // The getters only move two keys; generic struct views are not assignable
+      // to plain records, so the transformation is typed loosely and cast.
+      SchemaTransformation.transform<
+        Readonly<Record<string, unknown>>,
+        Readonly<Record<string, unknown>>
+      >({
+        decode: ({ serverKind, ...value }) =>
+          serverKind === "computer" ? { ...value, [key]: "computer" } : value,
+        encode: (value) =>
+          value[key] === "computer"
+            ? { ...value, [key]: "command", serverKind: "computer" }
+            : value,
+      }) as never,
+    ),
+  );
+
+const OrchestrationV2RuntimeRequestStruct = Schema.Struct({
   id: RuntimeRequestId,
   nodeId: NodeId,
   providerTurnId: Schema.NullOr(ProviderTurnId),
@@ -819,6 +855,10 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   resolvedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
+export const OrchestrationV2RuntimeRequest = computerKindOnLegacyWire(
+  "kind",
+  OrchestrationV2RuntimeRequestStruct,
+);
 export type OrchestrationV2RuntimeRequest = typeof OrchestrationV2RuntimeRequest.Type;
 
 export const OrchestrationV2ConversationMessage = Schema.Struct({
@@ -1135,13 +1175,16 @@ export const OrchestrationV2TurnItem = Schema.Union([
     patterns: Schema.optional(Schema.Array(Schema.String)),
     results: Schema.optional(Schema.Array(OrchestrationV2WebSearchResult)),
   }),
-  Schema.Struct({
-    ...OrchestrationV2TurnItemBaseFields,
-    type: Schema.Literal("approval_request"),
-    requestId: RuntimeRequestId,
-    requestKind: ProviderRequestKind,
-    prompt: Schema.optional(Schema.String),
-  }),
+  computerKindOnLegacyWire(
+    "requestKind",
+    Schema.Struct({
+      ...OrchestrationV2TurnItemBaseFields,
+      type: Schema.Literal("approval_request"),
+      requestId: RuntimeRequestId,
+      requestKind: ProviderRequestKind,
+      prompt: Schema.optional(Schema.String),
+    }),
+  ),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("checkpoint"),
@@ -1485,12 +1528,16 @@ export const OrchestrationV2ShellThreadStatus = Schema.Union([
 ]);
 export type OrchestrationV2ShellThreadStatus = typeof OrchestrationV2ShellThreadStatus.Type;
 
-export const OrchestrationV2PendingRuntimeRequestSummary = Schema.Struct({
+const OrchestrationV2PendingRuntimeRequestSummaryStruct = Schema.Struct({
   isBlocking: Schema.optional(Schema.Boolean),
   id: RuntimeRequestId,
-  kind: OrchestrationV2RuntimeRequest.fields.kind,
+  kind: OrchestrationV2RuntimeRequestStruct.fields.kind,
   createdAt: Schema.DateTimeUtc,
 });
+export const OrchestrationV2PendingRuntimeRequestSummary = computerKindOnLegacyWire(
+  "kind",
+  OrchestrationV2PendingRuntimeRequestSummaryStruct,
+);
 export type OrchestrationV2PendingRuntimeRequestSummary =
   typeof OrchestrationV2PendingRuntimeRequestSummary.Type;
 
@@ -1809,12 +1856,13 @@ export const OrchestrationV2ProviderTurnJson = OrchestrationV2ProviderTurn.mapFi
 }));
 export type OrchestrationV2ProviderTurnJson = typeof OrchestrationV2ProviderTurnJson.Type;
 
-export const OrchestrationV2RuntimeRequestJson = OrchestrationV2RuntimeRequest.mapFields(
-  (fields) => ({
+export const OrchestrationV2RuntimeRequestJson = computerKindOnLegacyWire(
+  "kind",
+  OrchestrationV2RuntimeRequestStruct.mapFields((fields) => ({
     ...fields,
     createdAt: Schema.DateTimeUtcFromString,
     resolvedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-  }),
+  })),
 );
 export type OrchestrationV2RuntimeRequestJson = typeof OrchestrationV2RuntimeRequestJson.Type;
 
@@ -1920,13 +1968,16 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     patterns: Schema.optional(Schema.Array(Schema.String)),
     results: Schema.optional(Schema.Array(OrchestrationV2WebSearchResult)),
   }),
-  Schema.Struct({
-    ...OrchestrationV2TurnItemJsonBaseFields,
-    type: Schema.Literal("approval_request"),
-    requestId: RuntimeRequestId,
-    requestKind: ProviderRequestKind,
-    prompt: Schema.optional(Schema.String),
-  }),
+  computerKindOnLegacyWire(
+    "requestKind",
+    Schema.Struct({
+      ...OrchestrationV2TurnItemJsonBaseFields,
+      type: Schema.Literal("approval_request"),
+      requestId: RuntimeRequestId,
+      requestKind: ProviderRequestKind,
+      prompt: Schema.optional(Schema.String),
+    }),
+  ),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("checkpoint"),
@@ -2072,11 +2123,13 @@ export const OrchestrationV2ThreadProjectionJson = OrchestrationV2ThreadProjecti
 );
 export type OrchestrationV2ThreadProjectionJson = typeof OrchestrationV2ThreadProjectionJson.Type;
 
-export const OrchestrationV2PendingRuntimeRequestSummaryJson =
-  OrchestrationV2PendingRuntimeRequestSummary.mapFields((fields) => ({
+export const OrchestrationV2PendingRuntimeRequestSummaryJson = computerKindOnLegacyWire(
+  "kind",
+  OrchestrationV2PendingRuntimeRequestSummaryStruct.mapFields((fields) => ({
     ...fields,
     createdAt: Schema.DateTimeUtcFromString,
-  }));
+  })),
+);
 export type OrchestrationV2PendingRuntimeRequestSummaryJson =
   typeof OrchestrationV2PendingRuntimeRequestSummaryJson.Type;
 
