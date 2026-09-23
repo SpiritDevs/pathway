@@ -2936,7 +2936,7 @@ export const layer: Layer.Layer<ProviderAdapterV2, never, OpenCodeAdapterV2Drive
       return makeOpenCodeAdapterV2({
         instanceId: OPENCODE_DEFAULT_INSTANCE_ID,
         settings: DEFAULT_OPENCODE_SETTINGS,
-        environment: hostEnvironment,
+        environment: mergeProviderInstanceEnvironment(undefined, hostEnvironment),
         runtime: openCodeRuntime,
         idAllocator,
         serverConfig,

@@ -1578,7 +1578,7 @@ export const layer: Layer.Layer<
     return makeCodexAdapterV2({
       instanceId: CODEX_DEFAULT_INSTANCE_ID,
       settings: DEFAULT_CODEX_SETTINGS,
-      environment: hostEnvironment,
+      environment: mergeProviderInstanceEnvironment(undefined, hostEnvironment),
       clientFactory,
       fileSystem,
       idAllocator,
