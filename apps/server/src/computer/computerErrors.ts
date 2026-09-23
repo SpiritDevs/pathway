@@ -138,7 +138,9 @@ export type ComputerTargetErrorCode =
    * security UI) and the access was refused before it could dispatch or
    * disclose anything. There is no override in this build.
    */
-  | "computer_denylist_refused";
+  | "computer_denylist_refused"
+  /** The target's app needs the user's once-per-app consent this turn; nothing was sent. */
+  | "computer_app_approval_required";
 
 export const ComputerTargetCandidate = Schema.Struct({
   label: Schema.String,
@@ -231,6 +233,25 @@ export class ComputerDenylistError extends ComputerTargetError {
       message:
         `${app} is on the computer-control denylist (${matched}): password managers ` +
         "and OS security surfaces are refused, with no override in this build.",
+    });
+    this.app = app;
+  }
+}
+
+/**
+ * Input for an app the turn may not drive yet (ADR 0043's once-per-app
+ * consent). Refused before dispatch; the next call asks the user for `app`.
+ */
+export class ComputerAppApprovalRequiredError extends ComputerTargetError {
+  readonly app: string;
+
+  // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+  constructor(app: string) {
+    super({
+      code: "computer_app_approval_required",
+      message:
+        `Computer needs the user's approval to use ${app} in this task, so nothing was sent. ` +
+        "Call again to ask the user; the call waits for their answer.",
     });
     this.app = app;
   }
