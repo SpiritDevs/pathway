@@ -1,9 +1,17 @@
 import { type RuntimeRequestId, type ProviderApprovalDecision } from "@spiritdevs/contracts";
-import { memo } from "react";
+import { parseComputerApprovalPrompt } from "@spiritdevs/client-runtime/state/computer-approval";
+import { type KeyboardEvent, memo, useRef } from "react";
+import { type PendingApproval } from "../../session-logic";
 import { Button } from "../ui/button";
+import {
+  approvalShortcutAction,
+  resolveApprovalActions,
+  respondToApprovalOnce,
+  type ApprovalAction,
+} from "./ComposerPendingApproval.logic";
 
 interface ComposerPendingApprovalActionsProps {
-  requestId: RuntimeRequestId;
+  approval: PendingApproval;
   isResponding: boolean;
   canRespond: boolean;
   onRespondToApproval: (
@@ -12,46 +20,89 @@ interface ComposerPendingApprovalActionsProps {
   ) => Promise<unknown>;
 }
 
+const BUTTON_VARIANT = {
+  cancel: "ghost",
+  decline: "destructive-outline",
+  acceptForSession: "outline",
+  accept: "default",
+} as const satisfies Record<ProviderApprovalDecision, string>;
+
+/** Left to right: stop-everything first, the recommended action last. */
+const VISUAL_ORDER: ReadonlyArray<ProviderApprovalDecision> = [
+  "cancel",
+  "decline",
+  "acceptForSession",
+  "accept",
+];
+
 export const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActions({
-  requestId,
+  approval,
   isResponding,
   canRespond,
   onRespondToApproval,
 }: ComposerPendingApprovalActionsProps) {
+  const claim = useRef<string | null>(null);
+  const actions = resolveApprovalActions(parseComputerApprovalPrompt(approval));
+  const disabled = isResponding || !canRespond;
+
+  const respond = (action: ApprovalAction) =>
+    respondToApprovalOnce({
+      claim,
+      requestKey: approval.requestId,
+      isResponding: disabled,
+      respond: () => onRespondToApproval(approval.requestId, action.decision),
+    });
+
+  // Digit shortcuts bubble from focused controls inside this group only; a bare
+  // number key elsewhere in the app must never approve a tool request.
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const target = event.target;
+    const action = approvalShortcutAction(
+      {
+        key: event.key,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        targetIsEditable:
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          (target instanceof HTMLElement &&
+            target.closest('[contenteditable]:not([contenteditable="false"])') !== null),
+      },
+      actions,
+    );
+    if (action === null || disabled) return;
+    event.preventDefault();
+    respond(action);
+  };
+
   return (
-    <>
-      <Button
-        size="sm"
-        variant="ghost"
-        disabled={isResponding || !canRespond}
-        onClick={() => void onRespondToApproval(requestId, "cancel")}
-      >
-        Cancel turn
-      </Button>
-      <Button
-        size="sm"
-        variant="destructive-outline"
-        disabled={isResponding || !canRespond}
-        onClick={() => void onRespondToApproval(requestId, "decline")}
-      >
-        Decline
-      </Button>
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={isResponding || !canRespond}
-        onClick={() => void onRespondToApproval(requestId, "acceptForSession")}
-      >
-        Always allow this session
-      </Button>
-      <Button
-        size="sm"
-        variant="default"
-        disabled={isResponding || !canRespond}
-        onClick={() => void onRespondToApproval(requestId, "accept")}
-      >
-        Approve once
-      </Button>
-    </>
+    <div className="contents" role="group" aria-label="Approval" onKeyDown={handleKeyDown}>
+      {VISUAL_ORDER.map((decision) => {
+        const index = actions.findIndex((action) => action.decision === decision);
+        const action = actions[index];
+        if (action === undefined) return null;
+        const shortcut = String(index + 1);
+        return (
+          <Button
+            key={decision}
+            size="sm"
+            variant={BUTTON_VARIANT[decision]}
+            disabled={disabled}
+            title={action.description}
+            aria-keyshortcuts={shortcut}
+            onClick={() => respond(action)}
+          >
+            {action.label}
+            <kbd
+              aria-hidden="true"
+              className="ms-1 text-[10px] font-medium tabular-nums opacity-55"
+            >
+              {shortcut}
+            </kbd>
+          </Button>
+        );
+      })}
+    </div>
   );
 });
