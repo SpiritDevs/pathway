@@ -1,4 +1,5 @@
 import {
+  COMPUTER_WS_METHODS,
   EMAIL_WS_METHODS,
   ISSUES_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
@@ -64,7 +65,8 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.subscribeResourceTelemetry
   | typeof WS_METHODS.previewAutomationConnect
   | typeof WS_METHODS.subscribeVcsStatus
-  | typeof WS_METHODS.terminalAttach;
+  | typeof WS_METHODS.terminalAttach
+  | typeof COMPUTER_WS_METHODS.subscribeEvents;
 
 export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.cloudInstallRelayClient

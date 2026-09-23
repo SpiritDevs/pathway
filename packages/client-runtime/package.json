@@ -67,6 +67,14 @@
       "types": "./src/state/attachments.ts",
       "default": "./src/state/attachments.ts"
     },
+    "./state/computer": {
+      "types": "./src/state/computer.ts",
+      "default": "./src/state/computer.ts"
+    },
+    "./state/computer-state": {
+      "types": "./src/state/computerState.ts",
+      "default": "./src/state/computerState.ts"
+    },
     "./state/connections": {
       "types": "./src/state/connections.ts",
       "default": "./src/state/connections.ts"
