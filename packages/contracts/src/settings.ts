@@ -13,6 +13,7 @@ import {
 } from "./model.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
+import type { RuntimeMode } from "./providerPolicy.ts";
 import { AlertDeliverySettings, DEFAULT_ALERT_DELIVERY_SETTINGS } from "./threadAlerts.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
@@ -861,6 +862,59 @@ export const DEFAULT_ISSUE_AUTOMATION_SETTINGS: IssueAutomationSettings = {
   maxRemediationCycles: 3,
 };
 
+// ── Computer Use (environment-local) ───────────────────────────
+
+/**
+ * Which paired clients may start Computer tasks and turn on Computer control:
+ * any client with `orchestration:operate`, clients holding `computer:operate`,
+ * or admin clients only. Watching, approving and Stop are never restricted by it.
+ */
+export const ComputerAccessPolicy = Schema.Literals(["any-operator", "scoped", "admins-only"]);
+export type ComputerAccessPolicy = typeof ComputerAccessPolicy.Type;
+export const DEFAULT_COMPUTER_ACCESS_POLICY: ComputerAccessPolicy = "scoped";
+
+/** The environment's ceiling on Computer oversight, strictest first. */
+export const ComputerAutonomy = Schema.Literals(["supervised", "per-task", "auto", "full-access"]);
+export type ComputerAutonomy = typeof ComputerAutonomy.Type;
+export const DEFAULT_COMPUTER_AUTONOMY: ComputerAutonomy = "per-task";
+
+/** The Computer level each composer runtime mode stands for. */
+export const COMPUTER_AUTONOMY_BY_RUNTIME_MODE: Readonly<Record<RuntimeMode, ComputerAutonomy>> = {
+  "approval-required": "supervised",
+  "auto-accept-edits": "per-task",
+  auto: "auto",
+  "full-access": "full-access",
+};
+
+/**
+ * The autonomy a Computer task runs with: the stricter of the environment
+ * ceiling and the thread's runtime mode. Scheduled tasks and subagents have no
+ * composer mode, so they pass `null` and the ceiling applies alone.
+ */
+export function resolveComputerAutonomy(
+  ceiling: ComputerAutonomy,
+  runtimeMode: RuntimeMode | null,
+): ComputerAutonomy {
+  if (runtimeMode === null) return ceiling;
+  const threadLevel = COMPUTER_AUTONOMY_BY_RUNTIME_MODE[runtimeMode];
+  const levels = ComputerAutonomy.literals;
+  return levels.indexOf(threadLevel) < levels.indexOf(ceiling) ? threadLevel : ceiling;
+}
+
+/**
+ * Computer Use policy for this environment. Admin-only to change (`access:write`),
+ * so it is deliberately absent from `ServerSettingsPatch`.
+ */
+export const ComputerSettings = Schema.Struct({
+  accessPolicy: ComputerAccessPolicy.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_COMPUTER_ACCESS_POLICY)),
+  ),
+  autonomy: ComputerAutonomy.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_COMPUTER_AUTONOMY)),
+  ),
+});
+export type ComputerSettings = typeof ComputerSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   /** A user-chosen environment name. Empty keeps the host-derived automatic name. */
   environmentName: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -947,6 +1001,7 @@ export const ServerSettings = Schema.Struct({
   ),
   emailCapture: EmailCaptureSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  computer: ComputerSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
