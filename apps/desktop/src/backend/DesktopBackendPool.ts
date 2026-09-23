@@ -96,6 +96,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
+import { DesktopComputer } from "../computer/DesktopComputer.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
@@ -210,6 +211,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
+    const computer = yield* DesktopComputer;
     const electronDialog = yield* ElectronDialog.ElectronDialog;
     const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
     // Anchor the pool's lifetime to its layer scope so registered
@@ -282,7 +284,8 @@ export const layer = Layer.effect(
       // permanently capture DEFAULT_DESKTOP_SETTINGS and mislabel WSL-only
       // primaries as Windows.
       label: configuration.resolvePrimaryLabel,
-      configResolve: configuration.resolvePrimary,
+      // The Computer host admits requests again for each backend it serves.
+      configResolve: computer.resume.pipe(Effect.andThen(configuration.resolvePrimary)),
       // Window creation errors propagating out of handleBackendReady must
       // not block the readiness callback (that would prevent restartAttempt
       // from being reset), so we absorb them here. The window service only
@@ -305,7 +308,7 @@ export const layer = Layer.effect(
             }),
           ),
         ),
-      onShutdown: () => desktopWindow.handleBackendNotReady,
+      onShutdown: () => computer.suspend.pipe(Effect.andThen(desktopWindow.handleBackendNotReady)),
       onPreflightFailed: handlePrimaryPreflightFailure,
     });
 
