@@ -13,6 +13,7 @@ import {
 } from "@spiritdevs/contracts/relay";
 import { projectThreadAwarenessV2 } from "@spiritdevs/shared/agentAwareness";
 import { makeDrainableWorker } from "@spiritdevs/shared/DrainableWorker";
+import { makeKeyedCoalescingWorker } from "@spiritdevs/shared/KeyedCoalescingWorker";
 import { withRelayClientTracing } from "@spiritdevs/shared/relayTracing";
 import {
   normalizeRelayIssuer,
@@ -340,58 +341,7 @@ export const make = Effect.gen(function* () {
       });
       return;
     }
-    const relayConfig = yield* readRelayConfig.pipe(Effect.orElseSucceed(() => null));
-    if (!relayConfig) {
-      yield* Effect.logDebug("agent activity publish skipped; relay link credentials unavailable", {
-        threadId,
-      });
-      return;
-    }
-    const relayClient = yield* makeRelayClient(relayConfig);
     const environmentId = yield* serverEnvironment.getEnvironmentId;
-
-    const publishState = (input: {
-      readonly projectId: string | null;
-      readonly state: RelayAgentActivityState | null;
-      readonly reason: string;
-    }) =>
-      Effect.gen(function* () {
-        const proof = yield* makePublishProof({
-          privateKey: cloudLinkKeyPair.privateKey,
-          relayIssuer: relayConfig.issuer,
-          environmentId,
-          threadId,
-          state: input.state,
-          jti: yield* crypto.randomUUIDv4,
-        });
-
-        yield* Effect.logInfo("publishing agent activity for thread", {
-          environmentId,
-          threadId,
-          projectId: input.projectId,
-          statePhase: input.state?.phase ?? null,
-          hasState: input.state !== null,
-          reason: input.reason,
-        });
-
-        const response = yield* relayClient.server.publishAgentActivity({
-          params: {
-            environmentId,
-            threadId,
-          },
-          payload: {
-            state: input.state,
-            proof,
-          },
-        });
-
-        yield* Effect.logInfo("agent activity publish completed", {
-          environmentId,
-          threadId,
-          ok: response.ok,
-          deliveries: deliveryStats(response.deliveries),
-        });
-      });
 
     // Per-thread shell read: this publish runs for every activity-relevant
     // domain event, so materializing the full shell here would make the cost
@@ -470,6 +420,60 @@ export const make = Effect.gen(function* () {
     } else {
       publishConfirmDeadlines.delete(threadId);
     }
+
+    // Relay credentials are only needed once the projected state has changed,
+    // which most events do not do.
+    const relayConfig = yield* readRelayConfig.pipe(Effect.orElseSucceed(() => null));
+    if (!relayConfig) {
+      yield* Effect.logDebug("agent activity publish skipped; relay link credentials unavailable", {
+        threadId,
+      });
+      return;
+    }
+    const relayClient = yield* makeRelayClient(relayConfig);
+
+    const publishState = (input: {
+      readonly projectId: string | null;
+      readonly state: RelayAgentActivityState | null;
+      readonly reason: string;
+    }) =>
+      Effect.gen(function* () {
+        const proof = yield* makePublishProof({
+          privateKey: cloudLinkKeyPair.privateKey,
+          relayIssuer: relayConfig.issuer,
+          environmentId,
+          threadId,
+          state: input.state,
+          jti: yield* crypto.randomUUIDv4,
+        });
+
+        yield* Effect.logInfo("publishing agent activity for thread", {
+          environmentId,
+          threadId,
+          projectId: input.projectId,
+          statePhase: input.state?.phase ?? null,
+          hasState: input.state !== null,
+          reason: input.reason,
+        });
+
+        const response = yield* relayClient.server.publishAgentActivity({
+          params: {
+            environmentId,
+            threadId,
+          },
+          payload: {
+            state: input.state,
+            proof,
+          },
+        });
+
+        yield* Effect.logInfo("agent activity publish completed", {
+          environmentId,
+          threadId,
+          ok: response.ok,
+          deliveries: deliveryStats(response.deliveries),
+        });
+      });
 
     if (snapshot.reason === "thread-not-found") {
       yield* Effect.logDebug("publishing agent activity tombstone; thread not found", {
@@ -622,13 +626,18 @@ export const make = Effect.gen(function* () {
       }
     });
 
-  const worker = yield* makeDrainableWorker(publishThread);
+  // A publish reads the thread's current state, so events that arrive while a
+  // thread is queued or publishing collapse into one follow-up publish.
+  const worker = yield* makeKeyedCoalescingWorker({
+    merge: () => true as const,
+    process: (threadId: ThreadId) => publishThread(threadId),
+  });
   const attentionEventWorker = yield* makeDrainableWorker(publishAttentionEvent);
 
   schedulePublishConfirm = (threadId) =>
     Effect.forkDetach(
       Effect.sleep("5 seconds").pipe(
-        Effect.andThen(worker.enqueue(threadId)),
+        Effect.andThen(worker.enqueue(threadId, true)),
         Effect.catchCause((cause) =>
           Effect.logWarning("deferred agent activity confirmation failed", {
             threadId,
@@ -709,7 +718,7 @@ export const make = Effect.gen(function* () {
               threadId,
               attentionEventKind: attentionEvent?.eventKind ?? null,
             });
-            yield* worker.enqueue(threadId);
+            yield* worker.enqueue(threadId, true);
             if (attentionEvent !== null) yield* attentionEventWorker.enqueue(attentionEvent);
           }),
         ),

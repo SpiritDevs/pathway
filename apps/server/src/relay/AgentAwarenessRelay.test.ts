@@ -1,9 +1,23 @@
-import { describe, expect, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import { EnvironmentId, EventId, ProviderInstanceId, ThreadId } from "@spiritdevs/contracts";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import {
+  PUBLISH_AGENT_ACTIVITY_SECRET,
+  RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
+  RELAY_URL_SECRET,
+} from "../cloud/config.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { emptyProjection, threadShellFromProjection } from "../orchestration-v2/ProjectionStore.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as AgentAwarenessRelay from "./AgentAwarenessRelay.ts";
 import {
   resolveAgentAwarenessRelayActiveThreadIds,
   resolveAgentAwarenessRelayPublishSnapshot,
@@ -91,5 +105,55 @@ describe("conversation relay awareness", () => {
         project: Option.none(),
       }).state,
     ).toBeNull();
+  });
+});
+
+describe("agent awareness publishing", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.effect("reads relay credentials only when the projected state changes", () => {
+    const encoder = new TextEncoder();
+    const secrets = new Map<string, Uint8Array>([
+      [PUBLISH_AGENT_ACTIVITY_SECRET, encoder.encode("true")],
+      [RELAY_URL_SECRET, encoder.encode("https://relay.example.test")],
+      [RELAY_ENVIRONMENT_CREDENTIAL_SECRET, encoder.encode("environment-credential")],
+    ]);
+    const secretReads = new Map<string, number>();
+    const getThreadShell = vi.fn(() => Effect.succeed(thread));
+    const fetchMock = vi.fn(async () => Response.json({ ok: true, deliveries: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const layer = AgentAwarenessRelay.layer.pipe(
+      Layer.provide([
+        Layer.mock(ServerSecretStore.ServerSecretStore)({
+          get: (name) =>
+            Effect.sync(() => {
+              secretReads.set(name, (secretReads.get(name) ?? 0) + 1);
+              return Option.fromNullishOr(secrets.get(name));
+            }),
+          create: (name, value) => Effect.sync(() => void secrets.set(name, value)),
+        }),
+        Layer.mock(ServerEnvironment.ServerEnvironment)({
+          getEnvironmentId: Effect.succeed(environmentId),
+        }),
+        Layer.mock(ThreadManagement.ThreadManagementService)({ getThreadShell }),
+        Layer.mock(ProjectService.ProjectService)({}),
+        NodeCrypto.layer,
+      ]),
+    );
+
+    return Effect.gen(function* () {
+      const relay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+      yield* relay.publishThread(threadId);
+      yield* relay.publishThread(threadId);
+      yield* relay.publishThread(threadId);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(getThreadShell).toHaveBeenCalledTimes(3);
+      expect(secretReads.get(PUBLISH_AGENT_ACTIVITY_SECRET)).toBe(3);
+      expect(secretReads.get(RELAY_URL_SECRET)).toBe(1);
+    }).pipe(Effect.provide(layer));
   });
 });
