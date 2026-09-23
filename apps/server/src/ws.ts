@@ -1,3 +1,4 @@
+import { UsageRecoveryService } from "./providerUsage/UsageRecoveryService.ts";
 import { ModelManifest } from "./provider/ModelManifest.ts";
 import { StorageService } from "./storage/StorageService.ts";
 import * as DateTime from "effect/DateTime";
@@ -612,6 +613,7 @@ const makeWsRpcLayer = (
       const continuationLaunch = yield* ContinuationLaunchService.ContinuationLaunchService;
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const threadWorkspaceMove = yield* ThreadWorkspaceMove.ThreadWorkspaceMoveService;
+      const usageRecovery = yield* UsageRecoveryService;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const usage = yield* UsageService.UsageService;
@@ -829,6 +831,7 @@ const makeWsRpcLayer = (
           threadResumeCompletionMarker: true,
           threadSnapshotPagination: true,
           orchestrationV2ThreadHistory: true,
+          usageRecovery: true,
         };
       });
 
@@ -1599,6 +1602,10 @@ const makeWsRpcLayer = (
               "orchestration_v2.thread_id": input.threadId,
             },
           ),
+        [WS_METHODS.usageRecoveryGet]: (input) => usageRecovery.get(input.threadId),
+        [WS_METHODS.usageRecoverySubscribe]: (input) => usageRecovery.subscribe(input.threadId),
+        [WS_METHODS.usageRecoverySchedule]: (input) => usageRecovery.schedule(input),
+        [WS_METHODS.usageRecoveryCancel]: (input) => usageRecovery.cancel(input.threadId),
         [WS_METHODS.scheduledTasksList]: (_input) =>
           observeRpcEffect(WS_METHODS.scheduledTasksList, scheduledTasks.list(), {
             "rpc.aggregate": "scheduledTasks",

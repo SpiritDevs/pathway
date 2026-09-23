@@ -8,6 +8,24 @@ import {
 } from "./usageLimitRecovery.ts";
 
 describe("usage limit recovery", () => {
+  it("recognizes Codex camel-case quota errors and child HTTP 429 results", () => {
+    expect(
+      isUsageLimitFailure({
+        class: "provider_error",
+        code: "usageLimitExceeded",
+        message: "Quota unavailable",
+        retryable: false,
+      }),
+    ).toBe(true);
+    expect(
+      isUsageLimitFailure({
+        class: "provider_error",
+        code: null,
+        message: "Agent terminated: HTTP 429 (rate_limit)",
+        retryable: false,
+      }),
+    ).toBe(true);
+  });
   it("recognizes allowance failures without classifying unrelated provider errors", () => {
     expect(
       isUsageLimitFailure({

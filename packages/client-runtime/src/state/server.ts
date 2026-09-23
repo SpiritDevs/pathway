@@ -987,6 +987,19 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:process-resource-history",
       tag: WS_METHODS.serverGetProcessResourceHistory,
     }),
+    /** Environment-owned recovery timer and eligibility for a thread. */
+    usageRecoveryLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:usage-recovery:live",
+      tag: WS_METHODS.usageRecoverySubscribe,
+    }),
+    scheduleUsageRecovery: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:usage-recovery:schedule",
+      tag: WS_METHODS.usageRecoverySchedule,
+    }),
+    cancelUsageRecovery: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:usage-recovery:cancel",
+      tag: WS_METHODS.usageRecoveryCancel,
+    }),
     /** Live scheduled-task list: snapshot on subscribe, fresh list after every server-side change. */
     scheduledTasksLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:scheduled-tasks:live",

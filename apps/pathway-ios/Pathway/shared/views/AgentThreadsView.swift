@@ -1200,6 +1200,7 @@ struct AgentThreadConversationView: View {
                     }
                     .contentShape(.rect)
                     .simultaneousGesture(TapGesture().onEnded { collapseComposer() })
+                    AgentThreadUsageRecovery(model: model)
                     AgentThreadComposer(model: model, isExpanded: $isComposerExpanded,
                         isFocused: $isComposerFocused, modelName: model.currentModelSelection.model,
                         usesCompactPresentation: compactThreadChrome != nil, isNavigationExpanded: compactThreadChrome?.isNavigationExpanded == true, onOpenThread: openChild, workspaceRoot: workspaceRoot)

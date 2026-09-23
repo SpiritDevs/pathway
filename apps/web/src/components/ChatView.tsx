@@ -1,3 +1,4 @@
+import { useUsageRecovery } from "./chat/useUsageRecovery";
 import { useQuestionDismissal } from "./chat/useQuestionDismissal";
 import { ScrollToEndButton } from "./chat/ScrollToEndButton";
 import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
@@ -5649,9 +5650,20 @@ function ChatViewContent(props: ChatViewProps) {
   const supportsSettleAfterCompletion =
     serverConfig?.environment.capabilities.threadSettleAfterCompletion === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
+  const usageRecovery = useUsageRecovery({
+    environmentId,
+    threadId,
+    projection: serverProjection,
+    providerStatuses,
+    supported: isServerThread && serverConfig?.usageRecovery === true,
+  });
   const [usageLimitWaitPending, setUsageLimitWaitPending] = useState(false);
   const onWaitUntilUsageReset = useCallback(
     async (resetAt: string) => {
+      if (serverConfig?.usageRecovery === true && usageRecovery.supportedProvider) {
+        usageRecovery.open(resetAt);
+        return;
+      }
       if (!activeThreadRef || !supportsSnooze || usageLimitWaitPending) return;
       const resetMs = Date.parse(resetAt);
       if (!Number.isFinite(resetMs) || resetMs <= Date.now()) return;
@@ -5685,7 +5697,15 @@ function ChatViewContent(props: ChatViewProps) {
         setUsageLimitWaitPending(false);
       }
     },
-    [activeThreadRef, snoozeThreadMutation, supportsSnooze, usageLimitWaitPending],
+    [
+      activeThreadRef,
+      snoozeThreadMutation,
+      supportsSnooze,
+      usageLimitWaitPending,
+      serverConfig?.usageRecovery,
+      usageRecovery.open,
+      usageRecovery.supportedProvider,
+    ],
   );
   const nowMinute = useNowMinute();
   const activeThreadSnoozed =
@@ -6276,6 +6296,7 @@ function ChatViewContent(props: ChatViewProps) {
       return [
         ...(storageBannerItem ? [storageBannerItem] : []),
         ...systemComposerBannerItems,
+        ...(usageRecovery.banner ? [usageRecovery.banner] : []),
         ...browserTakeoverItems,
         ...resumeCompactionItems,
         ...parkedThreadItems,
@@ -6284,6 +6305,7 @@ function ChatViewContent(props: ChatViewProps) {
     return [
       ...(storageBannerItem ? [storageBannerItem] : []),
       ...systemComposerBannerItems,
+      ...(usageRecovery.banner ? [usageRecovery.banner] : []),
       ...browserTakeoverItems,
       {
         id: `branch-mismatch:${activeBranchMismatchKey}`,
@@ -6337,6 +6359,7 @@ function ChatViewContent(props: ChatViewProps) {
     resumeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
+    usageRecovery.banner,
     storageBannerItem,
   ]);
 
@@ -9746,8 +9769,13 @@ function ChatViewContent(props: ChatViewProps) {
                 onContinueFromRun={onContinueFromRun}
                 onRecoverUsageLimit={onRecoverUsageLimit}
                 onWaitUntilUsageReset={onWaitUntilUsageResetForTimeline}
-                usageLimitRecoveryPending={continuationPending || usageLimitWaitPending}
-                canWaitUntilUsageReset={supportsSnooze}
+                usageLimitRecoveryPending={
+                  continuationPending || usageLimitWaitPending || usageRecovery.busy
+                }
+                canWaitUntilUsageReset={
+                  supportsSnooze ||
+                  (serverConfig?.usageRecovery === true && usageRecovery.supportedProvider)
+                }
                 onRollbackCheckpoint={onRollbackCheckpointForTimeline}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
@@ -10338,6 +10366,7 @@ function ChatViewContent(props: ChatViewProps) {
           onOpenIssueKey={setLocalIssueDetailKey}
         />
       ) : null}
+      {usageRecovery.dialog}
       <ContinuationDialog
         open={continuationRequest !== null}
         kind={continuationRequest?.kind ?? "continue"}
