@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - the fixture hands the layer a real inherited descriptor.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessEnvironment, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import { describe, expect, it } from "@effect/vitest";
@@ -7,7 +12,13 @@ import * as Layer from "effect/Layer";
 import * as ComputerApprovalGate from "../ComputerApprovalGate.ts";
 import { FakeComputerBackend } from "../FakeComputerBackend.ts";
 import { ComputerService } from "../Services/ComputerService.ts";
-import { makeComputerServiceLayer, type ComputerServiceLiveOptions } from "./ComputerService.ts";
+import {
+  COMPUTER_HOST_CAPABILITY_ENV,
+  COMPUTER_HOST_CAPABILITY_FD_ENV,
+  makeComputerServiceLayer,
+  resolveHostCapability,
+  type ComputerServiceLiveOptions,
+} from "./ComputerService.ts";
 
 /** Builds the service exactly as the server does, minus the state dir. */
 const serviceLayer = (options: ComputerServiceLiveOptions) =>
@@ -135,5 +146,34 @@ describe("ComputerServiceLive", () => {
         ),
       ),
     ),
+  );
+});
+
+describe("resolveHostCapability", () => {
+  const secret = "s".repeat(40);
+
+  it.effect("reads an inherited descriptor once, closes it, and clears the variables", () =>
+    Effect.gen(function* () {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pathway-capability-"));
+      const file = NodePath.join(dir, "capability");
+      NodeFS.writeFileSync(file, `${secret}\n`);
+      const fd = NodeFS.openSync(file, "r");
+      const env: NodeJS.ProcessEnv = { [COMPUTER_HOST_CAPABILITY_FD_ENV]: String(fd) };
+      try {
+        expect(yield* resolveHostCapability(env)).toBe(secret);
+        expect(() => NodeFS.fstatSync(fd)).toThrow();
+        expect(env).toEqual({});
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  it.effect("clears a directly given capability too", () =>
+    Effect.gen(function* () {
+      const env: NodeJS.ProcessEnv = { [COMPUTER_HOST_CAPABILITY_ENV]: secret, KEEP: "1" };
+      expect(yield* resolveHostCapability(env)).toBe(secret);
+      expect(env).toEqual({ KEEP: "1" });
+    }),
   );
 });

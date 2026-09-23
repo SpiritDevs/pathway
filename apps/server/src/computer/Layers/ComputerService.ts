@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - an inherited descriptor is read by number; Effect's FileSystem opens paths only.
 /**
  * Builds the ComputerService: picks the backend for this host, runs the passive
  * boot probe, and owns the manager for the layer's lifetime.
@@ -7,11 +8,12 @@
  *
  * @module computer/Layers/ComputerService
  */
+import * as NodeFS from "node:fs";
+
 import type { ComputerAvailability } from "@spiritdevs/contracts";
 import { CUA_HOST_SOCKET_ENV } from "@spiritdevs/shared/cuaDriverProtocol";
 import { HostProcessEnvironment, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
@@ -43,27 +45,34 @@ const MIN_CAPABILITY_BYTES = 32;
 /**
  * The host socket's shared secret: given directly, or inherited on a file
  * descriptor the desktop app opened for this server. Anything shorter than
- * the minimum is ignored rather than trusted.
+ * the minimum is ignored rather than trusted. Both variables are consumed and
+ * the descriptor closed, so provider CLIs spawned later inherit neither.
  */
-const resolveHostCapability = Effect.fn("resolveHostCapability")(function* (
-  env: NodeJS.ProcessEnv,
-) {
-  const usable = (value: string | undefined) =>
-    value !== undefined && Buffer.byteLength(value, "utf8") >= MIN_CAPABILITY_BYTES
-      ? value
-      : undefined;
-  const direct = usable(env[COMPUTER_HOST_CAPABILITY_ENV]?.trim());
-  if (direct) return direct;
-  const rawFd = env[COMPUTER_HOST_CAPABILITY_FD_ENV]?.trim();
-  if (!rawFd || !/^\d+$/.test(rawFd)) return undefined;
-  const fd = Number(rawFd);
-  if (fd < 3 || fd > 255) return undefined;
-  const fs = yield* FileSystem.FileSystem;
-  return yield* fs.readFileString(`/dev/fd/${fd}`).pipe(
-    Effect.map((value) => usable(value.trim())),
-    Effect.orElseSucceed(() => undefined),
-  );
-});
+export const resolveHostCapability = (env: NodeJS.ProcessEnv): Effect.Effect<string | undefined> =>
+  Effect.sync(() => {
+    const usable = (value: string | undefined) =>
+      value !== undefined && Buffer.byteLength(value, "utf8") >= MIN_CAPABILITY_BYTES
+        ? value
+        : undefined;
+    const direct = usable(env[COMPUTER_HOST_CAPABILITY_ENV]?.trim());
+    const rawFd = env[COMPUTER_HOST_CAPABILITY_FD_ENV]?.trim();
+    delete env[COMPUTER_HOST_CAPABILITY_ENV];
+    delete env[COMPUTER_HOST_CAPABILITY_FD_ENV];
+    const fd = rawFd && /^\d+$/.test(rawFd) ? Number(rawFd) : undefined;
+    if (fd === undefined || fd < 3 || fd > 255) return direct;
+    try {
+      // Read the descriptor itself: `/dev/fd/N` fails with ENXIO on a Linux socket.
+      return direct ?? usable(NodeFS.readFileSync(fd, "utf8").trim());
+    } catch {
+      return undefined;
+    } finally {
+      try {
+        NodeFS.closeSync(fd);
+      } catch {
+        // The runtime may already have closed the one-shot descriptor.
+      }
+    }
+  });
 
 export const makeComputerServiceLayer = (options: ComputerServiceLiveOptions = {}) =>
   Layer.effect(
