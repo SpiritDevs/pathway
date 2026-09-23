@@ -403,8 +403,8 @@ export const ClientSettingsSchema = Schema.Struct({
   computerPreviewSize: ComputerPreviewSize.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_COMPUTER_PREVIEW_SIZE)),
   ),
-  // Computer control is off by default. When on, new chats start with the
-  // agent allowed to use the desktop. Approval gates and Stop still apply.
+  // Computer control is off by default. When on, the agent may use the desktop
+  // in any chat; `/computer-use` covers one request. Approval gates and Stop still apply.
   computerControlEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   // The agent cursor's colors. Stock stores no overrides; "custom" opts into a
   // fill and rim, stored as lowercase `#rrggbb` and pushed to the desktop host.
