@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -6,7 +7,12 @@ import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { type ComputerShield, type ComputerShieldEngagement, make } from "./ComputerShield.ts";
+import {
+  type ComputerShield,
+  type ComputerShieldEngagement,
+  ComputerShieldError,
+  make,
+} from "./ComputerShield.ts";
 import {
   type FakeHelper,
   type FakeHelperSpawner,
@@ -235,5 +241,37 @@ describe("ComputerShield", () => {
         assert.include(error.message, "closed");
       }),
     ),
+  );
+
+  it.effect("a helper whose spawn lands during dispose is stopped instead of engaging", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeHelperSpawner;
+      const entered = yield* Deferred.make<void>();
+      const gate = yield* Deferred.make<void>();
+      const gated = ChildProcessSpawner.make((command) =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(gate)),
+          Effect.andThen(fake.layer.spawn(command)),
+        ),
+      );
+      const scope = yield* Scope.make();
+      const shield = yield* make({ helperPath: "/fixture/pathway-helper" }).pipe(
+        Scope.provide(scope),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, gated),
+      );
+      const engaging = yield* Effect.forkChild(Effect.flip(shield.engage(request("late"), TASK)));
+      yield* Deferred.await(entered);
+      const disposing = yield* shield.dispose.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(gate, undefined);
+      const helper = yield* fake.next;
+      yield* Fiber.join(disposing);
+      // Teardown finished only after the late helper was gone.
+      assert.isTrue(helper.exitedFlag());
+      assert.deepStrictEqual(helper.stdinLines, []);
+      const error = yield* Fiber.join(engaging);
+      assert.instanceOf(error, ComputerShieldError);
+      assert.strictEqual(error.reason, "stopped");
+      yield* Scope.close(scope, Exit.void);
+    }),
   );
 });
