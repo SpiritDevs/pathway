@@ -35,11 +35,9 @@ describe("Pathway Computer provider permission", () => {
   });
 
   it("reads only explicit provider tool-name fields", () => {
-    expect(
-      computerToolNameFromProviderPermission({
-        rawInput: { _toolName: "mcp__pathway__computer_scroll" },
-      }),
-    ).toBe("computer_scroll");
+    expect(computerToolNameFromProviderPermission({ title: "mcp__pathway__computer_scroll" })).toBe(
+      "computer_scroll",
+    );
     expect(
       computerToolNameFromProviderPermission({
         metadata: { toolName: "pathway_computer_get_state" },
@@ -56,16 +54,35 @@ describe("Pathway Computer provider permission", () => {
     expect(
       computerToolNameFromProviderPermission({
         name: "mcp__other__computer_click",
-        rawInput: { _toolName: "mcp__pathway__computer_click" },
+        title: "mcp__pathway__computer_click",
       }),
     ).toBeUndefined();
     expect(
       computerToolNameFromProviderPermission({
-        rawInput: { _toolName: "mcp__other__computer_click" },
-        metadata: { toolName: "mcp__pathway__computer_click" },
+        metadata: { toolName: "mcp__other__computer_click" },
         title: "mcp__pathway__computer_click",
       }),
     ).toBeUndefined();
+  });
+
+  it("refuses a Computer name when the provider names another MCP server", () => {
+    expect(
+      computerToolNameFromProviderPermission({
+        title: "mcp__pathway__computer_click",
+        metadata: { serverName: "other" },
+      }),
+    ).toBeUndefined();
+    expect(
+      computerToolNameFromProviderPermission({
+        metadata: { server_name: "other", toolName: "pathway_computer_click" },
+      }),
+    ).toBeUndefined();
+    expect(
+      computerToolNameFromProviderPermission({
+        title: "mcp__pathway__computer_click",
+        metadata: { serverName: "pathway" },
+      }),
+    ).toBe("computer_click");
   });
 
   it("does not infer provider provenance from a bare title or metadata name", () => {

@@ -135,17 +135,22 @@ function firstRecordString(value: unknown, keys: ReadonlyArray<string>): string 
   return undefined;
 }
 
+/**
+ * Reads the tool identity a provider itself reports. The tool's own arguments
+ * are never consulted: they are model-written, so any tool could claim a
+ * Computer name there. A provider-reported server other than Pathway's vetoes
+ * the match whatever the name says.
+ */
 export function computerToolNameFromProviderPermission(input: {
   readonly name?: unknown;
   readonly title?: unknown;
-  readonly rawInput?: unknown;
   readonly metadata?: unknown;
 }): PathwayComputerToolName | undefined {
+  const serverName = firstRecordString(input.metadata, ["serverName", "server_name"]);
+  if (serverName !== undefined && serverName.trim().toLowerCase() !== "pathway") return undefined;
+
   const explicitName = typeof input.name === "string" ? input.name : undefined;
   if (explicitName !== undefined) return qualifiedPathwayComputerToolName(explicitName);
-
-  const rawToolName = firstRecordString(input.rawInput, ["_toolName", "toolName", "tool_name"]);
-  if (rawToolName !== undefined) return qualifiedPathwayComputerToolName(rawToolName);
 
   const metadataToolName = firstRecordString(input.metadata, [
     "_toolName",
