@@ -6016,12 +6016,13 @@ function withControlEnableTimeout<A, E>(
  * The disable/removal/dispose side of the same bound: a wedged native call
  * wedges the operation tail, and without a deadline every teardown that
  * waits on it hangs forever — the in-memory gates are already held, so the
- * bounded wait can only lose cleanup confirmation, never authority.
+ * bounded wait can only lose cleanup confirmation, never authority. Only the
+ * wait is bounded: the cleanup runs detached and still lands if it is late.
  */
 function withControlTeardownTimeout<A, E>(
   action: Effect.Effect<A, E>,
 ): Effect.Effect<A, E | ComputerBackendError> {
-  return action.pipe(
+  return Effect.flatMap(Effect.forkDetach(action), Fiber.join).pipe(
     Effect.timeoutOrElse({
       duration: COMPUTER_CONTROL_ENABLE_TIMEOUT_MS,
       orElse: () =>
