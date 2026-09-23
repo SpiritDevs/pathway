@@ -32,6 +32,8 @@ import {
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
+import { desktopComputerEmergencyStopRouteLayer } from "./computer/computerEmergencyStopRoute.ts";
+import { computerFrameRouteLayer } from "./computer/computerFrameRoute.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
@@ -145,9 +147,18 @@ import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import {
+  OrchestrationV2EventSinkLayerLive,
   OrchestrationV2ProductionLayerLive,
   ProjectSetupScriptRunnerLayerLive,
 } from "./orchestration-v2/runtimeLayer.ts";
+import { layer as IdAllocatorV2Layer } from "./orchestration-v2/IdAllocator.ts";
+import { layer as ProjectionStoreV2Layer } from "./orchestration-v2/ProjectionStore.ts";
+import * as ComputerApprovalGate from "./computer/ComputerApprovalGate.ts";
+import {
+  computerApprovalRequesterLayer,
+  computerServerOwnedRuntimeRequestsLayer,
+} from "./computer/computerApprovalRequester.ts";
+import { ComputerServiceLive } from "./computer/Layers/ComputerService.ts";
 import {
   activitySinkLayer as browserTakeoverActivitySinkLayer,
   registerPreviewAutomationFence,
@@ -469,7 +480,32 @@ const RunFinalizationObserverLayerLive = RunFinalizationService.observerLive.pip
   ),
 );
 
+// One Computer approval gate for the server (ADR 0048): the orchestrator routes
+// card answers to it, and the Computer tools, WS handlers and manager wait on
+// it. It posts cards through the same event sink the orchestration runtime
+// writes, so both sides share one instance by layer memoization.
+const ComputerApprovalGateLayerLive = ComputerApprovalGate.layer.pipe(
+  Layer.provide(
+    computerApprovalRequesterLayer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          OrchestrationV2EventSinkLayerLive,
+          ProjectionStoreV2Layer,
+          IdAllocatorV2Layer,
+        ),
+      ),
+    ),
+  ),
+);
+
+const ComputerLayerLive = ComputerServiceLive.pipe(
+  Layer.provideMerge(ComputerApprovalGateLayerLive),
+);
+
 const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
+  Layer.provide(
+    computerServerOwnedRuntimeRequestsLayer.pipe(Layer.provide(ComputerApprovalGateLayerLive)),
+  ),
   Layer.provide(questionAnswerDeliveryLayer),
   Layer.provide(CheckpointStoreLayerLive),
   Layer.provide(ResourceCleanupService.live),
@@ -489,6 +525,7 @@ const StorageManagementLayerLive = StorageManagement.layer.pipe(
 );
 
 const RuntimeCoreDependenciesBaseLive = AgentAwarenessRelay.layer.pipe(
+  Layer.provideMerge(ComputerLayerLive),
   Layer.provideMerge(StorageManagementLayerLive),
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),
@@ -628,6 +665,8 @@ export const makeRoutesLayer = Layer.mergeAll(
       assetRouteLayer,
       attachmentUploadRouteLayer,
       websocketRpcRouteLayer,
+      computerFrameRouteLayer,
+      desktopComputerEmergencyStopRouteLayer,
     ),
     // The MCP session registry is provided globally (shared with V2 provider
     // sessions) rather than inline here.
