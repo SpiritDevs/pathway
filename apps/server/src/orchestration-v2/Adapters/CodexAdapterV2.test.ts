@@ -982,7 +982,7 @@ function codexReplayPreamble(input: {
   readonly nativeTurnId: string;
   readonly prompt: string;
   readonly serverVersion?: string;
-  readonly turnOptions?: Readonly<Record<string, string>>;
+  readonly turnOptions?: Readonly<Record<string, unknown>>;
 }): Array<CodexReplay.CodexAppServerReplayEntry> {
   const serverVersion = input.serverVersion ?? "0.144.0";
   return [
@@ -5355,6 +5355,7 @@ describe("codexMcpElicitationAction", () => {
       codexMcpElicitationAction({
         params: toolCall({ tool: "computer_click" }),
         runtimePolicy: admitted,
+        activeTurn: true,
       }),
       "accept",
     );
@@ -5362,6 +5363,7 @@ describe("codexMcpElicitationAction", () => {
       codexMcpElicitationAction({
         params: toolCall({ tool: "ignored", toolName: "computer_screenshot" }),
         runtimePolicy: admitted,
+        activeTurn: true,
       }),
       "accept",
     );
@@ -5371,11 +5373,24 @@ describe("codexMcpElicitationAction", () => {
     const decline = (
       params: ReturnType<typeof toolCall>,
       runtimePolicy: ProviderAdapterV2RuntimePolicy = admitted,
-    ) => assert.equal(codexMcpElicitationAction({ params, runtimePolicy }), "decline");
+    ) =>
+      assert.equal(
+        codexMcpElicitationAction({ params, runtimePolicy, activeTurn: true }),
+        "decline",
+      );
     assert.equal(
       codexMcpElicitationAction({
         params: toolCall({ tool: "computer_click" }),
         runtimePolicy: undefined,
+        activeTurn: true,
+      }),
+      "decline",
+    );
+    assert.equal(
+      codexMcpElicitationAction({
+        params: toolCall({ tool: "computer_click" }),
+        runtimePolicy: admitted,
+        activeTurn: false,
       }),
       "decline",
     );
@@ -5387,4 +5402,135 @@ describe("codexMcpElicitationAction", () => {
     decline({ ...toolCall({ tool: "computer_click" }), _meta: { codex_approval_kind: "other" } });
     decline({ ...toolCall({ tool: "computer_click" }), message: "Run computer_click?" });
   });
+});
+
+describe("CodexAdapterV2 Computer elicitation stop guard", () => {
+  const nativeThreadId = "computer-elicitation-stop-thread";
+  const nativeTurnId = "computer-elicitation-stop-turn";
+  const prompt = "Click the button.";
+  const computerPolicy = ProviderAdapterV2RuntimePolicy.make({
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+    cwd: "/workspace",
+    enableComputerControl: true,
+  });
+  const computerElicitation = (id: number): CodexReplay.CodexAppServerReplayEntry => ({
+    type: "emit_inbound",
+    label: `computer elicitation ${id}`,
+    frame: {
+      id,
+      method: "mcpServer/elicitation/request",
+      params: {
+        _meta: { codex_approval_kind: "mcp_tool_call" },
+        message: 'Allow the pathway MCP server to run tool "computer_click"?',
+        mode: "form",
+        requestedSchema: { type: "object", properties: {} },
+        serverName: "pathway",
+        threadId: nativeThreadId,
+        turnId: nativeTurnId,
+      },
+    },
+  });
+  const elicitationResponse = (
+    id: number,
+    action: "accept" | "decline",
+  ): CodexReplay.CodexAppServerReplayEntry => ({
+    type: "expect_outbound",
+    label: `computer elicitation ${id} ${action}`,
+    frame: { id, result: { action } },
+  });
+  const preamble = codexReplayPreamble({
+    nativeThreadId,
+    nativeTurnId,
+    prompt,
+    turnOptions: { approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly" } },
+  });
+  const turnCompleted = (
+    status: "completed" | "interrupted",
+  ): CodexReplay.CodexAppServerReplayEntry => ({
+    type: "emit_inbound",
+    label: "turn/completed",
+    frame: {
+      method: "turn/completed",
+      params: { threadId: nativeThreadId, turn: makeCodexReplayTurn({ id: nativeTurnId, status }) },
+    },
+  });
+  const startComputerTurn = (transcript: CodexReplay.CodexAppServerReplayTranscript) =>
+    Effect.gen(function* () {
+      const harness = yield* makeCodexReplayHarness(transcript);
+      yield* harness.runtime.startTurn({
+        ...makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make(`attempt-${transcript.scenario}`),
+          text: prompt,
+        }),
+        runtimePolicy: computerPolicy,
+      });
+      return harness;
+    });
+
+  it.effect("accepts a Computer elicitation for a live admitted turn", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* startComputerTurn(
+          makeCodexReplayTranscript({
+            scenario: "computer-elicitation-live",
+            entries: [
+              ...preamble,
+              computerElicitation(80),
+              elicitationResponse(80, "accept"),
+              turnCompleted("completed"),
+            ],
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "completed terminal");
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("declines a Computer elicitation once Stop is in flight", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* startComputerTurn(
+          makeCodexReplayTranscript({
+            scenario: "computer-elicitation-stopping",
+            entries: [
+              ...preamble,
+              {
+                type: "expect_outbound",
+                label: "turn/interrupt",
+                frame: {
+                  id: 4,
+                  method: "turn/interrupt",
+                  params: { threadId: nativeThreadId, turnId: nativeTurnId },
+                },
+              },
+              computerElicitation(81),
+              elicitationResponse(81, "decline"),
+              { type: "emit_inbound", label: "turn/interrupt", frame: { id: 4, result: {} } },
+              turnCompleted("interrupted"),
+            ],
+          }),
+        );
+        yield* awaitUntil(
+          () => harness.events.some((event) => event.type === "provider_turn.updated"),
+          "running provider turn",
+        );
+        const providerTurnId = harness.events.find(
+          (event): event is Extract<ProviderAdapterV2Event, { type: "provider_turn.updated" }> =>
+            event.type === "provider_turn.updated",
+        )?.providerTurn.id;
+        assert.isDefined(providerTurnId);
+        yield* harness.runtime.interruptTurn({
+          providerThread: harness.providerThread,
+          providerTurnId,
+        });
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted terminal");
+        assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
 });
