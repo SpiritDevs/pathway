@@ -606,6 +606,54 @@ it.layer(NodeServices.layer)("computer_browser_* gateway tools", (it) => {
     ),
   );
 
+  it.effect("sends nothing for a queued browser call whose request was cancelled", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstEntered = yield* Deferred.make<void>();
+        const firstRelease = yield* Deferred.make<void>();
+        const browserNames: string[] = [];
+        const browser = (request: ComputerBrowserCall) =>
+          Effect.gen(function* () {
+            browserNames.push(request.name);
+            if (request.name === "get_browser_state") {
+              yield* Deferred.succeed(firstEntered, undefined);
+              yield* Deferred.await(firstRelease);
+            }
+            return { structuredContent: { status: "ok" } };
+          });
+        const { manager, call } = yield* setup({
+          backend: new FakeComputerBackend({ browser }),
+          authorizeAction: approve,
+        });
+        const secondQueued = yield* Deferred.make<void>();
+        const originalBrowserCall = manager.browserCall.bind(manager);
+        vi.spyOn(manager, "browserCall").mockImplementation(
+          <E>(...args: Parameters<typeof originalBrowserCall<E>>) =>
+            Effect.andThen(Deferred.succeed(secondQueued, undefined), originalBrowserCall(...args)),
+        );
+        const first = yield* Effect.forkChild(
+          originalBrowserCall(THREAD, "turn-browser", "get_browser_state", {}),
+        );
+        yield* Deferred.await(firstEntered);
+        const second = yield* Effect.forkChild(
+          call("computer_browser_navigate", {
+            target_id: "t",
+            tab_id: "tab",
+            url: "https://example.invalid",
+          }),
+        );
+        yield* Deferred.await(secondQueued);
+        // The MCP transport interrupts the call's fiber when its request is cancelled.
+        yield* Fiber.interrupt(second);
+        yield* Deferred.succeed(firstRelease, undefined);
+
+        yield* Fiber.join(first);
+        expect(Exit.hasInterrupts(yield* Fiber.await(second))).toBe(true);
+        expect(browserNames).toEqual(["get_browser_state"]);
+      }),
+    ),
+  );
+
   it.effect("does not dispatch after cancellation during the admitted browser check", () =>
     Effect.scoped(
       Effect.gen(function* () {
