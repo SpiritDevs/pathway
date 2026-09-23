@@ -25,6 +25,7 @@ import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthAdministrativeScopes,
+  AuthComputerOperateScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
@@ -261,6 +262,11 @@ const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
     scope: AuthReviewWriteScope,
     title: "Write reviews",
     description: "Create comments while reviewing changes.",
+  },
+  {
+    scope: AuthComputerOperateScope,
+    title: "Use Computer",
+    description: "Start Computer tasks that control this machine's desktop.",
   },
   {
     scope: AuthAccessReadScope,
