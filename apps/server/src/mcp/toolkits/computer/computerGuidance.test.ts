@@ -174,6 +174,15 @@ describe("computer guidance", () => {
     expect(COMPUTER_HELP_SECTIONS.editors).toContain("not that it was saved or synced");
   });
 
+  it("points the in-app browser at Pathway's preview_* tools", () => {
+    // Pathway's in-app browser is the preview; Synara's `browser_*` tools do not exist here.
+    const bareBrowserTool = /(?<![\w.])browser_\*/;
+    for (const text of [computerToolInstructions(), COMPUTER_HELP_SECTIONS.browser]) {
+      expect(text).toContain("preview_*");
+      expect(text).not.toMatch(bareBrowserTool);
+    }
+  });
+
   it("describes managed inventory and explicit reservation without promising OS ownership", () => {
     const spaces = COMPUTER_HELP_SECTIONS.spaces;
     expect(spaces).toContain("including empty ones");

@@ -43,10 +43,10 @@ export const PATHWAY_COMPUTER_TOOL_NAMES = [
   "computer_write_clipboard",
   "computer_zoom",
   // The cua-driver CDP browser family. Deliberately inside the Computer
-  // namespace: these are the same capability (computer:control), the same
+  // namespace: these are the same capability (`computer`), the same
   // approval gate, and the same denial-card path as the desktop tools — they
   // merely dispatch over CDP rather than OS events. They must never collide
-  // with the integrated `browser_*` surface, which is a different host.
+  // with the integrated `preview_*` surface, which is a different host.
   "computer_browser_state",
   "computer_browser_prepare",
   "computer_browser_navigate",
