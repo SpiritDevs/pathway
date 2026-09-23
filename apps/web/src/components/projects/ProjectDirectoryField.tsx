@@ -45,6 +45,7 @@ export function ProjectDirectoryField({
   currentProjectCwd,
   value,
   onChange,
+  onConfirm,
   autoFocus = false,
   disabled = false,
   inputLabel = "Project directory",
@@ -54,6 +55,8 @@ export function ProjectDirectoryField({
   currentProjectCwd: string | null;
   value: string;
   onChange: (next: string, createIfMissing: boolean) => void;
+  /** Validate an attachment before closing the browser; false leaves it open for correction. */
+  onConfirm?: (path: string, createIfMissing: boolean) => Promise<boolean>;
   autoFocus?: boolean;
   disabled?: boolean;
   inputLabel?: string;
@@ -81,6 +84,28 @@ export function ProjectDirectoryField({
         })
       : null,
   );
+  // A missing path ending in / browses the missing directory itself. Check its parent so
+  // Create Directory still works and resolves ~/ on the selected environment.
+  const missingPath =
+    onConfirm && browseQuery.error !== null && /[\\/]$/.test(value)
+      ? getFilesystemBrowsePath(value.replace(/[\\/]+$/, ""), platform)
+      : null;
+  const parentQuery = useEnvironmentQuery(
+    environmentId !== null &&
+      missingPath?.isBrowsing &&
+      missingPath.filterQuery &&
+      !relativeNeedsAnchor
+      ? filesystemEnvironment.browse({
+          environmentId,
+          input: {
+            partialPath: missingPath.directoryPath,
+            ...(currentProjectCwd ? { cwd: currentProjectCwd } : {}),
+          },
+        })
+      : null,
+  );
+  const createQuery = missingPath ? parentQuery : browseQuery;
+  const createLeaf = missingPath?.filterQuery ?? browsePath.filterQuery;
   const entries = browseQuery.data?.entries ?? EMPTY_BROWSE_ENTRIES;
   const { visibleEntries, exactEntry } = useMemo(
     () => filterFilesystemBrowseEntries(entries, browsePath.filterQuery),
@@ -88,10 +113,27 @@ export function ProjectDirectoryField({
   );
   const parentPath = browsePath.canBrowseUp ? getBrowseParentPath(browsePath.directoryPath) : null;
   const directoryExists =
-    browseQuery.data !== undefined &&
+    browseQuery.data !== null &&
     !browseQuery.isPending &&
     browseQuery.error === null &&
     (browsePath.filterQuery === "" || exactEntry !== null);
+  const confirmPath = async (createIfMissing: boolean) => {
+    if (onConfirm) {
+      const query = createIfMissing ? createQuery : browseQuery;
+      const leaf = createIfMissing ? createLeaf : browsePath.filterQuery;
+      if (!query.data || query.isPending || query.error) return;
+      // The environment resolves ~/; Git inspection requires its absolute path.
+      const path =
+        exactEntry?.fullPath ??
+        (leaf
+          ? appendBrowsePathSegment(ensureBrowseDirectoryPath(query.data.parentPath), leaf)
+          : query.data.parentPath);
+      if (!(await onConfirm(path, createIfMissing))) return;
+    } else {
+      onChange(value, createIfMissing);
+    }
+    setExplorerOpen(false);
+  };
 
   return (
     <div className="flex min-h-0 flex-col gap-2">
@@ -129,10 +171,7 @@ export function ProjectDirectoryField({
             size="xs"
             disabled={disabled}
             type="button"
-            onClick={() => {
-              onChange(value, false);
-              setExplorerOpen(false);
-            }}
+            onClick={() => void confirmPath(false)}
           >
             Attach
           </Button>
@@ -150,13 +189,21 @@ export function ProjectDirectoryField({
           ) : null}
           {!directoryExists ? (
             <DirectoryRow
-              disabled={disabled || !browsePath.isBrowsing || relativeNeedsAnchor}
+              disabled={
+                disabled ||
+                browseQuery.isPending ||
+                !browsePath.isBrowsing ||
+                relativeNeedsAnchor ||
+                (onConfirm !== undefined &&
+                  (!createQuery.data ||
+                    createQuery.isPending ||
+                    createQuery.error !== null ||
+                    (missingPath !== null &&
+                      createQuery.data.entries.some((entry) => entry.name === createLeaf))))
+              }
               icon={<FolderPlusIcon className="size-3.5 shrink-0 text-muted-foreground" />}
               label="Create Directory"
-              onSelect={() => {
-                onChange(value, true);
-                setExplorerOpen(false);
-              }}
+              onSelect={() => void confirmPath(true)}
             />
           ) : null}
           {visibleEntries.length > 0 && (parentPath !== null || !directoryExists) ? (

@@ -23,6 +23,6 @@ const projectFaviconSourcesAtom = Atom.make((get) => {
   return deriveProjectFaviconSources({ projects, ...catalog, connectedEnvironmentIds });
 });
 
-export const projectFaviconSourceAtom = Atom.family((key: string) =>
+export const projectFaviconCandidatesAtom = Atom.family((key: string) =>
   Atom.make((get) => get(projectFaviconSourcesAtom).get(key) ?? null),
 );

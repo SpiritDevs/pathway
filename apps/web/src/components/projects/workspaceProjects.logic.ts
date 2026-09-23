@@ -10,8 +10,9 @@
  * @module components/projects/workspaceProjects.logic
  */
 import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
+import { scopedProjectKey } from "@spiritdevs/client-runtime/environment";
 import { CloudProjectSyncEntity, EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
-import type { RepositoryIdentity } from "@spiritdevs/contracts";
+import type { RepositoryIdentity, ScopedProjectRef } from "@spiritdevs/contracts";
 import * as Schema from "effect/Schema";
 
 const isCloudProject = Schema.is(CloudProjectSyncEntity);
@@ -23,6 +24,8 @@ export interface WorkspaceProjectCandidate {
   readonly title: string;
   readonly companyIds: ReadonlyArray<string>;
   readonly projectIds: ReadonlyArray<string>;
+  /** Binding-resolved checkouts; local ids alone may repeat on different environments. */
+  readonly environmentProjectRefs?: ReadonlyArray<ScopedProjectRef>;
   readonly isCompanyProject: boolean;
   readonly repositoryIdentity?: RepositoryIdentity | null;
   readonly repositoryIdentities?: ReadonlyArray<RepositoryIdentity>;
@@ -170,10 +173,87 @@ export function buildWorkspaceProjects(input: {
   readonly groups: ReadonlyArray<SidebarProjectSnapshot>;
   readonly candidates: ReadonlyArray<WorkspaceProjectCandidate>;
 }): ReadonlyArray<WorkspaceProject> {
-  const groupByProjectId = new Map<string, SidebarProjectSnapshot>();
+  const groupsByProjectAlias = new Map<string, Set<SidebarProjectSnapshot>>();
+  const canonicalGroups = new Map(input.groups.map((group) => [group.projectKey, group]));
+  const candidateKeys = (candidate: WorkspaceProjectCandidate) =>
+    candidate.environmentProjectRefs === undefined
+      ? candidate.projectIds.map((id) => `id:${id}`)
+      : candidate.environmentProjectRefs.map((ref) => `ref:${scopedProjectKey(ref)}`);
   for (const group of input.groups) {
-    groupByProjectId.set(String(group.id), group);
-    for (const member of group.memberProjects) groupByProjectId.set(String(member.id), group);
+    const ids = [
+      group.id,
+      ...group.memberProjects.map((member) => member.id),
+      ...group.memberProjectRefs.map((ref) => ref.projectId),
+    ];
+    const keys = [
+      ...ids.map((id) => `id:${id}`),
+      ...group.memberProjectRefs.map((ref) => `ref:${scopedProjectKey(ref)}`),
+    ];
+    for (const key of keys) {
+      const matches = groupsByProjectAlias.get(key) ?? new Set<SidebarProjectSnapshot>();
+      matches.add(group);
+      groupsByProjectAlias.set(key, matches);
+    }
+  }
+
+  // Bindings can join checkouts that local grouping keeps apart (different paths, missing Git,
+  // or a separate-group preference). Consume all of those groups before adding unclaimed rows.
+  for (const candidate of input.candidates) {
+    if (!candidate.isCompanyProject) continue;
+    const matches = new Set(
+      candidateKeys(candidate).flatMap((key) => [...(groupsByProjectAlias.get(key) ?? [])]),
+    );
+    if (matches.size < 2) continue;
+    const groups = [...matches];
+    const representative =
+      groups.find((group) => group.environmentPresence !== "remote-only") ?? groups[0]!;
+    const memberProjects = [
+      ...new Map(
+        groups.flatMap((group) =>
+          group.memberProjects.map((member) => [member.physicalProjectKey, member] as const),
+        ),
+      ).values(),
+    ];
+    const memberProjectRefs = [
+      ...new Map(
+        groups.flatMap((group) =>
+          group.memberProjectRefs.map((ref) => [scopedProjectKey(ref), ref] as const),
+        ),
+      ).values(),
+    ];
+    const hasLocal = groups.some((group) => group.environmentPresence !== "remote-only");
+    const remoteGroups = groups.filter((group) => group.environmentPresence !== "local-only");
+    const merged: SidebarProjectSnapshot = {
+      ...representative,
+      memberProjects,
+      memberProjectRefs,
+      groupedProjectCount: memberProjects.length,
+      environmentPresence: hasLocal
+        ? remoteGroups.length > 0
+          ? "mixed"
+          : "local-only"
+        : "remote-only",
+      allRemoteMembersAreDesktopLocal:
+        remoteGroups.length > 0 &&
+        remoteGroups.every((group) => group.allRemoteMembersAreDesktopLocal),
+      remoteEnvironmentLabels: [
+        ...new Set(groups.flatMap((group) => group.remoteEnvironmentLabels)),
+      ],
+    };
+    // Redirect all aliases, including older checkout ids and groups joined by another company.
+    for (const groups of groupsByProjectAlias.values()) {
+      let replaced = false;
+      for (const group of groups) {
+        if (matches.has(group)) {
+          groups.delete(group);
+          replaced = true;
+        }
+      }
+      if (replaced) groups.add(merged);
+    }
+    for (const [key, group] of canonicalGroups) {
+      if (matches.has(group)) canonicalGroups.set(key, merged);
+    }
   }
 
   const byKey = new Map<string, WorkspaceProject>();
@@ -181,9 +261,8 @@ export function buildWorkspaceProjects(input: {
 
   for (const candidate of input.candidates) {
     const group =
-      candidate.projectIds
-        .map((projectId) => groupByProjectId.get(String(projectId)))
-        .find((match) => match !== undefined) ?? null;
+      candidateKeys(candidate).flatMap((key) => [...(groupsByProjectAlias.get(key) ?? [])])[0] ??
+      null;
     if (group !== null) claimedGroupKeys.add(group.projectKey);
 
     const projectKey =
@@ -237,7 +316,9 @@ export function buildWorkspaceProjects(input: {
   // A checkout nobody has registered yet still belongs in the list. Dropping it here would repeat
   // the mistake that emptied the issue Project picker.
   for (const group of input.groups) {
-    if (claimedGroupKeys.has(group.projectKey) || byKey.has(group.projectKey)) continue;
+    const canonicalGroup = canonicalGroups.get(group.projectKey) ?? group;
+    if (claimedGroupKeys.has(canonicalGroup.projectKey) || byKey.has(canonicalGroup.projectKey))
+      continue;
     const repositoryIdentity = group.memberProjects.find(
       (member) => member.repositoryIdentity != null,
     )?.repositoryIdentity;

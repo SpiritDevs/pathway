@@ -1,12 +1,17 @@
-import type { ComponentType, Dispatch, ReactElement, SetStateAction } from "react";
+import type { ComponentType, Dispatch, ReactElement, ReactNode, SetStateAction } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 
 const testState = vi.hoisted(() => ({
   faviconUrl: "https://environment.test/api/assets/token-a/v1-20-favicon.svg",
   lastResource: null as unknown,
-  sharedSource: null as { environmentId: EnvironmentId; cwd: string; faviconPath: string } | null,
+  sharedSources: null as
+    | { environmentId: EnvironmentId; cwd: string; faviconPath: string }[]
+    | null,
   libraryIcon: null as { name: string; color: string } | null,
+  assetStatus: "Success" as "Success" | "Failure" | "Loading",
+  sourcePath: undefined as string | undefined,
+  refresh: vi.fn(),
 }));
 
 const hooks = vi.hoisted(() => {
@@ -47,7 +52,7 @@ const hooks = vi.hoisted(() => {
 
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: unknown) =>
-    atom === "library-icon" ? testState.libraryIcon : testState.sharedSource,
+    atom === "library-icon" ? testState.libraryIcon : testState.sharedSources,
 }));
 
 vi.mock("../state/projectIcons", () => ({
@@ -55,7 +60,7 @@ vi.mock("../state/projectIcons", () => ({
   projectIconCheckoutKey: (environmentId: string, cwd: string) => `${environmentId}:${cwd}`,
 }));
 
-vi.mock("../state/projectFavicons", () => ({ projectFaviconSourceAtom: () => null }));
+vi.mock("../state/projectFavicons", () => ({ projectFaviconCandidatesAtom: () => null }));
 
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -69,7 +74,12 @@ vi.mock("react/compiler-runtime", () => ({ c: hooks.useMemoCache }));
 vi.mock("../assets/assetUrls", () => ({
   useAssetUrlState: (_environmentId: unknown, resource: unknown) => {
     testState.lastResource = resource;
-    return { _tag: "Success", url: testState.faviconUrl };
+    return {
+      _tag: testState.assetStatus,
+      url: testState.faviconUrl,
+      refresh: testState.refresh,
+      sourcePath: testState.sourcePath,
+    };
   },
 }));
 
@@ -80,6 +90,8 @@ type ProjectFaviconImageProps = {
   readonly src: string;
   readonly className?: string | undefined;
   readonly fallbackIcon: ComponentType<{ className?: string }>;
+  readonly fallback?: ReactNode;
+  readonly refresh?: (() => void) | undefined;
 };
 
 type ImageElement = ReactElement<{
@@ -119,8 +131,12 @@ function renderImage(
 
 describe("ProjectFavicon", () => {
   beforeEach(() => {
-    testState.sharedSource = null;
+    testState.sharedSources = null;
     testState.libraryIcon = null;
+    testState.assetStatus = "Success";
+    testState.sourcePath = undefined;
+    testState.faviconUrl = "https://environment.test/api/assets/token-a/v1-20-favicon.svg";
+    testState.refresh.mockReset();
     hooks.reset();
   });
 
@@ -173,11 +189,13 @@ describe("ProjectFavicon", () => {
   });
 
   it("requests the shared project's icon from its own host and directory", () => {
-    testState.sharedSource = {
-      environmentId: "other-host" as EnvironmentId,
-      cwd: "/other/checkout",
-      faviconPath: "brand/icon.svg",
-    };
+    testState.sharedSources = [
+      {
+        environmentId: "other-host" as EnvironmentId,
+        cwd: "/other/checkout",
+        faviconPath: "brand/icon.svg",
+      },
+    ];
     const element = ProjectFavicon({
       environmentId: "thread-host" as EnvironmentId,
       cwd: "/thread/checkout",
@@ -186,13 +204,67 @@ describe("ProjectFavicon", () => {
       props: typeof element.props,
     ) => ReactElement<typeof element.props>;
     const rooted = Shared(element.props);
-    expect(rooted.props).toMatchObject(testState.sharedSource);
+    expect(rooted.props).toMatchObject(testState.sharedSources[0]!);
     RootedProjectFavicon(rooted.props);
     expect(testState.lastResource).toEqual({
       _tag: "project-favicon",
       cwd: "/other/checkout",
       path: "brand/icon.svg",
     });
+  });
+
+  it.each(["Failure", "missing", "automatic"] as const)(
+    "tries another checkout when the first asset is %s",
+    (failure) => {
+      testState.sharedSources = [
+        {
+          environmentId: "preferred-host" as EnvironmentId,
+          cwd: "/preferred",
+          faviconPath: "brand/icon.png",
+        },
+        {
+          environmentId: "other-host" as EnvironmentId,
+          cwd: "/other",
+          faviconPath: "brand/icon.png",
+        },
+      ];
+      const element = ProjectFavicon({
+        environmentId: "preferred-host" as EnvironmentId,
+        cwd: "/preferred",
+      }) as ReactElement<Parameters<typeof RootedProjectFavicon>[0]>;
+      const Shared = element.type as (
+        props: typeof element.props,
+      ) => ReactElement<typeof element.props>;
+      const first = Shared(element.props);
+      if (failure === "Failure") testState.assetStatus = "Failure";
+      else if (failure === "missing")
+        testState.faviconUrl = "https://environment.test/api/assets/token/project-favicon-missing";
+      else testState.sourcePath = "favicon.svg";
+      const next = RootedProjectFavicon(first.props) as ReactElement<typeof element.props>;
+      expect(next.type).toBe(RootedProjectFavicon);
+      expect(next.props).toMatchObject(testState.sharedSources[1]!);
+      testState.assetStatus = "Success";
+      testState.sourcePath = "brand/icon.png";
+      testState.faviconUrl = "https://environment.test/api/assets/token/v1-icon.png";
+      RootedProjectFavicon(next.props);
+      expect(testState.lastResource).toEqual({
+        _tag: "project-favicon",
+        cwd: "/other",
+        path: "brand/icon.png",
+      });
+    },
+  );
+
+  it("tries the next checkout and refreshes the capability when an image fails to load", () => {
+    testState.faviconUrl = "https://environment.test/api/assets/failed/v1-broken.png";
+    const { Component, props } = resolveImageComponent();
+    const fallback = <span>Next checkout</span>;
+    const withFallback = { ...props, fallback };
+    renderImage(Component, withFallback).props.children[2]?.props.onError?.();
+    const failed = renderImage(Component, withFallback);
+    expect(failed.props.children[0]).toBe(fallback);
+    expect(failed.props.children[2]).toBeNull();
+    expect(testState.refresh).toHaveBeenCalledOnce();
   });
 
   it("renders the fallback for a rootless project without asking for an asset", () => {

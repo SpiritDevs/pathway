@@ -47,7 +47,7 @@ const key = (environmentId: EnvironmentId) =>
 describe("project favicon sources", () => {
   it("uses the same source including its host and custom path for both thread projects", () => {
     const sources = deriveProjectFaviconSources(input);
-    expect(sources.get(key(remote))).toEqual({
+    expect(sources.get(key(remote))?.[0]).toEqual({
       environmentId: local,
       cwd: "/local/quotecloud",
       faviconPath: projects[1]!.faviconPath,
@@ -60,15 +60,23 @@ describe("project favicon sources", () => {
       ...input,
       projects: projects.map((project) => ({ ...project, faviconPath: null })),
     });
-    expect(sources.get(key(remote))?.environmentId).toBe(local);
+    expect(sources.get(key(remote))?.[0]?.environmentId).toBe(local);
   });
 
   it("prefers an available custom icon over a preferred connection's automatic icon", () => {
     const sources = deriveProjectFaviconSources({
       ...input,
+      projects: projects.map((project) =>
+        project.environmentId === remote
+          ? {
+              ...project,
+              faviconPath: "/remote/quotecloud/favicon.svg",
+            }
+          : project,
+      ),
       preferredBindingIds: new Set(["binding-remote"]),
     });
-    expect(sources.get(key(remote))?.environmentId).toBe(local);
+    expect(sources.get(key(remote))?.[0]?.environmentId).toBe(local);
   });
 
   it("switches both rows to an available host when the preferred host disconnects", () => {
@@ -76,7 +84,8 @@ describe("project favicon sources", () => {
       ...input,
       connectedEnvironmentIds: new Set([remote]),
     });
-    expect(sources.get(key(local))?.environmentId).toBe(remote);
+    expect(sources.get(key(local))?.[0]?.environmentId).toBe(remote);
+    expect(sources.get(key(local))).toHaveLength(1);
     expect(sources.get(key(remote))).toBe(sources.get(key(local)));
   });
 
@@ -88,7 +97,7 @@ describe("project favicon sources", () => {
         cloudProjectId: CloudProjectId.make(binding.id),
       })),
     });
-    expect(separate.get(key(remote))?.environmentId).toBe(remote);
+    expect(separate.get(key(remote))?.[0]?.environmentId).toBe(remote);
     const revoked = deriveProjectFaviconSources({
       ...input,
       bindings: bindings.map((binding) => ({ ...binding, status: "revoked" as const })),
@@ -107,5 +116,15 @@ describe("project favicon sources", () => {
         projects: projects.map((project) => ({ ...project, workspaceRoot: null })),
       }).size,
     ).toBe(0);
+  });
+
+  it("retains other connected checkouts when the preferred one cannot serve its saved icon", () => {
+    const sources = deriveProjectFaviconSources({
+      ...input,
+      projects: projects.map((project) => ({ ...project, faviconPath: "brand/icon.png" })),
+      preferredBindingIds: new Set(["binding-remote"]),
+    });
+    expect(sources.get(key(local))?.map((source) => source.environmentId)).toEqual([remote, local]);
+    expect(sources.get(key(local))).toBe(sources.get(key(remote)));
   });
 });

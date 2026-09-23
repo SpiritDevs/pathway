@@ -1,7 +1,10 @@
 export function projectGroupTitleNeedsUpdate(
-  memberTitles: ReadonlyArray<string>,
+  members: ReadonlyArray<{ readonly title: string; readonly titleIsCustom?: boolean | undefined }>,
   nextTitle: string,
   wasEdited: boolean,
 ): boolean {
-  return wasEdited && memberTitles.some((title) => title !== nextTitle);
+  return (
+    wasEdited &&
+    members.some((member) => member.title !== nextTitle || member.titleIsCustom !== true)
+  );
 }

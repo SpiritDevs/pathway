@@ -349,6 +349,8 @@ export const setViewPreference = mutation({
     focusId: v.string(),
     sortOrder: v.optional(v.string()),
     collapsiblePinned: v.optional(v.boolean()),
+    // Older clients send the complete view. Accept its device-local field without persisting it.
+    pinnedCollapsed: v.optional(v.boolean()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {

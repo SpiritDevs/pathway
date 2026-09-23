@@ -1,19 +1,20 @@
 /**
- * Planning for the Create project dialog: one project, any number of environment folders, and an
- * optional repository shared by all of them.
- *
- * A new repository is created once, on the first folder's environment, and every other folder
- * clones it. Creating a repository per environment would leave unrelated histories to reconcile.
+ * Planning for New project: one folder per environment and one shared Git repository.
+ * Folder inspection decides whether repository creation is available.
  *
  * @module components/projects/createProject.logic
  */
-import { inferProjectTitleFromPath } from "@spiritdevs/client-runtime/state/projects";
-import type { EnvironmentId } from "@spiritdevs/contracts";
-import type { SourceControlRepositoryVisibility } from "@spiritdevs/contracts";
+import {
+  getBrowseParentPath,
+  inferProjectTitleFromPath,
+} from "@spiritdevs/client-runtime/state/projects";
+import type {
+  EnvironmentId,
+  ProjectInspectDirectoryResult,
+  SourceControlRepositoryVisibility,
+} from "@spiritdevs/contracts";
 
 import { planAttachProjectDirectory } from "./projectWorkspace.logic";
-
-export type ProjectSourceMode = "folders" | "clone" | "new_repo";
 
 export interface ProjectFolderDraft {
   /** Stable React key; rows can be removed from the middle. */
@@ -22,6 +23,8 @@ export interface ProjectFolderDraft {
   readonly path: string;
   /** Set when the folder browser's Create Directory row was chosen. */
   readonly createIfMissing: boolean;
+  /** Only attached paths have an inspection; editing the path clears it. */
+  readonly inspection: ProjectInspectDirectoryResult | null;
 }
 
 export interface NewRepositoryDraft {
@@ -33,14 +36,10 @@ export interface NewRepositoryDraft {
 
 export interface CreateProjectDraft {
   readonly name: string;
-  readonly mode: ProjectSourceMode;
+  readonly createRepository: boolean;
   readonly folders: ReadonlyArray<ProjectFolderDraft>;
-  /** Clone mode: `owner/name` or a Git URL. */
-  readonly cloneSource: string;
   readonly newRepository: NewRepositoryDraft;
 }
-
-export type CloneSource = { readonly repository: string } | { readonly remoteUrl: string };
 
 export interface PlannedFolder {
   readonly environmentId: EnvironmentId;
@@ -57,7 +56,6 @@ export type CreateProjectPlan =
       readonly folders: ReadonlyArray<PlannedFolder>;
       readonly source:
         | { readonly kind: "folders" }
-        | { readonly kind: "clone"; readonly clone: CloneSource }
         | {
             readonly kind: "new_repo";
             readonly repository: string;
@@ -67,12 +65,46 @@ export type CreateProjectPlan =
 
 const OWNER_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\/[A-Za-z0-9._-]+$/;
 
-/** `owner/name` targets the provider; anything URL-shaped is cloned as given. */
-export function parseCloneSource(input: string): CloneSource | null {
-  const value = input.trim().replace(/\.git$/, "");
-  if (value.length === 0) return null;
-  if (/^(?:[a-z+]+:\/\/|git@)/i.test(input.trim())) return { remoteUrl: input.trim() };
-  return OWNER_NAME.test(value) ? { repository: value } : null;
+export function folderHasRepository(folder: ProjectFolderDraft): boolean {
+  return !!(folder.inspection?.repositoryRoot || folder.inspection?.repositoryIdentity);
+}
+
+/** New directories inherit their parent's repository, but may have been created since attachment. */
+export async function inspectProjectFolder(
+  folder: ProjectFolderDraft,
+  inspect: (cwd: string) => Promise<ProjectInspectDirectoryResult>,
+): Promise<ProjectFolderDraft> {
+  let inspection = await inspect(folder.path);
+  if (folder.createIfMissing && !folderHasRepository({ ...folder, inspection })) {
+    const parent = getBrowseParentPath(folder.path.replace(/[\\/]+$/, ""));
+    if (parent !== null) inspection = await inspect(parent);
+  }
+  if (inspection.repositoryRoot === undefined && inspection.repositoryIdentity === null) {
+    throw new Error(
+      "Update Pathway on this environment to detect Git repositories without a remote.",
+    );
+  }
+  return { ...folder, inspection };
+}
+
+/** Matching checkouts are one repository; local repositories without remotes cannot be matched. */
+export function projectFolderRepositoryError(
+  folders: ReadonlyArray<ProjectFolderDraft>,
+): string | null {
+  const repositories = folders.filter(folderHasRepository);
+  if (repositories.length < 2) return null;
+  const key = repositories[0]?.inspection?.repositoryIdentity?.canonicalKey;
+  return key &&
+    repositories.every((folder) => folder.inspection?.repositoryIdentity?.canonicalKey === key)
+    ? null
+    : "A project can only use one Git repository. Choose a checkout of the same repository or a folder without Git.";
+}
+
+export function canCreateProjectRepository(folders: ReadonlyArray<ProjectFolderDraft>): boolean {
+  return (
+    folders.length > 0 &&
+    folders.every((folder) => folder.inspection !== null && !folderHasRepository(folder))
+  );
 }
 
 /** GitHub-safe repository name derived from a project name. */
@@ -85,11 +117,12 @@ export function repositoryNameFromProjectName(name: string): string {
     .slice(0, 100);
 }
 
-/** The typed name, else the first folder's basename. */
+/** The typed name, else the first attached folder's basename. */
 export function createProjectTitle(draft: Pick<CreateProjectDraft, "name" | "folders">): string {
   const typed = draft.name.trim();
   if (typed.length > 0) return typed;
-  const firstPath = draft.folders[0]?.path.trim() ?? "";
+  const first = draft.folders[0];
+  const firstPath = first?.inspection ? first.path.trim() : "";
   return firstPath.length > 0 ? inferProjectTitleFromPath(firstPath.replace(/[\\/]+$/, "")) : "";
 }
 
@@ -100,9 +133,9 @@ export function planCreateProject(input: {
 }): CreateProjectPlan {
   const { draft } = input;
   const title = createProjectTitle(draft);
-  if (draft.mode !== "folders" && draft.folders.length === 0) {
-    return { kind: "invalid", message: "Add a folder for the repository." };
-  }
+  const repositoryError = projectFolderRepositoryError(draft.folders);
+  if (repositoryError) return { kind: "invalid", message: repositoryError };
+  const createRepository = draft.createRepository && canCreateProjectRepository(draft.folders);
   const folders: PlannedFolder[] = [];
   const environments = new Set<EnvironmentId>();
   for (const folder of draft.folders) {
@@ -118,43 +151,28 @@ export function planCreateProject(input: {
       occupiedWorkspaceRoots: input.occupiedWorkspaceRootsFor(folder.environmentId),
     });
     if (attach.kind !== "attach") return attach;
+    if (folder.inspection === null) return { kind: "incomplete" };
     folders.push({
       environmentId: folder.environmentId,
       workspaceRoot: attach.workspaceRoot,
-      // Cloning and creating a repository both make the folder themselves.
-      createIfMissing: draft.mode === "folders" ? attach.createWorkspaceRootIfMissing : false,
+      // Creating or cloning the new repository makes the folder itself.
+      createIfMissing: createRepository ? false : attach.createWorkspaceRootIfMissing,
     });
   }
   if (title.length === 0) return { kind: "incomplete" };
+  if (!createRepository) return { kind: "create", title, folders, source: { kind: "folders" } };
 
-  switch (draft.mode) {
-    case "folders":
-      return { kind: "create", title, folders, source: { kind: "folders" } };
-    case "clone": {
-      if (draft.cloneSource.trim().length === 0) return { kind: "incomplete" };
-      const clone = parseCloneSource(draft.cloneSource);
-      if (clone === null) {
-        return { kind: "invalid", message: "Enter a repository as owner/name or a Git URL." };
-      }
-      return { kind: "create", title, folders, source: { kind: "clone", clone } };
-    }
-    case "new_repo": {
-      const owner = draft.newRepository.owner.trim();
-      const name = draft.newRepository.name.trim() || repositoryNameFromProjectName(title);
-      if (owner.length === 0 || name.length === 0) return { kind: "incomplete" };
-      const repository = `${owner}/${name}`;
-      if (!OWNER_NAME.test(repository)) {
-        return {
-          kind: "invalid",
-          message: "Repository names can use letters, numbers, . _ and -.",
-        };
-      }
-      return {
-        kind: "create",
-        title,
-        folders,
-        source: { kind: "new_repo", repository, visibility: draft.newRepository.visibility },
-      };
-    }
+  const owner = draft.newRepository.owner.trim();
+  const name = draft.newRepository.name.trim() || repositoryNameFromProjectName(title);
+  if (owner.length === 0 || name.length === 0) return { kind: "incomplete" };
+  const repository = `${owner}/${name}`;
+  if (!OWNER_NAME.test(repository)) {
+    return { kind: "invalid", message: "Repository names can use letters, numbers, . _ and -." };
   }
+  return {
+    kind: "create",
+    title,
+    folders,
+    source: { kind: "new_repo", repository, visibility: draft.newRepository.visibility },
+  };
 }

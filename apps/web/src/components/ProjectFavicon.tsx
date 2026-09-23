@@ -1,15 +1,18 @@
 import { useAtomValue } from "@effect/atom-react";
-import { projectFaviconSourceAtom } from "../state/projectFavicons";
+import { projectFaviconCandidatesAtom } from "../state/projectFavicons";
 import { projectIconAtom, projectIconCheckoutKey } from "../state/projectIcons";
 import { FocusIcon } from "./focus/FocusIcon";
-import { projectFaviconSourceKey } from "../state/projectFaviconSources";
+import {
+  isCustomProjectFaviconPath,
+  projectFaviconSourceKey,
+} from "../state/projectFaviconSources";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import {
   getProjectFaviconCacheKey,
   isProjectFaviconFallbackUrl,
 } from "@spiritdevs/shared/projectFavicon";
 import { FolderIcon } from "lucide-react";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { useState } from "react";
 import { useAssetUrlState } from "../assets/assetUrls";
 import { cn } from "~/lib/utils";
@@ -51,10 +54,20 @@ export function ProjectFavicon(input: {
 }
 
 function SharedProjectFavicon(input: Parameters<typeof RootedProjectFavicon>[0]) {
-  const source = useAtomValue(
-    projectFaviconSourceAtom(projectFaviconSourceKey(input.environmentId, input.cwd)),
+  const sources = useAtomValue(
+    projectFaviconCandidatesAtom(projectFaviconSourceKey(input.environmentId, input.cwd)),
   );
-  return <RootedProjectFavicon {...input} {...(source ?? {})} />;
+  return (sources ?? [input]).reduceRight<ReactNode>(
+    (fallback, source) => (
+      <RootedProjectFavicon
+        {...input}
+        {...source}
+        key={projectFaviconSourceKey(source.environmentId, source.cwd)}
+        fallback={fallback}
+      />
+    ),
+    null,
+  );
 }
 
 export function RootedProjectFavicon(input: {
@@ -63,12 +76,30 @@ export function RootedProjectFavicon(input: {
   faviconPath?: string | null | undefined;
   className?: string | undefined;
   fallbackIcon?: ComponentType<{ className?: string }>;
+  fallback?: ReactNode;
 }) {
   const state = useProjectFaviconAsset(input);
   const src = state._tag === "Success" ? state.url : null;
   const FallbackIcon = input.fallbackIcon ?? FolderIcon;
 
-  if (!src || isProjectFaviconFallbackUrl(src)) {
+  // A checkout may have fallen back to automatic discovery because the selected file is absent.
+  // Try the other connections for that file before accepting a different icon.
+  if (
+    input.fallback != null &&
+    state._tag === "Success" &&
+    state.sourcePath !== undefined &&
+    isCustomProjectFaviconPath(input.faviconPath) &&
+    state.sourcePath.replaceAll("\\", "/") !== input.faviconPath.replaceAll("\\", "/")
+  ) {
+    return input.fallback;
+  }
+
+  if (state._tag === "Failure" || isProjectFaviconFallbackUrl(src)) {
+    return (
+      input.fallback ?? <ProjectFaviconFallback className={input.className} icon={FallbackIcon} />
+    );
+  }
+  if (!src) {
     return <ProjectFaviconFallback className={input.className} icon={FallbackIcon} />;
   }
 
@@ -81,6 +112,8 @@ export function RootedProjectFavicon(input: {
       src={src}
       className={input.className}
       fallbackIcon={FallbackIcon}
+      fallback={input.fallback}
+      refresh={state.refresh}
     />
   );
 }
@@ -112,27 +145,40 @@ function ProjectFaviconImage({
   src,
   className,
   fallbackIcon: FallbackIcon,
+  fallback,
+  refresh,
 }: {
   readonly cacheKey: string;
   readonly src: string;
   readonly className?: string | undefined;
   readonly fallbackIcon: ComponentType<{ className?: string }>;
+  readonly fallback?: ReactNode;
+  readonly refresh?: (() => void) | undefined;
 }) {
   const [displayedSrc, setDisplayedSrc] = useState<string | null>(
     () => loadedProjectFaviconSrcs.get(cacheKey) ?? null,
   );
-  const isLoading = displayedSrc !== src;
-  const handleLoadError = (failedSrc: string) => {
-    if (loadedProjectFaviconSrcs.get(cacheKey) === failedSrc) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const isLoading = displayedSrc !== src && failedSrc !== src;
+  const handleLoadError = (failedUrl: string) => {
+    if (loadedProjectFaviconSrcs.get(cacheKey) === failedUrl) {
       loadedProjectFaviconSrcs.delete(cacheKey);
     }
-    setDisplayedSrc((currentSrc) => (currentSrc === failedSrc ? null : currentSrc));
+    setDisplayedSrc((currentSrc) => (currentSrc === failedUrl ? null : currentSrc));
+    if (failedUrl === src) {
+      setFailedSrc(failedUrl);
+      refresh?.();
+    }
   };
 
   return (
     <>
       {displayedSrc === null ? (
-        <ProjectFaviconFallback className={className} icon={FallbackIcon} />
+        failedSrc === src && fallback != null ? (
+          fallback
+        ) : (
+          <ProjectFaviconFallback className={className} icon={FallbackIcon} />
+        )
       ) : null}
       {displayedSrc ? (
         <img

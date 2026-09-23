@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 
 import {
   useIssueProjectOptions,
@@ -20,6 +21,9 @@ function useMergedWorkspaceProjects(
           title: option.title,
           companyIds: option.companyIds.map(String),
           projectIds: option.projectIds.map(String),
+          environmentProjectRefs: option.environmentProjects.map((project) =>
+            scopeProjectRef(project.environmentId, project.id),
+          ),
           isCompanyProject: option.isCompanyProject,
           repositoryIdentity: option.companyProject?.repositoryIdentity ?? null,
           repositoryIdentities: option.environmentBindings.flatMap((binding) =>

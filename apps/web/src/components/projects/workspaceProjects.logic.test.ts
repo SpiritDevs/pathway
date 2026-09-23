@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
+import { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 
-import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
+import {
+  buildSidebarProjectSnapshots,
+  type SidebarProjectSnapshot,
+} from "~/sidebarProjectGrouping";
+import { filterSidebarWorkspaceProjectsForFocus } from "../Sidebar.logic";
 import {
   buildWorkspaceProjects,
   buildCompanyProjectMergeCandidates,
@@ -44,6 +49,95 @@ function candidate(overrides: Partial<WorkspaceProjectCandidate>): WorkspaceProj
 }
 
 describe("workspace project list", () => {
+  it.each([false, true])(
+    "lists a cloud project once across environments (shared local id: %s)",
+    (sharedId) => {
+      const checkoutId = (environment: string) => `checkout-${sharedId ? "shared" : environment}`;
+      const groups = buildSidebarProjectSnapshots({
+        projects: ["laptop", "studio"].map((environment) => ({
+          environmentId: EnvironmentId.make(environment),
+          id: ProjectId.make(checkoutId(environment)),
+          title: environment === "laptop" ? "quotecloud" : "QuoteCloud",
+          workspaceRoot: `/work/${environment}/quotecloud`,
+          repositoryIdentity: null,
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-09-24T00:00:00.000Z",
+          updatedAt: "2026-09-24T00:00:00.000Z",
+        })),
+        settings: {
+          sidebarProjectGroupingMode: "separate",
+          sidebarProjectGroupingOverrides: {},
+          sidebarProjectGroupAssignments: {},
+        },
+        primaryEnvironmentId: EnvironmentId.make("laptop"),
+        resolveEnvironmentLabel: (id) => id,
+      });
+      const projects = buildWorkspaceProjects({
+        groups,
+        candidates: [
+          candidate({
+            id: "cloud-quotecloud",
+            title: "QuoteCloud",
+            companyIds: ["company-acme"],
+            projectIds: ["cloud-quotecloud", checkoutId("laptop"), checkoutId("studio")],
+            environmentProjectRefs: groups.flatMap((group) => group.memberProjectRefs),
+            isCompanyProject: true,
+          }),
+        ],
+      });
+      expect(projects).toHaveLength(1);
+      expect(projects[0]).toMatchObject({
+        cloudProjectId: "cloud-quotecloud",
+        checkoutCount: 2,
+        group: {
+          environmentPresence: "mixed",
+          remoteEnvironmentLabels: ["studio"],
+          memberProjectRefs: [
+            { environmentId: "laptop", projectId: checkoutId("laptop") },
+            { environmentId: "studio", projectId: checkoutId("studio") },
+          ],
+        },
+      });
+      expect(projects[0]?.group?.memberProjects).toHaveLength(2);
+      // A Focus assigned only to the second checkout must still include the combined project.
+      expect(
+        filterSidebarWorkspaceProjectsForFocus(
+          projects,
+          new Set([`studio:${checkoutId("studio")}`]),
+        ),
+      ).toEqual(projects);
+      // Reusing a local id does not join checkouts bound to different cloud projects.
+      expect(
+        buildWorkspaceProjects({
+          groups,
+          candidates: groups.map((group) =>
+            candidate({
+              id: `cloud-${group.environmentId}`,
+              projectIds: [String(group.id)],
+              environmentProjectRefs: group.memberProjectRefs,
+              isCompanyProject: true,
+            }),
+          ),
+        }),
+      ).toHaveLength(2);
+    },
+  );
+
+  it("does not collapse unrelated projects just because their display names match", () => {
+    const projects = buildWorkspaceProjects({
+      groups: [
+        group({ id: "first", projectKey: "first", displayName: "Website" }),
+        group({ id: "second", projectKey: "second", displayName: "Website" }),
+      ],
+      candidates: [
+        candidate({ id: "cloud-first", projectIds: ["first"], isCompanyProject: true }),
+        candidate({ id: "cloud-second", projectIds: ["second"], isCompanyProject: true }),
+      ],
+    });
+    expect(projects).toHaveLength(2);
+  });
+
   it("keeps same-repository cloud rows distinct as merge candidates", () => {
     const repositoryIdentity = {
       canonicalKey: "github.com/spiritdevs/pathway",

@@ -185,8 +185,12 @@ function makeFocusMutations(client: ConvexClient): FocusMutations {
     remove: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.remove, input),
     assignProject: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.assignProject, input),
     unassignProject: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.unassignProject, input),
-    setViewPreference: (input) =>
-      client.mutation(FOCUS_FUNCTION_REFERENCES.setViewPreference, input),
+    setViewPreference: ({ focusId, sortOrder, collapsiblePinned }) =>
+      client.mutation(FOCUS_FUNCTION_REFERENCES.setViewPreference, {
+        focusId,
+        ...(sortOrder === undefined ? {} : { sortOrder }),
+        ...(collapsiblePinned === undefined ? {} : { collapsiblePinned }),
+      }),
     clearAllNotifications: () => client.mutation(FOCUS_FUNCTION_REFERENCES.clearAll, {}),
     markAllNotificationsSeen: () => client.mutation(FOCUS_FUNCTION_REFERENCES.markAllSeen, {}),
     markAllNotificationsRead: () => client.mutation(FOCUS_FUNCTION_REFERENCES.markAllRead, {}),

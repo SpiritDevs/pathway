@@ -11,7 +11,7 @@ that project's owner.
 
 ## Create a project
 
-**Add project**, the sidebar's new-project button, and the command palette all open **Create
+**Add project**, the sidebar's new-project button, and the command palette all open **New
 project**:
 
 - **Name and icon.** The name defaults to the first folder's name. The icon button shows the icon
@@ -19,35 +19,45 @@ project**:
   device shows. **Use detected icon** switches back.
 - **Focus.** The project joins the Focus you have open, or none from **All**. Change it before
   creating.
-- **Folders.** Add one folder per environment that should run the project, using **Add
-  environment** for each additional computer. The folder browser can create a new folder. With no
-  folder, the project uses an internal [Pathway workspace](project-workspaces.md) until you attach
-  one.
-- **Source.** **Folders** links each folder as it is. **Clone repository** clones an `owner/name`
-  repository or Git URL into every folder. **New GitHub repository** creates the repository once,
-  under your account or one of your organizations, public or private, in the first folder; every
-  other folder clones it so all computers share one history. Creating a repository uses the GitHub
-  CLI signed in on the first folder's computer.
+- **Folders.** Browse from your home folder (`~/`) and choose **Attach**, or create a new folder.
+  Add one folder per environment using **Add environment**. Environments already selected are
+  excluded from the other dropdowns; the add button disappears once all connected environments
+  have a folder. With no folder, the project uses an internal
+  [Pathway workspace](project-workspaces.md) until you attach one.
+- **Git.** Pathway checks each attached folder for Git. Checkouts of the same repository can be
+  linked across environments, but attaching a different repository shows an error. Folders
+  without Git can be attached alongside a repository.
+- **Create Git Repository.** When all attached folders have been checked and none contains Git,
+  enable this switch to show the GitHub owner, name, and visibility options. The repository is
+  created once in the first folder; every other folder clones it and must be empty. Creating a
+  repository uses the GitHub CLI signed in on the first folder's computer.
 
 Creating a project from **Agent Threads** selects it for the current unassigned draft. If setup
 stops partway, the project keeps whatever was created; finish the remaining folders from its
 **Connections** settings.
 
-To change a project's icon later, open its settings and use **Choose icon** beside **Project
-icon**.
+To rename a project, open **Settings > Projects**, edit **Name**, then press Enter or leave the
+field. The name applies to all of the project's connections, including when you choose the same
+name as its folder or Git repository.
+
+To change a project's icon later, use **Choose icon** beside **Project icon** for a built-in icon,
+or **Choose file** for an image in the project's folder. Selecting a file replaces any built-in
+icon after the file setting is saved.
 
 On iPhone and iPad, choose **New Project** from the Focus menu in **Thread options**, or from the
-**Projects** screen. The sheet offers the same name, icon, Focus, company, source, and environment
+**Projects** screen. The sheet offers name, icon, Focus, company, source, and environment
 choices; use **Browse** to pick each folder. A project's **Icon** row in its settings sets or clears
 its built-in icon.
 
 A Pathway project can have connections on several computers. Pathway normally joins checkouts
 automatically when their Git repository matches.
+The project picker lists each project once across its connected environments. Selecting a project
+shows its threads from every environment, including checkouts with different folder names or no Git repository.
 
 In web and desktop, threads belonging to the same project share an icon from an available
 connection. A built-in icon chosen for the project takes priority, then a configured custom icon
 file, followed by the preferred connection.
-If that computer disconnects, Pathway uses another available connection.
+If that computer disconnects or cannot load the image, Pathway tries another available connection.
 
 To choose an available machine automatically for new threads, enable [load balancing](load-balancing.md).
 

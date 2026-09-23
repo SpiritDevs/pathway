@@ -2426,8 +2426,9 @@ export default function Sidebar() {
     () =>
       projectScopeKey === null
         ? null
-        : (projectGroups.find((project) => project.projectKey === projectScopeKey) ?? null),
-    [projectGroups, projectScopeKey],
+        : (workspaceProjects.find((project) => project.projectKey === projectScopeKey)?.group ??
+          null),
+    [workspaceProjects, projectScopeKey],
   );
   useEffect(() => {
     if (activeFocusId !== CONVERSATIONS_FOCUS_ID) return;

@@ -45,6 +45,7 @@ import { appAtomRegistry, resetAppAtomRegistryForTests } from "../rpc/atomRegist
 import { threadAlertNotificationsReadyAtom } from "../threadAlerts/state";
 import {
   FOCUS_FUNCTION_REFERENCES,
+  focusMutationsAtom,
   focusNotificationsAtom,
   useFocusReadModelRuntime,
 } from "./focusReadModel";
@@ -106,6 +107,28 @@ afterEach(() => {
 });
 
 describe("Focus notification subscription readiness", () => {
+  it("sends only synced view settings even when the editor passes its full local view", async () => {
+    const { client } = mount("account-a");
+    const mutations = appAtomRegistry.get(focusMutationsAtom)!;
+    const view = {
+      focusId: "all",
+      sortOrder: "project" as const,
+      collapsiblePinned: true,
+      pinnedCollapsed: true,
+    };
+    await mutations.setViewPreference(view);
+    expect(client.mutation).toHaveBeenLastCalledWith(FOCUS_FUNCTION_REFERENCES.setViewPreference, {
+      focusId: "all",
+      sortOrder: "project",
+      collapsiblePinned: true,
+    });
+    await mutations.setViewPreference({ focusId: "all", collapsiblePinned: false });
+    expect(client.mutation).toHaveBeenLastCalledWith(FOCUS_FUNCTION_REFERENCES.setViewPreference, {
+      focusId: "all",
+      collapsiblePinned: false,
+    });
+  });
+
   it("pauses alert delivery on a subscription error or invalid result and resumes on valid data", () => {
     const { notifications } = mount("account-a");
     expect(appAtomRegistry.get(threadAlertNotificationsReadyAtom)).toBe(false);

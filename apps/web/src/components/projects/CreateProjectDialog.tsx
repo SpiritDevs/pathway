@@ -1,8 +1,8 @@
 /**
- * Create project: a name and icon, a Focus, and any number of environment folders.
+ * New project: a name and icon, a Focus, and one folder per environment.
  *
- * The folders can be linked as they are, cloned from an existing repository, or seeded by a new
- * GitHub repository. A new repository is created once, on the first folder's environment; every
+ * Attached folders determine the Git repository, or can be seeded by a new GitHub repository.
+ * A new repository is created once, on the first folder's environment; every
  * other folder clones it, so all checkouts share one history. A project may also have no folder
  * at all, which is what the issue flows that open this dialog rely on.
  *
@@ -42,7 +42,6 @@ import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
 import {
   Dialog,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogPanel,
@@ -53,6 +52,7 @@ import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
+import { Switch } from "../ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { environmentBrowsePlatform, ProjectDirectoryField } from "./ProjectDirectoryField";
 import {
@@ -72,36 +72,34 @@ import { useQuickCreateProject } from "./useProjectWorkspaceCommands";
 import { useProjectGroups } from "./useProjectGroups";
 import { useWorkspaceProjects } from "./useWorkspaceProjects";
 import {
+  canCreateProjectRepository,
   createProjectTitle,
+  folderHasRepository,
+  inspectProjectFolder,
+  projectFolderRepositoryError,
   planCreateProject,
   repositoryNameFromProjectName,
-  type CloneSource,
+  type CreateProjectPlan,
   type CreateProjectDraft,
   type ProjectFolderDraft,
-  type ProjectSourceMode,
 } from "./createProject.logic";
 
 const NO_FOCUS = "none";
 const EMPTY_OWNERS: ReadonlyArray<{ readonly login: string }> = [];
-const SOURCE_MODES: ReadonlyArray<{ value: ProjectSourceMode; label: string }> = [
-  { value: "folders", label: "Folders" },
-  { value: "clone", label: "Clone repository" },
-  { value: "new_repo", label: "New GitHub repository" },
-];
 
 let folderKeySeed = 0;
 const emptyFolder = (environmentId: EnvironmentId | null): ProjectFolderDraft => ({
   key: `folder-${++folderKeySeed}`,
   environmentId,
-  path: "",
+  path: "~/",
   createIfMissing: false,
+  inspection: null,
 });
 
 const EMPTY_DRAFT: CreateProjectDraft = {
   name: "",
-  mode: "folders",
+  createRepository: false,
   folders: [],
-  cloneSource: "",
   newRepository: { owner: "", name: "", visibility: "private" },
 };
 
@@ -193,8 +191,15 @@ export function CreateProjectDialog({
   }, [open]);
 
   const firstFolder = draft.folders[0] ?? null;
+  const canCreateRepository = canCreateProjectRepository(draft.folders);
+  const creatingRepository = draft.createRepository && canCreateRepository;
+  const availableEnvironments = connectedEnvironments.filter(
+    (environment) =>
+      !draft.folders.some((folder) => folder.environmentId === environment.environmentId),
+  );
+  const selectedFocus = orderedFocuses.find((focus) => focus.id === focusChoice);
   const ownersQuery = useEnvironmentQuery(
-    open && draft.mode === "new_repo" && firstFolder?.environmentId
+    open && creatingRepository && firstFolder?.environmentId
       ? sourceControlEnvironment.repositoryOwners({
           environmentId: firstFolder.environmentId,
           input: { provider: "github" },
@@ -205,46 +210,98 @@ export function CreateProjectDialog({
   // The signed-in account owns a new repository until the user picks an organization.
   const repositoryOwner = draft.newRepository.owner || (repositoryOwners[0]?.login ?? "");
 
-  const plan = useMemo(
-    () =>
-      planCreateProject({
-        draft: { ...draft, newRepository: { ...draft.newRepository, owner: repositoryOwner } },
-        platformFor: (id) =>
-          environmentBrowsePlatform(
-            environments.find((candidate) => candidate.environmentId === id)?.serverConfig
-              ?.environment.platform.os,
-          ),
-        occupiedWorkspaceRootsFor: (id) =>
-          projects.flatMap((project) =>
-            project.environmentId === id && project.workspaceRoot !== null
-              ? [project.workspaceRoot]
-              : [],
-          ),
-      }),
-    [draft, environments, projects, repositoryOwner],
-  );
+  const planDraft = (value: CreateProjectDraft) =>
+    planCreateProject({
+      draft: { ...value, newRepository: { ...value.newRepository, owner: repositoryOwner } },
+      platformFor: (id) =>
+        environmentBrowsePlatform(
+          environments.find((candidate) => candidate.environmentId === id)?.serverConfig
+            ?.environment.platform.os,
+        ),
+      occupiedWorkspaceRootsFor: (id) =>
+        projects.flatMap((project) =>
+          project.environmentId === id && project.workspaceRoot !== null
+            ? [project.workspaceRoot]
+            : [],
+        ),
+    });
+  const plan = planDraft(draft);
 
-  const updateFolder = (key: string, patch: Partial<ProjectFolderDraft>) =>
+  const updateFolder = (key: string, patch: Partial<ProjectFolderDraft>) => {
+    setWriteError(null);
     setDraft((current) => ({
       ...current,
       folders: current.folders.map((folder) =>
-        folder.key === key ? { ...folder, ...patch } : folder,
+        folder.key === key ? { ...folder, ...patch, inspection: null } : folder,
       ),
     }));
+  };
   const addFolder = () =>
     setDraft((current) => {
       const used = new Set(current.folders.map((folder) => folder.environmentId));
       const next =
         connectedEnvironments.find((candidate) => !used.has(candidate.environmentId))
           ?.environmentId ?? null;
-      return { ...current, folders: [...current.folders, emptyFolder(next)] };
+      return next === null
+        ? current
+        : { ...current, folders: [...current.folders, emptyFolder(next)] };
     });
 
-  const run = (choice: ProjectRepositoryChoice | null) => {
-    if (plan.kind !== "create" || submitting) return;
-    const created = plan;
+  const inspectFolder = async (folder: ProjectFolderDraft) => {
+    const environment = environments.find(
+      (candidate) => candidate.environmentId === folder.environmentId,
+    );
+    if (!folder.environmentId || environment?.connection.phase !== "connected") {
+      throw new Error("Connect this environment before attaching a folder.");
+    }
+    if (environment.descriptor?.capabilities.projectDirectoryInspection !== true) {
+      throw new Error("Update Pathway on this environment to check the folder's Git repository.");
+    }
+    const targetEnvironmentId = folder.environmentId;
+    return inspectProjectFolder(folder, (cwd) =>
+      unwrap(
+        inspectProjectDirectory({
+          environmentId: targetEnvironmentId,
+          input: { cwd },
+        }),
+      ),
+    );
+  };
+
+  const attachFolder = async (key: string, path: string, createIfMissing: boolean) => {
+    if (submitting) return false;
+    const folder = draft.folders.find((candidate) => candidate.key === key);
+    if (!folder) return false;
+    setProgress("Checking folder…");
+    setWriteError(null);
+    try {
+      const attached = await inspectFolder({ ...folder, path, createIfMissing });
+      const folders = draft.folders.map((candidate) =>
+        candidate.key === key ? attached : candidate,
+      );
+      const error = projectFolderRepositoryError(folders);
+      if (error) throw new Error(error);
+      setDraft((current) => ({
+        ...current,
+        createRepository: folderHasRepository(attached) ? false : current.createRepository,
+        folders: current.folders.map((candidate) => (candidate.key === key ? attached : candidate)),
+      }));
+      return true;
+    } catch (cause) {
+      setWriteError(cause instanceof Error ? cause.message : "The folder could not be checked.");
+      return false;
+    } finally {
+      setProgress(null);
+    }
+  };
+
+  const run = (
+    choice: ProjectRepositoryChoice | null,
+    created: Extract<CreateProjectPlan, { kind: "create" }>,
+  ) => {
     if (environmentControl === null) {
       setWriteError("Connect to Pathway Cloud to create a project.");
+      setProgress(null);
       return;
     }
     const existingTarget =
@@ -264,8 +321,7 @@ export function CreateProjectDialog({
       let companyId: CompanyId | null = null;
       let cloudProjectId: string | null = existingTarget?.cloudProjectId ?? null;
       // Rows after the first link to the shared repository rather than making their own.
-      let sharedClone: CloneSource | null =
-        created.source.kind === "clone" ? created.source.clone : null;
+      let sharedRemoteUrl: string | null = null;
       const pendingKeys: string[] = [];
       try {
         companyId =
@@ -302,8 +358,8 @@ export function CreateProjectDialog({
                 },
               }),
             );
-            sharedClone = { remoteUrl: published.remoteUrl };
-          } else if (workspaceRoot !== null && sharedClone !== null) {
+            sharedRemoteUrl = published.remoteUrl;
+          } else if (workspaceRoot !== null && sharedRemoteUrl !== null) {
             setProgress(
               folders.length > 1 ? `Cloning (${index + 1}/${folders.length})…` : "Cloning…",
             );
@@ -312,9 +368,7 @@ export function CreateProjectDialog({
                 environmentId: folder.environmentId,
                 input: {
                   destinationPath: workspaceRoot,
-                  ...("repository" in sharedClone
-                    ? { provider: "github" as const, repository: sharedClone.repository }
-                    : { remoteUrl: sharedClone.remoteUrl }),
+                  remoteUrl: sharedRemoteUrl,
                 },
               }),
             );
@@ -435,33 +489,43 @@ export function CreateProjectDialog({
     })();
   };
 
-  const submit = () => {
+  const submit = (choice: ProjectRepositoryChoice | null = null) => {
     if (plan.kind !== "create" || submitting) return;
-    const first = plan.folders[0];
-    const environment = environments.find(
-      (candidate) => candidate.environmentId === first?.environmentId,
-    );
-    // Only an existing folder can already belong to a project through its Git remote.
-    if (
-      plan.source.kind !== "folders" ||
-      first === undefined ||
-      first.createIfMissing ||
-      environment?.descriptor?.capabilities.projectDirectoryInspection !== true
-    ) {
-      run(null);
-      return;
-    }
-    setProgress("Checking folder…");
-    void inspectProjectDirectory({
-      environmentId: first.environmentId,
-      input: { cwd: first.workspaceRoot },
-    }).then((inspection) => {
-      setProgress(null);
-      if (inspection._tag === "Success") {
-        const candidates = findProjectsForRepository(
-          projectGroups,
-          inspection.value.repositoryIdentity,
-        );
+    setProgress("Checking folders…");
+    setWriteError(null);
+    void (async () => {
+      try {
+        // Recheck every environment before any writes, including while confirming a project match.
+        const folders = await Promise.all(draft.folders.map(inspectFolder));
+        const verifiedDraft = { ...draft, folders };
+        const verifiedPlan = planDraft(verifiedDraft);
+        setDraft(verifiedDraft);
+        if (verifiedPlan.kind !== "create") {
+          throw new Error(
+            verifiedPlan.kind === "invalid"
+              ? verifiedPlan.message
+              : "Attach each folder before creating the project.",
+          );
+        }
+        if (plan.source.kind === "new_repo" && verifiedPlan.source.kind !== "new_repo") {
+          throw new Error(
+            "A selected folder now contains Git. Review the attached folders before creating the project.",
+          );
+        }
+        const repository =
+          folders.find(folderHasRepository)?.inspection?.repositoryIdentity ?? null;
+        if (
+          choice?.kind === "existing" &&
+          !findProjectsForRepository(projectGroups, repository).some(
+            (group) => group.projectKey === choice.projectKey,
+          )
+        ) {
+          throw new Error(
+            "The folder's Git repository changed. Review the folders and choose the project again.",
+          );
+        }
+        const candidates =
+          choice === null ? findProjectsForRepository(projectGroups, repository) : [];
         if (candidates.length > 0) {
           setRepositoryChoiceCandidates(
             candidates.map((group) => {
@@ -478,11 +542,16 @@ export function CreateProjectDialog({
               };
             }),
           );
+          setProgress(null);
           return;
         }
+        run(choice, verifiedPlan);
+      } catch (cause) {
+        setWriteError(cause instanceof Error ? cause.message : "The folders could not be checked.");
+        setRepositoryChoiceCandidates([]);
+        setProgress(null);
       }
-      run(null);
-    });
+    })();
   };
 
   const title = createProjectTitle(draft);
@@ -495,7 +564,7 @@ export function CreateProjectDialog({
       }}
       open={open}
     >
-      <DialogPopup className="max-w-lg">
+      <DialogPopup className="max-w-lg" aria-describedby={undefined}>
         <ProjectOwnerSelect
           owner={owner}
           options={ownerOptions}
@@ -503,10 +572,7 @@ export function CreateProjectDialog({
           disabled={submitting}
         />
         <DialogHeader>
-          <DialogTitle>Create project</DialogTitle>
-          <DialogDescription>
-            Add a folder on each environment that should run this project.
-          </DialogDescription>
+          <DialogTitle>New project</DialogTitle>
         </DialogHeader>
         <DialogPanel className="space-y-4">
           <div className="flex items-center gap-2">
@@ -552,8 +618,23 @@ export function CreateProjectDialog({
                 ...orderedFocuses.map((focus) => ({ value: focus.id, label: focus.name })),
               ]}
             >
-              <SelectTrigger size="sm" aria-label="Focus" className="w-48">
-                <SelectValue />
+              <SelectTrigger
+                size="sm"
+                aria-label="Focus"
+                className="ml-auto w-auto min-w-0 max-w-[75%]"
+              >
+                <SelectValue>
+                  <span className="flex min-w-0 items-center gap-2">
+                    {selectedFocus ? (
+                      <FocusIcon
+                        iconName={selectedFocus.iconName}
+                        color={selectedFocus.accentColor}
+                        className="size-3.5 shrink-0"
+                      />
+                    ) : null}
+                    <span className="truncate">{selectedFocus?.name ?? "None"}</span>
+                  </span>
+                </SelectValue>
               </SelectTrigger>
               <SelectPopup>
                 <SelectItem value={NO_FOCUS}>None</SelectItem>
@@ -574,72 +655,20 @@ export function CreateProjectDialog({
           </label>
 
           <div className="space-y-2">
-            <span className="text-sm font-medium">Source</span>
-            <ToggleGroup
-              value={[draft.mode]}
-              onValueChange={(value) => {
-                const mode = value[0] as ProjectSourceMode | undefined;
-                if (!mode) return;
-                setDraft((current) => ({
-                  ...current,
-                  mode,
-                  folders:
-                    mode !== "folders" && current.folders.length === 0
-                      ? [emptyFolder(connectedEnvironments[0]?.environmentId ?? null)]
-                      : current.folders,
-                }));
-              }}
-              size="sm"
-              variant="outline"
-              className="w-full"
-              disabled={submitting}
-            >
-              {SOURCE_MODES.map((mode) => (
-                <ToggleGroupItem key={mode.value} value={mode.value} className="flex-1">
-                  {mode.label}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-            {draft.mode === "clone" ? (
-              <Input
-                aria-label="Repository"
-                placeholder="owner/name or Git URL"
-                spellCheck={false}
-                disabled={submitting}
-                value={draft.cloneSource}
-                onChange={(event) => {
-                  const cloneSource = event.currentTarget.value;
-                  setDraft((current) => ({ ...current, cloneSource }));
-                }}
-              />
-            ) : null}
-            {draft.mode === "new_repo" ? (
-              <NewRepositoryFields
-                draft={draft}
-                owner={repositoryOwner}
-                owners={repositoryOwners.map((candidate) => candidate.login)}
-                loadingOwners={ownersQuery.isPending && firstFolder?.environmentId != null}
-                disabled={submitting}
-                onChange={(newRepository) => setDraft((current) => ({ ...current, newRepository }))}
-              />
-            ) : null}
-          </div>
-
-          <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium">Folders</span>
-              <Button
-                type="button"
-                size="xs"
-                variant="ghost"
-                disabled={
-                  submitting || draft.folders.length >= Math.max(connectedEnvironments.length, 1)
-                }
-                onClick={addFolder}
-              >
-                <PlusIcon />
-                Add environment
-              </Button>
+              {availableEnvironments.length > 0 ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  disabled={submitting}
+                  onClick={addFolder}
+                >
+                  <PlusIcon />
+                  Add environment
+                </Button>
+              ) : null}
             </div>
             {draft.folders.length === 0 ? (
               <p className="rounded-lg border border-dashed border-border/70 px-3 py-4 text-center text-xs text-muted-foreground">
@@ -651,36 +680,77 @@ export function CreateProjectDialog({
                   key={folder.key}
                   folder={folder}
                   note={
-                    draft.mode === "new_repo"
+                    creatingRepository
                       ? index === 0
                         ? "The repository is created here."
-                        : "Clones the new repository."
-                      : draft.mode === "clone"
-                        ? "The repository is cloned here."
+                        : "Clones the new repository into this folder. The folder must be empty."
+                      : folder.inspection
+                        ? folderHasRepository(folder)
+                          ? "Git repository detected."
+                          : "No Git repository in this folder."
                         : null
                   }
-                  environments={connectedEnvironments}
+                  environments={connectedEnvironments.filter(
+                    (candidate) =>
+                      candidate.environmentId === folder.environmentId ||
+                      !draft.folders.some(
+                        (other) => other.environmentId === candidate.environmentId,
+                      ),
+                  )}
                   platform={environmentBrowsePlatform(
                     environments.find(
                       (candidate) => candidate.environmentId === folder.environmentId,
                     )?.serverConfig?.environment.platform.os,
                   )}
                   disabled={submitting}
-                  removable={draft.mode === "folders" || draft.folders.length > 1}
+                  removable
                   onChange={(patch) => updateFolder(folder.key, patch)}
-                  onRemove={() =>
+                  onConfirm={(path, createIfMissing) =>
+                    attachFolder(folder.key, path, createIfMissing)
+                  }
+                  onRemove={() => {
+                    setWriteError(null);
                     setDraft((current) => ({
                       ...current,
                       folders: current.folders.filter((candidate) => candidate.key !== folder.key),
-                    }))
-                  }
+                    }));
+                  }}
                 />
               ))
             )}
           </div>
 
+          {canCreateRepository ? (
+            <div className="space-y-3">
+              <label className="flex items-center justify-between gap-3 text-sm font-medium">
+                Create Git Repository
+                <Switch
+                  checked={creatingRepository}
+                  disabled={submitting}
+                  onCheckedChange={(createRepository) =>
+                    setDraft((current) => ({ ...current, createRepository }))
+                  }
+                />
+              </label>
+              {creatingRepository ? (
+                <NewRepositoryFields
+                  draft={draft}
+                  owner={repositoryOwner}
+                  owners={repositoryOwners.map((candidate) => candidate.login)}
+                  loadingOwners={ownersQuery.isPending && firstFolder?.environmentId != null}
+                  disabled={submitting}
+                  onChange={(newRepository) =>
+                    setDraft((current) => ({ ...current, newRepository }))
+                  }
+                />
+              ) : null}
+            </div>
+          ) : null}
+
           {errorMessage ? (
-            <p className="text-xs text-destructive-foreground">{errorMessage}</p>
+            <p role="alert" className="text-xs text-destructive-foreground">
+              {errorMessage}
+            </p>
           ) : null}
         </DialogPanel>
         <DialogFooter>
@@ -695,7 +765,7 @@ export function CreateProjectDialog({
           </Button>
           <Button
             disabled={plan.kind !== "create" || submitting}
-            onClick={submit}
+            onClick={() => submit()}
             size="sm"
             type="button"
           >
@@ -705,7 +775,7 @@ export function CreateProjectDialog({
       </DialogPopup>
       <ProjectRepositoryChoiceDialog
         candidates={repositoryChoiceCandidates.map((candidate) => candidate.group)}
-        onConfirm={run}
+        onConfirm={(choice) => submit(choice)}
         onOpenChange={(next) => {
           if (!next) setRepositoryChoiceCandidates([]);
         }}
@@ -858,6 +928,7 @@ function FolderRow(props: {
   readonly disabled: boolean;
   readonly removable: boolean;
   readonly onChange: (patch: Partial<ProjectFolderDraft>) => void;
+  readonly onConfirm: (path: string, createIfMissing: boolean) => Promise<boolean>;
   readonly onRemove: () => void;
 }) {
   const { folder } = props;
@@ -871,7 +942,7 @@ function FolderRow(props: {
             environmentId &&
             props.onChange({
               environmentId: environmentId as EnvironmentId,
-              path: "",
+              path: "~/",
               createIfMissing: false,
             })
           }
@@ -905,12 +976,14 @@ function FolderRow(props: {
         ) : null}
       </div>
       <ProjectDirectoryField
+        key={folder.environmentId}
         environmentId={folder.environmentId}
         platform={props.platform}
         currentProjectCwd={null}
         value={folder.path}
         disabled={props.disabled || folder.environmentId === null}
         onChange={(path, createIfMissing) => props.onChange({ path, createIfMissing })}
+        onConfirm={props.onConfirm}
       />
       {props.note ? <p className="text-xs text-muted-foreground">{props.note}</p> : null}
     </div>

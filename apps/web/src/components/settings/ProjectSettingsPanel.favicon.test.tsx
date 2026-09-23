@@ -13,6 +13,8 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { visitElements } from "../../test/reactElementTree";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
+import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
+import type { WorkspaceProject } from "../projects/workspaceProjects.logic";
 
 const atoms = vi.hoisted(() => ({
   projectUpdate: Symbol("projectUpdate"),
@@ -48,6 +50,8 @@ const dialogState = vi.hoisted(() => ({ confirm: vi.fn() }));
 const cloudState = vi.hoisted(() => ({
   deleteCompanyProject: vi.fn(),
   setPreferredEnvironmentBinding: vi.fn(),
+  setCompanyProjectIcon: vi.fn(),
+  libraryIcon: null as { name: string; color: string } | null,
 }));
 const companyState = vi.hoisted(() => ({
   companies: [] as Array<{
@@ -56,6 +60,10 @@ const companyState = vi.hoisted(() => ({
     workspaceKind: "personal" | "organization";
     issueKeyPrefix: string;
   }>,
+}));
+const projectState = vi.hoisted(() => ({
+  groups: [] as SidebarProjectSnapshot[],
+  workspaceProjects: [] as WorkspaceProject[],
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -67,6 +75,7 @@ vi.mock("react", async (importOriginal) => {
     useMemo: reactHookHarness.useMemo,
     useRef: reactHookHarness.useRef,
     useState: reactHookHarness.useState,
+    useEffect: vi.fn(),
   };
 });
 
@@ -84,6 +93,18 @@ vi.mock("@effect/atom-react", () => ({
 }));
 
 vi.mock("../../cloud/activeCompany", () => ({ companyListAtom: atoms.companies }));
+vi.mock("../projects/useProjectGroups", () => ({ useProjectGroups: () => projectState.groups }));
+vi.mock("../projects/useWorkspaceProjects", () => ({
+  useWorkspaceProjects: () => projectState.workspaceProjects,
+}));
+vi.mock("./company/useCompanySettings", () => ({
+  useCompanySettings: () => ({ companyId: null, replica: null, registryReplicas: new Map() }),
+}));
+vi.mock("./company/useEnvironmentControl", () => ({ useEnvironmentControl: () => null }));
+vi.mock("../projects/ProjectLibraryIconPicker", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../projects/ProjectLibraryIconPicker")>()),
+  useCompanyProjectIcon: () => cloudState.libraryIcon,
+}));
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children }: { children?: unknown }) => children,
@@ -165,7 +186,11 @@ import { Select, SelectValue } from "../ui/select";
 import { Sheet } from "../ui/sheet";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
 import { ProjectAlertOverride } from "./NotificationsSettings";
-import { CheckoutlessProjectSettings, ProjectDetail } from "./ProjectSettingsPanel";
+import {
+  CheckoutlessProjectSettings,
+  ProjectDetail,
+  ProjectSettingsPanel,
+} from "./ProjectSettingsPanel";
 
 const localEnvironmentId = EnvironmentId.make("local");
 const remoteEnvironmentId = EnvironmentId.make("remote");
@@ -266,7 +291,11 @@ describe("Project settings favicon selection", () => {
     dialogState.confirm.mockReset().mockResolvedValue(true);
     cloudState.deleteCompanyProject.mockReset().mockResolvedValue({ deleted: true });
     cloudState.setPreferredEnvironmentBinding.mockReset().mockResolvedValue(undefined);
+    cloudState.setCompanyProjectIcon.mockReset().mockResolvedValue(undefined);
+    cloudState.libraryIcon = null;
     companyState.companies = [];
+    projectState.groups = [];
+    projectState.workspaceProjects = [];
   });
 
   it("uses the repository policy when the representative has lost its identity", () => {
@@ -283,6 +312,45 @@ describe("Project settings favicon selection", () => {
     const tree = ProjectDetail({ group: staleGroup }) as ReactElement<Record<string, unknown>>;
     const override = visitElements(tree, (element) => element.type === ProjectAlertOverride);
     expect(override?.props.scopeKey).toBe("github.com/spiritdevs/pathway");
+  });
+
+  it("edits every connection in the same merged project shown by the picker and breadcrumb", async () => {
+    const localOnly = makeGroup(null, false);
+    const merged = makeGroup(null);
+    projectState.groups = [localOnly];
+    projectState.workspaceProjects = [
+      {
+        projectKey: merged.projectKey,
+        displayName: merged.displayName,
+        group: merged,
+        companyIds: [],
+        cloudProjectId: "cloud-pathway",
+        checkoutCount: 2,
+      },
+    ];
+    hooks.beginRender();
+    const panel = ProjectSettingsPanel({ projectKey: localOnly.projectKey }) as ReactElement<
+      Parameters<typeof ProjectDetail>[0]
+    >;
+    expect(panel.type).toBe(ProjectDetail);
+    expect(panel.props.group).toBe(merged);
+    hooks.reset();
+    hooks.beginRender();
+    const detail = ProjectDetail(panel.props) as ReactElement<Record<string, unknown>>;
+    const input = visitElements(
+      detail,
+      (element) => element.props["aria-label"] === "Project name",
+    );
+    if (!input) throw new Error("Expected project name input");
+    (input.props.onChange as () => void)();
+    (input.props.onBlur as (event: unknown) => void)({
+      currentTarget: { value: "New shared name" },
+    });
+    await flushPromises();
+    expect(commands.updateProject.mock.calls.map(([request]) => request.environmentId)).toEqual([
+      localEnvironmentId,
+      remoteEnvironmentId,
+    ]);
   });
 
   it("fans the selected relative path out to every member and renders projected state", async () => {
@@ -393,6 +461,84 @@ describe("Project settings favicon selection", () => {
       ),
     ).not.toBeNull();
   });
+
+  it("saves a name equal to the automatic folder title and updates the rendered group label", async () => {
+    const group = makeGroup(null);
+    const automatic = {
+      ...group,
+      displayName: "spiritdevs/pathway",
+      memberProjects: group.memberProjects.map((member) => ({
+        ...member,
+        title: "pathway",
+        titleIsCustom: false,
+      })),
+    };
+    hooks.beginRender();
+    const tree = ProjectDetail({ group: automatic }) as ReactElement<Record<string, unknown>>;
+    const input = visitElements(tree, (element) => element.props["aria-label"] === "Project name");
+    if (!input) throw new Error("Expected project name input");
+    (input.props.onChange as () => void)();
+    (input.props.onBlur as (event: unknown) => void)({ currentTarget: { value: "pathway" } });
+    await flushPromises();
+    expect(commands.updateProject).toHaveBeenCalledTimes(2);
+    const renamed = buildSidebarProjectSnapshots({
+      projects: automatic.memberProjects.map((member) => ({ ...member, titleIsCustom: true })),
+      settings: {
+        sidebarProjectGroupingMode: "repository",
+        sidebarProjectGroupingOverrides: {},
+        sidebarProjectGroupAssignments: {},
+      },
+      primaryEnvironmentId: localEnvironmentId,
+      resolveEnvironmentLabel: () => null,
+    })[0]!;
+    expect(renamed.displayName).toBe("pathway");
+    hooks.beginRender();
+    const updated = ProjectDetail({ group: renamed }) as ReactElement<Record<string, unknown>>;
+    expect(
+      visitElements(updated, (element) => element.props["aria-label"] === "Project name")?.props
+        .defaultValue,
+    ).toBe("pathway");
+  });
+
+  it.each([true, false])(
+    "switches from a built-in icon only after the file save succeeds (%s)",
+    async (succeeds) => {
+      const companyId = CompanyId.make("company-a");
+      companyState.companies = [
+        { id: companyId, name: "Company", workspaceKind: "organization", issueKeyPrefix: "CO" },
+      ];
+      cloudState.libraryIcon = { name: "Folder", color: "#ffffff" };
+      if (!succeeds)
+        commands.updateProject.mockResolvedValueOnce({
+          _tag: "Failure",
+          cause: Cause.fail(new Error("Save failed")),
+        });
+      const group = makeGroup(null);
+      hooks.beginRender();
+      const tree = ProjectDetail({
+        group,
+        workspaceProject: {
+          projectKey: group.projectKey,
+          displayName: group.displayName,
+          companyIds: [companyId],
+          group,
+          checkoutCount: 2,
+          cloudProjectId: "cloud-pathway",
+        },
+        companyContext: {
+          companyId,
+          replica: null,
+          environmentControl: { setCompanyProjectIcon: cloudState.setCompanyProjectIcon } as never,
+        },
+      }) as ReactElement<Record<string, unknown>>;
+      const picker = visitElements(tree, (element) => element.type === ProjectFaviconPickerDialog);
+      if (!picker) throw new Error("Expected project icon picker");
+      await (picker.props.onSelect as (path: string) => Promise<void>)(selectedPath);
+      expect(cloudState.setCompanyProjectIcon.mock.calls).toEqual(
+        succeeds ? [[{ companyId, cloudProjectId: "cloud-pathway", icon: null }]] : [],
+      );
+    },
+  );
 
   it("shows thread counts on connections and protects the final connection", () => {
     const grouped = renderDetail(null);

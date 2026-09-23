@@ -53,6 +53,34 @@ const createFocus = (id: string, name: string, orderKey?: string) => ({
 });
 
 describe("Focus definitions", () => {
+  it.each(["all", "conversations", WORK])(
+    "accepts legacy view payloads for %s without syncing the local collapsed state",
+    async (focusId) => {
+      const t = harness();
+      await seedUser(t, "user-one");
+      const owner = asUser(t, "user-one");
+      if (focusId === WORK) await owner.mutation(api.focuses.create, createFocus(WORK, "Work"));
+      const legacyView = {
+        focusId,
+        sortOrder: "project",
+        collapsiblePinned: true,
+        pinnedCollapsed: true,
+      };
+      await owner.mutation(api.focuses.setViewPreference, legacyView);
+      await owner.mutation(api.focuses.setViewPreference, {
+        focusId,
+        collapsiblePinned: false,
+        pinnedCollapsed: false,
+      });
+      expect((await owner.query(api.focuses.list, {})).viewPreferences).toEqual([
+        expect.objectContaining({ focusId, sortOrder: "project", collapsiblePinned: false }),
+      ]);
+      const rows = await t.run((ctx) => ctx.db.query("focusViewPreferences").collect());
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).not.toHaveProperty("pinnedCollapsed");
+    },
+  );
+
   it("includes conversations in multiple Focuses independently", async () => {
     const t = harness();
     await seedUser(t, "user-one");

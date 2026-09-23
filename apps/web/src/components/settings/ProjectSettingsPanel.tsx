@@ -172,7 +172,10 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
   const companySettings = useCompanySettings();
   const environmentControl = useEnvironmentControl();
 
-  const selected = groups.find((group) => group.projectKey === projectKey) ?? null;
+  const selected =
+    workspaceProjects.find((project) => project.projectKey === projectKey)?.group ??
+    groups.find((group) => group.projectKey === projectKey) ??
+    null;
 
   // Remember the members of the last rendered group so a grouping-rule change
   // (which changes the group key) can follow the project to its new group.
@@ -621,13 +624,7 @@ export function ProjectDetail({
         toastManager.add({ type: "warning", title: "Project title cannot be empty" });
         return;
       }
-      if (
-        !projectGroupTitleNeedsUpdate(
-          group.memberProjects.map((member) => member.title),
-          title,
-          wasEdited,
-        )
-      ) {
+      if (!projectGroupTitleNeedsUpdate(group.memberProjects, title, wasEdited)) {
         return;
       }
       await updateAllMembers({ title, titleIsCustom: true }, "Failed to rename project");
@@ -679,13 +676,32 @@ export function ProjectDetail({
       savingFaviconRef.current = true;
       setIsSavingFavicon(true);
       try {
-        await updateAllMembers({ faviconPath }, "Failed to update project icon");
+        const result = await updateAllMembers({ faviconPath }, "Failed to update project icon");
+        if (
+          result._tag === "Success" &&
+          faviconPath !== null &&
+          libraryIcon !== null &&
+          owningCompany !== null &&
+          workspaceProject?.cloudProjectId &&
+          companyContext?.environmentControl
+        ) {
+          const clearIconResult = await settlePromise(() =>
+            companyContext.environmentControl!.setCompanyProjectIcon({
+              companyId: owningCompany.id as CompanyId,
+              cloudProjectId: workspaceProject.cloudProjectId!,
+              icon: null,
+            }),
+          );
+          if (clearIconResult._tag === "Failure") {
+            reportFailure("Failed to switch to the project icon file", clearIconResult);
+          }
+        }
       } finally {
         savingFaviconRef.current = false;
         setIsSavingFavicon(false);
       }
     },
-    [updateAllMembers],
+    [companyContext, libraryIcon, owningCompany, reportFailure, updateAllMembers, workspaceProject],
   );
 
   // ----- connection selection and scripts -----
