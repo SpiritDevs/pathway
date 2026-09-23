@@ -1,6 +1,6 @@
 # Pathway owns Computer approvals
 
-Computer approvals are Pathway thread events. The Computer MCP toolkit posts a pending-approval card to the thread and waits for a decision. The same thing happens for every provider, including ACP registry agents. Providers never ask separately about `computer_*` tools: Claude already allows `mcp__pathway__*` through `allowedTools`, and every other adapter auto-allows the Computer tools the same way. The user sees exactly one card. It works the same on web, desktop and iOS, and the autonomy ceiling ([0040](0040-computer-autonomy-is-an-environment-ceiling-over-thread-mode.md)) is enforced in one place.
+Computer approvals are Pathway thread events. The Computer MCP toolkit posts a pending-approval card to the thread and waits for a decision. The same thing happens for every provider, including ACP registry agents. Providers never ask separately about `computer_*` tools: Claude already allows `mcp__pathway__*` through `allowedTools`, and every other adapter auto-allows the Computer tools the same way. The user sees exactly one card. It works the same on web, desktop and iOS, and the autonomy ceiling ([0043](0043-computer-autonomy-is-an-environment-ceiling-over-thread-mode.md)) is enforced in one place.
 
 Synara routed approvals through each provider's own approval path. Providers without one (Pi, Antigravity) refused every approval-gated action. That meant per-adapter work and uneven behavior, and Pathway's MCP server can avoid both because every Computer call reaches it directly.
 

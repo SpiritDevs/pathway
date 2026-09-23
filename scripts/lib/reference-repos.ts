@@ -37,7 +37,7 @@ export const referenceRepos: ReadonlyArray<ReferenceRepo> = [
     },
   },
   {
-    // Read-only reference for Computer Use (docs/adr/0041). Not a dependency, so it follows main.
+    // Read-only reference for Computer Use (docs/adr/0044). Not a dependency, so it follows main.
     id: "synara",
     prefix: ".repos/synara",
     repository: "https://github.com/Emanuele-web04/synara.git",
