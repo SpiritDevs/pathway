@@ -358,7 +358,7 @@ it.layer(NodeServices.layer)("ComputerManager background task ownership", (it) =
         Object.assign(backend, {
           pressKey: (...args: PressKeyArgs) => {
             pressCalls.push(args);
-            if (pressCalls.length > 1) return realPress(...args);
+            if (pressCalls.length > 1) return realPress(args[0]);
             return Deferred.succeed(started, undefined).pipe(
               Effect.andThen(Deferred.await(finish)),
               Effect.as({}),
@@ -402,7 +402,7 @@ it.layer(NodeServices.layer)("ComputerManager background task ownership", (it) =
         Object.assign(backend, {
           pressKey: (...args: PressKeyArgs) => {
             pressCalls.push(args);
-            if (pressCalls.length > 1) return realPress(...args);
+            if (pressCalls.length > 1) return realPress(args[0]);
             return Deferred.succeed(started, undefined).pipe(
               Effect.andThen(Deferred.await(finish)),
               Effect.as({}),
@@ -437,7 +437,7 @@ it.layer(NodeServices.layer)("ComputerManager background task ownership", (it) =
         Object.assign(backend, {
           pressKey: (...args: PressKeyArgs) => {
             pressCalls.push(args);
-            return realPress(...args);
+            return realPress(args[0]);
           },
         });
         const manager = yield* ComputerManager.make({ backend, actionSettleMs: 0 });
