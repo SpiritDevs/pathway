@@ -112,6 +112,13 @@ export const AuthAdministrativeScopes = [
   AuthAccessWriteScope,
   AuthRelayWriteScope,
 ] as const;
+/**
+ * What a peer environment is issued. A peer never drives this desktop: cross-environment
+ * work runs as an agent on the host, whose Computer calls stay local.
+ */
+export const AuthPeerEnvironmentScopes = AuthStandardClientScopes.filter(
+  (scope) => scope !== AuthComputerOperateScope,
+);
 
 export const AuthTokenExchangeGrantType =
   "urn:ietf:params:oauth:grant-type:token-exchange" as const;
