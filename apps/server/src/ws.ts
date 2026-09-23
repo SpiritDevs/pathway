@@ -1577,6 +1577,8 @@ const makeWsRpcLayer = (
                             : { messageId: input.initialMessage.messageId }),
                           text: input.initialMessage.text,
                           attachments: input.initialMessage.attachments,
+                          enableComputerControl: input.initialMessage.enableComputerControl,
+                          computerControlGeneration: input.initialMessage.computerControlGeneration,
                         },
                       }),
                   createdBy: "user",

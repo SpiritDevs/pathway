@@ -2932,6 +2932,9 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
       messageId: Schema.optional(MessageId),
       text: Schema.String,
       attachments: Schema.Array(ChatAttachment),
+      /** Same Computer intent as `message.dispatch`, for a thread's first message. */
+      enableComputerControl: Schema.optional(Schema.Boolean),
+      computerControlGeneration: Schema.optional(NonNegativeInt),
     }),
   ),
 });

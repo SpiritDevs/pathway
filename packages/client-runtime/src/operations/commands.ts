@@ -838,6 +838,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
         messageId: input.message.messageId,
         text: input.message.text,
         attachments,
+        ...computerControlFields(input),
       },
     });
   }

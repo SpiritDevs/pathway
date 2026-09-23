@@ -109,6 +109,32 @@ describe("cloud queue submission", () => {
       },
     });
   });
+  it("carries the Computer intent on a new thread's first message", () => {
+    const result = buildThreadQueueSubmission(
+      {
+        ...input,
+        enableComputerControl: true,
+        computerControlGeneration: 0,
+        bootstrap: {
+          createThread: {
+            projectId: ProjectId.make("project"),
+            title: "New thread",
+            modelSelection: input.modelSelection!,
+            runtimeMode: input.runtimeMode,
+            interactionMode: input.interactionMode,
+            branch: null,
+            worktreePath: null,
+            createdAt: "2026-09-10T00:00:00Z",
+          },
+        },
+      },
+      [],
+    );
+    expect(result).toMatchObject({
+      kind: "launch",
+      input: { initialMessage: { enableComputerControl: true, computerControlGeneration: 0 } },
+    });
+  });
 });
 
 it("preserves the exact active turn targeted by explicit steering and restart", () => {
