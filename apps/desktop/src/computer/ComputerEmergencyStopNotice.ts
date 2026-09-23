@@ -1,7 +1,13 @@
+import { PRIMARY_LOCAL_ENVIRONMENT_ID } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+
+import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
+import * as DesktopLocalEnvironmentAuth from "../backend/DesktopLocalEnvironmentAuth.ts";
+import { DesktopComputer } from "./DesktopComputer.ts";
 
 export const DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH = "/api/desktop/computer/emergency-stop";
 
@@ -83,3 +89,36 @@ export const notifyBackendComputerEmergencyStop = Effect.fn(
     if (delay !== undefined) yield* Effect.sleep(delay);
   }
 });
+
+/**
+ * Points the Computer host's Escape notice at the primary local backend, as
+ * the desktop's own bearer session. The backend route accepts no other
+ * credential.
+ */
+export const layer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const computer = yield* DesktopComputer;
+    const pool = yield* DesktopBackendPool.DesktopBackendPool;
+    const localAuth = yield* DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth;
+    const client = yield* HttpClient.HttpClient;
+
+    const endpoint = Effect.gen(function* () {
+      const primary = (yield* pool.list).find(
+        (instance) => instance.id === PRIMARY_LOCAL_ENVIRONMENT_ID,
+      );
+      const config = primary ? yield* primary.currentConfig : Option.none();
+      if (Option.isNone(config)) return yield* Effect.fail("the primary backend is not configured");
+      return {
+        httpBaseUrl: config.value.httpBaseUrl.href,
+        bearerToken: yield* localAuth.getBearerToken,
+      } satisfies ComputerEmergencyStopEndpoint;
+    });
+
+    yield* computer.setEmergencyStopNotice(
+      notifyBackendComputerEmergencyStop({
+        endpoint,
+        onError: (message) => Effect.logWarning(`[desktop-computer] ${message}`),
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client)),
+    );
+  }),
+);

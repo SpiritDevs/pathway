@@ -1,6 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
+import { PRIMARY_LOCAL_ENVIRONMENT_ID } from "@spiritdevs/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 import {
@@ -10,11 +14,15 @@ import {
   HttpClientResponse,
 } from "effect/unstable/http";
 
+import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
+import * as DesktopLocalEnvironmentAuth from "../backend/DesktopLocalEnvironmentAuth.ts";
 import {
   type ComputerEmergencyStopEndpoint,
   DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH,
+  layer,
   notifyBackendComputerEmergencyStop,
 } from "./ComputerEmergencyStopNotice.ts";
+import { DesktopComputer, inertDesktopComputer } from "./DesktopComputer.ts";
 
 const ENDPOINT: ComputerEmergencyStopEndpoint = {
   httpBaseUrl: "http://127.0.0.1:3773/some/path?x=1#frag",
@@ -174,5 +182,48 @@ describe("ComputerEmergencyStopNotice", () => {
         assert.strictEqual(yield* Queue.size(requests), 1);
       }),
     ),
+  );
+});
+
+describe("ComputerEmergencyStopNotice.layer", () => {
+  it.effect("hands the host a notice for the primary backend as the desktop session", () =>
+    Effect.gen(function* () {
+      const notice = yield* Deferred.make<Effect.Effect<void>>();
+      const requests = yield* Queue.unbounded<HttpClientRequest.HttpClientRequest>();
+      const client = HttpClient.make((request) =>
+        Queue.offer(requests, request).pipe(
+          Effect.as(HttpClientResponse.fromWeb(request, new Response(null, { status: 202 }))),
+        ),
+      );
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(DesktopComputer, {
+          ...inertDesktopComputer,
+          setEmergencyStopNotice: (effect) => Deferred.succeed(notice, effect).pipe(Effect.asVoid),
+        }),
+        Layer.succeed(DesktopBackendPool.DesktopBackendPool, {
+          list: Effect.succeed([
+            {
+              id: PRIMARY_LOCAL_ENVIRONMENT_ID,
+              currentConfig: Effect.succeed(
+                Option.some({ httpBaseUrl: new URL("http://127.0.0.1:3773") }),
+              ),
+            },
+          ]),
+        } as unknown as DesktopBackendPool.DesktopBackendPool["Service"]),
+        Layer.succeed(DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth, {
+          getBearerToken: Effect.succeed("desktop-bearer"),
+        }),
+        Layer.succeed(HttpClient.HttpClient, client),
+      );
+      yield* Layer.build(layer.pipe(Layer.provide(dependencies)));
+
+      yield* yield* Deferred.await(notice);
+      const request = yield* Queue.take(requests);
+      assert.strictEqual(
+        request.url,
+        `http://127.0.0.1:3773${DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH}`,
+      );
+      assert.strictEqual(request.headers.authorization, "Bearer desktop-bearer");
+    }),
   );
 });

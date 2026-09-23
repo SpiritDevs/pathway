@@ -103,6 +103,7 @@ const make = Effect.gen(function* () {
 
   // Set once the host exists; helper callbacks only fire after that.
   let host: CuaDriverHost | undefined;
+  let emergencyStopNotice: Effect.Effect<void> = Effect.void;
 
   const helper = yield* ComputerHelper.make({
     helperPath,
@@ -123,8 +124,17 @@ const make = Effect.gen(function* () {
 
   const escapeMonitor = yield* EscapeKillSwitchMonitor.make({
     helperPath: helperPath.value,
-    // Native interruption owns the drain; the backend notice arrives with P4's route.
-    onEscape: () => (host ? Effect.asVoid(host.emergencyStopInput) : Effect.void),
+    // Native interruption owns the drain. The backend notice only relays a stop
+    // that engaged, and is forked so a slow backend never delays the local one.
+    onEscape: () =>
+      host
+        ? host.emergencyStopInput.pipe(
+            Effect.flatMap((stopped) =>
+              stopped ? Effect.sync(() => runFork(emergencyStopNotice)) : Effect.void,
+            ),
+            Effect.asVoid,
+          )
+        : Effect.void,
     onPhysicalInput: (event) => (host ? Effect.asVoid(host.physicalInput(event)) : Effect.void),
     onStateChange: (state) => host?.inputMonitorStateChanged(state) ?? Effect.void,
     onError: (message) => warn(`Escape monitor: ${message}`),
@@ -217,6 +227,10 @@ const make = Effect.gen(function* () {
     handoff: Option.some({ endpoint, capability }),
     suspend: running.suspend.pipe(Effect.catch((error) => warn("host suspend failed", error))),
     resume: running.resume,
+    setEmergencyStopNotice: (notice) =>
+      Effect.sync(() => {
+        emergencyStopNotice = notice;
+      }),
   };
 });
 
