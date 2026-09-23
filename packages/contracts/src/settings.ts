@@ -219,6 +219,37 @@ const DEFAULT_SNAP_SHOT_SHORTCUT: SnapShotShortcut = {
   kind: "both-shift-keys",
 };
 
+export const ComputerPreviewSize = Schema.Literals(["compact", "large"]);
+export type ComputerPreviewSize = typeof ComputerPreviewSize.Type;
+export const DEFAULT_COMPUTER_PREVIEW_SIZE: ComputerPreviewSize = "compact";
+export const AgentCursorColorMode = Schema.Literals(["stock", "custom"]);
+export type AgentCursorColorMode = typeof AgentCursorColorMode.Type;
+export const DEFAULT_AGENT_CURSOR_COLOR_MODE: AgentCursorColorMode = "stock";
+
+/** A lowercase `#rrggbb` string, or "" when the value is not a color. */
+export function normalizeCursorHexColor(value: string | null | undefined): string {
+  const candidate = (value ?? "").trim().toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(candidate) ? candidate : "";
+}
+
+/**
+ * The custom agent-cursor colors to push to the desktop cursor host, or null
+ * for the stock monochrome cursor. Stock mode resolves to null whatever colors
+ * are stored, so switching back never leaves a stale override. A channel with
+ * no valid color is omitted, because the driver treats an omitted channel as stock.
+ */
+export function resolveAgentCursorColors(settings: {
+  readonly agentCursorColorMode?: AgentCursorColorMode | undefined;
+  readonly agentCursorFillColor?: string | undefined;
+  readonly agentCursorRimColor?: string | undefined;
+}): { fill?: string; rim?: string } | null {
+  if ((settings.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE) !== "custom") return null;
+  const fill = normalizeCursorHexColor(settings.agentCursorFillColor);
+  const rim = normalizeCursorHexColor(settings.agentCursorRimColor);
+  if (!fill && !rim) return null;
+  return { ...(fill ? { fill } : {}), ...(rim ? { rim } : {}) };
+}
+
 export const ClientSettingsSchema = Schema.Struct({
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   loadBalancingAvoidCriticalStorage: Schema.Boolean.pipe(
@@ -365,6 +396,31 @@ export const ClientSettingsSchema = Schema.Struct({
   snapShotFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Show the in-chat Computer preview when an agent starts driving the desktop.
+  autoOpenComputerPane: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // In-chat Computer preview footprint. Compact is a small glanceable card;
+  // large is the wide card for users who want the detail inline.
+  computerPreviewSize: ComputerPreviewSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_COMPUTER_PREVIEW_SIZE)),
+  ),
+  // Computer control is off by default. When on, new chats start with the
+  // agent allowed to use the desktop. Approval gates and Stop still apply.
+  computerControlEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // The agent cursor's colors. Stock stores no overrides; "custom" opts into a
+  // fill and rim, stored as lowercase `#rrggbb` and pushed to the desktop host.
+  agentCursorColorMode: AgentCursorColorMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AGENT_CURSOR_COLOR_MODE)),
+  ),
+  agentCursorFillColor: Schema.String.check(Schema.isMaxLength(7)).pipe(
+    Schema.withDecodingDefault(Effect.succeed("")),
+  ),
+  agentCursorRimColor: Schema.String.check(Schema.isMaxLength(7)).pipe(
+    Schema.withDecodingDefault(Effect.succeed("")),
+  ),
+  // One-shot composer hint suggesting Medium effort for faster desktop actions.
+  dismissedComputerControlEffortHint: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
@@ -1221,5 +1277,12 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
   wordWrap: Schema.optionalKey(Schema.Boolean),
+  autoOpenComputerPane: Schema.optionalKey(Schema.Boolean),
+  computerPreviewSize: Schema.optionalKey(ComputerPreviewSize),
+  computerControlEnabled: Schema.optionalKey(Schema.Boolean),
+  agentCursorColorMode: Schema.optionalKey(AgentCursorColorMode),
+  agentCursorFillColor: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(7))),
+  agentCursorRimColor: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(7))),
+  dismissedComputerControlEffortHint: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;
