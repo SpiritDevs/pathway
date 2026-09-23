@@ -107,7 +107,9 @@ it.effect("runs a queued command with its caller's Computer clearance", () =>
           }),
         )
         .pipe(
-          Effect.provideService(ComputerDispatchAccess, { clearance: Effect.succeed("scoped") }),
+          Effect.provideService(ComputerDispatchAccess, {
+            clearance: Effect.succeed("scoped" as const),
+          }),
           Effect.forkScoped,
         );
 
