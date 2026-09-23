@@ -15,7 +15,11 @@ import * as Path from "effect/Path";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
 import { resolveDesktopRuntimeIdentity } from "./DesktopEarlyElectronStartup.ts";
-import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
+import {
+  resolveDesktopBaseDir,
+  resolveDesktopStateDir,
+  resolveFlavorPathwayHome,
+} from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 
 export interface MakeDesktopEnvironmentInput {
@@ -159,10 +163,24 @@ const make = Effect.fn("desktop.environment.make")(function* (
       : input.platform === "darwin"
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
-  const baseDir = resolveDesktopBaseDir({
+  const pathwayHome = resolveFlavorPathwayHome({
     homeDirectory,
     joinPath: path.join,
     pathwayHome: config.pathwayHome,
+    isolated: identity.flavor === "cua",
+  });
+  if (
+    Option.isNone(pathwayHome) &&
+    Option.exists(config.pathwayHome, (home) => home.trim() !== "")
+  ) {
+    yield* Effect.logWarning(
+      "Ignoring PATHWAY_HOME: the cua flavor never uses the production home.",
+    );
+  }
+  const baseDir = resolveDesktopBaseDir({
+    homeDirectory,
+    joinPath: path.join,
+    pathwayHome,
     defaultHomeDirName: identity.defaultHomeDirName,
   });
   const rootDir = path.resolve(input.dirname, "../../..");
@@ -180,7 +198,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     baseDir,
     isDevelopment,
     joinPath: path.join,
-    pathwayHome: config.pathwayHome,
+    pathwayHome,
   });
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
