@@ -2004,7 +2004,7 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
           }
         }
         if (name === "get_desktop_state" && reply.result && options.normalizeOverview)
-          reply = { ...reply, result: options.normalizeOverview(reply.result) };
+          reply.result = { ...reply.result, ...options.normalizeOverview(reply.result) };
         if (agentLabel && task && !isDriverSessionDeath(reply)) {
           const cursor = current.taskCursors.get(agentLabel);
           const sameTurn =
