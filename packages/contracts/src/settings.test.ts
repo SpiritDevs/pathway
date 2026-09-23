@@ -2,11 +2,14 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { RuntimeMode } from "./providerPolicy.ts";
 import {
   ClientSettingsSchema,
   ClientSettingsPatch,
+  ComputerAutonomy,
   DEFAULT_DEVELOPMENT_SERVER_PORT_RANGE,
   DEFAULT_SERVER_SETTINGS,
+  resolveComputerAutonomy,
   ServerSettings,
   ServerSettingsPatch,
 } from "./settings.ts";
@@ -638,5 +641,60 @@ describe("ClientSettings preferred terminal", () => {
       "ghostty",
     );
     expect(() => decodeClientSettingsPatch({ preferredTerminal: "unknown" })).toThrow();
+  });
+});
+
+describe("ServerSettings Computer policy", () => {
+  it("defaults to the scoped access policy and the per-task ceiling", () => {
+    expect(DEFAULT_SERVER_SETTINGS.computer).toEqual({
+      accessPolicy: "scoped",
+      autonomy: "per-task",
+    });
+    expect(decodeServerSettings({ computer: { accessPolicy: "admins-only" } }).computer).toEqual({
+      accessPolicy: "admins-only",
+      autonomy: "per-task",
+    });
+  });
+
+  it("rejects unknown policies and levels", () => {
+    expect(() => decodeServerSettings({ computer: { accessPolicy: "everyone" } })).toThrow();
+    expect(() => decodeServerSettings({ computer: { autonomy: "unrestricted" } })).toThrow();
+  });
+
+  it("cannot be changed through the operator settings patch", () => {
+    const patch = decodeServerSettingsPatch({
+      environmentName: "Studio",
+      computer: { accessPolicy: "any-operator", autonomy: "full-access" },
+    });
+    expect(patch).toEqual({ environmentName: "Studio" });
+  });
+});
+
+describe("resolveComputerAutonomy", () => {
+  it("maps each runtime mode onto its Computer level under a full-access ceiling", () => {
+    expect(resolveComputerAutonomy("full-access", "approval-required")).toBe("supervised");
+    expect(resolveComputerAutonomy("full-access", "auto-accept-edits")).toBe("per-task");
+    expect(resolveComputerAutonomy("full-access", "auto")).toBe("auto");
+    expect(resolveComputerAutonomy("full-access", "full-access")).toBe("full-access");
+  });
+
+  it("applies whichever of the ceiling and the thread mode is stricter", () => {
+    expect(resolveComputerAutonomy("per-task", "full-access")).toBe("per-task");
+    expect(resolveComputerAutonomy("per-task", "approval-required")).toBe("supervised");
+    expect(resolveComputerAutonomy("supervised", "auto")).toBe("supervised");
+    expect(resolveComputerAutonomy("auto", "auto-accept-edits")).toBe("per-task");
+    const levels = ComputerAutonomy.literals;
+    for (const ceiling of levels) {
+      for (const mode of RuntimeMode.literals) {
+        const resolved = levels.indexOf(resolveComputerAutonomy(ceiling, mode));
+        expect(resolved).toBeLessThanOrEqual(levels.indexOf(ceiling));
+      }
+    }
+  });
+
+  it("uses the ceiling alone for scheduled tasks and subagents", () => {
+    for (const ceiling of ComputerAutonomy.literals) {
+      expect(resolveComputerAutonomy(ceiling, null)).toBe(ceiling);
+    }
   });
 });
