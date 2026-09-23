@@ -7,6 +7,7 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -107,6 +108,8 @@ export interface SendOptions {
 
 export interface Fixture {
   readonly host: CuaDriverHost;
+  /** Closes the host's scope without calling `dispose` first, as a layer teardown does. */
+  readonly closeHostScope: Effect.Effect<void>;
   readonly endpoint: string;
   readonly binary: string;
   /** Every event the fake drivers wrote so far; empty when none started. */
@@ -377,8 +380,11 @@ export const makeFixture = Effect.fn("makeFixture")(function* (options: FixtureO
     Effect.provideService(Logger.CurrentLoggers, new Set([capture])),
     Effect.provide(NodeServices.layer),
   );
+  // A closed host scope already disposed the host, and its runtime is gone.
+  let hostScopeClosed = false;
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {
+      if (hostScopeClosed) return;
       const disposed = yield* Effect.exit(host.dispose);
       yield* Scope.close(hostScope, disposed);
       const expectsFailure =
@@ -456,6 +462,10 @@ export const makeFixture = Effect.fn("makeFixture")(function* (options: FixtureO
 
   return {
     host,
+    closeHostScope: Effect.suspend(() => {
+      hostScopeClosed = true;
+      return Scope.close(hostScope, Exit.void);
+    }),
     endpoint,
     binary,
     events,

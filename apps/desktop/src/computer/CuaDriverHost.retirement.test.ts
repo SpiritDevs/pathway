@@ -583,6 +583,35 @@ describe("Cua macOS host retirement", () => {
     }),
   );
 
+  it.live("closing the host scope cancels native input before the driver is killed", () =>
+    Effect.gen(function* () {
+      let releaseCalls = 0;
+      const f = yield* makeFixture({
+        releaseHeldInput: Effect.sync(() => {
+          releaseCalls += 1;
+        }),
+      });
+      const typing = yield* f
+        .send({ method: "call", name: "type_text", args: { text: "fixture" } }, { mutation: true })
+        .pipe(Effect.exit, Effect.forkChild);
+      yield* f.waitForEvent("dispatch");
+      yield* f.closeHostScope;
+      yield* Fiber.join(typing);
+      assert.deepStrictEqual(yield* f.eventNames, [
+        "start",
+        "motion-100-0",
+        "dispatch",
+        "cancel",
+        "release",
+        "cleanup-ack",
+        "retiring",
+        "exit",
+      ]);
+      // The driver acknowledged its own cleanup, so no OS-level fallback ran.
+      assert.strictEqual(releaseCalls, 0);
+    }),
+  );
+
   it.live("releases held input through the helper when the driver dies mid-action", () =>
     Effect.gen(function* () {
       let releaseCalls = 0;
