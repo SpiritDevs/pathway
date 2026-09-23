@@ -4,7 +4,7 @@ import {
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@spiritdevs/contracts";
-import { BotIcon } from "lucide-react";
+import { BotIcon, MousePointer2Icon } from "lucide-react";
 import { memo, useLayoutEffect, useMemo, useRef } from "react";
 
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
@@ -235,7 +235,11 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         />
       ) : null}
       {props.item.type === "slash-command" ? (
-        <BotIcon className="size-4 shrink-0 text-icon-muted" />
+        props.item.command === "computer-use" ? (
+          <MousePointer2Icon className="size-4 shrink-0 text-icon-muted" />
+        ) : (
+          <BotIcon className="size-4 shrink-0 text-icon-muted" />
+        )
       ) : null}
       {props.item.type === "provider-slash-command" ? (
         <span className="inline-flex size-4 shrink-0 items-center justify-center text-icon-muted">
