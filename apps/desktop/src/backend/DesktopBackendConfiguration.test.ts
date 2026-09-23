@@ -11,7 +11,10 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { CUA_HOST_SOCKET_ENV } from "@spiritdevs/shared/cuaDriverProtocol";
+
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { DesktopComputer } from "../computer/DesktopComputer.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
@@ -373,6 +376,40 @@ describe("DesktopBackendConfiguration", () => {
 
         assert.isUndefined(config.bootstrap.otlpTracesUrl);
         assert.isUndefined(config.bootstrap.otlpMetricsUrl);
+      }),
+    ),
+  );
+
+  it.effect("resolvePrimary hands the Computer host socket and capability to the backend", () =>
+    withHarness(
+      Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+
+        assert.equal(config.env[CUA_HOST_SOCKET_ENV], "/tmp/pathway-cua-host.sock");
+        assert.equal(config.bootstrap.cuaHostCapability, "fixture-capability");
+      }),
+    ).pipe(
+      Effect.provideService(DesktopComputer, {
+        handoff: Option.some({
+          endpoint: "/tmp/pathway-cua-host.sock",
+          capability: "fixture-capability",
+        }),
+        suspend: Effect.void,
+        resume: Effect.void,
+      }),
+    ),
+  );
+
+  it.effect("resolvePrimary clears an inherited Computer host socket while Computer is off", () =>
+    withHarness(
+      Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+
+        assert.isTrue(CUA_HOST_SOCKET_ENV in config.env);
+        assert.isUndefined(config.env[CUA_HOST_SOCKET_ENV]);
+        assert.isUndefined(config.bootstrap.cuaHostCapability);
       }),
     ),
   );
