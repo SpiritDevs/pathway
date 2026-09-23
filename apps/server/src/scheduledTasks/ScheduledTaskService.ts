@@ -35,6 +35,9 @@ import { ProviderAllowanceRuntime } from "../providerUsage/AllowanceRuntime.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 
+/** Starts the id of every user message a scheduled run sends, so a run can tell nobody typed it. */
+export const SCHEDULED_TASK_MESSAGE_ID_PREFIX = "scheduled-task-message:";
+
 const decodeTask = Schema.decodeUnknownEffect(ScheduledTask);
 const decodeScheduleJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ScheduledTask.fields.schedule),
@@ -482,7 +485,7 @@ export const layer = Layer.effect(
 
         const fireKey = `${active.id}:${DateTime.toEpochMillis(startedAt)}:${trigger}`;
         const commandId = CommandId.make(`scheduled-task:${fireKey}`);
-        const messageId = MessageId.make(`scheduled-task-message:${fireKey}`);
+        const messageId = MessageId.make(`${SCHEDULED_TASK_MESSAGE_ID_PREFIX}${fireKey}`);
         const targetThreadId = active.threadId ?? ThreadId.make(`thread:scheduled:${fireKey}`);
         const inheritAllowance = Effect.gen(function* () {
           if (!active.allowanceParentThreadId || active.allowanceParentThreadId === targetThreadId)
