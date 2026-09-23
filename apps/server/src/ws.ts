@@ -79,7 +79,7 @@ import {
 } from "@spiritdevs/contracts";
 import { resolveServerBackgroundActivitySettings } from "@spiritdevs/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
-import { type RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { type RpcGroup, RpcSerialization } from "effect/unstable/rpc";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
@@ -129,7 +129,7 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { RemoteBrowser } from "./preview/RemoteBrowser.ts";
 import { remoteBrowserRpcHandlers } from "./preview/RemoteBrowserRpc.ts";
-import { makeWsComputerRpcLayer } from "./computer/wsComputerRpcLayer.ts";
+import { makeWsComputerRpcLayer, serveRpcWebSocket } from "./computer/wsComputerRpcLayer.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import {
   attachmentMetadataMatchesStoredPath,
@@ -3133,41 +3133,38 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             failEnvironmentInternal("internal_error", error),
           ),
         );
-        const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
-          disableTracing: true,
-        }).pipe(
-          Effect.provide(
-            Layer.merge(
-              makeWsRpcLayer(session, previewAutomationBroker, providerUsageUpdates),
-              makeWsComputerRpcLayer(session),
-            ).pipe(
-              Layer.provideMerge(RpcSerialization.layerJson),
-              Layer.provide(ProviderMaintenanceRunner.layer),
-              Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
-              Layer.provide(Layer.succeed(RemoteBrowser, remoteBrowser)),
-              // One server-lifetime service means clients share the same PR caches, and a WS
-              // mutation invalidates the HTTP diff cache that every client reads from.
-              Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
-              Layer.provide(
-                SourceControlDiscovery.layer.pipe(
-                  Layer.provide(
-                    SourceControlProviderRegistry.layer.pipe(
-                      Layer.provide(
-                        Layer.mergeAll(
-                          AzureDevOpsCli.layer,
-                          BitbucketApi.layer,
-                          GitHubCli.layer,
-                          GitLabCli.layer,
-                        ),
-                      ),
-                      Layer.provideMerge(GitVcsDriver.layer),
-                      Layer.provide(
-                        VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
+        const rpcWebSocketHttpEffect = yield* serveRpcWebSocket(
+          WsRpcGroup,
+          Layer.merge(
+            makeWsRpcLayer(session, previewAutomationBroker, providerUsageUpdates),
+            makeWsComputerRpcLayer(session),
+          ).pipe(
+            Layer.provideMerge(RpcSerialization.layerJson),
+            Layer.provide(ProviderMaintenanceRunner.layer),
+            Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+            Layer.provide(Layer.succeed(RemoteBrowser, remoteBrowser)),
+            // One server-lifetime service means clients share the same PR caches, and a WS
+            // mutation invalidates the HTTP diff cache that every client reads from.
+            Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+            Layer.provide(
+              SourceControlDiscovery.layer.pipe(
+                Layer.provide(
+                  SourceControlProviderRegistry.layer.pipe(
+                    Layer.provide(
+                      Layer.mergeAll(
+                        AzureDevOpsCli.layer,
+                        BitbucketApi.layer,
+                        GitHubCli.layer,
+                        GitLabCli.layer,
                       ),
                     ),
+                    Layer.provideMerge(GitVcsDriver.layer),
+                    Layer.provide(
+                      VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
+                    ),
                   ),
-                  Layer.provide(VcsProcess.layer),
                 ),
+                Layer.provide(VcsProcess.layer),
               ),
             ),
           ),

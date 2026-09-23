@@ -14,7 +14,9 @@ import {
   WsComputerRpcGroup,
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import { type Rpc, type RpcGroup, RpcServer } from "effect/unstable/rpc";
 
 import { requiredScopeForRpcMethod } from "../auth/RpcAuthorization.ts";
 import type * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
@@ -30,6 +32,27 @@ import { ComputerService } from "./Services/ComputerService.ts";
 import { makeWsComputerHandlers, wrapWsComputerHandlers } from "./wsComputerHandlers.ts";
 
 const TRACE_ATTRIBUTES = { "rpc.aggregate": "computer" } as const;
+
+/**
+ * Serves `group` on the current request's WebSocket. Run it inside the route
+ * handler and run the returned effect to upgrade.
+ *
+ * `handlers` is built into the request scope, which the HTTP server closes only
+ * after the socket closes, so per-socket state (such as this module's event
+ * interests) lives exactly as long as the socket. `Effect.provide(handlers)`
+ * would instead close that state as soon as the upgrade effect was built.
+ */
+export const serveRpcWebSocket = <Rpcs extends Rpc.Any, ROut, E, RIn>(
+  group: RpcGroup.RpcGroup<Rpcs>,
+  handlers: Layer.Layer<ROut, E, RIn>,
+) =>
+  Layer.build(handlers).pipe(
+    Effect.flatMap((context) =>
+      RpcServer.toHttpEffectWebsocket(group, { disableTracing: true }).pipe(
+        Effect.provideContext(context),
+      ),
+    ),
+  );
 
 export const makeWsComputerRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
   WsComputerRpcGroup.toLayer(
