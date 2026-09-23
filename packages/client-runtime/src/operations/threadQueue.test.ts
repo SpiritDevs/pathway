@@ -66,6 +66,19 @@ describe("cloud queue submission", () => {
       input: { dispatchMode: { type: "queue_after_active" } },
     });
   });
+  it("freezes the Computer intent onto a queued message", () => {
+    const result = buildThreadQueueSubmission(
+      { ...input, enableComputerControl: true, computerControlGeneration: 3 },
+      [],
+    );
+    expect(result).toMatchObject({
+      kind: "message",
+      input: { enableComputerControl: true, computerControlGeneration: 3 },
+    });
+    const plain = buildThreadQueueSubmission(input, []);
+    expect(plain.input).not.toHaveProperty("enableComputerControl");
+    expect(plain.input).not.toHaveProperty("computerControlGeneration");
+  });
   it("creates the first thread with workspace preparation in the durable payload", () => {
     const result = buildThreadQueueSubmission(
       {

@@ -563,6 +563,47 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
+  it.effect("carries the Computer switch and generation on dispatch and edit-and-restart", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+
+      yield* startThreadTurn({
+        commandId: CommandId.make("send-computer"),
+        threadId: v2ThreadId,
+        message: {
+          messageId: MessageId.make("message-computer"),
+          role: "user",
+          text: "Open Calculator",
+          attachments: [],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        enableComputerControl: true,
+        computerControlGeneration: 2,
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      yield* editAndRestartMessage({
+        commandId: CommandId.make("edit-computer"),
+        threadId: v2ThreadId,
+        messageId: MessageId.make("message-computer"),
+        replacementMessageId: MessageId.make("message-computer-edit"),
+        text: "/computer-use open Notes",
+        computerControlGeneration: 2,
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(commands[0]).toMatchObject({
+        type: "message.dispatch",
+        enableComputerControl: true,
+        computerControlGeneration: 2,
+      });
+      expect(commands[1]).toMatchObject({
+        type: "message.edit-and-restart",
+        computerControlGeneration: 2,
+      });
+      expect(commands[1]).not.toHaveProperty("enableComputerControl");
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
   it.effect("resolves run ordinal zero to the first run's root-scope baseline", () =>
     Effect.gen(function* () {
       const firstRunId = RunId.make("run-1");
