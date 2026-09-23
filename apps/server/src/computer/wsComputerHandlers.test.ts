@@ -21,6 +21,7 @@ import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import type { ComputerOperationError } from "./computerErrors.ts";
 import {
   makeWsComputerHandlers,
+  wrapWsComputerHandlers,
   type WsComputerError,
   type WsComputerHandlerOptions,
 } from "./wsComputerHandlers.ts";
@@ -362,6 +363,25 @@ it.layer(NodeServices.layer)("computer WebSocket access policy", (it) => {
     message: "denied",
     requiredScope: "computer:operate",
   });
+
+  it.effect("runs every handler through the socket's wrapper under its own method", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { handlers } = yield* setup();
+        const seen: Array<string> = [];
+        const wrapped = wrapWsComputerHandlers(handlers, (method, effect) =>
+          method === COMPUTER_WS_METHODS.click
+            ? Effect.fail(new ComputerError({ message: "wrapped" }))
+            : Effect.sync(() => seen.push(method)).pipe(Effect.andThen(effect)),
+        );
+        expect(Object.keys(wrapped).toSorted()).toEqual(Object.keys(handlers).toSorted());
+        const refused = yield* Effect.flip(wrapped[COMPUTER_WS_METHODS.click]({ x: 1, y: 1 }));
+        expect(refused.message).toBe("wrapped");
+        yield* wrapped[COMPUTER_WS_METHODS.getAuditHistory]({ limit: 1 });
+        expect(seen).toEqual([COMPUTER_WS_METHODS.getAuditHistory]);
+      }),
+    ),
+  );
 
   it.effect("refuses every way in when the policy refuses the session", () =>
     Effect.scoped(

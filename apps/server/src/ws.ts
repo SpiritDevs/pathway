@@ -28,8 +28,6 @@ import {
   type IssueInvestigationRoute,
   ISSUES_WS_METHODS,
   EMAIL_WS_METHODS,
-  COMPUTER_WS_METHODS,
-  ComputerError,
   type GitActionProgressEvent,
   type GitManagerServiceError,
   type MessageId,
@@ -77,10 +75,11 @@ import {
   type TerminalMetadataStreamEvent,
   WS_METHODS,
   WsRpcGroup,
+  WsComputerRpcGroup,
 } from "@spiritdevs/contracts";
 import { resolveServerBackgroundActivitySettings } from "@spiritdevs/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { type RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
@@ -130,11 +129,7 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { RemoteBrowser } from "./preview/RemoteBrowser.ts";
 import { remoteBrowserRpcHandlers } from "./preview/RemoteBrowserRpc.ts";
-import { ComputerApprovalGate } from "./computer/ComputerApprovalGate.ts";
-import { requireComputerAccess } from "./computer/computerAccessPolicy.ts";
-import { ComputerEventInterests } from "./computer/computerEventInterests.ts";
-import { ComputerService } from "./computer/Services/ComputerService.ts";
-import { makeWsComputerHandlers } from "./computer/wsComputerHandlers.ts";
+import { makeWsComputerRpcLayer } from "./computer/wsComputerRpcLayer.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import {
   attachmentMetadataMatchesStoredPath,
@@ -465,7 +460,12 @@ function projectFileFailureContext(
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
-const ServerWsRpcGroup = WsRpcGroup;
+// Computer RPCs are served by their own handler layer (see makeWsComputerRpcLayer).
+const ServerWsRpcGroup = WsRpcGroup.omit(
+  ...([...WsComputerRpcGroup.requests.keys()] as ReadonlyArray<
+    RpcGroup.Rpcs<typeof WsComputerRpcGroup>["_tag"]
+  >),
+);
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
 // snapshot instead. Replaying each intervening event costs a shell refetch;
@@ -695,35 +695,6 @@ const makeWsRpcLayer = (
       const emailCapture = yield* EmailCapture.EmailCaptureService;
       const emailTriggers = yield* EmailTrigger.EmailTriggerService;
       const issueActor = yield* resolveIssueConnectionActor(currentSession, issueTracker);
-      const computerService = yield* ComputerService;
-      const computerHandlers = makeWsComputerHandlers(computerService, {
-        approvalGate: yield* ComputerApprovalGate,
-        // Read per call: an admin can change the policy while this socket is open.
-        admitComputerUse: serverSettings.getSettings.pipe(
-          Effect.mapError(
-            () => new ComputerError({ message: "Failed to read the Computer access policy." }),
-          ),
-          Effect.flatMap((settings) =>
-            requireComputerAccess(settings.computer.accessPolicy, currentSession.scopes),
-          ),
-        ),
-      });
-      // This layer is built per socket, so one key names the connection and the
-      // layer's scope is its lifetime.
-      const computerConnectionKey = "connection";
-      const computerInterestCleanups = new Set<() => void>();
-      let computerConnectionOpen = true;
-      const computerInterests = new ComputerEventInterests((_key, cleanup) => {
-        if (computerConnectionOpen) computerInterestCleanups.add(cleanup);
-        return computerConnectionOpen;
-      });
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          computerConnectionOpen = false;
-          for (const cleanup of computerInterestCleanups) cleanup();
-          computerInterestCleanups.clear();
-        }),
-      );
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -3135,161 +3106,6 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "email",
             },
           ),
-        [COMPUTER_WS_METHODS.setControlEnabled]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.setControlEnabled,
-            computerHandlers[COMPUTER_WS_METHODS.setControlEnabled](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.getStatus]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.getStatus,
-            computerHandlers[COMPUTER_WS_METHODS.getStatus](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.getAuditHistory]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.getAuditHistory,
-            computerHandlers[COMPUTER_WS_METHODS.getAuditHistory](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.provision]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.provision,
-            computerHandlers[COMPUTER_WS_METHODS.provision](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.listWindows]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.listWindows,
-            computerHandlers[COMPUTER_WS_METHODS.listWindows](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.getState]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.getState,
-            computerHandlers[COMPUTER_WS_METHODS.getState](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.getScreenSize]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.getScreenSize,
-            computerHandlers[COMPUTER_WS_METHODS.getScreenSize](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.launchApp]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.launchApp,
-            computerHandlers[COMPUTER_WS_METHODS.launchApp](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.click]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.click,
-            computerHandlers[COMPUTER_WS_METHODS.click](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.doubleClick]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.doubleClick,
-            computerHandlers[COMPUTER_WS_METHODS.doubleClick](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.rightClick]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.rightClick,
-            computerHandlers[COMPUTER_WS_METHODS.rightClick](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.moveCursor]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.moveCursor,
-            computerHandlers[COMPUTER_WS_METHODS.moveCursor](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.drag]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.drag,
-            computerHandlers[COMPUTER_WS_METHODS.drag](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.scroll]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.scroll,
-            computerHandlers[COMPUTER_WS_METHODS.scroll](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.typeText]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.typeText,
-            computerHandlers[COMPUTER_WS_METHODS.typeText](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.pressKey]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.pressKey,
-            computerHandlers[COMPUTER_WS_METHODS.pressKey](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.hotkey]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.hotkey,
-            computerHandlers[COMPUTER_WS_METHODS.hotkey](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.setValue]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.setValue,
-            computerHandlers[COMPUTER_WS_METHODS.setValue](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.performAction]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.performAction,
-            computerHandlers[COMPUTER_WS_METHODS.performAction](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.selectText]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.selectText,
-            computerHandlers[COMPUTER_WS_METHODS.selectText](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.inputClick]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.inputClick,
-            computerHandlers[COMPUTER_WS_METHODS.inputClick](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.inputScroll]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.inputScroll,
-            computerHandlers[COMPUTER_WS_METHODS.inputScroll](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.inputKey]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.inputKey,
-            computerHandlers[COMPUTER_WS_METHODS.inputKey](input),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.getThreadState]: (input) =>
-          observeRpcEffect(
-            COMPUTER_WS_METHODS.getThreadState,
-            Effect.suspend(() => {
-              computerInterests.watch(computerConnectionKey, input.threadId);
-              return computerHandlers[COMPUTER_WS_METHODS.getThreadState](input);
-            }),
-            { "rpc.aggregate": "computer" },
-          ),
-        [COMPUTER_WS_METHODS.subscribeEvents]: (_input) =>
-          observeRpcStream(
-            COMPUTER_WS_METHODS.subscribeEvents,
-            computerService.supported
-              ? computerInterests.subscribe(computerConnectionKey, computerService.manager.events)
-              : Stream.never,
-            { "rpc.aggregate": "computer" },
-          ),
       });
       return handlers;
     }),
@@ -3317,11 +3133,14 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             failEnvironmentInternal("internal_error", error),
           ),
         );
-        const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(ServerWsRpcGroup, {
+        const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, previewAutomationBroker, providerUsageUpdates).pipe(
+            Layer.merge(
+              makeWsRpcLayer(session, previewAutomationBroker, providerUsageUpdates),
+              makeWsComputerRpcLayer(session),
+            ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
