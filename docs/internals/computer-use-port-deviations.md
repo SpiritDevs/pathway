@@ -65,3 +65,13 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - The desktop renderer scheme now comes from `DesktopEnvironment.desktopScheme` rather than `getDesktopScheme(isDevelopment)`, and the server trusts the `pathway-cua://app` renderer origin.
 - Before cua builds can sign in with OAuth, the Clerk instance's allowed redirect origins need `pathway-cua://app`; this is instance configuration, not repository code.
 - Host code must use the renamed Cua wire keys (`pathway_native_revision`, `pathway_browser_input_control`, `_pathway_foreground_observation_ms`, `PATHWAY_CUA_*_OBSERVATION_MS`, …); Synara's `synara_*` names are not accepted.
+
+## P2 server core
+
+- Computer errors are `Schema.TaggedErrorClass`es in `computer/computerErrors.ts`. `ComputerLeaseError`, `CuaActionError`, `ComputerSpaceError`, and `ComputerDenylistError` subclass them and keep the parent's `_tag` and `name`, so `Effect.catchTag("ComputerBackendError")` still catches a lease refusal. Synara gave each subclass its own `name`.
+- `ComputerBackend` methods return `Effect`s that fail with `ComputerOperationError`. `onEvent` is an optional `events` stream, `attachStream`/`detachStream` take no listener, and `ComputerBrowserCall` drops `signal`: cancellation is fiber interruption.
+- `assertComputerClipboardWriteFits` is `computerClipboardWriteError`, which returns the error instead of throwing it.
+- The desktop operation, delivery-mode, and task contexts are `Context.Reference`s instead of `AsyncLocalStorage`. A cancellation signal is a set of `Deferred`s rather than an `AbortSignal`, and every signal carries a reason.
+- Aborting a desktop operation interrupts it and fails it with the abort reason. Synara relied on cooperative `throwIfAborted` checks, so its queue tests that let an operation ignore a close now expect the operation to fail with "closed".
+- `DesktopOperationQueue` orders work with one FIFO and a conflict rule (exclusive conflicts with everything, scoped with its own key) instead of promise chains. An operation cancelled while waiting leaves the queue at once instead of holding its place until its turn.
+- `modelImageBudget` and `uiTreeTargeting` are new `@spiritdevs/shared` subpath exports, copied verbatim.
