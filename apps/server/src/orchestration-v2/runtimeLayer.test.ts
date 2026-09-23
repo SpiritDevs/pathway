@@ -3675,4 +3675,117 @@ it.layer(TestLayer)("decider computer-control pass-through", (it) => {
         }),
     );
   }
+
+  /** Queues a run behind an active one, then completes the active run so it is dispatched. */
+  const dispatchQueued = Effect.fn("dispatchQueuedComputerRun")(function* (
+    name: string,
+    input: Partial<DispatchCommand>,
+  ) {
+    const orchestrator = yield* OrchestratorV2;
+    const eventSink = yield* EventSinkV2;
+    const threadId = yield* startThread(name);
+    const active = yield* send(threadId, `computer-${name}-active`, {});
+    const queued = yield* send(threadId, `computer-${name}-queued`, {
+      ...input,
+      dispatchMode: { type: "queue_after_active" },
+    });
+    const promoted = yield* Queue.unbounded<RunId>();
+    yield* eventSink
+      .stream({ threadId, afterSequence: yield* orchestrator.getThreadEventSequence(threadId) })
+      .pipe(
+        Stream.runForEach((stored) =>
+          stored.event.type === "run.updated" && stored.event.payload.status === "starting"
+            ? Queue.offer(promoted, stored.event.payload.id)
+            : Effect.void,
+        ),
+        Effect.forkScoped,
+      );
+    yield* Effect.yieldNow;
+    yield* completeRun(threadId, active.id);
+    assert.equal(yield* Queue.take(promoted), queued.id);
+    const projection = yield* orchestrator.getThreadProjection(threadId);
+    const run = projection.runs.find((candidate) => candidate.id === queued.id);
+    assert.isDefined(run);
+    return run;
+  });
+
+  /** Edits a completed first message and returns the replacement run. */
+  const editCompleted = Effect.fn("editCompletedComputerMessage")(function* (
+    name: string,
+    input: { readonly enableComputerControl?: boolean },
+  ) {
+    const threadId = yield* startThread(name);
+    const original = yield* send(threadId, `computer-${name}`, {});
+    yield* completeRun(threadId, original.id);
+    return yield* editAndRestart(threadId, `computer-${name}`, `computer-${name}-replacement`, {
+      text: "Open Calculator instead",
+      ...input,
+    });
+  });
+
+  it.effect("carries the flag onto a turn-start request", () =>
+    Effect.gen(function* () {
+      const threadId = yield* startThread("flag-start");
+      const run = yield* send(threadId, "computer-flag-start", { enableComputerControl: true });
+      assert.equal(run.status, "starting");
+      assert.equal(run.computerControl?.mode, "chat");
+    }),
+  );
+
+  it.effect("carries the flag onto a queued turn", () =>
+    Effect.gen(function* () {
+      const threadId = yield* startThread("flag-queued");
+      yield* send(threadId, "computer-flag-queued-active", {});
+      const run = yield* send(threadId, "computer-flag-queued", {
+        enableComputerControl: true,
+        dispatchMode: { type: "queue_after_active" },
+      });
+      assert.equal(run.status, "queued");
+      assert.equal(run.computerControl?.mode, "chat");
+    }),
+  );
+
+  it.effect("carries an explicit false onto a turn-start request", () =>
+    Effect.gen(function* () {
+      const threadId = yield* startThread("flag-false");
+      const run = yield* send(threadId, "computer-flag-false", { enableComputerControl: false });
+      assert.isUndefined(run.computerControl);
+    }),
+  );
+
+  it.effect("defaults the flag to off from a turn-start request when the command omits it", () =>
+    Effect.gen(function* () {
+      const threadId = yield* startThread("flag-omitted");
+      const run = yield* send(threadId, "computer-flag-omitted", {});
+      assert.isUndefined(run.computerControl);
+    }),
+  );
+
+  it.effect("carries the flag when a queued turn is dispatched", () =>
+    Effect.gen(function* () {
+      const run = yield* dispatchQueued("flag-dispatched", { enableComputerControl: true });
+      assert.equal(run.computerControl?.mode, "chat");
+    }),
+  );
+
+  it.effect("defaults the flag to off when a queued dispatch omits it", () =>
+    Effect.gen(function* () {
+      const run = yield* dispatchQueued("flag-dispatched-omitted", {});
+      assert.isUndefined(run.computerControl);
+    }),
+  );
+
+  it.effect("carries the flag onto an edit-and-resend request", () =>
+    Effect.gen(function* () {
+      const run = yield* editCompleted("flag-edit", { enableComputerControl: true });
+      assert.equal(run.computerControl?.mode, "chat");
+    }),
+  );
+
+  it.effect("defaults the flag to off when an edit-and-resend omits it", () =>
+    Effect.gen(function* () {
+      const run = yield* editCompleted("flag-edit-omitted", {});
+      assert.isUndefined(run.computerControl);
+    }),
+  );
 });
