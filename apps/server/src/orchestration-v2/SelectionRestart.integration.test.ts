@@ -76,6 +76,7 @@ interface RestartAdapterState {
     readonly model: string;
     readonly cwd: string | null;
     readonly attemptId: string;
+    readonly computer: boolean;
   }>;
   readonly closedSessionCount: number;
   readonly failedReplacementOpen: boolean;
@@ -221,6 +222,7 @@ function makeRestartAdapter(
                     model: input.modelSelection.model,
                     cwd: input.runtimePolicy.cwd,
                     attemptId: input.attemptId,
+                    computer: input.runtimePolicy.enableComputerControl === true,
                   },
                 ],
               }));
@@ -639,6 +641,107 @@ it.live("detaches the old provider session after an active provider handoff", ()
       assert.equal(result.projection.contextHandoffs.length, 1);
       assert.equal(result.captured.closedSessionCount, 1);
       assert.equal(yield* Ref.get(targetStartCount), 1);
+    }),
+  ),
+);
+
+it.live("restarts a live run so a Computer steer reaches the provider", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const cwd = yield* checkpointWorkspace("selection-computer-steer");
+      const threadId = ThreadId.make("thread:selection-computer-steer");
+      const state = yield* Ref.make<RestartAdapterState>({
+        activeTurn: null,
+        opened: [],
+        started: [],
+        closedSessionCount: 0,
+        failedReplacementOpen: false,
+      });
+      const registry = makeSingleProviderAdapterRegistryLayer(makeRestartAdapter(state));
+
+      const projection = yield* Effect.gen(function* () {
+        const orchestrator = yield* OrchestratorV2;
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("command:selection-computer-steer:create"),
+          threadId,
+          projectId: ProjectId.make("project:selection-computer-steer"),
+          title: "Computer steer",
+          modelSelection: initialSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: cwd,
+        });
+        const runningTurns = yield* Queue.unbounded<ProviderTurnId>();
+        yield* orchestrator
+          .streamStoredEventsFrom({
+            threadId,
+            afterSequence: yield* orchestrator.getThreadEventSequence(threadId),
+          })
+          .pipe(
+            Stream.runForEach((stored) =>
+              stored.event.type === "provider-turn.updated" &&
+              stored.event.payload.status === "running"
+                ? Queue.offer(runningTurns, stored.event.payload.id)
+                : Effect.void,
+            ),
+            Effect.forkScoped,
+          );
+        yield* Effect.yieldNow;
+
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("command:selection-computer-steer:first"),
+          threadId,
+          messageId: MessageId.make("message:selection-computer-steer:first"),
+          text: "first",
+          attachments: [],
+          modelSelection: initialSelection,
+          dispatchMode: { type: "start_immediately" },
+        });
+        yield* Queue.take(runningTurns);
+        const activeRunId = (yield* orchestrator.getThreadProjection(threadId)).runs[0]?.id;
+        if (activeRunId === undefined) {
+          return yield* Effect.die("active Computer steer run is missing");
+        }
+
+        // Same selection: only installing Computer can force this restart.
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("command:selection-computer-steer:second"),
+          threadId,
+          messageId: MessageId.make("message:selection-computer-steer:second"),
+          text: "/computer-use open Calculator",
+          attachments: [],
+          modelSelection: initialSelection,
+          dispatchMode: { type: "steer_active", targetRunId: activeRunId },
+        });
+        yield* Queue.take(runningTurns);
+        return yield* orchestrator.getThreadProjection(threadId);
+      }).pipe(
+        Effect.provide(
+          makeOrchestratorV2ReplayLayerWithRegistry({ name: "selection-computer-steer" }, registry),
+        ),
+      );
+      const captured = yield* Ref.get(state);
+
+      assert.lengthOf(projection.runs, 1);
+      assert.deepEqual(projection.runs[0]?.computerControl, { mode: "request", generation: 0 });
+      assert.deepEqual(
+        projection.attempts.map((attempt) => attempt.status),
+        ["superseded", "running"],
+      );
+      assert.deepEqual(
+        captured.started.map((turn) => turn.computer),
+        [false, true],
+      );
     }),
   ),
 );

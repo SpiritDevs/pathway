@@ -490,7 +490,9 @@ const ComputerOrchestrationStoresLive = Layer.mergeAll(
   IdAllocatorV2Layer,
 );
 const ComputerApprovalGateLayerLive = ComputerApprovalGate.layer.pipe(
-  Layer.provide(computerApprovalRequesterLayer.pipe(Layer.provide(ComputerOrchestrationStoresLive))),
+  Layer.provide(
+    computerApprovalRequesterLayer.pipe(Layer.provide(ComputerOrchestrationStoresLive)),
+  ),
 );
 
 const ComputerLayerLive = ComputerServiceLive.pipe(
@@ -501,6 +503,8 @@ const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
   Layer.provide(
     computerServerOwnedRuntimeRequestsLayer.pipe(Layer.provide(ComputerApprovalGateLayerLive)),
   ),
+  // Turn start admits each run's Computer intent against the host.
+  Layer.provide(ComputerLayerLive),
   Layer.provide(questionAnswerDeliveryLayer),
   Layer.provide(CheckpointStoreLayerLive),
   Layer.provide(ResourceCleanupService.live),
