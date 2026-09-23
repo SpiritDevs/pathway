@@ -712,10 +712,11 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
 
   const inputMonitorAvailable = (name: string, input: unknown) =>
     Effect.gen(function* () {
+      // Without the Linux admission adapter no browser call is read-only.
       const linuxBrowserMutation =
-        linux !== undefined &&
+        platform === "linux" &&
         CUA_BROWSER_MUTATION_TOOLS.has(name) &&
-        !linux.browserCallIsReadOnly(name, input);
+        !(linux?.browserCallIsReadOnly(name, input) ?? false);
       const required =
         CUA_ACTION_TOOLS.has(name) ||
         linuxBrowserMutation ||
@@ -723,6 +724,8 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
           options.nativeRevision !== null &&
           CUA_BROWSER_MUTATION_TOOLS.has(name));
       if (!required) return true;
+      // The adapter carries the Linux Escape safeguard; fail closed until P8 supplies it.
+      if (linuxBrowserMutation && linux === undefined) return false;
       const monitor = yield* monitorState;
       // Portable native paths have no listener contract. The verified Linux
       // browser port does: missing integration is not readiness.
