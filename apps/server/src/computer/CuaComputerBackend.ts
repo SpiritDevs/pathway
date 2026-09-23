@@ -109,7 +109,9 @@ import {
   checkDesktopSignal,
   desktopDeliveryMode,
   desktopOperationSignal,
+  desktopSignal,
   isDesktopSignalAborted,
+  makeDesktopAbort,
   raceDesktopSignal,
 } from "./DesktopOperationQueue.ts";
 import { isModelDesktopObservationActive } from "./modelDesktopObservation.ts";
@@ -1621,7 +1623,9 @@ export const makeCuaComputerBackend = (options: CuaComputerBackendOptions = {}) 
      *
      * The write runs in the backend scope, not the caller's fiber: the hold
      * timeout or a cancellation fails the caller honestly while the lane drains
-     * in order behind it, and nothing is replayed.
+     * in order behind it, and nothing is replayed. A cancelled caller also
+     * aborts the native request in flight, as Synara's shared abort signal did;
+     * the lane still waits out the gap behind it.
      */
     const semanticTextInLane = (
       pid: number,
@@ -1636,6 +1640,8 @@ export const makeCuaComputerBackend = (options: CuaComputerBackendOptions = {}) 
         const laneWaitStarted = yield* Clock.currentTimeMillis;
         const deadline = laneWaitStarted + semanticTextLaneHoldMs;
         const lane = { dispatched: false, abandoned: false };
+        // Fails the write's native request when the caller stops waiting.
+        const cancel = makeDesktopAbort();
         const assertAdmission = Effect.gen(function* () {
           // An overdue timer may lose a turn to the read's completion.
           if (lane.abandoned || (yield* Clock.currentTimeMillis) >= deadline)
@@ -1662,13 +1668,16 @@ export const makeCuaComputerBackend = (options: CuaComputerBackendOptions = {}) 
           yield* assertAdmission;
           const deliveryStarted = yield* Clock.currentTimeMillis;
           const laneWaitMs = deliveryStarted - laneWaitStarted;
-          const result = yield* write(
-            Effect.andThen(
-              assertAdmission,
-              Effect.sync(() => {
-                lane.dispatched = true;
-              }),
+          const result = yield* raceDesktopSignal(
+            write(
+              Effect.andThen(
+                assertAdmission,
+                Effect.sync(() => {
+                  lane.dispatched = true;
+                }),
+              ),
             ),
+            desktopSignal(cancel),
           );
           const deliveryMs = (yield* Clock.currentTimeMillis) - deliveryStarted;
           yield* Effect.logDebug("[computer] semantic text lane write", {
@@ -1689,8 +1698,17 @@ export const makeCuaComputerBackend = (options: CuaComputerBackendOptions = {}) 
           ),
         );
         const fiber = yield* Effect.forkIn(writeResult, scope, { startImmediately: true });
-        const abandon = Effect.sync(() => {
+        const abandon = Effect.suspend(() => {
           lane.abandoned = true;
+          return Deferred.fail(
+            cancel,
+            new CuaActionError(
+              lane.dispatched
+                ? "Semantic text write was cancelled after it may have dispatched."
+                : "Semantic text write was cancelled; nothing was sent.",
+              lane.dispatched ? "dispatched-unknown" : "not-dispatched",
+            ),
+          );
         });
         const timedOut = Effect.andThen(
           Effect.sleep(Duration.millis(semanticTextLaneHoldMs)),
@@ -1711,7 +1729,7 @@ export const makeCuaComputerBackend = (options: CuaComputerBackendOptions = {}) 
         return yield* Effect.raceAllFirst([
           Fiber.join(fiber),
           timedOut,
-          awaitDesktopSignal(signal).pipe(Effect.onError(() => abandon)),
+          awaitDesktopSignal(signal).pipe(Effect.tapError(() => abandon)),
         ]).pipe(Effect.onInterrupt(() => abandon));
       });
 
