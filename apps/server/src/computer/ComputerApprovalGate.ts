@@ -213,6 +213,7 @@ export interface ComputerApprovalGateShape {
   /**
    * Routes a user decision. False when the card is not open for that thread.
    * Session-wide approval is unavailable here, so `acceptForSession` declines.
+   * The caller settles the card itself; the gate only withdraws cards nobody answered.
    */
   readonly respond: (
     threadId: string,
@@ -306,13 +307,16 @@ export const make = Effect.fn("ComputerApprovalGate.make")(function* (
         Effect.asVoid,
       );
 
+  /** Records the decision; false when the prompt was already settled. */
+  const decide = (prompt: Prompt, decision: ProviderApprovalDecision) => {
+    if (!Deferred.doneUnsafe(prompt.answer, Effect.succeed(decision))) return false;
+    // Per-call answers wait for their call; everything else is done now.
+    if (decision === "cancel" || prompt.callKey === undefined) remove(prompt);
+    return true;
+  };
+
   const settle = (prompt: Prompt, decision: ProviderApprovalDecision) =>
-    Effect.suspend(() => {
-      if (!Deferred.doneUnsafe(prompt.answer, Effect.succeed(decision))) return Effect.void;
-      // Per-call answers wait for their call; everything else is done now.
-      if (decision === "cancel" || prompt.callKey === undefined) remove(prompt);
-      return dismiss(prompt, decision);
-    });
+    Effect.suspend(() => (decide(prompt, decision) ? dismiss(prompt, decision) : Effect.void));
 
   const cancel = (prompt: Prompt) =>
     Effect.suspend(() => {
@@ -516,7 +520,8 @@ export const make = Effect.fn("ComputerApprovalGate.make")(function* (
       const effective = decision === "acceptForSession" ? "decline" : decision;
       prompt.answeredGeneration = generation;
       if (prompt.grant?.prompt === prompt) prompt.grant.granted = effective === "accept";
-      return settle(prompt, effective).pipe(Effect.as(true));
+      // The responder settles the card with the answer, so the gate does not dismiss it.
+      return Effect.succeed(decide(prompt, effective));
     });
 
   const revokeTaskGrants: ComputerApprovalGateShape["revokeTaskGrants"] = Effect.sync(() => {
