@@ -957,11 +957,20 @@ function acpWorkspaceWriteAllowsMutation(
   return true;
 }
 
+/**
+ * ACP reports MCP tools as kind `other`. Every other kind titles the call with
+ * model-written text (a command, a path, a query or a URL), so only an `other`
+ * call can carry a Pathway Computer identity.
+ */
+const acpMayBeComputerTool = (kind: string | null | undefined) =>
+  kind === undefined || kind === null || kind === "other";
+
 export function acpPermissionDisposition(
   runtimePolicy: ProviderAdapterV2RuntimePolicy,
   request: EffectAcpSchema.RequestPermissionRequest,
 ): AcpPermissionDisposition {
   if (
+    acpMayBeComputerTool(request.toolCall.kind) &&
     shouldAllowPathwayComputerProviderTool({
       computerControlEnabled: runtimePolicy.enableComputerControl === true,
       activeTurn: true,
@@ -969,7 +978,6 @@ export function acpPermissionDisposition(
       runtimeMode: runtimePolicy.runtimeMode,
       permission: {
         title: request.toolCall.title,
-        rawInput: request.toolCall.rawInput,
         metadata: request.toolCall._meta,
       },
     })
