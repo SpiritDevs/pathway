@@ -2,6 +2,7 @@ import { useQuestionDismissal } from "./chat/useQuestionDismissal";
 import { ScrollToEndButton } from "./chat/ScrollToEndButton";
 import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
 import { ThreadQueueStatus } from "./chat/ThreadQueueStatus";
+import { ComputerPreviewRail } from "./chat/ComputerPreviewPopover";
 import { useThreadQueueChat } from "../cloud/useThreadQueueChat";
 import {
   queueDestinationProject,
@@ -92,11 +93,11 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@spiritdevs/client-runtime/environment";
-import {
-  applyClaudePromptEffortPrefix,
-  createModelSelection,
-  resolvePromptInjectedEffort,
-} from "@spiritdevs/shared/model";
+import { createModelSelection, resolvePromptInjectedEffort } from "@spiritdevs/shared/model";
+import { parseComputerInvocation } from "@spiritdevs/shared/computerInvocation";
+import { useThreadComputerControlGeneration } from "../computerStateStore";
+import { useComputerControlModeChange } from "../hooks/useComputerControlModeChange";
+import { resolveComputerControlForSend } from "../hooks/useComputerControlModeChange.logic";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@spiritdevs/shared/chatList";
 import { AddProjectConnectionDialog } from "./projects/AddProjectConnectionDialog";
 import { projectWorkspaceCwd, projectWorkspaceRuntimeEnv } from "./projects/projectWorkspace.logic";
@@ -404,6 +405,10 @@ import {
 } from "../state/threadPullRequest";
 import { resolveThreadPr, resolveThreadPrBadges } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import {
+  applyPromptEffortKeepingComputerUse,
+  isBareComputerUseInvocation,
+} from "./chat/composerSlashCommands.logic";
 import { shouldOfferResumeCompaction } from "./chat/ContextWindowMeter.logic";
 import {
   contextWindowSnapshotFromUsage,
@@ -667,7 +672,7 @@ function formatOutgoingPrompt(params: {
 }): string {
   const caps = getProviderModelCapabilities(params.models, params.model, params.provider);
   const promptEffort = resolvePromptInjectedEffort(caps, params.effort);
-  return applyClaudePromptEffortPrefix(params.text, promptEffort);
+  return applyPromptEffortKeepingComputerUse(params.text, promptEffort);
 }
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
@@ -1659,6 +1664,10 @@ function ChatViewContent(props: ChatViewProps) {
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
   );
+  const composerComputerControlOn = useComposerDraftStore(
+    (store) =>
+      (store.getComposerDraft(composerDraftTarget)?.computerControlMode ?? "off") !== "off",
+  );
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const setComposerDraftTerminalContexts = useComposerDraftStore(
@@ -2096,6 +2105,39 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThread],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  // Pins each Computer send to the control epoch it was made in.
+  const threadComputerControlGeneration = useThreadComputerControlGeneration(activeThreadRef);
+  const setComposerComputerControlMode = useComposerDraftStore(
+    (store) => store.setComputerControlMode,
+  );
+  const { change: changeComputerControlMode, sequence: computerControlChangeSequence } =
+    useComputerControlModeChange({
+      threadRef: activeThreadRef,
+      setMode: setComposerComputerControlMode,
+      focusComposer: scheduleComposerFocus,
+    });
+  // A denied Computer card offers "allow for this request": arm `/computer-use`
+  // on the draft and enable control, leaving the send to the user.
+  const handleEnableComputerControlFromDenial = useCallback(() => {
+    const currentPrompt = promptRef.current;
+    if (!parseComputerInvocation(currentPrompt)) {
+      const nextPrompt = `/computer-use ${currentPrompt}`;
+      promptRef.current = nextPrompt;
+      setComposerDraftPrompt(composerDraftTarget, nextPrompt);
+      composerRef.current?.resetCursorState({
+        cursor: collapseExpandedComposerCursor(nextPrompt, nextPrompt.length),
+        prompt: nextPrompt,
+        detectTrigger: false,
+      });
+    }
+    changeComputerControlMode("request");
+  }, [
+    changeComputerControlMode,
+    composerDraftTarget,
+    composerRef,
+    promptRef,
+    setComposerDraftPrompt,
+  ]);
   const revealPanelThreadAsPage = useCallback(() => {
     if (!isPanelPresentation || !activeThreadRef) return;
     void navigate({
@@ -7488,20 +7530,33 @@ function ChatViewContent(props: ChatViewProps) {
       });
       return;
     }
-    const standaloneSlashCommand =
+    const textOnlySend =
       composerImages.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
       composerElementContexts.length === 0 &&
       composerIssueContexts.length === 0 &&
       composerPreviewAnnotations.length === 0 &&
-      composerReviewComments.length === 0
-        ? parseStandaloneComposerSlashCommand(trimmed)
-        : null;
+      composerReviewComments.length === 0;
+    const standaloneSlashCommand = textOnlySend
+      ? parseStandaloneComposerSlashCommand(trimmed)
+      : null;
     if (standaloneSlashCommand) {
       handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
+      return;
+    }
+    if (textOnlySend && isBareComputerUseInvocation(trimmed)) {
+      // Keep the draft: the command still needs its task.
+      toastManager.add(
+        stackedThreadToast({
+          type: "info",
+          title: "Add a task after /computer-use",
+          description: "For example: /computer-use open Calculator and calculate 123 × 45.",
+        }),
+      );
+      scheduleComposerFocus();
       return;
     }
     if (!hasSendableContent) {
@@ -7643,6 +7698,17 @@ function ChatViewContent(props: ChatViewProps) {
       composerIssueContextsSnapshot,
     );
     const shouldQueueBehindActiveRun = phase === "running" && dispatchMode === "queue";
+    const computerControlSequenceForSend = computerControlChangeSequence.current;
+    const computerControlForSend = resolveComputerControlForSend({
+      messageText: promptForSend,
+      computerControlEnabled: settings.computerControlEnabled,
+      // Another thread's control epoch never applies to a new chat.
+      generation: sendsToCurrentThread
+        ? (threadComputerControlGeneration ??
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+            ?.computerControlGeneration)
+        : undefined,
+    });
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
       model: ctxSelectedModel,
@@ -7890,6 +7956,7 @@ function ChatViewContent(props: ChatViewProps) {
           runtimeMode,
           interactionMode,
           dispatchMode: sendsToCurrentThread ? dispatchMode : "auto",
+          ...computerControlForSend.fields,
           ...(bootstrap ? { bootstrap } : {}),
           createdAt: messageCreatedAt,
         },
@@ -7899,6 +7966,15 @@ function ChatViewContent(props: ChatViewProps) {
       } else {
         turnStartSucceeded = true;
         resetLocalDispatch();
+        // A `/computer-use` request covers only the turn it was sent with.
+        if (
+          computerControlForSend.mode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForSend &&
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+            ?.computerControlMode === "request"
+        ) {
+          setComposerComputerControlMode(composerDraftTarget, "off");
+        }
         if (isFirstMessage) {
           const currentFocusId = appAtomRegistry.get(activeFocusIdAtom);
           if (activeThread.projectId === null) {
@@ -8416,16 +8492,36 @@ function ChatViewContent(props: ChatViewProps) {
       if (!requireConversationStorage()) return false;
       sendInFlightRef.current = true;
       setThreadError(activeThread.id, null);
+      const computerControlSequenceForEdit = computerControlChangeSequence.current;
+      const computerControlForEdit = resolveComputerControlForSend({
+        messageText: text,
+        computerControlEnabled: settings.computerControlEnabled,
+        generation:
+          threadComputerControlGeneration ??
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+            ?.computerControlGeneration,
+      });
       const result = await editAndRestartMessage({
         environmentId,
         input: {
           threadId: activeThread.id,
           messageId,
           text,
+          ...computerControlForEdit.fields,
         },
       });
       sendInFlightRef.current = false;
-      if (result._tag === "Success") return true;
+      if (result._tag === "Success") {
+        if (
+          computerControlForEdit.mode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForEdit &&
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+            ?.computerControlMode === "request"
+        ) {
+          setComposerComputerControlMode(composerDraftTarget, "off");
+        }
+        return true;
+      }
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         setThreadError(
@@ -8446,6 +8542,11 @@ function ChatViewContent(props: ChatViewProps) {
       isServerThread,
       latestRunSettled,
       setThreadError,
+      computerControlChangeSequence,
+      settings.computerControlEnabled,
+      threadComputerControlGeneration,
+      composerDraftTarget,
+      setComposerComputerControlMode,
     ],
   );
 
@@ -8781,6 +8882,11 @@ function ChatViewContent(props: ChatViewProps) {
     const threadIdForSend = activeThread.id;
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
+    const computerControlForFollowUp = resolveComputerControlForSend({
+      messageText: trimmed,
+      computerControlEnabled: settings.computerControlEnabled,
+      generation: threadComputerControlGeneration,
+    });
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
       model: ctxSelectedModel,
@@ -8846,6 +8952,7 @@ function ChatViewContent(props: ChatViewProps) {
           titleSeed: activeThread.title,
           runtimeMode,
           interactionMode: nextInteractionMode,
+          ...computerControlForFollowUp.fields,
           ...(nextInteractionMode === "default" && activeProposedPlan
             ? {
                 sourceProposedPlan: {
@@ -8968,6 +9075,12 @@ function ChatViewContent(props: ChatViewProps) {
           titleSeed: nextThreadTitle,
           runtimeMode,
           interactionMode: "default",
+          // The setting carries to the new thread; its control epoch starts at 0.
+          ...resolveComputerControlForSend({
+            messageText: implementationPrompt,
+            computerControlEnabled: settings.computerControlEnabled,
+            generation: undefined,
+          }).fields,
           sourceProposedPlan: {
             threadId: activeThread.id,
             planId: activeProposedPlan.id,
@@ -9045,6 +9158,7 @@ function ChatViewContent(props: ChatViewProps) {
     startThreadTurn,
     environmentId,
     composerRef,
+    settings.computerControlEnabled,
   ]);
 
   const getModelDisabledReason = useCallback(
@@ -9700,6 +9814,7 @@ function ChatViewContent(props: ChatViewProps) {
             </div>
             {/* Messages Wrapper */}
             <div className="relative flex min-h-0 flex-1 flex-col">
+              {activeThreadRef ? <ComputerPreviewRail threadRef={activeThreadRef} /> : null}
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
                 key={activeThread.id}
@@ -9741,6 +9856,10 @@ function ChatViewContent(props: ChatViewProps) {
                 onRemoveMissingThread={handleRemoveMissingThread}
                 removingMissingThread={isRemovingMissingThread}
                 onControlWorkspacePreparation={onControlWorkspacePreparation}
+                computerControlEnabled={
+                  settings.computerControlEnabled || composerComputerControlOn
+                }
+                onEnableComputerControl={handleEnableComputerControlFromDenial}
                 onOpenThread={onOpenRelatedThread}
                 parentThreadLink={parentThreadLink}
                 onContinueFromRun={onContinueFromRun}
