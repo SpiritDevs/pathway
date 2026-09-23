@@ -58,6 +58,7 @@ import {
   type ProviderRequestKind,
   type ProviderUserInputAnswers,
   type ProviderThreadId,
+  type ServerProviderUsageSnapshot,
   type ThreadId,
   type ThreadTokenUsageSnapshot,
 } from "@spiritdevs/contracts";
@@ -93,6 +94,11 @@ import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
 import { PATHWAY_ORCHESTRATION_INSTRUCTIONS } from "../../provider/PathwayOrchestrationInstructions.ts";
+import {
+  ingestPushedSnapshot,
+  mapClaudeRateLimitEvent,
+  type PushedProviderUsageSnapshot,
+} from "../../providerUsage/ProviderUsageService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { IdAllocatorV2, type IdAllocatorV2Shape } from "../IdAllocator.ts";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "../ProviderFailure.ts";
@@ -2368,6 +2374,10 @@ export interface ClaudeAdapterV2Options {
     readonly read?: ClaudeSubagentTranscriptReader;
     readonly pollInterval?: Duration.Input;
   };
+  /** Streamed allowance windows keep the usage panel live while polling is rate limited. */
+  readonly ingestProviderUsage?: (
+    snapshot: PushedProviderUsageSnapshot,
+  ) => Effect.Effect<ServerProviderUsageSnapshot>;
 }
 
 export function makeClaudeAdapterV2(
@@ -2402,6 +2412,7 @@ export function makeClaudeAdapterV2(
         const interruptedTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const steeredTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
+        const lastRateLimitUsage = yield* Ref.make<string | null>(null);
         const openedNativeThreads = yield* Ref.make(new Set<string>());
         const itemOrdinals = yield* Ref.make(new Map<string, number>());
         const nextItemOrdinalsByTurn = yield* Ref.make(new Map<string, number>());
@@ -4386,6 +4397,20 @@ export function makeClaudeAdapterV2(
           readonly query: ClaudeAgentSdkQuerySession;
           readonly message: SDKMessage;
         }) {
+          if (input.message.type === "rate_limit_event") {
+            const usage = mapClaudeRateLimitEvent({
+              instanceId: adapterOptions.instanceId,
+              rateLimitInfo: input.message.rate_limit_info,
+            });
+            // Frames repeat on every request; only changed windows are worth ingesting.
+            const key =
+              usage?.limits
+                .map((limit) => `${limit.window}:${limit.usedPercent}:${limit.resetsAt}`)
+                .join("|") ?? null;
+            if (usage !== null && (yield* Ref.getAndSet(lastRateLimitUsage, key)) !== key) {
+              yield* (adapterOptions.ingestProviderUsage ?? ingestPushedSnapshot)(usage);
+            }
+          }
           const liveQuery = yield* Ref.get(queryContext);
           if (liveQuery?.query !== input.query) {
             return;

@@ -112,7 +112,7 @@ interface ScheduledRateLimitRefresh {
 
 const contextIdentities = new Map<string, string>();
 const pushSemaphores = new Map<string, Semaphore.Semaphore>();
-const codexAccountKeyReaders = new Map<string, () => Promise<string | undefined>>();
+const accountKeyReaders = new Map<string, () => Promise<string | undefined>>();
 const snapshotCache = new Map<string, CachedSnapshot>();
 const inFlightFetches = new Map<string, InFlightFetch>();
 const retryAfterGates = new Map<string, number>();
@@ -467,6 +467,49 @@ export function mapCodexRateLimitsUpdated(input: {
     ...(primaryLimit === undefined ? {} : { primaryLimit }),
     ...(secondaryLimit === undefined ? {} : { secondaryLimit }),
     ...(credits === undefined || credits === null ? {} : { updatesUsageLines: true }),
+  };
+}
+
+const CLAUDE_PUSH_WINDOWS = {
+  five_hour: { window: "5h", windowKey: "session", windowDurationMins: 300 },
+  seven_day: { window: "Weekly", windowKey: "weekly", windowDurationMins: 10_080 },
+} as const;
+
+/**
+ * Maps a Claude stream `rate_limit_event` to the unscoped 5h and weekly windows.
+ * Scoped weekly limits only come from polling. Returns null for frames without utilization.
+ */
+export function mapClaudeRateLimitEvent(input: {
+  instanceId: ServerGetProviderUsageInput["instanceId"];
+  rateLimitInfo: unknown;
+}): PushedProviderUsageSnapshot | null {
+  const info = asRecord(input.rateLimitInfo);
+  const unifiedWindows = asRecord(info?.unifiedWindows);
+  const mapWindow = (key: keyof typeof CLAUDE_PUSH_WINDOWS) => {
+    // Older frames describe only the window named by rateLimitType.
+    const value =
+      asRecord(unifiedWindows?.[key]) ?? (info?.rateLimitType === key ? info : undefined);
+    const utilization = asFiniteNumber(value?.utilization);
+    if (!value || utilization === undefined) return undefined;
+    const resetsAt = isoFromUnixSeconds(value.resetsAt);
+    return {
+      ...CLAUDE_PUSH_WINDOWS[key],
+      usedPercent: Math.min(100, Math.max(0, utilization * 100)),
+      ...(resetsAt ? { resetsAt } : {}),
+    } satisfies ServerProviderUsageLimit;
+  };
+  const primaryLimit = mapWindow("five_hour");
+  const secondaryLimit = mapWindow("seven_day");
+  const limits = [primaryLimit, secondaryLimit].filter((limit) => limit !== undefined);
+  if (limits.length === 0) return null;
+  return {
+    instanceId: input.instanceId,
+    provider: "claudeAgent",
+    status: "ok",
+    limits,
+    usageLines: [],
+    ...(primaryLimit === undefined ? {} : { primaryLimit }),
+    ...(secondaryLimit === undefined ? {} : { secondaryLimit }),
   };
 }
 
@@ -1600,14 +1643,48 @@ function cacheKeyFor(input: Pick<ServerProviderUsageSnapshot, "instanceId" | "pr
   return `${input.instanceId}:${input.provider}`;
 }
 
+const PUSH_SOURCES = {
+  codex: "codex-app-server-push",
+  claudeAgent: "claude-stream-push",
+} as const satisfies Partial<Record<ProviderUsageDriver, string>>;
+
+function isPushSnapshot(snapshot: ServerProviderUsageSnapshot): boolean {
+  return Object.values<string>(PUSH_SOURCES).includes(snapshot.source);
+}
+
+/** A recent push keeps the headline windows live even while polling is gated or failing. */
+function isFreshPush(cached: CachedSnapshot, nowMs: number): boolean {
+  return (
+    isPushSnapshot(cached.snapshot) && nowMs - Date.parse(cached.snapshot.updatedAt) < CACHE_TTL_MS
+  );
+}
+
+/** A window whose reset has passed is empty until the provider reports new usage. */
+function withElapsedResets(
+  snapshot: ServerProviderUsageSnapshot,
+  nowMs: number,
+): ServerProviderUsageSnapshot {
+  if (!snapshot.limits.some((limit) => limit.resetsAt && Date.parse(limit.resetsAt) <= nowMs)) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    limits: snapshot.limits.map(({ resetsAt, ...limit }) =>
+      resetsAt && Date.parse(resetsAt) <= nowMs
+        ? { ...limit, usedPercent: 0 }
+        : { ...limit, ...(resetsAt ? { resetsAt } : {}) },
+    ),
+  };
+}
+
 function storeSnapshot(input: CachedSnapshot): {
   readonly snapshot: ServerProviderUsageSnapshot;
   readonly changed: boolean;
 } {
   const cacheKey = cacheKeyFor(input.snapshot);
   const current = snapshotCache.get(cacheKey);
-  const currentIsPush = current?.snapshot.source === "codex-app-server-push";
-  const incomingIsPush = input.snapshot.source === "codex-app-server-push";
+  const currentIsPush = current !== undefined && isPushSnapshot(current.snapshot);
+  const incomingIsPush = isPushSnapshot(input.snapshot);
   if (
     current &&
     ((current.fetchedAtMs ?? -Infinity) > (input.fetchedAtMs ?? -Infinity) ||
@@ -1674,7 +1751,7 @@ const ingestPushedSnapshotSerial = Effect.fn("ProviderUsage.ingestPushedSnapshot
   let cached = snapshotCache.get(cacheKey);
   if (cached?.snapshot.accountKey) {
     const pending = inFlightFetches.get(cacheKey);
-    const readAccountKey = codexAccountKeyReaders.get(cacheKey);
+    const readAccountKey = accountKeyReaders.get(cacheKey);
     const accountKey = readAccountKey ? yield* Effect.promise(readAccountKey) : undefined;
     if (snapshotCache.get(cacheKey) !== cached) {
       cached = snapshotCache.get(cacheKey);
@@ -1702,7 +1779,7 @@ const ingestPushedSnapshotSerial = Effect.fn("ProviderUsage.ingestPushedSnapshot
   const stored = storeSnapshot({
     snapshot: {
       ...merged,
-      source: "codex-app-server-push",
+      source: PUSH_SOURCES[input.provider === "codex" ? "codex" : "claudeAgent"],
       updatedAt: now,
       ...(cached?.snapshot.fetchedAt ? { fetchedAt: cached.snapshot.fetchedAt } : {}),
     },
@@ -1777,9 +1854,11 @@ async function resolveProviderUsage(
   }
   const cacheKey = cacheKeyFor(ctx);
   if (ctx.provider === "codex") {
-    setBounded(codexAccountKeyReaders, cacheKey, async () =>
+    setBounded(accountKeyReaders, cacheKey, async () =>
       codexAccountKey(await resolveCodexAuth(ctx)),
     );
+  } else if (ctx.provider === "claudeAgent") {
+    setBounded(accountKeyReaders, cacheKey, () => readClaudeAccountKey(ctx));
   }
   const identity = NodeCrypto.createHash("sha256")
     .update(
@@ -1809,6 +1888,7 @@ async function resolveProviderUsage(
       scheduleRateLimitRefresh(ctx, blockedUntil, fetchUsage);
       const rateLimitedUntil = DateTime.formatIso(DateTime.makeUnsafe(blockedUntil));
       const detail = rateLimitDetail(providerName(ctx.provider), blockedUntil, ctx.nowMs);
+      if (cached && isFreshPush(cached, ctx.nowMs)) return cached.snapshot;
       if (cached) {
         return {
           ...cached.snapshot,
@@ -1849,7 +1929,9 @@ async function resolveProviderUsage(
     const latest = snapshotCache.get(cacheKey);
     const fallback = latest?.snapshot.status === "ok" ? latest : cached;
     let resolved: ServerProviderUsageSnapshot;
-    if (result.status === "error" && fallback?.snapshot.status === "ok") {
+    if (result.status === "error" && latest && isFreshPush(latest, ctx.nowMs)) {
+      resolved = latest.snapshot;
+    } else if (result.status === "error" && fallback?.snapshot.status === "ok") {
       const { rateLimitedUntil: _previousRateLimit, ...cachedWithoutRateLimit } = fallback.snapshot;
       resolved = {
         ...cachedWithoutRateLimit,
@@ -1861,7 +1943,7 @@ async function resolveProviderUsage(
       };
     } else {
       const newerLimits =
-        result.status === "ok" && ctx.provider === "codex"
+        result.status === "ok" && ctx.provider !== "cursor"
           ? (latest?.snapshot.limits ?? []).filter(
               (limit) => Date.parse(limit.fetchedAt ?? "") > ctx.nowMs,
             )
@@ -1877,7 +1959,7 @@ async function resolveProviderUsage(
                     !newerLimits.some(
                       (newer) =>
                         (newer.limitId ?? newer.scope) === (limit.limitId ?? limit.scope) &&
-                        newer.lane === limit.lane,
+                        (newer.lane ?? newer.windowKey) === (limit.lane ?? limit.windowKey),
                     ),
                 ),
                 ...newerLimits,
@@ -1993,7 +2075,7 @@ export const getProviderUsage = Effect.fn("ProviderUsage.get")(function* (
   // switch invalidates the snapshot even when no credential file exists.
   const credentialRevision = yield* Effect.promise(() => readCredentialIdentity(ctx));
   const nowMs = yield* Clock.currentTimeMillis;
-  return yield* Effect.promise(() =>
+  const snapshot = yield* Effect.promise(() =>
     resolveProviderUsage(
       {
         ...ctx,
@@ -2004,6 +2086,7 @@ export const getProviderUsage = Effect.fn("ProviderUsage.get")(function* (
       input.forceRefresh === true,
     ),
   );
+  return withElapsedResets(snapshot, nowMs);
 });
 
 export const consumeProviderResetCredit = Effect.fn("ProviderUsage.consumeResetCredit")(function* (
@@ -2129,8 +2212,9 @@ const readCachedProviderUsageList = Effect.fn("ProviderUsage.readCachedList")(fu
     return cached
       ? [
           {
-            ...cached.snapshot,
-            ...(cached.fetchedAtMs === null || nowMs - cached.fetchedAtMs >= CACHE_TTL_MS
+            ...withElapsedResets(cached.snapshot, nowMs),
+            ...(!isFreshPush(cached, nowMs) &&
+            (cached.fetchedAtMs === null || nowMs - cached.fetchedAtMs >= CACHE_TTL_MS)
               ? { stale: true }
               : {}),
           },
@@ -2240,7 +2324,7 @@ export const providerUsageTestKit = {
     instanceId: ProviderInstanceId,
     read: () => Promise<string | undefined>,
   ) => {
-    codexAccountKeyReaders.set(cacheKeyFor({ instanceId, provider: "codex" }), read);
+    accountKeyReaders.set(cacheKeyFor({ instanceId, provider: "codex" }), read);
   },
   credentialIdentity: (input: Parameters<typeof testingContext>[0]) =>
     readCredentialIdentity({ ...testingContext(input), useDefaultCredentialStore: true }),
@@ -2287,7 +2371,7 @@ export function resetProviderUsageCache(): void {
   resetCreditRequests.clear();
   contextIdentities.clear();
   pushSemaphores.clear();
-  codexAccountKeyReaders.clear();
+  accountKeyReaders.clear();
   snapshotCache.clear();
   inFlightFetches.clear();
   retryAfterGates.clear();

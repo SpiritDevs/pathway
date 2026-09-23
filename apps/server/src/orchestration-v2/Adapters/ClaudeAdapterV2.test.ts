@@ -1403,6 +1403,98 @@ describe("ClaudeAdapterV2 native session identity", () => {
   );
 });
 
+describe("ClaudeAdapterV2 provider usage", () => {
+  it.effect("pushes changed stream rate-limit windows into provider usage", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const idAllocator = yield* IdAllocatorV2;
+        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "pathway-claude-v2-usage-",
+        });
+        const frame = (fiveHour: number): SDKMessage => {
+          // unifiedWindows is present at runtime but not yet in the SDK type.
+          const rateLimitInfo = {
+            status: "allowed" as const,
+            unifiedWindows: {
+              five_hour: { utilization: fiveHour, resetsAt: 1_790_189_400 },
+              seven_day: { utilization: 0.27, resetsAt: 1_790_247_600 },
+            },
+          };
+          return {
+            type: "rate_limit_event",
+            rate_limit_info: rateLimitInfo,
+            uuid: "00000000-0000-4000-8000-000000000001",
+            session_id: "native-session-usage",
+          };
+        };
+        const ingested: Array<number | undefined> = [];
+        const done = yield* Deferred.make<void>();
+        const adapter = makeClaudeAdapterV2({
+          instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CLAUDE_SETTINGS,
+          environment: {},
+          attachmentsDir,
+          fileSystem,
+          idAllocator,
+          ingestProviderUsage: (snapshot) =>
+            Effect.gen(function* () {
+              ingested.push(snapshot.primaryLimit?.usedPercent);
+              if (ingested.length === 2) yield* Deferred.succeed(done, undefined);
+              return { ...snapshot, source: "test", updatedAt: "2026-09-24T00:00:00.000Z" };
+            }),
+          queryRunner: {
+            allocateSessionId: Effect.succeed("native-session-usage"),
+            open: () =>
+              Effect.succeed({
+                messages: Stream.make(
+                  {
+                    type: "rate_limit_event",
+                    rate_limit_info: { status: "allowed" },
+                  } as SDKMessage,
+                  frame(0.02),
+                  frame(0.02),
+                  frame(0.03),
+                ),
+                offer: () => Effect.void,
+                setModel: () => Effect.void,
+                interrupt: Effect.void,
+                close: Effect.void,
+              }),
+            forkSession: () => Effect.die("unused forkSession"),
+            assertComplete: Effect.void,
+          },
+        });
+        const threadId = ThreadId.make("thread-claude-usage");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-usage"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("run-attempt-claude-usage"),
+            text: "Report usage",
+            attachments: [],
+            providerTurnOrdinal: 1,
+          }),
+        );
+        yield* Deferred.await(done);
+        assert.deepEqual(ingested, [2, 3]);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+});
+
 describe("ClaudeAdapterV2 background wake turns", () => {
   const WAKE_NATIVE_SESSION = "native-thread-claude-wake";
   const WAKE_TASK_ID = "task-wake-build";

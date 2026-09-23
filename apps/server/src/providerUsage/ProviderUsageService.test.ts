@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 
 import { describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceId, type ServerProviderUsageSnapshot } from "@spiritdevs/contracts";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Fiber from "effect/Fiber";
 import { HostProcessEnvironment } from "@spiritdevs/shared/hostProcess";
@@ -19,6 +20,7 @@ import {
   ingestPushedSnapshot,
   getProviderUsage,
   makeSharedProviderUsageSubscription,
+  mapClaudeRateLimitEvent,
   mapCodexRateLimitsUpdated,
   parseClaudeUsage,
   parseCodexUsage,
@@ -1090,6 +1092,126 @@ it.effect("refreshes a subscribed idle account after TTL without a user action",
       );
       expect(refreshed).toHaveLength(1);
       expect(calls).toBe(2);
+    }),
+  ),
+);
+
+it("maps Claude stream rate-limit windows and ignores frames without utilization", () => {
+  expect(mapClaudeRateLimitEvent({ instanceId, rateLimitInfo: { status: "allowed" } })).toBeNull();
+  expect(
+    mapClaudeRateLimitEvent({
+      instanceId,
+      rateLimitInfo: {
+        status: "allowed",
+        unifiedWindows: {
+          five_hour: { utilization: 0.02, resetsAt: 1_790_189_400 },
+          seven_day: { utilization: 1.4, resetsAt: 1_790_247_600 },
+        },
+      },
+    }),
+  ).toMatchObject({
+    provider: "claudeAgent",
+    primaryLimit: {
+      window: "5h",
+      windowKey: "session",
+      usedPercent: 2,
+      resetsAt: "2026-09-23T18:50:00.000Z",
+    },
+    secondaryLimit: { window: "Weekly", windowKey: "weekly", usedPercent: 100 },
+  });
+  expect(
+    mapClaudeRateLimitEvent({
+      instanceId,
+      rateLimitInfo: { status: "rejected", rateLimitType: "five_hour", utilization: 1 },
+    })?.limits,
+  ).toEqual([{ window: "5h", windowKey: "session", windowDurationMins: 300, usedPercent: 100 }]);
+});
+
+it.effect("keeps Claude usage live from stream pushes while polling is rate limited", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const dir = yield* Effect.acquireRelease(
+        Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "usage-push-"))),
+        (dir) => Effect.promise(() => NodeFSP.rm(dir, { recursive: true, force: true })),
+      );
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          NodePath.join(dir, ".credentials.json"),
+          '{"claudeAiOauth":{"accessToken":"synthetic"}}',
+        ),
+      );
+      resetProviderUsageCache();
+      providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
+      const hour = 60 * 60 * 1000;
+      const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
+      let calls = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        calls += 1;
+        return calls === 1
+          ? new Response(
+              JSON.stringify({
+                five_hour: { utilization: 100, resets_at: iso(hour) },
+                seven_day: { utilization: 60, resets_at: iso(72 * hour) },
+                seven_day_opus: { utilization: 40, resets_at: iso(72 * hour) },
+              }),
+            )
+          : new Response("{}", { status: 429, headers: { "retry-after": "3600" } });
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          fetchMock.mockRestore();
+          resetProviderUsageCache();
+        }),
+      );
+      const loadList = () =>
+        providerUsageTestKit.loadList().pipe(
+          Effect.provide(
+            ServerSettingsService.layerTest({
+              providerInstances: {
+                ...disabledLegacySlots,
+                [instanceId]: { driver: "claudeAgent", config: { homePath: dir } },
+              },
+            }),
+          ),
+        );
+      expect((yield* loadList())[0]?.limits[0]?.usedPercent).toBe(100);
+
+      yield* TestClock.adjust("5 minutes");
+      expect((yield* loadList())[0]).toMatchObject({
+        stale: true,
+        rateLimitedUntil: iso(hour + 5 * 60_000),
+      });
+      const push = mapClaudeRateLimitEvent({
+        instanceId,
+        rateLimitInfo: {
+          status: "allowed",
+          unifiedWindows: {
+            five_hour: { utilization: 0.02, resetsAt: (6 * hour) / 1000 },
+            seven_day: { utilization: 0.61, resetsAt: (72 * hour) / 1000 },
+          },
+        },
+      });
+      yield* ingestPushedSnapshot(push!, yield* Clock.currentTimeMillis);
+
+      const live = (yield* loadList())[0];
+      expect(live?.stale).toBeUndefined();
+      expect(live?.rateLimitedUntil).toBeUndefined();
+      expect(live?.limits).toMatchObject([
+        { windowKey: "session", usedPercent: 2 },
+        { windowKey: "weekly", usedPercent: 61 },
+        { windowKey: "weekly", scope: "Opus", usedPercent: 40 },
+      ]);
+
+      // Once the pushed session window resets, stale numbers are not presented as current.
+      yield* TestClock.adjust(`${6 * 60} minutes`);
+      const afterReset = (yield* loadList())[0];
+      expect(afterReset?.stale).toBe(true);
+      expect(afterReset?.limits[0]).toEqual(
+        expect.objectContaining({ windowKey: "session", usedPercent: 0 }),
+      );
+      expect(afterReset?.limits[0]?.resetsAt).toBeUndefined();
+      expect(afterReset?.limits[1]).toMatchObject({ usedPercent: 61, resetsAt: iso(72 * hour) });
+      expect(calls).toBe(3);
     }),
   ),
 );
