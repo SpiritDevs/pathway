@@ -3,6 +3,13 @@ import * as Schema from "effect/Schema";
 
 export const LINUX_CUA_INPUT_SCOPE = "owned-headless-browser";
 
+/**
+ * The macOS driver's signing identifier. It is embedded as the Mach-O's
+ * `__TEXT,__info_plist`, so codesign keeps it through electron-builder's
+ * identifier-less re-sign and macOS TCC grants survive updates.
+ */
+export const CUA_DRIVER_SIGN_IDENTIFIER = "com.spiritdevs.pathway.cua.driver";
+
 // The CLI delegates cursor-theme authoring to the sibling executable. AT-SPI
 // observations use Rust/zbus; the GNOME extension sources are also embedded in
 // the driver, and these files preserve the upstream manual installation route.
@@ -58,6 +65,7 @@ export const CuaArtifactProvenance = Schema.Struct({
   upstreamArchiveSha256: Schema.optional(Schema.String),
   sourceArchiveSha256: Schema.optional(Schema.String),
   signedIdentity: Schema.optional(Schema.String),
+  signingIdentifier: Schema.optional(Schema.String),
 });
 export type CuaArtifactProvenance = typeof CuaArtifactProvenance.Type;
 
@@ -110,14 +118,13 @@ export const assertCuaArtifactProvenance = (input: {
   readonly binarySha256: string;
 }) => {
   const { provenance, release, platform } = input;
-  const legacyMacPlatform = platform === "darwin" && provenance.platform === undefined;
   const recordedArchitectures = provenance.architectures;
   if (
     provenance.version !== release.version ||
     provenance.source !== release.source ||
     provenance.nativeRevision !== release.nativeRevision ||
     provenance.rustVersion !== release.rustVersion ||
-    (!legacyMacPlatform && provenance.platform !== platform) ||
+    provenance.platform !== platform ||
     !Array.isArray(recordedArchitectures) ||
     input.architectures.some((value) => !recordedArchitectures.includes(value)) ||
     input.binarySha256 !== provenance.binarySha256
@@ -154,7 +161,24 @@ export const assertCuaArtifactProvenance = (input: {
   ) {
     return reject("A macOS Cua artifact cannot carry Linux-only input provenance.");
   }
+  if (platform === "darwin" && provenance.signingIdentifier !== CUA_DRIVER_SIGN_IDENTIFIER) {
+    return reject("Cua macOS artifact lacks the embedded signing identifier; rebuild it.");
+  }
   return Effect.void;
+};
+
+/** Every file staged beside the driver must be recorded, and every recorded file present. */
+export const assertCuaSidecarChecksums = (
+  provenance: CuaArtifactProvenance,
+  checksums: Readonly<Record<string, string>>,
+) => {
+  const recorded = provenance.sidecarSha256;
+  const staged = Object.keys(checksums);
+  return recorded &&
+    Object.keys(recorded).length === staged.length &&
+    staged.every((path) => recorded[path] === checksums[path])
+    ? Effect.void
+    : reject("Cua sidecar checksum mismatch, or a sidecar is missing or unrecorded.");
 };
 
 export const assertLinuxCuaSidecarChecksums = (
