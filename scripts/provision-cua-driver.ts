@@ -21,12 +21,14 @@ import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable
 
 import {
   assertCuaArtifactProvenance,
+  assertCuaSidecarChecksums,
   assertLinuxCuaBinaryIdentity,
   assertLinuxCuaBuildHost,
   assertLinuxCuaSidecarChecksums,
   type CuaArch,
   CuaArtifactProvenance,
   type CuaPlatform,
+  CUA_DRIVER_SIGN_IDENTIFIER,
   LINUX_CUA_INPUT_SCOPE,
   LINUX_CUA_SIDECAR_PATHS,
 } from "./lib/cua-artifact-provenance.ts";
@@ -37,8 +39,28 @@ export class CuaProvisionError extends Schema.TaggedErrorClass<CuaProvisionError
   { message: Schema.String },
 ) {}
 
-/** Stable signing identifier so macOS TCC remembers the driver across rebuilds. */
-export const CUA_DRIVER_SIGN_IDENTIFIER = "com.spiritdevs.pathway.cua.driver";
+export { CUA_DRIVER_SIGN_IDENTIFIER };
+
+// Linked into the Mach-O as __TEXT,__info_plist. codesign reads the identifier
+// from it, so no signer (ad-hoc here, Developer ID in electron-builder) can
+// fall back to the per-build `cua-driver-<LC_UUID>` identifier.
+const CUA_DRIVER_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>${CUA_DRIVER_SIGN_IDENTIFIER}</string>
+	<key>CFBundleName</key>
+	<string>cua-driver</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+</dict>
+</plist>
+`;
+
+// Written by the provisioner or the cache action beside the driver; never
+// upstream sidecars, and never staged from an artifact.
+const PROVISIONER_FILES = new Set(["provenance.json", "LICENSE.txt", "build-key.txt"]);
 
 const PATCH_DIR = "native/cua-driver/patches";
 const NATIVE_PATCH = "0001-pathway-native.patch";
@@ -90,6 +112,29 @@ const decodeProvenance = Schema.decodeUnknownEffect(ProvenanceJson);
 const encodeProvenance = Schema.encodeEffect(ProvenanceJson);
 
 type MutableProvenance = { -readonly [K in keyof CuaArtifactProvenance]: CuaArtifactProvenance[K] };
+
+interface Sidecar {
+  readonly bytes: Uint8Array;
+  readonly mode: number;
+}
+
+const sidecarChecksums = (sidecars: Readonly<Record<string, Sidecar>>) =>
+  Object.fromEntries(Object.entries(sidecars).map(([file, { bytes }]) => [file, sha256Hex(bytes)]));
+
+/** Every regular file in a bundle directory except the driver and provisioner files. */
+const readSidecars = Effect.fnUntraced(function* (directory: string, binaryName: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sidecars: Record<string, Sidecar> = {};
+  for (const entry of (yield* fs.readDirectory(directory, { recursive: true })).toSorted()) {
+    const file = entry.split(path.sep).join("/");
+    if (file === binaryName || PROVISIONER_FILES.has(file)) continue;
+    const info = yield* fs.stat(path.join(directory, entry));
+    if (info.type !== "File") continue;
+    sidecars[file] = { bytes: yield* fs.readFile(path.join(directory, entry)), mode: info.mode };
+  }
+  return sidecars;
+});
 
 export const provisionCuaDriver = Effect.fn("provisionCuaDriver")(function* (
   options: ProvisionCuaDriverOptions,
@@ -161,14 +206,16 @@ export const provisionCuaDriver = Effect.fn("provisionCuaDriver")(function* (
   const temporary = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-cua-package-" });
   const digestFile = (file: string) => Effect.map(fs.readFile(file), sha256Hex);
 
+  const binaryName = platform === "win32" ? "cua-driver.exe" : "cua-driver";
   let binary: string;
   let provenance: MutableProvenance;
-  let linuxSidecars: Record<string, Uint8Array> | undefined;
-  let upstreamDirectory: string | undefined;
+  // Everything staged beside a Linux or Windows driver, each byte checksummed
+  // in provenance. macOS stages the driver alone.
+  let sidecars: Record<string, Sidecar> = {};
 
   if (artifact) {
     const artifactDir = path.resolve(artifact);
-    binary = path.join(artifactDir, platform === "win32" ? "cua-driver.exe" : "cua-driver");
+    binary = path.join(artifactDir, binaryName);
     provenance = {
       ...(yield* decodeProvenance(
         yield* fs.readFileString(path.join(artifactDir, "provenance.json")),
@@ -185,20 +232,14 @@ export const provisionCuaDriver = Effect.fn("provisionCuaDriver")(function* (
       architectures,
       binarySha256: yield* digestFile(binary),
     });
-    if (platform === "linux" && provenance.patched === true) {
-      const sidecars: Record<string, Uint8Array> = {};
-      for (const sidecar of LINUX_CUA_SIDECAR_PATHS) {
-        sidecars[sidecar] = yield* fs.readFile(path.join(artifactDir, sidecar));
+    if (platform !== "darwin") {
+      sidecars = yield* readSidecars(artifactDir, binaryName);
+      const checksums = sidecarChecksums(sidecars);
+      yield* assertCuaSidecarChecksums(provenance, checksums);
+      if (platform === "linux" && provenance.patched === true) {
+        yield* assertLinuxCuaSidecarChecksums(provenance, checksums);
       }
-      linuxSidecars = sidecars;
-      yield* assertLinuxCuaSidecarChecksums(
-        provenance,
-        Object.fromEntries(
-          Object.entries(sidecars).map(([file, bytes]) => [file, sha256Hex(bytes)]),
-        ),
-      );
     }
-    upstreamDirectory = artifactDir;
   } else if (platform === "win32") {
     // Windows: stage the upstream release binary for the pinned version. The
     // authoritative checksum comes from the release's own checksums.txt,
@@ -225,7 +266,7 @@ export const provisionCuaDriver = Effect.fn("provisionCuaDriver")(function* (
       Effect.catch(() => run("unzip", ["-o", archivePath, "-d", staged])),
     );
     binary = path.join(staged, UPSTREAM_ASSET.win32.binary);
-    upstreamDirectory = staged;
+    sidecars = yield* readSidecars(staged, binaryName);
     provenance = {
       version: release.version,
       source: release.source,
@@ -236,6 +277,7 @@ export const provisionCuaDriver = Effect.fn("provisionCuaDriver")(function* (
       platform,
       architectures,
       binarySha256: yield* digestFile(binary),
+      sidecarSha256: sidecarChecksums(sidecars),
       upstreamArchiveSha256: wantSha,
     };
   } else {
@@ -284,24 +326,37 @@ export const provisionCuaDriver = Effect.fn("provisionCuaDriver")(function* (
       return yield* fail("Cua source package version mismatch.");
     }
     const targetDir = path.resolve(hostEnv.CARGO_TARGET_DIR || path.join(temporary, "target"));
+    const infoPlist = path.join(temporary, "Info.plist");
+    yield* fs.writeFileString(infoPlist, CUA_DRIVER_INFO_PLIST);
     const binaries: Array<string> = [];
     for (const architecture of architectures) {
       const target = SOURCE_TARGETS[platform][architecture];
+      const cargoOptions = [
+        "--release",
+        "--locked",
+        "--target-dir",
+        targetDir,
+        "--target",
+        target,
+        ...(options.offline ? ["--offline"] : []),
+      ];
       yield* run(
         "cargo",
-        [
-          "build",
-          "--release",
-          "--locked",
-          "--target-dir",
-          targetDir,
-          "--target",
-          target,
-          "-p",
-          "cua-driver",
-          ...(platform === "linux" ? ["-p", "cursor-theme-cli"] : []),
-          ...(options.offline ? ["--offline"] : []),
-        ],
+        platform === "darwin"
+          ? // `cargo rustc` adds the link argument to the driver binary alone and
+            // keeps the crate's configured rustflags, which RUSTFLAGS would replace.
+            [
+              "rustc",
+              ...cargoOptions,
+              "-p",
+              "cua-driver",
+              "--bin",
+              "cua-driver",
+              "--",
+              "-C",
+              `link-arg=-Wl,-sectcreate,__TEXT,__info_plist,${infoPlist}`,
+            ]
+          : ["build", ...cargoOptions, "-p", "cua-driver", "-p", "cursor-theme-cli"],
         rust,
       );
       binaries.push(path.join(targetDir, target, "release/cua-driver"));
@@ -311,15 +366,16 @@ export const provisionCuaDriver = Effect.fn("provisionCuaDriver")(function* (
     else yield* fs.copyFile(binaries[0]!, binary);
     if (platform === "linux") {
       const target = SOURCE_TARGETS.linux[architectures[0]!];
-      const sidecars: Record<string, Uint8Array> = {};
       for (const sidecar of LINUX_CUA_SIDECAR_PATHS) {
-        sidecars[sidecar] = yield* fs.readFile(
-          sidecar === "cua-cursor-theme"
-            ? path.join(targetDir, target, "release/cua-cursor-theme")
-            : path.join(build, "libs/cua-driver", sidecar),
-        );
+        sidecars[sidecar] = {
+          bytes: yield* fs.readFile(
+            sidecar === "cua-cursor-theme"
+              ? path.join(targetDir, target, "release/cua-cursor-theme")
+              : path.join(build, "libs/cua-driver", sidecar),
+          ),
+          mode: sidecar === "cua-cursor-theme" || sidecar.endsWith(".sh") ? 0o755 : 0o644,
+        };
       }
-      linuxSidecars = sidecars;
     }
     provenance = {
       version: release.version,
@@ -328,16 +384,14 @@ export const provisionCuaDriver = Effect.fn("provisionCuaDriver")(function* (
       platform,
       patched: true,
       patchSha256: release.patchSha256,
-      ...(platform === "linux" && linuxSidecars
+      ...(platform === "linux"
         ? {
             linuxBrowserPatchSha256: release.linuxBrowserPatchSha256,
             browserInputControl: release.linuxBrowserInputControl,
             inputScope: LINUX_CUA_INPUT_SCOPE,
-            sidecarSha256: Object.fromEntries(
-              Object.entries(linuxSidecars).map(([file, bytes]) => [file, sha256Hex(bytes)]),
-            ),
+            sidecarSha256: sidecarChecksums(sidecars),
           }
-        : {}),
+        : { signingIdentifier: CUA_DRIVER_SIGN_IDENTIFIER }),
       rustVersion: release.rustVersion,
       rustcVersion,
       architectures,
@@ -357,38 +411,34 @@ export const provisionCuaDriver = Effect.fn("provisionCuaDriver")(function* (
     }
   } else if (platform === "linux") {
     yield* assertLinuxCuaBinaryIdentity(yield* fs.readFile(binary), architectures);
-    if (linuxSidecars) {
-      yield* assertLinuxCuaBinaryIdentity(linuxSidecars["cua-cursor-theme"]!, architectures);
+    if (provenance.patched === true) {
+      yield* assertLinuxCuaBinaryIdentity(sidecars["cua-cursor-theme"]!.bytes, architectures);
     }
   }
 
   yield* fs.makeDirectory(destination, { recursive: true });
-  if (platform === "win32" || (platform === "linux" && provenance.patched === false)) {
-    // The upstream archive is a bundle — driver plus its sidecars (cursor
-    // theme, SDK, node runtime, UIA/Wayland helpers). Stage them all — from
-    // the verified artifact dir when one was supplied, else the download.
-    yield* fs.copy(upstreamDirectory!, destination, { overwrite: true });
-    if (platform !== "win32") yield* fs.chmod(path.join(destination, "cua-driver"), 0o755);
-  } else if (platform === "linux") {
-    // A previous upstream install may have left separately loadable SDK
-    // binaries here. They are not used by Pathway's direct daemon transport
-    // and must not masquerade as this newly patched runtime.
-    for (const obsolete of [
-      "libcua_driver_sdk.so",
-      "cua_driver_node_runtime.node",
-      "cua_driver_abi.h",
-    ]) {
-      yield* fs.remove(path.join(destination, obsolete), { force: true });
+  if (platform !== "darwin") {
+    if (provenance.patched === true) {
+      // A previous upstream install may have left separately loadable SDK
+      // binaries here. They are not used by Pathway's direct daemon transport
+      // and must not masquerade as this newly patched runtime.
+      for (const obsolete of [
+        "libcua_driver_sdk.so",
+        "cua_driver_node_runtime.node",
+        "cua_driver_abi.h",
+      ]) {
+        yield* fs.remove(path.join(destination, obsolete), { force: true });
+      }
     }
-    yield* fs.writeFile(path.join(destination, "cua-driver"), yield* fs.readFile(binary));
-    yield* fs.chmod(path.join(destination, "cua-driver"), 0o755);
-    for (const [sidecar, bytes] of Object.entries(linuxSidecars ?? {})) {
+    // Stage bytes, never the directory: only the driver and the sidecars whose
+    // checksums provenance records reach the destination.
+    yield* fs.writeFile(path.join(destination, binaryName), yield* fs.readFile(binary));
+    yield* fs.chmod(path.join(destination, binaryName), 0o755);
+    for (const [sidecar, { bytes, mode }] of Object.entries(sidecars)) {
       const stagedPath = path.join(destination, sidecar);
       yield* fs.makeDirectory(path.dirname(stagedPath), { recursive: true });
       yield* fs.writeFile(stagedPath, bytes);
-      if (sidecar === "cua-cursor-theme" || sidecar.endsWith(".sh")) {
-        yield* fs.chmod(stagedPath, 0o755);
-      }
+      yield* fs.chmod(stagedPath, mode & 0o777);
     }
   } else {
     // Stage via a content write, not copyFile: macOS clonefile carries the
@@ -397,27 +447,30 @@ export const provisionCuaDriver = Effect.fn("provisionCuaDriver")(function* (
     const staged = path.join(destination, "cua-driver");
     yield* fs.writeFile(staged, yield* fs.readFile(binary));
     yield* fs.chmod(staged, 0o755);
-    // Re-stamp the signature. Default is a plain adhoc signature (the linker's
-    // embedded `linker-signed` flag signature is killed at exec on recent
-    // macOS). When a signing identity is supplied, use it with a stable
-    // identifier so macOS TCC remembers this driver across rebuilds instead of
-    // prompting as a brand-new unknown app every time.
-    yield* run("codesign", [
-      "--force",
-      ...(signIdentity
-        ? ["--identifier", CUA_DRIVER_SIGN_IDENTIFIER, "--sign", signIdentity]
-        : ["--sign", "-"]),
+    // Re-stamp the signature: ad-hoc by default (the linker's `linker-signed`
+    // signature is killed at exec on recent macOS), or the supplied identity.
+    // The embedded Info.plist supplies the identifier either way; check it so
+    // a driver built without the plist can never be staged.
+    yield* run("codesign", ["--force", "--sign", signIdentity ?? "-", staged]);
+    yield* output("codesign", [
+      "--verify",
+      `-R=identifier "${CUA_DRIVER_SIGN_IDENTIFIER}"`,
       staged,
-    ]);
+    ]).pipe(
+      Effect.mapError(
+        () =>
+          new CuaProvisionError({
+            message: `Cua driver does not carry the ${CUA_DRIVER_SIGN_IDENTIFIER} signing identifier.`,
+          }),
+      ),
+    );
     // Signing rewrites the executable bytes, so record the digest of the
-    // final staged file. The reuse path verifies binarySha256 against exactly
-    // these bytes.
+    // final staged file; the reuse path verifies exactly these bytes.
+    // electron-builder re-signs the packaged copy with Developer ID, so there
+    // the code signature, not this digest, vouches for the bytes.
     if (signIdentity) provenance.signedIdentity = signIdentity;
     provenance.binarySha256 = yield* digestFile(staged);
   }
-  // Legacy Mac artifacts predate the platform field; Mach-O/lipo verification
-  // above establishes it without invalidating or recompiling their signed bytes.
-  provenance.platform = platform;
   yield* fs.writeFileString(
     path.join(destination, "provenance.json"),
     `${yield* encodeProvenance(provenance)}\n`,
