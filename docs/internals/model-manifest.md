@@ -27,3 +27,11 @@ local to the environment, whose snapshots serve all connected clients.
 
 Servers predating Claude catalog support need one update before they can consume
 `claudeModels`. Later catalog changes can then ship through GitHub alone.
+
+The Provider settings **Update model catalog** action sends
+`server.refreshProviders` with `forceModelCatalogRefresh: true`. The server downloads
+and validates the manifest before refreshing all provider snapshots. Explicit downloads
+bypass automatic-check preferences, the cache TTL, and retry backoff, but retain the
+last good catalog on failure. The response includes `modelCatalogUpdatedAt` only after
+a successful forced download; older servers omit it, so clients can report that an
+update is required rather than falsely claiming success.

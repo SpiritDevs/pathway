@@ -324,6 +324,7 @@ import {
   ServerProviderAuthenticationStartInput,
   ServerProviderAuthenticationStartResult,
   ServerProviderUpdateError,
+  ServerModelCatalogRefreshError,
   ServerProviderUpdateInput,
   ServerLifecycleStreamEvent,
   ServerRemoveKeybindingInput,
@@ -577,9 +578,13 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
      * refreshes.
      */
     instanceId: Schema.optional(ProviderInstanceId),
+    forceModelCatalogRefresh: Schema.optionalKey(Schema.Boolean),
   }),
-  success: ServerProviderUpdatedPayload,
-  error: EnvironmentAuthorizationError,
+  success: Schema.Struct({
+    ...ServerProviderUpdatedPayload.fields,
+    modelCatalogUpdatedAt: Schema.optionalKey(Schema.String),
+  }),
+  error: Schema.Union([EnvironmentAuthorizationError, ServerModelCatalogRefreshError]),
 });
 
 export const WsServerStartProviderAuthenticationRpc = Rpc.make(

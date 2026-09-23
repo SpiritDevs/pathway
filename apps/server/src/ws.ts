@@ -1,3 +1,4 @@
+import { ModelManifest } from "./provider/ModelManifest.ts";
 import { StorageService } from "./storage/StorageService.ts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -628,6 +629,7 @@ const makeWsRpcLayer = (
       const remoteBrowser = yield* RemoteBrowser;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+      const modelManifest = yield* ModelManifest;
       const providerInstanceRegistry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
@@ -1651,10 +1653,19 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
-            (input.instanceId !== undefined
-              ? providerRegistry.refreshInstance(input.instanceId)
-              : providerRegistry.refresh()
-            ).pipe(Effect.map((providers) => ({ providers }))),
+            Effect.gen(function* () {
+              const manifest = input.forceModelCatalogRefresh
+                ? yield* modelManifest.forceRefresh
+                : undefined;
+              const providers = yield* input.instanceId !== undefined &&
+              !input.forceModelCatalogRefresh
+                ? providerRegistry.refreshInstance(input.instanceId)
+                : providerRegistry.refresh();
+              return {
+                providers,
+                ...(manifest ? { modelCatalogUpdatedAt: manifest.updatedAt } : {}),
+              };
+            }),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverStartProviderAuthentication]: (input) =>

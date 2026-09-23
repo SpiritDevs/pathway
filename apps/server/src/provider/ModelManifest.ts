@@ -1,4 +1,4 @@
-import { ServerProviderModel } from "@spiritdevs/contracts";
+import { ServerModelCatalogRefreshError, ServerProviderModel } from "@spiritdevs/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -43,6 +43,8 @@ const Cache = Schema.fromJsonString(
   }),
 );
 
+const encodeCache = Schema.encodeEffect(Cache);
+
 export function classifyModels(
   models: ReadonlyArray<ServerProviderModel>,
   manifest: ModelManifestData,
@@ -61,6 +63,7 @@ export function classifyModels(
 interface ModelManifestService {
   readonly current: Effect.Effect<ModelManifestData>;
   readonly refresh: Effect.Effect<ModelManifestData>;
+  readonly forceRefresh: Effect.Effect<ModelManifestData, ServerModelCatalogRefreshError>;
 }
 
 /** Tests and standalone drivers use the bundle; production provides the shared cache. */
@@ -70,6 +73,11 @@ export const ModelManifest = Context.Reference<ModelManifestService>(
     defaultValue: () => ({
       current: Effect.succeed(BUNDLED_MODEL_MANIFEST),
       refresh: Effect.succeed(BUNDLED_MODEL_MANIFEST),
+      forceRefresh: Effect.fail(
+        new ServerModelCatalogRefreshError({
+          message: "Model catalog updates are unavailable in this environment.",
+        }),
+      ),
     }),
   },
 );
@@ -99,32 +107,50 @@ export const makeModelManifest = Effect.fn("ModelManifest.make")(function* (opti
     ),
   );
   const current = load.pipe(Effect.map(() => manifest));
-  const refresh = gate.withPermits(1)(
-    Effect.gen(function* () {
-      yield* load;
-      if (!(yield* options.enabled)) return manifest;
-      const now = yield* Clock.currentTimeMillis;
-      const fresh = (at: number | null, ttl: number) => at !== null && now >= at && now - at < ttl;
-      if (fresh(fetchedAt, 3_600_000) || fresh(attemptedAt, 300_000)) return manifest;
-      attemptedAt = now;
-      const candidate = yield* options.fetch.pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(ModelManifestData)),
-        Effect.timeout(10_000),
-        Effect.catch(() => Effect.succeed(null)),
-      );
-      if (!candidate || Date.parse(candidate.updatedAt) < Date.parse(manifest.updatedAt))
+  const refresh = (force: boolean) =>
+    gate.withPermits(1)(
+      Effect.gen(function* () {
+        yield* load;
+        if (!force && !(yield* options.enabled)) return manifest;
+        const now = yield* Clock.currentTimeMillis;
+        const fresh = (at: number | null, ttl: number) =>
+          at !== null && now >= at && now - at < ttl;
+        if (!force && (fresh(fetchedAt, 3_600_000) || fresh(attemptedAt, 300_000))) return manifest;
+        attemptedAt = now;
+        const candidate = yield* options.fetch.pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(ModelManifestData)),
+          Effect.timeout(10_000),
+          Effect.mapError(
+            () =>
+              new ServerModelCatalogRefreshError({
+                message:
+                  "Could not download a valid model catalog. Your existing models have been kept. Please try again.",
+              }),
+          ),
+        );
+        if (Date.parse(candidate.updatedAt) < Date.parse(manifest.updatedAt)) {
+          return yield* new ServerModelCatalogRefreshError({
+            message:
+              "The published model catalog is older than your current catalog. Your existing models have been kept.",
+          });
+        }
+        manifest = candidate;
+        fetchedAt = now;
+        yield* encodeCache({ fetchedAt: now, manifest }).pipe(
+          Effect.flatMap((serialized) =>
+            fs.writeFileString(`${options.cachePath}.tmp`, serialized),
+          ),
+          Effect.andThen(fs.rename(`${options.cachePath}.tmp`, options.cachePath)),
+          Effect.catch(() => Effect.void),
+        );
         return manifest;
-      manifest = candidate;
-      fetchedAt = now;
-      yield* Schema.encodeEffect(Cache)({ fetchedAt: now, manifest }).pipe(
-        Effect.flatMap((serialized) => fs.writeFileString(`${options.cachePath}.tmp`, serialized)),
-        Effect.andThen(fs.rename(`${options.cachePath}.tmp`, options.cachePath)),
-        Effect.catch(() => Effect.void),
-      );
-      return manifest;
-    }),
-  );
-  return { current, refresh } satisfies ModelManifestService;
+      }),
+    );
+  return {
+    current,
+    refresh: refresh(false).pipe(Effect.orElseSucceed(() => manifest)),
+    forceRefresh: refresh(true),
+  } satisfies ModelManifestService;
 });
 
 export const layer = Layer.effect(
@@ -140,7 +166,10 @@ export const layer = Layer.effect(
         Effect.map((value) => value.enableProviderUpdateChecks),
         Effect.catch(() => Effect.succeed(false)),
       ),
-      fetch: http.get(MODEL_MANIFEST_URL).pipe(
+      fetch: Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) =>
+          http.get(`${MODEL_MANIFEST_URL}?t=${now}`, { headers: { "Cache-Control": "no-cache" } }),
+        ),
         Effect.flatMap(HttpClientResponse.filterStatusOk),
         Effect.flatMap((response) => response.json),
       ),

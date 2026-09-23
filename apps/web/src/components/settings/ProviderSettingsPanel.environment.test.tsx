@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 import type { ReactElement } from "react";
 import {
   DEFAULT_UNIFIED_SETTINGS,
@@ -22,6 +23,12 @@ const atoms = vi.hoisted(() => ({
 const commands = vi.hoisted(() => ({
   refresh: vi.fn(),
   updateProvider: vi.fn(),
+}));
+
+const toasts = vi.hoisted(() => ({ add: vi.fn() }));
+vi.mock("../ui/toast", () => ({
+  toastManager: toasts,
+  stackedThreadToast: (value: unknown) => value,
 }));
 
 const settingsState = vi.hoisted(() => ({
@@ -135,6 +142,7 @@ async function flushPromises(): Promise<void> {
 describe("EnvironmentProviderSettings routing", () => {
   beforeEach(() => {
     hooks.reset();
+    toasts.add.mockReset();
     atoms.providers = null;
     settingsState.value = DEFAULT_UNIFIED_SETTINGS;
     settingsState.readEnvironmentIds = [];
@@ -176,6 +184,75 @@ describe("EnvironmentProviderSettings routing", () => {
       environmentId,
       input: { provider: ProviderDriverKind.make("codex"), instanceId: codexId },
     });
+  });
+
+  it("forces model downloads on the selected environment and confirms completion", async () => {
+    commands.refresh.mockResolvedValue({
+      _tag: "Success",
+      value: { providers: [], modelCatalogUpdatedAt: "2026-09-23T00:00:00Z" },
+    });
+    const button = visitElements(
+      renderPanel(),
+      (element) => element.props["aria-label"] === "Update model catalog",
+    );
+    expect(button).not.toBeNull();
+    (button?.props.onClick as (() => void) | undefined)?.();
+    (button?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    expect(commands.refresh).toHaveBeenCalledTimes(1);
+    expect(commands.refresh).toHaveBeenCalledWith({
+      environmentId,
+      input: { forceModelCatalogRefresh: true },
+    });
+    expect(toasts.add).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "success", title: "Model catalog updated" }),
+    );
+  });
+
+  it("does not claim a model download succeeded on older servers", async () => {
+    commands.refresh.mockResolvedValue({ _tag: "Success", value: { providers: [] } });
+    const button = visitElements(
+      renderPanel(),
+      (element) => element.props["aria-label"] === "Update model catalog",
+    );
+    (button?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    expect(toasts.add).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Pathway update required" }),
+    );
+  });
+
+  it("reports catalog download errors and releases the refresh guard for retry", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    commands.refresh.mockResolvedValue({
+      _tag: "Failure",
+      cause: Cause.fail(new Error("Download unavailable")),
+    });
+    const button = visitElements(
+      renderPanel(),
+      (element) => element.props["aria-label"] === "Update model catalog",
+    );
+    (button?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    expect(toasts.add).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        title: "Could not update model catalog",
+        description: "Download unavailable",
+      }),
+    );
+    (button?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    expect(commands.refresh).toHaveBeenCalledTimes(2);
+    warning.mockRestore();
+  });
+
+  it("disables model catalog downloads for read-only connections", () => {
+    const button = visitElements(
+      renderPanel({ readOnly: true }),
+      (element) => element.props["aria-label"] === "Update model catalog",
+    );
+    expect(button?.props.disabled).toBe(true);
   });
 
   it("attaches allowance management to each supported provider instance in its environment", () => {

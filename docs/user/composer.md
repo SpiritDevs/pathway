@@ -101,3 +101,9 @@ change their options, and move models into or out of the legacy list without ano
 Pathway update. A new model can still require a newer Claude Code version or account access.
 If the catalog cannot be downloaded, Pathway keeps its last good catalog or its bundled copy.
 Connected web, desktop, and mobile clients use the catalog from their selected environment.
+
+To fetch the latest catalog immediately, open **Settings → Providers**, select the
+environment that runs your threads, and choose **Update model catalog**. This bypasses
+the hourly cache and works with automatic provider update checks disabled. Pathway
+confirms when the catalog is downloaded; if it fails, your existing models stay available.
+This updates model definitions, not the Pathway app or the provider CLI.

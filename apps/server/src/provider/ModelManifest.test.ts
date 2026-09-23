@@ -50,6 +50,52 @@ it.layer(NodeServices.layer)("model manifest cache", (it) => {
     }),
   );
 
+  it.effect("forces downloads with automatic checks disabled and a fresh cache", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-manifest-force-" });
+      let count = 0;
+      const newer = { ...BUNDLED_MODEL_MANIFEST, updatedAt: "2099-01-01T00:00:00Z" };
+      const service = yield* makeModelManifest({
+        cachePath: `${dir}/manifest.json`,
+        enabled: Effect.succeed(false),
+        fetch: Effect.sync(() => {
+          count++;
+          return newer;
+        }),
+      });
+      yield* service.refresh;
+      assert.strictEqual(count, 0);
+      assert.deepStrictEqual(yield* service.forceRefresh, newer);
+      yield* service.forceRefresh;
+      assert.strictEqual(count, 2);
+      assert.deepStrictEqual(yield* service.current, newer);
+    }),
+  );
+
+  it.effect("reports forced failures, preserves models, and allows immediate retry", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-manifest-force-" });
+      let count = 0;
+      const newer = { ...BUNDLED_MODEL_MANIFEST, updatedAt: "2099-01-01T00:00:00Z" };
+      const service = yield* makeModelManifest({
+        cachePath: `${dir}/manifest.json`,
+        enabled: Effect.succeed(true),
+        fetch: Effect.suspend(() =>
+          ++count === 1 ? Effect.fail(new Offline()) : Effect.succeed(newer),
+        ),
+      });
+      const failure = yield* Effect.flip(service.forceRefresh);
+      assert.strictEqual(failure._tag, "ServerModelCatalogRefreshError");
+      assert.deepStrictEqual(yield* service.current, BUNDLED_MODEL_MANIFEST);
+      yield* service.refresh;
+      assert.strictEqual(count, 1);
+      assert.deepStrictEqual(yield* service.forceRefresh, newer);
+      assert.strictEqual(count, 2);
+    }),
+  );
+
   it.effect("rejects invalid and older remote metadata without replacing the bundle", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -74,6 +120,9 @@ it.layer(NodeServices.layer)("model manifest cache", (it) => {
           fetch: Effect.succeed(data),
         });
         assert.deepStrictEqual(yield* service.refresh, BUNDLED_MODEL_MANIFEST);
+        const failure = yield* Effect.flip(service.forceRefresh);
+        assert.strictEqual(failure._tag, "ServerModelCatalogRefreshError");
+        assert.deepStrictEqual(yield* service.current, BUNDLED_MODEL_MANIFEST);
       }
     }),
   );

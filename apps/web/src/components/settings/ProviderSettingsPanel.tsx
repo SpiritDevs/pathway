@@ -424,26 +424,57 @@ export function EnvironmentProviderSettings({
         )
       : null;
 
-  const refreshProviders = useCallback(() => {
-    if (refreshingRef.current) return;
-    refreshingRef.current = true;
-    setIsRefreshingProviders(true);
-    void (async () => {
-      const result = await refreshServerProviders({
-        environmentId,
-        input: {},
-      });
-      refreshingRef.current = false;
-      setIsRefreshingProviders(false);
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        console.warn("Failed to refresh providers", {
-          operation: "refresh-providers",
+  const refreshProviders = useCallback(
+    (forceModelCatalogRefresh = false) => {
+      if (refreshingRef.current) return;
+      refreshingRef.current = true;
+      setIsRefreshingProviders(true);
+      void (async () => {
+        const result = await refreshServerProviders({
           environmentId,
-          ...safeErrorLogAttributes(squashAtomCommandFailure(result)),
+          input: forceModelCatalogRefresh ? { forceModelCatalogRefresh: true } : {},
         });
-      }
-    })();
-  }, [environmentId, refreshServerProviders]);
+        refreshingRef.current = false;
+        setIsRefreshingProviders(false);
+        if (forceModelCatalogRefresh && result._tag === "Success") {
+          toastManager.add(
+            stackedThreadToast(
+              result.value.modelCatalogUpdatedAt
+                ? {
+                    type: "success",
+                    title: "Model catalog updated",
+                    description: "The latest published model catalog is ready.",
+                  }
+                : {
+                    type: "error",
+                    title: "Pathway update required",
+                    description:
+                      "Update Pathway on this environment to enable model catalog downloads.",
+                  },
+            ),
+          );
+        }
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: forceModelCatalogRefresh
+                ? "Could not update model catalog"
+                : "Could not refresh providers",
+              description: error instanceof Error ? error.message : "Please try again.",
+            }),
+          );
+          console.warn("Failed to refresh providers", {
+            operation: "refresh-providers",
+            environmentId,
+            ...safeErrorLogAttributes(squashAtomCommandFailure(result)),
+          });
+        }
+      })();
+    },
+    [environmentId, refreshServerProviders],
+  );
 
   const runProviderUpdate = useCallback(
     async (candidate: ProviderUpdateCandidate) => {
@@ -726,6 +757,21 @@ export function EnvironmentProviderSettings({
           aria-disabled={readOnly || undefined}
           className={readOnly ? "space-y-1 opacity-50 select-none" : "space-y-1"}
         >
+          <SettingsRow
+            title="Model catalog"
+            description="Download the latest model list and options now, without waiting for the automatic refresh."
+            control={
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isRefreshingProviders || readOnly}
+                onClick={() => void refreshProviders(true)}
+                aria-label="Update model catalog"
+              >
+                {isRefreshingProviders ? "Refreshing…" : "Update model catalog"}
+              </Button>
+            }
+          />
           <SettingsRow
             title={
               <span className="inline-flex items-center gap-1.5">

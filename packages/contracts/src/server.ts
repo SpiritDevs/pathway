@@ -593,6 +593,11 @@ export const ServerLifecycleStreamEvent = Schema.Union([
 ]);
 export type ServerLifecycleStreamEvent = typeof ServerLifecycleStreamEvent.Type;
 
+export class ServerModelCatalogRefreshError extends Schema.TaggedErrorClass<ServerModelCatalogRefreshError>()(
+  "ServerModelCatalogRefreshError",
+  { message: Schema.String },
+) {}
+
 export const ServerProviderUpdatedPayload = Schema.Struct({
   providers: ServerProviders,
 });
