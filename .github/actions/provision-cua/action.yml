@@ -46,6 +46,10 @@ runs:
       env:
         RUSTUP_TOOLCHAIN: ${{ steps.toolchain.outputs.rust-version }}
         CARGO_PROFILE_RELEASE_STRIP: ${{ steps.toolchain.outputs.strip }}
+        # Pinned over whatever a job's Rust setup exported (dtolnay/rust-toolchain
+        # sets both), so producer and consumer fingerprint the same flags.
+        CARGO_INCREMENTAL: "0"
+        CARGO_TERM_COLOR: always
       run: |
         set -euo pipefail
         [[ -n "$CARGO_PROFILE_RELEASE_STRIP" ]] || unset CARGO_PROFILE_RELEASE_STRIP
@@ -65,6 +69,10 @@ runs:
         CACHE_KEY: ${{ steps.key.outputs.key }}
         RUSTUP_TOOLCHAIN: ${{ steps.toolchain.outputs.rust-version }}
         CARGO_PROFILE_RELEASE_STRIP: ${{ steps.toolchain.outputs.strip }}
+        # Pinned over whatever a job's Rust setup exported (dtolnay/rust-toolchain
+        # sets both), so producer and consumer fingerprint the same flags.
+        CARGO_INCREMENTAL: "0"
+        CARGO_TERM_COLOR: always
       run: |
         set -euo pipefail
         [[ -n "$CARGO_PROFILE_RELEASE_STRIP" ]] || unset CARGO_PROFILE_RELEASE_STRIP
