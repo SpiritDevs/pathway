@@ -571,8 +571,12 @@ describe("CodexAdapterV2 process spawning", () => {
       assert.deepEqual(command.args, ['^"app-server^"', '^"argument^ with^ spaces^"']);
       assert.equal(command.options.shell, true);
       assert.equal(command.options.cwd, "C:\\workspace");
-      assert.deepEqual(command.options.env, { CUSTOM: "1" });
-      assert.equal(command.options.extendEnv, true);
+      assert.deepEqual(command.options.env, {
+        PATH: "C:\\Windows\\System32",
+        HOST_ONLY: "1",
+        CUSTOM: "1",
+      });
+      assert.equal(command.options.extendEnv, false);
     }).pipe(
       Effect.provideService(HostProcessPlatform, "win32"),
       Effect.provideService(HostProcessEnvironment, {

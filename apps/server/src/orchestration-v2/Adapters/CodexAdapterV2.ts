@@ -69,7 +69,10 @@ import {
 } from "../../provider/Drivers/CodexHomeLayout.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
-import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
+import {
+  mergeProviderInstanceEnvironment,
+  providerChildEnvironment,
+} from "../../provider/ProviderInstanceEnvironment.ts";
 import {
   ingestPushedSnapshot,
   mapCodexRateLimitsUpdated,
@@ -1327,14 +1330,14 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
   readonly env?: NodeJS.ProcessEnv | undefined;
   readonly extendEnv?: boolean | undefined;
 }) {
-  const spawnCommand = yield* resolveSpawnCommand(input.command, input.args, {
-    ...(input.env === undefined ? {} : { env: input.env }),
-    ...(input.extendEnv === undefined ? {} : { extendEnv: input.extendEnv }),
+  const environment = yield* providerChildEnvironment({
+    env: input.env,
+    extendEnv: input.extendEnv,
   });
+  const spawnCommand = yield* resolveSpawnCommand(input.command, input.args, environment);
   return ChildProcess.make(spawnCommand.command, spawnCommand.args, {
     ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-    ...(input.env === undefined ? {} : { env: input.env }),
-    ...(input.extendEnv === undefined ? {} : { extendEnv: input.extendEnv }),
+    ...environment,
     shell: spawnCommand.shell,
   });
 });
