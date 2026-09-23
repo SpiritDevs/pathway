@@ -343,25 +343,41 @@ describe("OpenCodeAdapterV2", () => {
 describe("openCodeAllowsComputerPermission", () => {
   const admitted = runtimePolicy("approval-required", { enableComputerControl: true });
   const asked = (permission: string) => ({ permission, metadata: {} });
+  const servers = ["pathway", "github"];
 
   it("skips OpenCode's prompt for Pathway Computer tools on an admitted turn", () => {
-    assert.isTrue(openCodeAllowsComputerPermission(admitted, asked("pathway_computer_click")));
+    assert.isTrue(
+      openCodeAllowsComputerPermission(admitted, asked("pathway_computer_click"), servers),
+    );
     assert.isTrue(
       openCodeAllowsComputerPermission(
         runtimePolicy("auto-accept-edits", { enableComputerControl: true }),
         asked("pathway_computer_screenshot"),
+        servers,
       ),
     );
   });
 
   it("keeps asking for other tools, other modes, and turns without Computer", () => {
-    assert.isFalse(openCodeAllowsComputerPermission(admitted, asked("pathway_thread_send")));
-    assert.isFalse(openCodeAllowsComputerPermission(admitted, asked("computer_click")));
-    assert.isFalse(openCodeAllowsComputerPermission(admitted, asked("bash")));
+    assert.isFalse(
+      openCodeAllowsComputerPermission(admitted, asked("pathway_thread_send"), servers),
+    );
+    assert.isFalse(openCodeAllowsComputerPermission(admitted, asked("computer_click"), servers));
+    for (const permission of ["bash", "edit", "other_computer_click"]) {
+      assert.isFalse(
+        openCodeAllowsComputerPermission(
+          admitted,
+          { permission, metadata: { tool_name: "mcp__pathway__computer_click" } },
+          servers,
+        ),
+        permission,
+      );
+    }
     assert.isFalse(
       openCodeAllowsComputerPermission(
         runtimePolicy("approval-required"),
         asked("pathway_computer_click"),
+        servers,
       ),
     );
     assert.isFalse(
@@ -371,7 +387,32 @@ describe("openCodeAllowsComputerPermission", () => {
           interactionMode: "plan",
         }),
         asked("pathway_computer_click"),
+        servers,
       ),
+    );
+  });
+
+  it("keeps asking when another MCP server could flatten to the same tool name", () => {
+    // OpenCode keys MCP tools as `<server>_<tool>`, so a foreign `pathway_computer`
+    // server's `set_window_frame` arrives as `pathway_computer_set_window_frame`.
+    const permission = asked("pathway_computer_set_window_frame");
+    assert.isFalse(
+      openCodeAllowsComputerPermission(admitted, permission, ["pathway", "pathway_computer"]),
+    );
+    assert.isFalse(
+      openCodeAllowsComputerPermission(admitted, permission, ["pathway", "pathway.computer"]),
+    );
+    assert.isFalse(
+      openCodeAllowsComputerPermission(admitted, permission, ["pathway", "pathway_computer_set"]),
+    );
+    // A case variant is a different OpenCode server, never Pathway's own.
+    assert.isFalse(
+      openCodeAllowsComputerPermission(admitted, asked("Pathway_computer_click"), ["Pathway"]),
+    );
+    // Without Pathway's own registration, no flattened name is Pathway's.
+    assert.isFalse(openCodeAllowsComputerPermission(admitted, asked("pathway_computer_click"), []));
+    assert.isTrue(
+      openCodeAllowsComputerPermission(admitted, permission, ["pathway", "pathway_browser"]),
     );
   });
 });
