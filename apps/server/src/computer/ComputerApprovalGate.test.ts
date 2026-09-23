@@ -177,9 +177,8 @@ describe("ComputerApprovalGate", () => {
         expect(result).toBe(decision === "accept" ? "approved" : "denied");
         const prompt = yield* Queue.take(opened);
         expect(yield* gate.respond("a", prompt.requestId, "accept")).toBe(false);
-        expect(yield* Queue.take(resolved)).toBe(
-          decision === "acceptForSession" ? "decline" : decision,
-        );
+        // Whoever answered settles the card; the gate never writes it a second time.
+        expect(yield* Queue.size(resolved)).toBe(0);
       }),
   );
 

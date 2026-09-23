@@ -79,16 +79,46 @@ it.layer(ComputerApprovalsTestLayer)("computerApprovalRequester", (it) => {
         decision: "decline",
       });
       assert.equal(yield* Fiber.join(waiting), "denied");
+      // The answer settles the card in the same command.
+      const settled = (yield* orchestrator.getThreadProjection(threadId)).runtimeRequests.find(
+        (candidate) => candidate.id === request.id,
+      );
+      assert.equal(settled?.status, "resolved");
+    }),
+  );
 
-      // The gate withdraws the card in the background.
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        const settled = (yield* orchestrator.getThreadProjection(threadId)).runtimeRequests.find(
-          (candidate) => candidate.id === request.id,
-        );
-        if (settled?.status === "resolved") return;
-        yield* Effect.yieldNow;
-      }
-      assert.fail("the declined card was never settled");
+  it.effect("marks a cancelled card cancelled, not resolved", () =>
+    Effect.gen(function* () {
+      const gate = yield* ComputerApprovalGate.ComputerApprovalGate;
+      const orchestrator = yield* OrchestratorV2;
+      const { threadId, runId } = yield* seedRunningTurn("cancel");
+      const waiting = yield* Effect.forkChild(
+        gate.authorizeAction({
+          threadId,
+          turnId: runId,
+          callKey: "computer_click:{}",
+          toolName: "computer_click",
+          autonomy: "supervised",
+        }),
+      );
+      const { request } = yield* pendingComputerRequest(threadId);
+      yield* orchestrator.dispatch({
+        type: "runtime-request.respond",
+        commandId: CommandId.make("cancel-respond"),
+        threadId,
+        requestId: request.id,
+        decision: "cancel",
+      });
+      assert.equal(yield* Fiber.join(waiting), "denied");
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(
+        projection.runtimeRequests.find((candidate) => candidate.id === request.id)?.status,
+        "cancelled",
+      );
+      const card = projection.turnItems.find(
+        (item) => item.type === "approval_request" && item.requestId === request.id,
+      );
+      assert.equal(card?.status, "cancelled");
     }),
   );
 
