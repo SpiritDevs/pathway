@@ -523,6 +523,13 @@ export const OrchestrationV2DelegatedCompletionCohort = Schema.Struct({
 export type OrchestrationV2DelegatedCompletionCohort =
   typeof OrchestrationV2DelegatedCompletionCohort.Type;
 
+/** How a run was opted into Computer and the Stop generation it was opted in under. */
+export const OrchestrationV2RunComputerControl = Schema.Struct({
+  mode: Schema.Literals(["request", "chat"]),
+  generation: NonNegativeInt,
+});
+export type OrchestrationV2RunComputerControl = typeof OrchestrationV2RunComputerControl.Type;
+
 export const OrchestrationV2Run = Schema.Struct({
   allowanceHold: Schema.optional(Schema.NullOr(Schema.String)),
   id: RunId,
@@ -533,6 +540,8 @@ export const OrchestrationV2Run = Schema.Struct({
   /** Send-time settings; absent only on runs persisted before settings were snapshotted. */
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  /** Computer intent frozen at send time; absent means off. Admitted again at turn start. */
+  computerControl: Schema.optional(OrchestrationV2RunComputerControl),
   providerThreadId: Schema.NullOr(ProviderThreadId),
   userMessageId: MessageId,
   rootNodeId: Schema.NullOr(NodeId),
@@ -2593,6 +2602,10 @@ export const OrchestrationV2Command = Schema.Union([
     runtimeMode: Schema.optional(RuntimeMode),
     interactionMode: Schema.optional(ProviderInteractionMode),
     modelSelection: Schema.optional(ModelSelection),
+    /** The chat's Computer switch; a user-authored `/computer-use` opts in one turn instead. */
+    enableComputerControl: Schema.optional(Schema.Boolean),
+    /** The Computer Stop generation the client saw, so a stale send cannot re-arm control. */
+    computerControlGeneration: Schema.optional(NonNegativeInt),
     sourcePlanRef: Schema.optional(Schema.Struct({ threadId: ThreadId, planId: PlanId })),
     delegatedCompletion: Schema.optional(
       Schema.Struct({
@@ -2617,6 +2630,8 @@ export const OrchestrationV2Command = Schema.Union([
     messageId: MessageId,
     replacementMessageId: MessageId,
     text: Schema.String,
+    enableComputerControl: Schema.optional(Schema.Boolean),
+    computerControlGeneration: Schema.optional(NonNegativeInt),
   }),
   Schema.Struct({
     type: Schema.Literal("prepared-run.retry"),

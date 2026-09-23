@@ -32,6 +32,7 @@ import {
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
   type OrchestrationV2RunAttempt,
+  type OrchestrationV2RunComputerControl,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2ThreadShellSnapshot,
   type OrchestrationV2StoredEvent,
@@ -83,6 +84,29 @@ import {
   subagentThreadTitle,
 } from "./SubagentProjection.ts";
 import { ThreadForkServiceV2 } from "./ThreadForkService.ts";
+import { computerActivationMetadata } from "../computer/computerActivation.ts";
+
+/**
+ * The Computer intent a dispatch freezes onto its run (ADR 0048): the chat
+ * switch, or a user-authored `/computer-use` for this turn only. Agent and
+ * system messages never infer consent from their text.
+ */
+export function runComputerControl(input: {
+  readonly createdBy: OrchestrationV2ConversationMessage["createdBy"];
+  readonly text: string;
+  readonly enableComputerControl?: boolean | undefined;
+  readonly computerControlGeneration?: number | undefined;
+}): OrchestrationV2RunComputerControl | undefined {
+  const activation = computerActivationMetadata({
+    enableComputerControl: input.enableComputerControl,
+    computerControlGeneration: input.computerControlGeneration,
+    userMessageText: input.text,
+    dispatchOrigin: input.createdBy === "system" ? "automation" : input.createdBy,
+  });
+  return activation.computerControlMode === "off"
+    ? undefined
+    : { mode: activation.computerControlMode, generation: activation.computerControlGeneration };
+}
 
 export class OrchestratorDispatchError extends Schema.TaggedErrorClass<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -3269,6 +3293,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly createdBy: OrchestrationV2ConversationMessage["createdBy"];
     readonly creationSource: OrchestrationV2ConversationMessage["creationSource"];
     readonly forceRestart: boolean;
+    /** Computer intent of the steering message; installing it needs a new provider turn. */
+    readonly computerControl?: OrchestrationV2RunComputerControl | undefined;
   }) =>
     Effect.gen(function* () {
       const targetRun = input.projection.runs.find(
@@ -3343,6 +3369,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         targetRun.modelSelection,
         input.modelSelection,
       );
+      // A steer can only add Computer; the live turn's tools change only by restarting it.
+      const installsComputer =
+        input.computerControl !== undefined && targetRun.computerControl === undefined;
       const providerInstanceChanged =
         targetRun.providerInstanceId !== input.modelSelection.instanceId;
       const selectionTransition =
@@ -3449,6 +3478,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           forceRestart:
             input.forceRestart ||
             selectionChanged ||
+            installsComputer ||
             targetRun.runtimeMode !== input.projection.thread.runtimeMode ||
             targetRun.interactionMode !== input.projection.thread.interactionMode,
         }),
@@ -3700,6 +3730,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       const restartedRun: OrchestrationV2Run = {
         ...targetRun,
+        ...(installsComputer ? { computerControl: input.computerControl } : {}),
         runtimeMode: input.projection.thread.runtimeMode,
         interactionMode: input.projection.thread.interactionMode,
         providerInstanceId: input.modelSelection.instanceId,
@@ -4117,6 +4148,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         delegatedCompletion === undefined
           ? command.text
           : delegatedCompletionWakeDetail(delegatedCompletion.taskIds);
+      const computerControl =
+        delegatedCompletion === undefined
+          ? runComputerControl({
+              createdBy: command.createdBy,
+              text: command.text,
+              enableComputerControl: command.enableComputerControl,
+              computerControlGeneration: command.computerControlGeneration,
+            })
+          : undefined;
       const sourcePlanProjection =
         command.sourcePlanRef === undefined
           ? null
@@ -4180,6 +4220,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           createdBy: command.createdBy,
           creationSource: command.creationSource,
           forceRestart: dispatchMode.type === "restart_active",
+          computerControl,
         });
         return;
       }
@@ -4296,6 +4337,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           checkpointId: null,
           contextHandoffId: null,
           ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+          ...(computerControl === undefined ? {} : { computerControl }),
         };
         const attempt: OrchestrationV2RunAttempt = {
           id: attemptId,
@@ -4530,6 +4572,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           checkpointId: null,
           contextHandoffId: null,
           ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+          ...(computerControl === undefined ? {} : { computerControl }),
         };
         const attempt: OrchestrationV2RunAttempt = {
           id: attemptId,
@@ -5159,6 +5202,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         contextHandoffId:
           portableForkHandoff?.id ?? providerSwitchHandoff?.id ?? mergeBackHandoff?.id ?? null,
         ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+        ...(computerControl === undefined ? {} : { computerControl }),
       };
       const attempt: OrchestrationV2RunAttempt = {
         id: attemptId,
@@ -6716,6 +6760,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         createdBy: queuedMessage.createdBy,
         creationSource: queuedMessage.creationSource,
         forceRestart: false,
+        computerControl: queuedRun.computerControl,
       });
     });
 
@@ -7913,6 +7958,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             attachments: latestUserMessage.attachments,
             modelSelection: targetRun.modelSelection,
             dispatchMode: { type: "start_immediately" },
+            ...(command.enableComputerControl === undefined
+              ? {}
+              : { enableComputerControl: command.enableComputerControl }),
+            ...(command.computerControlGeneration === undefined
+              ? {}
+              : { computerControlGeneration: command.computerControlGeneration }),
           },
           events,
           effects,
@@ -7967,6 +8018,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           attachments: latestUserMessage.attachments,
           modelSelection: targetRun.modelSelection,
           dispatchMode: { type: "start_immediately" },
+          ...(command.enableComputerControl === undefined
+            ? {}
+            : { enableComputerControl: command.enableComputerControl }),
+          ...(command.computerControlGeneration === undefined
+            ? {}
+            : { computerControlGeneration: command.computerControlGeneration }),
         },
         events,
         effects,
