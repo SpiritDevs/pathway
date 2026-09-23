@@ -6,11 +6,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import {
+  COMPUTER_AUDIT_LOG_FILE,
   COMPUTER_AUDIT_MAX_BYTES,
   COMPUTER_AUDIT_MAX_ENTRIES,
   makeComputerAuditLog,
   summarizeComputerAuditArgs,
 } from "./computerAuditLog.ts";
+import { ComputerManager } from "./ComputerManager.ts";
+import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 
 const fixture = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -343,6 +346,85 @@ it.layer(NodeServices.layer)("ComputerAuditLog", (it) => {
       );
       const lines = yield* readLines(fs, file);
       expect(JSON.parse(lines[0]!).mcpRequestId).toBe("last");
+    }),
+  );
+});
+
+it.layer(NodeServices.layer)("ComputerManager audit seam", (it) => {
+  it.effect(
+    "a thread whose control is off records nothing, even for the refusal that stopped it",
+    () =>
+      Effect.gen(function* () {
+        const { fs, path, dir } = yield* fixture;
+        const threadId = "disabled-thread";
+        // Closing the inner scope disposes the manager, draining queued audit writes.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const manager = yield* ComputerManager.make({
+              backend: new FakeComputerBackend(),
+              stateDir: dir,
+              actionSettleMs: 0,
+            });
+            yield* manager.setControlEnabled(threadId, false);
+            yield* manager.recordComputerAudit({
+              tool: "computer_click",
+              threadId,
+              args: { x: 1, y: 1 },
+              effect: "refused",
+              code: "computer_control_revoked",
+            });
+          }),
+        );
+        expect(yield* fs.exists(path.join(dir, COMPUTER_AUDIT_LOG_FILE))).toBe(false);
+      }),
+  );
+
+  it.effect("a disabled thread records nothing at all — no lifecycle row survives the drop", () =>
+    Effect.gen(function* () {
+      const { fs, path, dir } = yield* fixture;
+      const threadId = "disabled-thread";
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const manager = yield* ComputerManager.make({
+            backend: new FakeComputerBackend(),
+            stateDir: dir,
+            actionSettleMs: 0,
+          });
+          yield* manager.setControlEnabled(threadId, false);
+          // A refused input attempt on a disabled thread still drops.
+          yield* manager.recordComputerAudit({
+            tool: "computer_click",
+            threadId,
+            args: { x: 1, y: 1 },
+            effect: "refused",
+            code: "computer_control_revoked",
+          });
+        }),
+      );
+      expect(yield* fs.exists(path.join(dir, COMPUTER_AUDIT_LOG_FILE))).toBe(false);
+    }),
+  );
+
+  it.effect("records through the manager once control is enabled", () =>
+    Effect.gen(function* () {
+      const { fs, path, dir } = yield* fixture;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const manager = yield* ComputerManager.make({
+            backend: new FakeComputerBackend(),
+            stateDir: dir,
+            actionSettleMs: 0,
+          });
+          yield* manager.recordComputerAudit({
+            tool: "computer_click",
+            threadId: "enabled-thread",
+            effect: "verified",
+          });
+        }),
+      );
+      const lines = yield* readLines(fs, path.join(dir, COMPUTER_AUDIT_LOG_FILE));
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]!).effect).toBe("verified");
     }),
   );
 });
