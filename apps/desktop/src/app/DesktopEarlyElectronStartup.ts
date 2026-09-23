@@ -16,6 +16,7 @@ import {
 import {
   resolveDesktopBaseDir,
   resolveDesktopStateDir,
+  resolveFlavorPathwayHome,
   type JoinPath,
 } from "./DesktopStatePaths.ts";
 
@@ -94,15 +95,21 @@ function resolveEarlyDesktopSettingsPath(input: {
   readonly joinPath: JoinPath;
   readonly flavor?: PathwayDesktopFlavor | undefined;
 }): string {
-  const pathwayHome = Option.fromUndefinedOr(input.env.PATHWAY_HOME);
+  const identity = resolveDesktopRuntimeIdentity({
+    isDevelopment: isDevelopmentEnvironment(input.env),
+    flavor: input.flavor,
+  });
+  const pathwayHome = resolveFlavorPathwayHome({
+    homeDirectory: input.homeDirectory,
+    joinPath: input.joinPath,
+    pathwayHome: Option.fromUndefinedOr(input.env.PATHWAY_HOME),
+    isolated: identity.flavor === "cua",
+  });
   const baseDir = resolveDesktopBaseDir({
     homeDirectory: input.homeDirectory,
     joinPath: input.joinPath,
     pathwayHome,
-    defaultHomeDirName: resolveDesktopRuntimeIdentity({
-      isDevelopment: isDevelopmentEnvironment(input.env),
-      flavor: input.flavor,
-    }).defaultHomeDirName,
+    defaultHomeDirName: identity.defaultHomeDirName,
   });
   const stateDir = resolveDesktopStateDir({
     baseDir,

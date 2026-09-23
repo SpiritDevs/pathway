@@ -170,6 +170,47 @@ describe("DesktopEnvironment", () => {
     }),
   );
 
+  it.effect("keeps the cua flavor out of the production home", () =>
+    Effect.gen(function* () {
+      for (const pathwayHome of [
+        "/Users/alice/.pathway",
+        "/Users/alice/.pathway/",
+        "~/.pathway",
+        "/Users/alice/./.PATHWAY",
+      ]) {
+        const environment = yield* makeEnvironment(
+          { isPackaged: true, flavor: "cua" },
+          { PATHWAY_HOME: pathwayHome },
+        );
+        assert.equal(environment.baseDir, "/Users/alice/.pathway-cua", pathwayHome);
+        assert.equal(environment.stateDir, "/Users/alice/.pathway-cua/userdata", pathwayHome);
+      }
+    }),
+  );
+
+  it.effect("honours a non-production PATHWAY_HOME in the cua flavor", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment(
+        { isPackaged: true, flavor: "cua" },
+        { PATHWAY_HOME: "/tmp/cua-home" },
+      );
+
+      assert.equal(environment.baseDir, "/tmp/cua-home");
+      assert.equal(environment.stateDir, "/tmp/cua-home/userdata");
+    }),
+  );
+
+  it.effect("lets production adopt PATHWAY_HOME=~/.pathway", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment(
+        { isPackaged: true },
+        { PATHWAY_HOME: "/Users/alice/.pathway" },
+      );
+
+      assert.equal(environment.baseDir, "/Users/alice/.pathway");
+    }),
+  );
+
   it.effect("keeps production names when no flavor is packaged", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment({ isPackaged: true });
