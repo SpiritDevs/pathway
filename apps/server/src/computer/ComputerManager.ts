@@ -447,9 +447,12 @@ export class ComputerManager {
       const created = manager;
       yield* Effect.addFinalizer(() => created.dispose());
       if (options.backend.events) {
+        // Started immediately so the subscription exists before `make` returns:
+        // Synara subscribed in the constructor, and a backend event published
+        // right after construction must not be lost.
         yield* options.backend.events.pipe(
           Stream.runForEach((event) => created.handleBackendEvent(event)),
-          Effect.forkScoped,
+          Effect.forkScoped({ startImmediately: true }),
         );
       }
       return created;
@@ -747,7 +750,11 @@ export class ComputerManager {
             }),
           ),
         );
-        this.physicalRead = this.runFork(read);
+        const fiber = this.runFork(read);
+        // A read that finished synchronously already ran its `ensuring`;
+        // caching it would pin that result for every later refresh.
+        if (fiber.pollUnsafe() === undefined) this.physicalRead = fiber;
+        return Fiber.join(fiber);
       }
       return Fiber.join(this.physicalRead);
     });
@@ -1101,6 +1108,13 @@ export class ComputerManager {
           "Computer control was revoked for this conversation; no new input may be dispatched.",
         controlRevoked: true,
       });
+      // Read before the aborts below: an aborted live call drops its authority
+      // entry as it unwinds, which can land before the detached stop runs.
+      const holdsInput =
+        this.lease?.threadId === threadId ||
+        [...this.backgroundLeases.values()].some((lease) => lease.threadId === threadId) ||
+        (this.activeAuthorities.get(threadId)?.size ?? 0) > 0;
+      const turnId = this.authorityTurns.get(threadId);
       const revocation = this.authorityRevocations.get(threadId);
       if (revocation) Deferred.doneUnsafe(revocation, Effect.fail(revokeReason));
       // Live ops get the same reason: a call cancelled by an Off must classify
@@ -1112,12 +1126,7 @@ export class ComputerManager {
       if (pending) return pending;
       const stop = this.runFork(
         Effect.gen({ self: this }, function* () {
-          if (
-            this.lease?.threadId === threadId ||
-            [...this.backgroundLeases.values()].some((lease) => lease.threadId === threadId) ||
-            (this.activeAuthorities.get(threadId)?.size ?? 0) > 0
-          ) {
-            const turnId = this.authorityTurns.get(threadId);
+          if (holdsInput) {
             yield* (
               this.backend.stopInput?.({ threadId, ...(turnId ? { turnId } : {}) }) ?? Effect.void
             );
