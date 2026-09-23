@@ -15,6 +15,12 @@ export interface DesktopComputerService {
   readonly suspend: Effect.Effect<void>;
   /** A backend is starting against this host again. */
   readonly resume: Effect.Effect<void>;
+  /**
+   * Sets the backend notice forked after each physical Escape that stopped
+   * local input. Set late: the notice needs the backend pool, which is built
+   * on top of this service.
+   */
+  readonly setEmergencyStopNotice: (notice: Effect.Effect<void>) => Effect.Effect<void>;
 }
 
 /** No host: backends start exactly as they would without Computer. */
@@ -22,6 +28,7 @@ export const inertDesktopComputer: DesktopComputerService = {
   handoff: Option.none(),
   suspend: Effect.void,
   resume: Effect.void,
+  setEmergencyStopNotice: () => Effect.void,
 };
 
 /**
