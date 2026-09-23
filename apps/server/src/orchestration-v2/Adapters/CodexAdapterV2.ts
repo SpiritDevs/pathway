@@ -1294,12 +1294,15 @@ export class CodexAppServerClientFactory extends Context.Service<
 /**
  * Codex asks through an MCP elicitation before it runs an MCP tool. Pathway
  * approves each Computer call itself (ADR 0048), so its own Computer tools are
- * accepted for an admitted turn. Pathway has no prompt for any other MCP
- * approval, so those are declined, as they were before the handler existed.
+ * accepted for a live admitted turn. A turn being interrupted or already
+ * terminal is not live, so its Computer calls are declined. Pathway has no
+ * prompt for any other MCP approval, so those are declined, as they were
+ * before the handler existed.
  */
 export function codexMcpElicitationAction(input: {
   readonly params: CodexSchema.McpServerElicitationRequestParams;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy | undefined;
+  readonly activeTurn: boolean;
 }): CodexSchema.McpServerElicitationRequestResponse["action"] {
   const meta = input.params._meta;
   const metaField = (key: string) =>
@@ -1322,7 +1325,7 @@ export function codexMcpElicitationAction(input: {
   return toolName !== undefined &&
     shouldAllowPathwayComputerProviderTool({
       computerControlEnabled: input.runtimePolicy.enableComputerControl === true,
-      activeTurn: true,
+      activeTurn: input.activeTurn,
       interactionMode: input.runtimePolicy.interactionMode,
       runtimeMode: input.runtimePolicy.runtimeMode,
       permission: { name: McpProviderSession.pathwayMcpToolName(toolName) },
@@ -4761,16 +4764,26 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
 
         yield* client.handleServerRequest("mcpServer/elicitation/request", (payload) =>
           Effect.gen(function* () {
+            const turnId = payload.turnId;
             const context =
-              payload.turnId == null ? undefined : yield* awaitActiveTurn(payload.turnId);
+              turnId == null || finishedNativeTurns.has(turnId)
+                ? undefined
+                : yield* awaitActiveTurn(turnId);
             const activeTurn =
               context?.providerThread.nativeThreadRef?.nativeId === payload.threadId
                 ? context
                 : undefined;
+            // Mirrors Synara's stop guard: a Stop in flight or a settled turn
+            // never auto-accepts a Computer call.
+            const live =
+              activeTurn !== undefined &&
+              !finishedNativeTurns.has(activeTurn.nativeTurnId) &&
+              !(yield* Ref.get(interruptingNativeTurns)).has(activeTurn.nativeTurnId);
             return {
               action: codexMcpElicitationAction({
                 params: payload,
                 runtimePolicy: activeTurn?.input.runtimePolicy,
+                activeTurn: live,
               }),
             } satisfies CodexSchema.McpServerElicitationRequestResponse;
           }),
