@@ -75,6 +75,7 @@ import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import { ProviderContinuationRequests } from "./ProviderContinuationRequests.ts";
 import { ComputerDispatchAccess } from "./ComputerDispatchAccess.ts";
 import { ServerOwnedRuntimeRequests } from "./ServerOwnedRuntimeRequests.ts";
+import { RunStopFence } from "./RunStopFence.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
@@ -692,6 +693,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const providerAdapters = yield* ProviderAdapterRegistryV2;
   const continuationRequests = yield* ProviderContinuationRequests;
   const serverOwnedRequests = yield* ServerOwnedRuntimeRequests;
+  const runStopFence = yield* RunStopFence;
   const questionDelivery = yield* Effect.serviceOption(QuestionAnswerDelivery);
   const providerSessions = yield* ProviderSessionManagerV2;
   const providerSwitchService = yield* ProviderSwitchServiceV2;
@@ -7451,6 +7453,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Run ${command.runId} is not interruptible.`,
         });
       }
+      // Fence the run's work outside the provider before anything reads it
+      // interrupted: no Computer input lands after Stop.
+      yield* runStopFence.stopRun({ threadId: command.threadId, runId: run.id });
       const now = yield* DateTime.now;
       const completionMessage = projection.messages.find(
         (candidate) => candidate.id === run.userMessageId,
@@ -9191,9 +9196,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           stored.event.payload.status,
         );
       // No provider closes a server-owned card, so an ended run (Stop
-      // included) withdraws its own before anything reads it still pending.
+      // included) withdraws its own before anything reads it still pending,
+      // and its Computer calls end with it.
       if (isTerminalRunEvent && stored.event.type === "run.updated") {
         yield* serverOwnedRequests.endRun({ threadId, runId: stored.event.payload.id });
+        yield* runStopFence.stopRun({ threadId, runId: stored.event.payload.id });
       }
       // finalize writes the parent thread and startNextQueuedRun writes this
       // thread, so each takes its own thread's lock, sequentially and never

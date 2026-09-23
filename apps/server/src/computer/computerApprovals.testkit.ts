@@ -44,6 +44,7 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as ComputerApprovalGate from "./ComputerApprovalGate.ts";
+import * as ComputerRunCalls from "./ComputerRunCalls.ts";
 import {
   computerApprovalRequesterLayer,
   computerServerOwnedRuntimeRequestsLayer,
@@ -80,13 +81,17 @@ const GateLive = ComputerApprovalGate.layer.pipe(
   Layer.provide(computerApprovalRequesterLayer.pipe(Layer.provide(OrchestrationStores))),
 );
 
-/** The orchestrator, its stores and the Computer approval gate, in memory. */
+const RunCallsLive = ComputerRunCalls.layer;
+
+/** The orchestrator, its stores, the Computer approval gate and run calls, in memory. */
 export const ComputerApprovalsTestLayer = Layer.mergeAll(
   OrchestrationV2LayerLive.pipe(
     Layer.provide(computerServerOwnedRuntimeRequestsLayer.pipe(Layer.provide(GateLive))),
+    Layer.provide(ComputerRunCalls.computerRunStopFenceLayer.pipe(Layer.provide(RunCallsLive))),
   ),
   OrchestrationStores,
   GateLive,
+  RunCallsLive,
 ).pipe(
   Layer.provideMerge(ProjectionProjectRepositoryLive),
   Layer.provide(mcpSessionRegistryTestLayer),
