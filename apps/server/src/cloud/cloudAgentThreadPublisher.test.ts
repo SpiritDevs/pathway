@@ -295,6 +295,38 @@ describe("cloud Agent Thread publisher", () => {
     }),
   );
 
+  it.effect("holds cosmetic-only live changes for reconcile but publishes state at once", () =>
+    Effect.gen(function* () {
+      const { client, upserts } = fakeClient(() => Promise.resolve({ outcome: "published" }));
+      const publisher = yield* makeCloudAgentThreadPublisher({
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        convexUrl: "https://example.convex.cloud",
+        tokens,
+        client,
+      });
+      const live = { deferCosmetic: true } as const;
+      const shell = shellOf("thread-one", "project-one");
+      const later = DateTime.add(NOW, { seconds: 5 });
+
+      yield* publisher.publish(shell, live);
+      yield* publisher.publish(
+        { ...shell, itemCount: 4, visibleItemCount: 2, updatedAt: later },
+        live,
+      );
+      assert.strictEqual(upserts.length, 1);
+
+      yield* publisher.publish(
+        { ...shell, status: "running", itemCount: 4, updatedAt: later },
+        live,
+      );
+      assert.strictEqual(upserts.length, 2);
+
+      yield* publisher.publish({ ...shell, status: "running", itemCount: 9, updatedAt: later });
+      assert.strictEqual(upserts.length, 3);
+    }),
+  );
+
   it.effect("keeps transport failures retryable instead of parking the thread", () =>
     Effect.gen(function* () {
       const { client, upserts } = fakeClient(() => Promise.reject(new Error("fetch failed")));

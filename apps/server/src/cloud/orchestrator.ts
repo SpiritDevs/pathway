@@ -431,6 +431,7 @@ const claimRef = makeFunctionReference<
     companyId: string;
     providers: Array<{ instanceId: string; driver: string }>;
     delegationCatalog?: OrchestratorDelegationCatalog;
+    refreshPresence?: boolean;
   },
   unknown
 >("aiOrchestratorJobs:claim");
@@ -645,6 +646,8 @@ export const makeOrchestratorBackend = Effect.fn("cloud.orchestrator.backend")(f
               companyId: options.companyId,
               providers,
               ...(catalog && publish ? { delegationCatalog: catalog } : {}),
+              // The coordinator heartbeat owns presence for this environment.
+              refreshPresence: false,
             }),
           );
           publishedCatalog = fingerprint;

@@ -452,6 +452,7 @@ describe("tool-free coordinator reasoning", () => {
       expect(calls[0]?.args).toEqual({
         companyId: "company",
         providers: [{ instanceId: "codex", driver: "codex" }],
+        refreshPresence: false,
       });
     }),
   );

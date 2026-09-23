@@ -1562,6 +1562,7 @@ describe("orphaned queue cleanup", () => {
     });
     vi.setSystemTime(Date.now() + QUEUE_ORPHAN_GRACE_MS + 1);
     await t.mutation(internal.threadQueue.pruneOrphans, {});
+    expect(await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect())).toEqual([]);
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     expect(await t.run((ctx) => ctx.db.get(queueId))).not.toBeNull();
   });

@@ -1,5 +1,5 @@
 import { internal } from "./_generated/api.js";
-import { patchEnvironmentPresence } from "./lib/environmentRuntime.ts";
+import { patchEnvironmentPresence, readEnvironmentPresence } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations are not Effect programs; the transaction clock is `Date.now()`.
 /**
  * Company environment registry and discovery.
@@ -15,7 +15,11 @@ import { patchEnvironmentPresence } from "./lib/environmentRuntime.ts";
 import { v } from "convex/values";
 import type { ExecutionEnvironmentCapabilities } from "@spiritdevs/contracts";
 
-import { isRegisteredProofKey, tokenProofKeyThumbprint } from "../src/environmentRegistrations.ts";
+import {
+  ENVIRONMENT_REGISTRATION_HEARTBEAT_INTERVAL_MS,
+  isRegisteredProofKey,
+  tokenProofKeyThumbprint,
+} from "../src/environmentRegistrations.ts";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query, type QueryCtx } from "./_generated/server.js";
 import { appendCompanyChanges, encodeEnvironmentRegistration } from "./lib/companyApply.ts";
@@ -531,7 +535,10 @@ export const heartbeat = mutation({
       managedEndpointAvailable: args.managedEndpointAvailable,
       ...(publishedChanged ? { updatedAt: now } : {}),
     };
-    await patchEnvironmentPresence(ctx, registration, { lastSeenAt: now });
+    const { lastSeenAt } = await readEnvironmentPresence(ctx, registration);
+    if (lastSeenAt === null || now - lastSeenAt >= ENVIRONMENT_REGISTRATION_HEARTBEAT_INTERVAL_MS) {
+      await patchEnvironmentPresence(ctx, registration, { lastSeenAt: now });
+    }
     if (publishedChanged) await ctx.db.patch(registration._id, patch);
 
     // `lastSeenAt` is freshness metadata read directly by discovery queries. Appending every beat

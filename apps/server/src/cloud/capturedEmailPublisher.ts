@@ -23,6 +23,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { forkParkedFiber } from "../serverActivation.ts";
 import type { ConvexServiceTokenProvider } from "./convexServiceToken.ts";
 import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "./environmentKeys.ts";
+import { makePublisherReconcileGate } from "./publisherReconcileGate.ts";
 import {
   type ConvexClientLike,
   classifyConvexFailure,
@@ -47,6 +48,8 @@ interface CapturedEmailPublisherOptions {
   readonly tokens: ConvexServiceTokenProvider;
   readonly client?: ConvexClientLike;
   readonly reconcileInterval?: Duration.Input;
+  /** How often an unchanged inventory still reconciles; tests shorten it. */
+  readonly reconcileRepairInterval?: Duration.Input;
 }
 
 class CapturedEmailPublisherCallError extends Data.TaggedError("CapturedEmailPublisherCallError")<{
@@ -144,6 +147,7 @@ export const runCapturedEmailPublisher = Effect.fn("cloud.captured_email_publish
 ) {
   const store = yield* EmailStore;
   const publisher = yield* makePublisher(options);
+  const reconcileGate = yield* makePublisherReconcileGate(options.reconcileRepairInterval);
 
   const reportFailure = (operation: string, messageId?: EmailMessageId) =>
     Effect.catchCause((cause) =>
@@ -190,9 +194,10 @@ export const runCapturedEmailPublisher = Effect.fn("cloud.captured_email_publish
         },
       );
     }
-    yield* publisher.reconcileIds(
-      outcomes.filter((outcome) => outcome.state !== "deleted").map((outcome) => outcome.messageId),
-    );
+    const liveIds = outcomes
+      .filter((outcome) => outcome.state !== "deleted")
+      .map((outcome) => outcome.messageId);
+    yield* reconcileGate.run(liveIds, publisher.reconcileIds(liveIds));
   }).pipe(reportFailure("reconcile"));
 
   yield* reconcile;

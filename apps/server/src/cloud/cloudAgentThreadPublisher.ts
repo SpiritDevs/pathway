@@ -29,6 +29,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { forkParkedFiber } from "../serverActivation.ts";
+import { makePublisherReconcileGate } from "./publisherReconcileGate.ts";
 import { type ConvexServiceTokenProvider, convexErrorCode } from "./convexServiceToken.ts";
 import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "./environmentKeys.ts";
 import {
@@ -77,6 +78,8 @@ interface CloudAgentThreadPublisherOptions {
   readonly tokens: ConvexServiceTokenProvider;
   readonly client?: ConvexClientLike;
   readonly reconcileInterval?: Duration.Input;
+  /** How often an unchanged inventory still reconciles; tests shorten it. */
+  readonly reconcileRepairInterval?: Duration.Input;
 }
 
 class CloudAgentThreadPublisherCallError extends Data.TaggedError(
@@ -100,6 +103,27 @@ export function cloudSafeThreadShell(shell: OrchestrationV2ThreadShell): CloudAg
 const encodeCloudShell = Schema.encodeSync(CloudAgentThreadShell);
 const encodeCloudShellIdentity = Schema.encodeSync(Schema.fromJsonString(CloudAgentThreadShell));
 
+/**
+ * Fields that move with nearly every transcript item. Cross-client discovery can show them a
+ * reconcile tick late; publishing each one would write Convex and re-run every company replica
+ * several times per turn.
+ */
+const COSMETIC_SHELL_FIELDS = [
+  "updatedAt",
+  "itemCount",
+  "visibleItemCount",
+  "latestVisibleMessage",
+  "latestUserMessageAt",
+  "lastVisitedAt",
+] as const;
+
+/** The shell identity without cosmetic fields: a change here publishes immediately. */
+function urgentShellIdentity(encoded: ReturnType<typeof encodeCloudShell>): string {
+  const urgent: Record<string, unknown> = { ...encoded };
+  for (const field of COSMETIC_SHELL_FIELDS) delete urgent[field];
+  return JSON.stringify(urgent);
+}
+
 export function shouldPublishCloudAgentThreadEvent(event: OrchestrationV2DomainEvent): boolean {
   return (
     event.type.startsWith("thread.") ||
@@ -119,7 +143,9 @@ export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publi
     const client = options.client ?? convexHttpClientLike(options.convexUrl);
     const requestLock = yield* Semaphore.make(1);
     const publishLock = yield* Semaphore.make(1);
-    const published = yield* Ref.make<ReadonlyMap<ThreadId, string>>(new Map());
+    const published = yield* Ref.make<
+      ReadonlyMap<ThreadId, { readonly full: string; readonly urgent: string }>
+    >(new Map());
     const parkedThreads = yield* Ref.make<ReadonlyMap<ThreadId, number>>(new Map());
     const announcedUnboundProjects = yield* Ref.make<ReadonlySet<ProjectId>>(new Set());
 
@@ -152,13 +178,23 @@ export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publi
         );
       });
 
-    const publish = (shell: OrchestrationV2ThreadShell) =>
+    /**
+     * `deferCosmetic` skips a publish whose only changes are cosmetic fields; the periodic
+     * reconcile publishes without it, so those changes land within one reconcile interval.
+     */
+    const publish = (
+      shell: OrchestrationV2ThreadShell,
+      publishOptions?: { readonly deferCosmetic?: boolean },
+    ) =>
       publishLock.withPermits(1)(
         Effect.gen(function* () {
           if (shell.projectId === null && shell.conversationCompanyId !== options.companyId) return;
           const encoded = encodeCloudShell(cloudSafeThreadShell(shell));
           const identity = encodeCloudShellIdentity(cloudSafeThreadShell(shell));
-          if ((yield* Ref.get(published)).get(shell.id) === identity) return;
+          const urgent = urgentShellIdentity(encoded);
+          const previous = (yield* Ref.get(published)).get(shell.id);
+          if (previous?.full === identity) return;
+          if (publishOptions?.deferCosmetic === true && previous?.urgent === urgent) return;
           const now = yield* Clock.currentTimeMillis;
           const nextProbeAt = (yield* Ref.get(parkedThreads)).get(shell.id);
           if (nextProbeAt !== undefined && now < nextProbeAt) return;
@@ -204,7 +240,9 @@ export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publi
             next.delete(shell.id);
             return next;
           });
-          yield* Ref.update(published, (current) => new Map(current).set(shell.id, identity));
+          yield* Ref.update(published, (current) =>
+            new Map(current).set(shell.id, { full: identity, urgent }),
+          );
         }),
       );
 
@@ -256,14 +294,20 @@ export const runCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publis
       );
 
     const mutationLock = yield* Semaphore.make(1);
-    const publishThread = (threadId: ThreadId) =>
+    const reconcileGate = yield* makePublisherReconcileGate(options.reconcileRepairInterval);
+    const publishThread = (
+      threadId: ThreadId,
+      publishOptions?: { readonly deferCosmetic?: boolean },
+    ) =>
       mutationLock
         .withPermits(1)(
           threads
             .getThreadShell(threadId)
             .pipe(
               Effect.flatMap((shell) =>
-                shell === null ? publisher.remove(threadId) : publisher.publish(shell),
+                shell === null
+                  ? publisher.remove(threadId)
+                  : publisher.publish(shell, publishOptions),
               ),
             ),
         )
@@ -288,7 +332,8 @@ export const runCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publis
       yield* mutationLock.withPermits(1)(
         Effect.gen(function* () {
           const current = yield* threads.getShellSnapshot();
-          yield* publisher.reconcileIds(companyShells(current).map((shell) => shell.id));
+          const ids = companyShells(current).map((shell) => shell.id);
+          yield* reconcileGate.run(ids, publisher.reconcileIds(ids));
         }),
       );
     }).pipe(reportFailure("reconcile"));
@@ -299,7 +344,7 @@ export const runCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publis
       Effect.gen(function* () {
         const live = yield* threads.streamDomainEvents.pipe(
           Stream.filter(shouldPublishCloudAgentThreadEvent),
-          Stream.runForEach((event) => publishThread(event.threadId)),
+          Stream.runForEach((event) => publishThread(event.threadId, { deferCosmetic: true })),
           Effect.forkScoped({ startImmediately: true }),
         );
         yield* reconcile.pipe(

@@ -771,9 +771,9 @@ async function publishWorkerPresence(
   ctx: MutationCtx,
   registration: Doc<"environmentRegistrations">,
   delegationCatalog?: unknown,
+  refreshPresence = true,
 ) {
   const now = Date.now();
-  const presence = await readEnvironmentPresence(ctx, registration);
   if (delegationCatalog !== undefined) {
     const runtime = await readEnvironmentRuntime(ctx, registration);
     if (JSON.stringify(delegationCatalog).length > 100000)
@@ -791,6 +791,8 @@ async function publishWorkerPresence(
       });
     }
   }
+  if (!refreshPresence) return;
+  const presence = await readEnvironmentPresence(ctx, registration);
   if ((presence.lastSeenAt ?? 0) < now - 30_000 || presence.orchestratorPresence !== "online") {
     await patchEnvironmentPresence(ctx, registration, {
       lastSeenAt: now,
@@ -820,11 +822,18 @@ export const claim = mutation({
     companyId: v.string(),
     providers: v.array(v.object({ instanceId: v.string(), driver: v.string() })),
     delegationCatalog: v.optional(v.any()),
+    /** Servers with a dedicated heartbeat send `false`; older servers kept presence alive here. */
+    refreshPresence: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<OrchestratorRun | null> => {
     if (args.providers.length > 50) return fail("Too many provider instances.");
     const actor = await environmentActor(ctx, args.companyId);
-    await publishWorkerPresence(ctx, actor.registration, args.delegationCatalog);
+    await publishWorkerPresence(
+      ctx,
+      actor.registration,
+      args.delegationCatalog,
+      args.refreshPresence !== false,
+    );
     const now = Date.now();
     const tracked = await Promise.all(
       (["queued", "working", "unknown"] as const).map((status) =>

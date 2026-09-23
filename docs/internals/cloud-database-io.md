@@ -477,3 +477,32 @@ remaining cost was growth-proportional reads and writes that changed nothing.
 The command, feed and automation changes add one index and two crons and need
 no migration. Agent-time savings require updated environment servers; the rest
 take effect on backend deploy.
+
+## Publisher cadence and a single heartbeat
+
+- **Agent-thread shells.** Live events publish immediately only when a field
+  other than `updatedAt`, item counts, `latestVisibleMessage`,
+  `latestUserMessageAt` or `lastVisitedAt` changed. Those cosmetic fields move
+  with nearly every transcript item; the 15-second reconcile pass publishes them
+  without deferral, so cross-client lists lag by at most one tick. Every
+  publish is a Convex write, a company sync-head bump and a feed drain on every
+  connected replica.
+- **Inventory reconcile.** Reconcile only deletes rows whose ids left the
+  environment's inventory, yet each backend scan reads every published thread
+  or captured email (email rows carry full message payloads). Environment
+  servers now call it only when an id disappeared since their last successful
+  reconcile, or once an hour as a repair backstop; the backend's own unchanged
+  inventory window is one hour to match.
+- **One presence writer.** The coordinator heartbeat, which runs for every
+  company an environment serves, owns `environmentPresence`. The separate
+  command-worker heartbeat is gone, and updated servers pass
+  `refreshPresence: false` to command and reasoning claims. Older servers omit
+  it and keep refreshing presence from claims. The legacy
+  `environments.heartbeat` writes presence at most every 30 seconds.
+- **Queue backstops.** The orphaned-queue and unused-upload sweeps run daily
+  instead of hourly, since thread deletion schedules its own cleanup, and the
+  orphan sweep schedules work only for queues whose thread is no longer
+  published.
+
+Deploy the backend before updated environment servers: an older backend rejects
+the new `refreshPresence` claim argument.

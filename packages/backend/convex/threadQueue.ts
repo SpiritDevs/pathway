@@ -1368,8 +1368,21 @@ export const pruneOrphans = internalMutation({
         q.eq("state", "delivered").lt("updatedAt", Date.now() - QUEUE_ORPHAN_GRACE_MS),
       )
       .paginate({ cursor: args.cursor ?? null, numItems: QUEUE_CLEANUP_BATCH_SIZE });
-    for (const row of page.page)
-      await ctx.scheduler.runAfter(0, internal.threadQueue.pruneOrphan, { queueId: row._id });
+    for (const row of page.page) {
+      // Most delivered queues belong to live threads; schedule work only for real orphans.
+      const published = await ctx.db
+        .query("agentThreads")
+        .withIndex("by_company_and_environment_and_thread", (q) =>
+          q
+            .eq("companyId", row.companyId)
+            .eq("environmentId", row.environmentId)
+            .eq("threadId", row.threadId),
+        )
+        .first();
+      if (published === null) {
+        await ctx.scheduler.runAfter(0, internal.threadQueue.pruneOrphan, { queueId: row._id });
+      }
+    }
     if (!page.isDone)
       await ctx.scheduler.runAfter(0, internal.threadQueue.pruneOrphans, {
         cursor: page.continueCursor,

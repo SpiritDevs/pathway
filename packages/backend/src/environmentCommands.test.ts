@@ -390,6 +390,38 @@ describe("environment commands", () => {
     }
   });
 
+  it("leaves presence to the heartbeat when a claim opts out", async () => {
+    vi.useFakeTimers();
+    try {
+      const startedAt = 1_800_000_000_000;
+      vi.setSystemTime(startedAt);
+      const t = harness();
+      const seeded = await seed(t);
+      const lastSeenAt = async () =>
+        await t.run(async (ctx) => {
+          const registration = await ctx.db
+            .query("environmentRegistrations")
+            .withIndex("by_company_and_environment", (q) =>
+              q.eq("companyId", seeded.companyDocId).eq("environmentId", ENVIRONMENT_ONE),
+            )
+            .unique();
+          return registration
+            ? (await readEnvironmentPresence(ctx, registration)).lastSeenAt
+            : null;
+        });
+      const before = await lastSeenAt();
+
+      vi.setSystemTime(startedAt + 60_000);
+      await asEnvironment(t).mutation(api.environmentCommands.claim, {
+        companyId: COMPANY_ID,
+        refreshPresence: false,
+      });
+      expect(await lastSeenAt()).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not refresh a revoked registration", async () => {
     const t = harness();
     const seeded = await seed(t);

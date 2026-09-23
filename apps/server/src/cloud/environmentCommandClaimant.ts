@@ -6,10 +6,9 @@ import { makeWorkerWakeups } from "./workerWakeups.ts";
  *
  * Convex discovery supervises one claimant for every company that registered this environment.
  * Within each company, `environmentCommands.claim` is both command discovery and lease acquisition:
- * it orders work by creation time and returns an existing live claim unchanged. The same
- * authenticated call refreshes presence at a backend-throttled 30-second cadence; a separate
- * heartbeat keeps idle environments fresh while queue subscriptions park their claim loops. A
- * command is renewed before any local side effect and then periodically while it runs; losing that fence interrupts local work and suppresses the terminal report.
+ * it orders work by creation time and returns an existing live claim unchanged. Presence belongs
+ * to the coordinator heartbeat in `orchestrator.ts`, which runs for every company this environment
+ * serves, so claims ask the backend not to refresh it. A command is renewed before any local side effect and then periodically while it runs; losing that fence interrupts local work and suppresses the terminal report.
  *
  * @module cloud/environmentCommandClaimant
  */
@@ -90,7 +89,6 @@ type ClaimResponse = FunctionReturnType<typeof api.environmentCommands.claim>;
 export type ClaimedEnvironmentCommand = ClaimResponse[number];
 
 export interface EnvironmentCommandBackend {
-  readonly heartbeat?: (companyId: string) => Effect.Effect<null, unknown>;
   readonly claim: (input: {
     readonly companyId: string;
     readonly limit: number;
@@ -576,9 +574,10 @@ export const makeEnvironmentCommandBackend = Effect.fn(
     );
 
   return {
-    heartbeat: (companyId: string) =>
-      authorized((convex) => convex.mutation(api.environmentCommands.heartbeat, { companyId })),
-    claim: (args) => authorized((convex) => convex.mutation(api.environmentCommands.claim, args)),
+    claim: (args) =>
+      authorized((convex) =>
+        convex.mutation(api.environmentCommands.claim, { ...args, refreshPresence: false }),
+      ),
     renewClaim: (args) =>
       authorized((convex) => convex.mutation(api.environmentCommands.renewClaim, args)),
     reportStatus: (args) =>
@@ -834,15 +833,6 @@ export const startEnvironmentCommandClaimant = Effect.fn(
             tokens,
             kinds: ["commands"],
           });
-          if (backend.heartbeat)
-            yield* backend.heartbeat(companyId).pipe(
-              Effect.catch(() =>
-                Effect.logDebug("Command worker heartbeat will retry", { companyId }),
-              ),
-              Effect.andThen(Effect.sleep("30 seconds")),
-              Effect.forever,
-              Effect.forkScoped,
-            );
           return yield* runEnvironmentCommandClaimant({
             ...runtime,
             idleWait: wakeups.wait("commands"),

@@ -3,6 +3,7 @@ import { pending as workerPending } from "../convex/workerWakeups.ts";
 import {
   patchEnvironmentPresence,
   patchEnvironmentRuntime,
+  readEnvironmentPresence,
 } from "../convex/lib/environmentRuntime.ts";
 import { notifyOrchestratorIssueChanges } from "../convex/lib/aiOrchestratorIssueSignals.ts";
 // @effect-diagnostics globalDate:off -- Convex transaction time in fixtures.
@@ -2977,6 +2978,36 @@ describe("environment presence signals", () => {
       environmentId: "studio",
       online: true,
     });
+  });
+
+  it("leaves presence to the coordinator heartbeat when a claim opts out", async () => {
+    const test = await coordinatorHarness();
+    const stale = Date.now() - 60_000;
+    const presence = () =>
+      test.t.run(async (ctx) => {
+        const row = (await ctx.db.query("environmentRegistrations").collect()).find(
+          (r) => r.environmentId === "studio",
+        )!;
+        return (await readEnvironmentPresence(ctx, row)).lastSeenAt;
+      });
+    await test.t.run(async (ctx) => {
+      const row = (await ctx.db.query("environmentRegistrations").collect()).find(
+        (r) => r.environmentId === "studio",
+      )!;
+      await patchEnvironmentPresence(ctx, row, { lastSeenAt: stale });
+    });
+
+    await test.environment("studio").mutation(api.aiOrchestratorJobs.claim, {
+      companyId: "workspace",
+      providers: [],
+      refreshPresence: false,
+    });
+    expect(await presence()).toBe(stale);
+
+    await test.environment("studio").mutation(api.aiOrchestratorJobs.heartbeat, {
+      companyId: "workspace",
+    });
+    expect(await presence()).toBeGreaterThan(stale);
   });
 });
 

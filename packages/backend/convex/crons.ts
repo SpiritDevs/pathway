@@ -4,15 +4,16 @@ import { internal } from "./_generated/api.js";
 
 const crons = cronJobs();
 
-crons.hourly(
+// Thread deletion schedules its own queue cleanup; these daily passes only catch misses.
+crons.daily(
   "prune orphaned delivered thread queues",
-  { minuteUTC: 7 },
+  { hourUTC: 4, minuteUTC: 7 },
   internal.threadQueue.pruneOrphans,
   {},
 );
-crons.hourly(
+crons.daily(
   "prune unused thread queue uploads",
-  { minuteUTC: 12 },
+  { hourUTC: 4, minuteUTC: 12 },
   internal.threadQueue.pruneAttachments,
   {},
 );

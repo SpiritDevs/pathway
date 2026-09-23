@@ -437,6 +437,8 @@ export const claim = mutation({
     companyId: domainIdArg,
     limit: v.optional(v.number()),
     claimTtlMs: v.optional(v.number()),
+    /** Servers with a dedicated heartbeat send `false`; older servers kept presence alive here. */
+    refreshPresence: v.optional(v.boolean()),
   },
   returns: v.array(commandRecord),
   handler: async (ctx, args) => {
@@ -448,7 +450,9 @@ export const claim = mutation({
     const ttl = claimTtl(args.claimTtlMs);
     const now = Date.now();
     const environmentId = actor.registration.environmentId;
-    await refreshCommandPresence(ctx, actor.registration, now);
+    if (args.refreshPresence !== false) {
+      await refreshCommandPresence(ctx, actor.registration, now);
+    }
     const pending = await ctx.db
       .query("environmentCommands")
       .withIndex("by_company_target_state", (q) =>
