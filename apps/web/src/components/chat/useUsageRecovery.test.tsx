@@ -44,7 +44,8 @@ vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (target: unknown) => ({
     data: target === "recovery" ? state.result : null,
     error: null,
-    isPending: false,
+    // Live subscriptions remain waiting for their next value after the snapshot arrives.
+    isPending: true,
   }),
 }));
 vi.mock("../../state/use-atom-command", () => ({
@@ -87,6 +88,7 @@ function render(props = input) {
 function click(node: unknown, label: string) {
   const button = visitElements(node, (element) => element.props.children === label);
   expect(button, label).not.toBeNull();
+  expect(button!.props.disabled, `${label} must be enabled`).not.toBe(true);
   return (button!.props.onClick as () => void)();
 }
 
@@ -103,7 +105,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-it("opens from the composer, keeps the reset margin, and schedules on the correct environment", async () => {
+it("opens while the live subscription waits for updates and schedules with the reset margin on the correct environment", async () => {
   let view = render();
   expect(view.banner?.presentation).toBe("lip");
   click(view.banner?.actions, "Resume after reset");
@@ -143,6 +145,7 @@ it("offers change and cancel controls for a persisted timer", async () => {
   expect(
     visitElements(view.banner?.actions, (element) => element.props.children === "Change time"),
   ).not.toBeNull();
+  click(view.banner?.actions, "Change time");
   click(view.banner?.actions, "Cancel recovery");
   await Promise.resolve();
   expect(state.cancel).toHaveBeenCalledWith({ environmentId, input: { threadId } });

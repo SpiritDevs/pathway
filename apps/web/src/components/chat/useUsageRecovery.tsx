@@ -194,7 +194,7 @@ export function useUsageRecovery(input: {
           actions: (
             <>
               {(scheduled || canSchedule) && !monitoring && !inherited && (
-                <Button size="xs" disabled={busy || query.isPending} onClick={() => open()}>
+                <Button size="xs" disabled={busy} onClick={() => open()}>
                   {scheduled ? "Change time" : "Resume after reset"}
                 </Button>
               )}
