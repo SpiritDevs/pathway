@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
 import {
   ComputerApprovalsTestLayer,
@@ -63,6 +64,9 @@ const invocationFor = (
   capabilities: new Set(capabilities),
   issuedAt: 1,
 });
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 const errorCode = (result: McpToolCallResult | undefined) => {
   const first = result?.content[0];
@@ -139,6 +143,74 @@ const toolsUnderCeiling = Effect.fn("toolsUnderCeiling")(function* (
 });
 
 it.layer(TestLayer)("computerMcpTools", (it) => {
+  it.effect.each(["the caller hangs up", "the caller cancels", "the endpoint shuts down"] as const)(
+    "interrupts a running Computer call when %s",
+    (trigger) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const started = yield* Deferred.make<void>();
+          const interrupted = yield* Deferred.make<void>();
+          const handler = yield* McpHttpServer.makeComputerTestHandler({
+            advertised: [],
+            handles: () => true,
+            call: () =>
+              Deferred.succeed(started, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+              ),
+          });
+          const invocation = invocationFor(ThreadId.make("thread-cancel"), ["computer"]);
+          const post = (body: object, signal?: AbortSignal) =>
+            handler.fetch(
+              new Request("http://pathway.test/mcp", {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  accept: "application/json, text/event-stream",
+                },
+                body: encodeJson(body),
+                ...(signal === undefined ? {} : { signal }),
+              }),
+              invocation,
+            );
+          const hangUp = new AbortController();
+          const response = post(
+            {
+              jsonrpc: "2.0",
+              id: 7,
+              method: "tools/call",
+              params: { name: "computer_click", arguments: {} },
+            },
+            hangUp.signal,
+          );
+          yield* Deferred.await(started);
+          switch (trigger) {
+            case "the caller hangs up":
+              hangUp.abort();
+              break;
+            case "the caller cancels":
+              yield* Effect.promise(() =>
+                post({
+                  jsonrpc: "2.0",
+                  method: "notifications/cancelled",
+                  params: { requestId: 7 },
+                }),
+              );
+              break;
+            case "the endpoint shuts down":
+              yield* Effect.promise(() => handler.close());
+              break;
+          }
+          yield* Deferred.await(interrupted);
+          const answer = decodeJson(yield* Effect.promise(async () => (await response).text()));
+          assert.deepInclude(answer, {
+            id: 7,
+            error: { code: -32800, message: "Request cancelled." },
+          });
+        }),
+      ),
+  );
+
   it.effect("lists computer_* when the switch is on and drops them when it is off", () =>
     Effect.scoped(
       Effect.gen(function* () {
