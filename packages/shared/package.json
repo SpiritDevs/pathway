@@ -291,6 +291,14 @@
     "./mailSlug": {
       "types": "./src/mailSlug.ts",
       "import": "./src/mailSlug.ts"
+    },
+    "./modelImageBudget": {
+      "types": "./src/modelImageBudget.ts",
+      "import": "./src/modelImageBudget.ts"
+    },
+    "./uiTreeTargeting": {
+      "types": "./src/uiTreeTargeting.ts",
+      "import": "./src/uiTreeTargeting.ts"
     }
   },
   "scripts": {
