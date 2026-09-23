@@ -19,6 +19,7 @@ import {
   cuaComputerTaskKey,
 } from "@spiritdevs/shared/cuaDriverProtocol";
 
+import { COMPUTER_PREVIEW_FRAME_CHANNEL } from "../ipc/channels.ts";
 import {
   type HelperProcess,
   type HelperSpawnError,
@@ -27,9 +28,6 @@ import {
   stopHelper,
 } from "./HelperProcess.ts";
 import { decodeHelperJsonLine, PathwayHelperMode } from "./PathwayHelperProtocol.ts";
-
-/** Renderer channel carrying live JPEG frames: `{windowId, seq, jpeg}`. */
-export const COMPUTER_PREVIEW_FRAME_CHANNEL = "computerPreview.frame";
 
 const MAX_FRAME_BYTES = 4 * 1024 * 1024;
 const MAX_DEAD_TARGETS = 256;

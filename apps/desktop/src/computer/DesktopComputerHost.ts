@@ -11,6 +11,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import * as Electron from "electron";
 
+import type { DesktopComputerHelperState } from "@spiritdevs/contracts";
 import { COMPUTER_PERMISSIONS } from "@spiritdevs/shared/computerGrants";
 import type { CuaToolResult } from "@spiritdevs/shared/cuaDriverProtocol";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
@@ -19,13 +20,25 @@ import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@spiritdevs/shared/modelImageB
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
+import * as ElectronWindow from "../electron/ElectronWindow.ts";
+import * as IpcChannels from "../ipc/channels.ts";
 import { macPermissionAppBundle } from "../snapShot/MacPermissionSetup.ts";
+import {
+  type AgentCursorStylePreference,
+  agentCursorPreferencePath,
+  readAgentCursorPreference,
+} from "./AgentCursorPreference.ts";
 import { resolveComputerBinary } from "./ComputerBinaries.ts";
 import * as ComputerDesktopLifecycle from "./ComputerDesktopLifecycle.ts";
+import * as ComputerFrameTap from "./ComputerFrameTap.ts";
 import * as ComputerHelper from "./ComputerHelper.ts";
 import * as ComputerShield from "./ComputerShield.ts";
 import { type CuaDriverHost, makeCuaDriverHost, sweepOrphanedCuaDrivers } from "./CuaDriverHost.ts";
-import { DesktopComputer, inertDesktopComputer } from "./DesktopComputer.ts";
+import {
+  DesktopComputer,
+  makeInertDesktopComputer,
+  unsupportedComputerHelperState,
+} from "./DesktopComputer.ts";
 import * as EscapeKillSwitchMonitor from "./EscapeKillSwitchMonitor.ts";
 
 // Unset or unparseable reads as off.
@@ -39,6 +52,17 @@ export const computerUseEnabled = Effect.gen(function* () {
 
 const warn = (message: string, error?: { readonly message: string }) =>
   Effect.logWarning(`[desktop-computer] ${message}${error ? `: ${error.message}` : ""}`);
+
+const COMPUTER_DISABLED_MESSAGE = "Computer use is not enabled in this desktop build.";
+const COMPUTER_BINARIES_MISSING_MESSAGE =
+  "This desktop build lacks the native Computer helpers, so Computer use is unavailable.";
+const COMPUTER_HOST_UNAVAILABLE_MESSAGE = "The Computer host could not start.";
+
+// The helper omits Accessibility until asked; the contract's key is exact-optional.
+const toBridgeState = (state: ComputerHelper.ComputerHelperState): DesktopComputerHelperState => {
+  const { accessibilityPermission, ...rest } = state;
+  return accessibilityPermission === undefined ? rest : { ...rest, accessibilityPermission };
+};
 
 // Overview screenshots arrive at full Retina size; the model only needs the budget.
 const normalizeOverview = (result: CuaToolResult): CuaToolResult => {
@@ -81,9 +105,17 @@ const quitSystemSettings = Effect.fn("desktop.computer.quitSystemSettings")(func
  * inert service. Closing the layer scope disposes the host and its helpers.
  */
 const make = Effect.gen(function* () {
-  if (!(yield* computerUseEnabled)) return inertDesktopComputer;
-
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const inert = (message: string) =>
+    makeInertDesktopComputer(unsupportedComputerHelperState(message, environment.displayName));
+  if (!(yield* computerUseEnabled))
+    return inert(
+      (yield* HostProcessPlatform) === "darwin"
+        ? COMPUTER_DISABLED_MESSAGE
+        : ComputerHelper.COMPUTER_HELPER_UNSUPPORTED_MESSAGE,
+    );
+
+  const electronWindow = yield* ElectronWindow.ElectronWindow;
   const electronApp = yield* ElectronApp.ElectronApp;
   const powerMonitor = yield* ElectronPowerMonitor.ElectronPowerMonitor;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -98,20 +130,49 @@ const make = Effect.gen(function* () {
     yield* warn(
       "Computer use is enabled but this build lacks cua-driver, pathway-helper or its app bundle",
     );
-    return inertDesktopComputer;
+    return inert(COMPUTER_BINARIES_MISSING_MESSAGE);
   }
 
   // Set once the host exists; helper callbacks only fire after that.
   let host: CuaDriverHost | undefined;
   let emergencyStopNotice: Effect.Effect<void> = Effect.void;
+  // Mirrors the persisted preference; the IPC handler writes the file and then updates this.
+  let cursorStyle: AgentCursorStylePreference | null = yield* readAgentCursorPreference(
+    yield* agentCursorPreferencePath,
+  );
+
+  // Helper events reach only a main renderer that is up and has loaded.
+  const pushToRenderer = (channel: string, payload: unknown) =>
+    Effect.gen(function* () {
+      const main = yield* electronWindow.main;
+      if (Option.isNone(main)) return false;
+      const window = main.value;
+      if (
+        window.isDestroyed() ||
+        window.webContents.isDestroyed() ||
+        window.webContents.isLoadingMainFrame()
+      )
+        return false;
+      window.webContents.send(channel, payload);
+      return true;
+    }).pipe(Effect.catchDefect(() => Effect.succeed(false)));
 
   const helper = yield* ComputerHelper.make({
     helperPath,
     appBundlePath: appBundlePath.value,
     appDisplayName: environment.displayName,
-    // The renderer surfaces for helper state arrive with the Computer UI.
-    onState: () => Effect.void,
-    onError: (error) => warn("permission setup failed", error),
+    onState: (state) =>
+      Effect.asVoid(pushToRenderer(IpcChannels.COMPUTER_STATE_CHANNEL, toBridgeState(state))),
+    onPermissionGuideState: (state) =>
+      Effect.asVoid(pushToRenderer(IpcChannels.COMPUTER_PERMISSION_GUIDE_STATE_CHANNEL, state)),
+    // A setup failure the user must act on brings the app forward.
+    onError: (error) =>
+      Effect.gen(function* () {
+        yield* warn("permission setup failed", error);
+        const main = yield* electronWindow.main;
+        if (Option.isSome(main)) yield* electronWindow.reveal(main.value);
+        yield* pushToRenderer(IpcChannels.COMPUTER_ERROR_CHANNEL, error);
+      }).pipe(Effect.catchDefect(() => Effect.void)),
     openSettingsPane: (pane) =>
       Effect.promise(() =>
         Electron.shell.openExternal(ComputerHelper.helperSettingsPaneUrl(pane)).catch(() => {}),
@@ -143,6 +204,27 @@ const make = Effect.gen(function* () {
   const shield = yield* ComputerShield.make({
     helperPath: helperPath.value,
     onError: (error) => warn("computer shield failed", { message: String(error) }),
+  });
+
+  // Live frames go to the desktop's own renderer only, never the orchestration socket.
+  const frameTap = yield* ComputerFrameTap.make({
+    helperPath: helperPath.value,
+    send: (channel, frame) =>
+      electronWindow.main.pipe(
+        Effect.map((main) => {
+          if (
+            Option.isSome(main) &&
+            !main.value.isDestroyed() &&
+            !main.value.webContents.isDestroyed()
+          )
+            main.value.webContents.send(channel, frame);
+        }),
+        Effect.catchDefect(() => Effect.void),
+      ),
+    onError: (error) =>
+      warn("computer frame tap failed", {
+        message: error instanceof Error ? error.message : String(error),
+      }),
   });
 
   yield* sweepOrphanedCuaDrivers();
@@ -191,6 +273,8 @@ const make = Effect.gen(function* () {
     inputMonitorState: escapeMonitor.state,
     activateInputMonitor: escapeMonitor.activate(),
     shield,
+    frameTap,
+    cursorStyle: () => cursorStyle,
     normalizeOverview,
     // Computer use must never target the app hosting it.
     ownPids: () =>
@@ -206,7 +290,7 @@ const make = Effect.gen(function* () {
   if (Result.isFailure(listening)) {
     yield* warn("Computer host could not listen", listening.failure);
     yield* running.dispose.pipe(Effect.catch((error) => warn("host dispose failed", error)));
-    return inertDesktopComputer;
+    return inert(COMPUTER_HOST_UNAVAILABLE_MESSAGE);
   }
   const endpoint = listening.success;
 
@@ -230,6 +314,25 @@ const make = Effect.gen(function* () {
     setEmergencyStopNotice: (notice) =>
       Effect.sync(() => {
         emergencyStopNotice = notice;
+      }),
+    getState: (permissions) => Effect.map(helper.refreshState(permissions), toBridgeState),
+    requestPermissions: (permissions) =>
+      Effect.map(helper.requestPermissions(permissions), toBridgeState),
+    startPermissionSetup: (permissions) =>
+      Effect.map(helper.startPermissionSetup(permissions), toBridgeState),
+    openPermissionSettings: (pane) =>
+      Effect.promise(() =>
+        Electron.shell.openExternal(ComputerHelper.helperSettingsPaneUrl(pane)).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    showPermissionGuide: helper.showPermissionGuide,
+    hidePermissionGuide: helper.hidePermissionGuide,
+    setCursorStyle: (style) =>
+      Effect.suspend(() => {
+        cursorStyle = style;
+        return running.setCursorStyle(style);
       }),
   };
 });
