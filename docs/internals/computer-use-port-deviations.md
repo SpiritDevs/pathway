@@ -25,3 +25,13 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - The OAuth token endpoint now derives its allowed scopes from `AuthEnvironmentScope` instead of a hardcoded list. Without this, `computer:operate` would have been rejected with `invalid_scope`.
 - `computer:operate` is optional during token exchange. The server drops it when the pairing grant lacks it, rather than failing with `scope_not_granted`, so pairings from before the upgrade, or created without "Use Computer", still redeem. Those sessions cannot start Computer tasks under the `scoped` policy.
 - Servers advertise the `computerOperateScope` descriptor capability. Clients request `computer:operate` only when it is advertised (`requestableEnvironmentScopes`), because older servers reject the whole token request with `invalid_scope`.
+
+## P2 server core
+
+- Computer errors are `Schema.TaggedErrorClass`es in `computer/computerErrors.ts`. `ComputerLeaseError`, `CuaActionError`, `ComputerSpaceError`, and `ComputerDenylistError` subclass them and keep the parent's `_tag` and `name`, so `Effect.catchTag("ComputerBackendError")` still catches a lease refusal. Synara gave each subclass its own `name`.
+- `ComputerBackend` methods return `Effect`s that fail with `ComputerOperationError`. `onEvent` is an optional `events` stream, `attachStream`/`detachStream` take no listener, and `ComputerBrowserCall` drops `signal`: cancellation is fiber interruption.
+- `assertComputerClipboardWriteFits` is `computerClipboardWriteError`, which returns the error instead of throwing it.
+- The desktop operation, delivery-mode, and task contexts are `Context.Reference`s instead of `AsyncLocalStorage`. A cancellation signal is a set of `Deferred`s rather than an `AbortSignal`, and every signal carries a reason.
+- Aborting a desktop operation interrupts it and fails it with the abort reason. Synara relied on cooperative `throwIfAborted` checks, so its queue tests that let an operation ignore a close now expect the operation to fail with "closed".
+- `DesktopOperationQueue` orders work with one FIFO and a conflict rule (exclusive conflicts with everything, scoped with its own key) instead of promise chains. An operation cancelled while waiting leaves the queue at once instead of holding its place until its turn.
+- `modelImageBudget` and `uiTreeTargeting` are new `@spiritdevs/shared` subpath exports, copied verbatim.
