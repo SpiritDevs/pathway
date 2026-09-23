@@ -183,7 +183,7 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - The tool factories are Effects that need FileSystem/Path. Abort signals become fiber interruption, `Effect.sleep` replaces timers, and only typed failures are caught. A defect in a foreground resolver becomes `foreground_not_requested`, and a handler defect becomes "`<name>` failed unexpectedly.".
 - `GatewayToolError` is `ComputerToolError`, rendered by `computerToolErrorResult`. `computer_wait_for_label` input errors are `ToolInputError`, audited as `invalid_arguments`.
 - `withForegroundRestore` uses `Effect.result`/`fromResult`. The `computer_spaces` reserve recheck latches turn-ended. The dead `drivenApps` parameter of `computerAuditTarget` is removed. `TextEncoder` replaces `Buffer`. `computer_help` no longer spreads the tool list.
-- `preview_*` wording and "Pathway resolves it" replace Synara's product names in tool prose. The strings "gateway access" and "Advertised by the gateway" stay literal, because the guidance tests pin them.
+- `preview_*` wording and "Pathway resolves it" replace Synara's product names in tool prose. The guidance sends in-app browsing to `preview_*`, because Pathway has no `browser_*` tools. The strings "gateway access" and "Advertised by the gateway" stay literal, because the guidance tests pin them.
 - `synara_*` names become `pathway_*`, and `auto-accept-edits` is an accepted runtime mode.
 - Browser tool tests use Deferreds where Synara used `vi.waitFor`.
 - The guidance test drops the `harnessPolicy` assertions and the Pi mention, because Pathway has neither.
