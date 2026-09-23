@@ -1,4 +1,4 @@
-import type { ServerProviderModel } from "@spiritdevs/contracts";
+import { ServerProviderModel } from "@spiritdevs/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -19,6 +19,16 @@ export const MODEL_MANIFEST_URL =
 export const ModelManifestData = Schema.Struct({
   version: Schema.Literal(1),
   updatedAt: Schema.String.check(Schema.makeFilter((value) => Number.isFinite(Date.parse(value)))),
+  claudeModels: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        model: ServerProviderModel,
+        minimumVersion: Schema.optionalKey(
+          Schema.String.check(Schema.makeFilter((value) => /^\d+\.\d+\.\d+$/.test(value))),
+        ),
+      }),
+    ),
+  ),
   models: Schema.Record(
     Schema.String,
     Schema.Record(Schema.String, Schema.Literals(["current", "legacy"])),

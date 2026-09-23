@@ -6,6 +6,7 @@ import {
   resolvePromptInjectedEffort,
 } from "@spiritdevs/shared/model";
 
+import { BUNDLED_MODEL_MANIFEST, type ModelManifestData } from "./provider/ModelManifest.ts";
 import {
   getClaudeModelCapabilities,
   isClaudeUltracodeEffort,
@@ -25,14 +26,15 @@ export interface CompiledClaudeModelSelection {
 /** Compile every Claude model option at the provider boundary. */
 export function compileClaudeModelSelection(
   selection: ModelSelection,
+  manifest: ModelManifestData = BUNDLED_MODEL_MANIFEST,
 ): CompiledClaudeModelSelection {
-  const capabilities = getClaudeModelCapabilities(selection.model);
+  const capabilities = getClaudeModelCapabilities(selection.model, manifest);
   const descriptors = getProviderOptionDescriptors({ caps: capabilities });
   const supportsBoolean = (id: string) =>
     descriptors.some((descriptor) => descriptor.type === "boolean" && descriptor.id === id);
   const rawEffort = getModelSelectionStringOptionValue(selection, "effort");
   const resolvedEffort = resolveClaudeEffort(capabilities, rawEffort);
-  const effort = normalizeClaudeCliEffort(resolvedEffort, selection.model);
+  const effort = normalizeClaudeCliEffort(resolvedEffort, selection.model, manifest);
   const fastMode = supportsBoolean("fastMode")
     ? getModelSelectionBooleanOptionValue(selection, "fastMode")
     : undefined;
@@ -44,7 +46,7 @@ export function compileClaudeModelSelection(
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),
     ...(isClaudeUltracodeEffort(resolvedEffort) ? { ultracode: true } : {}),
   };
-  const apiModelId = resolveClaudeApiModelId(selection);
+  const apiModelId = resolveClaudeApiModelId(selection, manifest);
   const promptEffort = resolvePromptInjectedEffort(capabilities, rawEffort) ?? undefined;
   return {
     apiModelId,

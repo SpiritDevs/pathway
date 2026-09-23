@@ -27,7 +27,7 @@ it.layer(NodeServices.layer)("model manifest cache", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-manifest-" });
       let count = 0;
-      const newer = { ...BUNDLED_MODEL_MANIFEST, updatedAt: "2026-09-08T00:00:00Z" };
+      const newer = { ...BUNDLED_MODEL_MANIFEST, updatedAt: "2099-01-01T00:00:00Z" };
       const service = yield* makeModelManifest({
         cachePath: `${dir}/manifest.json`,
         enabled: Effect.succeed(true),
@@ -54,7 +54,20 @@ it.layer(NodeServices.layer)("model manifest cache", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-manifest-" });
-      for (const data of [{ version: 2 }, { ...BUNDLED_MODEL_MANIFEST, updatedAt: "2020-01-01" }]) {
+      for (const data of [
+        { version: 2 },
+        { ...BUNDLED_MODEL_MANIFEST, updatedAt: "2020-01-01" },
+        {
+          ...BUNDLED_MODEL_MANIFEST,
+          updatedAt: "2099-01-01",
+          claudeModels: [{ model: { slug: "bad" } }],
+        },
+        {
+          ...BUNDLED_MODEL_MANIFEST,
+          updatedAt: "2099-01-01",
+          claudeModels: [{ ...BUNDLED_MODEL_MANIFEST.claudeModels![0], minimumVersion: "invalid" }],
+        },
+      ]) {
         const service = yield* makeModelManifest({
           cachePath: `${dir}/manifest.json`,
           enabled: Effect.succeed(true),

@@ -37,6 +37,9 @@ import { ProviderDriverError } from "../Errors.ts";
 import {
   buildClaudeCapabilitiesProbeQueryOptions,
   checkClaudeProviderStatus,
+  getBuiltInClaudeModelsForVersion,
+  getClaudeModels,
+  getClaudeModelCapabilities,
   makePendingClaudeProvider,
   probeClaudeCapabilities,
 } from "../Layers/ClaudeProvider.ts";
@@ -51,7 +54,7 @@ import {
   type ProviderDriver,
   type ProviderInstance,
 } from "../ProviderDriver.ts";
-import type { ServerProviderDraft } from "../providerSnapshot.ts";
+import { providerModelsFromSettings, type ServerProviderDraft } from "../providerSnapshot.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
@@ -71,6 +74,8 @@ import {
   makeClaudeContinuationGroupKey,
   makeClaudeEnvironment,
 } from "./ClaudeHome.ts";
+import { ModelManifest } from "../ModelManifest.ts";
+
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
@@ -141,6 +146,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       const { cwd } = yield* ServerConfig;
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
+      const manifest = yield* ModelManifest;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const fallbackContinuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -291,6 +297,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         processEnv,
         cwd,
       ).pipe(
+        Effect.provideService(ModelManifest, manifest),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -304,12 +311,31 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
         initialSnapshot: (settings) =>
-          makePendingClaudeProvider(settings.provider).pipe(Effect.map(stampIdentity)),
+          makePendingClaudeProvider(settings.provider).pipe(
+            Effect.provideService(ModelManifest, manifest),
+            Effect.map(stampIdentity),
+          ),
         checkProvider,
         enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
-          enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
-            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-          }).pipe(
+          manifest.refresh.pipe(
+            Effect.flatMap((metadata) =>
+              enrichProviderSnapshotWithVersionAdvisory(
+                {
+                  ...snapshot,
+                  models: providerModelsFromSettings(
+                    snapshot.enabled && snapshot.installed
+                      ? getBuiltInClaudeModelsForVersion(snapshot.version, metadata)
+                      : getClaudeModels(metadata),
+                    effectiveConfig.customModels,
+                    getClaudeModelCapabilities(undefined),
+                  ),
+                },
+                maintenanceCapabilities,
+                {
+                  enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+                },
+              ),
+            ),
             Effect.provideService(HttpClient.HttpClient, httpClient),
             Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
           ),

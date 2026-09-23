@@ -1,3 +1,4 @@
+import { BUNDLED_MODEL_MANIFEST } from "../ModelManifest.ts";
 import { ClaudeSettings } from "@spiritdevs/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -10,16 +11,19 @@ import {
   buildClaudeCapabilitiesProbeQueryOptions,
   CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES,
   isLegacyClaudeModel,
+  getBuiltInClaudeModelsForVersion,
+  getClaudeModels,
   probeClaudeCapabilities,
 } from "./ClaudeProvider.ts";
 
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
-it("keeps only the Claude 5 family out of legacy models", () => {
+it("keeps Opus 5.5 current and marks Opus 5 as legacy", () => {
   assert.deepStrictEqual(
     [
       "claude-fable-5-1",
       "claude-fable-5",
+      "claude-opus-5-5",
       "claude-opus-5",
       "claude-sonnet-5",
       "claude-opus-4-8",
@@ -27,7 +31,8 @@ it("keeps only the Claude 5 family out of legacy models", () => {
     [
       ["claude-fable-5-1", false],
       ["claude-fable-5", false],
-      ["claude-opus-5", false],
+      ["claude-opus-5-5", false],
+      ["claude-opus-5", true],
       ["claude-sonnet-5", false],
       ["claude-opus-4-8", true],
     ],
@@ -164,4 +169,43 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
       assert.equal(flagSettings.disableAllHooks, true);
     }).pipe(Effect.scoped),
   );
+});
+
+it("gates manifest Claude models on their minimum CLI version", () => {
+  for (const version of [null, "2.1.279"]) {
+    assert.isFalse(
+      getBuiltInClaudeModelsForVersion(version).some((model) => model.slug === "claude-opus-5-5"),
+    );
+  }
+  const opus = getBuiltInClaudeModelsForVersion("2.1.280").find(
+    (model) => model.slug === "claude-opus-5-5",
+  );
+  assert.strictEqual(opus?.name, "Claude Opus 5.5");
+  assert.isUndefined(opus?.isLegacy);
+});
+
+it("adds remote Claude models and overrides existing entries without duplicates", () => {
+  const entry = BUNDLED_MODEL_MANIFEST.claudeModels![0]!;
+  const manifest = {
+    ...BUNDLED_MODEL_MANIFEST,
+    models: { claudeAgent: { "claude-opus-5": "legacy" as const } },
+    claudeModels: [
+      { ...entry, model: { ...entry.model, slug: "claude-future" }, minimumVersion: "3.0.0" },
+      { ...entry, model: { ...entry.model, slug: "claude-opus-5", name: "Updated name" } },
+    ],
+  };
+  assert.isFalse(
+    getBuiltInClaudeModelsForVersion("2.1.280", manifest).some(
+      (model) => model.slug === "claude-future",
+    ),
+  );
+  assert.isTrue(
+    getBuiltInClaudeModelsForVersion("3.0.0", manifest).some(
+      (model) => model.slug === "claude-future",
+    ),
+  );
+  const models = getClaudeModels(manifest).filter((model) => model.slug === "claude-opus-5");
+  assert.lengthOf(models, 1);
+  assert.strictEqual(models[0]?.name, "Updated name");
+  assert.isTrue(models[0]?.isLegacy);
 });

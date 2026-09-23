@@ -18,6 +18,7 @@ import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@spiritdevs/s
 import { resolveSpawnCommand } from "@spiritdevs/shared/shell";
 
 import { TextGenerationError } from "@spiritdevs/contracts";
+import { ModelManifest } from "../provider/ModelManifest.ts";
 import * as TextGeneration from "./TextGeneration.ts";
 import {
   buildBranchNamePrompt,
@@ -72,6 +73,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
   environment?: NodeJS.ProcessEnv,
 ) {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const modelManifest = yield* ModelManifest;
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, environment);
 
   const readStreamAsString = <E>(
@@ -149,7 +151,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       toJsonSchemaObject(outputSchemaJson),
       "Failed to encode structured output schema.",
     );
-    const caps = getClaudeModelCapabilities(modelSelection.model);
+    const manifest = yield* modelManifest.current;
+    const caps = getClaudeModelCapabilities(modelSelection.model, manifest);
     const descriptors = getProviderOptionDescriptors({
       caps,
       selections: modelSelection.options,
@@ -157,7 +160,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     const findDescriptor = (id: string) => descriptors.find((descriptor) => descriptor.id === id);
     const rawEffortSelection = getModelSelectionStringOptionValue(modelSelection, "effort");
     const resolvedEffort = resolveClaudeEffort(caps, rawEffortSelection);
-    const cliEffort = normalizeClaudeCliEffort(resolvedEffort, modelSelection.model);
+    const cliEffort = normalizeClaudeCliEffort(resolvedEffort, modelSelection.model, manifest);
     const ultracode = isClaudeUltracodeEffort(resolvedEffort);
     const thinkingDescriptor = findDescriptor("thinking");
     const fastModeDescriptor = findDescriptor("fastMode");
@@ -189,7 +192,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           "--json-schema",
           jsonSchemaStr,
           "--model",
-          resolveClaudeApiModelId(modelSelection),
+          resolveClaudeApiModelId(modelSelection, manifest),
           ...(cliEffort ? ["--effort", cliEffort] : []),
           ...(settingsJson ? ["--settings", settingsJson] : []),
           "--dangerously-skip-permissions",
@@ -303,10 +306,12 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     modelSelection: ModelSelection;
   }) {
     const operation = "investigate" as const;
-    const caps = getClaudeModelCapabilities(input.modelSelection.model);
+    const manifest = yield* modelManifest.current;
+    const caps = getClaudeModelCapabilities(input.modelSelection.model, manifest);
     const cliEffort = normalizeClaudeCliEffort(
       resolveClaudeEffort(caps, getModelSelectionStringOptionValue(input.modelSelection, "effort")),
       input.modelSelection.model,
+      manifest,
     );
 
     const runClaudeCommand = Effect.fn("runClaudeInvestigation.runClaudeCommand")(function* () {
@@ -332,7 +337,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
               ]
             : []),
           "--model",
-          resolveClaudeApiModelId(input.modelSelection),
+          resolveClaudeApiModelId(input.modelSelection, manifest),
           ...(cliEffort ? ["--effort", cliEffort] : []),
         ],
         { env: claudeEnvironment },

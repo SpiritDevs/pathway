@@ -1888,6 +1888,33 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         ),
       );
 
+      it.effect("includes Claude Opus 5.5 on supported Claude Code versions", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            claudeCapabilities(),
+          );
+          const opus55 = status.models.find((model) => model.slug === "claude-opus-5-5");
+          assert.strictEqual(opus55?.name, "Claude Opus 5.5");
+          assert.strictEqual(opus55?.isLegacy, undefined);
+          assert.strictEqual(status.message, undefined);
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "2.1.280\n", stderr: "", code: 0 };
+              if (joined === "auth status")
+                return {
+                  stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
       it.effect("includes Claude Fable 5.1 on supported Claude Code versions", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(
@@ -1897,7 +1924,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           const fable51 = status.models.find((model) => model.slug === "claude-fable-5-1");
           assert.strictEqual(fable51?.name, "Claude Fable 5.1");
           assert.strictEqual(fable51?.isLegacy, undefined);
-          assert.strictEqual(status.message, undefined);
+          assert.strictEqual(
+            status.message,
+            "Claude Code v2.1.257 is too old for Claude Opus 5.5. Upgrade to v2.1.280 or newer to access it.",
+          );
         }).pipe(
           Effect.provide(
             mockSpawnerLayer((args) => {

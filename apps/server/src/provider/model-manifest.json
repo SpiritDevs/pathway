@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-09-07T00:00:00Z",
+  "updatedAt": "2026-09-23T00:00:00Z",
   "models": {
     "codex": {
       "gpt-6-astra": "current",
@@ -16,6 +16,74 @@
       "gpt-5.3-codex-spark": "legacy",
       "gpt-5.2": "legacy",
       "gpt-5.2-codex": "legacy"
+    },
+    "claudeAgent": {
+      "claude-opus-5-5": "current",
+      "claude-fable-5-1": "current",
+      "claude-fable-5": "current",
+      "claude-opus-5": "legacy",
+      "claude-sonnet-5": "current"
     }
-  }
+  },
+  "claudeModels": [
+    {
+      "minimumVersion": "2.1.280",
+      "model": {
+        "slug": "claude-opus-5-5",
+        "name": "Claude Opus 5.5",
+        "isCustom": false,
+        "capabilities": {
+          "optionDescriptors": [
+            {
+              "id": "effort",
+              "label": "Reasoning",
+              "type": "select",
+              "currentValue": "medium",
+              "options": [
+                {
+                  "id": "low",
+                  "label": "Low"
+                },
+                {
+                  "id": "medium",
+                  "label": "Medium",
+                  "isDefault": true
+                },
+                {
+                  "id": "high",
+                  "label": "High"
+                },
+                {
+                  "id": "xhigh",
+                  "label": "Extra High"
+                },
+                {
+                  "id": "max",
+                  "label": "Max"
+                }
+              ]
+            },
+            {
+              "id": "fastMode",
+              "label": "Fast Mode",
+              "type": "boolean"
+            },
+            {
+              "id": "contextWindow",
+              "label": "Context Window",
+              "type": "select",
+              "currentValue": "1m",
+              "options": [
+                {
+                  "id": "1m",
+                  "label": "1M",
+                  "isDefault": true
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
 }

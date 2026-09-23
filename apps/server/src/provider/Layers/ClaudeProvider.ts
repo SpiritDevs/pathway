@@ -48,6 +48,8 @@ import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 
+import { BUNDLED_MODEL_MANIFEST, ModelManifest, type ModelManifestData } from "../ModelManifest.ts";
+
 const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
@@ -62,15 +64,8 @@ const MINIMUM_CLAUDE_FABLE_5_VERSION = "2.1.169";
 const MINIMUM_CLAUDE_OPUS_4_8_VERSION = "2.1.154";
 const MINIMUM_CLAUDE_OPUS_4_7_VERSION = "2.1.111";
 
-const CURRENT_CLAUDE_MODELS = new Set([
-  "claude-fable-5-1",
-  "claude-fable-5",
-  "claude-opus-5",
-  "claude-sonnet-5",
-]);
-
 export function isLegacyClaudeModel(model: string): boolean {
-  return !CURRENT_CLAUDE_MODELS.has(model);
+  return BUNDLED_MODEL_MANIFEST.models.claudeAgent?.[model] !== "current";
 }
 
 const CLAUDE_MODEL_CATALOG: ReadonlyArray<ServerProviderModel> = [
@@ -397,10 +392,32 @@ function supportsClaudeOpus47(version: string | null | undefined): boolean {
   return version ? compareSemverVersions(version, MINIMUM_CLAUDE_OPUS_4_7_VERSION) >= 0 : false;
 }
 
-function getBuiltInClaudeModelsForVersion(
-  version: string | null | undefined,
+export function getClaudeModels(
+  manifest: ModelManifestData = BUNDLED_MODEL_MANIFEST,
 ): ReadonlyArray<ServerProviderModel> {
-  return BUILT_IN_MODELS.filter((model) => {
+  const overrides = new Map(manifest.claudeModels?.map((entry) => [entry.model.slug, entry.model]));
+  return [
+    ...overrides.values(),
+    ...BUILT_IN_MODELS.filter((model) => !overrides.has(model.slug)),
+  ].map((model) => {
+    const status = manifest.models.claudeAgent?.[model.slug];
+    if (status === undefined) return model;
+    if (status === "legacy") return { ...model, isLegacy: true };
+    const { isLegacy: _legacy, ...current } = model;
+    return current;
+  });
+}
+
+export function getBuiltInClaudeModelsForVersion(
+  version: string | null | undefined,
+  manifest: ModelManifestData = BUNDLED_MODEL_MANIFEST,
+): ReadonlyArray<ServerProviderModel> {
+  return getClaudeModels(manifest).filter((model) => {
+    const minimumVersion = manifest.claudeModels?.find(
+      (entry) => entry.model.slug === model.slug,
+    )?.minimumVersion;
+    if (minimumVersion)
+      return version ? compareSemverVersions(version, minimumVersion) >= 0 : false;
     if (model.slug === "claude-fable-5-1") {
       return supportsClaudeFable51(version);
     }
@@ -445,10 +462,13 @@ function formatClaudeOpus47UpgradeMessage(version: string | null): string {
   return `Claude Code ${versionLabel} is too old for Claude Opus 4.7. Upgrade to v${MINIMUM_CLAUDE_OPUS_4_7_VERSION} or newer to access it.`;
 }
 
-export function getClaudeModelCapabilities(model: string | null | undefined): ModelCapabilities {
+export function getClaudeModelCapabilities(
+  model: string | null | undefined,
+  manifest: ModelManifestData = BUNDLED_MODEL_MANIFEST,
+): ModelCapabilities {
   const slug = model?.trim();
   return (
-    BUILT_IN_MODELS.find((candidate) => candidate.slug === slug)?.capabilities ??
+    getClaudeModels(manifest).find((candidate) => candidate.slug === slug)?.capabilities ??
     DEFAULT_CLAUDE_MODEL_CAPABILITIES
   );
 }
@@ -479,6 +499,7 @@ export function resolveClaudeEffort(
 export function normalizeClaudeCliEffort(
   effort: string | null | undefined,
   model: string | null | undefined,
+  manifest: ModelManifestData = BUNDLED_MODEL_MANIFEST,
 ): string | undefined {
   if (!effort || effort === "ultrathink") {
     return undefined;
@@ -488,6 +509,16 @@ export function normalizeClaudeCliEffort(
   }
   if (
     effort === "xhigh" &&
+    !manifest.claudeModels?.some(
+      (entry) =>
+        entry.model.slug === model &&
+        entry.model.capabilities?.optionDescriptors?.some(
+          (descriptor) =>
+            descriptor.type === "select" &&
+            descriptor.id === "effort" &&
+            descriptor.options.some((option) => option.id === "xhigh"),
+        ),
+    ) &&
     model !== "claude-fable-5-1" &&
     model !== "claude-fable-5" &&
     model !== "claude-opus-5" &&
@@ -508,8 +539,9 @@ export function isClaudeUltracodeEffort(effort: string | null | undefined): bool
 
 export function resolveClaudeContextWindow(
   modelSelection: ModelSelection | undefined,
+  manifest: ModelManifestData = BUNDLED_MODEL_MANIFEST,
 ): string | undefined {
-  const caps = getClaudeModelCapabilities(modelSelection?.model);
+  const caps = getClaudeModelCapabilities(modelSelection?.model, manifest);
   const raw = getModelSelectionStringOptionValue(modelSelection, "contextWindow");
   const descriptors = getProviderOptionDescriptors({
     caps,
@@ -520,8 +552,11 @@ export function resolveClaudeContextWindow(
   return typeof value === "string" ? value : undefined;
 }
 
-export function resolveClaudeApiModelId(modelSelection: ModelSelection): string {
-  switch (resolveClaudeContextWindow(modelSelection)) {
+export function resolveClaudeApiModelId(
+  modelSelection: ModelSelection,
+  manifest: ModelManifestData = BUNDLED_MODEL_MANIFEST,
+): string {
+  switch (resolveClaudeContextWindow(modelSelection, manifest)) {
     case "1m":
       return `${modelSelection.model}[1m]`;
     default:
@@ -949,8 +984,9 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
 > {
   const resolvedEnvironment = environment ?? process.env;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const manifest = yield* (yield* ModelManifest).current;
   const allModels = providerModelsFromSettings(
-    BUILT_IN_MODELS,
+    getClaudeModels(manifest),
     claudeSettings.customModels,
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
   );
@@ -1040,12 +1076,19 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   }
 
   const models = providerModelsFromSettings(
-    getBuiltInClaudeModelsForVersion(parsedVersion),
+    getBuiltInClaudeModelsForVersion(parsedVersion, manifest),
     claudeSettings.customModels,
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
   );
+  const unavailableModel = manifest.claudeModels?.find(
+    (entry) =>
+      entry.minimumVersion &&
+      (!parsedVersion || compareSemverVersions(parsedVersion, entry.minimumVersion) < 0),
+  );
   const versionUpgradeMessage = supportsClaudeFable51(parsedVersion)
-    ? undefined
+    ? unavailableModel
+      ? `Claude Code v${parsedVersion} is too old for ${unavailableModel.model.name}. Upgrade to v${unavailableModel.minimumVersion} or newer to access it.`
+      : undefined
     : supportsClaudeOpus5(parsedVersion)
       ? formatClaudeFable51UpgradeMessage(parsedVersion)
       : supportsClaudeFable5(parsedVersion)
@@ -1143,7 +1186,7 @@ export const makePendingClaudeProvider = (
   Effect.gen(function* () {
     const checkedAt = yield* nowIso;
     const models = providerModelsFromSettings(
-      BUILT_IN_MODELS,
+      getClaudeModels(yield* (yield* ModelManifest).current),
       claudeSettings.customModels,
       DEFAULT_CLAUDE_MODEL_CAPABILITIES,
     );

@@ -1,3 +1,4 @@
+import { BUNDLED_MODEL_MANIFEST } from "../../provider/ModelManifest.ts";
 import type {
   Query as ClaudeQuery,
   SDKMessage,
@@ -5701,4 +5702,28 @@ describe("ClaudeAdapterV2 query message stream", () => {
       assert.isTrue(closed);
     }),
   );
+});
+
+it("uses refreshed model capabilities at the Claude SDK boundary", () => {
+  const entry = BUNDLED_MODEL_MANIFEST.claudeModels![0]!;
+  const options = makeClaudeQueryOptions({
+    modelManifest: {
+      ...BUNDLED_MODEL_MANIFEST,
+      claudeModels: [{ ...entry, model: { ...entry.model, slug: "claude-future" } }],
+    },
+    modelSelection: {
+      ...CLAUDE_TEST_MODEL_SELECTION,
+      model: "claude-future",
+      options: [
+        { id: "effort", value: "xhigh" },
+        { id: "fastMode", value: true },
+      ],
+    },
+    nativeThreadId: "manifest-test",
+    resume: false,
+    cwd: "/workspace",
+  });
+  assert.strictEqual(options.model, "claude-future[1m]");
+  assert.strictEqual(options.effort, "xhigh");
+  assert.deepEqual(options.settings, { fastMode: true });
 });

@@ -1,3 +1,8 @@
+import {
+  BUNDLED_MODEL_MANIFEST,
+  ModelManifest,
+  type ModelManifestData,
+} from "../../provider/ModelManifest.ts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import {
   type CanUseTool,
@@ -756,6 +761,7 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
 );
 
 export function makeClaudeQueryOptions(input: {
+  readonly modelManifest?: ModelManifestData;
   readonly modelSelection: ModelSelection;
   readonly nativeThreadId: string;
   readonly resume: boolean;
@@ -782,7 +788,7 @@ export function makeClaudeQueryOptions(input: {
   readonly supportedDialogKinds?: ClaudeQueryOptions["supportedDialogKinds"];
   readonly allowDangerouslySkipPermissions?: boolean;
 }): ClaudeAgentSdkQueryOptions {
-  const compiledSelection = compileClaudeModelSelection(input.modelSelection);
+  const compiledSelection = compileClaudeModelSelection(input.modelSelection, input.modelManifest);
   const extraArgs =
     input.settings === undefined ? {} : parseCliArgs(input.settings.launchArgs).flags;
   const threadIdentity: ClaudeAgentSdkThreadIdentity = input.resume
@@ -1825,6 +1831,7 @@ function claudeSubagentModel(alias: string | undefined, parentModel: string): st
  * what the child thread actually runs with.
  */
 function claudeSubagentOptionSelections(input: {
+  readonly manifest: ModelManifestData;
   readonly parentSelection: ModelSelection;
   readonly model: string;
 }): ProviderOptionSelections | undefined {
@@ -1836,7 +1843,7 @@ function claudeSubagentOptionSelections(input: {
     return parentOptions;
   }
   const descriptors = getProviderOptionDescriptors({
-    caps: getClaudeModelCapabilities(input.model),
+    caps: getClaudeModelCapabilities(input.model, input.manifest),
   });
   const supported = parentOptions.filter((selection) =>
     descriptors.some((descriptor) => descriptor.id === selection.id),
@@ -2344,6 +2351,7 @@ type PendingClaudeRuntimeRequest =
     };
 
 export interface ClaudeAdapterV2Options {
+  readonly modelManifest?: typeof ModelManifest.Service;
   readonly instanceId: ProviderInstanceId;
   readonly settings: ClaudeSettings;
   readonly environment: NodeJS.ProcessEnv;
@@ -2366,6 +2374,8 @@ export function makeClaudeAdapterV2(
   adapterOptions: ClaudeAdapterV2Options,
 ): ProviderAdapterV2Shape {
   const { attachmentsDir, fileSystem, idAllocator, queryRunner } = adapterOptions;
+  const currentManifest =
+    adapterOptions.modelManifest?.current ?? Effect.succeed(BUNDLED_MODEL_MANIFEST);
   const continuationRequests = adapterOptions.continuationRequests ?? {
     offer: () => Effect.void,
   };
@@ -3207,6 +3217,7 @@ export function makeClaudeAdapterV2(
             input.context.input.modelSelection.model,
           );
           const subagentOptions = claudeSubagentOptionSelections({
+            manifest: yield* currentManifest,
             parentSelection: input.context.input.modelSelection,
             model: subagentModel,
           });
@@ -5053,7 +5064,10 @@ export function makeClaudeAdapterV2(
               : { allowedTools: queryPolicy.allowedTools }),
           });
           const queryPolicyKey = claudeEffectiveQueryPolicyKey(queryPolicy, mcpOverrides);
-          const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection);
+          const compiledSelection = compileClaudeModelSelection(
+            turnInput.modelSelection,
+            yield* currentManifest,
+          );
           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
           const existing = yield* Ref.get(queryContext);
           if (
@@ -5095,6 +5109,7 @@ export function makeClaudeAdapterV2(
               threadId: turnInput.threadId,
               providerSessionId: input.providerSessionId,
               options: makeClaudeQueryOptions({
+                modelManifest: yield* currentManifest,
                 modelSelection: turnInput.modelSelection,
                 nativeThreadId,
                 resume: shouldResume,
@@ -5243,7 +5258,8 @@ export function makeClaudeAdapterV2(
                   cwd: turnInput.runtimePolicy.cwd,
                   text: applyClaudePromptEffortPrefix(
                     turnInput.message.text,
-                    compileClaudeModelSelection(turnInput.modelSelection).promptEffort,
+                    compileClaudeModelSelection(turnInput.modelSelection, yield* currentManifest)
+                      .promptEffort,
                   ),
                   attachments: turnInput.message.attachments,
                   attachmentsDir,
@@ -5428,7 +5444,10 @@ export function makeClaudeAdapterV2(
               cwd: currentTurn.input.runtimePolicy.cwd,
               text: applyClaudePromptEffortPrefix(
                 turnInput.message.text,
-                compileClaudeModelSelection(currentTurn.input.modelSelection).promptEffort,
+                compileClaudeModelSelection(
+                  currentTurn.input.modelSelection,
+                  yield* currentManifest,
+                ).promptEffort,
               ),
               attachments: turnInput.message.attachments,
               priority: "now",
@@ -5845,6 +5864,7 @@ export const ClaudeAdapterV2Driver: ProviderAdapterDriver<
       const baseEnvironment = mergeProviderInstanceEnvironment(environment, hostEnvironment);
       const claudeEnvironment = yield* makeClaudeEnvironment(config, baseEnvironment);
       return makeClaudeAdapterV2({
+        modelManifest: yield* ModelManifest,
         instanceId,
         settings: { ...config, enabled },
         environment: claudeEnvironment,
@@ -5879,6 +5899,7 @@ const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* 
   const continuationRequests = yield* ProviderContinuationRequests;
 
   return makeClaudeAdapterV2({
+    modelManifest: yield* ModelManifest,
     instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
     settings: DEFAULT_CLAUDE_SETTINGS,
     environment: hostEnvironment,

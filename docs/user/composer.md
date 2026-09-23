@@ -88,3 +88,16 @@ On iOS, the button shows a still orb with the current activity, including “Wor
 Queued work and requests waiting for your response use the down chevron. Tap the button
 to return to the latest message and resume following new replies. The changed-files
 bubble remains above the composer and opens the diff sheet.
+
+## Claude model updates
+
+Claude Opus 5.5 is available in the model picker when your environment runs Claude Code
+2.1.280 or newer. It defaults to medium reasoning effort and a 1M context window,
+with an optional Fast Mode toggle. Thinking is always enabled for this model.
+
+With provider update checks enabled, Pathway refreshes its published model catalog
+as part of provider checks, at most once per hour. Catalog updates can add Claude models,
+change their options, and move models into or out of the legacy list without another
+Pathway update. A new model can still require a newer Claude Code version or account access.
+If the catalog cannot be downloaded, Pathway keeps its last good catalog or its bundled copy.
+Connected web, desktop, and mobile clients use the catalog from their selected environment.
