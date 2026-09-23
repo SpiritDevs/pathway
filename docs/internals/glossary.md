@@ -311,6 +311,21 @@ The applications and system surfaces Computer Use always refuses: password manag
 The isolated "Pathway Cua" desktop build (`build-desktop-artifact --flavor cua`, macOS and Linux). It has its own bundle ID, `pathway-cua://` scheme, user-data directory and `~/.pathway-cua` home, so Computer Use testing never touches the installed app's permissions or state. It publishes no update feed.
 _Avoid_: Cua build (that is the driver build).
 
+**Computer control** (setting):
+The client setting that lets the agent use the controlled computer in any chat. With it off, a message that starts with `/computer-use` opts in for that one request. Sends carry it as `enableComputerControl` plus the control generation the client last saw.
+
+**Computer preview**:
+The floating live view of the controlled computer over a chat (`ComputerPreviewPopover`). It streams only while it is visible, and a tap on it clicks the controlled computer.
+
+**Frame socket**:
+The binary WebSocket at `/ws/computer-frames` that carries preview stills, separate from the orchestration socket. It needs `orchestration:read` and a one-time ticket on remote connections.
+
+**Frame tap**:
+The desktop's in-process preview feed (`ComputerFrameTap`), pushed to the renderer over `desktop:computer-preview-frame`. Only a client whose environment is its own desktop uses it; every other client uses the frame socket.
+
+**Control generation**:
+A per-thread counter the server bumps on Stop and revoke. A send pins the generation it was made in, so an intent from before a Stop cannot re-arm control.
+
 ## Dictation
 
 **Dictation**:
