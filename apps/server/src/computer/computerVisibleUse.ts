@@ -36,8 +36,9 @@ export interface ComputerVisibleUseMessage {
  * task that said "use Helium" was never asked to *show* Helium, yet the run
  * raised it, then ran twenty-one foreground excursions through it while the
  * user was typing. Raising is therefore opt-in per task, and the opt-in is the
- * user's own request or direct confirmation — not the model's judgment, not
- * the approval mode, not `full-access`.
+ * user's own request or direct confirmation — not the model's judgment. Only
+ * `full-access` autonomy skips the request (ADR 0043); the caller decides that
+ * before asking here, and the user-interaction guards still apply.
  *
  * The answer is reconstructed from durable human messages in this task.
  * Explicit consent survives a chain of routine continuations; a new task,

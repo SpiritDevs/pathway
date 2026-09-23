@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import {
   CommandId,
+  type ComputerAutonomy,
   EnvironmentId,
   type OrchestrationV2TurnItem,
   ProviderDriverKind,
@@ -23,6 +24,7 @@ import { FakeComputerBackend } from "../computer/FakeComputerBackend.ts";
 import { ComputerService } from "../computer/Services/ComputerService.ts";
 import { EventSinkV2 } from "../orchestration-v2/EventSink.ts";
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { makeComputerMcpTools } from "./computerMcpTools.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import type { McpCapability, McpInvocationScope } from "./McpInvocationContext.ts";
@@ -56,12 +58,30 @@ const invocationFor = (
 const errorCode = (result: McpToolCallResult | undefined) => {
   const first = result?.content[0];
   return first?.type === "text" && result?.isError === true
-    ? (/"code": "([a-z_]+)"/u.exec(first.text)?.[1] ?? null)
+    ? (/"(?:code|error)": ?"([a-z_]+)"/u.exec(first.text)?.[1] ?? null)
     : null;
 };
 
 const noticesOf = (items: ReadonlyArray<OrchestrationV2TurnItem>, toolName: string) =>
   items.filter((item) => item.type === "dynamic_tool" && item.toolName === toolName);
+
+/** Tools reading an environment ceiling the test can change between steps. */
+const toolsUnderCeiling = Effect.fn("toolsUnderCeiling")(function* (ceiling: ComputerAutonomy) {
+  const settings = yield* ServerSettingsService;
+  const policy = { autonomy: ceiling };
+  const tools = yield* makeComputerMcpTools.pipe(
+    Effect.provideService(ServerSettingsService, {
+      ...settings,
+      getSettings: settings.getSettings.pipe(
+        Effect.map((current) => ({
+          ...current,
+          computer: { ...current.computer, autonomy: policy.autonomy },
+        })),
+      ),
+    }),
+  );
+  return { tools, policy };
+});
 
 it.layer(TestLayer)("computerMcpTools", (it) => {
   it.effect("lists computer_* when the switch is on and drops them when it is off", () =>
@@ -217,6 +237,26 @@ it.layer(TestLayer)("computerMcpTools", (it) => {
       const moved = yield* call("computer_move_cursor", { x: 10, y: 10 });
       assert.notEqual(moved?.isError, true);
       assert.equal(callsTo("moveCursor"), movedBefore + 1);
+      yield* (yield* ComputerService).manager.releaseDesktopControl(threadId);
+    }),
+  );
+  it.effect("lets a full-access task raise a window only when the ceiling is full access too", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* ComputerService;
+      const { tools, policy } = yield* toolsUnderCeiling("auto");
+      const { threadId } = yield* seedRunningTurn("foreground-full-access", "full-access");
+      const activate = () =>
+        tools.call({
+          invocation: invocationFor(threadId, ["computer"]),
+          name: "computer_activate_window",
+          args: { window_id: "fake-terminal", include_screenshot: false },
+          jsonRpcRequestId: 1,
+        });
+      assert.equal(errorCode(yield* activate()), "foreground_not_requested");
+      policy.autonomy = "full-access";
+      const raised = yield* activate();
+      assert.notEqual(raised?.isError, true, JSON.stringify(raised));
+      yield* manager.releaseDesktopControl(threadId);
     }),
   );
 });
