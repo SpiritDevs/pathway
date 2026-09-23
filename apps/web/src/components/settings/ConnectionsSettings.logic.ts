@@ -1,9 +1,26 @@
-import type {
-  AdvertisedEndpoint,
-  DesktopBridge,
-  DesktopWslState,
-  EnvironmentId,
+import {
+  requestableEnvironmentScopes,
+  type AdvertisedEndpoint,
+  type AuthEnvironmentScope,
+  type DesktopBridge,
+  type DesktopWslState,
+  type EnvironmentId,
+  type ExecutionEnvironmentCapabilities,
 } from "@spiritdevs/contracts";
+
+/** The scopes a pairing link may grant: ones the server understands and the caller holds.
+ * Unknown capabilities or session scopes grant nothing beyond what is proven. */
+export function delegablePairingScopes(
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+  capabilities: ExecutionEnvironmentCapabilities | null,
+  sessionScopes: ReadonlyArray<AuthEnvironmentScope> | null,
+): ReadonlyArray<AuthEnvironmentScope> {
+  if (sessionScopes === null) return [];
+  // An unknown descriptor advertises nothing, so capability-gated scopes stay hidden.
+  return requestableEnvironmentScopes(scopes, capabilities ?? { repositoryIdentity: false }).filter(
+    (scope) => sessionScopes.includes(scope),
+  );
+}
 
 export function partitionEnvironmentsByConnection<
   T extends { readonly connection: { readonly phase: string } },
