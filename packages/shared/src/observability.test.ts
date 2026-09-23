@@ -447,6 +447,32 @@ describe("observability", () => {
       ),
     );
 
+    it.effect("omits fast, successful, silent child spans from the trace file", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const tempDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "pathway-local-tracer-",
+          });
+          const tracePath = path.join(tempDir, "shared.trace.ndjson");
+
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* Effect.void.pipe(Effect.withSpan("routine-child"));
+              yield* Effect.fail("boom").pipe(Effect.withSpan("failing-child"), Effect.ignore);
+            }).pipe(Effect.withSpan("root-span"), Effect.provide(makeTestLayer(tracePath))),
+          );
+
+          const records = yield* readTraceRecords(tracePath);
+          assert.deepEqual(records.map((record) => record.name).toSorted(), [
+            "failing-child",
+            "root-span",
+          ]);
+        }),
+      ),
+    );
+
     it.effect("serializes interrupted spans with an interrupted exit status", () =>
       Effect.scoped(
         Effect.gen(function* () {

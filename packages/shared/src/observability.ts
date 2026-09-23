@@ -430,6 +430,23 @@ export const makeTraceSink = Effect.fn("makeTraceSink")(function* (options: Trac
   } satisfies TraceSink;
 });
 
+const ROUTINE_CHILD_SPAN_MAX_NANOS = 1_000_000n;
+
+// Fast, successful, silent child spans (single SQL statements, secret reads)
+// are most of the local trace volume and say nothing a diagnosis needs. They
+// stay out of the file so its rotation window covers hours instead of
+// minutes; delegates such as OTLP still receive every span.
+function isRoutineChildSpan(span: LocalFileSpan): boolean {
+  const status = span.status;
+  return (
+    status._tag === "Ended" &&
+    ExitRuntime.isSuccess(status.exit) &&
+    Option.isSome(span.parent) &&
+    span.events.length === 0 &&
+    status.endTime - status.startTime < ROUTINE_CHILD_SPAN_MAX_NANOS
+  );
+}
+
 class LocalFileSpan implements Tracer.Span {
   readonly _tag = "Span";
   readonly name: string;
@@ -479,7 +496,7 @@ class LocalFileSpan implements Tracer.Span {
     };
     this.delegate.end(endTime, exit);
 
-    if (this.sampled) {
+    if (this.sampled && !isRoutineChildSpan(this)) {
       this.push(spanToTraceRecord(this));
     }
   }
