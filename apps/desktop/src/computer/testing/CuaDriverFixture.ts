@@ -89,6 +89,7 @@ export interface FixtureOptions
         | "ownPids"
         | "warmOnFirstTouch"
         | "linuxAdmission"
+        | "normalizeOverview"
       >
     > {
   readonly capability?: string;
@@ -368,6 +369,7 @@ export const makeFixture = Effect.fn("makeFixture")(function* (options: FixtureO
     ...(options.cursorStyle ? { cursorStyle: options.cursorStyle } : {}),
     ...(options.warmOnFirstTouch ? { warmOnFirstTouch: true } : {}),
     ...(options.linuxAdmission ? { linuxAdmission: options.linuxAdmission } : {}),
+    ...(options.normalizeOverview ? { normalizeOverview: options.normalizeOverview } : {}),
   }).pipe(
     Scope.provide(hostScope),
     Effect.provideService(HostProcessPlatform, options.platform ?? "darwin"),
