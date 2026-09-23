@@ -406,6 +406,8 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       env: {
         ...backendChildEnvPatch(),
         ELECTRON_RUN_AS_NODE: "1",
+        // The server ranks PATHWAY_HOME above the bootstrap home, so an isolated flavor pins its own.
+        ...(environment.flavor === "cua" ? { PATHWAY_HOME: environment.baseDir } : {}),
       },
       // Primary wants process.env (PATH, dev-runner's PATHWAY_HOME, etc.).
       extendEnv: true,

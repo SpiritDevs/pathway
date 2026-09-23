@@ -110,6 +110,28 @@ describe("DesktopEarlyElectronStartup", () => {
     });
   });
 
+  it("keeps the cua flavor's early settings out of the production home", () => {
+    const readPaths: Array<string> = [];
+    for (const PATHWAY_HOME of ["/home/user/.pathway", "~/.pathway/", "/tmp/cua-home"]) {
+      resolveEarlyLinuxElectronOptions({
+        env: { PATHWAY_HOME },
+        homeDirectory: "/home/user",
+        joinPath,
+        flavor: "cua",
+        readFileString: (path) => {
+          readPaths.push(path);
+          return "{}";
+        },
+      });
+    }
+
+    assert.deepEqual(readPaths, [
+      "/home/user/.pathway-cua/userdata/desktop-settings.json",
+      "/home/user/.pathway-cua/userdata/desktop-settings.json",
+      "/tmp/cua-home/userdata/desktop-settings.json",
+    ]);
+  });
+
   it("keeps implicit development state under ~/.pathway/dev when PATHWAY_HOME is unset", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: {
