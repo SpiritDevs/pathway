@@ -5,6 +5,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { makeCuaComputerBackend } from "./CuaComputerBackend.ts";
 import { withComputerTask } from "./computerTaskContext.ts";
+import { fakeCuaRequest } from "./testing/FakeCuaRequest.ts";
 
 const BOUNDS = { x: 0, y: 0, width: 200, height: 100 };
 
@@ -67,7 +68,10 @@ const evictionFixture = Effect.fn(function* () {
       };
     return { ok: true, result: { structuredContent: {} } };
   };
-  const backend = yield* makeCuaComputerBackend({ endpoint: "/evict", request });
+  const backend = yield* makeCuaComputerBackend({
+    endpoint: "/evict",
+    request: fakeCuaRequest(request),
+  });
   return {
     backend,
     endTaskCalls: () => calls.filter((call) => call.method === "end_task").length,

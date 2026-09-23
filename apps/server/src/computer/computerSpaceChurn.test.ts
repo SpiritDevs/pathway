@@ -3,8 +3,9 @@ import { expect, it } from "@effect/vitest";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import * as Effect from "effect/Effect";
 
-import { makeCuaComputerBackend, type CuaRequest } from "./CuaComputerBackend.ts";
+import { makeCuaComputerBackend } from "./CuaComputerBackend.ts";
 import { withDesktopDeliveryMode } from "./DesktopOperationQueue.ts";
+import { fakeCuaRequest } from "./testing/FakeCuaRequest.ts";
 
 const PNG_400x200 = (() => {
   const header = Buffer.alloc(24);
@@ -71,14 +72,15 @@ const spaceFixture = Effect.fn(function* () {
   };
   // Captures may begin with permission/window reads, without a separate probe.
   // Identify the macOS native host on every reply, just like the real transport.
-  const request: CuaRequest = async (_endpoint, req) => ({
+  const request = async (_endpoint: string, req: unknown) => ({
     ...respond(req as Record<string, unknown>),
     hostPlatform: "darwin",
   });
   // Exercise a Linux backend connected to this fixture's macOS native host.
-  const backend = yield* makeCuaComputerBackend({ endpoint: "/space-churn", request }).pipe(
-    Effect.provideService(HostProcessPlatform, "linux"),
-  );
+  const backend = yield* makeCuaComputerBackend({
+    endpoint: "/space-churn",
+    request: fakeCuaRequest(request),
+  }).pipe(Effect.provideService(HostProcessPlatform, "linux"));
   return {
     backend,
     calls,

@@ -7,6 +7,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import { makeCuaComputerBackend, type CuaComputerBackend } from "./CuaComputerBackend.ts";
+import { fakeCuaRequest } from "./testing/FakeCuaRequest.ts";
 
 const PNG_400x200 = (() => {
   const header = Buffer.alloc(24);
@@ -141,7 +142,10 @@ const lockableFixture = Effect.fn(function* () {
     }
     return { ok: true, ...state(), result: { structuredContent: {} } };
   };
-  const backend = yield* makeCuaComputerBackend({ endpoint: "/lock-resume", request });
+  const backend = yield* makeCuaComputerBackend({
+    endpoint: "/lock-resume",
+    request: fakeCuaRequest(request),
+  });
   const controls: LockableControls = {
     lock: () => {
       desktopEpoch += 1;
