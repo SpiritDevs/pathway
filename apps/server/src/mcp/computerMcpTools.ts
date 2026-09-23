@@ -32,7 +32,6 @@ import {
 import { ComputerService } from "../computer/Services/ComputerService.ts";
 import { computerSpaceDesignationForMessages } from "../computer/computerSpaceDesignation.ts";
 import {
-  COMPUTER_FOREGROUND_NOT_AUTHORIZED,
   computerForegroundAuthorizationForMessages,
   type ComputerVisibleUseMessage,
 } from "../computer/computerVisibleUse.ts";
@@ -221,7 +220,7 @@ export const makeComputerMcpTools = Effect.gen(function* () {
           },
         ],
       });
-    }).pipe(Effect.ignoreCause({ log: true }));
+    }).pipe(Effect.ignore({ log: true }));
 
   /** Apps each turn has driven; the first is covered by the task's own consent. */
   const drivenApps = new Map<string, Set<string>>();
@@ -280,6 +279,7 @@ export const makeComputerMcpTools = Effect.gen(function* () {
       return appOutcome;
     });
 
+  // Both toolkits read a resolver defect as "not asked"; interruption stays interruption.
   const resolveForegroundAuthorization = (context: ToolContext) =>
     messagesOf(context).pipe(
       Effect.map((messages) =>
@@ -287,7 +287,6 @@ export const makeComputerMcpTools = Effect.gen(function* () {
           knownAppNames: manager.observedAppNames(),
         }),
       ),
-      Effect.catchCause(() => Effect.succeed(COMPUTER_FOREGROUND_NOT_AUTHORIZED)),
     );
 
   const resolveSpaceDesignation = (context: ToolContext) =>
@@ -415,4 +414,3 @@ export const makeComputerMcpTools = Effect.gen(function* () {
     call,
   } satisfies ComputerMcpTools;
 });
-
