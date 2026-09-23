@@ -37,6 +37,11 @@ jobs:
           run-install: |
             args:
               - --filter=@spiritdevs/scripts...
+      # Same Rust setup as release.yml: provides rustup for the action's pinned
+      # toolchain on a fresh runner.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
       - uses: ./.github/actions/provision-cua
         with:
           targets: aarch64-apple-darwin
