@@ -13,7 +13,6 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - `computerAudit.test` drops the `ServerReadThreadDiagnosticsInput` case. Pathway has no thread diagnostics RPC to decode.
 - `ComputerAuditEntry.gatewayRequestId` is now `mcpRequestId`. Pathway exposes Computer through its MCP toolkit, not an agent gateway.
 - Computer RPCs fail with a `ComputerError | EnvironmentAuthorizationError` union, not Synara's `WsRpcError`. Pathway has no shared RPC error, and scope checks raise `EnvironmentAuthorizationError`.
-- `WsComputerRpcGroup` stays outside `WsRpcGroup` until P4 adds the server handlers and `RpcAuthorization` entries. Merging it earlier would require handlers that do not exist yet.
 - The `WsPushComputerEvent` push channel is not ported. Pathway has no push channels, so `computer.subscribeEvents` is a stream RPC. `COMPUTER_WS_CHANNELS` is kept literally for parity.
 - `ComputerControlMode` lives in `computer.ts`, not `orchestration.ts`. This keeps Computer contracts self-contained.
 - `ComputerError` is a Pathway type in `computer.ts`. Synara has none; it is a Computer-scoped copy of Synara's generic `WsRpcError` with the same fields.
@@ -111,14 +110,12 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - The manager tests are split by topic into `ComputerManager.test.ts`, `.control`, `.observation`, `.lifecycle` and `.foreground`, because Synara's one 4.7k-line file is too large to review.
 - `makeComputerServiceLayer` requires `ComputerApprovalGate` and passes it to the manager as `approvals`. It reads the platform and environment from `HostProcessPlatform`/`HostProcessEnvironment`; Synara used `process` and a `platform` option. It passes the manager `stateDir` rather than two file paths.
 - The service layer reads the host capability from `PATHWAY_BROWSER_HOST_CAPABILITY`, or from the descriptor named by `PATHWAY_BROWSER_HOST_CAPABILITY_FD`, which it then closes. It also deletes both variables from the host environment. This replaces Synara's `browserHostRpcClient`, which has no Pathway counterpart. A failed boot probe reads as `backend-unavailable` rather than a defect.
-- P4/P5 strip `PATHWAY_BROWSER_HOST_CAPABILITY*` and `PATHWAY_CUA_*` from provider child environments, matching Synara's `providerChildEnvironment`.
 - `makeCuaComputerBackend(options)` is a scope-bound factory. The still loop, the semantic text lanes and the event `PubSub` live in its scope, and `dispose` is idempotent and also a scope finalizer.
 - Cua frames arrive on `events` as `{ type: "frame" }` rather than through an `attachStream` callback. Browser calls and aborts are cancelled by interruption through the operation's `DesktopSignal`, not an `AbortSignal`.
 - The Cua backend calls the Effect `cuaRequest` directly, and a `CuaTransportError` becomes a `CuaActionError` with the same delivery verdict. Cleanup requests (stop, end task, browser-thread end, shield release) run uninterruptibly, so an interrupted caller waits for them to land; Synara's signal-less requests could not be cancelled either. An invalid key is a typed failure rather than a synchronous throw, and the semantic text lane skips its gap after a write torn down with the backend. A cancelled caller interrupts its lane write's native request through a per-write `DesktopAbort`, and the lane still waits out the gap.
 - `ComputerManager.subscribeFrames` is scoped like `FrameTransport.subscribe`: closing the subscriber's scope removes the sink and detaches the stream once nobody is watching.
 - The Cua backend reads the server platform from `HostProcessPlatform`, and `launchApp` takes an explicit args array.
-- Six Cua suite cases that go through the agent gateway's computer tools wait for P4. Synara's "Computer authority" describe in that suite exercises only the manager, so it lives in `ComputerManager.authority.test.ts`.
-- Four `computerControlInvariants.test.ts` cases go through the agent gateway and wait for P4: "an intervening explicit screenshot must prevent unrelated image reuse", "routes every provider's routine mutations through the same task gate", "lets Synara approve or deny %s actions" and "rechecks original turn authority after waiting for the desktop".
+- Synara's "Computer authority" describe in the Cua suite exercises only the manager, so it lives in `ComputerManager.authority.test.ts`.
 
 ## P3 desktop host
 
@@ -161,11 +158,53 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - The host's `bundleId` is the desktop `appUserModelId` (`com.spiritdevs.pathway`, `.dev` in development), and the app bundle for setup comes from the reused `macPermissionAppBundle` in `snapShot/MacPermissionSetup.ts`.
 - `normalizeOverview` returns a new result instead of mutating the image part.
 - The frame tap is ported and tested but not wired into the live host until P6 adds the renderer consumer. Sending JPEG frames to a renderer that drops them only costs IPC bandwidth.
-- The Escape monitor stops local input but does not yet post the backend emergency-stop notice. P4 adds the `/api/desktop/computer/emergency-stop` route and forks `notifyBackendComputerEmergencyStop` from `onEscape`.
 - The agent cursor style preference and its `desktop:computer-set-cursor-style` IPC are not wired, so the driver keeps its stock cursor. P6 adds the preference with the renderer control.
 - The Computer parts of `appSnapIpc` (helper state, permission request and setup, the settings pane, the guide, and the state, error and guide pushes) are left to P6. The preload bridge and its contracts are renderer surfaces, and handlers without them are unreachable. The host drives setup itself through `startPermissionSetup`.
-- `cuaFixtures/focusProbe` is ported. `electron`, `native`, `gateway`, `cancellation` and `live` wait for P4, because they drive `CuaComputerBackend`, `DesktopOperationQueue`, the agent gateway tools and `pngHeader` from the server.
+- `cuaFixtures/focusProbe` is ported. `electron`, `native`, `gateway`, `cancellation` and `live` are not: they are manual harnesses that drive a real desktop through `CuaComputerBackend`, `DesktopOperationQueue` and the Computer tools, and nothing in CI runs them.
 - focusProbe runs on `spawnHelper`/`stopHelper` inside the caller's Scope, so closing the scope kills a probe that was never finished. `finish` is an Effect. When the binary is missing it returns `Option.none()`. A failed spawn is a typed `HelperSpawnError`, where Synara returned an empty report.
 - focusProbe's 5s finish grace runs on the Effect clock. After it, `stopHelper` sends SIGTERM, then SIGKILL, and then fails; Synara sent SIGTERM and then waited with no limit. Stderr is capped at exactly 16,384 characters.
 - focusProbe line parsing reuses `decodeHelperJsonLine`, and the baseline and analyzer drop the `as never`/`!` casts. The results are unchanged.
 - `resolveFocusProbePath` moves Synara's electron.ts override into the module as `PATHWAY_CUA_FOCUS_PROBE`, falling back to `<resourcesPath>/focus-probe`. Pathway has no build step for `focus_probe.m` yet.
+
+## P4 — tools and policy
+
+- Synara's agent-gateway Computer tools live in `apps/server/src/mcp/toolkits/computer/` and are served by Pathway's MCP endpoint. The capability is `computer` rather than `computer:control`.
+- `computerMcpTools.ts` answers every Computer-family `tools/call` before the MCP SDK sees it, in both the legacy and modern protocol eras. Legacy replies are plain JSON-RPC. The tools are not `effect/unstable/ai` Tools, because their results carry images and live-caller context the toolkit shape cannot express.
+- `tools/list` advertises Computer tools only to credentials holding the `computer` capability, and never lists discovery-only tools. Synara's `computerTurnPresence.test.ts` case is an MCP integration test in `computerMcpTools.test.ts`.
+- A caller without the capability that names a Computer-family tool gets `capability_denied` with `details.requiredCapability: "computer"`. A permitted caller that names a tool this host lacks gets the SDK's unknown-tool error.
+- Approval cards are Pathway runtime requests of kind `computer`, posted on the caller's active run (ADR 0048). The orchestrator routes answers to the gate through the `ServerOwnedRuntimeRequests` Reference instead of emitting a provider effect.
+- `authorizeAction` returns `approved | denied | pending`. A pending approval is a non-error `{status: "approval_pending"}` result that writes no audit or progress entry, `approval_queue_full` is retryable, and a card that cannot be posted reads as `approval_unavailable`.
+- `authorizeApp` runs only for the second and later distinct apps in a turn, because the task consent already covers the first app.
+- Autonomy is `resolveComputerAutonomy(environment ceiling, thread runtime mode)`, and the stricter one wins. Scheduled and subagent turns are not detected, so they also use the thread's mode.
+- `caller_session_inactive` is not checked. A turn check that is re-read after every wait covers the same stale-authority cases.
+- Setup-required and capability-denied notices are `dynamic_tool` turn items (`computer_setup_required`, `computer_capability_denied`), posted at most once per turn and reason. The disclosure text appears only in the agent's result.
+- Visible-use message sources map from Pathway's `createdBy`: user, agent, and everything else as automation. Async user input and handoff imports have no source of their own.
+- `PROVIDERS_WITHOUT_APPROVAL_GATE` is dropped. It was never referenced, and every Pathway provider goes through the same gate.
+- The tool factories are Effects that need FileSystem/Path. Abort signals become fiber interruption, `Effect.sleep` replaces timers, and only typed failures are caught. A defect in a foreground resolver becomes `foreground_not_requested`, and a handler defect becomes "`<name>` failed unexpectedly.".
+- `GatewayToolError` is `ComputerToolError`, rendered by `computerToolErrorResult`. `computer_wait_for_label` input errors are `ToolInputError`, audited as `invalid_arguments`.
+- `withForegroundRestore` uses `Effect.result`/`fromResult`. The `computer_spaces` reserve recheck latches turn-ended. The dead `drivenApps` parameter of `computerAuditTarget` is removed. `TextEncoder` replaces `Buffer`. `computer_help` no longer spreads the tool list.
+- `preview_*` wording and "Pathway resolves it" replace Synara's product names in tool prose. The strings "gateway access" and "Advertised by the gateway" stay literal, because the guidance tests pin them.
+- `synara_*` names become `pathway_*`, and `auto-accept-edits` is an accepted runtime mode.
+- Browser tool tests use Deferreds where Synara used `vi.waitFor`.
+- The guidance test drops the `harnessPolicy` assertions and the Pi mention, because Pathway has neither.
+- Computer WS RPCs keep Synara's method names but fail with `ComputerError` rather than `WsRpcError`, and defects stay defects.
+- There is no `withDesktopOperationSignal` around WS handlers. `getStatus`/`getThreadState` need no fallbacks. The `setComputerControlEnabled` registry is dropped, and `cancelThread` is injected.
+- Every Computer WS RPC is admitted by `requireComputerAccess` (ADR 0041). `access:write` satisfies the `scoped` policy, and a denied call carries a re-pair hint.
+- `getAuditHistory` needs `orchestration:read`, where Synara required the owner session. This is looser; whether it should need `access:read` is a maintainer decision.
+- `subscribeEvents` has no `streamAdmission` or `bufferLiveUiStream`. Interests are keyed per socket and cleared when the socket closes.
+- Computer RPCs are served by their own per-socket `WsComputerRpcGroup.toLayer`, and the main WS layer serves `WsRpcGroup.omit(...)` of them. A single handler literal for the merged group exceeded TypeScript's inference depth and widened the layer's requirements to `any`.
+- Peer environments never receive `computer:operate`. `AuthPeerEnvironmentScopes` in `cloud/http.ts` and `peerEnvironments.ts` strips it, so a cloud-linked peer cannot drive this desktop.
+- The emergency-stop route accepts only the desktop-bootstrap bearer session, and only in desktop mode over loopback. It does not check the bind host. It returns 202 even when the stop fails, and 500 only when authentication itself fails internally.
+- The frame route and the stop route live in `computer/`. The frame route authenticates (`orchestration:read`) before its 404/400 checks. It serves window-scoped stills deduplicated at about 2 fps, but Cua's still rate stays 1 fps.
+- The desktop forks the backend stop notice from `onEscape` only when a stop really happened, and wires it late through `setEmergencyStopNotice`.
+- The emergency-stop path constant is duplicated in the server and desktop. It is a candidate for `@spiritdevs/shared`.
+- Provider child environments drop `PATHWAY_BROWSER_HOST_CAPABILITY*` and `PATHWAY_CUA_*` in `ProviderInstanceEnvironment`, where every adapter builds its child environment. Synara wrapped each spawn site with `providerChildEnvironment`.
+- The four gateway cases in `computerControlInvariants.test.ts` run over `makeComputerTools` directly. "lets Synara approve or deny %s actions" is "lets Pathway approve or deny %s actions" and covers Pathway's five providers.
+- The six Cua gateway cases run through `withGateway` in `CuaComputerBackend.test.ts`, which drives the Cua fixture through `ComputerManager` and `makeComputerTools`. "…through the gateway and manager…" reads "…through the tools and manager…".
+- `computerApprovals.testkit.ts` shares the in-memory orchestration and approval-gate graph, and a seeded running turn, between the requester and MCP tests.
+- Synara's 6k-line `computerTools.test.ts` is split by topic into `computerTools.test.ts`, `.guards`, `.operations` and `.observation`, beside `.menusFrames` and `.visibility`. The top-level describes read "Pathway computer tools…", and the 10 loose `it`s between the ordering and never-raise describes sit in "computer wait, scroll and observation". "…behind computer:control…" reads "…behind the computer capability…".
+- Three gate-less provider cases are not ported: "refuses action tools for providers without an approval gate", "pins the gate-less provider set" and "refuses mutating computer tools for Pi, whose sessions have no approval gate". Pathway has no gate-less provider set, and no antigravity or Pi. "keeps the zoom tool read-only and free of an approval gate" calls as opencode with no gate. The clipboard-read refusal is a gate that answers `denied`.
+- In the tool tests, `authorizeAction` mocks return `Effect.succeed("approved" | "denied")`, and `toHaveBeenCalledWith` takes three arguments because no abort signal is passed. Backend spies return Effects. Synara's `PROVIDER_KINDS` loops run over Pathway's five providers.
+- Tool-test cancellation cases interrupt the handler fiber and assert an interrupted exit. "propagates cancellation during the action tree read" is slightly weaker than Synara's signal abort: it cannot catch a handler that turns a finished read into a normal result.
+- Waits, the paste clipboard restore and poll intervals run on `TestClock`. Env flags (`PATHWAY_CUA_CAPTURE_REUSE`, `PATHWAY_CUA_CONDITIONAL_SETTLE`) are set and restored by scope finalizers, and closing the scope replaces `manager.dispose()`.
+- The macOS dialect fakes pass `agentDialect: "macos"` to the `FakeComputerBackend` constructor instead of using `Object.assign`. Null-window launch fixtures use `backend.computerId`, and `UnavailableComputerBackend` takes its `failedAt` argument.
