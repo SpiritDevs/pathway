@@ -1,10 +1,13 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId } from "@spiritdevs/contracts";
+import { CommandId, EventId } from "@spiritdevs/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import { EventSinkV2 } from "../orchestration-v2/EventSink.ts";
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import * as ComputerApprovalGate from "./ComputerApprovalGate.ts";
 import {
@@ -120,6 +123,66 @@ it.layer(ComputerApprovalsTestLayer)("computerApprovalRequester", (it) => {
       );
       assert.equal(card?.status, "cancelled");
     }),
+  );
+
+  it.effect.each(["completed", "interrupted"] as const)(
+    "withdraws the card when its run ends %s",
+    (status) =>
+      Effect.gen(function* () {
+        const gate = yield* ComputerApprovalGate.ComputerApprovalGate;
+        const orchestrator = yield* OrchestratorV2;
+        const eventSink = yield* EventSinkV2;
+        const { threadId, runId } = yield* seedRunningTurn(`ended-${status}`);
+        const waiting = yield* Effect.forkChild(
+          gate.authorizeAction({
+            threadId,
+            turnId: runId,
+            callKey: "computer_click:{}",
+            toolName: "computer_click",
+            autonomy: "supervised",
+          }),
+        );
+        const { request, projection } = yield* pendingComputerRequest(threadId);
+        const withdrawn = yield* eventSink
+          .stream({ threadId, afterSequence: yield* eventSink.latestSequence({ threadId }) })
+          .pipe(
+            Stream.filter(
+              ({ event }) =>
+                event.type === "runtime-request.updated" &&
+                event.payload.id === request.id &&
+                event.payload.status !== "pending",
+            ),
+            Stream.runHead,
+            Effect.forkChild({ startImmediately: true }),
+          );
+        const run = projection.runs.find((candidate) => candidate.id === runId);
+        assert.isDefined(run);
+        const now = yield* DateTime.now;
+        yield* eventSink.write({
+          events: [
+            {
+              id: EventId.make(`ended-${status}-run-end`),
+              type: "run.updated",
+              threadId,
+              runId,
+              occurredAt: now,
+              payload: { ...run, status, completedAt: now },
+            },
+          ],
+        });
+
+        assert.equal(yield* Fiber.join(waiting), "denied");
+        yield* Fiber.join(withdrawn);
+        const settled = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(
+          settled.runtimeRequests.find((candidate) => candidate.id === request.id)?.status,
+          "cancelled",
+        );
+        const card = settled.turnItems.find(
+          (item) => item.type === "approval_request" && item.requestId === request.id,
+        );
+        assert.equal(card?.status, "cancelled");
+      }),
   );
 
   it.effect("refuses an answer to a card the gate no longer holds", () =>

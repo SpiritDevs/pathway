@@ -10,8 +10,9 @@
  *
  * Consent is scoped to one live turn. Task and app grants cover every call of
  * the turn; per-call approvals (supervised mutations, clipboard reads) cover
- * one call. Stop, turn boundaries and restarts discard open prompts through
- * `cancelThread`. How much is asked at all is `computerApprovalPolicy` of the
+ * one call. Revocation and turn boundaries discard open prompts through
+ * `cancelThread`; a run that ends, Stop included, withdraws its own through
+ * `endTurn`. How much is asked at all is `computerApprovalPolicy` of the
  * thread's resolved autonomy (ADR 0043); the denylist, Stop/Escape and the
  * audit log apply regardless and are not this gate's concern.
  *
@@ -223,6 +224,11 @@ export interface ComputerApprovalGateShape {
   /** Drops grants and withdraws cards for the thread, or only for one turn. */
   readonly cancelThread: (threadId: string, turnId?: string) => Effect.Effect<void>;
   /**
+   * `cancelThread` for a turn that has ended, which also waits (bounded) until
+   * its cards read cancelled, so nothing downstream sees them still pending.
+   */
+  readonly endTurn: (threadId: string, turnId: string) => Effect.Effect<void>;
+  /**
    * A desktop interruption (screen lock, sleep, session switch) revokes every
    * standing grant, so consent given before it cannot authorize the desktop
    * after it. Per-call accepts still waiting for their retry are dropped too,
@@ -296,16 +302,14 @@ export const make = Effect.fn("ComputerApprovalGate.make")(function* (
     stop(prompt.publisher);
   };
 
-  /** Best-effort, bounded dismissal: a hung or failed publish must not hold anyone. */
-  const dismiss = (prompt: Prompt, decision: ProviderApprovalDecision) =>
+  /** Best-effort, bounded withdrawal: a hung or failed publish must not hold anyone. */
+  const withdraw = (prompt: Prompt, decision: ProviderApprovalDecision) =>
     requester
       .resolve(prompt.info, decision)
-      .pipe(
-        Effect.timeoutOption(COMPUTER_APPROVAL_DISMISS_BOUND),
-        Effect.ignore,
-        Effect.forkIn(scope),
-        Effect.asVoid,
-      );
+      .pipe(Effect.timeoutOption(COMPUTER_APPROVAL_DISMISS_BOUND), Effect.ignore);
+
+  const dismiss = (prompt: Prompt, decision: ProviderApprovalDecision) =>
+    withdraw(prompt, decision).pipe(Effect.forkIn(scope), Effect.asVoid);
 
   /** Records the decision; false when the prompt was already settled. */
   const decide = (prompt: Prompt, decision: ProviderApprovalDecision) => {
@@ -431,17 +435,34 @@ export const make = Effect.fn("ComputerApprovalGate.make")(function* (
       }),
     );
 
+  /** Drops the grants and takes the open prompts of a thread, or of one turn. */
+  const takeThread = (threadId: string, turnId?: string) => {
+    const task = tasks.get(threadId);
+    if (turnId === undefined || task?.turnId === turnId) tasks.delete(threadId);
+    const taken = [...prompts.values()].filter(
+      (prompt) =>
+        prompt.info.threadId === threadId &&
+        (turnId === undefined || prompt.info.turnId === turnId),
+    );
+    for (const prompt of taken) remove(prompt);
+    return taken;
+  };
+
   const cancelThread: ComputerApprovalGateShape["cancelThread"] = (threadId, turnId) =>
-    Effect.suspend(() => {
-      const task = tasks.get(threadId);
-      if (turnId === undefined || task?.turnId === turnId) tasks.delete(threadId);
-      const cancelled = [...prompts.values()].filter(
-        (prompt) =>
-          prompt.info.threadId === threadId &&
-          (turnId === undefined || prompt.info.turnId === turnId),
-      );
-      return Effect.forEach(cancelled, cancel, { discard: true });
-    });
+    Effect.suspend(() =>
+      Effect.forEach(takeThread(threadId, turnId), (prompt) => settle(prompt, "cancel"), {
+        discard: true,
+      }),
+    );
+
+  const endTurn: ComputerApprovalGateShape["endTurn"] = (threadId, turnId) =>
+    Effect.suspend(() =>
+      Effect.forEach(
+        takeThread(threadId, turnId).filter((prompt) => decide(prompt, "cancel")),
+        (prompt) => withdraw(prompt, "cancel"),
+        { concurrency: "unbounded", discard: true },
+      ),
+    );
 
   const requestGrant = Effect.fnUntraced(function* (
     key: string,
@@ -545,6 +566,7 @@ export const make = Effect.fn("ComputerApprovalGate.make")(function* (
     authorizeClipboardRead,
     respond,
     cancelThread,
+    endTurn,
     revokeTaskGrants,
   });
 });

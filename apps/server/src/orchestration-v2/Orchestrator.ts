@@ -9113,6 +9113,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
           stored.event.payload.status,
         );
+      // No provider closes a server-owned card, so an ended run (Stop
+      // included) withdraws its own before anything reads it still pending.
+      if (isTerminalRunEvent && stored.event.type === "run.updated") {
+        yield* serverOwnedRequests.endRun({ threadId, runId: stored.event.payload.id });
+      }
       // finalize writes the parent thread and startNextQueuedRun writes this
       // thread, so each takes its own thread's lock, sequentially and never
       // nested: dispatchDelegatedTaskRequest already writes child events
