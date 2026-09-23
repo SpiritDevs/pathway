@@ -765,9 +765,13 @@ export const makeCuaComputerBackend = (options: CuaComputerBackendOptions = {}) 
           Number.isSafeInteger(args.window_id)
             ? {
                 windowId: `cua:${pid}:${String(args.window_id)}`,
-                ...(code === "computer_input_paused" ||
-                code === "target_not_on_active_space" ||
-                code === "focus_restore_failed"
+                // `ComputerInputPause.pid` is a positive int32; a pid outside it
+                // would turn this typed refusal into a constructor defect.
+                ...((code === "computer_input_paused" ||
+                  code === "target_not_on_active_space" ||
+                  code === "focus_restore_failed") &&
+                pid >= 1 &&
+                pid <= 0x7fffffff
                   ? { pid }
                   : {}),
                 message,
