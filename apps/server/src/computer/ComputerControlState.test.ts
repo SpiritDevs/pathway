@@ -2,9 +2,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Scope from "effect/Scope";
 
 import { COMPUTER_CONTROL_STATE_FILE, makeComputerControlState } from "./ComputerControlState.ts";
 import { ComputerManager } from "./ComputerManager.ts";
@@ -110,6 +112,26 @@ it.layer(NodeServices.layer)("ComputerControlState", (it) => {
       }),
     );
 
+    it.effect("an interrupted disable still reaches disk", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped();
+        const gate = yield* gatedWrites(fs);
+        const state = yield* makeComputerControlState(dir).pipe(
+          Effect.provideService(FileSystem.FileSystem, gate.fs),
+        );
+        const save = yield* Effect.forkChild(state.set("thread", true));
+        yield* Deferred.await(gate.writing);
+        const interrupting = yield* Effect.forkChild(Fiber.interrupt(save));
+        yield* Deferred.succeed(gate.release, undefined);
+        yield* Fiber.join(interrupting);
+        expect((yield* makeComputerControlState(dir)).get("thread")).toEqual({
+          disabled: true,
+          generation: 1,
+        });
+      }),
+    );
+
     it.effect("enabling an already enabled thread writes nothing", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -181,6 +203,30 @@ it.layer(NodeServices.layer)("durable Computer activation", (it) => {
           expect(manager.canActivateControl("thread", 1)).toBe(false);
         }),
       ),
+  );
+
+  it.effect("a disable still writing when the manager shuts down reaches disk", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const gate = yield* gatedWrites(fs);
+      const scope = yield* Scope.make();
+      const manager = yield* ComputerManager.make({
+        backend: new FakeComputerBackend(),
+        stateDir: dir,
+      }).pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provideService(FileSystem.FileSystem, gate.fs),
+      );
+      yield* manager
+        .setControlEnabled("thread", false)
+        .pipe(Effect.ignore, Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(gate.writing);
+      const closing = yield* Effect.forkChild(Scope.close(scope, Exit.void));
+      yield* Deferred.succeed(gate.release, undefined);
+      yield* Fiber.join(closing);
+      expect((yield* makeComputerControlState(dir)).allows("thread", 0)).toBe(false);
+    }),
   );
 
   it.effect("keeps authority closed if durable preference writes fail", () =>
@@ -325,4 +371,19 @@ it.layer(NodeServices.layer)("Computer control consent", (it) => {
       }),
     ),
   );
+});
+
+/** A file system whose next writes wait until the test releases them. */
+const gatedWrites = Effect.fnUntraced(function* (fs: FileSystem.FileSystem) {
+  const writing = yield* Deferred.make<void>();
+  const release = yield* Deferred.make<void>();
+  const gated: FileSystem.FileSystem = {
+    ...fs,
+    writeFileString: (path, data, options) =>
+      Deferred.succeed(writing, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+        Effect.andThen(fs.writeFileString(path, data, options)),
+      ),
+  };
+  return { fs: gated, writing, release };
 });
