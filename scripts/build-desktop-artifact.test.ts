@@ -30,6 +30,7 @@ import {
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
   UnsupportedDesktopBuildArchitectureError,
+  UnsupportedDesktopFlavorError,
   isMacPasskeySigningConfigurationError,
   LinuxIconResizeError,
   MacPasskeySigningConfigurationResolutionError,
@@ -848,6 +849,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         mockUpdates: Option.none(),
         mockUpdateServerPort: Option.none(),
         wslPrebuild: Option.none(),
+        flavor: Option.none(),
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -871,6 +873,85 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect.each(["mac", "linux", "win"] as const)(
+    "keeps the production identity on %s",
+    (platform) =>
+      Effect.gen(function* () {
+        const config = yield* createBuildConfig(
+          platform,
+          "dir",
+          "1.2.3",
+          false,
+          false,
+          undefined,
+          undefined,
+        );
+        assert.equal(config.appId, "com.spiritdevs.pathway");
+        assert.equal(config.artifactName, "Pathway-Code-${version}-${arch}.${ext}");
+        assert.notStrictEqual(config.publish, null);
+      }),
+  );
+
+  it.effect.each(["mac", "linux"] as const)("isolates the cua identity on %s", (platform) =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        platform,
+        "dir",
+        "1.2.3-nightly.20260923",
+        false,
+        false,
+        undefined,
+        undefined,
+        "cua",
+      );
+      assert.equal(config.appId, "com.spiritdevs.pathway.cua");
+      assert.equal(config.productName, "Pathway Cua");
+      assert.equal(config.artifactName, "Pathway-Cua-${version}-${arch}.${ext}");
+      assert.strictEqual(config.publish, null);
+      const platformConfig = config[platform] as Record<string, unknown>;
+      assert.deepStrictEqual(platformConfig.protocols, [
+        { name: "Pathway", schemes: ["pathway-cua"] },
+      ]);
+      if (platform === "linux") {
+        assert.equal(platformConfig.executableName, "pathway-cua");
+        assert.deepStrictEqual(platformConfig.desktop, {
+          entry: { StartupWMClass: "pathway-cua" },
+        });
+      }
+    }),
+  );
+
+  it.effect("refuses isolated flavors on Windows and stages cua into its own release dir", () =>
+    Effect.gen(function* () {
+      const cliInput = (platform: "mac" | "win") => ({
+        platform: Option.some(platform),
+        target: Option.none(),
+        arch: Option.some("arm64" as const),
+        buildVersion: Option.none(),
+        outputDir: Option.none(),
+        skipBuild: Option.none(),
+        skipBackendDeploy: Option.none(),
+        keepStage: Option.none(),
+        signed: Option.none(),
+        verbose: Option.none(),
+        mockUpdates: Option.some(true),
+        mockUpdateServerPort: Option.none(),
+        wslPrebuild: Option.none(),
+        flavor: Option.some("cua" as const),
+      });
+      const windows = yield* Effect.flip(resolveBuildOptions(cliInput("win")));
+      assert.instanceOf(windows, UnsupportedDesktopFlavorError);
+      const direct = yield* Effect.flip(
+        createBuildConfig("win", "nsis", "1.2.3", false, false, undefined, undefined, "cua"),
+      );
+      assert.instanceOf(direct, UnsupportedDesktopFlavorError);
+
+      const mac = yield* resolveBuildOptions(cliInput("mac"));
+      assert.equal(mac.flavor, "cua");
+      assert.match(mac.outputDir, /\/release-cua$/);
+    }),
+  );
+
   it.effect("rejects universal builds on Linux and Windows before staging binaries", () =>
     Effect.gen(function* () {
       for (const platform of ["linux", "win"] as const) {
@@ -889,6 +970,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             mockUpdates: Option.none(),
             mockUpdateServerPort: Option.none(),
             wslPrebuild: Option.none(),
+            flavor: Option.none(),
           }),
         );
 
@@ -980,6 +1062,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         mockUpdates: Option.some(false),
         mockUpdateServerPort: Option.none(),
         wslPrebuild: Option.none(),
+        flavor: Option.none(),
       }).pipe(
         Effect.provide(
           ConfigProvider.layer(

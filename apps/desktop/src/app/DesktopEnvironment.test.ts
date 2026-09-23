@@ -153,6 +153,34 @@ describe("DesktopEnvironment", () => {
     }),
   );
 
+  it.effect("isolates every OS-facing name and default state in the cua flavor", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({ isPackaged: true, flavor: "cua" });
+
+      assert.equal(environment.flavor, "cua");
+      assert.equal(environment.desktopScheme, "pathway-cua");
+      assert.equal(environment.baseDir, "/Users/alice/.pathway-cua");
+      assert.equal(environment.stateDir, "/Users/alice/.pathway-cua/userdata");
+      assert.equal(environment.userDataDirName, "pathway-cua");
+      assert.equal(environment.legacyUserDataDirName, "pathway-cua");
+      assert.equal(environment.displayName, "Pathway Cua");
+      assert.equal(environment.appUserModelId, "com.spiritdevs.pathway.cua");
+      assert.equal(environment.linuxWmClass, "pathway-cua");
+      assert.equal(environment.linuxDesktopEntryName, "com.spiritdevs.Pathway.Cua.desktop");
+    }),
+  );
+
+  it.effect("keeps production names when no flavor is packaged", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({ isPackaged: true });
+
+      assert.equal(environment.flavor, "production");
+      assert.equal(environment.desktopScheme, "pathway");
+      assert.equal(environment.baseDir, "/Users/alice/.pathway");
+      assert.equal(environment.displayName, "Pathway (Alpha)");
+    }),
+  );
+
   it.effect("keeps implicit development state separate from production state", () =>
     Effect.gen(function* () {
       const development = yield* makeEnvironment(
