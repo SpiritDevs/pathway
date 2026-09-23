@@ -726,9 +726,15 @@ export const makeComputerBrowserTools = Effect.fn("makeComputerBrowserTools")(fu
             boundedArgs,
             // Cancellation is interruption of this fiber.
             undefined,
-            // Approval and the browser queue can both outlive visible-use
-            // intent. Check the shared resolver at actual queue admission.
-            visibleLaunch ? assertVisibleBrowserAllowed(context) : undefined,
+            // Approval and the browser queue can both outlive the turn, a
+            // tightened policy and visible-use intent. Check them again at
+            // actual queue admission.
+            visibleLaunch
+              ? Effect.andThen(
+                  context.assertCallerTurnActive(),
+                  assertVisibleBrowserAllowed(context),
+                )
+              : context.assertCallerTurnActive(),
           );
           const result = yield* name === "computer_browser_state"
             ? withModelDesktopObservation(dispatch)
