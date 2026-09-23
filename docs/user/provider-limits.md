@@ -12,7 +12,9 @@ Use the refresh button beside the bars to fetch the latest values immediately. I
 
 While a client is connected, Pathway checks for quota updates in the background. Successful snapshots are refreshed after about five minutes; unavailable data is retried about once a minute, subject to the provider's retry delay. Codex can also push updates while agents run. Model-specific Codex allowances remain separate from the general allowance.
 
-The account menu and Settings group the same Codex subscription across connected environments and show its freshest available usage. Different subscriptions remain separate, even when they share an email. Environments that do not report an account identity, and other providers, remain separate. Changing a configured credential home invalidates its previous quota and retry state.
+The account menu and Settings group the same Codex or Claude account across connected environments and show its freshest available usage. Different subscriptions or Claude organizations remain separate, even when they share an email. Environments that do not report an account identity, and Cursor accounts, remain separate. Changing a configured credential home invalidates its previous quota and retry state.
+
+The account menu and Settings show the last usage they received as soon as they open, with a spinning refresh icon while newer values load.
 
 When offering to wait after a usage-limit failure, Pathway prefers the reset time in the provider's failure message. Otherwise it uses the latest reset among the exhausted windows that apply to the selected model. Unknown or stale reset information does not schedule automatic recovery.
 

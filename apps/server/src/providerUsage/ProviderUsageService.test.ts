@@ -482,6 +482,56 @@ describe("provider usage snapshots", () => {
     }
   });
 
+  it("identifies the same Claude login across environments", async () => {
+    resetProviderUsageCache();
+    providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        async () => new Response(JSON.stringify({ five_hour: { utilization: 5 } })),
+      );
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "claude-account-"));
+    const writeHome = async (name: string, account: Record<string, string>) => {
+      const home = NodePath.join(root, name);
+      await NodeFSP.mkdir(home);
+      await NodeFSP.writeFile(
+        NodePath.join(home, ".credentials.json"),
+        JSON.stringify({ claudeAiOauth: { accessToken: `token-${name}` } }),
+      );
+      await NodeFSP.writeFile(
+        NodePath.join(home, ".claude.json"),
+        JSON.stringify({ oauthAccount: account }),
+      );
+      return home;
+    };
+    const fetchFrom = (providerHomePath: string) =>
+      providerUsageTestKit.fetchClaudeFromHome({
+        instanceId,
+        provider: "claudeAgent",
+        nowMs,
+        providerHomePath,
+      });
+    try {
+      const studio = await fetchFrom(
+        await writeHome("studio", { accountUuid: "user-1", organizationUuid: "org-1" }),
+      );
+      const laptop = await fetchFrom(
+        await writeHome("laptop", { accountUuid: "user-1", organizationUuid: "org-1" }),
+      );
+      const team = await fetchFrom(
+        await writeHome("team", { accountUuid: "user-1", organizationUuid: "org-2" }),
+      );
+
+      expect(studio.snapshot.accountKey).toMatch(/^[0-9a-f]{64}$/u);
+      expect(laptop.snapshot.accountKey).toBe(studio.snapshot.accountKey);
+      expect(team.snapshot.accountKey).not.toBe(studio.snapshot.accountKey);
+    } finally {
+      fetchMock.mockRestore();
+      resetProviderUsageCache();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { label: "a missing header", headers: undefined },
     { label: "retry-after: 0", headers: { "Retry-After": "0" } },

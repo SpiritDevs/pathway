@@ -1346,8 +1346,27 @@ async function fetchClaudeUsageWithCredentials(
   return fetched(lastNetworkError ?? needsAuthSnapshot(ctx));
 }
 
+/** Claude Code records its signed-in account beside its settings; hash it so environments sharing a login group together. */
+async function readClaudeAccountKey(ctx: ProviderContext): Promise<string | undefined> {
+  const configPath = ctx.useDefaultCredentialStore
+    ? NodePath.join(ctx.homeDir, ".claude.json")
+    : NodePath.join(ctx.providerHomePath ?? ctx.homeDir, ".claude.json");
+  const account = asRecord(asRecord(await readJsonFile(configPath))?.oauthAccount);
+  const accountUuid = asString(account?.accountUuid);
+  if (!accountUuid) return undefined;
+  return NodeCrypto.createHash("sha256")
+    .update(JSON.stringify(["claude", accountUuid, asString(account?.organizationUuid) ?? null]))
+    .digest("hex");
+}
+
 async function fetchClaudeUsage(ctx: ProviderContext): Promise<ProviderFetchResult> {
-  return fetchClaudeUsageWithCredentials(ctx, await resolveClaudeAuth(ctx));
+  const [result, accountKey] = await Promise.all([
+    fetchClaudeUsageWithCredentials(ctx, await resolveClaudeAuth(ctx)),
+    readClaudeAccountKey(ctx),
+  ]);
+  return accountKey && result.snapshot.status === "ok"
+    ? { ...result, snapshot: { ...result.snapshot, accountKey } }
+    : result;
 }
 
 const importRuntimeModule = (specifier: string): Promise<unknown> =>
@@ -2243,6 +2262,8 @@ export const providerUsageTestKit = {
     input: Parameters<typeof testingContext>[0],
     credentials: ReadonlyArray<ClaudeAuth>,
   ) => fetchClaudeUsageWithCredentials(testingContext(input), credentials),
+  fetchClaudeFromHome: (input: Parameters<typeof testingContext>[0]) =>
+    fetchClaudeUsage(testingContext(input)),
   fetchCodex: (input: Parameters<typeof testingContext>[0]) =>
     fetchCodexUsage(testingContext(input)),
   loadList: loadProviderUsageList,

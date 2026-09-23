@@ -111,6 +111,7 @@ import {
   ConnectedProviderUsageMenu,
   ProviderUsageSettingsSection,
 } from "./ProviderUsage";
+import { resetRememberedProviderUsage } from "./providerUsageCache";
 
 import { ProviderResetCredits } from "./ProviderResetCredits";
 
@@ -217,6 +218,7 @@ async function flushPromises(): Promise<void> {
 describe("provider usage panel refresh", () => {
   beforeEach(() => {
     hooks.reset();
+    resetRememberedProviderUsage();
     atoms.providers = null;
     atoms.serverConfigs = new Map();
     testState.environments = [];
@@ -500,6 +502,26 @@ describe("provider usage panel refresh", () => {
       visitElements(settings, (element) => element.props["aria-label"] === "Refresh provider usage")
         ?.props.disabled,
     ).toBe(true);
+  });
+
+  it("shows remembered usage with an update indicator while the subscription reconnects", () => {
+    setConnectedProviders([
+      { environmentId, label: "studio", providers: [provider("codex", codexId)] },
+    ]);
+    testState.queries.set(String(codexId), snapshot(codexId, "codex", 20));
+    hooks.beginRender();
+    ConnectedProviderUsageMenu();
+
+    hooks.reset();
+    testState.listLoaded = false;
+    hooks.beginRender();
+    const menu = ConnectedProviderUsageMenu() as ReactElement<Record<string, unknown>>;
+    const row = visitElements(menu, (element) => Boolean(element.props.account));
+    const account = row?.props.account as { snapshot: ServerProviderUsageSnapshot | null };
+    expect(account.snapshot).toMatchObject({ instanceId: codexId });
+    expect(
+      visitElements(menu, (element) => element.props["aria-label"] === "Updating provider usage"),
+    ).not.toBeNull();
   });
 
   it("groups matching subscriptions in the menu and refreshes each account once in settings", async () => {

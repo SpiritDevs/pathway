@@ -49,6 +49,7 @@ import {
   isProviderUsageDriver,
   type ConnectedProviderUsageAccount,
 } from "./providerUsageAccounts";
+import { readRememberedProviderUsage, rememberProviderUsage } from "./providerUsageCache";
 
 import { ProviderResetCredits, type ResetCreditSelection } from "./ProviderResetCredits";
 
@@ -627,7 +628,7 @@ function ProviderUsageCard({ account }: { account: ConnectedProviderUsageAccount
     provider: usageProvider,
     enabled: true,
   });
-  const snapshot = usage.data;
+  const snapshot = usage.data ?? account.snapshot;
   const statusLabel = snapshot?.stale
     ? "Last known"
     : snapshot?.status === "needs-auth"
@@ -718,11 +719,12 @@ function ConnectedProviderUsageRow({ account }: { account: ConnectedProviderUsag
     provider: usageProvider,
     enabled: true,
   });
+  const snapshot = usage.data ?? account.snapshot;
 
   if (
     usageProvider === "claudeAgent" &&
-    (usage.data?.status === "needs-auth" ||
-      (provider.auth.status !== "authenticated" && usage.data?.status !== "ok"))
+    (snapshot?.status === "needs-auth" ||
+      (provider.auth.status !== "authenticated" && snapshot?.status !== "ok"))
   )
     return null;
 
@@ -742,12 +744,12 @@ function ConnectedProviderUsageRow({ account }: { account: ConnectedProviderUsag
             · {[account.provider.auth.email, account.environmentLabel].filter(Boolean).join(" · ")}
           </span>
         </span>
-        {usage.data?.status === "ok" && usage.data.planName ? (
-          <span className="shrink-0 text-[10px] text-muted-foreground">{usage.data.planName}</span>
+        {snapshot?.status === "ok" && snapshot.planName ? (
+          <span className="shrink-0 text-[10px] text-muted-foreground">{snapshot.planName}</span>
         ) : null}
       </div>
       <ProviderUsageDetails
-        snapshot={filterProviderUsageForDisplay(usage.data)}
+        snapshot={filterProviderUsageForDisplay(snapshot)}
         loading={usage.isPending}
         error={usage.error}
         compact
@@ -781,10 +783,12 @@ function useConnectedProviderUsageAccounts() {
                   : result._tag === "Failure"
                     ? Option.getOrNull(result.previousSuccess)
                     : null;
+              if (success) rememberProviderUsage(environment.environmentId, success.value);
               return [
                 environment.environmentId,
                 {
-                  data: success?.value ?? [],
+                  data:
+                    success?.value ?? readRememberedProviderUsage(environment.environmentId) ?? [],
                   receivedAt: success?.timestamp ?? 0,
                   loading: result._tag === "Initial",
                 },
@@ -817,18 +821,21 @@ function useConnectedProviderUsageAccounts() {
     () => deriveConnectedProviderResetCreditAccounts(trackedEnvironments),
     [trackedEnvironments],
   );
-  const loading =
+  const pending =
     !isReady ||
     connected.some(
       (environment) =>
         !serverConfigs.has(environment.environmentId) ||
         usage.get(environment.environmentId)?.loading,
     );
+  // Remembered readings render immediately; only an empty first load blocks the list.
+  const loading = pending && ![...usage.values()].some((entry) => entry.data.length > 0);
   return {
     accounts: loading ? [] : accounts,
     resetCreditAccounts: loading ? [] : resetCreditAccounts,
     connectedCount: connected.length,
     loading,
+    refreshing: pending && !loading,
   };
 }
 
@@ -840,6 +847,7 @@ export function ConnectedProviderUsageMenu({
     resetCreditAccounts,
     connectedCount,
     loading,
+    refreshing,
   } = useConnectedProviderUsageAccounts();
   const accounts = connectedAccounts.filter(
     (account) =>
@@ -850,7 +858,16 @@ export function ConnectedProviderUsageMenu({
   return (
     <div className="min-w-0">
       <div className="px-3 pb-2 pt-2">
-        <p className="text-sm font-medium text-foreground">Provider usage</p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-medium text-foreground">Provider usage</p>
+          {refreshing ? (
+            <RefreshCwIcon
+              role="status"
+              aria-label="Updating provider usage"
+              className={cn("size-3 text-muted-foreground", SLOW_REFRESH_SPIN_CLASS)}
+            />
+          ) : null}
+        </div>
         <p className="mt-0.5 text-[11px] text-muted-foreground">
           Live subscription limits from connected accounts.
         </p>
@@ -875,7 +892,8 @@ export function ConnectedProviderUsageMenu({
 }
 
 export function ProviderUsageSettingsSection() {
-  const { accounts, resetCreditAccounts, loading } = useConnectedProviderUsageAccounts();
+  const { accounts, resetCreditAccounts, loading, refreshing } =
+    useConnectedProviderUsageAccounts();
   const refreshTargets = useMemo(
     () => [
       ...new Map(
@@ -907,7 +925,10 @@ export function ProviderUsageSettingsSection() {
           onClick={() => void usageRefresh.refresh()}
         >
           <RefreshCwIcon
-            className={cn("size-3.5", usageRefresh.isRefreshing && SLOW_REFRESH_SPIN_CLASS)}
+            className={cn(
+              "size-3.5",
+              (usageRefresh.isRefreshing || refreshing) && SLOW_REFRESH_SPIN_CLASS,
+            )}
             aria-hidden="true"
           />
           Refresh
