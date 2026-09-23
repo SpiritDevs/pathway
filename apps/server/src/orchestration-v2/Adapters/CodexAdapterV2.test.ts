@@ -51,6 +51,7 @@ import {
   CODEX_DRIVER_KIND,
   codexBackgroundCommandDetail,
   codexSubagentTitle,
+  codexMcpElicitationAction,
   codexThreadRuntimeParams,
   type CodexAgentMessageDeltaUpdate,
   type CodexAppServerClientFactoryShape,
@@ -543,6 +544,7 @@ describe("CodexAdapterV2 process spawning", () => {
                 http_headers: {
                   Authorization: "Bearer secret-codex-token",
                 },
+                tool_timeout_sec: 1200,
               },
             },
           },
@@ -5326,4 +5328,63 @@ describe("CodexAdapterV2 subagent audit regressions", () => {
       }),
     ),
   );
+});
+
+describe("codexMcpElicitationAction", () => {
+  const admitted = ProviderAdapterV2RuntimePolicy.make({
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+    cwd: "/workspace",
+    enableComputerControl: true,
+  });
+  const toolCall = (input: { serverName?: string; tool: string; toolName?: string }) => ({
+    _meta: {
+      codex_approval_kind: "mcp_tool_call",
+      ...(input.toolName === undefined ? {} : { tool_name: input.toolName }),
+    },
+    message: `Allow the ${input.serverName ?? "pathway"} MCP server to run tool "${input.tool}"?`,
+    mode: "form" as const,
+    requestedSchema: { type: "object" as const, properties: {} },
+    serverName: input.serverName ?? "pathway",
+    threadId: "native-thread",
+    turnId: "native-turn",
+  });
+
+  it("accepts Pathway Computer tool calls for an admitted turn", () => {
+    assert.equal(
+      codexMcpElicitationAction({
+        params: toolCall({ tool: "computer_click" }),
+        runtimePolicy: admitted,
+      }),
+      "accept",
+    );
+    assert.equal(
+      codexMcpElicitationAction({
+        params: toolCall({ tool: "ignored", toolName: "computer_screenshot" }),
+        runtimePolicy: admitted,
+      }),
+      "accept",
+    );
+  });
+
+  it("declines everything else", () => {
+    const decline = (
+      params: ReturnType<typeof toolCall>,
+      runtimePolicy: ProviderAdapterV2RuntimePolicy = admitted,
+    ) => assert.equal(codexMcpElicitationAction({ params, runtimePolicy }), "decline");
+    assert.equal(
+      codexMcpElicitationAction({
+        params: toolCall({ tool: "computer_click" }),
+        runtimePolicy: undefined,
+      }),
+      "decline",
+    );
+    decline(toolCall({ tool: "computer_click" }), { ...admitted, enableComputerControl: false });
+    decline(toolCall({ tool: "computer_click" }), { ...admitted, runtimeMode: "full-access" });
+    decline(toolCall({ tool: "computer_click" }), { ...admitted, interactionMode: "plan" });
+    decline(toolCall({ tool: "computer_click", serverName: "other" }));
+    decline(toolCall({ tool: "pathway_thread_send" }));
+    decline({ ...toolCall({ tool: "computer_click" }), _meta: { codex_approval_kind: "other" } });
+    decline({ ...toolCall({ tool: "computer_click" }), message: "Run computer_click?" });
+  });
 });

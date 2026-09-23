@@ -79,6 +79,7 @@ import {
   type PushedProviderUsageSnapshot,
 } from "../../providerUsage/ProviderUsageService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { shouldAllowPathwayComputerProviderTool } from "../../mcp/toolkits/computer/computerToolPermission.ts";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
@@ -1290,6 +1291,46 @@ export class CodexAppServerClientFactory extends Context.Service<
   CodexAppServerClientFactoryShape
 >()("@spiritdevs/pathway/orchestration-v2/Adapters/CodexAdapterV2/CodexAppServerClientFactory") {}
 
+/**
+ * Codex asks through an MCP elicitation before it runs an MCP tool. Pathway
+ * approves each Computer call itself (ADR 0048), so its own Computer tools are
+ * accepted for an admitted turn. Pathway has no prompt for any other MCP
+ * approval, so those are declined, as they were before the handler existed.
+ */
+export function codexMcpElicitationAction(input: {
+  readonly params: CodexSchema.McpServerElicitationRequestParams;
+  readonly runtimePolicy: ProviderAdapterV2RuntimePolicy | undefined;
+}): CodexSchema.McpServerElicitationRequestResponse["action"] {
+  const meta = input.params._meta;
+  const metaField = (key: string) =>
+    meta !== null && typeof meta === "object" && !Array.isArray(meta)
+      ? Reflect.get(meta, key)
+      : undefined;
+  if (
+    input.runtimePolicy === undefined ||
+    input.params.serverName !== McpProviderSession.PATHWAY_MCP_SERVER_NAME ||
+    metaField("codex_approval_kind") !== "mcp_tool_call"
+  ) {
+    return "decline";
+  }
+  // Current Codex builds omit tool_name; accept only their exact generated prompt.
+  const explicitToolName = metaField("tool_name");
+  const toolName =
+    typeof explicitToolName === "string"
+      ? explicitToolName
+      : /^Allow the pathway MCP server to run tool "([a-z_]+)"\?$/.exec(input.params.message)?.[1];
+  return toolName !== undefined &&
+    shouldAllowPathwayComputerProviderTool({
+      computerControlEnabled: input.runtimePolicy.enableComputerControl === true,
+      activeTurn: true,
+      interactionMode: input.runtimePolicy.interactionMode,
+      runtimeMode: input.runtimePolicy.runtimeMode,
+      permission: { name: McpProviderSession.pathwayMcpToolName(toolName) },
+    })
+    ? "accept"
+    : "decline";
+}
+
 export function codexThreadRuntimeParams(input: {
   readonly threadId: ThreadId | null;
   readonly modelSelection?: { readonly model: string };
@@ -1314,6 +1355,7 @@ export function codexThreadRuntimeParams(input: {
                 http_headers: {
                   Authorization: mcpSession.authorizationHeader,
                 },
+                tool_timeout_sec: McpProviderSession.PATHWAY_MCP_TOOL_TIMEOUT_MS / 1000,
               },
             },
           },
@@ -4715,6 +4757,23 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               ),
             } satisfies CodexSchema.ApplyPatchApprovalResponse;
           }).pipe(Effect.orDie),
+        );
+
+        yield* client.handleServerRequest("mcpServer/elicitation/request", (payload) =>
+          Effect.gen(function* () {
+            const context =
+              payload.turnId == null ? undefined : yield* awaitActiveTurn(payload.turnId);
+            const activeTurn =
+              context?.providerThread.nativeThreadRef?.nativeId === payload.threadId
+                ? context
+                : undefined;
+            return {
+              action: codexMcpElicitationAction({
+                params: payload,
+                runtimePolicy: activeTurn?.input.runtimePolicy,
+              }),
+            } satisfies CodexSchema.McpServerElicitationRequestResponse;
+          }),
         );
 
         yield* client.handleServerRequest("item/tool/requestUserInput", (payload, rpcRequestId) =>
