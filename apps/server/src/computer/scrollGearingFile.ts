@@ -82,8 +82,10 @@ export class ScrollGearingFile {
     const writes = yield* Semaphore.make(1);
 
     // Atomic rename write, serialized so the newest snapshot always lands last.
-    // Write failures are swallowed: gearing is an optimization, and a disk error
-    // must not fail a scroll.
+    // A started write finishes even when its forked caller is interrupted at
+    // shutdown, so it never strands a half-written temporary file. Write
+    // failures are swallowed: gearing is an optimization, and a disk error must
+    // not fail a scroll.
     const persist = (entries: ReadonlyMap<string, AppGearingEntry>) =>
       writes
         .withPermit(
@@ -93,7 +95,7 @@ export class ScrollGearingFile {
             yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
             yield* fs.writeFileString(temporaryPath, content, { mode: 0o600 });
             yield* fs.rename(temporaryPath, filePath);
-          }),
+          }).pipe(Effect.uninterruptible),
         )
         .pipe(Effect.ignore);
 
