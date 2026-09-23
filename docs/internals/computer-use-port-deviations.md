@@ -80,3 +80,8 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - A shared task card is cancelled only by the gate (Stop, turn change, timeout), never by one waiter leaving. In Synara, aborting the call that opened it cancelled it for every waiter.
 - A task card that times out leaves no standing decline, so the next call asks again. Synara recorded the timeout as a decline for the rest of the turn.
 - The gate adds per-app grants (`requestApp`) and `computerApprovalPolicy`, which maps a resolved autonomy level to the approvals ADR 0043 asks for. Synara had only task and per-call consent.
+- The server `uiTreeTargeting` resolvers (point, semantic, unique text, window) return `Effect`s that fail with `ComputerTargetError` instead of throwing. `resolveComputerWindowTarget` succeeds with `undefined` when the window is not in the tree.
+- `screenshotFrames` resolution and point/rect mapping return `Effect`s that fail with `ComputerTargetError`. The registry itself stays a synchronous class.
+- `computerDenylist` matches executable paths with a pure last-segment helper instead of `node:path`, so Windows backslash paths are not split.
+- `waitForControl` takes a `read` effect instead of an async function and an `AbortSignal`. Cancelling it is interrupting it, and elapsed time comes from `Clock`.
+- `UnavailableComputerBackend` takes its failure time as epoch millis, and `makeUnavailableComputerBackend` reads it from `Clock`. It has no `events` stream because nothing ever changes.
