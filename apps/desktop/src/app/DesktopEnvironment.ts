@@ -164,8 +164,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
   const pathwayHome = resolveFlavorPathwayHome({
-    homeDirectory,
-    joinPath: path.join,
     pathwayHome: config.pathwayHome,
     isolated: identity.flavor === "cua",
   });
@@ -173,9 +171,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     Option.isNone(pathwayHome) &&
     Option.exists(config.pathwayHome, (home) => home.trim() !== "")
   ) {
-    yield* Effect.logWarning(
-      "Ignoring PATHWAY_HOME: the cua flavor never uses the production home.",
-    );
+    yield* Effect.logWarning("Ignoring PATHWAY_HOME: the cua flavor always uses its own home.");
   }
   const baseDir = resolveDesktopBaseDir({
     homeDirectory,

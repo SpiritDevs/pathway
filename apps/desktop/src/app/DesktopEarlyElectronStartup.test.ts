@@ -110,7 +110,7 @@ describe("DesktopEarlyElectronStartup", () => {
     });
   });
 
-  it("keeps the cua flavor's early settings out of the production home", () => {
+  it("reads the cua flavor's early settings from its own home whatever PATHWAY_HOME says", () => {
     const readPaths: Array<string> = [];
     for (const PATHWAY_HOME of ["/home/user/.pathway", "~/.pathway/", "/tmp/cua-home"]) {
       resolveEarlyLinuxElectronOptions({
@@ -128,7 +128,7 @@ describe("DesktopEarlyElectronStartup", () => {
     assert.deepEqual(readPaths, [
       "/home/user/.pathway-cua/userdata/desktop-settings.json",
       "/home/user/.pathway-cua/userdata/desktop-settings.json",
-      "/tmp/cua-home/userdata/desktop-settings.json",
+      "/home/user/.pathway-cua/userdata/desktop-settings.json",
     ]);
   });
 
