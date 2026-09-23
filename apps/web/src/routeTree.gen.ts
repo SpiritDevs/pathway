@@ -60,6 +60,7 @@ import { Route as SettingsEmailRouteImport } from './routes/settings.email'
 import { Route as SettingsDictationRouteImport } from './routes/settings.dictation'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
+import { Route as SettingsComputerRouteImport } from './routes/settings.computer'
 import { Route as SettingsCompanyTeamsRouteImport } from './routes/settings.company-teams'
 import { Route as SettingsCompanyRolesRouteImport } from './routes/settings.company-roles'
 import { Route as SettingsCompanyMembersRouteImport } from './routes/settings.company-members'
@@ -350,6 +351,11 @@ const SettingsConnectionsRoute = SettingsConnectionsRouteImport.update({
   path: '/connections',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsComputerRoute = SettingsComputerRouteImport.update({
+  id: '/computer',
+  path: '/computer',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsCompanyTeamsRoute = SettingsCompanyTeamsRouteImport.update({
   id: '/company-teams',
   path: '/company-teams',
@@ -509,6 +515,7 @@ export interface FileRoutesByFullPath {
   '/settings/company-members': typeof SettingsCompanyMembersRoute
   '/settings/company-roles': typeof SettingsCompanyRolesRoute
   '/settings/company-teams': typeof SettingsCompanyTeamsRoute
+  '/settings/computer': typeof SettingsComputerRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/dictation': typeof SettingsDictationRoute
@@ -584,6 +591,7 @@ export interface FileRoutesByTo {
   '/settings/company-members': typeof SettingsCompanyMembersRoute
   '/settings/company-roles': typeof SettingsCompanyRolesRoute
   '/settings/company-teams': typeof SettingsCompanyTeamsRoute
+  '/settings/computer': typeof SettingsComputerRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/dictation': typeof SettingsDictationRoute
@@ -662,6 +670,7 @@ export interface FileRoutesById {
   '/settings/company-members': typeof SettingsCompanyMembersRoute
   '/settings/company-roles': typeof SettingsCompanyRolesRoute
   '/settings/company-teams': typeof SettingsCompanyTeamsRoute
+  '/settings/computer': typeof SettingsComputerRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/dictation': typeof SettingsDictationRoute
@@ -740,6 +749,7 @@ export interface FileRouteTypes {
     | '/settings/company-members'
     | '/settings/company-roles'
     | '/settings/company-teams'
+    | '/settings/computer'
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/dictation'
@@ -815,6 +825,7 @@ export interface FileRouteTypes {
     | '/settings/company-members'
     | '/settings/company-roles'
     | '/settings/company-teams'
+    | '/settings/computer'
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/dictation'
@@ -892,6 +903,7 @@ export interface FileRouteTypes {
     | '/settings/company-members'
     | '/settings/company-roles'
     | '/settings/company-teams'
+    | '/settings/computer'
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/dictation'
@@ -1323,6 +1335,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsConnectionsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/computer': {
+      id: '/settings/computer'
+      path: '/computer'
+      fullPath: '/settings/computer'
+      preLoaderRoute: typeof SettingsComputerRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/company-teams': {
       id: '/settings/company-teams'
       path: '/company-teams'
@@ -1535,6 +1554,7 @@ interface SettingsRouteChildren {
   SettingsCompanyMembersRoute: typeof SettingsCompanyMembersRoute
   SettingsCompanyRolesRoute: typeof SettingsCompanyRolesRoute
   SettingsCompanyTeamsRoute: typeof SettingsCompanyTeamsRoute
+  SettingsComputerRoute: typeof SettingsComputerRoute
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
   SettingsDictationRoute: typeof SettingsDictationRoute
@@ -1585,6 +1605,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsCompanyMembersRoute: SettingsCompanyMembersRoute,
   SettingsCompanyRolesRoute: SettingsCompanyRolesRoute,
   SettingsCompanyTeamsRoute: SettingsCompanyTeamsRoute,
+  SettingsComputerRoute: SettingsComputerRoute,
   SettingsConnectionsRoute: SettingsConnectionsRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsDictationRoute: SettingsDictationRoute,

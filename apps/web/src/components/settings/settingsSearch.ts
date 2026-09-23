@@ -13,6 +13,7 @@ export type SettingsPath =
   | "/settings/appearance"
   | "/settings/keybindings"
   | "/settings/snap-shot"
+  | "/settings/computer"
   | "/settings/dictation"
   | "/settings/dictation/models"
   | "/settings/dictation/history"
@@ -108,6 +109,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
   "/settings/snap-shot": "SnapShots",
+  "/settings/computer": "Computer use",
   "/settings/projects": "Projects",
   "/settings/members-teams": "Members & Teams",
   "/settings/company-members": "Members",
@@ -163,6 +165,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/appearance",
       "/settings/keybindings",
       "/settings/snap-shot",
+      "/settings/computer",
       "/settings/projects",
     ],
   },
@@ -629,6 +632,68 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Capture flash",
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
+  },
+  {
+    id: "computer-control",
+    title: "Computer control",
+    searchTerms: [
+      "Let the agent use the desktop in any chat. Approval gates and Stop still apply.",
+      "enable toggle permission desktop agent computer use control",
+    ],
+    to: "/settings/computer",
+  },
+  {
+    id: "computer-status",
+    title: "Computer status",
+    searchTerms: [
+      "Whether agents can see and control this computer's desktop right now.",
+      "desktop backend beta availability health kwin hyprland nested wayland linux mac macos screen recording accessibility computer use control status set up install plugin repair",
+    ],
+    to: "/settings/computer",
+    // The status row is conditional and its title is dynamic, so link to the section.
+    targetId: "computer-control",
+  },
+  {
+    id: "computer-preview",
+    title: "Preview",
+    searchTerms: [
+      "Show the in-chat Computer preview the first time an agent acts on the desktop, and choose its size.",
+      "open automatically compact large auto open computer use",
+    ],
+    to: "/settings/computer",
+  },
+  {
+    id: "computer-cursor-colors",
+    title: "Cursor colors",
+    searchTerms: [
+      "The agent pointer's colors: stock monochrome by default, or custom fill and rim.",
+      "agent cursor arrow pointer color hex custom",
+    ],
+    to: "/settings/computer",
+  },
+  {
+    id: "computer-audit-history",
+    title: "Recent Computer actions",
+    searchTerms: ["computer audit history action log", "admin access read"],
+    to: "/settings/computer",
+  },
+  {
+    id: "computer-access-policy",
+    title: "Who can use this computer",
+    searchTerms: [
+      "computer access policy any operator scoped admins only",
+      "access write admin connection",
+    ],
+    to: "/settings/computer",
+  },
+  {
+    id: "computer-autonomy",
+    title: "Computer autonomy",
+    searchTerms: [
+      "computer oversight approvals supervised per task auto full access",
+      "reduced oversight denylist",
+    ],
+    to: "/settings/computer",
   },
   {
     id: "providers",
