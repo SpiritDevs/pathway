@@ -5,6 +5,13 @@ import {
 import { ComposerAsyncQuestions } from "./ComposerAsyncQuestions";
 import { turnItemIsWorkspacePreparation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
 import { WorkspacePreparationCard } from "./WorkspacePreparationCard";
+import { computerNoticeOfTurnItem } from "@spiritdevs/client-runtime/state/computer-notice";
+import { ConnectedComputerControlDeniedCard } from "./ComputerControlDeniedCard";
+import { ConnectedComputerSetupRequiredCard } from "./ComputerSetupRequiredCard";
+import {
+  computerApprovalEventPresentation,
+  isComputerToolName,
+} from "~/lib/computerToolPresentation";
 import {
   type EnvironmentId,
   type MessageId,
@@ -77,6 +84,7 @@ import {
   GlobeIcon,
   type LucideIcon,
   MessageCircleIcon,
+  MousePointer2Icon,
   MousePointerClickIcon,
   PaintbrushIcon,
   PencilIcon,
@@ -245,6 +253,8 @@ interface TimelineRowSharedState {
   onControlWorkspacePreparation?:
     | ((runId: RunId, action: "cancel" | "work_locally" | "retry") => Promise<void>)
     | undefined;
+  computerControlEnabled: boolean | undefined;
+  onEnableComputerControl: (() => void) | undefined;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   onDetachPullRequest: (pullRequest: { readonly number: number; readonly url: string }) => void;
   activeAttachedPullRequestItemIds: ReadonlySet<string>;
@@ -336,6 +346,10 @@ interface MessagesTimelineProps {
   onControlWorkspacePreparation?:
     | ((runId: RunId, action: "cancel" | "work_locally" | "retry") => Promise<void>)
     | undefined;
+  /** The composer's live Computer control for this chat, shown on denial cards. */
+  computerControlEnabled?: boolean | undefined;
+  /** Switches Computer control on from a denial card; the card hides Enable without it. */
+  onEnableComputerControl?: (() => void) | undefined;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   parentThreadLink?: {
     readonly threadId: ThreadId;
@@ -423,6 +437,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onRemoveMissingThread = NOOP_PANEL_SURFACE_OPEN,
   removingMissingThread = false,
   onControlWorkspacePreparation,
+  computerControlEnabled,
+  onEnableComputerControl,
   onOpenThread,
   parentThreadLink = null,
   onContinueFromRun,
@@ -970,6 +986,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRemoveMissingThread,
       removingMissingThread,
       onControlWorkspacePreparation,
+      computerControlEnabled,
+      onEnableComputerControl,
       onOpenThread,
       onDetachPullRequest,
       activeAttachedPullRequestItemIds,
@@ -1021,6 +1039,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRemoveMissingThread,
       removingMissingThread,
       onControlWorkspacePreparation,
+      computerControlEnabled,
+      onEnableComputerControl,
       onOpenThread,
       onDetachPullRequest,
       activeAttachedPullRequestItemIds,
@@ -2280,8 +2300,10 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
     }
     case "approval_request":
       return {
-        label: "Approval requested",
-        detail: item.prompt ?? item.requestKind,
+        ...(computerApprovalEventPresentation(item) ?? {
+          label: "Approval requested",
+          detail: item.prompt ?? item.requestKind,
+        }),
         tone: item.status === "failed" ? "danger" : "warning",
         icon: MessageCircleIcon,
       };
@@ -2342,6 +2364,30 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
           ? { onControl: (action) => ctx.onControlWorkspacePreparation!(item.runId!, action) }
           : {})}
       />
+    );
+  }
+  const computerNotice = computerNoticeOfTurnItem(item);
+  if (computerNotice?.kind === "setup-required") {
+    return (
+      <div data-v2-item-type={item.type} data-v2-item-visibility={visibility}>
+        <ConnectedComputerSetupRequiredCard
+          environmentId={ctx.activeThreadEnvironmentId}
+          missing={computerNotice.missing}
+          buildSignature={computerNotice.buildSignature}
+          bundleId={computerNotice.bundleId}
+        />
+      </div>
+    );
+  }
+  if (computerNotice?.kind === "control-denied") {
+    return (
+      <div data-v2-item-type={item.type} data-v2-item-visibility={visibility}>
+        <ConnectedComputerControlDeniedCard
+          environmentId={ctx.activeThreadEnvironmentId}
+          computerControlEnabled={ctx.computerControlEnabled}
+          onEnable={visibility === "local" ? ctx.onEnableComputerControl : undefined}
+        />
+      </div>
     );
   }
   if (isV2LifecycleItem(item)) {
@@ -3541,6 +3587,7 @@ type WorkEntryIconName =
   | "bot"
   | "check"
   | "circle-alert"
+  | "computer"
   | "eye"
   | "globe"
   | "message-circle"
@@ -3558,6 +3605,8 @@ function WorkEntryIconSvg({ name, className }: { name: WorkEntryIconName; classN
       return <CheckIcon className={className} aria-hidden />;
     case "circle-alert":
       return <CircleAlertIcon className={className} aria-hidden />;
+    case "computer":
+      return <MousePointer2Icon className={className} aria-hidden />;
     case "eye":
       return <EyeIcon className={className} aria-hidden />;
     case "globe":
@@ -3733,7 +3782,10 @@ function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
 
   switch (workEntry.itemType) {
     case "dynamic_tool":
-      return "wrench";
+      return workEntry.structuredPayload?.type === "dynamic_tool" &&
+        isComputerToolName(workEntry.structuredPayload.toolName)
+        ? "computer"
+        : "wrench";
     case "subagent":
       return "bot";
   }
