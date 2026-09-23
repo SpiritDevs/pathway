@@ -2089,11 +2089,13 @@ export const EmailRpcs = RpcGroup.make(
 );
 
 // ── Computer control ────────────────────────────────────────────────
-// Two callers, two gates. The agent reaches these methods through the Computer
-// MCP toolkit only; the human pane reaches them through its own authenticated
-// WebSocket with no turn attached. The group is kept separate, and out of
-// WsRpcGroup until the server handlers land, so both admission rules stay
-// visible next to the contract they guard.
+// Two callers, two gates. The agent reaches Computer through the Computer MCP
+// toolkit only; the human pane reaches these methods through its own
+// authenticated WebSocket with no turn attached. On the socket, transport scopes
+// admit the call (orchestration read to watch, operate to act) and the server
+// handlers then apply the environment's Computer access policy to everything
+// except watching and Stop. The group is declared on its own so those rules
+// stay next to the contract they guard, and merged into WsRpcGroup below.
 
 const ComputerRpcError = Schema.Union([ComputerError, EnvironmentAuthorizationError]);
 
@@ -2422,4 +2424,5 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2RetryWorkspaceCleanupRpc,
 )
   .merge(IssuesRpcs)
-  .merge(EmailRpcs);
+  .merge(EmailRpcs)
+  .merge(WsComputerRpcGroup);

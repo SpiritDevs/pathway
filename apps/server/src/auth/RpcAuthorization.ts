@@ -6,6 +6,7 @@ import {
   AuthRelayWriteScope,
   AuthReviewWriteScope,
   AuthTerminalOperateScope,
+  COMPUTER_WS_METHODS,
   EMAIL_WS_METHODS,
   ISSUES_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
@@ -254,6 +255,34 @@ export const RPC_REQUIRED_SCOPES = {
   [EMAIL_WS_METHODS.triggerRulesUpsert]: AuthOrchestrationOperateScope,
   [EMAIL_WS_METHODS.triggerRulesDelete]: AuthOrchestrationOperateScope,
   [EMAIL_WS_METHODS.updateSettings]: AuthOrchestrationOperateScope,
+  // Computer: watching is a read and acting is a write. These only admit the call; the
+  // environment's Computer access policy is applied by the handlers, because it reads live
+  // settings and never restricts watching or Stop.
+  [COMPUTER_WS_METHODS.getStatus]: AuthOrchestrationReadScope,
+  [COMPUTER_WS_METHODS.getAuditHistory]: AuthOrchestrationReadScope,
+  [COMPUTER_WS_METHODS.listWindows]: AuthOrchestrationReadScope,
+  [COMPUTER_WS_METHODS.getState]: AuthOrchestrationReadScope,
+  [COMPUTER_WS_METHODS.getScreenSize]: AuthOrchestrationReadScope,
+  [COMPUTER_WS_METHODS.getThreadState]: AuthOrchestrationReadScope,
+  [COMPUTER_WS_METHODS.subscribeEvents]: AuthOrchestrationReadScope,
+  [COMPUTER_WS_METHODS.setControlEnabled]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.provision]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.launchApp]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.click]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.doubleClick]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.rightClick]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.moveCursor]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.drag]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.scroll]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.typeText]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.pressKey]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.hotkey]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.setValue]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.performAction]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.selectText]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.inputClick]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.inputScroll]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.inputKey]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {
