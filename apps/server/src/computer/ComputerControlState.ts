@@ -61,7 +61,8 @@ export interface ComputerControlState {
   /**
    * Records whether the thread's chat opted in to Computer at `generation`.
    * Intent only sticks when it matches the current, enabled generation. A
-   * failed write rolls the intent back so it cannot authorize a later turn.
+   * write that fails, dies or is interrupted rolls the intent back so it
+   * cannot authorize a later turn.
    */
   readonly recordChatIntent: (
     threadId: string,
@@ -174,7 +175,7 @@ export const makeComputerControlState = Effect.fn("makeComputerControlState")(fu
           };
           threads.set(threadId, next);
           return persist.pipe(
-            Effect.tapError(() =>
+            Effect.onError(() =>
               Effect.sync(() => {
                 if (threads.get(threadId) === next) {
                   threads.set(threadId, { disabled: next.disabled, generation: next.generation });
