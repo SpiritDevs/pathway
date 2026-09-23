@@ -1,0 +1,6008 @@
+import { describe, expect, it, vi } from "vitest";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { PassThrough } from "node:stream";
+import {
+  ApprovalRequestId,
+  BROWSER_TOOL_NAMES,
+  DEFAULT_MODEL_BY_PROVIDER,
+  ThreadId,
+  TurnId,
+  type RuntimeMode,
+} from "@synara/contracts";
+
+import {
+  buildCodexProcessEnv,
+  disableCodexConfigSections,
+  SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS,
+} from "./codexProcessEnv";
+import {
+  buildCodexCollaborationMode,
+  buildCodexInitializeParams,
+  buildCodexThreadOpenRequest,
+  resolveCodexThreadOpenMinimumVersion,
+  shouldWarnCodexFreshStartWithoutResume,
+  CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+  CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+  __codexCliVersionGateTesting,
+  CodexAppServerManager,
+  classifyCodexStderrLine,
+  formatCodexThreadResumeError,
+  isRecoverableThreadResumeError,
+  normalizeCodexModelSlug,
+  readCodexAccountSnapshot,
+  resolveCodexModelForAccount,
+} from "./codexAppServerManager";
+import {
+  assertCodexWorkingDirectoryExists,
+  formatMissingCodexWorkingDirectoryError,
+} from "./codexWorkingDirectory";
+import {
+  CodexAppServerTransportError,
+  CodexJsonlFramer,
+  CodexJsonlWriter,
+} from "./codexAppServerTransport";
+import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
+import {
+  SYNARA_GATEWAY_HARNESS_POLICY,
+  SYNARA_HARNESS_POLICY_MARKER,
+} from "./agentGateway/harnessPolicy.ts";
+import {
+  AGENT_GATEWAY_NO_CAPABILITIES,
+  AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
+  acquireAgentGatewaySessionLease,
+} from "./agentGateway/sessionLease.ts";
+import {
+  MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
+  MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION,
+} from "./provider/codexCliVersion.ts";
+
+const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
+
+type SyntheticCodexRequest = {
+  readonly id?: string | number;
+  readonly method: string;
+  readonly params?: Record<string, unknown>;
+};
+
+function createSyntheticCodexAppServer(options?: { readonly forceFullHistoryResponse?: boolean }) {
+  const historySentinel = "SYNTHETIC_PRIVATE_HISTORY_SENTINEL";
+  const persistedTranscript = Object.freeze([
+    Object.freeze({ role: "user", text: historySentinel }),
+    Object.freeze({ role: "assistant", text: "synthetic reply" }),
+  ]);
+  const historyFingerprint = () =>
+    createHash("sha256").update(JSON.stringify(persistedTranscript)).digest("hex");
+  const requests: SyntheticCodexRequest[] = [];
+  const historicalResponses: Array<{ readonly thread: { readonly id: string } }> = [];
+  const children: ChildProcessWithoutNullStreams[] = [];
+  let oversizedResponseCount = 0;
+  let nextPid = 50_000;
+  let nextTurn = 1;
+
+  const buildFullHistoryFrame = (id: string | number, providerThreadId: string): Buffer => {
+    const targetFrameBytes = 16_842_743;
+    const prefix = Buffer.from(
+      `{"id":${JSON.stringify(id)},"result":{"thread":{"id":${JSON.stringify(providerThreadId)},"turns":[{"payload":"${historySentinel}`,
+      "utf8",
+    );
+    const suffix = Buffer.from('"}]}}}', "utf8");
+    const fillerBytes = targetFrameBytes - prefix.length - suffix.length;
+    if (fillerBytes < 0) throw new Error("Synthetic Codex frame prefix exceeds target size");
+    return Buffer.concat(
+      [prefix, Buffer.alloc(fillerBytes, 0x78), suffix, Buffer.from("\n")],
+      targetFrameBytes + 1,
+    );
+  };
+
+  const spawnAppServer = (): ChildProcessWithoutNullStreams => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const child = Object.assign(new EventEmitter(), {
+      stdin,
+      stdout,
+      stderr,
+      pid: nextPid++,
+      exitCode: null,
+      signalCode: null,
+      killed: false,
+    }) as unknown as ChildProcessWithoutNullStreams;
+    children.push(child);
+
+    let bufferedInput = "";
+    stdin.on("data", (chunk: Buffer) => {
+      bufferedInput += chunk.toString("utf8");
+      for (;;) {
+        const newline = bufferedInput.indexOf("\n");
+        if (newline < 0) break;
+        const line = bufferedInput.slice(0, newline);
+        bufferedInput = bufferedInput.slice(newline + 1);
+        if (!line) continue;
+        const request = JSON.parse(line) as SyntheticCodexRequest;
+        requests.push(request);
+        if (request.id === undefined) continue;
+
+        const respond = (result: unknown) => {
+          queueMicrotask(() => stdout.write(`${JSON.stringify({ id: request.id, result })}\n`));
+        };
+        if (request.method === "initialize") {
+          respond({});
+        } else if (request.method === "account/read") {
+          respond({ account: { type: "apiKey" } });
+        } else if (request.method === "thread/resume" || request.method === "thread/fork") {
+          const providerThreadId = String(request.params?.threadId ?? "provider-thread");
+          if (options?.forceFullHistoryResponse === true || request.params?.excludeTurns !== true) {
+            oversizedResponseCount += 1;
+            queueMicrotask(() =>
+              stdout.write(buildFullHistoryFrame(request.id!, providerThreadId)),
+            );
+          } else {
+            const result = {
+              thread: {
+                id:
+                  request.method === "thread/fork"
+                    ? `${providerThreadId}-forked`
+                    : providerThreadId,
+              },
+            };
+            historicalResponses.push(result);
+            respond(result);
+          }
+        } else if (request.method === "thread/start") {
+          respond({ thread: { id: "fresh-provider-thread" } });
+        } else if (request.method === "turn/start") {
+          respond({ turn: { id: `synthetic-turn-${nextTurn++}` } });
+        } else {
+          respond({});
+        }
+      }
+    });
+
+    return child;
+  };
+
+  return {
+    buildFullHistoryFrame,
+    children,
+    historyFingerprint,
+    historySentinel,
+    historicalResponses,
+    transcriptSnapshot: () => structuredClone(persistedTranscript),
+    requests,
+    spawnAppServer,
+    get oversizedResponseCount() {
+      return oversizedResponseCount;
+    },
+  };
+}
+
+function createSyntheticCodexManager(fake: ReturnType<typeof createSyntheticCodexAppServer>) {
+  const teardownProcessTree = vi.fn(async () => ({ escalated: false, signalErrors: [] }));
+  const manager = new CodexAppServerManager(undefined, {
+    spawnAppServer: fake.spawnAppServer,
+    teardownProcessTree,
+  });
+  const internals = manager as unknown as {
+    assertSupportedCodexCliVersion: () => Promise<void>;
+    buildSessionProcessEnv: () => Promise<NodeJS.ProcessEnv>;
+  };
+  vi.spyOn(internals, "assertSupportedCodexCliVersion").mockResolvedValue(undefined);
+  vi.spyOn(internals, "buildSessionProcessEnv").mockResolvedValue({});
+  return { manager, teardownProcessTree };
+}
+
+const fullAccessTurnOverrides = {
+  approvalPolicy: "never",
+  approvalsReviewer: "user",
+  sandboxPolicy: { type: "dangerFullAccess" },
+} as const;
+const approvalRequiredTurnOverrides = {
+  approvalPolicy: "untrusted",
+  approvalsReviewer: "user",
+  sandboxPolicy: { type: "readOnly" },
+} as const;
+const autoTurnOverrides = {
+  approvalPolicy: "on-request",
+  approvalsReviewer: "auto_review",
+  sandboxPolicy: { type: "workspaceWrite" },
+} as const;
+
+describe("Codex Synara harness policy", () => {
+  it("keeps Computer desktop guidance out of base and disabled default/plan instructions", () => {
+    const disabledInstructions = [SYNARA_GATEWAY_HARNESS_POLICY];
+    for (const interactionMode of ["default", "plan"] as const) {
+      const baseline =
+        interactionMode === "default"
+          ? CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS
+          : CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS;
+      const disabled = buildCodexCollaborationMode({
+        interactionMode,
+        enableComputerControl: false,
+      })?.settings.developer_instructions;
+      expect(disabled).toBe(baseline);
+      disabledInstructions.push(baseline, disabled!);
+      const enabled = buildCodexCollaborationMode({
+        interactionMode,
+        enableComputerControl: true,
+      })?.settings.developer_instructions;
+      expect(enabled).toContain("## Synara computer use");
+      expect(enabled).toContain("The computer_* tools are live on this session");
+    }
+    for (const instructions of disabledInstructions) {
+      expect(instructions).not.toContain("Use `Computer Use`");
+      expect(instructions).not.toContain("desktop apps, OS settings");
+      expect(instructions).not.toContain("## Synara computer use");
+      expect(instructions).not.toContain("computer_");
+    }
+  });
+
+  it("keeps the same host policy exactly once in default and plan instructions", () => {
+    for (const instructions of [
+      CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+      CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+    ]) {
+      expect(instructions).toContain(SYNARA_HARNESS_POLICY_MARKER);
+      expect(instructions.split(SYNARA_HARNESS_POLICY_MARKER)).toHaveLength(2);
+      expect(instructions).toContain("Synara is the host and harness");
+      expect(instructions).toContain("Final responses must restate every needed scope");
+      expect(instructions).toContain("include all decision context");
+      expect(instructions).toContain("one exact synara_create_threads plan");
+      expect(instructions).toContain("tools.mcp__synara__browser_open");
+      for (const name of BROWSER_TOOL_NAMES) {
+        expect(instructions, name).toContain(`\`${name.slice("browser_".length)}\``);
+      }
+      expect(instructions).toContain("Do not search or filter \`ALL_TOOLS\`");
+      expect(instructions).not.toContain("Use separate tool calls for browser steps");
+      expect(instructions).toContain("Independent tool calls may run concurrently");
+      expect(instructions).toContain("Batch related reads/actions in one browser_run script");
+      expect(instructions).toContain("Split when new state needs inspection or a human decision");
+      expect(instructions).not.toContain("no multi-action scripts");
+      expect(instructions).toContain("your first tool call is");
+      expect(instructions).toContain("text(r.structuredContent ?? r)");
+      expect(instructions).toContain("errors may only have");
+      expect(instructions).toContain("not a fresh whole-page snapshot by default");
+      expect(instructions).toContain("Do not rediscover tools after a model switch");
+      expect(instructions).toContain("print no unrelated catalogue");
+      expect(instructions).toContain("Snapshot diffs and aria refs do not persist between calls");
+      expect(instructions).toContain(
+        'human.click(page.getByRole("button",{name:"Log In",exact:true}))',
+      );
+      expect(instructions).toContain("never bare document/window/location");
+      expect(instructions).toContain("Script errors do not mean sign-in buttons are blocked");
+    }
+  });
+
+  it("resolves the gateway endpoint when each session environment is built", async () => {
+    const homePath = mkdtempSync(path.join(os.tmpdir(), "synara-codex-gateway-endpoint-"));
+    const previousSynaraHome = process.env.SYNARA_HOME;
+    process.env.SYNARA_HOME = path.join(homePath, "synara-home");
+    let endpointUrl = "http://127.0.0.1:0/mcp";
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        agentGatewayMcp: {
+          endpointUrl: () => endpointUrl,
+          acquireSessionLease: () => ({
+            connection: { url: endpointUrl, bearerToken: "token" },
+            cancelTurn: () => Promise.resolve(),
+            retireTurn: () => Promise.resolve(),
+            release: () => undefined,
+          }),
+        },
+      });
+      endpointUrl = "http://127.0.0.1:48123/mcp";
+      const env = await (
+        manager as unknown as {
+          buildSessionProcessEnv: (
+            homePath: string | undefined,
+            token: string | undefined,
+          ) => Promise<NodeJS.ProcessEnv>;
+        }
+      ).buildSessionProcessEnv(homePath, "token");
+      const configPath = path.join(env.CODEX_HOME ?? homePath, "config.toml");
+      expect(readFileSync(configPath, "utf8")).toContain('url = "http://127.0.0.1:48123/mcp"');
+    } finally {
+      if (previousSynaraHome === undefined) {
+        delete process.env.SYNARA_HOME;
+      } else {
+        process.env.SYNARA_HOME = previousSynaraHome;
+      }
+      rmSync(homePath, { recursive: true, force: true });
+    }
+  });
+});
+
+function createSendTurnHarness(runtimeMode: RuntimeMode = "full-access") {
+  const manager = new CodexAppServerManager();
+  const context = {
+    session: {
+      provider: "codex",
+      status: "ready",
+      threadId: "thread_1",
+      runtimeMode,
+      model: "gpt-5.3-codex",
+      activeTurnId: undefined as string | undefined,
+      resumeCursor: { threadId: "thread_1" },
+      createdAt: "2026-02-10T00:00:00.000Z",
+      updatedAt: "2026-02-10T00:00:00.000Z",
+    },
+    account: {
+      type: "unknown",
+      planType: null,
+      sparkEnabled: true,
+    },
+    pendingApprovals: new Map(),
+    pendingUserInputs: new Map(),
+    collabReceiverTurns: new Map(),
+    collabReceiverParents: new Map(),
+    reviewTurnIds: new Set<string>(),
+  };
+
+  const requireSession = vi
+    .spyOn(
+      manager as unknown as { requireSession: (sessionId: string) => unknown },
+      "requireSession",
+    )
+    .mockReturnValue(context);
+  const sendRequest = vi
+    .spyOn(
+      manager as unknown as { sendRequest: (...args: unknown[]) => Promise<unknown> },
+      "sendRequest",
+    )
+    .mockResolvedValue({
+      turn: {
+        id: "turn_1",
+      },
+    });
+  const updateSession = vi
+    .spyOn(manager as unknown as { updateSession: (...args: unknown[]) => void }, "updateSession")
+    .mockImplementation(() => {});
+
+  return { manager, context, requireSession, sendRequest, updateSession };
+}
+
+function createThreadControlHarness() {
+  const manager = new CodexAppServerManager();
+  const context = {
+    lifecycleGeneration: "generation-request-a",
+    session: {
+      provider: "codex",
+      status: "ready",
+      threadId: "thread_1",
+      runtimeMode: "full-access",
+      model: "gpt-5.3-codex",
+      activeTurnId: undefined as string | undefined,
+      resumeCursor: { threadId: "thread_1" },
+      createdAt: "2026-02-10T00:00:00.000Z",
+      updatedAt: "2026-02-10T00:00:00.000Z",
+    },
+    pendingApprovals: new Map(),
+    pendingUserInputs: new Map(),
+    collabReceiverTurns: new Map(),
+    collabReceiverParents: new Map(),
+    reviewTurnIds: new Set<string>(),
+  };
+
+  const requireSession = vi
+    .spyOn(
+      manager as unknown as { requireSession: (sessionId: string) => unknown },
+      "requireSession",
+    )
+    .mockReturnValue(context);
+  const sendRequest = vi.spyOn(
+    manager as unknown as { sendRequest: (...args: unknown[]) => Promise<unknown> },
+    "sendRequest",
+  );
+  const updateSession = vi
+    .spyOn(manager as unknown as { updateSession: (...args: unknown[]) => void }, "updateSession")
+    .mockImplementation(() => {});
+  const emitEvent = vi
+    .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+    .mockImplementation(() => {});
+
+  return { manager, context, requireSession, sendRequest, updateSession, emitEvent };
+}
+
+function createPendingUserInputHarness() {
+  const manager = new CodexAppServerManager();
+  const context = {
+    session: {
+      provider: "codex",
+      status: "ready",
+      threadId: "thread_1",
+      runtimeMode: "full-access",
+      model: "gpt-5.3-codex",
+      activeTurnId: undefined as string | undefined,
+      resumeCursor: { threadId: "thread_1" },
+      createdAt: "2026-02-10T00:00:00.000Z",
+      updatedAt: "2026-02-10T00:00:00.000Z",
+    },
+    pendingApprovals: new Map(),
+    pendingUserInputs: new Map([
+      [
+        ApprovalRequestId.makeUnsafe("req-user-input-1"),
+        {
+          requestId: ApprovalRequestId.makeUnsafe("req-user-input-1"),
+          jsonRpcId: 42,
+          threadId: asThreadId("thread_1"),
+        },
+      ],
+    ]),
+    collabReceiverTurns: new Map(),
+    collabReceiverParents: new Map(),
+    reviewTurnIds: new Set<string>(),
+  };
+
+  const requireSession = vi
+    .spyOn(
+      manager as unknown as { requireSession: (sessionId: string) => unknown },
+      "requireSession",
+    )
+    .mockReturnValue(context);
+  const writeMessage = vi
+    .spyOn(
+      manager as unknown as { writeMessage: (...args: unknown[]) => Promise<void> },
+      "writeMessage",
+    )
+    .mockResolvedValue(undefined);
+  const emitEvent = vi
+    .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+    .mockImplementation(() => {});
+
+  return { manager, context, requireSession, writeMessage, emitEvent };
+}
+
+function createPendingApprovalHarness(runtimeMode: RuntimeMode = "approval-required") {
+  const manager = new CodexAppServerManager();
+  const context = {
+    lifecycleGeneration: "generation-request-a",
+    session: {
+      provider: "codex",
+      status: "ready",
+      threadId: "thread_1",
+      runtimeMode,
+      model: "gpt-5.3-codex",
+      activeTurnId: undefined as string | undefined,
+      resumeCursor: { threadId: "thread_1" },
+      createdAt: "2026-02-10T00:00:00.000Z",
+      updatedAt: "2026-02-10T00:00:00.000Z",
+    },
+    account: {
+      type: "unknown",
+      planType: null,
+      sparkEnabled: true,
+    },
+    pendingApprovals: new Map([
+      [
+        ApprovalRequestId.makeUnsafe("req-approval-1"),
+        {
+          requestId: ApprovalRequestId.makeUnsafe("req-approval-1"),
+          jsonRpcId: 42,
+          method: "item/commandExecution/requestApproval" as const,
+          requestKind: "command" as const,
+          threadId: asThreadId("thread_1"),
+        },
+      ],
+    ]),
+    pendingUserInputs: new Map(),
+    sessionApprovalOverride: undefined as
+      | undefined
+      | {
+          approvalPolicy: "never";
+          approvalsReviewer: "user";
+          sandboxPolicy: { type: "dangerFullAccess" };
+        },
+    collabReceiverTurns: new Map(),
+    collabReceiverParents: new Map(),
+    reviewTurnIds: new Set<string>(),
+  };
+
+  const requireSession = vi
+    .spyOn(
+      manager as unknown as { requireSession: (sessionId: string) => unknown },
+      "requireSession",
+    )
+    .mockReturnValue(context);
+  const writeMessage = vi
+    .spyOn(
+      manager as unknown as { writeMessage: (...args: unknown[]) => Promise<void> },
+      "writeMessage",
+    )
+    .mockResolvedValue(undefined);
+  const emitEvent = vi
+    .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+    .mockImplementation(() => {});
+  const sendRequest = vi
+    .spyOn(
+      manager as unknown as { sendRequest: (...args: unknown[]) => Promise<unknown> },
+      "sendRequest",
+    )
+    .mockResolvedValue({
+      turn: {
+        id: "turn_1",
+      },
+    });
+  const updateSession = vi
+    .spyOn(manager as unknown as { updateSession: (...args: unknown[]) => void }, "updateSession")
+    .mockImplementation(() => {});
+
+  return {
+    manager,
+    context,
+    requireSession,
+    writeMessage,
+    emitEvent,
+    sendRequest,
+    updateSession,
+  };
+}
+
+function createCollabNotificationHarness() {
+  const manager = new CodexAppServerManager();
+  const context = {
+    session: {
+      provider: "codex",
+      status: "running",
+      threadId: asThreadId("thread_1"),
+      runtimeMode: "full-access",
+      model: "gpt-5.3-codex",
+      activeTurnId: "turn_parent",
+      resumeCursor: { threadId: "provider_parent" },
+      createdAt: "2026-02-10T00:00:00.000Z",
+      updatedAt: "2026-02-10T00:00:00.000Z",
+    },
+    account: {
+      type: "unknown",
+      planType: null,
+      sparkEnabled: true,
+    },
+    pending: new Map(),
+    pendingApprovals: new Map(),
+    pendingUserInputs: new Map(),
+    sessionApprovalOverride: undefined as
+      | undefined
+      | {
+          approvalPolicy: "never";
+          approvalsReviewer: "user";
+          sandboxPolicy: { type: "dangerFullAccess" };
+        },
+    collabReceiverTurns: new Map<string, string>(),
+    collabReceiverParents: new Map<string, string>(),
+    reviewTurnIds: new Set<string>(),
+    gatewayCredentialRetired: false,
+    nextRequestId: 1,
+    stopping: false,
+  };
+
+  const emitEvent = vi
+    .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+    .mockImplementation(() => {});
+  const updateSession = vi
+    .spyOn(manager as unknown as { updateSession: (...args: unknown[]) => void }, "updateSession")
+    .mockImplementation(() => {});
+  const requireSession = vi
+    .spyOn(
+      manager as unknown as { requireSession: (threadId: ThreadId) => unknown },
+      "requireSession",
+    )
+    .mockReturnValue(context);
+  const writeMessage = vi
+    .spyOn(
+      manager as unknown as { writeMessage: (...args: unknown[]) => Promise<void> },
+      "writeMessage",
+    )
+    .mockResolvedValue(undefined);
+
+  return { manager, context, emitEvent, updateSession, requireSession, writeMessage };
+}
+
+function handleServerNotificationForTest(
+  manager: CodexAppServerManager,
+  context: unknown,
+  notification: Record<string, unknown>,
+): void {
+  (
+    manager as unknown as {
+      handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+    }
+  ).handleServerNotification(context, notification);
+}
+
+async function handleServerRequestForTest(
+  manager: CodexAppServerManager,
+  context: unknown,
+  request: Record<string, unknown>,
+): Promise<void> {
+  await (
+    manager as unknown as {
+      handleServerRequest: (context: unknown, request: Record<string, unknown>) => Promise<void>;
+    }
+  ).handleServerRequest(context, request);
+}
+
+function createProcessOutputHarness() {
+  const manager = new CodexAppServerManager();
+  const context = {
+    session: {
+      provider: "codex",
+      status: "running",
+      threadId: asThreadId("thread_1"),
+      runtimeMode: "full-access",
+      model: "gpt-5.3-codex",
+      createdAt: "2026-02-10T00:00:00.000Z",
+      updatedAt: "2026-02-10T00:00:00.000Z",
+    },
+    reviewTurnIds: new Set<string>(),
+    stopping: false,
+  };
+  const emitEvent = vi
+    .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+    .mockImplementation(() => {});
+
+  return { manager, context, emitEvent };
+}
+
+describe("Codex app-server teardown", () => {
+  it("keeps a live process routable when only the last turn status is error", () => {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5050;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      killed = false;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-codex-failed-turn");
+    const context = {
+      session: {
+        provider: "codex",
+        status: "error",
+        threadId,
+        runtimeMode: "full-access",
+        lastError: "Turn failed",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    const internals = manager as unknown as {
+      sessions: Map<ThreadId, unknown>;
+      requireSession: (threadId: ThreadId) => unknown;
+    };
+    internals.sessions.set(threadId, context);
+
+    expect(manager.hasSession(threadId)).toBe(true);
+    expect(manager.listSessions()).toEqual([
+      expect.objectContaining({ threadId, status: "error" }),
+    ]);
+    expect(internals.requireSession(threadId)).toBe(context);
+
+    child.stdin.end();
+
+    expect(manager.hasSession(threadId)).toBe(false);
+    expect(manager.listSessions()).toEqual([]);
+    expect(() => internals.requireSession(threadId)).toThrow("Session is closed");
+  });
+
+  it("makes the session unroutable immediately while stop awaits exit proof", async () => {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5151;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    let exitProven = false;
+    const teardownProcessTree = vi.fn(
+      async (input: { readonly rootPid: number; readonly rootExited: Promise<unknown> }) => {
+        expect(input.rootPid).toBe(5151);
+        await input.rootExited;
+        exitProven = true;
+        return { escalated: false as const, signalErrors: [] };
+      },
+    );
+    const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
+    const threadId = asThreadId("thread-codex-exit-proof");
+    const revokeSessionToken = vi.fn();
+    const gatewaySessionLease = acquireAgentGatewaySessionLease(
+      {
+        connectionForThread: () => ({
+          url: "http://127.0.0.1:48123/mcp",
+          bearerToken: "gateway-token",
+        }),
+        revokeSessionToken,
+      },
+      threadId,
+      "codex",
+      AGENT_GATEWAY_NO_CAPABILITIES,
+    );
+    const context = {
+      gatewaySessionLease,
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, context);
+
+    const stopping = manager.stopSession(threadId);
+    await Promise.resolve();
+    expect(revokeSessionToken).toHaveBeenCalledOnce();
+    expect(teardownProcessTree).toHaveBeenCalledTimes(1);
+    // Unroutable immediately: follow-ups must fall through to thread/resume
+    // instead of writing into the dying process's stdin.
+    expect(manager.hasSession(threadId)).toBe(false);
+    expect(exitProven).toBe(false);
+
+    child.exitCode = 0;
+    child.emit("exit", 0, null);
+    await stopping;
+    expect(revokeSessionToken).toHaveBeenCalledOnce();
+    expect(exitProven).toBe(true);
+    expect(manager.hasSession(threadId)).toBe(false);
+  });
+
+  it("releases the session lease once when the app-server exits spontaneously", async () => {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5252;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    const teardownProcessTree = vi.fn(async () => ({
+      escalated: false,
+      signalErrors: [],
+      capturedBeforeRootExit: false,
+    }));
+    const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
+    const threadId = asThreadId("thread-codex-spontaneous-exit");
+    const revokeSessionToken = vi.fn();
+    const gatewaySessionLease = acquireAgentGatewaySessionLease(
+      {
+        connectionForThread: () => ({
+          url: "http://127.0.0.1:48123/mcp",
+          bearerToken: "gateway-token",
+        }),
+        revokeSessionToken,
+      },
+      threadId,
+      "codex",
+      AGENT_GATEWAY_NO_CAPABILITIES,
+    );
+    const context = {
+      gatewaySessionLease,
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    const internals = manager as unknown as {
+      sessions: Map<ThreadId, unknown>;
+      attachProcessListeners: (context: unknown) => void;
+    };
+    internals.sessions.set(threadId, context);
+    internals.attachProcessListeners(context);
+
+    child.exitCode = 1;
+    child.emit("exit", 1, null);
+    child.emit("exit", 1, null);
+
+    expect(revokeSessionToken).toHaveBeenCalledOnce();
+    expect(manager.hasSession(threadId)).toBe(false);
+    await vi.waitFor(() => expect(internals.sessions.has(threadId)).toBe(false));
+    expect(teardownProcessTree).toHaveBeenCalledOnce();
+  });
+});
+
+describe("classifyCodexStderrLine", () => {
+  it("ignores empty lines", () => {
+    expect(classifyCodexStderrLine("   ")).toBeNull();
+  });
+
+  it("ignores non-error structured codex logs", () => {
+    const line =
+      "2026-02-08T04:24:19.241256Z  WARN codex_core::features: unknown feature key in config: skills";
+    expect(classifyCodexStderrLine(line)).toBeNull();
+  });
+
+  it("ignores known benign rollout path errors", () => {
+    const line =
+      "\u001b[2m2026-02-08T04:24:20.085687Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[2mcodex_core::rollout::list\u001b[0m: state db missing rollout path for thread 019c3b6c-46b8-7b70-ad23-82f824d161fb";
+    expect(classifyCodexStderrLine(line)).toBeNull();
+  });
+
+  it("ignores token usage footers emitted during shutdown", () => {
+    const line =
+      "^CToken usage: total=360,953 input=336,874 (+ 4,219,648 cached) output=24,079 (reasoning 7,982)";
+    expect(classifyCodexStderrLine(line)).toBeNull();
+  });
+
+  it("keeps unknown structured errors", () => {
+    const line = "2026-02-08T04:24:20.085687Z ERROR codex_core::runtime: unrecoverable failure";
+    expect(classifyCodexStderrLine(line)).toEqual({
+      message: line,
+    });
+  });
+
+  it("keeps plain stderr messages", () => {
+    const line = "fatal: permission denied";
+    expect(classifyCodexStderrLine(line)).toEqual({
+      message: line,
+    });
+  });
+
+  it("normalizes duplicate tool argument parse failures", () => {
+    const line =
+      "2026-04-11T23:48:45.012578Z ERROR codex_core::tools::router: error=failed to parse function arguments: duplicate field `yield_time_ms` at line 1 column 114";
+    expect(classifyCodexStderrLine(line)).toEqual({
+      message: "Tool call failed because the same argument was sent twice (yield_time_ms).",
+    });
+  });
+});
+
+describe("codex CLI version gate", () => {
+  it("memoizes the version probe per binary and shares concurrent probes", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const counterPath = path.join(dir, "calls.log");
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex.sh");
+    writeFileSync(
+      binaryPath,
+      isWindows
+        ? `@echo off\r\necho x>>"${counterPath}"\r\necho codex-cli 9.9.9\r\n`
+        : `#!/bin/sh\necho x >> "${counterPath}"\necho "codex-cli 9.9.9"\n`,
+      { mode: 0o755 },
+    );
+    const probeCount = () => {
+      try {
+        return readFileSync(counterPath, "utf8").split("\n").filter(Boolean).length;
+      } catch {
+        return 0;
+      }
+    };
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      // Concurrent session starts must share one in-flight probe.
+      await Promise.all([
+        assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath }),
+        assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath }),
+      ]);
+      expect(probeCount()).toBe(1);
+
+      // A later start/resume reuses the cached verdict instead of spawning again.
+      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
+      expect(probeCount()).toBe(1);
+
+      // The per-call working-directory precondition is never served from the cache.
+      await expect(
+        assertSupportedCodexCliVersion({
+          binaryPath,
+          cwd: path.join(dir, "missing"),
+          homePath,
+        }),
+      ).rejects.toThrow(formatMissingCodexWorkingDirectoryError(path.join(dir, "missing")));
+      expect(probeCount()).toBe(1);
+
+      // An expired verdict re-probes.
+      reset();
+      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
+      expect(probeCount()).toBe(2);
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reuse a general-version verdict for the stricter Auto floor", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-auto-floor-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const counterPath = path.join(dir, "calls.log");
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex.sh");
+    writeFileSync(
+      binaryPath,
+      isWindows
+        ? `@echo off\r\necho x>>"${counterPath}"\r\necho codex-cli 0.100.0\r\n`
+        : `#!/bin/sh\necho x >> "${counterPath}"\necho "codex-cli 0.100.0"\n`,
+      { mode: 0o755 },
+    );
+    const probeCount = () => {
+      try {
+        return readFileSync(counterPath, "utf8").split("\n").filter(Boolean).length;
+      } catch {
+        return 0;
+      }
+    };
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
+      await expect(
+        assertSupportedCodexCliVersion({
+          binaryPath,
+          cwd: dir,
+          homePath,
+          minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
+        }),
+      ).rejects.toThrow(MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION);
+      expect(probeCount()).toBe(2);
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed for Auto when the Codex CLI version cannot be parsed", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-auto-unknown-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex.sh");
+    writeFileSync(
+      binaryPath,
+      isWindows
+        ? "@echo off\r\necho codex-cli development\r\n"
+        : '#!/bin/sh\necho "codex-cli development"\n',
+      { mode: 0o755 },
+    );
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      // Preserve compatibility with custom development builds for ordinary sessions.
+      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
+      await expect(
+        assertSupportedCodexCliVersion({
+          binaryPath,
+          cwd: dir,
+          homePath,
+          minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
+        }),
+      ).rejects.toThrow(`Auto mode requires v${MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION} or newer`);
+      await expect(
+        assertSupportedCodexCliVersion({
+          binaryPath,
+          cwd: dir,
+          homePath,
+          minimumVersion: MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION,
+          minimumVersionRequirement: "Codex thread resume and fork",
+        }),
+      ).rejects.toThrow(
+        `Codex thread resume and fork requires v${MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION} or newer`,
+      );
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("re-probes when the binary behind an unchanged path is replaced", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-swap-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex.sh");
+    // The trailing filler keeps the two revisions different in size, so the swap is detected
+    // even on a filesystem whose timestamps are too coarse to separate two writes this close.
+    const writeBinary = (version: string, filler: string) => {
+      writeFileSync(
+        binaryPath,
+        isWindows
+          ? `@echo off\r\nrem ${filler}\r\necho codex-cli ${version}\r\n`
+          : `#!/bin/sh\n# ${filler}\necho "codex-cli ${version}"\n`,
+        { mode: 0o755 },
+      );
+    };
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      writeBinary("9.9.9", "original");
+      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
+
+      // An in-place downgrade must not keep riding the cached pass for the rest of the TTL.
+      writeBinary("0.1.0", "replaced-in-place-by-a-downgrade");
+      await expect(
+        assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath }),
+      ).rejects.toThrow(/too old for Synara/);
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("re-probes when a PATH-resolved codex is replaced behind the same bare name", async () => {
+    // The production default is the bare name `codex`, so the fingerprint is only useful if it
+    // survives PATH resolution. It is taken from the same env object handed to the spawn a few
+    // lines later, which is what keeps it pointed at the binary actually being probed even when
+    // that env carries a login-shell PATH the process itself never had.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-path-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex");
+    const writeBinary = (version: string, filler: string) => {
+      writeFileSync(
+        binaryPath,
+        isWindows
+          ? `@echo off\r\nrem ${filler}\r\necho codex-cli ${version}\r\n`
+          : `#!/bin/sh\n# ${filler}\necho "codex-cli ${version}"\n`,
+        { mode: 0o755 },
+      );
+    };
+    // Prepended, so this copy wins over any real codex on the machine.
+    vi.stubEnv("PATH", `${dir}${path.delimiter}${process.env.PATH ?? ""}`);
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      writeBinary("9.9.9", "original");
+      await assertSupportedCodexCliVersion({ binaryPath: "codex", cwd: dir, homePath });
+
+      writeBinary("0.1.0", "replaced-in-place-by-a-downgrade");
+      await expect(
+        assertSupportedCodexCliVersion({ binaryPath: "codex", cwd: dir, homePath }),
+      ).rejects.toThrow(/too old for Synara/);
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an unsupported codex version without caching the failure", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-old-"));
+    const homePath = path.join(dir, "codex-home");
+    mkdirSync(homePath, { recursive: true });
+    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
+
+    const isWindows = process.platform === "win32";
+    const counterPath = path.join(dir, "calls.log");
+    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex.sh");
+    writeFileSync(
+      binaryPath,
+      isWindows
+        ? `@echo off\r\necho x>>"${counterPath}"\r\necho codex-cli 0.1.0\r\n`
+        : `#!/bin/sh\necho x >> "${counterPath}"\necho "codex-cli 0.1.0"\n`,
+      { mode: 0o755 },
+    );
+    const probeCount = () => {
+      try {
+        return readFileSync(counterPath, "utf8").split("\n").filter(Boolean).length;
+      } catch {
+        return 0;
+      }
+    };
+
+    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
+    reset();
+    try {
+      await expect(
+        assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath }),
+      ).rejects.toThrow(/too old for Synara/);
+      await expect(
+        assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath }),
+      ).rejects.toThrow(/too old for Synara/);
+      // Failures are re-probed so installing or upgrading Codex takes effect at once.
+      expect(probeCount()).toBe(2);
+    } finally {
+      reset();
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("buildCodexProcessEnv", () => {
+  it("hydrates the active custom provider env_key from the effective CODEX_HOME", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    try {
+      writeFileSync(
+        path.join(tempDir, "config.toml"),
+        [
+          'model_provider = "my-company-proxy"',
+          "",
+          '[model_providers."my-company-proxy"]',
+          'env_key = "MY_COMPANY_PROXY_KEY"',
+        ].join("\n"),
+        "utf8",
+      );
+
+      const readEnvironment = vi.fn(() => ({
+        PATH: "/opt/homebrew/bin:/usr/bin",
+        SSH_AUTH_SOCK: "/tmp/ssh.sock",
+        MY_COMPANY_PROXY_KEY: "proxy-secret",
+      }));
+
+      const env = await buildCodexProcessEnv({
+        env: {
+          SHELL: "/bin/zsh",
+          PATH: "/usr/bin",
+        },
+        homePath: tempDir,
+        platform: "darwin",
+        readEnvironment,
+      });
+
+      expect(readEnvironment).toHaveBeenCalledWith("/bin/zsh", [
+        "PATH",
+        "SSH_AUTH_SOCK",
+        "MY_COMPANY_PROXY_KEY",
+      ]);
+      expect(env.CODEX_HOME).toContain("codex-home-overlay");
+      expect(env.MY_COMPANY_PROXY_KEY).toBe("proxy-secret");
+      expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not read shell env when the provider key is already present", async () => {
+    const readEnvironment = vi.fn();
+
+    const env = await buildCodexProcessEnv({
+      env: {
+        SHELL: "/bin/zsh",
+        PATH: "/usr/bin",
+        CODEX_HOME: "/tmp/.codex",
+        AZURE_OPENAI_API_KEY: "existing-secret",
+      },
+      platform: "darwin",
+      readEnvironment,
+    });
+
+    expect(readEnvironment).not.toHaveBeenCalled();
+    expect(env.AZURE_OPENAI_API_KEY).toBe("existing-secret");
+  });
+
+  it("keeps the private desktop browser host out of the Codex process", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-private-host-"));
+    const codexHome = path.join(tempDir, "codex-home");
+    mkdirSync(codexHome, { recursive: true });
+    try {
+      const env = await buildCodexProcessEnv({
+        env: {
+          CODEX_HOME: codexHome,
+          SYNARA_HOME: tempDir,
+          SYNARA_BROWSER_HOST_PIPE_PATH: "/tmp/synara-browser-host.sock",
+          SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/legacy-browser-use.sock",
+          SYNARA_BROWSER_HOST_CAPABILITY: "desktop-capability",
+          SYNARA_BROWSER_HOST_CAPABILITY_FD: "3",
+          NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/existing.sock",
+        },
+        platform: "darwin",
+      });
+
+      expect(env.SYNARA_BROWSER_HOST_PIPE_PATH).toBeUndefined();
+      expect(env.SYNARA_BROWSER_USE_PIPE_PATH).toBeUndefined();
+      expect(env.SYNARA_BROWSER_HOST_CAPABILITY).toBeUndefined();
+      expect(env.SYNARA_BROWSER_HOST_CAPABILITY_FD).toBeUndefined();
+      expect(env.NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS).toBeUndefined();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies durable section suppressions inside Synara's Codex overlay", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      writeFileSync(
+        path.join(tempDir, "config.toml"),
+        [
+          '[plugins."github@openai-curated"]',
+          "enabled = true",
+          "",
+          ...SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS.flatMap((header) => [
+            header,
+            "enabled = true",
+            "",
+          ]),
+          '[plugins."historical-plugin@local"]',
+          "enabled = true",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      mkdirSync(overlayHome, { recursive: true });
+      writeFileSync(
+        path.join(overlayHome, "synara-config-suppressions-v1.json"),
+        `${JSON.stringify({
+          version: 1,
+          sectionHeaders: ['[plugins."historical-plugin@local"]'],
+        })}\n`,
+        "utf8",
+      );
+
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toBe(path.join(runtimeHome, "codex-home-overlay"));
+      const codexHome = env.CODEX_HOME;
+      if (typeof codexHome !== "string") {
+        throw new Error("Expected CODEX_HOME to be set.");
+      }
+      expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
+        '[plugins."historical-plugin@local"]\nenabled = false',
+      );
+      for (const header of SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS) {
+        expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
+          `${header}\nenabled = false`,
+        );
+        expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
+          `${header}\nenabled = true`,
+        );
+      }
+      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
+        '[plugins."historical-plugin@local"]\nenabled = true',
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("seeds markerless suppressions for conflicting local browser plugins", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      const conflictingHeader = '[plugins."bridge-browser@local"]';
+      writeFileSync(
+        path.join(tempDir, "config.toml"),
+        [conflictingHeader, "enabled = true", "", '[plugins."other@local"]', "enabled = true"].join(
+          "\n",
+        ),
+        "utf8",
+      );
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toBe(overlayHome);
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+      expect(overlayConfig).toContain(`${conflictingHeader}\nenabled = false`);
+      expect(overlayConfig).toContain('[plugins."other@local"]\nenabled = true');
+      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
+        `${conflictingHeader}\nenabled = true`,
+      );
+      const suppressionMarker = JSON.parse(
+        readFileSync(path.join(overlayHome, "synara-config-suppressions-v1.json"), "utf8"),
+      ) as { sectionHeaders?: string[] };
+      expect(suppressionMarker.sectionHeaders).toContain(conflictingHeader);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a recorded suppression after its plugin disappears from source config", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      mkdirSync(overlayHome, { recursive: true });
+      writeFileSync(
+        path.join(overlayHome, "synara-config-suppressions-v1.json"),
+        `${JSON.stringify({
+          version: 1,
+          sectionHeaders: ['[plugins."historical-plugin@local"]'],
+        })}\n`,
+        "utf8",
+      );
+
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      const codexHome = env.CODEX_HOME;
+      if (typeof codexHome !== "string") {
+        throw new Error("Expected CODEX_HOME to be set.");
+      }
+      expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
+        '[plugins."historical-plugin@local"]\nenabled = false',
+      );
+      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).not.toContain(
+        "historical-plugin@local",
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Codex SQLite state out of Synara's Codex home overlay", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    const lstatOrUndefined = (target: string) => {
+      try {
+        return lstatSync(target);
+      } catch {
+        return undefined;
+      }
+    };
+    try {
+      writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
+      writeFileSync(path.join(tempDir, "history.jsonl"), "", "utf8");
+      const sourceSqliteEntries = [
+        "state_5.sqlite",
+        "state_5.sqlite-wal",
+        "state_5.sqlite-shm",
+        "memories_1.sqlite",
+      ];
+      for (const entry of sourceSqliteEntries) {
+        writeFileSync(path.join(tempDir, entry), "source-db", "utf8");
+      }
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      mkdirSync(overlayHome, { recursive: true });
+      // Links left behind by releases that mirrored SQLite state per file,
+      // including a WAL sidecar whose source Codex has since checkpointed away.
+      const legacyLinks = ["state_5.sqlite", "thread_history_1.sqlite-wal"];
+      for (const entry of legacyLinks) {
+        symlinkSync(path.join(tempDir, entry), path.join(overlayHome, entry), "file");
+      }
+      const staleOverlayDbPath = path.join(overlayHome, "memories_1.sqlite");
+      writeFileSync(staleOverlayDbPath, "stale-overlay-db", "utf8");
+
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toBe(overlayHome);
+      expect(env.CODEX_SQLITE_HOME).toBe(tempDir);
+      for (const entry of [...sourceSqliteEntries, ...legacyLinks]) {
+        if (entry === "memories_1.sqlite") continue;
+        expect(lstatOrUndefined(path.join(overlayHome, entry))).toBeUndefined();
+      }
+      // A regular database file in the overlay is not Synara's to destroy.
+      expect(lstatSync(staleOverlayDbPath).isSymbolicLink()).toBe(false);
+      expect(readFileSync(staleOverlayDbPath, "utf8")).toBe("stale-overlay-db");
+      const overlayHistoryPath = path.join(overlayHome, "history.jsonl");
+      expect(lstatSync(overlayHistoryPath).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(overlayHistoryPath)).toBe(path.join(tempDir, "history.jsonl"));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs stale auth.json files in Synara's Codex home overlay", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      const sourceAuthPath = path.join(tempDir, "auth.json");
+      writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
+      writeFileSync(sourceAuthPath, '{"tokens":{"access_token":"fresh"}}', "utf8");
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      const overlayAuthPath = path.join(overlayHome, "auth.json");
+      mkdirSync(overlayHome, { recursive: true });
+      writeFileSync(overlayAuthPath, '{"tokens":{"access_token":"stale"}}', "utf8");
+
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toBe(overlayHome);
+      expect(lstatSync(overlayAuthPath).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(overlayAuthPath)).toBe(sourceAuthPath);
+      expect(readFileSync(overlayAuthPath, "utf8")).toContain("fresh");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves real generated image directories in Synara's Codex home overlay", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
+      const sourceGeneratedImagesDir = path.join(tempDir, "generated_images");
+      mkdirSync(sourceGeneratedImagesDir, { recursive: true });
+      writeFileSync(path.join(sourceGeneratedImagesDir, "source.png"), "source-image", "utf8");
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      const overlayGeneratedImagesDir = path.join(overlayHome, "generated_images");
+      mkdirSync(overlayGeneratedImagesDir, { recursive: true });
+      const overlayImagePath = path.join(overlayGeneratedImagesDir, "overlay.png");
+      writeFileSync(overlayImagePath, "overlay-image", "utf8");
+
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toBe(overlayHome);
+      expect(lstatSync(overlayGeneratedImagesDir).isDirectory()).toBe(true);
+      expect(readFileSync(overlayImagePath, "utf8")).toBe("overlay-image");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("disables only explicitly recorded plugin sections", () => {
+    expect(
+      disableCodexConfigSections(
+        '[plugins."historical-plugin@local"]\nenabled = true\n\n[plugins."other@local"]\nenabled = true',
+        ['[plugins."historical-plugin@local"]'],
+      ),
+    ).toBe(
+      '[plugins."historical-plugin@local"]\nenabled = false\n\n[plugins."other@local"]\nenabled = true',
+    );
+  });
+});
+
+describe("handleStdoutLine", () => {
+  it("ignores token usage footers emitted on stdout during shutdown", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+
+    (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine(
+      context,
+      "^CToken usage: total=360,953 input=336,874 (+ 4,219,648 cached) output=24,079 (reasoning 7,982)",
+    );
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores human-readable diagnostics leaked onto app-server stdout", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+    const handleStdoutLine = (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine.bind(manager);
+
+    for (const line of ["Reasoning trace", "Reasoning summary", "Command execution"]) {
+      handleStdoutLine(context, line);
+    }
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores multiline and standalone JSON leaked from command output", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+    const handleStdoutLine = (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine.bind(manager);
+
+    for (const line of ["{", "[", '{"scripts": {', "{}", "[]", '{"name":"synara"}']) {
+      handleStdoutLine(context, line);
+    }
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores malformed JSON-looking fragments without poisoning the session", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+
+    (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine(context, '{"method":"item/started"');
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("normalizeCodexModelSlug", () => {
+  it("maps 5.3 aliases to gpt-5.3-codex", () => {
+    expect(normalizeCodexModelSlug("5.3")).toBe("gpt-5.3-codex");
+    expect(normalizeCodexModelSlug("gpt-5.3")).toBe("gpt-5.3-codex");
+  });
+
+  it("prefers codex id when model differs", () => {
+    expect(normalizeCodexModelSlug("gpt-5.3", "gpt-5.3-codex")).toBe("gpt-5.3-codex");
+  });
+
+  it("keeps non-aliased models as-is", () => {
+    expect(normalizeCodexModelSlug("gpt-5.2-codex")).toBe("gpt-5.2-codex");
+    expect(normalizeCodexModelSlug("gpt-5.2")).toBe("gpt-5.2");
+  });
+});
+
+describe("isRecoverableThreadResumeError", () => {
+  it("matches not-found resume errors", () => {
+    expect(
+      isRecoverableThreadResumeError(new Error("thread/resume failed: thread not found")),
+    ).toBe(true);
+  });
+
+  it("ignores non-resume errors", () => {
+    expect(
+      isRecoverableThreadResumeError(new Error("thread/start failed: permission denied")),
+    ).toBe(false);
+  });
+
+  it("ignores non-recoverable resume errors", () => {
+    expect(
+      isRecoverableThreadResumeError(
+        new Error("thread/resume failed: timed out waiting for server"),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("buildCodexThreadOpenRequest", () => {
+  const sessionOverrides = {
+    model: null,
+    cwd: "/tmp/project",
+    approvalPolicy: "never" as const,
+    approvalsReviewer: "user" as const,
+    sandbox: "danger-full-access" as const,
+  };
+
+  it("forks an external thread into a new provider-owned thread", () => {
+    expect(
+      buildCodexThreadOpenRequest({
+        forkSourceThreadId: "external-thread",
+        sessionOverrides,
+      }),
+    ).toEqual({
+      method: "thread/fork",
+      params: {
+        ...sessionOverrides,
+        threadId: "external-thread",
+        excludeTurns: true,
+      },
+    });
+  });
+
+  it("resumes an existing provider thread without start-only options", () => {
+    expect(
+      buildCodexThreadOpenRequest({
+        resumeThreadId: "existing-thread",
+        sessionOverrides,
+      }),
+    ).toEqual({
+      method: "thread/resume",
+      params: {
+        ...sessionOverrides,
+        threadId: "existing-thread",
+        excludeTurns: true,
+      },
+    });
+  });
+
+  it("starts a fresh thread with raw events disabled", () => {
+    const request = buildCodexThreadOpenRequest({ sessionOverrides });
+    expect(request).toEqual({
+      method: "thread/start",
+      params: {
+        ...sessionOverrides,
+        experimentalRawEvents: false,
+      },
+    });
+    expect(request.params).not.toHaveProperty("excludeTurns");
+  });
+
+  it("rejects conflicting resume and fork sources", () => {
+    expect(() =>
+      buildCodexThreadOpenRequest({
+        forkSourceThreadId: "fork-source",
+        resumeThreadId: "resume-source",
+        sessionOverrides,
+      }),
+    ).toThrow("cannot resume and fork at the same time");
+  });
+});
+
+describe("resolveCodexThreadOpenMinimumVersion", () => {
+  it("keeps fresh starts on their existing floor and merges stricter capability floors", () => {
+    expect(
+      resolveCodexThreadOpenMinimumVersion({
+        runtimeMode: "full-access",
+        threadOpenMethod: "thread/start",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveCodexThreadOpenMinimumVersion({
+        runtimeMode: "auto",
+        threadOpenMethod: "thread/start",
+      }),
+    ).toBe(MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION);
+    for (const threadOpenMethod of ["thread/resume", "thread/fork"] as const) {
+      expect(
+        resolveCodexThreadOpenMinimumVersion({
+          runtimeMode: "full-access",
+          threadOpenMethod,
+        }),
+      ).toBe(MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION);
+      expect(resolveCodexThreadOpenMinimumVersion({ runtimeMode: "auto", threadOpenMethod })).toBe(
+        MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION,
+      );
+    }
+  });
+});
+
+describe("shouldWarnCodexFreshStartWithoutResume", () => {
+  it("warns only when a previously bound thread is opened with thread/start", () => {
+    expect(
+      shouldWarnCodexFreshStartWithoutResume({
+        threadOpenMethod: "thread/start",
+        previouslyBound: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldWarnCodexFreshStartWithoutResume({
+        threadOpenMethod: "thread/start",
+        previouslyBound: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldWarnCodexFreshStartWithoutResume({
+        threadOpenMethod: "thread/resume",
+        previouslyBound: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("formatCodexThreadResumeError", () => {
+  it("explains how to resolve an active writer conflict", () => {
+    const formatted = formatCodexThreadResumeError(
+      new Error("thread/resume failed: thread external-thread already has an active writer"),
+      "external-thread",
+    );
+
+    expect(formatted.message).toBe(
+      "Codex thread external-thread is open in another Codex client. Close that client before continuing the original thread, or import it as a copy instead.",
+    );
+  });
+
+  it("preserves unrelated resume errors", () => {
+    const original = new Error("thread/resume failed: permission denied");
+    expect(formatCodexThreadResumeError(original, "external-thread")).toBe(original);
+  });
+});
+
+describe("readCodexAccountSnapshot", () => {
+  it("disables spark for chatgpt plus accounts", () => {
+    expect(
+      readCodexAccountSnapshot({
+        type: "chatgpt",
+        email: "plus@example.com",
+        planType: "plus",
+      }),
+    ).toEqual({
+      type: "chatgpt",
+      planType: "plus",
+      sparkEnabled: false,
+    });
+  });
+
+  it("keeps spark enabled for chatgpt pro accounts", () => {
+    expect(
+      readCodexAccountSnapshot({
+        type: "chatgpt",
+        email: "pro@example.com",
+        planType: "pro",
+      }),
+    ).toEqual({
+      type: "chatgpt",
+      planType: "pro",
+      sparkEnabled: true,
+    });
+  });
+
+  it("keeps spark enabled for api key accounts", () => {
+    expect(
+      readCodexAccountSnapshot({
+        type: "apiKey",
+      }),
+    ).toEqual({
+      type: "apiKey",
+      planType: null,
+      sparkEnabled: true,
+    });
+  });
+});
+
+describe("resolveCodexModelForAccount", () => {
+  it("falls back from spark to default for unsupported chatgpt plans", () => {
+    expect(
+      resolveCodexModelForAccount("gpt-5.3-codex-spark", {
+        type: "chatgpt",
+        planType: "plus",
+        sparkEnabled: false,
+      }),
+    ).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
+  });
+
+  it("keeps spark for supported plans", () => {
+    expect(
+      resolveCodexModelForAccount("gpt-5.3-codex-spark", {
+        type: "chatgpt",
+        planType: "pro",
+        sparkEnabled: true,
+      }),
+    ).toBe("gpt-5.3-codex-spark");
+  });
+});
+
+describe("startSession", () => {
+  it("resumes a synthetic large-history thread across restart without replay or payload exposure", async () => {
+    const fake = createSyntheticCodexAppServer();
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-large-resume-"));
+    const beforeFingerprint = fake.historyFingerprint();
+    const beforeTranscript = fake.transcriptSnapshot();
+    const first = createSyntheticCodexManager(fake);
+    const second = createSyntheticCodexManager(fake);
+    const eventMessages: string[] = [];
+    first.manager.on("event", (event) => {
+      if (event.message) eventMessages.push(event.message);
+    });
+    second.manager.on("event", (event) => {
+      if (event.message) eventMessages.push(event.message);
+    });
+
+    try {
+      const fullHistoryFrame = fake.buildFullHistoryFrame(99, "provider-thread");
+      expect(fullHistoryFrame).toHaveLength(16_842_744);
+      expect(() => new CodexJsonlFramer().push(fullHistoryFrame)).toThrowError(
+        expect.objectContaining({
+          reason: "frame-too-large",
+          observedBytes: 16_842_743,
+          maxBytes: 16_777_216,
+        }),
+      );
+      const firstSession = await first.manager.startSession({
+        threadId: asThreadId("thread-synthetic-restart"),
+        provider: "codex",
+        runtimeMode: "full-access",
+        cwd,
+        resumeCursor: { threadId: "provider-thread" },
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+      });
+      expect(firstSession).toMatchObject({
+        status: "ready",
+        resumeCursor: { threadId: "provider-thread" },
+      });
+      await first.manager.sendTurn({
+        threadId: firstSession.threadId,
+        input: "Unfinished original turn",
+      });
+      await first.manager.stopSession(firstSession.threadId);
+
+      const resumedSession = await second.manager.startSession({
+        threadId: asThreadId("thread-synthetic-restart"),
+        provider: "codex",
+        runtimeMode: "full-access",
+        cwd,
+        resumeCursor: firstSession.resumeCursor,
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+      });
+      expect(resumedSession).toMatchObject({
+        status: "ready",
+        resumeCursor: { threadId: "provider-thread" },
+      });
+      expect(resumedSession.lastError).toBeUndefined();
+      await second.manager.sendTurn({
+        threadId: resumedSession.threadId,
+        input: "Follow-up after restart",
+      });
+
+      const historicalRequests = fake.requests.filter(
+        (request) => request.method === "thread/resume",
+      );
+      expect(historicalRequests).toHaveLength(2);
+      expect(historicalRequests.every((request) => request.params?.excludeTurns === true)).toBe(
+        true,
+      );
+      expect(fake.requests.filter((request) => request.method === "thread/start")).toEqual([]);
+      const turnRequests = fake.requests.filter((request) => request.method === "turn/start");
+      expect(turnRequests).toHaveLength(2);
+      const serializedTurns = JSON.stringify(turnRequests);
+      expect(serializedTurns.match(/Unfinished original turn/g)).toHaveLength(1);
+      expect(serializedTurns.match(/Follow-up after restart/g)).toHaveLength(1);
+      expect(fake.oversizedResponseCount).toBe(0);
+      expect(fake.historicalResponses).toHaveLength(2);
+      expect(fake.historicalResponses.every((response) => !("turns" in response.thread))).toBe(
+        true,
+      );
+      expect(
+        Buffer.byteLength(JSON.stringify({ id: 1, result: fake.historicalResponses[0] }) + "\n"),
+      ).toBeLessThan(16_777_216);
+      expect(fake.historyFingerprint()).toBe(beforeFingerprint);
+      expect(fake.transcriptSnapshot()).toEqual(beforeTranscript);
+      expect(fake.transcriptSnapshot().map((entry) => entry.role)).toEqual(["user", "assistant"]);
+      expect(eventMessages.join("\n")).not.toContain(fake.historySentinel);
+      expect(JSON.stringify(fake.requests)).not.toContain(fake.historySentinel);
+      expect(first.teardownProcessTree).toHaveBeenCalledTimes(1);
+    } finally {
+      await first.manager.stopAll();
+      await second.manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("forks a synthetic large-history thread with a metadata-only response", async () => {
+    const fake = createSyntheticCodexAppServer();
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-large-fork-"));
+    const { manager } = createSyntheticCodexManager(fake);
+
+    try {
+      const session = await manager.startSession({
+        threadId: asThreadId("thread-synthetic-fork"),
+        provider: "codex",
+        runtimeMode: "auto",
+        cwd,
+        forkSourceResumeCursor: { threadId: "provider-source-thread" },
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+      });
+
+      expect(session).toMatchObject({
+        status: "ready",
+        resumeCursor: { threadId: "provider-source-thread-forked" },
+      });
+      expect(fake.requests.filter((request) => request.method === "thread/fork")).toEqual([
+        expect.objectContaining({
+          params: expect.objectContaining({
+            threadId: "provider-source-thread",
+            excludeTurns: true,
+          }),
+        }),
+      ]);
+      expect(fake.oversizedResponseCount).toBe(0);
+    } finally {
+      await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the oversized resume error primary through start failure, exit, and repeated stop", async () => {
+    const fake = createSyntheticCodexAppServer({ forceFullHistoryResponse: true });
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-root-cause-"));
+    const { manager, teardownProcessTree } = createSyntheticCodexManager(fake);
+    const events: Array<{ kind: string; method: string; message?: string }> = [];
+    manager.on("event", (event) => {
+      events.push({
+        kind: event.kind,
+        method: event.method,
+        ...(event.message ? { message: event.message } : {}),
+      });
+    });
+    const expectedMessage =
+      "Codex app-server JSONL frame exceeded its byte limit (16842743/16777216). Operation: thread/resume.";
+
+    try {
+      const startError = await manager
+        .startSession({
+          threadId: asThreadId("thread-synthetic-root-cause"),
+          provider: "codex",
+          runtimeMode: "full-access",
+          cwd,
+          resumeCursor: { threadId: "provider-thread" },
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+        })
+        .catch((error: unknown) => error);
+      expect(startError).toBeInstanceOf(Error);
+      expect(startError).toMatchObject({
+        message: expectedMessage,
+        cause: expect.objectContaining({
+          message: "Codex app-server JSONL frame exceeded its byte limit (16842743/16777216).",
+        }),
+      });
+
+      const errorSurface: string[] = [];
+      const seenErrors = new Set<Error>();
+      let currentError: unknown = startError;
+      while (currentError instanceof Error && !seenErrors.has(currentError)) {
+        seenErrors.add(currentError);
+        errorSurface.push(currentError.message);
+        currentError = currentError.cause;
+      }
+      expect(errorSurface.join("\n")).not.toContain(fake.historySentinel);
+
+      expect(fake.oversizedResponseCount).toBe(1);
+      expect(events.filter((event) => event.kind === "error")).toEqual([
+        {
+          kind: "error",
+          method: "protocol/transportError",
+          message: expectedMessage,
+        },
+      ]);
+      expect(events.some((event) => event.message?.includes("Session stopped before"))).toBe(false);
+      expect(events.map((event) => event.message).join("\n")).not.toContain(fake.historySentinel);
+      expect(teardownProcessTree).toHaveBeenCalledTimes(1);
+      expect(manager.hasSession(asThreadId("thread-synthetic-root-cause"))).toBe(false);
+
+      fake.children[0]?.emit("exit", 1, null);
+      await manager.stopSession(asThreadId("thread-synthetic-root-cause"));
+      expect(events.filter((event) => event.kind === "error")).toHaveLength(1);
+      expect(teardownProcessTree).toHaveBeenCalledTimes(1);
+    } finally {
+      await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps failed fork cleanup visible after an oversized historical response", async () => {
+    const fake = createSyntheticCodexAppServer({ forceFullHistoryResponse: true });
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-fork-cleanup-"));
+    const { manager, teardownProcessTree } = createSyntheticCodexManager(fake);
+    const threadId = asThreadId("thread-synthetic-fork-cleanup");
+    teardownProcessTree
+      .mockRejectedValueOnce(new Error("rootExited=false; surviving fork process remains"))
+      .mockResolvedValueOnce({
+        escalated: true,
+        signalErrors: [],
+      });
+
+    try {
+      const error = await manager
+        .forkThread({
+          sourceThreadId: asThreadId("thread-synthetic-fork-source"),
+          sourceResumeCursor: { threadId: "provider-source-thread" },
+          threadId,
+          runtimeMode: "full-access",
+          cwd,
+        })
+        .catch((error: unknown) => error);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({
+        message: expect.stringContaining("Failed to prove Codex app-server process-tree exit"),
+      });
+      expect(fake.oversizedResponseCount).toBe(1);
+      expect(manager.hasSession(threadId)).toBe(false);
+      expect(
+        (
+          manager as unknown as {
+            sessions: Map<ThreadId, { terminalFailure?: { message: string } }>;
+          }
+        ).sessions.get(threadId)?.terminalFailure?.message,
+      ).toBe(
+        "Codex app-server JSONL frame exceeded its byte limit (16842743/16777216). Operation: thread/fork.",
+      );
+    } finally {
+      await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+    expect(teardownProcessTree).toHaveBeenCalledTimes(2);
+  });
+
+  it("emits session/started after any successful thread open", () => {
+    const manager = new CodexAppServerManager();
+    const methods: string[] = [];
+    manager.on("event", (event) => {
+      methods.push(event.method);
+    });
+    const context = {
+      session: {
+        provider: "codex" as const,
+        status: "connecting" as const,
+        threadId: asThreadId("thread-1"),
+        runtimeMode: "full-access" as const,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        resumeCursor: undefined as unknown,
+      },
+    };
+
+    for (const threadOpenMethod of ["thread/start", "thread/resume", "thread/fork"] as const) {
+      methods.length = 0;
+      (
+        manager as unknown as {
+          markSessionReadyAfterThreadOpen: (
+            context: unknown,
+            input: { threadOpenMethod: string; providerThreadId: string },
+          ) => void;
+        }
+      ).markSessionReadyAfterThreadOpen(context, {
+        threadOpenMethod,
+        providerThreadId: "native-thread-1",
+      });
+      expect(methods).toEqual(["session/threadOpenResolved", "session/ready", "session/started"]);
+      expect(context.session.status).toBe("ready");
+      expect(context.session.resumeCursor).toEqual({ threadId: "native-thread-1" });
+    }
+  });
+
+  it("enables Codex experimental api capabilities during initialize", () => {
+    expect(buildCodexInitializeParams()).toEqual({
+      clientInfo: {
+        name: "synara_desktop",
+        title: "Synara Desktop",
+        version: "0.1.0",
+      },
+      capabilities: {
+        experimentalApi: true,
+      },
+    });
+  });
+
+  it("creates the isolated scratch workspace inside the configured root", () => {
+    const temporary = mkdtempSync(path.join(os.tmpdir(), "synara-codex-scratch-test-"));
+    try {
+      const workspaceRoot = path.join(temporary, "synara-codex-workspaces");
+      const cwd = ensureIsolatedScratchWorkspace(asThreadId("thread-1"), workspaceRoot);
+      expect(path.dirname(cwd)).toBe(workspaceRoot);
+      expect(path.basename(cwd)).toMatch(/^thread-1-/);
+      expect(lstatSync(cwd).isDirectory()).toBe(true);
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a missing project working directory instead of a missing Codex CLI", () => {
+    const missingCwd = path.join(os.tmpdir(), `synara-missing-cwd-${randomUUID()}`, "old-project");
+    expect(() => assertCodexWorkingDirectoryExists(missingCwd)).toThrow(
+      formatMissingCodexWorkingDirectoryError(missingCwd),
+    );
+    expect(() => assertCodexWorkingDirectoryExists(missingCwd)).toThrow(
+      /Relocate or reconnect the project/,
+    );
+    expect(formatMissingCodexWorkingDirectoryError(missingCwd)).not.toMatch(
+      /not installed|not executable/i,
+    );
+  });
+
+  it("accepts an existing project working directory", () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-existing-cwd-"));
+    try {
+      expect(() => assertCodexWorkingDirectoryExists(cwd)).not.toThrow();
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("fails session start with missing-cwd guidance instead of missing Codex CLI", async () => {
+    const manager = new CodexAppServerManager();
+    const events: Array<{ method: string; kind: string; message?: string }> = [];
+    manager.on("event", (event) => {
+      events.push({
+        method: event.method,
+        kind: event.kind,
+        ...(event.message ? { message: event.message } : {}),
+      });
+    });
+    const missingCwd = path.join(
+      os.tmpdir(),
+      `synara-missing-session-cwd-${randomUUID()}`,
+      "old-project",
+    );
+
+    try {
+      await expect(
+        manager.startSession({
+          threadId: asThreadId("thread-missing-cwd"),
+          provider: "codex",
+          runtimeMode: "full-access",
+          cwd: missingCwd,
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+          providerOptions: {
+            codex: {
+              binaryPath: process.execPath,
+            },
+          },
+        }),
+      ).rejects.toThrow(formatMissingCodexWorkingDirectoryError(missingCwd));
+      expect(events).toEqual([
+        {
+          method: "session/startFailed",
+          kind: "error",
+          message: formatMissingCodexWorkingDirectoryError(missingCwd),
+        },
+      ]);
+      expect(events[0]?.message).not.toMatch(/not installed|not executable/i);
+    } finally {
+      await manager.stopAll();
+    }
+  });
+
+  it("fails fast with an upgrade message when codex is below the minimum supported version", async () => {
+    const manager = new CodexAppServerManager();
+    const events: Array<{ method: string; kind: string; message?: string }> = [];
+    manager.on("event", (event) => {
+      events.push({
+        method: event.method,
+        kind: event.kind,
+        ...(event.message ? { message: event.message } : {}),
+      });
+    });
+
+    const versionCheck = vi
+      .spyOn(
+        manager as unknown as {
+          assertSupportedCodexCliVersion: (input: {
+            binaryPath: string;
+            cwd: string;
+            homePath?: string;
+          }) => void;
+        },
+        "assertSupportedCodexCliVersion",
+      )
+      .mockImplementation(() => {
+        throw new Error(
+          "Codex CLI v0.36.0 is too old for Synara. Upgrade to v0.37.0 or newer and restart Synara.",
+        );
+      });
+
+    try {
+      await expect(
+        manager.startSession({
+          threadId: asThreadId("thread-1"),
+          provider: "codex",
+          runtimeMode: "full-access",
+          cwd: process.cwd(),
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+        }),
+      ).rejects.toThrow(
+        "Codex CLI v0.36.0 is too old for Synara. Upgrade to v0.37.0 or newer and restart Synara.",
+      );
+      expect(versionCheck).toHaveBeenCalledTimes(1);
+      expect(events).toEqual([
+        {
+          method: "session/startFailed",
+          kind: "error",
+          message:
+            "Codex CLI v0.36.0 is too old for Synara. Upgrade to v0.37.0 or newer and restart Synara.",
+        },
+      ]);
+    } finally {
+      versionCheck.mockRestore();
+      await manager.stopAll();
+    }
+  });
+
+  it("requires a Codex CLI version with AI approval-review support for auto mode", async () => {
+    const manager = new CodexAppServerManager();
+    const versionCheck = vi
+      .spyOn(
+        manager as unknown as {
+          assertSupportedCodexCliVersion: (input: {
+            binaryPath: string;
+            cwd: string;
+            homePath?: string;
+            minimumVersion?: string;
+          }) => void;
+        },
+        "assertSupportedCodexCliVersion",
+      )
+      .mockImplementation((input) => {
+        expect(input.minimumVersion).toBe(MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION);
+        throw new Error("Codex Auto version gate");
+      });
+
+    try {
+      await expect(
+        manager.startSession({
+          threadId: asThreadId("thread-auto-version"),
+          provider: "codex",
+          runtimeMode: "auto",
+          cwd: process.cwd(),
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+        }),
+      ).rejects.toThrow("Codex Auto version gate");
+      expect(versionCheck).toHaveBeenCalledTimes(1);
+    } finally {
+      versionCheck.mockRestore();
+      await manager.stopAll();
+    }
+  });
+
+  it("requires excludeTurns support before spawning a resumed Codex session", async () => {
+    const spawnAppServer = vi.fn(() => {
+      throw new Error("Version gate must run before spawning Codex");
+    });
+    const manager = new CodexAppServerManager(undefined, { spawnAppServer });
+    const versionCheck = vi
+      .spyOn(
+        manager as unknown as {
+          assertSupportedCodexCliVersion: (input: {
+            binaryPath: string;
+            cwd: string;
+            homePath?: string;
+            minimumVersion?: string;
+            minimumVersionRequirement?: string;
+          }) => void;
+        },
+        "assertSupportedCodexCliVersion",
+      )
+      .mockImplementation((input) => {
+        expect(input.minimumVersion).toBe(MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION);
+        expect(input.minimumVersionRequirement).toMatch(/resume|fork/i);
+        throw new Error("Codex excludeTurns version gate");
+      });
+
+    try {
+      await expect(
+        manager.startSession({
+          threadId: asThreadId("thread-resume-version"),
+          provider: "codex",
+          runtimeMode: "full-access",
+          resumeCursor: { threadId: "provider-thread" },
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+        }),
+      ).rejects.toThrow("Codex excludeTurns version gate");
+      expect(versionCheck).toHaveBeenCalledTimes(1);
+      expect(spawnAppServer).not.toHaveBeenCalled();
+    } finally {
+      versionCheck.mockRestore();
+      await manager.stopAll();
+    }
+  });
+
+  it("requires excludeTurns support before spawning a forked Codex session", async () => {
+    const spawnAppServer = vi.fn(() => {
+      throw new Error("Version gate must run before spawning Codex");
+    });
+    const manager = new CodexAppServerManager(undefined, { spawnAppServer });
+    const versionCheck = vi
+      .spyOn(
+        manager as unknown as {
+          assertSupportedCodexCliVersion: (input: {
+            binaryPath: string;
+            cwd: string;
+            homePath?: string;
+            minimumVersion?: string;
+            minimumVersionRequirement?: string;
+          }) => void;
+        },
+        "assertSupportedCodexCliVersion",
+      )
+      .mockImplementation((input) => {
+        expect(input.minimumVersion).toBe(MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION);
+        expect(input.minimumVersionRequirement).toMatch(/resume|fork/i);
+        throw new Error("Codex fork excludeTurns version gate");
+      });
+
+    try {
+      await expect(
+        manager.forkThread({
+          sourceThreadId: asThreadId("source-thread"),
+          sourceResumeCursor: { threadId: "provider-source-thread" },
+          threadId: asThreadId("thread-fork-version"),
+          runtimeMode: "full-access",
+        }),
+      ).rejects.toThrow("Codex fork excludeTurns version gate");
+      expect(versionCheck).toHaveBeenCalledTimes(1);
+      expect(spawnAppServer).not.toHaveBeenCalled();
+    } finally {
+      versionCheck.mockRestore();
+      await manager.stopAll();
+    }
+  });
+});
+
+describe("sendTurn", () => {
+  it("clears stale collaboration receiver routing before a new turn", async () => {
+    const { manager, context } = createSendTurnHarness();
+    context.collabReceiverTurns.set("reused-child", "old-turn");
+    context.collabReceiverParents.set("reused-child", "old-parent");
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Start the next turn",
+    });
+
+    expect(context.collabReceiverTurns.size).toBe(0);
+    expect(context.collabReceiverParents.size).toBe(0);
+  });
+
+  it("sends text and image user input items to turn/start", async () => {
+    const { manager, context, requireSession, sendRequest, updateSession } =
+      createSendTurnHarness();
+
+    const result = await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Inspect this image",
+      attachments: [
+        {
+          type: "image",
+          url: "data:image/png;base64,AAAA",
+        },
+      ],
+      model: "gpt-5.3",
+      serviceTier: "fast",
+      effort: "high",
+    });
+
+    expect(result).toEqual({
+      threadId: "thread_1",
+      turnId: "turn_1",
+      resumeCursor: { threadId: "thread_1" },
+    });
+    expect(requireSession).toHaveBeenCalledWith("thread_1");
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...fullAccessTurnOverrides,
+      summary: "auto",
+      input: [
+        {
+          type: "text",
+          text: "Inspect this image",
+          text_elements: [],
+        },
+        {
+          type: "image",
+          url: "data:image/png;base64,AAAA",
+        },
+      ],
+      model: "gpt-5.3-codex",
+      serviceTier: "fast",
+      effort: "high",
+    });
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      status: "running",
+      activeTurnId: "turn_1",
+      resumeCursor: { threadId: "thread_1" },
+    });
+  });
+
+  it("uses approval-required Codex overrides on turn/start", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness("approval-required");
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Check this before changing files",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...approvalRequiredTurnOverrides,
+      summary: "auto",
+      input: [
+        {
+          type: "text",
+          text: "Check this before changing files",
+          text_elements: [],
+        },
+      ],
+      model: "gpt-5.3-codex",
+    });
+  });
+
+  it("routes Codex approvals through the AI reviewer in auto mode", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness("auto");
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Make the routine workspace changes",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...autoTurnOverrides,
+      summary: "auto",
+      input: [
+        {
+          type: "text",
+          text: "Make the routine workspace changes",
+          text_elements: [],
+        },
+      ],
+      model: "gpt-5.3-codex",
+    });
+  });
+
+  it("passes Codex plan mode as a collaboration preset on turn/start", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Plan the work",
+      interactionMode: "plan",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...fullAccessTurnOverrides,
+      summary: "auto",
+      input: [
+        {
+          type: "text",
+          text: "Plan the work",
+          text_elements: [],
+        },
+      ],
+      model: "gpt-5.3-codex",
+      collaborationMode: {
+        mode: "plan",
+        settings: {
+          model: "gpt-5.3-codex",
+          reasoning_effort: "medium",
+          developer_instructions: CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+        },
+      },
+    });
+  });
+
+  it("passes Codex default mode as a collaboration preset on turn/start", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "PLEASE IMPLEMENT THIS PLAN:\n- step 1",
+      interactionMode: "default",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...fullAccessTurnOverrides,
+      summary: "auto",
+      input: [
+        {
+          type: "text",
+          text: "PLEASE IMPLEMENT THIS PLAN:\n- step 1",
+          text_elements: [],
+        },
+      ],
+      model: "gpt-5.3-codex",
+      collaborationMode: {
+        mode: "default",
+        settings: {
+          model: "gpt-5.3-codex",
+          reasoning_effort: "medium",
+          developer_instructions: CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+        },
+      },
+    });
+  });
+
+  it("maps Debug to native default collaboration while preserving full-access overrides", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Investigate the crash",
+      interactionMode: "debug",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...fullAccessTurnOverrides,
+      summary: "auto",
+      input: [
+        {
+          type: "text",
+          text: "Investigate the crash",
+          text_elements: [],
+        },
+      ],
+      model: "gpt-5.3-codex",
+      collaborationMode: {
+        mode: "default",
+        settings: {
+          model: "gpt-5.3-codex",
+          reasoning_effort: "medium",
+          developer_instructions: CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+        },
+      },
+    });
+  });
+
+  it("preserves auto-review overrides in Debug mode", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness("auto");
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Investigate and fix the flaky test",
+      interactionMode: "debug",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(
+      context,
+      "turn/start",
+      expect.objectContaining({
+        ...autoTurnOverrides,
+        collaborationMode: expect.objectContaining({ mode: "default" }),
+      }),
+    );
+  });
+
+  it("keeps the session model when interaction mode is set without an explicit model", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+    context.session.model = "gpt-5.2-codex";
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Plan this with my current session model",
+      interactionMode: "plan",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...fullAccessTurnOverrides,
+      summary: "auto",
+      input: [
+        {
+          type: "text",
+          text: "Plan this with my current session model",
+          text_elements: [],
+        },
+      ],
+      model: "gpt-5.2-codex",
+      collaborationMode: {
+        mode: "plan",
+        settings: {
+          model: "gpt-5.2-codex",
+          reasoning_effort: "medium",
+          developer_instructions: CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+        },
+      },
+    });
+  });
+
+  it("starts a fresh turn even when the session currently reports running", async () => {
+    const { manager, context, sendRequest, updateSession } = createSendTurnHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_active";
+    sendRequest.mockResolvedValueOnce({
+      turn: { id: "turn_next" },
+    });
+
+    const result = await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Focus on the failing tests first",
+      attachments: [
+        {
+          type: "image",
+          url: "data:image/png;base64,AAAA",
+        },
+      ],
+      model: "gpt-5.4",
+      serviceTier: "fast",
+      effort: "high",
+      interactionMode: "plan",
+    });
+
+    expect(result).toEqual({
+      threadId: "thread_1",
+      turnId: "turn_next",
+      resumeCursor: { threadId: "thread_1" },
+    });
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...fullAccessTurnOverrides,
+      summary: "auto",
+      input: [
+        {
+          type: "text",
+          text: "Focus on the failing tests first",
+          text_elements: [],
+        },
+        {
+          type: "image",
+          url: "data:image/png;base64,AAAA",
+        },
+      ],
+      model: "gpt-5.4",
+      serviceTier: "fast",
+      effort: "high",
+      collaborationMode: {
+        mode: "plan",
+        settings: {
+          model: "gpt-5.4",
+          reasoning_effort: "high",
+          developer_instructions: CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+        },
+      },
+    });
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      status: "running",
+      activeTurnId: "turn_next",
+      resumeCursor: { threadId: "thread_1" },
+    });
+  });
+
+  it("rejects empty turn input", async () => {
+    const { manager } = createSendTurnHarness();
+
+    await expect(
+      manager.sendTurn({
+        threadId: asThreadId("thread_1"),
+      }),
+    ).rejects.toThrow("Turn input must include text or attachments.");
+  });
+
+  it("disables reasoning summaries for Codex Spark", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Inspect the repository",
+      model: "gpt-5.3-codex-spark",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(
+      context,
+      "turn/start",
+      expect.objectContaining({
+        model: "gpt-5.3-codex-spark",
+        summary: "none",
+      }),
+    );
+  });
+});
+
+describe("steerTurn", () => {
+  it("steers the active Codex turn when the session is already running", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_active";
+    context.collabReceiverTurns.set("child_provider_1", "turn_active");
+    sendRequest.mockResolvedValueOnce({
+      turnId: "turn_active",
+    });
+
+    const result = await manager.steerTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Keep going",
+    });
+
+    expect(result).toEqual({
+      threadId: "thread_1",
+      turnId: "turn_active",
+      resumeCursor: { threadId: "thread_1" },
+    });
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/steer", {
+      threadId: "thread_1",
+      input: [
+        {
+          type: "text",
+          text: "Keep going",
+          text_elements: [],
+        },
+      ],
+      expectedTurnId: "turn_active",
+    });
+    expect(context.collabReceiverTurns.get("child_provider_1")).toBe("turn_active");
+  });
+
+  it("requires turn/steer to return the active turn id", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_active";
+    sendRequest.mockResolvedValueOnce({});
+
+    await expect(
+      manager.steerTurn({
+        threadId: asThreadId("thread_1"),
+        input: "Keep going",
+      }),
+    ).rejects.toThrow("turn/steer response did not include a turn id.");
+  });
+});
+
+describe("CodexAppServerManager discovery", () => {
+  it("restarts the idle grace period after a discovery request settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        discoverySessionIdleMs: 15_000,
+      });
+      const context = {
+        discovery: true,
+        session: { cwd: "/repo" },
+        pending: new Map(),
+        pendingApprovals: new Map(),
+        pendingUserInputs: new Map(),
+        nextRequestId: 1,
+        stopping: false,
+      };
+      (
+        manager as unknown as {
+          discoverySessions: Map<string, unknown>;
+        }
+      ).discoverySessions.set("/repo", context);
+      vi.spyOn(
+        manager as unknown as {
+          writeMessage: () => Promise<void>;
+        },
+        "writeMessage",
+      ).mockResolvedValue(undefined);
+      const stopDiscoverySession = vi
+        .spyOn(
+          manager as unknown as {
+            stopDiscoverySession: (cwd: string) => Promise<void>;
+          },
+          "stopDiscoverySession",
+        )
+        .mockResolvedValue(undefined);
+
+      (
+        manager as unknown as {
+          scheduleDiscoverySessionIdleStop: (cwd: string) => void;
+        }
+      ).scheduleDiscoverySessionIdleStop("/repo");
+      const request = (
+        manager as unknown as {
+          sendRequest: (context: unknown, method: string, params: unknown) => Promise<unknown>;
+        }
+      ).sendRequest(context, "model/list", {});
+
+      await vi.advanceTimersByTimeAsync(14_999);
+      (
+        manager as unknown as {
+          handleResponse: (context: unknown, response: unknown) => void;
+        }
+      ).handleResponse(context, { id: 1, result: {} });
+      await request;
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stopDiscoverySession).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(stopDiscoverySession).toHaveBeenCalledOnce();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops an idle discovery session after its configured grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        discoverySessionIdleMs: 15_000,
+      });
+      (
+        manager as unknown as {
+          discoverySessions: Map<string, unknown>;
+        }
+      ).discoverySessions.set("/repo", {
+        stopping: false,
+        pending: new Map(),
+        pendingApprovals: new Map(),
+        pendingUserInputs: new Map(),
+      });
+      const stopDiscoverySession = vi
+        .spyOn(
+          manager as unknown as {
+            stopDiscoverySession: (cwd: string) => Promise<void>;
+          },
+          "stopDiscoverySession",
+        )
+        .mockResolvedValue(undefined);
+
+      (
+        manager as unknown as {
+          scheduleDiscoverySessionIdleStop: (cwd: string) => void;
+        }
+      ).scheduleDiscoverySessionIdleStop("/repo");
+
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(stopDiscoverySession).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stopDiscoverySession).toHaveBeenCalledOnce();
+      expect(stopDiscoverySession).toHaveBeenCalledWith("/repo");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes model/list when the shared discovery cache requests a catalog", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_1",
+        runtimeMode: "full-access",
+        model: "gpt-5.5",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+    };
+
+    vi.spyOn(
+      manager as unknown as {
+        resolveContextForDiscovery: (threadId?: string) => unknown;
+      },
+      "resolveContextForDiscovery",
+    ).mockReturnValue(context);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValueOnce({ data: [{ id: "gpt-5.4", displayName: "GPT-5.4" }] })
+      .mockResolvedValueOnce({ data: [{ id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol" }] });
+
+    await expect(manager.listModels("thread_1")).resolves.toMatchObject({
+      models: [{ slug: "gpt-5.4", name: "GPT-5.4" }],
+      source: "codex-app-server",
+      cached: false,
+    });
+    await expect(manager.listModels("thread_1")).resolves.toMatchObject({
+      models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+      source: "codex-app-server",
+      cached: false,
+    });
+    expect(sendRequest).toHaveBeenCalledTimes(2);
+    expect(sendRequest).toHaveBeenCalledWith(context, "model/list", {
+      cursor: null,
+      limit: 50,
+      includeHidden: false,
+    });
+  });
+
+  it("uses a cwd-scoped discovery session instead of an unrelated active session", async () => {
+    const manager = new CodexAppServerManager();
+    const activeContext = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_active",
+        runtimeMode: "full-access",
+        model: "gpt-5.3-codex",
+        cwd: "/repo-a",
+        resumeCursor: { threadId: "thread_active" },
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      child: {
+        killed: false,
+      },
+      output: {
+        close: vi.fn(),
+      },
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    const discoveryContext = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "__codex_discovery__:/repo-b",
+        runtimeMode: "full-access",
+        model: "gpt-5.3-codex",
+        cwd: "/repo-b",
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      child: {
+        killed: false,
+      },
+      output: {
+        close: vi.fn(),
+      },
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      nextRequestId: 1,
+      stopping: false,
+      discovery: true,
+    };
+
+    (
+      manager as unknown as {
+        sessions: Map<string, unknown>;
+      }
+    ).sessions.set("thread_active", activeContext);
+
+    const getOrCreateDiscoverySession = vi
+      .spyOn(
+        manager as unknown as {
+          getOrCreateDiscoverySession: (cwd: string) => Promise<unknown>;
+        },
+        "getOrCreateDiscoverySession",
+      )
+      .mockResolvedValue(discoveryContext);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({
+        result: {
+          skills: [],
+        },
+      });
+
+    await manager.listSkills({
+      cwd: "/repo-b",
+      threadId: "thread_missing",
+    });
+
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith("/repo-b");
+    expect(sendRequest).toHaveBeenCalledWith(discoveryContext, "skills/list", {
+      cwds: ["/repo-b"],
+    });
+  });
+
+  it("skips a dead replacement barrier in the cwd-less discovery fallback", async () => {
+    const manager = new CodexAppServerManager();
+    const deadContext = {
+      session: {
+        provider: "codex",
+        status: "closed",
+        threadId: "thread_dead",
+        runtimeMode: "full-access",
+      },
+      child: {
+        exitCode: null,
+        signalCode: null,
+        killed: true,
+        stdin: new PassThrough(),
+      },
+      stopping: true,
+    };
+    const discoveryContext = { discovery: true };
+    (
+      manager as unknown as {
+        sessions: Map<string, unknown>;
+      }
+    ).sessions.set("thread_dead", deadContext);
+    const getOrCreateDiscoverySession = vi
+      .spyOn(
+        manager as unknown as {
+          getOrCreateDiscoverySession: (cwd: string) => Promise<unknown>;
+        },
+        "getOrCreateDiscoverySession",
+      )
+      .mockResolvedValue(discoveryContext);
+
+    await expect(
+      (
+        manager as unknown as {
+          resolveContextForDiscovery: () => Promise<unknown>;
+        }
+      ).resolveContextForDiscovery(),
+    ).resolves.toBe(discoveryContext);
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(process.cwd());
+  });
+
+  it("reuses one in-flight discovery startup for concurrent callers", async () => {
+    const manager = new CodexAppServerManager();
+    const context = { discovery: true };
+    let resolveStartup!: (value: unknown) => void;
+    const startup = new Promise<unknown>((resolve) => {
+      resolveStartup = resolve;
+    });
+    const createDiscoverySession = vi
+      .spyOn(
+        manager as unknown as {
+          createDiscoverySession: (cwd: string) => Promise<unknown>;
+        },
+        "createDiscoverySession",
+      )
+      .mockReturnValue(startup);
+    const getOrCreateDiscoverySession = (
+      manager as unknown as {
+        getOrCreateDiscoverySession: (cwd: string) => Promise<unknown>;
+      }
+    ).getOrCreateDiscoverySession.bind(manager);
+
+    const first = getOrCreateDiscoverySession("/repo");
+    const second = getOrCreateDiscoverySession("/repo");
+
+    expect(createDiscoverySession).toHaveBeenCalledTimes(1);
+    resolveStartup(context);
+    await expect(Promise.all([first, second])).resolves.toEqual([context, context]);
+  });
+
+  it("waits for an in-flight discovery startup before stopAll completes", async () => {
+    const manager = new CodexAppServerManager();
+    let resolveStartup!: (value: unknown) => void;
+    const startup = new Promise<unknown>((resolve) => {
+      resolveStartup = resolve;
+    });
+    vi.spyOn(
+      manager as unknown as {
+        createDiscoverySession: (cwd: string) => Promise<unknown>;
+      },
+      "createDiscoverySession",
+    ).mockReturnValue(startup);
+    const stopDiscoverySession = vi
+      .spyOn(
+        manager as unknown as {
+          stopDiscoverySession: (cwd: string) => Promise<void>;
+        },
+        "stopDiscoverySession",
+      )
+      .mockResolvedValue(undefined);
+
+    const pendingStartup = (
+      manager as unknown as {
+        getOrCreateDiscoverySession: (cwd: string) => Promise<unknown>;
+      }
+    ).getOrCreateDiscoverySession("/repo");
+    (
+      manager as unknown as {
+        discoverySessions: Map<string, unknown>;
+      }
+    ).discoverySessions.set("/repo", { status: "connecting" });
+    const stopping = manager.stopAll();
+    await Promise.resolve();
+    expect(stopDiscoverySession).not.toHaveBeenCalled();
+
+    resolveStartup({ discovery: true });
+    await expect(Promise.all([pendingStartup, stopping])).resolves.toEqual([
+      { discovery: true },
+      undefined,
+    ]);
+    expect(stopDiscoverySession).toHaveBeenCalledWith("/repo");
+    expect(stopDiscoverySession).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses a live thread for voice auth even when the project cwd is a worktree", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_voice",
+        runtimeMode: "full-access",
+        cwd: "/provider/repo",
+      },
+      child: {
+        exitCode: null,
+        signalCode: null,
+        killed: false,
+        stdin: new PassThrough(),
+      },
+      stopping: false,
+    };
+    (
+      manager as unknown as {
+        sessions: Map<string, unknown>;
+      }
+    ).sessions.set("thread_voice", context);
+    const resolveContextForDiscovery = vi.spyOn(
+      manager as unknown as {
+        resolveContextForDiscovery: (threadId?: string, cwd?: string) => Promise<unknown>;
+      },
+      "resolveContextForDiscovery",
+    );
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({ authMethod: "chatgpt", authToken: "voice-token" });
+
+    const resolveVoiceTranscriptionAuth = (
+      manager as unknown as {
+        resolveVoiceTranscriptionAuth: (input: {
+          cwd: string;
+          threadId: string;
+          refreshToken: boolean;
+        }) => Promise<unknown>;
+      }
+    ).resolveVoiceTranscriptionAuth.bind(manager);
+    await expect(
+      resolveVoiceTranscriptionAuth({
+        cwd: "/worktrees/repo-2",
+        threadId: "thread_voice",
+        refreshToken: false,
+      }),
+    ).resolves.toEqual({ authMethod: "chatgpt", token: "voice-token" });
+    await expect(
+      resolveVoiceTranscriptionAuth({
+        cwd: "/worktrees/repo-3",
+        threadId: "thread_voice",
+        refreshToken: false,
+      }),
+    ).resolves.toEqual({ authMethod: "chatgpt", token: "voice-token" });
+    expect(resolveContextForDiscovery).not.toHaveBeenCalled();
+    expect(sendRequest).toHaveBeenCalledTimes(1);
+    expect(sendRequest).toHaveBeenCalledWith(context, "getAuthStatus", {
+      includeToken: true,
+      refreshToken: false,
+    });
+  });
+
+  it("uses discovery for voice auth while the requested thread is still connecting", async () => {
+    const manager = new CodexAppServerManager();
+    const connectingContext = {
+      session: {
+        provider: "codex",
+        status: "connecting",
+        threadId: "thread_connecting",
+        runtimeMode: "full-access",
+        cwd: "/repo",
+      },
+      child: {
+        exitCode: null,
+        signalCode: null,
+        killed: false,
+        stdin: new PassThrough(),
+      },
+      stopping: false,
+    };
+    const discoveryContext = { discovery: true };
+    (
+      manager as unknown as {
+        sessions: Map<string, unknown>;
+      }
+    ).sessions.set("thread_connecting", connectingContext);
+    const resolveContextForDiscovery = vi
+      .spyOn(
+        manager as unknown as {
+          resolveContextForDiscovery: (threadId?: string, cwd?: string) => Promise<unknown>;
+        },
+        "resolveContextForDiscovery",
+      )
+      .mockResolvedValue(discoveryContext);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({ authMethod: "chatgpt", authToken: "voice-token" });
+
+    const loadVoiceTranscriptionAuth = (
+      manager as unknown as {
+        loadVoiceTranscriptionAuth: (input: {
+          cwd: string;
+          threadId: string;
+          refreshToken: boolean;
+        }) => Promise<unknown>;
+      }
+    ).loadVoiceTranscriptionAuth.bind(manager);
+
+    await expect(
+      loadVoiceTranscriptionAuth({
+        cwd: "/repo",
+        threadId: "thread_connecting",
+        refreshToken: false,
+      }),
+    ).resolves.toEqual({ authMethod: "chatgpt", token: "voice-token" });
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith(undefined, "/repo");
+    expect(sendRequest).toHaveBeenCalledWith(discoveryContext, "getAuthStatus", {
+      includeToken: true,
+      refreshToken: false,
+    });
+    expect(sendRequest).not.toHaveBeenCalledWith(
+      connectingContext,
+      "getAuthStatus",
+      expect.anything(),
+    );
+  });
+
+  it("retries skills/list with cwd when a runtime rejects cwds", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_1",
+        runtimeMode: "full-access",
+        model: "gpt-5.3-codex",
+        resumeCursor: { threadId: "thread_1" },
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+    };
+
+    vi.spyOn(
+      manager as unknown as {
+        resolveContextForDiscovery: (threadId?: string) => unknown;
+      },
+      "resolveContextForDiscovery",
+    ).mockReturnValue(context);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockRejectedValueOnce(new Error('skills/list failed: invalid params: unknown field "cwds"'))
+      .mockResolvedValueOnce({
+        result: {
+          skills: [
+            {
+              name: "check-code",
+              path: "/Users/test/.codex/skills/check-code/SKILL.md",
+            },
+          ],
+        },
+      });
+
+    const result = await manager.listSkills({
+      cwd: "/repo",
+      threadId: "thread_1",
+    });
+
+    expect(sendRequest).toHaveBeenNthCalledWith(1, context, "skills/list", {
+      cwds: ["/repo"],
+    });
+    expect(sendRequest).toHaveBeenNthCalledWith(2, context, "skills/list", {
+      cwd: "/repo",
+    });
+    expect(result.skills).toEqual([
+      {
+        name: "check-code",
+        path: "/Users/test/.codex/skills/check-code/SKILL.md",
+        enabled: true,
+      },
+    ]);
+  });
+
+  it("wires plugin discovery through plugin/list", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_1",
+        runtimeMode: "full-access",
+        model: "gpt-5.5",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+    };
+
+    const resolveContextForDiscovery = vi
+      .spyOn(
+        manager as unknown as {
+          resolveContextForDiscovery: (threadId?: string, cwd?: string) => unknown;
+        },
+        "resolveContextForDiscovery",
+      )
+      .mockReturnValue(context);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({ result: {} });
+
+    await expect(
+      manager.listPlugins({
+        cwd: "/repo",
+        threadId: "thread_1",
+        forceRemoteSync: true,
+      }),
+    ).resolves.toMatchObject({
+      marketplaces: [],
+      source: "codex-app-server",
+      cached: false,
+    });
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1", "/repo");
+    expect(sendRequest).toHaveBeenCalledWith(context, "plugin/list", {
+      cwds: ["/repo"],
+      forceRemoteSync: true,
+    });
+  });
+
+  it("wires plugin details through plugin/read", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_1",
+        runtimeMode: "full-access",
+        model: "gpt-5.5",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+    };
+
+    vi.spyOn(
+      manager as unknown as {
+        resolveContextForDiscovery: (threadId?: string, cwd?: string) => unknown;
+      },
+      "resolveContextForDiscovery",
+    ).mockReturnValue(context);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({
+        result: {
+          plugin: {
+            marketplaceName: "openai-curated",
+            marketplacePath: "/marketplace.json",
+            summary: {
+              id: "plugin/github",
+              name: "github",
+              source: { path: "/plugins/github" },
+              installed: true,
+              enabled: true,
+              installPolicy: "INSTALLED_BY_DEFAULT",
+              authPolicy: "ON_USE",
+            },
+          },
+        },
+      });
+
+    await expect(
+      manager.readPlugin({
+        marketplacePath: "/marketplace.json",
+        pluginName: "github",
+      }),
+    ).resolves.toMatchObject({
+      plugin: {
+        marketplaceName: "openai-curated",
+        summary: { id: "plugin/github" },
+      },
+      source: "codex-app-server",
+      cached: false,
+    });
+    expect(sendRequest).toHaveBeenCalledWith(context, "plugin/read", {
+      marketplacePath: "/marketplace.json",
+      pluginName: "github",
+    });
+  });
+});
+
+describe("thread checkpoint control", () => {
+  it("uses the requested binary and archive for stopped external history reads", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    const discovery = vi
+      .spyOn(
+        manager as unknown as {
+          getOrCreateDiscoverySession: (...args: unknown[]) => Promise<unknown>;
+        },
+        "getOrCreateDiscoverySession",
+      )
+      .mockResolvedValue(context);
+    const providerOptions = { codex: { binaryPath: "/custom/codex", homePath: "/custom/archive" } };
+    sendRequest.mockResolvedValue({ thread: { id: "external", turns: [] } });
+    await manager.readExternalThread({
+      externalThreadId: "external",
+      cwd: "/repo",
+      providerOptions,
+    });
+    expect(discovery).toHaveBeenCalledWith("/repo", providerOptions);
+  });
+  it("does not spawn a fork runtime after import cancellation during version discovery", async () => {
+    const { manager, sendRequest } = createThreadControlHarness();
+    let releaseVersionCheck!: () => void;
+    let versionCheckStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      versionCheckStarted = resolve;
+    });
+    vi.spyOn(
+      manager as unknown as { assertSupportedCodexCliVersion: () => Promise<void> },
+      "assertSupportedCodexCliVersion",
+    ).mockImplementation(() => {
+      versionCheckStarted();
+      return new Promise<void>((resolve) => {
+        releaseVersionCheck = resolve;
+      });
+    });
+    const controller = new AbortController();
+    const copied = manager.forkThread(
+      {
+        sourceThreadId: asThreadId("source"),
+        threadId: asThreadId("target"),
+        sourceResumeCursor: { threadId: "source" },
+        cwd: os.tmpdir(),
+        runtimeMode: "full-access",
+      },
+      controller.signal,
+    );
+    const failure = expect(copied).rejects.toThrow();
+    await started;
+    controller.abort();
+    releaseVersionCheck();
+    await failure;
+    expect(manager.listSessions()).toEqual([]);
+    expect(sendRequest).not.toHaveBeenCalled();
+  });
+  it("reads full paginated history and preserves native turn timestamps", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    sendRequest
+      .mockRejectedValueOnce(
+        new Error("includeTurns is not supported for paginated threads; use thread/turns/list"),
+      )
+      .mockResolvedValueOnce({ thread: { id: "thread_1", cwd: "/repo/source" } })
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: "turn_1",
+            itemsView: "full",
+            status: "completed",
+            startedAt: 1700000000,
+            completedAt: 1700000005,
+            items: [{ type: "userMessage" }],
+          },
+        ],
+        nextCursor: "page-2",
+      })
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: "turn_2",
+            itemsView: "full",
+            status: "completed",
+            items: [{ type: "agentMessage", text: "done" }],
+          },
+        ],
+        nextCursor: null,
+      });
+    const result = await manager.readThread(asThreadId("thread_1"));
+    expect(result.cwd).toBe("/repo/source");
+    expect(result.turns).toEqual([
+      {
+        id: "turn_1",
+        status: "completed",
+        startedAt: 1700000000,
+        completedAt: 1700000005,
+        items: [{ type: "userMessage" }],
+      },
+      { id: "turn_2", status: "completed", items: [{ type: "agentMessage", text: "done" }] },
+    ]);
+    expect(sendRequest).toHaveBeenNthCalledWith(4, context, "thread/turns/list", {
+      threadId: "thread_1",
+      itemsView: "full",
+      sortDirection: "asc",
+      limit: 100,
+      cursor: "page-2",
+    });
+  });
+
+  it("rejects repeated native history cursors instead of looping or truncating silently", async () => {
+    const { manager, sendRequest } = createThreadControlHarness();
+    sendRequest
+      .mockRejectedValueOnce(new Error("full history is unavailable for paginated threads"))
+      .mockResolvedValueOnce({ thread: { id: "thread_1" } })
+      .mockResolvedValue({ data: [], nextCursor: "same-page" });
+    await expect(manager.readThread(asThreadId("thread_1"))).rejects.toThrow("repeated");
+    expect(sendRequest).toHaveBeenCalledTimes(4);
+  });
+
+  it("reads thread turns from thread/read", async () => {
+    const { manager, context, requireSession, sendRequest } = createThreadControlHarness();
+    sendRequest.mockResolvedValue({
+      thread: {
+        id: "thread_1",
+        turns: [
+          {
+            id: "turn_1",
+            items: [{ type: "userMessage", content: [{ type: "text", text: "hello" }] }],
+          },
+        ],
+      },
+    });
+
+    const result = await manager.readThread(asThreadId("thread_1"));
+
+    expect(requireSession).toHaveBeenCalledWith("thread_1");
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/read", {
+      threadId: "thread_1",
+      includeTurns: true,
+    });
+    expect(result).toEqual({
+      threadId: "thread_1",
+      cwd: null,
+      turns: [
+        {
+          id: "turn_1",
+          items: [{ type: "userMessage", content: [{ type: "text", text: "hello" }] }],
+        },
+      ],
+    });
+  });
+
+  it("reads thread turns from flat thread/read responses", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    sendRequest.mockResolvedValue({
+      threadId: "thread_1",
+      turns: [
+        {
+          id: "turn_1",
+          items: [{ type: "userMessage", content: [{ type: "text", text: "hello" }] }],
+        },
+      ],
+    });
+
+    const result = await manager.readThread(asThreadId("thread_1"));
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/read", {
+      threadId: "thread_1",
+      includeTurns: true,
+    });
+    expect(result).toEqual({
+      threadId: "thread_1",
+      cwd: null,
+      turns: [
+        {
+          id: "turn_1",
+          items: [{ type: "userMessage", content: [{ type: "text", text: "hello" }] }],
+        },
+      ],
+    });
+  });
+
+  it.each([
+    "ordinary",
+    "completed",
+    "interrupted",
+    "failed",
+    "empty",
+    "inProgress",
+    "legacy-completed",
+    "legacy-unknown",
+    "legacy-invalid-date",
+  ])(
+    "forks a provider thread with an explicitly selected Standard tier (%s)",
+    async (sourceStatus) => {
+      const requireCompletedSource = sourceStatus !== "ordinary";
+      const homePath = mkdtempSync(path.join(os.tmpdir(), "synara-codex-fork-tier-"));
+      writeFileSync(path.join(homePath, "app-server"), "process.stdin.resume();\n");
+      const previousSynaraHome = process.env.SYNARA_HOME;
+      process.env.SYNARA_HOME = path.join(homePath, "synara-home");
+      const { manager, sendRequest } = createThreadControlHarness();
+      vi.spyOn(
+        manager as unknown as { assertSupportedCodexCliVersion: () => Promise<void> },
+        "assertSupportedCodexCliVersion",
+      ).mockResolvedValue(undefined);
+      sendRequest.mockResolvedValue({
+        thread: {
+          id: "thread_forked",
+          turns:
+            sourceStatus === "empty"
+              ? []
+              : [
+                  {
+                    id: "completed-source-turn",
+                    ...(sourceStatus.startsWith("legacy-")
+                      ? {}
+                      : { status: sourceStatus === "ordinary" ? "completed" : sourceStatus }),
+                    ...(sourceStatus === "legacy-completed" ? { completedAt: 1700000005 } : {}),
+                    ...(sourceStatus === "legacy-invalid-date" ? { completedAt: "invalid" } : {}),
+                    items: [],
+                  },
+                ],
+        },
+      });
+
+      try {
+        const fork = manager.forkThread({
+          sourceThreadId: asThreadId("thread_1"),
+          sourceResumeCursor: {
+            threadId: "thread_1",
+          },
+          threadId: asThreadId("thread_2"),
+          lifecycleGeneration: "import-generation",
+          requireCompletedSource,
+          cwd: homePath,
+          providerOptions: { codex: { binaryPath: process.execPath, homePath } },
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.4",
+            options: { fastMode: false },
+          },
+          runtimeMode: "full-access",
+        });
+        if (["inProgress", "legacy-unknown", "legacy-invalid-date"].includes(sourceStatus)) {
+          await expect(fork).rejects.toThrow("finish its turn");
+          expect(sendRequest.mock.calls.some(([, method]) => method === "thread/fork")).toBe(false);
+          return;
+        }
+        const result = await fork;
+
+        const forkRequest = sendRequest.mock.calls.find(([, method]) => method === "thread/fork");
+        expect(forkRequest?.[2]).toMatchObject({
+          threadId: "thread_1",
+          deferGoalContinuation: true,
+          serviceTier: "default",
+          approvalPolicy: "never",
+          sandbox: "danger-full-access",
+        });
+        expect(forkRequest?.[2]).toMatchObject(
+          requireCompletedSource
+            ? {
+                ...(sourceStatus === "empty" ? {} : { lastTurnId: "completed-source-turn" }),
+                excludeTurns: true,
+              }
+            : {},
+        );
+        expect(forkRequest?.[0]).toMatchObject({ lifecycleGeneration: "import-generation" });
+        expect(
+          sendRequest.mock.calls.some(
+            ([, method]) => method === "thread/resume" || method === "turn/start",
+          ),
+        ).toBe(false);
+        expect(result).toEqual({
+          threadId: "thread_2",
+          resumeCursor: {
+            threadId: "thread_forked",
+          },
+        });
+      } finally {
+        await manager.stopAll();
+        if (previousSynaraHome === undefined) {
+          delete process.env.SYNARA_HOME;
+        } else {
+          process.env.SYNARA_HOME = previousSynaraHome;
+        }
+        rmSync(homePath, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rolls back turns via thread/rollback and resets session running state", async () => {
+    const { manager, context, sendRequest, updateSession } = createThreadControlHarness();
+    sendRequest.mockResolvedValue({
+      thread: {
+        id: "thread_1",
+        turns: [],
+      },
+    });
+
+    const result = await manager.rollbackThread(asThreadId("thread_1"), 2);
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/rollback", {
+      threadId: "thread_1",
+      numTurns: 2,
+    });
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      status: "ready",
+      activeTurnId: undefined,
+    });
+    expect(result).toEqual({
+      threadId: "thread_1",
+      cwd: null,
+      turns: [],
+    });
+  });
+
+  it("retries review interrupt with the latest review turn from thread/read after timeout", async () => {
+    const { manager, context, sendRequest, updateSession } = createThreadControlHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_review_old";
+    context.reviewTurnIds.add("turn_review_old");
+
+    sendRequest
+      .mockRejectedValueOnce(new Error("Timed out waiting for turn/interrupt."))
+      .mockResolvedValueOnce({
+        thread: {
+          id: "thread_1",
+          turns: [
+            {
+              id: "turn_review_new",
+              items: [{ type: "enteredReviewMode" }],
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({});
+
+    await manager.interruptTurn(asThreadId("thread_1"));
+
+    expect(sendRequest).toHaveBeenNthCalledWith(1, context, "turn/interrupt", {
+      threadId: "thread_1",
+      turnId: "turn_review_old",
+    });
+    expect(sendRequest).toHaveBeenNthCalledWith(2, context, "thread/read", {
+      threadId: "thread_1",
+      includeTurns: true,
+    });
+    expect(sendRequest).toHaveBeenNthCalledWith(3, context, "turn/interrupt", {
+      threadId: "thread_1",
+      turnId: "turn_review_new",
+    });
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      activeTurnId: "turn_review_new",
+    });
+  });
+
+  it("cancels the exact gateway turn even when Codex omits MCP cancellation notifications", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    let settleCancellation: (() => void) | undefined;
+    const cancelTurn = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          settleCancellation = resolve;
+        }),
+    );
+    const release = vi.fn();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn-with-live-browser-wait";
+    Object.assign(context, {
+      gatewaySessionLease: {
+        connection: {
+          url: "http://127.0.0.1:48123/mcp",
+          bearerToken: "gateway-token",
+        },
+        cancelTurn,
+        retireTurn: vi.fn(() => Promise.resolve()),
+        release,
+      },
+    });
+    sendRequest.mockResolvedValue({});
+
+    let interruptSettled = false;
+    const interrupt = manager.interruptTurn(asThreadId("thread_1")).then(() => {
+      interruptSettled = true;
+    });
+    await vi.waitFor(() => expect(cancelTurn).toHaveBeenCalledOnce());
+    await Promise.resolve();
+
+    expect(interruptSettled).toBe(false);
+    expect(cancelTurn).toHaveBeenCalledWith("turn-with-live-browser-wait");
+    expect(release).toHaveBeenCalledOnce();
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/interrupt", {
+      threadId: "thread_1",
+      turnId: "turn-with-live-browser-wait",
+    });
+    settleCancellation?.();
+    await interrupt;
+    expect(interruptSettled).toBe(true);
+  });
+
+  it("tombstones the parent gateway turn when stopping one collab child", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    const cancelTurn = vi.fn(() => Promise.resolve());
+    const release = vi.fn();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn-parent";
+    Object.assign(context, {
+      gatewaySessionLease: {
+        connection: {
+          url: "http://127.0.0.1:48123/mcp",
+          bearerToken: "gateway-token",
+        },
+        cancelTurn,
+        retireTurn: vi.fn(() => Promise.resolve()),
+        release,
+      },
+    });
+    sendRequest.mockResolvedValue({});
+
+    await manager.interruptTurn(
+      asThreadId("thread_1"),
+      TurnId.makeUnsafe("turn-child"),
+      "provider-child",
+    );
+
+    expect(cancelTurn).toHaveBeenCalledOnce();
+    expect(cancelTurn).toHaveBeenCalledWith("turn-parent");
+    expect(release).toHaveBeenCalledOnce();
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/interrupt", {
+      threadId: "provider-child",
+      turnId: "turn-child",
+    });
+  });
+
+  it("settles review interrupt when thread/read already shows exited review mode", async () => {
+    const { manager, context, sendRequest, updateSession } = createThreadControlHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_review_old";
+    context.reviewTurnIds.add("turn_review_old");
+
+    sendRequest
+      .mockRejectedValueOnce(new Error("Timed out waiting for turn/interrupt."))
+      .mockResolvedValueOnce({
+        thread: {
+          id: "thread_1",
+          turns: [
+            {
+              id: "turn_review_old",
+              items: [{ type: "enteredReviewMode" }, { type: "exitedReviewMode" }],
+            },
+          ],
+        },
+      });
+
+    await manager.interruptTurn(asThreadId("thread_1"));
+
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: undefined,
+    });
+  });
+
+  it("settles a stale local turn when Codex reports that it is already idle", async () => {
+    const { manager, context, sendRequest, updateSession, emitEvent } =
+      createThreadControlHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_stale";
+    sendRequest.mockRejectedValue(new Error("turn/interrupt failed: no active turn to interrupt"));
+
+    await expect(manager.interruptTurn(asThreadId("thread_1"))).resolves.toBeUndefined();
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "notification",
+        method: "turn/aborted",
+        threadId: "thread_1",
+        turnId: "turn_stale",
+        lifecycleGeneration: "generation-request-a",
+      }),
+    );
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: undefined,
+    });
+  });
+
+  it("emits compaction progress before waiting for thread/compact/start", async () => {
+    const { manager, context, sendRequest, updateSession, emitEvent } =
+      createThreadControlHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_compact";
+    let resolveRequest: (() => void) | undefined;
+    sendRequest.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRequest = () => resolve({});
+        }),
+    );
+
+    const compactPromise = manager.compactThread(asThreadId("thread_1"));
+
+    await vi.waitFor(() => {
+      expect(sendRequest).toHaveBeenCalledWith(context, "thread/compact/start", {
+        threadId: "thread_1",
+      });
+      expect(updateSession).toHaveBeenCalledWith(context, {
+        status: "running",
+      });
+      expect(emitEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "notification",
+          provider: "codex",
+          threadId: "thread_1",
+          method: "thread/compacting",
+          message: "Compacting context",
+          payload: {
+            threadId: "thread_1",
+            state: "compacting",
+          },
+        }),
+      );
+    });
+
+    resolveRequest?.();
+    await compactPromise;
+  });
+
+  it("does not claim running status when compacting outside an active turn", async () => {
+    const { manager, context, sendRequest, updateSession, emitEvent } =
+      createThreadControlHarness();
+    sendRequest.mockResolvedValue({});
+
+    await manager.compactThread(asThreadId("thread_1"));
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/compact/start", {
+      threadId: "thread_1",
+    });
+    expect(updateSession).not.toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "thread/compacting",
+        message: "Compacting context",
+        payload: {
+          threadId: "thread_1",
+          state: "compacting",
+        },
+      }),
+    );
+  });
+});
+
+describe("respondToRequest", () => {
+  it("keeps acceptForSession active for later Codex turns", async () => {
+    const { manager, context, requireSession, writeMessage, emitEvent, sendRequest } =
+      createPendingApprovalHarness();
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+
+    expect(requireSession).toHaveBeenCalledWith("thread_1");
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 42,
+      result: {
+        decision: "acceptForSession",
+      },
+    });
+    expect(context.sessionApprovalOverride).toEqual(fullAccessTurnOverrides);
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "item/requestApproval/decision",
+        lifecycleGeneration: "generation-request-a",
+        requestKind: "command",
+        payload: {
+          requestId: "req-approval-1",
+          requestKind: "command",
+          decision: "acceptForSession",
+        },
+      }),
+    );
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Continue without asking again",
+    });
+
+    expect(sendRequest).toHaveBeenLastCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...fullAccessTurnOverrides,
+      summary: "auto",
+      input: [
+        {
+          type: "text",
+          text: "Continue without asking again",
+          text_elements: [],
+        },
+      ],
+      model: "gpt-5.3-codex",
+    });
+  });
+
+  it("auto-resolves later approval requests during an always-allowed Codex session", async () => {
+    const { manager, context, writeMessage, emitEvent } = createPendingApprovalHarness();
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+    writeMessage.mockClear();
+    emitEvent.mockClear();
+
+    await (
+      manager as unknown as {
+        handleServerRequest: (context: unknown, request: Record<string, unknown>) => Promise<void>;
+      }
+    ).handleServerRequest(context, {
+      jsonrpc: "2.0",
+      id: 99,
+      method: "item/fileChange/requestApproval",
+      params: {
+        turnId: "turn_2",
+        itemId: "item_file_change",
+        path: "apps/web/src/components/chat/ComposerPendingApprovalActions.tsx",
+      },
+    });
+
+    expect(context.pendingApprovals.size).toBe(0);
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 99,
+      result: {
+        decision: "acceptForSession",
+      },
+    });
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "notification",
+        method: "item/requestApproval/decision",
+        turnId: "turn_2",
+        itemId: "item_file_change",
+        requestKind: "file-change",
+        payload: expect.objectContaining({
+          requestKind: "file-change",
+          decision: "acceptForSession",
+        }),
+      }),
+    );
+    expect(
+      emitEvent.mock.calls.some(([event]) => (event as { kind?: string }).kind === "request"),
+    ).toBe(false);
+  });
+
+  it("keeps later permission-profile requests interactive during an always-allowed session", async () => {
+    const { manager, context, writeMessage, emitEvent } = createPendingApprovalHarness();
+    const permissions = {
+      network: { enabled: true },
+      fileSystem: { read: ["/tmp/example"] },
+    };
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+    writeMessage.mockClear();
+    emitEvent.mockClear();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 100,
+      method: "item/permissions/requestApproval",
+      params: {
+        turnId: "turn_2",
+        itemId: "item_permissions",
+        permissions,
+      },
+    });
+
+    expect(context.pendingApprovals.size).toBe(1);
+    expect(Array.from(context.pendingApprovals.values())[0]).toEqual(
+      expect.objectContaining({
+        method: "item/permissions/requestApproval",
+        requestedPermissions: permissions,
+      }),
+    );
+    expect(writeMessage).not.toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "request",
+        method: "item/permissions/requestApproval",
+        requestKind: "permissions",
+      }),
+    );
+  });
+
+  it("does not sweep a pending permission-profile request into always allow", async () => {
+    const { manager, context, writeMessage } = createPendingApprovalHarness();
+    const permissions = {
+      network: { enabled: true },
+    };
+
+    await handleServerRequestForTest(manager, context, {
+      id: 101,
+      method: "item/permissions/requestApproval",
+      params: {
+        turnId: "turn_1",
+        itemId: "item_permissions",
+        permissions,
+      },
+    });
+    const permissionRequestId = Array.from(context.pendingApprovals.keys()).find(
+      (requestId) => requestId !== "req-approval-1",
+    );
+    if (permissionRequestId === undefined) {
+      throw new Error("Expected the permission-profile request to remain pending.");
+    }
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+
+    expect(context.pendingApprovals.has(permissionRequestId)).toBe(true);
+    expect(writeMessage).not.toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({
+        id: 101,
+      }),
+    );
+  });
+
+  it("leaves pending MCP tool approvals alone when a command is accepted for the session", async () => {
+    const { manager, context, writeMessage } = createPendingApprovalHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 100,
+      method: "mcpServer/elicitation/request",
+      params: {
+        turnId: "turn_2",
+        mode: "form",
+        message: "Approve this tool call",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          persist: ["session"],
+          tool_name: "computer_launch_app",
+          tool_params_display: [{ name: "app", value: "kcalc" }],
+        },
+      },
+    });
+
+    const mcpRequest = [...context.pendingApprovals.values()].find(
+      (request) => String(request.method) === "mcpServer/elicitation/request",
+    );
+    if (!mcpRequest) {
+      throw new Error("Expected the MCP tool approval to remain pending.");
+    }
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+
+    // The command grant is not a tool grant: the tool approval still waits for its own answer.
+    expect(context.pendingApprovals.has(mcpRequest.requestId)).toBe(true);
+    expect(writeMessage).not.toHaveBeenCalledWith(context, expect.objectContaining({ id: 100 }));
+  });
+
+  it("keeps asking for MCP tool approvals while a command session grant is active", async () => {
+    const { manager, context, writeMessage } = createPendingApprovalHarness();
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+    expect(context.sessionApprovalOverride).toBeDefined();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 100,
+      method: "mcpServer/elicitation/request",
+      params: {
+        turnId: "turn_2",
+        mode: "form",
+        message: "Approve this tool call",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          persist: ["session"],
+          tool_name: "mcp_tool",
+          tool_params_display: [{ name: "app", value: "kcalc" }],
+        },
+      },
+    });
+
+    const mcpRequest = [...context.pendingApprovals.values()].find(
+      (request) => String(request.method) === "mcpServer/elicitation/request",
+    );
+    expect(mcpRequest).toBeDefined();
+    expect(writeMessage).not.toHaveBeenCalledWith(context, expect.objectContaining({ id: 100 }));
+  });
+});
+
+describe("MCP tool call elicitation approvals", () => {
+  const approvalParams = (persist: ReadonlyArray<string> | string = ["session"]) => ({
+    threadId: "provider_parent",
+    turnId: "turn_mcp",
+    serverName: "synara",
+    mode: "form",
+    message: "Allow Synara to launch the calculator?",
+    requestedSchema: { type: "object", properties: {} },
+    _meta: {
+      codex_approval_kind: "mcp_tool_call",
+      persist,
+      tool_name: "computer_launch_app",
+      tool_params: { app: "kcalc" },
+      tool_params_display: [{ name: "app", value: "kcalc", display_name: "app" }],
+    },
+  });
+
+  function computerApprovalHarness() {
+    const harness = createCollabNotificationHarness();
+    const context = Object.assign(harness.context, {
+      enableComputerControl: true,
+      activeInteractionMode: "default",
+      gatewaySessionLease: { release: vi.fn() } as { release: () => void } | undefined,
+    });
+    context.session.runtimeMode = "approval-required";
+    context.session.activeTurnId = "turn_mcp";
+    return { ...harness, context };
+  }
+
+  it("delegates exact active Synara Computer calls to gateway consent without persistent permission", async () => {
+    const { manager, context, emitEvent, writeMessage } = computerApprovalHarness();
+    for (const toolName of ["computer_click", "computer_type_text", "computer_read_clipboard"]) {
+      const params = approvalParams();
+      params._meta.tool_name = toolName;
+      await handleServerRequestForTest(manager, context, {
+        id: toolName,
+        method: "mcpServer/elicitation/request",
+        params,
+      });
+      expect(writeMessage).toHaveBeenCalledWith(context, {
+        id: toolName,
+        result: { action: "accept", content: null, _meta: null },
+      });
+    }
+    expect(context.pendingApprovals.size).toBe(0);
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Allow the synara MCP server to run tool "computer_click"?', true],
+    ['Allow the synara MCP server to run tool "computer_type_text"?', true],
+    ['Allow the synara MCP server to run tool "shell"?', false],
+    ['Allow the other MCP server to run tool "computer_click"?', false],
+    ["Please approve computer_click", false],
+    ['Allow the synara MCP server to run tool "computer_click"? Extra text', false],
+  ])(
+    "handles the installed Codex approval envelope without tool_name: %s",
+    async (message, accepted) => {
+      const { manager, context, writeMessage } = computerApprovalHarness();
+      const { tool_name: _toolName, ...meta } = approvalParams()._meta;
+      await handleServerRequestForTest(manager, context, {
+        id: 75,
+        method: "mcpServer/elicitation/request",
+        params: { ...approvalParams(), message, _meta: meta },
+      });
+      expect(context.pendingApprovals.size).toBe(accepted ? 0 : 1);
+      expect(writeMessage.mock.calls.length).toBe(accepted ? 1 : 0);
+    },
+  );
+
+  it.each([
+    "other-server",
+    "unknown-tool",
+    "disabled",
+    "no-lease",
+    "retired",
+    "stopping",
+    "inactive",
+    "stale-turn",
+    "child-thread",
+    "plan",
+    "unknown-mode",
+    "auto",
+  ])("preserves provider approval for %s requests", async (condition) => {
+    const { manager, context, emitEvent, writeMessage } = computerApprovalHarness();
+    const params = approvalParams();
+    switch (condition) {
+      case "other-server":
+        params.serverName = "other";
+        break;
+      case "unknown-tool":
+        params._meta.tool_name = "computer_delete_everything";
+        break;
+      case "disabled":
+        context.enableComputerControl = false;
+        break;
+      case "no-lease":
+        context.gatewaySessionLease = undefined;
+        break;
+      case "retired":
+        context.gatewayCredentialRetired = true;
+        break;
+      case "stopping":
+        context.stopping = true;
+        break;
+      case "inactive":
+        context.session.status = "ready";
+        break;
+      case "stale-turn":
+        params.turnId = "turn_old";
+        break;
+      case "child-thread":
+        params.threadId = "provider_child";
+        break;
+      case "plan":
+        context.activeInteractionMode = "plan";
+        break;
+      case "unknown-mode":
+        context.activeInteractionMode = "";
+        break;
+      case "auto":
+        context.session.runtimeMode = "auto";
+        break;
+    }
+    await handleServerRequestForTest(manager, context, {
+      id: 74,
+      method: "mcpServer/elicitation/request",
+      params,
+    });
+    expect(context.pendingApprovals.size).toBe(1);
+    expect(writeMessage).not.toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "request", requestKind: "tool" }),
+    );
+  });
+
+  it("tracks approval elicitations as tool requests and accepts them with the MCP response shape", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 70,
+      method: "mcpServer/elicitation/request",
+      params: approvalParams(),
+    });
+
+    const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+    expect(pendingRequest).toEqual(
+      expect.objectContaining({
+        method: "mcpServer/elicitation/request",
+        requestKind: "tool",
+        mcpSessionPersistenceAdvertised: true,
+      }),
+    );
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "request",
+        requestKind: "tool",
+        payload: expect.objectContaining({
+          _meta: expect.objectContaining({
+            tool_name: "computer_launch_app",
+            tool_params_display: [{ name: "app", value: "kcalc", display_name: "app" }],
+          }),
+        }),
+      }),
+    );
+
+    await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, "accept");
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 70,
+      result: { action: "accept", content: null, _meta: null },
+    });
+  });
+
+  it("tells the composer when session persistence was not advertised", async () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 71,
+      method: "mcpServer/elicitation/request",
+      params: approvalParams(["always"]),
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "request",
+        requestKind: "tool",
+        payload: expect.objectContaining({ sessionApprovalAvailable: false }),
+      }),
+    );
+
+    emitEvent.mockClear();
+    await handleServerRequestForTest(manager, context, {
+      id: 72,
+      method: "mcpServer/elicitation/request",
+      params: approvalParams(["session"]),
+    });
+    const [event] = emitEvent.mock.calls.at(-1) ?? [];
+    expect(event).toEqual(expect.objectContaining({ kind: "request", requestKind: "tool" }));
+    expect((event as { payload?: Record<string, unknown> }).payload).not.toHaveProperty(
+      "sessionApprovalAvailable",
+    );
+  });
+
+  it.each([
+    ["acceptForSession", ["session"], { persist: "session" }],
+    ["acceptForSession", ["always"], null],
+    ["acceptForSession", "session", { persist: "session" }],
+  ] as const)(
+    "maps %s with persist=%j to the protocol response",
+    async (decision, persist, meta) => {
+      const { manager, context, writeMessage } = createCollabNotificationHarness();
+
+      await handleServerRequestForTest(manager, context, {
+        id: 71,
+        method: "mcpServer/elicitation/request",
+        params: approvalParams(persist),
+      });
+      const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+      await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, decision);
+
+      expect(writeMessage).toHaveBeenCalledWith(context, {
+        id: 71,
+        result: { action: "accept", content: null, _meta: meta },
+      });
+    },
+  );
+
+  it.each(["decline", "cancel"] as const)(
+    "maps %s to the matching elicitation action",
+    async (decision) => {
+      const { manager, context, writeMessage } = createCollabNotificationHarness();
+      const interrupt = vi.spyOn(manager, "interruptTurn").mockResolvedValue(undefined);
+
+      await handleServerRequestForTest(manager, context, {
+        id: 72,
+        method: "mcpServer/elicitation/request",
+        params: approvalParams(),
+      });
+      const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+      await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, decision);
+
+      expect(writeMessage).toHaveBeenCalledWith(context, {
+        id: 72,
+        result: { action: decision, content: null, _meta: null },
+      });
+      if (decision === "cancel")
+        expect(interrupt).toHaveBeenCalledWith("thread_1", "turn_mcp", "provider_parent");
+      else expect(interrupt).not.toHaveBeenCalled();
+    },
+  );
+
+  it("cancels non-approval elicitations and emits a warning instead of an unsupported-request error", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 73,
+      method: "mcpServer/elicitation/request",
+      params: {
+        mode: "url",
+        message: "Authenticate with the MCP server",
+        url: "https://example.test/auth",
+      },
+    });
+
+    expect(context.pendingApprovals.size).toBe(0);
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 73,
+      result: { action: "cancel", content: null, _meta: null },
+    });
+    expect(writeMessage).not.toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({ error: expect.objectContaining({ code: -32601 }) }),
+    );
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "error",
+        method: "mcpServer/elicitation/request/unrenderable",
+        message: "Synara declined an MCP elicitation it cannot render yet.",
+      }),
+    );
+  });
+});
+
+describe("respondToUserInput", () => {
+  it("serializes canonical answers to Codex native answer objects", async () => {
+    const { manager, context, requireSession, writeMessage, emitEvent } =
+      createPendingUserInputHarness();
+
+    await manager.respondToUserInput(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-user-input-1"),
+      {
+        scope: "All request methods",
+        compat: "Keep current envelope",
+      },
+    );
+
+    expect(requireSession).toHaveBeenCalledWith("thread_1");
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 42,
+      result: {
+        answers: {
+          scope: { answers: ["All request methods"] },
+          compat: { answers: ["Keep current envelope"] },
+        },
+      },
+    });
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "item/tool/requestUserInput/answered",
+        payload: {
+          requestId: "req-user-input-1",
+          answers: {
+            scope: { answers: ["All request methods"] },
+            compat: { answers: ["Keep current envelope"] },
+          },
+        },
+      }),
+    );
+  });
+
+  it("preserves explicit empty multi-select answers", async () => {
+    const { manager, context, requireSession, writeMessage, emitEvent } =
+      createPendingUserInputHarness();
+
+    await manager.respondToUserInput(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-user-input-1"),
+      {
+        scope: [],
+      },
+    );
+
+    expect(requireSession).toHaveBeenCalledWith("thread_1");
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 42,
+      result: {
+        answers: {
+          scope: { answers: [] },
+        },
+      },
+    });
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "item/tool/requestUserInput/answered",
+        payload: {
+          requestId: "req-user-input-1",
+          answers: {
+            scope: { answers: [] },
+          },
+        },
+      }),
+    );
+  });
+
+  it("tracks file-read approval requests with the correct method", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        sessionId: "sess_1",
+        provider: "codex",
+        status: "ready",
+        threadId: asThreadId("thread_1"),
+        resumeCursor: { threadId: "thread_1" },
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+    };
+    type ApprovalRequestContext = {
+      session: typeof context.session;
+      pendingApprovals: typeof context.pendingApprovals;
+      pendingUserInputs: typeof context.pendingUserInputs;
+    };
+
+    await (
+      manager as unknown as {
+        handleServerRequest: (
+          context: ApprovalRequestContext,
+          request: Record<string, unknown>,
+        ) => Promise<void>;
+      }
+    ).handleServerRequest(context, {
+      jsonrpc: "2.0",
+      id: 42,
+      method: "item/fileRead/requestApproval",
+      params: {},
+    });
+
+    const request = Array.from(context.pendingApprovals.values())[0];
+    expect(request?.requestKind).toBe("file-read");
+    expect(request?.method).toBe("item/fileRead/requestApproval");
+  });
+});
+
+describe("collab child conversation routing", () => {
+  it("tracks the current collabToolCall receiver shape", () => {
+    const { manager, context } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/started",
+      params: {
+        item: {
+          type: "collabToolCall",
+          id: "call_collab_current",
+          receiverThreadId: "child_provider_current",
+        },
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+      },
+    });
+
+    expect(context.collabReceiverTurns.get("child_provider_current")).toBe("turn_parent");
+    expect(context.collabReceiverParents.get("child_provider_current")).toBe("provider_parent");
+  });
+
+  it("preserves child notification turn ids and annotates the parent turn", () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/completed",
+      params: {
+        item: {
+          type: "collabAgentToolCall",
+          id: "call_collab_1",
+          receiverThreadIds: ["child_provider_1"],
+        },
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+      },
+    });
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "child_provider_1",
+        turnId: "turn_child_1",
+        itemId: "msg_child_1",
+        delta: "working",
+      },
+    });
+
+    expect(emitEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "item/agentMessage/delta",
+        turnId: "turn_child_1",
+        parentTurnId: "turn_parent",
+        itemId: "msg_child_1",
+        providerThreadId: "child_provider_1",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+  });
+
+  it("routes unmapped child assistant notifications through the active provider thread", () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+
+    handleServerNotificationForTest(manager, context, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "child_provider_unmapped",
+        turnId: "turn_child_unmapped",
+        itemId: "msg_child_unmapped",
+        delta: "working",
+      },
+    });
+    handleServerNotificationForTest(manager, context, {
+      method: "item/completed",
+      params: {
+        threadId: "child_provider_unmapped",
+        turnId: "turn_child_unmapped",
+        item: {
+          type: "agentMessage",
+          id: "msg_child_unmapped",
+          text: "done",
+        },
+      },
+    });
+
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "item/agentMessage/delta",
+        turnId: "turn_child_unmapped",
+        itemId: "msg_child_unmapped",
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "item/completed",
+        turnId: "turn_child_unmapped",
+        itemId: "msg_child_unmapped",
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+  });
+
+  it("does not infer a provider parent for active-parent or inactive-session notifications", () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+
+    handleServerNotificationForTest(manager, context, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+        itemId: "msg_parent",
+        delta: "parent",
+      },
+    });
+    context.session.status = "ready";
+    handleServerNotificationForTest(manager, context, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "another_provider_thread",
+        turnId: "turn_other",
+        itemId: "msg_other",
+        delta: "other",
+      },
+    });
+
+    const activeParentEvent = emitEvent.mock.calls[0]?.[0] as Record<string, unknown>;
+    const inactiveSessionEvent = emitEvent.mock.calls[1]?.[0] as Record<string, unknown>;
+    expect(activeParentEvent.providerThreadId).toBe("provider_parent");
+    expect(activeParentEvent).not.toHaveProperty("providerParentThreadId");
+    expect(inactiveSessionEvent.providerThreadId).toBe("another_provider_thread");
+    expect(inactiveSessionEvent).not.toHaveProperty("providerParentThreadId");
+  });
+
+  it("prefers a mapped provider parent over the active-provider fallback", () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+    context.collabReceiverParents.set("child_provider_1", "provider_mapped_parent");
+
+    handleServerNotificationForTest(manager, context, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "child_provider_1",
+        turnId: "turn_child_1",
+        itemId: "msg_child_1",
+        delta: "mapped",
+      },
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerThreadId: "child_provider_1",
+        providerParentThreadId: "provider_mapped_parent",
+      }),
+    );
+  });
+
+  it("preserves an inferred child approval route through the decision event", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 42,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "child_provider_unmapped",
+        turnId: "turn_child_unmapped",
+        itemId: "call_child_unmapped",
+        command: "bun install",
+      },
+    });
+
+    const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+    expect(pendingRequest).toEqual(
+      expect.objectContaining({
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+    await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, "accept");
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 42,
+      result: { decision: "accept" },
+    });
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        kind: "request",
+        method: "item/commandExecution/requestApproval",
+        turnId: "turn_child_unmapped",
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        kind: "notification",
+        method: "item/requestApproval/decision",
+        turnId: "turn_child_unmapped",
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+  });
+
+  it("responds to permission-profile approvals with the requested native permissions", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+    const permissions = {
+      network: { enabled: true },
+      fileSystem: { read: ["/tmp/example"] },
+    };
+
+    await handleServerRequestForTest(manager, context, {
+      id: 45,
+      method: "item/permissions/requestApproval",
+      params: {
+        threadId: "provider_parent",
+        turnId: "turn_permissions",
+        itemId: "call_permissions",
+        reason: "Needs package metadata",
+        permissions,
+      },
+    });
+
+    const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+    expect(pendingRequest).toEqual(
+      expect.objectContaining({
+        method: "item/permissions/requestApproval",
+        requestKind: "permissions",
+        requestedPermissions: permissions,
+      }),
+    );
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      pendingRequest.requestId,
+      "acceptForSession",
+    );
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 45,
+      result: { permissions, scope: "session" },
+    });
+    expect(context.sessionApprovalOverride).toBeUndefined();
+    expect(emitEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "item/requestApproval/decision",
+        requestKind: "permissions",
+      }),
+    );
+  });
+
+  it("returns protocol-valid turn scope and omits null permission categories", async () => {
+    const { manager, context, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 46,
+      method: "item/permissions/requestApproval",
+      params: {
+        threadId: "provider_parent",
+        turnId: "turn_permissions_nullable",
+        itemId: "call_permissions_nullable",
+        permissions: {
+          network: null,
+          fileSystem: { read: ["/tmp/example"] },
+        },
+      },
+    });
+
+    const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+    await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, "accept");
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 46,
+      result: {
+        permissions: {
+          fileSystem: { read: ["/tmp/example"] },
+        },
+        scope: "turn",
+      },
+    });
+  });
+
+  it("preserves an unmapped child user-input route through the answered event", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 43,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "child_provider_unmapped",
+        turnId: "turn_child_unmapped",
+        itemId: "tool_child_unmapped",
+        questions: [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "Which scope should this change target?",
+            options: [{ label: "child", description: "Only the child thread" }],
+          },
+        ],
+      },
+    });
+
+    const pendingRequest = Array.from(context.pendingUserInputs.values())[0];
+    expect(pendingRequest).toEqual(
+      expect.objectContaining({
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+    await manager.respondToUserInput(asThreadId("thread_1"), pendingRequest.requestId, {
+      scope: "child",
+    });
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 43,
+      result: {
+        answers: {
+          scope: { answers: ["child"] },
+        },
+      },
+    });
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        kind: "request",
+        method: "item/tool/requestUserInput",
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        kind: "notification",
+        method: "item/tool/requestUserInput/answered",
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+  });
+
+  it("preserves the inferred child route when session approvals resolve immediately", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+    context.sessionApprovalOverride = {
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandboxPolicy: { type: "dangerFullAccess" },
+    };
+
+    await handleServerRequestForTest(manager, context, {
+      id: 44,
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: "child_provider_unmapped",
+        turnId: "turn_child_unmapped",
+        itemId: "file_child_unmapped",
+        path: "apps/server/src/example.ts",
+      },
+    });
+
+    expect(context.pendingApprovals.size).toBe(0);
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 44,
+      result: { decision: "acceptForSession" },
+    });
+    expect(emitEvent).toHaveBeenCalledTimes(1);
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "notification",
+        method: "item/requestApproval/decision",
+        turnId: "turn_child_unmapped",
+        itemId: "file_child_unmapped",
+        providerThreadId: "child_provider_unmapped",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+  });
+
+  it("suppresses child lifecycle notifications without mutating the parent session state", () => {
+    const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/completed",
+      params: {
+        item: {
+          type: "collabAgentToolCall",
+          id: "call_collab_1",
+          receiverThreadIds: ["child_provider_1"],
+        },
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+      },
+    });
+    emitEvent.mockClear();
+    updateSession.mockClear();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/started",
+      params: {
+        threadId: "child_provider_1",
+        turn: { id: "turn_child_1" },
+      },
+    });
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/completed",
+      params: {
+        threadId: "child_provider_1",
+        turn: { id: "turn_child_1", status: "completed" },
+      },
+    });
+
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
+  it("suppresses child lifecycle notifications that arrive before receiver mapping", () => {
+    const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_parent";
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/started",
+      params: {
+        threadId: "child_provider_unmapped",
+        turn: { id: "turn_child_unmapped" },
+      },
+    });
+
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(updateSession).not.toHaveBeenCalled();
+    expect(context.session.activeTurnId).toBe("turn_parent");
+  });
+
+  it("keeps handling lifecycle notifications from the active provider thread", () => {
+    const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/started",
+      params: {
+        threadId: "provider_parent",
+        turn: { id: "turn_parent" },
+      },
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "turn/started",
+        providerThreadId: "provider_parent",
+      }),
+    );
+    expect(updateSession).toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({ status: "running", activeTurnId: "turn_parent" }),
+    );
+  });
+
+  it("suppresses child lifecycle notifications when only the provider parent is known", () => {
+    const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
+    context.collabReceiverParents.set("child_provider_1", "provider_parent");
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/started",
+      params: {
+        threadId: "child_provider_1",
+        turn: { id: "turn_child_1" },
+      },
+    });
+
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
+  it("forwards child plan notifications so the active plan card can advance", () => {
+    // Plan events (`turn/plan/updated`, `item/plan/delta`) are intentionally NOT
+    // suppressed for child conversations. Suppressing them freezes the plan UI at
+    // its initial all-pending snapshot and prevents the card from ticking off steps
+    // as work progresses.
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/completed",
+      params: {
+        item: {
+          type: "collabAgentToolCall",
+          id: "call_collab_1",
+          receiverThreadIds: ["child_provider_1"],
+        },
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+      },
+    });
+    emitEvent.mockClear();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/plan/updated",
+      params: {
+        threadId: "child_provider_1",
+        turnId: "turn_child_1",
+        plan: [{ step: "Plan child work", status: "inProgress" }],
+      },
+    });
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/plan/delta",
+      params: {
+        threadId: "child_provider_1",
+        turnId: "turn_child_1",
+        itemId: "plan_item_child_1",
+        delta: "still planning",
+      },
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "turn/plan/updated",
+        turnId: "turn_child_1",
+        parentTurnId: "turn_parent",
+      }),
+    );
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "item/plan/delta",
+        turnId: "turn_child_1",
+        parentTurnId: "turn_parent",
+      }),
+    );
+  });
+
+  it("does not suppress provider-parent-only child notifications without a mapped parent turn", () => {
+    const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
+    context.collabReceiverParents.set("child_provider_1", "provider_parent");
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/plan/updated",
+      params: {
+        threadId: "child_provider_1",
+        turnId: "turn_child_1",
+        plan: [{ step: "Plan child work", status: "inProgress" }],
+      },
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "turn/plan/updated",
+        turnId: "turn_child_1",
+        providerThreadId: "child_provider_1",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
+  it("preserves child approval requests and annotates the parent turn", async () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/completed",
+      params: {
+        item: {
+          type: "collabAgentToolCall",
+          id: "call_collab_1",
+          receiverThreadIds: ["child_provider_1"],
+        },
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+      },
+    });
+    emitEvent.mockClear();
+
+    await (
+      manager as unknown as {
+        handleServerRequest: (context: unknown, request: Record<string, unknown>) => Promise<void>;
+      }
+    ).handleServerRequest(context, {
+      id: 42,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "child_provider_1",
+        turnId: "turn_child_1",
+        itemId: "call_child_1",
+        command: "bun install",
+      },
+    });
+
+    expect(Array.from(context.pendingApprovals.values())[0]).toEqual(
+      expect.objectContaining({
+        turnId: "turn_child_1",
+        itemId: "call_child_1",
+      }),
+    );
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "item/commandExecution/requestApproval",
+        turnId: "turn_child_1",
+        parentTurnId: "turn_parent",
+        itemId: "call_child_1",
+        providerThreadId: "child_provider_1",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+  });
+});
+
+describe("handleServerNotification error normalization", () => {
+  it("recovers a missing turn/completed after legacy task_complete", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        taskCompleteFallbackGraceMs: 25,
+      });
+      const harness = createCollabNotificationHarness();
+      const context = harness.context;
+      const emitEvent = vi
+        .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+        .mockImplementation(() => {});
+      const cancelTurn = vi.fn(() => Promise.resolve());
+      const retireTurn = vi.fn(() => {
+        expect(emitEvent).not.toHaveBeenCalled();
+        return Promise.resolve();
+      });
+      Object.assign(context, {
+        gatewaySessionLease: {
+          connection: {
+            url: "http://127.0.0.1:48123/mcp",
+            bearerToken: "gateway-token",
+          },
+          cancelTurn,
+          retireTurn,
+          release: vi.fn(),
+        },
+      });
+      const updateSession = vi
+        .spyOn(
+          manager as unknown as { updateSession: (...args: unknown[]) => void },
+          "updateSession",
+        )
+        .mockImplementation(() => {});
+
+      handleServerNotificationForTest(manager, context, {
+        method: "codex/event/task_complete",
+        params: {
+          id: "turn_parent",
+          msg: {
+            type: "task_complete",
+            turn_id: "turn_parent",
+            last_agent_message: "Done.",
+          },
+        },
+      });
+      vi.advanceTimersByTime(25);
+
+      expect(retireTurn).toHaveBeenCalledOnce();
+      expect(retireTurn).toHaveBeenCalledWith("turn_parent");
+      expect(cancelTurn).not.toHaveBeenCalled();
+      expect(context.gatewayCredentialRetired).toBe(true);
+      expect(updateSession).toHaveBeenCalledWith(context, {
+        status: "ready",
+        activeTurnId: undefined,
+        lastError: undefined,
+      });
+      expect(emitEvent).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          method: "turn/completed",
+          turnId: "turn_parent",
+          payload: expect.objectContaining({
+            recoveredFrom: "codex/event/task_complete",
+            [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true,
+          }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the task_complete fallback when native turn/completed arrives", () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new CodexAppServerManager(undefined, {
+        taskCompleteFallbackGraceMs: 25,
+      });
+      const context = createCollabNotificationHarness().context;
+      const emitEvent = vi
+        .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+        .mockImplementation(() => {});
+
+      handleServerNotificationForTest(manager, context, {
+        method: "codex/event/task_complete",
+        params: {
+          id: "turn_parent",
+          msg: { type: "task_complete", turn_id: "turn_parent" },
+        },
+      });
+      handleServerNotificationForTest(manager, context, {
+        method: "turn/completed",
+        params: {
+          threadId: "provider_parent",
+          turn: { id: "turn_parent", status: "completed" },
+        },
+      });
+      vi.advanceTimersByTime(25);
+
+      expect(
+        emitEvent.mock.calls.filter(
+          ([event]) => (event as { method?: string }).method === "turn/completed",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retires gateway authority before publishing every terminal parent-turn notification", () => {
+    const terminalNotifications = [
+      {
+        expectedTurnId: "turn-completed",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "provider_parent",
+            turn: { id: "turn-completed", status: "completed" },
+          },
+        },
+      },
+      {
+        expectedTurnId: "turn-aborted",
+        notification: {
+          method: "turn/aborted",
+          params: {
+            threadId: "provider_parent",
+            turn: { id: "turn-aborted", status: "interrupted" },
+          },
+        },
+      },
+      {
+        expectedTurnId: "turn-error",
+        notification: {
+          method: "error",
+          params: {
+            threadId: "provider_parent",
+            turnId: "turn-error",
+            error: { message: "terminal provider failure" },
+            willRetry: false,
+          },
+        },
+      },
+    ];
+
+    for (const { expectedTurnId, notification } of terminalNotifications) {
+      const { manager, context, emitEvent } = createCollabNotificationHarness();
+      const cancelTurn = vi.fn(() => Promise.resolve());
+      const retireTurn = vi.fn(() => {
+        expect(emitEvent).not.toHaveBeenCalled();
+        return Promise.resolve();
+      });
+      Object.assign(context, {
+        gatewaySessionLease: {
+          connection: {
+            url: "http://127.0.0.1:48123/mcp",
+            bearerToken: "gateway-token",
+          },
+          cancelTurn,
+          retireTurn,
+          release: vi.fn(),
+        },
+      });
+
+      handleServerNotificationForTest(manager, context, notification);
+
+      expect(retireTurn).toHaveBeenCalledOnce();
+      expect(retireTurn).toHaveBeenCalledWith(expectedTurnId);
+      expect(cancelTurn).not.toHaveBeenCalled();
+      expect(context.gatewayCredentialRetired).toBe(true);
+      expect(emitEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true,
+          }),
+        }),
+      );
+    }
+  });
+
+  it("settles native review when review mode exits", () => {
+    const { manager, context, updateSession, emitEvent } = createCollabNotificationHarness();
+    context.reviewTurnIds.add("turn_parent");
+    context.reviewTurnIds.add("turn_child");
+    context.session.activeTurnId = "turn_child";
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/completed",
+      params: {
+        item: {
+          type: "exitedReviewMode",
+          id: "turn_parent",
+          review: "The working tree is clean.",
+        },
+        threadId: "provider_parent",
+      },
+    });
+
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: undefined,
+    });
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "notification",
+        method: "turn/completed",
+        turnId: "turn_child",
+        threadId: "thread_1",
+        payload: {
+          turn: {
+            id: "turn_child",
+            status: "completed",
+          },
+        },
+      }),
+    );
+  });
+
+  it("clears the running session turn when Codex aborts a turn", () => {
+    const { manager, context, updateSession } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/aborted",
+      params: {
+        threadId: "provider_parent",
+        turn: {
+          id: "turn_parent",
+          status: "interrupted",
+        },
+      },
+    });
+
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: undefined,
+    });
+  });
+
+  it("normalizes duplicate tool argument errors on turn completion", () => {
+    const { manager, context, updateSession } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/completed",
+      params: {
+        threadId: "provider_parent",
+        turn: {
+          id: "turn_parent",
+          status: "failed",
+          error: {
+            message:
+              "failed to parse function arguments: duplicate field `yield_time_ms` at line 1 column 114",
+          },
+        },
+      },
+    });
+
+    expect(updateSession).toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({
+        status: "error",
+        lastError: "Tool call failed because the same argument was sent twice (yield_time_ms).",
+      }),
+    );
+  });
+
+  it("normalizes duplicate tool argument errors on runtime error notifications", () => {
+    const { manager, context, updateSession } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "error",
+      params: {
+        threadId: "provider_parent",
+        error: {
+          message:
+            "failed to parse function arguments: duplicate field `yield_time_ms` at line 1 column 114",
+        },
+        willRetry: false,
+      },
+    });
+
+    expect(updateSession).toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({
+        status: "error",
+        lastError: "Tool call failed because the same argument was sent twice (yield_time_ms).",
+      }),
+    );
+  });
+
+  it("does not promote non-fatal tool runtime errors to session lastError", () => {
+    const { manager, context, updateSession } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "error",
+      params: {
+        threadId: "provider_parent",
+        error: {
+          message:
+            "write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open",
+        },
+        willRetry: false,
+      },
+    });
+
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("CodexAppServerManager process teardown", () => {
+  it("preserves the first transport failure and its pending operation through teardown", async () => {
+    const teardownProcessTree = vi.fn(async () => ({ escalated: false, signalErrors: [] }));
+    const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
+    const threadId = asThreadId("thread-transport-root-cause");
+    const rejected = vi.fn();
+    const writerClose = vi.fn();
+    const events: Array<{ kind: string; method: string; message?: string }> = [];
+    manager.on("event", (event) => {
+      events.push({
+        kind: event.kind,
+        method: event.method,
+        ...(event.message ? { message: event.message } : {}),
+      });
+    });
+    const context = {
+      session: {
+        provider: "codex",
+        status: "connecting",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-09-08T08:03:37.000Z",
+        updatedAt: "2026-09-08T08:03:37.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child: {
+        pid: 42_426,
+        exitCode: null,
+        signalCode: null,
+        once: vi.fn(),
+        removeListener: vi.fn(),
+      },
+      stdinWriter: { close: writerClose },
+      pending: new Map([
+        [
+          "7",
+          {
+            method: "thread/resume",
+            timeout: setTimeout(() => {}, 60_000),
+            resolve: vi.fn(),
+            reject: rejected,
+          },
+        ],
+      ]),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 8,
+      stopping: false,
+      sessionAttemptId: "attempt-transport-root-cause",
+    };
+    const internals = manager as unknown as {
+      sessions: Map<ThreadId, unknown>;
+      handleTransportFailure: (context: unknown, cause: unknown) => void;
+    };
+    internals.sessions.set(threadId, context);
+
+    internals.handleTransportFailure(
+      context,
+      new CodexAppServerTransportError({
+        reason: "frame-too-large",
+        observedBytes: 16_842_743,
+        maxBytes: 16_777_216,
+      }),
+    );
+    await manager.stopSession(threadId);
+
+    const expectedMessage =
+      "Codex app-server JSONL frame exceeded its byte limit (16842743/16777216). Operation: thread/resume.";
+    expect(rejected).toHaveBeenCalledTimes(1);
+    expect(rejected.mock.calls[0]?.[0]).toMatchObject({ message: expectedMessage });
+    expect(writerClose).toHaveBeenCalledWith(expect.objectContaining({ message: expectedMessage }));
+    expect(context.session).toMatchObject({ status: "closed", lastError: expectedMessage });
+    expect(
+      (
+        context as typeof context & {
+          terminalFailure?: Record<string, unknown>;
+        }
+      ).terminalFailure,
+    ).toMatchObject({
+      kind: "frame-too-large",
+      operation: "thread/resume",
+      observedBytes: 16_842_743,
+      limitBytes: 16_777_216,
+      source: "transport",
+      sessionAttemptId: "attempt-transport-root-cause",
+    });
+    expect(events.filter((event) => event.kind === "error")).toEqual([
+      {
+        kind: "error",
+        method: "protocol/transportError",
+        message: expectedMessage,
+      },
+    ]);
+    expect(events.some((event) => event.message?.includes("Session stopped before"))).toBe(false);
+    expect(teardownProcessTree).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps one stop in flight and publishes closed eagerly", async () => {
+    let proveExit: (() => void) | undefined;
+    const exitProof = new Promise<void>((resolve) => {
+      proveExit = resolve;
+    });
+    const teardownProcessTree = vi.fn(async () => {
+      await exitProof;
+      return { escalated: false, signalErrors: [] };
+    });
+    const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
+    const threadId = asThreadId("thread-stop-proof");
+    const closedEvents: string[] = [];
+    manager.on("event", (event) => {
+      if (event.method === "session/closed") {
+        closedEvents.push(event.method);
+      }
+    });
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        model: "gpt-5.3-codex",
+        activeTurnId: "turn-active",
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child: {
+        pid: 42_424,
+        exitCode: null,
+        signalCode: null,
+        once: vi.fn(),
+        removeListener: vi.fn(),
+      },
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, context);
+
+    const firstStop = manager.stopSession(threadId);
+    const concurrentStop = manager.stopSession(threadId);
+
+    expect(teardownProcessTree).toHaveBeenCalledTimes(1);
+    // Closed publishes eagerly: the session must become unroutable the moment
+    // stop begins, with teardown proof continuing behind the returned promise.
+    expect(closedEvents).toEqual(["session/closed"]);
+    expect(manager.hasSession(threadId)).toBe(false);
+    expect(manager.listSessions()).toHaveLength(0);
+    expect(
+      (
+        manager as unknown as {
+          sessions: Map<ThreadId, unknown>;
+        }
+      ).sessions.has(threadId),
+    ).toBe(true);
+
+    proveExit?.();
+    await Promise.all([firstStop, concurrentStop]);
+
+    expect(closedEvents).toEqual(["session/closed"]);
+    expect(manager.hasSession(threadId)).toBe(false);
+    expect(manager.listSessions()).toHaveLength(0);
+  });
+
+  it("retains the replacement barrier and retries after teardown proof fails", async () => {
+    const teardownProcessTree = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("rootExited=false; surviving process remains"))
+      .mockResolvedValueOnce({
+        escalated: true,
+        signalErrors: [],
+      });
+    const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
+    const threadId = asThreadId("thread-stop-proof-retry");
+    const closedEvents: string[] = [];
+    manager.on("event", (event) => {
+      if (event.method === "session/closed") {
+        closedEvents.push(event.method);
+      }
+    });
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        model: "gpt-5.3-codex",
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child: {
+        pid: 42_425,
+        exitCode: null,
+        signalCode: null,
+        once: vi.fn(),
+        removeListener: vi.fn(),
+      },
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, context);
+
+    await expect(manager.stopSession(threadId)).rejects.toThrow(
+      "Failed to prove Codex app-server process-tree exit",
+    );
+    expect(manager.hasSession(threadId)).toBe(false);
+    expect(manager.listSessions()).toHaveLength(0);
+    expect(closedEvents).toEqual(["session/closed"]);
+
+    await manager.stopSession(threadId);
+    expect(teardownProcessTree).toHaveBeenCalledTimes(2);
+    expect(manager.listSessions()).toHaveLength(0);
+    expect(closedEvents).toEqual(["session/closed"]);
+  });
+});
+
+describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume", () => {
+  it("keeps prior thread history when resuming with a changed runtime mode", async () => {
+    const workspaceDir = mkdtempSync(path.join(os.tmpdir(), "codex-live-resume-"));
+    writeFileSync(path.join(workspaceDir, "README.md"), "hello\n", "utf8");
+
+    const manager = new CodexAppServerManager();
+
+    try {
+      const firstSession = await manager.startSession({
+        threadId: asThreadId("thread-live"),
+        provider: "codex",
+        cwd: workspaceDir,
+        runtimeMode: "full-access",
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+        providerOptions: {
+          codex: {
+            ...(process.env.CODEX_BINARY_PATH ? { binaryPath: process.env.CODEX_BINARY_PATH } : {}),
+            ...(process.env.CODEX_HOME_PATH ? { homePath: process.env.CODEX_HOME_PATH } : {}),
+          },
+        },
+      });
+
+      const firstTurn = await manager.sendTurn({
+        threadId: firstSession.threadId,
+        input: `Reply with exactly the word ALPHA ${randomUUID()}`,
+      });
+
+      expect(firstTurn.threadId).toBe(firstSession.threadId);
+
+      await vi.waitFor(
+        async () => {
+          const snapshot = await manager.readThread(firstSession.threadId);
+          expect(snapshot.turns.length).toBeGreaterThan(0);
+        },
+        { timeout: 120_000, interval: 1_000 },
+      );
+
+      const firstSnapshot = await manager.readThread(firstSession.threadId);
+      const originalThreadId = firstSnapshot.threadId;
+      const originalTurnCount = firstSnapshot.turns.length;
+
+      await manager.stopSession(firstSession.threadId);
+
+      const resumedSession = await manager.startSession({
+        threadId: firstSession.threadId,
+        provider: "codex",
+        cwd: workspaceDir,
+        runtimeMode: "approval-required",
+        resumeCursor: firstSession.resumeCursor,
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+        providerOptions: {
+          codex: {
+            ...(process.env.CODEX_BINARY_PATH ? { binaryPath: process.env.CODEX_BINARY_PATH } : {}),
+            ...(process.env.CODEX_HOME_PATH ? { homePath: process.env.CODEX_HOME_PATH } : {}),
+          },
+        },
+      });
+
+      expect(resumedSession.threadId).toBe(originalThreadId);
+
+      const resumedSnapshotBeforeTurn = await manager.readThread(resumedSession.threadId);
+      expect(resumedSnapshotBeforeTurn.threadId).toBe(originalThreadId);
+      expect(resumedSnapshotBeforeTurn.turns.length).toBeGreaterThanOrEqual(originalTurnCount);
+
+      await manager.sendTurn({
+        threadId: resumedSession.threadId,
+        input: `Reply with exactly the word BETA ${randomUUID()}`,
+      });
+
+      await vi.waitFor(
+        async () => {
+          const snapshot = await manager.readThread(resumedSession.threadId);
+          expect(snapshot.turns.length).toBeGreaterThan(originalTurnCount);
+        },
+        { timeout: 120_000, interval: 1_000 },
+      );
+    } finally {
+      await manager.stopAll();
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
