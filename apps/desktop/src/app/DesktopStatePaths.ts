@@ -10,37 +10,15 @@ function normalizeConfiguredBaseDir(pathwayHome: Option.Option<string>): Option.
   return trimmed.length > 0 ? Option.some(trimmed) : Option.none();
 }
 
-const comparablePath = (value: string, homeDirectory: string, joinPath: JoinPath): string => {
-  const expanded =
-    value === "~" || value.startsWith("~/") || value.startsWith("~\\")
-      ? joinPath(homeDirectory, value.slice(1))
-      : joinPath(value);
-  return expanded.replace(/[\\/]+$/, "").toLowerCase();
-};
-
 /**
- * The PATHWAY_HOME an isolated flavor may adopt. An isolated flavor never shares the production
- * home, so a PATHWAY_HOME that resolves to `~/.pathway` is ignored and the flavor keeps its own
- * default; any other override still wins.
+ * The PATHWAY_HOME a flavor adopts. The isolated cua flavor exists so Computer Use testing never
+ * touches another install's state, so it ignores PATHWAY_HOME and always uses its own home.
  */
 export function resolveFlavorPathwayHome(input: {
-  readonly homeDirectory: string;
-  readonly joinPath: JoinPath;
   readonly pathwayHome: Option.Option<string>;
   readonly isolated: boolean;
 }): Option.Option<string> {
-  const configured = normalizeConfiguredBaseDir(input.pathwayHome);
-  if (!input.isolated || Option.isNone(configured)) {
-    return configured;
-  }
-  const productionHome = comparablePath(
-    input.joinPath(input.homeDirectory, ".pathway"),
-    input.homeDirectory,
-    input.joinPath,
-  );
-  return comparablePath(configured.value, input.homeDirectory, input.joinPath) === productionHome
-    ? Option.none()
-    : configured;
+  return input.isolated ? Option.none() : normalizeConfiguredBaseDir(input.pathwayHome);
 }
 
 export function resolveDesktopBaseDir(input: {
