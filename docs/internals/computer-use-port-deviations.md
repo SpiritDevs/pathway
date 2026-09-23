@@ -119,3 +119,11 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - The Cua backend reads the server platform from `HostProcessPlatform`, and `launchApp` takes an explicit args array.
 - Six Cua suite cases that go through the agent gateway's computer tools wait for P4. Synara's "Computer authority" describe in that suite exercises only the manager, so it lives in `ComputerManager.authority.test.ts`.
 - Four `computerControlInvariants.test.ts` cases go through the agent gateway and wait for P4: "an intervening explicit screenshot must prevent unrelated image reuse", "routes every provider's routine mutations through the same task gate", "lets Synara approve or deny %s actions" and "rechecks original turn authority after waiting for the desktop".
+
+## P3 desktop host
+
+- The desktop Computer modules live in `apps/desktop/src/computer/` with Pathway's PascalCase file names (`CuaDriverHost.ts`, not `cuaDriverHost.ts`). This follows the desktop app's layout.
+- The Cua runtime directories, their ownership marker and its schema are `pathway-cua-XXXXXX`, `.pathway-cua-runtime.json` and `pathway-cua-runtime`, not `synara-cua-*`. This is a product rename. Runtime directories left behind by Synara are not swept.
+- `markCuaRuntimeDirectory` and `sweepOwnedCuaRuntimeDirectories` are Effects that read time from `Clock`, and the marker is encoded and decoded with Schema. The ownership checks are unchanged. The sweep's `now` option is dropped, because tests control time through `Clock`.
+- `clearStaleCuaHostSocket` reads the platform from `HostProcessPlatform` and takes its filesystem and socket calls as an injectable `CuaHostSocketIo`. Synara's tests used `vi.mock` of `node:fs/promises` and `node:net` for the same seams. The 1s probe timeout runs on the Effect clock.
+- `clearStaleCuaHostSocket` fails with a typed `CuaHostSocketError` (reason `live-listener | inconclusive | changed | non-socket | foreign`), or with `CuaHostSocketIoError` carrying the original Node error. Synara threw plain `Error`s. The messages are unchanged.
