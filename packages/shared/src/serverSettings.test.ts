@@ -18,6 +18,17 @@ import {
 } from "./serverSettings.ts";
 
 describe("serverSettings helpers", () => {
+  it("patches one Computer policy field without resetting the other", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      computer: { accessPolicy: "admins-only" as const, autonomy: "per-task" as const },
+    };
+    expect(applyServerSettingsPatch(current, { computer: { autonomy: "auto" } }).computer).toEqual({
+      accessPolicy: "admins-only",
+      autonomy: "auto",
+    });
+  });
+
   it("normalizes optional persisted strings", () => {
     expect(normalizePersistedServerSettingString(undefined)).toBeUndefined();
     expect(normalizePersistedServerSettingString("   ")).toBeUndefined();

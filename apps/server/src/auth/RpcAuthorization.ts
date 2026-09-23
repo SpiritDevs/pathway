@@ -1,5 +1,6 @@
 import {
   AuthAccessReadScope,
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
@@ -11,6 +12,7 @@ import {
   ISSUES_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
   type AuthEnvironmentScope,
+  type ServerSettingsPatch,
   WS_METHODS,
   WsRpcGroup,
 } from "@spiritdevs/contracts";
@@ -296,4 +298,14 @@ export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope 
     throw new Error(`RPC method ${method} has no declared authorization scope.`);
   }
   return requiredScope;
+}
+
+/**
+ * The scope a settings patch needs beyond the RPC's own. The Computer access policy and
+ * autonomy ceiling are admin-only (ADR 0041), so any patch touching them needs `access:write`.
+ */
+export function extraScopeForServerSettingsPatch(
+  patch: ServerSettingsPatch,
+): AuthEnvironmentScope | null {
+  return patch.computer === undefined ? null : AuthAccessWriteScope;
 }

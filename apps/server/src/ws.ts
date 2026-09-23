@@ -157,7 +157,10 @@ import * as ProjectService from "./project/ProjectService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
+import {
+  extraScopeForServerSettingsPatch,
+  requiredScopeForRpcMethod,
+} from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
@@ -1846,9 +1849,11 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateSettings,
-            serverSettings
-              .updateSettings(patch)
-              .pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
+            Effect.suspend(() => {
+              const extraScope = extraScopeForServerSettingsPatch(patch);
+              const update = serverSettings.updateSettings(patch);
+              return extraScope === null ? update : authorizeEffect(extraScope, update);
+            }).pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
             {
               "rpc.aggregate": "server",
             },

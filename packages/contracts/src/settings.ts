@@ -958,8 +958,8 @@ export function resolveComputerAutonomy(
 }
 
 /**
- * Computer Use policy for this environment. Admin-only to change (`access:write`),
- * so it is deliberately absent from `ServerSettingsPatch`.
+ * Computer Use policy for this environment. Admin-only to change: the server rejects a
+ * `ServerSettingsPatch.computer` from a session without `access:write`.
  */
 export const ComputerSettings = Schema.Struct({
   accessPolicy: ComputerAccessPolicy.pipe(
@@ -1205,6 +1205,13 @@ export const ServerSettingsPatch = Schema.Struct({
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
   emailCapture: Schema.optionalKey(EmailCaptureSettings),
+  // Requires `access:write`; the server rejects it from any other session.
+  computer: Schema.optionalKey(
+    Schema.Struct({
+      accessPolicy: Schema.optionalKey(ComputerAccessPolicy),
+      autonomy: Schema.optionalKey(ComputerAutonomy),
+    }),
+  ),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
