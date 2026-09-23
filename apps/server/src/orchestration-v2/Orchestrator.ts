@@ -4149,7 +4149,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         delegatedCompletion === undefined
           ? command.text
           : delegatedCompletionWakeDetail(delegatedCompletion.taskIds);
-      const computerControl =
+      const requestedComputer =
         delegatedCompletion === undefined
           ? runComputerControl({
               createdBy: command.createdBy,
@@ -4159,19 +4159,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             })
           : undefined;
       // ADR 0041: the one access-policy check every way in passes — chat,
-      // launch, the cloud queue, and a reply to a question alike.
-      if (computerControl !== undefined) {
-        yield* (yield* ComputerDispatchAccess).clearance.pipe(
-          Effect.mapError(
-            (cause) =>
-              new OrchestratorDispatchError({
-                commandId: command.commandId,
-                commandType: command.type,
-                cause,
-              }),
-          ),
-        );
-      }
+      // launch, the cloud queue, and a reply to a question alike. The run keeps
+      // the sender's clearance, so a later, stricter policy stops its calls.
+      const computerControl =
+        requestedComputer === undefined
+          ? undefined
+          : {
+              ...requestedComputer,
+              clearance: yield* (yield* ComputerDispatchAccess).clearance.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestratorDispatchError({
+                      commandId: command.commandId,
+                      commandType: command.type,
+                      cause,
+                    }),
+                ),
+              ),
+            };
       const sourcePlanProjection =
         command.sourcePlanRef === undefined
           ? null

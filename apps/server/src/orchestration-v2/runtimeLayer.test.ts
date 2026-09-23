@@ -3369,7 +3369,8 @@ it.layer(ConversationTestLayer)("Conversations and temporary retention", (it) =>
 });
 
 // Port of Synara's decider.computerControl.test.ts: Computer intent is frozen
-// onto the run at send time and never re-derived from stored text.
+// onto the run at send time and never re-derived from stored text. These sends
+// come from the server itself, which clears every access policy.
 it.layer(TestLayer)("decider computer-control pass-through", (it) => {
   type DispatchCommand = Extract<
     Parameters<OrchestratorV2["Service"]["dispatch"]>[0],
@@ -3516,7 +3517,11 @@ it.layer(TestLayer)("decider computer-control pass-through", (it) => {
           ...(queued ? { dispatchMode: { type: "queue_after_active" } as const } : {}),
         });
         assert.equal(run.status, queued ? "queued" : "starting");
-        assert.deepEqual(run.computerControl, { mode: "request", generation: 7 });
+        assert.deepEqual(run.computerControl, {
+          mode: "request",
+          generation: 7,
+          clearance: "admins-only",
+        });
       }),
     );
   }
@@ -3535,6 +3540,7 @@ it.layer(TestLayer)("decider computer-control pass-through", (it) => {
           assert.deepEqual(run.computerControl, {
             mode: enableComputerControl ? "chat" : "request",
             generation: 7,
+            clearance: "admins-only",
           });
         }),
     );
@@ -3578,7 +3584,11 @@ it.layer(TestLayer)("decider computer-control pass-through", (it) => {
 
       const projection = yield* orchestrator.getThreadProjection(threadId);
       const runOf = (id: RunId) => projection.runs.find((run) => run.id === id);
-      assert.deepEqual(runOf(requested.id)?.computerControl, { mode: "request", generation: 9 });
+      assert.deepEqual(runOf(requested.id)?.computerControl, {
+        mode: "request",
+        generation: 9,
+        clearance: "admins-only",
+      });
       assert.isUndefined(runOf(off.id)?.computerControl);
     }),
   );
@@ -3632,7 +3642,7 @@ it.layer(TestLayer)("decider computer-control pass-through", (it) => {
   }
 
   for (const [enableComputerControl, expected] of [
-    [true, { mode: "chat", generation: 7 }],
+    [true, { mode: "chat", generation: 7, clearance: "admins-only" }],
     [false, undefined],
     [undefined, undefined],
   ] as const) {

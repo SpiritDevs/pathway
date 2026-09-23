@@ -733,7 +733,11 @@ it.live("restarts a live run so a Computer steer reaches the provider", () =>
       const captured = yield* Ref.get(state);
 
       assert.lengthOf(projection.runs, 1);
-      assert.deepEqual(projection.runs[0]?.computerControl, { mode: "request", generation: 0 });
+      assert.deepEqual(projection.runs[0]?.computerControl, {
+        mode: "request",
+        generation: 0,
+        clearance: "admins-only",
+      });
       assert.deepEqual(
         projection.attempts.map((attempt) => attempt.status),
         ["superseded", "running"],

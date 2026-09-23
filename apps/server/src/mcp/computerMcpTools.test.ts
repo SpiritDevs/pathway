@@ -2,15 +2,19 @@ import { assert, it } from "@effect/vitest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import {
   CommandId,
+  type ComputerAccessPolicy,
   type ComputerAutonomy,
   EnvironmentId,
+  EventId,
   MessageId,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
   ProviderDriverKind,
   ProviderInstanceId,
+  RunId,
   ThreadId,
 } from "@spiritdevs/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -31,7 +35,7 @@ import { EventSinkV2 } from "../orchestration-v2/EventSink.ts";
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
-import { makeComputerMcpTools } from "./computerMcpTools.ts";
+import { type ComputerMcpTools, makeComputerMcpTools } from "./computerMcpTools.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import type { McpCapability, McpInvocationScope } from "./McpInvocationContext.ts";
 import type { McpToolCallResult } from "./toolkits/computer/toolRuntime.ts";
@@ -109,6 +113,40 @@ const noticesOf = (items: ReadonlyArray<OrchestrationV2TurnItem>, toolName: stri
   items.filter((item) => item.type === "dynamic_tool" && item.toolName === toolName);
 
 const callsTo = (method: string) => backend.calls.filter((call) => call.method === method).length;
+
+/** The seeded run as the projection holds it. */
+const seededRun = Effect.fn("seededRun")(function* (threadId: ThreadId, runId: RunId) {
+  const projection = yield* (yield* OrchestratorV2).getThreadProjection(threadId);
+  const run = projection.runs.find((candidate) => candidate.id === runId);
+  if (run === undefined) return yield* Effect.die("the seeded run is missing");
+  return run;
+});
+
+/** Holds the backend's target lookups, for the test, until `release`; `targeting` marks the first. */
+const holdTargeting = Effect.fn("holdTargeting")(function* () {
+  const targeting = yield* Deferred.make<void>();
+  const release = yield* Deferred.make<void>();
+  const original = backend.getState.bind(backend);
+  backend.getState = (options) =>
+    Deferred.succeed(targeting, undefined).pipe(
+      Effect.andThen(Deferred.await(release)),
+      Effect.andThen(original(options)),
+    );
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      backend.getState = original;
+    }),
+  );
+  return { targeting, release };
+});
+
+const clickDisplay = (tools: ComputerMcpTools, threadId: ThreadId) =>
+  tools.call({
+    invocation: invocationFor(threadId, ["computer"]),
+    name: "computer_click",
+    args: { window_id: "fake-calculator", label: "Display", include_screenshot: false },
+    jsonRpcRequestId: 1,
+  });
 
 /**
  * Tools reading an environment ceiling the test can change between steps, and
@@ -483,6 +521,126 @@ it.layer(TestLayer)("computerMcpTools", (it) => {
       yield* manager.releaseDesktopControl(threadId);
     }),
   );
+  it.effect("refuses a credential kept past its run once a later run starts without Computer", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* ComputerService;
+      const { threadId, runId } = yield* seedRunningTurn("outlived-run", "full-access");
+      yield* Effect.addFinalizer(() => Effect.orDie(manager.releaseDesktopControl(threadId)));
+      assert.isTrue(yield* manager.admitControl(threadId, "request", 0, true));
+      const original = yield* seededRun(threadId, runId);
+      const now = yield* DateTime.now;
+      const laterRunId = RunId.make("outlived-run-later");
+      yield* (yield* EventSinkV2).write({
+        events: [
+          {
+            id: EventId.make("outlived-run-completed"),
+            type: "run.updated",
+            threadId,
+            runId,
+            occurredAt: now,
+            payload: { ...original, status: "completed", completedAt: now },
+          },
+          {
+            id: EventId.make("outlived-run-later"),
+            type: "run.created",
+            threadId,
+            runId: laterRunId,
+            occurredAt: now,
+            payload: {
+              ...original,
+              id: laterRunId,
+              ordinal: 2,
+              userMessageId: MessageId.make("outlived-run-plain-message"),
+              computerControl: undefined,
+            },
+          },
+        ],
+      });
+      assert.isFalse(yield* manager.admitControl(threadId, "off", 0));
+      const { tools } = yield* toolsUnderCeiling("full-access");
+      const typedBefore = callsTo("typeText");
+      const typed = yield* tools.call({
+        invocation: invocationFor(threadId, ["computer"]),
+        name: "computer_type_text",
+        args: { text: "after Computer off", window_id: "fake-terminal", include_screenshot: false },
+        jsonRpcRequestId: 1,
+      });
+      assert.equal(errorCode(typed), "capability_denied");
+      assert.equal(callsTo("typeText"), typedBefore);
+    }),
+  );
+
+  it.effect("refuses a caller once the access policy tightens past its sender's clearance", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* ComputerService;
+      const settings = yield* ServerSettingsService;
+      const { threadId, runId } = yield* seedRunningTurn("access-tightened", "full-access");
+      yield* Effect.addFinalizer(() => Effect.orDie(manager.releaseDesktopControl(threadId)));
+      const original = yield* seededRun(threadId, runId);
+      yield* (yield* EventSinkV2).write({
+        events: [
+          {
+            id: EventId.make("access-tightened-operator"),
+            type: "run.updated",
+            threadId,
+            runId,
+            occurredAt: yield* DateTime.now,
+            payload: {
+              ...original,
+              computerControl: { mode: "request", generation: 0, clearance: "any-operator" },
+            },
+          },
+        ],
+      });
+      const access: { policy: ComputerAccessPolicy } = { policy: "any-operator" };
+      const tools = yield* makeComputerMcpTools.pipe(
+        Effect.provideService(ServerSettingsService, {
+          ...settings,
+          getSettings: settings.getSettings.pipe(
+            Effect.map((current) => ({
+              ...current,
+              computer: {
+                ...current.computer,
+                autonomy: "full-access" as const,
+                accessPolicy: access.policy,
+              },
+            })),
+          ),
+        }),
+      );
+      const type = () =>
+        tools.call({
+          invocation: invocationFor(threadId, ["computer"]),
+          name: "computer_type_text",
+          args: { text: "access", window_id: "fake-terminal", include_screenshot: false },
+          jsonRpcRequestId: 1,
+        });
+      assert.notEqual((yield* type())?.isError, true);
+      access.policy = "admins-only";
+      const typedBefore = callsTo("typeText");
+      assert.equal(errorCode(yield* type()), "computer_policy_changed");
+      assert.equal(callsTo("typeText"), typedBefore);
+    }),
+  );
+
+  it.effect("sends no click when the ceiling tightens while the call finds its target", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* ComputerService;
+      const { threadId } = yield* seedRunningTurn("tightened-targeting", "full-access");
+      yield* Effect.addFinalizer(() => Effect.orDie(manager.releaseDesktopControl(threadId)));
+      const { tools, policy } = yield* toolsUnderCeiling("full-access");
+      const { targeting, release } = yield* holdTargeting();
+      const clicksBefore = callsTo("click");
+      const clicking = yield* Effect.forkChild(clickDisplay(tools, threadId));
+      yield* Deferred.await(targeting);
+      policy.autonomy = "supervised";
+      yield* Deferred.succeed(release, undefined);
+      const clicked = yield* Fiber.join(clicking);
+      assert.equal(clicked?.isError, true);
+      assert.equal(callsTo("click"), clicksBefore);
+    }),
+  );
+
   it.effect("asks once for each further app the task's input reaches", () =>
     Effect.gen(function* () {
       const { manager } = yield* ComputerService;
