@@ -259,7 +259,9 @@ export const RPC_REQUIRED_SCOPES = {
   // environment's Computer access policy is applied by the handlers, because it reads live
   // settings and never restricts watching or Stop.
   [COMPUTER_WS_METHODS.getStatus]: AuthOrchestrationReadScope,
-  [COMPUTER_WS_METHODS.getAuditHistory]: AuthOrchestrationReadScope,
+  // The audit log spans every thread on this desktop, so only admins read it; Synara
+  // limited it to the owner session.
+  [COMPUTER_WS_METHODS.getAuditHistory]: AuthAccessReadScope,
   [COMPUTER_WS_METHODS.listWindows]: AuthOrchestrationReadScope,
   [COMPUTER_WS_METHODS.getState]: AuthOrchestrationReadScope,
   [COMPUTER_WS_METHODS.getScreenSize]: AuthOrchestrationReadScope,
