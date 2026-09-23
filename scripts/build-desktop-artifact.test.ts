@@ -21,7 +21,9 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
+  CUA_DRIVER_EXTRA_RESOURCES,
   DICTATION_EXTRA_RESOURCES,
+  PATHWAY_HELPER_EXTRA_RESOURCES,
   stageDictation,
   LINUX_CAPTURE_EXTRA_RESOURCES,
   InvalidMacPasskeyRpDomainError,
@@ -416,6 +418,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "!apps/desktop/gnome-extension",
       "!apps/desktop/gnome-extension/**/*",
       "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
+      "!apps/desktop/prod-resources/cua-driver/**",
+      "!apps/desktop/prod-resources/pathway-helper/**",
     ]);
   });
 
@@ -457,6 +461,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(mac.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
         ...DICTATION_EXTRA_RESOURCES,
+        ...CUA_DRIVER_EXTRA_RESOURCES,
+        ...PATHWAY_HELPER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(win.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
@@ -465,16 +471,38 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(linux.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
         ...LINUX_CAPTURE_EXTRA_RESOURCES,
+        ...CUA_DRIVER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(
         LINUX_CAPTURE_EXTRA_RESOURCES.map((resource) => resource.to),
         ["hyprland-capture", "kde-capture", "gnome-extension"],
       );
+      const macConfig = mac.mac as Record<string, unknown> & {
+        extendInfo: Record<string, unknown>;
+      };
       assert.propertyVal(
-        (mac.mac as { extendInfo: Record<string, unknown> }).extendInfo,
+        macConfig.extendInfo,
         "NSScreenCaptureUsageDescription",
-        "Pathway captures the active window when you use the SnapShots shortcut.",
+        "Pathway captures the active window when you use the SnapShots shortcut, and the windows you authorize for Computer use.",
       );
+      assert.propertyVal(
+        macConfig.extendInfo,
+        "NSAccessibilityUsageDescription",
+        "Pathway controls the windows you authorize for Computer use.",
+      );
+      // Both Computer Use natives are re-signed with the release identity and
+      // survive the universal merge as the fat binaries the build staged.
+      assert.deepStrictEqual(macConfig.binaries, [
+        "Contents/Resources/pathway-helper/pathway-helper",
+        "Contents/Resources/cua-driver/cua-driver",
+      ]);
+      assert.equal(
+        macConfig.x64ArchFiles,
+        "Contents/Resources/{pathway-helper/pathway-helper,cua-driver/cua-driver}",
+      );
+      for (const resource of [...CUA_DRIVER_EXTRA_RESOURCES, ...PATHWAY_HELPER_EXTRA_RESOURCES]) {
+        assert.include(DESKTOP_FILE_EXCLUSIONS, `!${resource.from}/**`);
+      }
       // Linux must register the renderer schemes so the generated .desktop
       // entry advertises MimeType=x-scheme-handler/pathway; for OAuth deep links.
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
@@ -664,7 +692,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         NSMicrophoneUsageDescription:
           "Pathway records your voice when you start dictation. Audio is processed on this computer.",
         NSScreenCaptureUsageDescription:
-          "Pathway captures the active window when you use the SnapShots shortcut.",
+          "Pathway captures the active window when you use the SnapShots shortcut, and the windows you authorize for Computer use.",
+        NSAccessibilityUsageDescription:
+          "Pathway controls the windows you authorize for Computer use.",
         NSLocalNetworkUsageDescription:
           "Pathway connects to development servers running on your local network.",
       });

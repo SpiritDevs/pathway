@@ -50,3 +50,6 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - The helper links without AVFoundation, which only the dropped capture feedback used.
 - The helper embeds an `Info.plist` so its signing identifier stays `com.spiritdevs.pathway.helper` through electron-builder's re-sign; Synara's identifier follows the binary's LC_UUID.
 - `build-pathway-helper` is Effect TypeScript under `scripts/`, stages to `apps/desktop/.electron-runtime/pathway-helper/pathway-helper`, and runs the native tests with `--native-tests`.
+- The helper and Cua driver ship as `extraResources` under `Contents/Resources/{pathway-helper,cua-driver}/` rather than Synara's `Contents/Helpers` via `extraFiles`, following Pathway's staged prod-resources convention; both are listed in `mac.binaries` and `x64ArchFiles`.
+- `build-desktop-artifact` stages Computer Use natives in-process into prod-resources (Cua on macOS and Linux, the helper on macOS only) instead of spawning the build scripts.
+- `NSScreenCaptureUsageDescription` combines Computer Use with the existing SnapShots wording, and `NSAccessibilityUsageDescription` is new.
