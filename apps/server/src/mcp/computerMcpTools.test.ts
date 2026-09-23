@@ -11,6 +11,7 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@spiritdevs/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -21,6 +22,7 @@ import {
   pendingComputerRequest,
   seedRunningTurn,
 } from "../computer/computerApprovals.testkit.ts";
+import { ComputerApprovalGate } from "../computer/ComputerApprovalGate.ts";
 import { ComputerManager } from "../computer/ComputerManager.ts";
 import { FakeComputerBackend } from "../computer/FakeComputerBackend.ts";
 import { ComputerService } from "../computer/Services/ComputerService.ts";
@@ -82,6 +84,18 @@ const unattended = {
     })),
   }),
 };
+
+/** Accepts the thread's pending Computer card once it lands. */
+const acceptCard = Effect.fn("acceptCard")(function* (threadId: ThreadId, commandId: string) {
+  const { request } = yield* pendingComputerRequest(threadId);
+  yield* (yield* OrchestratorV2).dispatch({
+    type: "runtime-request.respond",
+    commandId: CommandId.make(commandId),
+    threadId,
+    requestId: request.id,
+    decision: "accept",
+  });
+});
 
 const noticesOf = (items: ReadonlyArray<OrchestrationV2TurnItem>, toolName: string) =>
   items.filter((item) => item.type === "dynamic_tool" && item.toolName === toolName);
@@ -290,7 +304,7 @@ it.layer(TestLayer)("computerMcpTools", (it) => {
       assert.equal(errorCode(yield* activate()), "foreground_not_requested");
       policy.autonomy = "full-access";
       const raised = yield* activate();
-      assert.notEqual(raised?.isError, true, JSON.stringify(raised));
+      assert.notEqual(raised?.isError, true);
       yield* manager.releaseDesktopControl(threadId);
     }),
   );
@@ -315,9 +329,82 @@ it.layer(TestLayer)("computerMcpTools", (it) => {
 
         policy.autonomy = "full-access";
         const typed = yield* type();
-        assert.notEqual(typed?.isError, true, JSON.stringify(typed));
+        assert.notEqual(typed?.isError, true);
         assert.equal(callsTo("typeText"), typedBefore + 1);
         yield* manager.releaseDesktopControl(threadId);
       }),
+  );
+  it.effect("refuses a call approved before its card's ceiling tightened", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* ComputerService;
+      const { tools, policy } = yield* toolsUnderCeiling("per-task");
+      const { threadId } = yield* seedRunningTurn("tightened-while-asking", "full-access");
+      const type = () =>
+        tools.call({
+          invocation: invocationFor(threadId, ["computer"]),
+          name: "computer_type_text",
+          args: { text: "tightened", window_id: "fake-terminal", include_screenshot: false },
+          jsonRpcRequestId: 1,
+        });
+      const typedBefore = callsTo("typeText");
+      const waiting = yield* Effect.forkChild(type());
+      yield* pendingComputerRequest(threadId);
+      policy.autonomy = "supervised";
+      yield* acceptCard(threadId, "tightened-while-asking-accept");
+      assert.equal(errorCode(yield* Fiber.join(waiting)), "computer_policy_changed");
+      assert.equal(callsTo("typeText"), typedBefore);
+
+      // Called again, it asks under the new policy.
+      const retry = yield* Effect.forkChild(type());
+      yield* acceptCard(threadId, "tightened-while-asking-retry");
+      assert.notEqual((yield* Fiber.join(retry))?.isError, true);
+      assert.equal(callsTo("typeText"), typedBefore + 1);
+      yield* manager.releaseDesktopControl(threadId);
+    }),
+  );
+
+  it.effect("refuses a queued call whose ceiling tightened while it waited for the desktop", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* ComputerService;
+      const gate = yield* ComputerApprovalGate;
+      const { threadId, runId } = yield* seedRunningTurn("tightened-in-queue", "full-access");
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const holder = yield* Effect.forkChild(
+        manager.withAgentActivity(
+          threadId,
+          Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          undefined,
+          runId,
+        ),
+      );
+      yield* Deferred.await(held);
+      const approved = yield* Deferred.make<void>();
+      const { tools, policy } = yield* toolsUnderCeiling("full-access").pipe(
+        Effect.provideService(ComputerApprovalGate, {
+          ...gate,
+          authorizeAction: (input) =>
+            gate
+              .authorizeAction(input)
+              .pipe(Effect.tap(() => Deferred.succeed(approved, undefined))),
+        }),
+      );
+      const typedBefore = callsTo("typeText");
+      const queued = yield* Effect.forkChild(
+        tools.call({
+          invocation: invocationFor(threadId, ["computer"]),
+          name: "computer_type_text",
+          args: { text: "queued", window_id: "fake-terminal", include_screenshot: false },
+          jsonRpcRequestId: 1,
+        }),
+      );
+      yield* Deferred.await(approved);
+      policy.autonomy = "supervised";
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      assert.equal(errorCode(yield* Fiber.join(queued)), "computer_policy_changed");
+      assert.equal(callsTo("typeText"), typedBefore);
+      yield* manager.releaseDesktopControl(threadId);
+    }),
   );
 });
