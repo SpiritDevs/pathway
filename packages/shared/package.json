@@ -4,6 +4,10 @@
   "type": "module",
   "exports": {
     "./cuaDriverRelease.json": "./src/cuaDriverRelease.json",
+    "./desktopFlavor": {
+      "types": "./src/desktopFlavor.ts",
+      "import": "./src/desktopFlavor.ts"
+    },
     "./browserPasswordAutofill": {
       "types": "./src/browserPasswordAutofill.ts",
       "import": "./src/browserPasswordAutofill.ts"

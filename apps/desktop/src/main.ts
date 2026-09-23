@@ -78,6 +78,7 @@ const desktopEnvironmentLayer = Layer.unwrap(
       platform,
       processArch,
       ...metadata,
+      flavor: DesktopPreReadyPlatform.readPackagedDesktopFlavor(),
     });
   }),
 );

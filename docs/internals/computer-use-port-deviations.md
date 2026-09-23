@@ -53,3 +53,10 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - The helper and Cua driver ship as `extraResources` under `Contents/Resources/{pathway-helper,cua-driver}/` rather than Synara's `Contents/Helpers` via `extraFiles`, following Pathway's staged prod-resources convention; both are listed in `mac.binaries` and `x64ArchFiles`.
 - `build-desktop-artifact` stages Computer Use natives in-process into prod-resources (Cua on macOS and Linux, the helper on macOS only) instead of spawning the build scripts.
 - `NSScreenCaptureUsageDescription` combines Computer Use with the existing SnapShots wording, and `NSAccessibilityUsageDescription` is new.
+- Pathway has only the `production` and `cua` packaged flavors (no `canary`), defined in `@spiritdevs/shared/desktopFlavor`; development stays driven by the dev server URL rather than a flavor.
+- The cua flavor's identity is `com.spiritdevs.pathway.cua`, "Pathway Cua", `pathway-cua://app`, user data `pathway-cua` and home `~/.pathway-cua`; the build stamps `pathwayDesktopFlavor` into the packaged package.json, and an unknown value stops startup.
+- There is no runtime flavor override (Synara's `requestedFlavor`, source-build marker and smoke user-data override); only a packaged artifact can be the cua flavor.
+- The cua flavor publishes no update feed (`publish: null`), so the updater reports updates as unavailable rather than using Synara's scripted updates.
+- `build-desktop-artifact --flavor cua` (or `PATHWAY_DESKTOP_FLAVOR`) writes to `release-cua`, overriding `--mock-updates`' `release-mock`; Windows refuses isolated flavors at option resolution and in `createBuildConfig`.
+- The desktop renderer scheme now comes from `DesktopEnvironment.desktopScheme` rather than `getDesktopScheme(isDevelopment)`, and the server trusts the `pathway-cua://app` renderer origin.
+- Before cua builds can sign in with OAuth, the Clerk instance's allowed redirect origins need `pathway-cua://app`; this is instance configuration, not repository code.

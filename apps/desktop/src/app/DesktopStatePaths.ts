@@ -14,9 +14,10 @@ export function resolveDesktopBaseDir(input: {
   readonly homeDirectory: string;
   readonly joinPath: JoinPath;
   readonly pathwayHome: Option.Option<string>;
+  readonly defaultHomeDirName?: string | undefined;
 }): string {
   return Option.getOrElse(normalizeConfiguredBaseDir(input.pathwayHome), () =>
-    input.joinPath(input.homeDirectory, ".pathway"),
+    input.joinPath(input.homeDirectory, input.defaultHomeDirName ?? ".pathway"),
   );
 }
 
