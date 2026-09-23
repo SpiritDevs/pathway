@@ -45,3 +45,8 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - The `provision-cua` action drops Synara's Xcode 16.4 pin (the self-hosted fleet runner owns Xcode and the cache key fingerprints it) and its benchmark step, adds a `targets` input, and scopes `RUSTUP_TOOLCHAIN`/strip overrides to its own steps so other Rust builds keep stable.
 - `cua-cache-key` prints the key through `Effect.log`; CI reads it from `GITHUB_OUTPUT`, never stdout.
 - The release build job timeout rises from 30 to 45 minutes to absorb a cold Cua build.
+- The Swift helper lives in `native/pathway-helper/` as `pathway-helper`, not `apps/desktop/native/appsnap/` as `synara-appsnap-helper`; `AppSnap*` Swift identifiers become `PathwayHelper*`, and queue labels use `com.spiritdevs.pathway.*`.
+- The helper drops watch mode and its pieces (OptionChordMonitor, CaptureFeedback, ExternalTriggerListener, WindowCapture, and the `triggered`/`captured`/`windows` events); `--watch`, `--output-dir`, `--excluded-bundle-id` and `--external-trigger` are now unknown arguments.
+- The helper links without AVFoundation, which only the dropped capture feedback used.
+- The helper embeds an `Info.plist` so its signing identifier stays `com.spiritdevs.pathway.helper` through electron-builder's re-sign; Synara's identifier follows the binary's LC_UUID.
+- `build-pathway-helper` is Effect TypeScript under `scripts/`, stages to `apps/desktop/.electron-runtime/pathway-helper/pathway-helper`, and runs the native tests with `--native-tests`.
