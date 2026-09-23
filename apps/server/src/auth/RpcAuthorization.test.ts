@@ -1,8 +1,10 @@
 import {
+  AuthAccessReadScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
+  AuthStandardClientScopes,
   COMPUTER_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
@@ -98,7 +100,6 @@ describe("RPC authorization scopes", () => {
   it("lets read access watch Computer and requires operation access to act on it", () => {
     const watching = new Set<string>([
       COMPUTER_WS_METHODS.getStatus,
-      COMPUTER_WS_METHODS.getAuditHistory,
       COMPUTER_WS_METHODS.listWindows,
       COMPUTER_WS_METHODS.getState,
       COMPUTER_WS_METHODS.getScreenSize,
@@ -106,9 +107,17 @@ describe("RPC authorization scopes", () => {
       COMPUTER_WS_METHODS.subscribeEvents,
     ]);
     for (const method of Object.values(COMPUTER_WS_METHODS)) {
+      if (method === COMPUTER_WS_METHODS.getAuditHistory) continue;
       expect(requiredScopeForRpcMethod(method)).toBe(
         watching.has(method) ? AuthOrchestrationReadScope : AuthOrchestrationOperateScope,
       );
     }
+  });
+
+  it("keeps the desktop-wide Computer audit log to admin clients", () => {
+    expect(requiredScopeForRpcMethod(COMPUTER_WS_METHODS.getAuditHistory)).toBe(
+      AuthAccessReadScope,
+    );
+    expect(AuthStandardClientScopes).not.toContain(AuthAccessReadScope);
   });
 });
