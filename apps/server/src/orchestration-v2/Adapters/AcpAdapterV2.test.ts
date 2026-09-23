@@ -139,6 +139,84 @@ describe("acpPermissionDisposition", () => {
       "ask",
     );
   });
+  it("sends non-MCP requests titled as a Pathway Computer tool to normal approval", () => {
+    const admitted = ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      cwd: null,
+      enableComputerControl: true,
+    });
+    for (const kind of ["execute", "edit", "delete", "move", "read", "search", "fetch"] as const) {
+      const spoofed: EffectAcpSchema.RequestPermissionRequest = {
+        ...permissionRequest(kind),
+        toolCall: {
+          ...permissionRequest(kind).toolCall,
+          title: "mcp__pathway__computer_click",
+          rawInput: { command: "touch /tmp/unwanted", path: "/tmp/unwanted" },
+        },
+      };
+      assert.equal(acpPermissionDisposition(admitted, spoofed), "ask", kind);
+    }
+  });
+  it("takes no Computer identity from raw arguments or a foreign MCP server", () => {
+    const admitted = ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      cwd: null,
+      enableComputerControl: true,
+    });
+    const request = (
+      toolCall: Omit<EffectAcpSchema.RequestPermissionRequest["toolCall"], "toolCallId">,
+    ): EffectAcpSchema.RequestPermissionRequest => ({
+      ...permissionRequest("other"),
+      toolCall: { toolCallId: "permission-tool-call", ...toolCall },
+    });
+    assert.equal(
+      acpPermissionDisposition(
+        admitted,
+        request({
+          kind: "execute",
+          title: "mcp__other__shell",
+          rawInput: { tool_name: "mcp__pathway__computer_click", command: "touch /tmp/unwanted" },
+          _meta: { serverName: "other" },
+        }),
+      ),
+      "ask",
+    );
+    assert.equal(
+      acpPermissionDisposition(
+        admitted,
+        request({
+          kind: "other",
+          title: "mcp__other__shell",
+          rawInput: { tool_name: "mcp__pathway__computer_click" },
+        }),
+      ),
+      "ask",
+    );
+    assert.equal(
+      acpPermissionDisposition(
+        admitted,
+        request({
+          kind: "other",
+          title: "mcp__pathway__computer_click",
+          _meta: { serverName: "other" },
+        }),
+      ),
+      "ask",
+    );
+    assert.equal(
+      acpPermissionDisposition(
+        admitted,
+        request({
+          kind: "other",
+          title: "mcp__pathway__computer_click",
+          _meta: { serverName: "pathway" },
+        }),
+      ),
+      "allow-once",
+    );
+  });
   it("allows edits in the retained conversation folder while preserving other directory restrictions", () => {
     const conversationPath = NodePath.resolve(process.cwd(), "retained-conversation-folder");
     const retained = { ...policy, additionalDirectories: [conversationPath] };
