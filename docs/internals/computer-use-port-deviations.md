@@ -236,3 +236,62 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - Stop reaches in-flight Computer calls, as Synara's `inFlightRequestRegistry.cancelTurn` does. On Stop, the orchestrator calls the `RunStopFence` port before it writes the run interrupted, and it calls the port again whenever a run ends. `ComputerRunCalls` implements it. It keys calls by thread and run rather than by JSON-RPC id. It fences the run at once, so a later call is refused on arrival. It then aborts the run's live calls wherever they wait and returns once they have unwound, bounded at Synara's two seconds. A stopped call answers `caller_turn_inactive`. A backend action already on its way finishes, and nothing after it is sent. `revokeControl` is the persistent Off, not Stop.
 - `decider.computerControl.test.ts` is ported as the "decider computer-control pass-through" block in `runtimeLayer.test.ts`, which runs over the real orchestrator. `SelectionRestart.integration.test.ts` adds the Computer steer restart.
 - `ExternalMcpComputerControl.test.ts` is ported as its invariant: Pathway's MCP thread tools do not expose a Computer switch, and agent- or system-authored `/computer-use` text never activates Computer. The pass-through block covers that.
+
+## P6 — web and desktop clients
+
+### Desktop
+
+- Computer IPC channels are named `desktop:computer-*`. The frame tap's renderer channel is `desktop:computer-preview-frame`, replacing P3's placeholder `computerPreview.frame`. Synara's `appSnap` permission methods and `computerPreview.onFrame` are folded into one feature-detected `DesktopBridge.computer` namespace, so a browser client (local `npx` web, app.spiritdevs.com, relay) simply sees it absent.
+- Every Computer handler accepts only the main window as sender, the same way SnapShot does. Payloads are decoded with the contract Schemas, and invalid input falls back to Synara's defaults (the default grant list, `false`, or a no-op). Synara had no sender check.
+- The permission-guide push accepts only `granted` or `closed`. Synara forwarded any string.
+- `computer` is exposed in preload on every platform. An inert host (not macOS, `PATHWAY_COMPUTER_USE` unset, helpers missing, or a host that could not start) answers `status: "unsupported"` with a reason message, and the web hides the grant section on `supported: false`. Synara's manager ran on every platform.
+- The agent cursor preference is read from the desktop state directory once at startup and cached in memory; the IPC handler updates both. Synara re-read the file at each driver session open. The file format (`{version: 1, style}`, deleted for the stock cursor) is unchanged.
+- A setup error logs a warning, reveals the main window if one exists, and pushes the error to it. There is no desktop-notification fallback, and no window is created.
+- The relaunch after Screen Recording goes through `DesktopLifecycle.relaunch`, Pathway's graceful quit.
+
+### Composer
+
+- There is no per-chat Computer switch, as in Synara (its `BranchToolbar` test pins "no persistent Computer switch"). The **Computer control** setting enables every chat; a leading `/computer-use` enables one request.
+- `/computer-use` is offered only when the thread's environment reports a supported platform (`useComputerSupport`), and a provider's own `computer-use` command is hidden beside it.
+- The wire carries no mode. `enableComputerControl: true` is sent only when the setting is on, because sending it in request mode would widen the request into chat mode; the server reads request mode from the text (P5). `computerControlGeneration` is sent only when the resolved mode is not off: the thread's generation, else the draft's, else 0 for a new thread.
+- A thread's first message goes through `launchThread`, so `initialMessage` carries the same two optional fields and the launch service passes them to its `message.dispatch`. Synara had one dispatch path.
+- An edit-and-resend resolves its mode from the edited text; Synara used the composer's current state.
+- The permission guide opened by an explicit mode change reads `state.supported` rather than the platform, and runs only when the thread's environment is this desktop's primary environment.
+- The effort hint is a Pathway-styled strip in the composer header rather than Synara's stacked panel. For drafts, availability falls back to the environment's cached Computer status, because a draft has no server thread state. Explicitly picking "High" counts as the default, so the hint still shows.
+- Not ported: the editor slash chip (Pathway has no chip system), the legacy `enableComputerControl` draft boolean (superseded by the mode field), client-side queued-turn revoke (the server queue freezes intent when a turn is queued) and the optional send-time permission preflight.
+
+### Chat
+
+- The approval scope (whole task, one app, one call) is parsed from the prompt text by `parseComputerApprovalPrompt`, because the approval item has no structured scope. The parser is coupled to the server's `computerApprovalCardText`.
+- "Always allow this session" is hidden for every Computer scope: session-wide consent would bypass per-task consent. The one-app consent copy is Pathway's own; Synara has none.
+- Call approvals show the action summary and its parameters instead of the raw call. The panel keeps Pathway's split layout, and an approval is answered at most once per request id.
+- Every setup-required and control-denied notice is shown as its own never-folded row; the server already dedups them per run and reason. Synara showed the latest of each kind.
+- Declined and cancelled approvals both read "declined", because the item stores only a status.
+- The denied card has an `accessDenied` state for clients whose known scopes include neither `computer:operate` nor `access:write`: it shows the server's re-pair message and hides Enable. The desktop's own primary environment always counts as allowed. Under the Any operator policy a device paired without `computer:operate` still sees the re-pair message.
+- Enable is hidden on inherited or synthetic notice rows. Enable arms `/computer-use` on the draft and leaves the send to the user.
+- Status refreshes through `useLiveRefresh` instead of Synara's 10-second poll, and is read once on mount only when nothing is cached.
+
+### Live state and preview
+
+- The frame source takes a URL resolved on every reconnect by a client-runtime command: the cookie for the primary connection, a `wsTicket` for Bearer, and a DPoP ticket for relay, so remote and tunnel clients stream. The route constants are duplicated in client-runtime, because `@spiritdevs/shared/computerFrame` pulls in Node's `Buffer`.
+- Computer stores are keyed by `scopedThreadKey` and clear per environment, so several environments can each drive their own computer. An environment's cache resets on each new connected generation rather than on a server identity change, because Pathway exposes no server instance id; the seed calls refill it.
+- The desktop frame tap is used only when the thread's environment is the desktop's primary environment. A remote environment always uses the frame socket stills.
+- The preview is a top-right overlay inside the transcript (`ComputerPreviewRail`). Pathway has no environment panel rail, so Synara's `AmbientRailSlot` and gutter inset are dropped.
+- `ComputerStatusBadge` shows a static dot where Synara pulsed: a continuous pulse repaints every frame. The badge, input pause notice, click dispatch and input queue are ported but, as in Synara, not mounted.
+- `useComputerDesktopControl` is not ported: the preview needs only `agentActive` and `visibleDesktop`, which are inlined.
+- `ComputerPreviewPopover.browser.tsx` is covered by static-markup tests; the armed-to-live and hide-click interactions have no DOM test.
+
+### Settings → Computer
+
+- The access policy and autonomy ceiling are edited through `ServerSettingsPatch.computer`. `serverUpdateSettings` still needs `orchestration:operate`, and a patch that touches `computer` also needs `access:write` (`extraScopeForServerSettingsPatch`). Synara had neither setting.
+- The nav entry and search results appear only where the environment can be driven: the host platform plus any cached status. Settings has a per-environment picker, and scopes are checked per environment.
+- "Is this the local machine" means the desktop app talking to its primary environment, not a loopback URL check, because remote and tunnel URLs make the URL unreliable. Browser and remote clients see a "Set up on the host" note instead of grant controls. `localPlatformUnsupported` reads the desktop bridge's `supported` flag, so a Linux desktop app never offers Set up.
+- Status refreshes every 10 seconds while the page is visible and on focus, through an effect rather than react-query. The 2-second grant poll runs only while a permission guide is open. "Check again" appears only when the status failed to load; there is no separate Recheck row.
+- One provision per environment is in flight at a time, shared by the chat setup card and the panel through `useProvisionComputer`'s module-level store instead of react-query's `isMutating`.
+- The attention row uses a static tone dot, and disclosures do not animate. Advanced stays mounted while hidden, so an open guide keeps its state.
+- Audit history keeps its pages in local state with Synara's paging (30 rows a page, 100 at most). Without `access:read` it shows "Admin connection required" instead of an error.
+- The autonomy options are ADR 0042/0043's four levels; "Auto-accept edits" reads "Per task".
+- Agent cursor colours sync to the desktop from the app root, so the host has them from startup, not only after Settings opens.
+- The `computer-status` search item targets the `computer-control` section, because the attention row has no anchor.
+- Not ported: restore-defaults and the "always allowed" search entry, which belong to a feature outside this port.
+- Copy: Synara → Pathway, AppSnap → SnapShot.
