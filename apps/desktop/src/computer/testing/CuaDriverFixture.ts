@@ -103,7 +103,8 @@ export interface FixtureOptions
 export interface SendOptions {
   readonly mutation?: boolean;
   readonly timeoutMs?: number;
-  readonly signal?: AbortSignal;
+  /** Completing this effect cancels the request. */
+  readonly cancel?: Effect.Effect<void>;
 }
 
 export interface Fixture {
@@ -444,21 +445,11 @@ export const makeFixture = Effect.fn("makeFixture")(function* (options: FixtureO
   };
 
   const send = <T = CuaReply>(body: Record<string, unknown>, sendOptions: SendOptions = {}) =>
-    Effect.tryPromise({
-      try: (interrupted) =>
-        cuaRequest<T>(
-          endpoint,
-          { capability: options.capability ?? CAPABILITY, ...body },
-          {
-            ...sendOptions,
-            signal: sendOptions.signal
-              ? AbortSignal.any([sendOptions.signal, interrupted])
-              : interrupted,
-          },
-        ),
-      catch: (cause) =>
-        new CuaHostError({ message: cause instanceof Error ? cause.message : String(cause) }),
-    });
+    cuaRequest<T>(
+      endpoint,
+      { capability: options.capability ?? CAPABILITY, ...body },
+      sendOptions,
+    ).pipe(Effect.mapError((error) => new CuaHostError({ message: error.message })));
 
   return {
     host,

@@ -8,7 +8,7 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { expect } from "vite-plus/test";
 
-import { type CuaReply, CuaTransportError, cuaRequest } from "@spiritdevs/shared/cuaDriverProtocol";
+import { type CuaReply, cuaRequest } from "@spiritdevs/shared/cuaDriverProtocol";
 
 import { CuaHostError, type CuaHostPermissions } from "./CuaDriverHost.ts";
 import { CAPABILITY, type Fixture, makeFixture } from "./testing/CuaDriverFixture.ts";
@@ -21,14 +21,7 @@ const rawSend = (
   f: Fixture,
   body: Record<string, unknown>,
   options: { readonly timeoutMs?: number; readonly mutation?: boolean },
-) =>
-  Effect.tryPromise({
-    try: () => cuaRequest<CuaReply>(f.endpoint, { capability: CAPABILITY, ...body }, options),
-    catch: (cause) =>
-      cause instanceof CuaTransportError
-        ? cause
-        : new CuaTransportError(String(cause), "not-dispatched"),
-  });
+) => cuaRequest<CuaReply>(f.endpoint, { capability: CAPABILITY, ...body }, options);
 
 const Json = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeEffect(Json);
@@ -390,15 +383,15 @@ describe("Cua macOS host retirement", () => {
       const f = yield* makeFixture({ delayObservation: true });
       yield* f.host.pauseDesktop("screen-lock");
       yield* f.host.resumeDesktop("screen-lock");
-      const controller = new AbortController();
+      const cancel = yield* Deferred.make<void>();
       const observation = yield* f
         .send(
           { method: "call", name: "get_window_state", modelObservation: true },
-          { signal: controller.signal },
+          { cancel: Deferred.await(cancel) },
         )
         .pipe(Effect.forkChild);
       yield* f.waitForEvent("observe");
-      controller.abort();
+      yield* Deferred.succeed(cancel, undefined);
       assert.instanceOf(yield* Effect.flip(Fiber.join(observation)), CuaHostError);
       // The press queues behind the abandoned observation on the host's
       // operation queue, so it sees whatever that observation left behind.

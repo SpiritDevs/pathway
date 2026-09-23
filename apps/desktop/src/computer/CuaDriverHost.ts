@@ -36,6 +36,7 @@ import {
   type CuaPreviewTarget,
   type CuaReply,
   cuaRequest,
+  type CuaRequestOptions,
   type CuaToolResult,
   parseCuaComputerTask,
   parseCuaShieldArgs,
@@ -57,6 +58,10 @@ const isCuaHostError = Schema.is(CuaHostError);
 const hostError = (message: string) => new CuaHostError({ message });
 const toHostError = (cause: unknown) =>
   isCuaHostError(cause) ? cause : hostError(cause instanceof Error ? cause.message : String(cause));
+
+/** A per-call cancellation: completing it cancels that call's driver request. */
+type CallCancel = Deferred.Deferred<void>;
+const cancelCall = (cancel: CallCancel) => Deferred.doneUnsafe(cancel, Exit.void);
 
 /** Failures from the injected helper surfaces; only their message is kept. */
 export interface SurfaceError {
@@ -513,18 +518,9 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
   const driverRequest = <T = CuaReply>(
     socket: string,
     body: unknown,
-    requestOptions: { timeoutMs?: number; mutation?: boolean; signal?: AbortSignal } = {},
+    requestOptions: CuaRequestOptions = {},
   ): Effect.Effect<T, CuaHostError> =>
-    Effect.tryPromise({
-      try: (interrupted) =>
-        cuaRequest<T>(socket, body, {
-          ...requestOptions,
-          signal: requestOptions.signal
-            ? AbortSignal.any([requestOptions.signal, interrupted])
-            : interrupted,
-        }),
-      catch: toHostError,
-    });
+    cuaRequest<T>(socket, body, requestOptions).pipe(Effect.mapError(toHostError));
 
   let directory = "";
   let server: NodeNet.Server | undefined;
@@ -545,9 +541,9 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
   const monitoredTasks = new Map<string, string>();
   /** Deadline until which mutating dispatch is refused after physical input. */
   let inputInterruptCooldownUntil = 0;
-  /** Abort handles for mutating calls whose driver request is live right now. */
-  const inFlightInputInterrupts = new Set<AbortController>();
-  const activeTaskCalls = new Map<AbortController, string>();
+  /** Cancel handles for mutating calls whose driver request is live right now. */
+  const inFlightInputInterrupts = new Set<CallCancel>();
+  const activeTaskCalls = new Map<CallCancel, string>();
   const desktopPauses = new Set<string>();
   let desktopObservationRequired = false;
   let browserObservationRequired = false;
@@ -1120,7 +1116,7 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
     for (const cancel of pendingPermissionChecks.keys()) cancel();
     const admitted = operations;
     const surfaces = stopSurfaces();
-    for (const interrupt of inFlightInputInterrupts) interrupt.abort();
+    for (const interrupt of inFlightInputInterrupts) cancelCall(interrupt);
     const previous = stopping;
     const task = start(
       Effect.gen(function* () {
@@ -1618,7 +1614,7 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
       }
       for (const [cancel, owner] of pendingPermissionChecks)
         if (owner !== undefined && stoppedKeys.has(owner)) cancel();
-      for (const [cancel, owner] of activeTaskCalls) if (stoppedKeys.has(owner)) cancel.abort();
+      for (const [cancel, owner] of activeTaskCalls) if (stoppedKeys.has(owner)) cancelCall(cancel);
       // Once this task dispatched input, stopping it drains that generation
       // and fences queued siblings too. Idle and queued tasks need only their
       // own revocation; a thread-wide Stop never interrupts another thread.
@@ -1774,13 +1770,13 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
       // Per-call cancellation: the input interrupt aborts mutating calls, and a
       // caller's connection closing aborts too. Neither indicts the driver,
       // so an aborted call never retires the generation.
-      const callCancel = new AbortController();
+      const callCancel: CallCancel = Deferred.makeUnsafe();
       if (mutation) inFlightInputInterrupts.add(callCancel);
       if (task) activeTaskCalls.set(callCancel, cuaComputerTaskKey(task));
       const abort = () => {
         if (repliedConnections.has(connection)) return;
-        const alreadyInterrupted = callCancel.signal.aborted;
-        callCancel.abort();
+        const alreadyInterrupted = Deferred.isDoneUnsafe(callCancel);
+        cancelCall(callCancel);
         // Closing a socket does not stop a native input loop. Fence queued
         // work behind the real native drain, just as an explicit Stop does.
         if (mutation && dispatched && !alreadyInterrupted)
@@ -1804,7 +1800,7 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
             current.retired ||
             admittedEpoch !== epoch ||
             desktopPauses.size > 0 ||
-            callCancel.signal.aborted
+            Deferred.isDoneUnsafe(callCancel)
           )
             return yield* cancelBeforeDispatch();
           const args = input && typeof input === "object" && !Array.isArray(input) ? input : {};
@@ -1854,7 +1850,7 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
           }
           // Session setup can await I/O. Stop wins even if it arrived after
           // the first guard and before the native request is sent.
-          if (admittedEpoch !== epoch || connection.destroyed || callCancel.signal.aborted)
+          if (admittedEpoch !== epoch || connection.destroyed || Deferred.isDoneUnsafe(callCancel))
             return yield* cancelBeforeDispatch();
           if (linux && isBrowser) {
             const refusal = linux.refusal(
@@ -1903,7 +1899,7 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
               args: { ...args, session: label ?? agentLabel ?? current.session },
               ...(browserSessionId ? { session_id: browserSessionId } : {}),
             },
-            { timeoutMs: 30_000, mutation, signal: callCancel.signal },
+            { timeoutMs: 30_000, mutation, cancel: Deferred.await(callCancel) },
           );
           if (attemptReply.result?.structuredContent?.input_cleanup_unconfirmed === true) {
             // A tool reply is not a release acknowledgement. Keep CDP input
@@ -2038,7 +2034,7 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
             let detail = error.message;
             // A cancelled call proves nothing about the generation's health;
             // every real dispatch failure still retires it.
-            if (target && !cancelledBeforeDispatch && !callCancel.signal.aborted) {
+            if (target && !cancelledBeforeDispatch && !Deferred.isDoneUnsafe(callCancel)) {
               const retired = yield* Effect.result(retire(target).await);
               if (retired._tag === "Failure") detail += `; ${retired.failure.message}`;
             }
@@ -2719,7 +2715,7 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
         }
         const affectedInputInFlight =
           activeForegroundInput &&
-          [...inFlightInputInterrupts].some((input) => !input.signal.aborted);
+          [...inFlightInputInterrupts].some((input) => !Deferred.isDoneUnsafe(input));
         inputInterruptCooldownUntil = now() + ESCAPE_INPUT_COOLDOWN_MS;
         if (alreadyPaused && !affectedInputInFlight) {
           // Repeated typing keeps observations stale without one native
