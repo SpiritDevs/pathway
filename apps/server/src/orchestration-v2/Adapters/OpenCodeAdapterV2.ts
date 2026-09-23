@@ -52,6 +52,7 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { shouldAllowPathwayComputerProviderTool } from "../../mcp/toolkits/computer/computerToolPermission.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 import {
@@ -497,6 +498,20 @@ export function openCodeMcpRegistration(input: {
       oauth: false as const,
     },
   };
+}
+
+/** Pathway approves each Computer call itself (ADR 0048), so OpenCode's own prompt is skipped. */
+export function openCodeAllowsComputerPermission(
+  runtimePolicy: ProviderAdapterV2RuntimePolicy,
+  permission: { readonly permission: string; readonly metadata: unknown },
+): boolean {
+  return shouldAllowPathwayComputerProviderTool({
+    computerControlEnabled: runtimePolicy.enableComputerControl === true,
+    activeTurn: true,
+    interactionMode: runtimePolicy.interactionMode,
+    runtimeMode: runtimePolicy.runtimeMode,
+    permission: { name: permission.permission, metadata: permission.metadata },
+  });
 }
 
 const OPENCODE_ALWAYS_ALLOWED_PERMISSIONS = [
@@ -2130,6 +2145,16 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
             case "permission.asked": {
               const state = threads.get(event.properties.sessionID);
               if (state?.activeTurn !== null && state?.activeTurn !== undefined) {
+                if (
+                  openCodeAllowsComputerPermission(state.activeTurn.runtimePolicy, event.properties)
+                ) {
+                  const reply = { requestID: event.properties.id, reply: "once" as const };
+                  const replied = yield* sdkCall("permission.reply", reply, () =>
+                    client.permission.reply(reply),
+                  ).pipe(Effect.exit);
+                  // A failed auto-reply falls back to asking, so the call is never stranded.
+                  if (Exit.isSuccess(replied)) return;
+                }
                 yield* emitRuntimeRequest(state, state.activeTurn, event.properties.id, {
                   type: "permission",
                   value: event.properties,

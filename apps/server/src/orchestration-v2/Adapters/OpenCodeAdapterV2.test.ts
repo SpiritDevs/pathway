@@ -18,6 +18,7 @@ import { IdAllocatorV2, layer as idAllocatorLayer } from "../IdAllocator.ts";
 import { subagentChildModelSelection } from "../SubagentProjection.ts";
 
 import {
+  openCodeAllowsComputerPermission,
   openCodeBoundaryAfterProviderTurn,
   openCodeChildPermissionRules,
   openCodePermissionRules,
@@ -335,6 +336,42 @@ describe("OpenCodeAdapterV2", () => {
     assert.deepEqual(
       subagentChildModelSelection({ parentSelection, reportedModel: null }),
       parentSelection,
+    );
+  });
+});
+
+describe("openCodeAllowsComputerPermission", () => {
+  const admitted = runtimePolicy("approval-required", { enableComputerControl: true });
+  const asked = (permission: string) => ({ permission, metadata: {} });
+
+  it("skips OpenCode's prompt for Pathway Computer tools on an admitted turn", () => {
+    assert.isTrue(openCodeAllowsComputerPermission(admitted, asked("pathway_computer_click")));
+    assert.isTrue(
+      openCodeAllowsComputerPermission(
+        runtimePolicy("auto-accept-edits", { enableComputerControl: true }),
+        asked("pathway_computer_screenshot"),
+      ),
+    );
+  });
+
+  it("keeps asking for other tools, other modes, and turns without Computer", () => {
+    assert.isFalse(openCodeAllowsComputerPermission(admitted, asked("pathway_thread_send")));
+    assert.isFalse(openCodeAllowsComputerPermission(admitted, asked("computer_click")));
+    assert.isFalse(openCodeAllowsComputerPermission(admitted, asked("bash")));
+    assert.isFalse(
+      openCodeAllowsComputerPermission(
+        runtimePolicy("approval-required"),
+        asked("pathway_computer_click"),
+      ),
+    );
+    assert.isFalse(
+      openCodeAllowsComputerPermission(
+        runtimePolicy("approval-required", {
+          enableComputerControl: true,
+          interactionMode: "plan",
+        }),
+        asked("pathway_computer_click"),
+      ),
     );
   });
 });
