@@ -1,7 +1,16 @@
-import type { AdvertisedEndpoint, DesktopWslState, EnvironmentId } from "@spiritdevs/contracts";
+import {
+  AuthAccessWriteScope,
+  AuthAdministrativeScopes,
+  AuthComputerOperateScope,
+  AuthStandardClientScopes,
+  type AdvertisedEndpoint,
+  type DesktopWslState,
+  type EnvironmentId,
+} from "@spiritdevs/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   applyWslEnableSelection,
+  delegablePairingScopes,
   excludeRepresentedEnvironmentClientSessions,
   isQrShareableEndpoint,
   partitionClientSessionsByConnection,
@@ -299,5 +308,38 @@ describe("selectQrEndpointOption", () => {
     const loopbackOnly = options.slice(0, 1);
     expect(selectQrEndpointOption(loopbackOnly, null, null)?.id).toBe("desktop-loopback:4780");
     expect(selectQrEndpointOption([], "anything", "anything")).toBeNull();
+  });
+});
+
+describe("delegablePairingScopes", () => {
+  const legacy = { repositoryIdentity: true };
+  const upgraded = { repositoryIdentity: true, computerOperateScope: true };
+
+  it("offers computer:operate only when the server advertises it", () => {
+    // An older server rejects a pairing request that names an unknown scope.
+    expect(
+      delegablePairingScopes(AuthStandardClientScopes, legacy, AuthAdministrativeScopes),
+    ).not.toContain(AuthComputerOperateScope);
+    expect(
+      delegablePairingScopes(AuthStandardClientScopes, null, AuthAdministrativeScopes),
+    ).not.toContain(AuthComputerOperateScope);
+    expect(
+      delegablePairingScopes(AuthStandardClientScopes, upgraded, AuthAdministrativeScopes),
+    ).toEqual(AuthStandardClientScopes);
+  });
+
+  it("never offers a scope the session lacks", () => {
+    // An admin session issued before the upgrade holds no computer:operate, and the
+    // server refuses to delegate a scope the caller lacks.
+    const legacyAdmin = AuthAdministrativeScopes.filter(
+      (scope) => scope !== AuthComputerOperateScope,
+    );
+    const scopes = delegablePairingScopes(AuthStandardClientScopes, upgraded, legacyAdmin);
+    expect(scopes).not.toContain(AuthComputerOperateScope);
+    expect(scopes).toEqual(
+      AuthStandardClientScopes.filter((scope) => scope !== AuthComputerOperateScope),
+    );
+    expect(delegablePairingScopes([AuthAccessWriteScope], upgraded, [])).toEqual([]);
+    expect(delegablePairingScopes(AuthStandardClientScopes, upgraded, null)).toEqual([]);
   });
 });
