@@ -12,12 +12,8 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import type { CuaPreviewTarget } from "@spiritdevs/shared/cuaDriverProtocol";
 
-import {
-  COMPUTER_PREVIEW_FRAME_CHANNEL,
-  type ComputerFrameTap,
-  type ComputerPreviewFrame,
-  make,
-} from "./ComputerFrameTap.ts";
+import { COMPUTER_PREVIEW_FRAME_CHANNEL } from "../ipc/channels.ts";
+import { type ComputerFrameTap, type ComputerPreviewFrame, make } from "./ComputerFrameTap.ts";
 import {
   type FakeHelper,
   type FakeHelperSpawner,

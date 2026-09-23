@@ -17,13 +17,15 @@ import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
-import type { CuaDriverHost } from "./CuaDriverHost.ts";
+import * as ElectronWindow from "../electron/ElectronWindow.ts";
+import type { CuaDriverHost, CuaDriverHostOptions } from "./CuaDriverHost.ts";
 import { DesktopComputer } from "./DesktopComputer.ts";
 import { makeFakeHelperSpawner } from "./testing/FakeHelperSpawner.ts";
 
 const hostMock = vi.hoisted(() => ({
   made: 0,
   disposed: 0,
+  options: undefined as unknown,
 }));
 
 vi.mock("electron", () => ({
@@ -42,9 +44,10 @@ vi.mock("./CuaDriverHost.ts", async (importOriginal) => {
   return {
     ...actual,
     sweepOrphanedCuaDrivers: () => Effect.void,
-    makeCuaDriverHost: () =>
+    makeCuaDriverHost: (options: unknown) =>
       Effect.sync(() => {
         hostMock.made += 1;
+        hostMock.options = options;
         return {
           listen: Effect.fail(new actual.CuaHostError({ message: "listen EADDRINUSE" })),
           inputMonitorStateChanged: () => Effect.void,
@@ -102,6 +105,7 @@ describe("DesktopComputerHost.layer", () => {
           isDevelopment: true,
           isPackaged: false,
           rootDir,
+          stateDir: NodePath.join(rootDir, "state"),
           displayName: "Pathway",
           appUserModelId: "com.spiritdevs.pathway.dev",
         } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]),
@@ -112,6 +116,10 @@ describe("DesktopComputerHost.layer", () => {
           ElectronPowerMonitor.ElectronPowerMonitor,
           {} as ElectronPowerMonitor.ElectronPowerMonitor["Service"],
         ),
+        Effect.provideService(ElectronWindow.ElectronWindow, {
+          main: Effect.succeed(Option.none()),
+          reveal: () => Effect.void,
+        } as unknown as ElectronWindow.ElectronWindow["Service"]),
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
       );
       return { service, spawned: fake.spawned.length };
@@ -141,6 +149,15 @@ describe("DesktopComputerHost.layer", () => {
       expect(Option.isNone(service.handoff)).toBe(true);
       expect(spawned).toBe(0);
       expect(hostMock.made).toBe(0);
+      expect(yield* service.getState()).toEqual({
+        supported: false,
+        status: "unsupported",
+        message: "Computer use is not enabled in this desktop build.",
+        appDisplayName: "Pathway",
+        screenRecordingPermission: "unknown",
+        inputMonitoringPermission: "unknown",
+      });
+      expect(yield* service.openPermissionSettings("accessibility")).toBe(false);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -151,6 +168,9 @@ describe("DesktopComputerHost.layer", () => {
       expect(Option.isNone(service.handoff)).toBe(true);
       expect(spawned).toBe(0);
       expect(hostMock.made).toBe(0);
+      const state = yield* service.startPermissionSetup(["screenRecording"]);
+      expect(state.supported).toBe(false);
+      expect(state.status).toBe("unsupported");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -158,10 +178,26 @@ describe("DesktopComputerHost.layer", () => {
     Effect.gen(function* () {
       const rootDir = yield* checkout;
       yield* stageBinaries(rootDir);
+      // The stored agent cursor seeds the first driver session.
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(NodePath.join(rootDir, "state"), { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(rootDir, "state", "agent-cursor-colors.json"),
+          '{"version":1,"style":{"fill":"#AABBCC"}}',
+        );
+      });
       const { service } = yield* build(rootDir, { PATHWAY_COMPUTER_USE: "1" });
+      const options = hostMock.options as CuaDriverHostOptions;
+      expect(options.frameTap).toBeDefined();
+      expect(options.cursorStyle?.()).toEqual({ fill: "#aabbcc" });
       expect(Option.isNone(service.handoff)).toBe(true);
       expect(hostMock.made).toBe(1);
       expect(hostMock.disposed).toBeGreaterThanOrEqual(1);
+      expect(yield* service.getState()).toMatchObject({
+        supported: false,
+        status: "unsupported",
+        message: "The Computer host could not start.",
+      });
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
