@@ -10,6 +10,7 @@ vi.mock("node:crypto", async (importOriginal) => {
 });
 
 import { ComputerTargetError } from "./computerErrors.ts";
+import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import {
   SCREENSHOT_FRAMES_PER_THREAD,
   ScreenshotFrameRegistry,
@@ -208,3 +209,27 @@ describe("screenshot reuse", () => {
     }),
   );
 });
+
+it.effect("reuses only the latest delivered pixels with an identical coordinate frame", () =>
+  Effect.gen(function* () {
+    const backend = new FakeComputerBackend();
+    const screenshot = yield* backend.captureScreenshot({
+      kind: "window",
+      windowId: "fake-terminal",
+    });
+    const frames = new ScreenshotFrameRegistry();
+    const delivered = frames.record("a", screenshot, "fake-terminal");
+    expect(frames.matchLatest("a", screenshot, "fake-terminal")).toBe(delivered);
+    expect(frames.matchLatest("b", screenshot, "fake-terminal")).toBeUndefined();
+    for (const changed of [
+      { ...screenshot, width: screenshot.width + 1 },
+      { ...screenshot, height: screenshot.height + 1 },
+      { ...screenshot, scale: 0.25 },
+      { ...screenshot, region: { ...screenshot.region!, x: screenshot.region!.x + 1 } },
+    ]) {
+      expect(frames.matchLatest("a", changed, "fake-terminal")).toBeUndefined();
+    }
+    frames.record("a", screenshot, "different-window");
+    expect(frames.matchLatest("a", screenshot, "fake-terminal")).toBeUndefined();
+  }),
+);
