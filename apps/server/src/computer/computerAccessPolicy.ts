@@ -62,3 +62,32 @@ export const requireComputerAccess = (
   scopes: ReadonlyArray<AuthEnvironmentScope>,
 ): Effect.Effect<void, EnvironmentAuthorizationError> =>
   canUseComputer(policy, scopes) ? Effect.void : Effect.fail(computerAccessDenied(policy));
+
+const POLICIES_BY_STRICTNESS: ReadonlyArray<ComputerAccessPolicy> = [
+  "any-operator",
+  "scoped",
+  "admins-only",
+];
+
+/** Whether `policy` admits fewer senders than `than`. */
+export const isStricterComputerAccess = (
+  policy: ComputerAccessPolicy,
+  than: ComputerAccessPolicy,
+): boolean => POLICIES_BY_STRICTNESS.indexOf(policy) > POLICIES_BY_STRICTNESS.indexOf(than);
+
+/**
+ * The strictest policy `scopes` satisfy, checked against the current one: the
+ * clearance a run is frozen with, or the re-pair hint when the sender is not
+ * admitted now.
+ */
+export const computerClearance = (
+  policy: ComputerAccessPolicy,
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+): Effect.Effect<ComputerAccessPolicy, EnvironmentAuthorizationError> => {
+  const clearance = POLICIES_BY_STRICTNESS.findLast((candidate) =>
+    canUseComputer(candidate, scopes),
+  );
+  return clearance === undefined || isStricterComputerAccess(policy, clearance)
+    ? Effect.fail(computerAccessDenied(policy))
+    : Effect.succeed(clearance);
+};
