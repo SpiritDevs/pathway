@@ -648,4 +648,32 @@ it.layer(NodeServices.layer)("ComputerManager lifecycle", (it) => {
       yield* Fiber.join(disposing);
     }),
   );
+
+  it.effect("a teardown bound stops waiting without cancelling the cleanup", () =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>();
+      const stopped = yield* Deferred.make<void>();
+      let interrupted = false;
+      const backend = Object.assign(new FakeComputerBackend(), {
+        stopInput: () =>
+          Deferred.await(release).pipe(
+            Effect.andThen(Deferred.succeed(stopped, undefined)),
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                interrupted = true;
+              }),
+            ),
+          ),
+      });
+      const scope = yield* Scope.make();
+      yield* ComputerManager.make({ backend, actionSettleMs: 0 }).pipe(Scope.provide(scope));
+      const disposing = yield* Effect.forkChild(Scope.close(scope, Exit.void));
+      yield* TestClock.adjust(COMPUTER_CONTROL_ENABLE_TIMEOUT_MS * 2 + 2_000);
+      yield* Fiber.join(disposing);
+      expect(interrupted).toBe(false);
+      // Like Synara's Promise.race, the late stop still lands.
+      yield* Deferred.succeed(release, undefined);
+      yield* Deferred.await(stopped);
+    }),
+  );
 });
