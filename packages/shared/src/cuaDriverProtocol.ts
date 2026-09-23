@@ -1,4 +1,10 @@
 import * as NodeNet from "node:net";
+
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+
 import release from "./cuaDriverRelease.json" with { type: "json" };
 
 export const CUA_DRIVER_VERSION = release.version;
@@ -231,101 +237,115 @@ export function parseCuaComputerTask(value: unknown): CuaComputerTask | undefine
  * `refused`/`error` outcomes for calls that never produced a delivery verdict.
  */
 export type CuaEffect = "not-dispatched" | "dispatched-unknown" | "verified";
-export class CuaTransportError extends Error {
-  readonly effect: CuaEffect;
+export class CuaTransportError extends Schema.TaggedErrorClass<CuaTransportError>()(
+  "CuaTransportError",
+  {
+    message: Schema.String,
+    effect: Schema.Literals(["not-dispatched", "dispatched-unknown", "verified"]),
+  },
+) {}
 
-  constructor(message: string, effect: CuaEffect) {
-    super(message);
-    this.effect = effect;
-  }
+const CuaJson = Schema.fromJsonString(Schema.Unknown);
+const encodeCuaJson = Schema.encodeUnknownOption(CuaJson);
+const decodeCuaJson = Schema.decodeUnknownOption(CuaJson);
+
+export interface CuaRequestOptions {
+  /** Completing this effect cancels the request with a typed `CuaTransportError`. */
+  readonly cancel?: Effect.Effect<void> | undefined;
+  readonly timeoutMs?: number | undefined;
+  readonly mutation?: boolean | undefined;
 }
 
 /** One bounded request per connection. A timeout closes the connection; the GUI
- * broker retires the active driver before admitting its next generation. */
-export function cuaRequest<T = unknown>(
+ * broker retires the active driver before admitting its next generation.
+ * Interrupting the effect also closes the connection. Use `cancel` when the
+ * caller needs the delivery verdict of a cancelled call. */
+export const cuaRequest = <T = unknown>(
   socketPath: string,
   request: unknown,
-  options: {
-    signal?: AbortSignal | undefined;
-    timeoutMs?: number;
-    mutation?: boolean;
-  } = {},
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    if (options.signal?.aborted) {
-      reject(new CuaTransportError("Cancelled before dispatch.", "not-dispatched"));
-      return;
+  options: CuaRequestOptions = {},
+): Effect.Effect<T, CuaTransportError> =>
+  Effect.suspend(() => {
+    const json = encodeCuaJson(request);
+    const encoded = Option.isSome(json) ? json.value + "\n" : undefined;
+    if (encoded === undefined || Buffer.byteLength(encoded) > 1024 * 1024) {
+      return Effect.fail(
+        new CuaTransportError({
+          message: "Invalid or oversized computer request.",
+          effect: "not-dispatched",
+        }),
+      );
     }
-    let encoded: string;
-    try {
-      encoded = JSON.stringify(request) + "\n";
-      if (Buffer.byteLength(encoded) > 1024 * 1024)
-        throw new Error("Request exceeds its byte budget.");
-    } catch {
-      reject(new CuaTransportError("Invalid or oversized computer request.", "not-dispatched"));
-      return;
-    }
-    const socket = NodeNet.createConnection(socketPath);
-    const chunks: Buffer[] = [];
-    let bytes = 0;
     let dispatched = false;
-    let settled = false;
-    const finish = (error?: Error, result?: T) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", abort);
-      socket.destroy();
-      if (error) reject(error);
-      else resolve(result as T);
-    };
-    const fail = (message: string) =>
-      finish(
-        new CuaTransportError(
-          message,
-          options.mutation && dispatched ? "dispatched-unknown" : "not-dispatched",
-        ),
-      );
-    const abort = () =>
-      fail(
-        "Computer operation cancelled. Input already dispatched may have taken effect; do not replay.",
-      );
-    // @effect-diagnostics-next-line globalTimers:off -- a plain Promise socket client, called outside Effect.
-    const timer = setTimeout(
-      () => fail("Computer request timed out; do not replay an uncertain action."),
-      options.timeoutMs ?? 15_000,
+    const failure = (message: string) =>
+      new CuaTransportError({
+        message,
+        effect: options.mutation && dispatched ? "dispatched-unknown" : "not-dispatched",
+      });
+    const exchange = Effect.acquireRelease(
+      Effect.sync(() => NodeNet.createConnection(socketPath)),
+      (socket) => Effect.sync(() => socket.destroy()),
+    ).pipe(
+      Effect.flatMap((socket) =>
+        Effect.callback<T, CuaTransportError>((resume) => {
+          const chunks: Buffer[] = [];
+          let bytes = 0;
+          let settled = false;
+          const settle = (result: Effect.Effect<T, CuaTransportError>) => {
+            if (settled) return;
+            settled = true;
+            resume(result);
+          };
+          socket.once("connect", () => {
+            dispatched = true;
+            socket.write(encoded);
+          });
+          socket.on("data", (chunk: Buffer) => {
+            if (settled) return;
+            bytes += chunk.length;
+            if (bytes > CUA_MAX_RESPONSE_BYTES) {
+              settle(Effect.fail(failure("Computer response exceeded its byte budget.")));
+              return;
+            }
+            const end = chunk.indexOf(10);
+            chunks.push(end < 0 ? chunk : chunk.subarray(0, end));
+            if (end < 0) return;
+            const reply = decodeCuaJson(Buffer.concat(chunks).toString("utf8"));
+            settle(
+              Option.isSome(reply)
+                ? Effect.succeed(reply.value as T)
+                : Effect.fail(failure("Invalid computer response.")),
+            );
+          });
+          socket.once("error", (error) => settle(Effect.fail(failure(error.message))));
+          socket.once("close", () =>
+            settle(Effect.fail(failure("Computer connection closed before a result."))),
+          );
+        }),
+      ),
+      Effect.scoped,
+      Effect.timeoutOrElse({
+        duration: Duration.millis(options.timeoutMs ?? 15_000),
+        orElse: () =>
+          Effect.fail(failure("Computer request timed out; do not replay an uncertain action.")),
+      }),
     );
-    timer.unref?.();
-    options.signal?.addEventListener("abort", abort, { once: true });
-    socket.once("connect", () => {
-      if (options.signal?.aborted) {
-        abort();
-        return;
-      }
-      dispatched = true;
-      socket.write(encoded);
-    });
-    socket.on("data", (chunk: Buffer) => {
-      bytes += chunk.length;
-      if (bytes > CUA_MAX_RESPONSE_BYTES) {
-        fail("Computer response exceeded its byte budget.");
-        return;
-      }
-      const end = chunk.indexOf(10);
-      chunks.push(end < 0 ? chunk : chunk.subarray(0, end));
-      if (end < 0) return;
-      try {
-        finish(undefined, JSON.parse(Buffer.concat(chunks).toString("utf8")) as T);
-      } catch {
-        fail("Invalid computer response.");
-      }
-    });
-    socket.once("error", (error) => fail(error.message));
-    socket.once("close", () => {
-      if (!settled) fail("Computer connection closed before a result.");
-    });
+    if (!options.cancel) return exchange;
+    return Effect.raceFirst(
+      exchange,
+      options.cancel.pipe(
+        Effect.andThen(() =>
+          Effect.fail(
+            failure(
+              dispatched
+                ? "Computer operation cancelled. Input already dispatched may have taken effect; do not replay."
+                : "Cancelled before dispatch.",
+            ),
+          ),
+        ),
+      ),
+    );
   });
-}
 
 export interface CuaToolResult {
   content?: Array<{

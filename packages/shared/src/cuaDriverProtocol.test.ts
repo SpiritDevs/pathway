@@ -1,11 +1,21 @@
+import * as NodeNet from "node:net";
+import * as NodeOS from "node:os";
+
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   CUA_ACTION_TOOLS,
   CUA_BROWSER_MUTATION_TOOLS,
   CUA_BROWSER_TOOLS,
+  CUA_MAX_RESPONSE_BYTES,
   CUA_READ_TOOLS,
   cuaCleanupAcknowledged,
+  cuaRequest,
+  CuaTransportError,
   parseCuaShieldArgs,
 } from "./cuaDriverProtocol.ts";
 
@@ -350,4 +360,188 @@ describe("parseCuaShieldArgs", () => {
     expect(parseCuaShieldArgs({ action: "release" })).toBeUndefined();
     expect(parseCuaShieldArgs({ action: "release", shield_id: "" })).toBeUndefined();
   });
+});
+
+let nextHost = 0;
+
+/** A unix-socket host that hands each connection's first request line to `onRequest`.
+ * Node unlinks the socket file when the server closes. */
+const host = (onRequest: (line: string, socket: NodeNet.Socket) => void) =>
+  Effect.acquireRelease(
+    Effect.callback<{ readonly path: string; readonly server: NodeNet.Server }>((resume) => {
+      const path = `${NodeOS.tmpdir()}/cua-${process.pid}-${nextHost++}.sock`;
+      const server = NodeNet.createServer((socket) => {
+        let buffered = "";
+        socket.on("data", (chunk) => {
+          buffered += chunk.toString("utf8");
+          if (buffered.includes("\n")) onRequest(buffered, socket);
+        });
+      });
+      server.listen(path, () => resume(Effect.succeed({ path, server })));
+    }),
+    ({ server }) => Effect.sync(() => server.close()),
+  );
+
+const transportError = <A>(effect: Effect.Effect<A, CuaTransportError>) =>
+  Effect.flip(Effect.asVoid(effect)).pipe(
+    Effect.tap((error) => Effect.sync(() => expect(error).toBeInstanceOf(CuaTransportError))),
+  );
+
+describe("cuaRequest", () => {
+  it.effect("writes one JSON line and resolves the first reply line", () =>
+    Effect.gen(function* () {
+      const received = yield* Deferred.make<string>();
+      const { path } = yield* host((line, socket) => {
+        Deferred.doneUnsafe(received, Effect.succeed(line));
+        // The reply may arrive split across chunks; only the first line counts.
+        socket.write('{"ok":true,');
+        socket.write('"desktopEpoch":3}\n{"ignored":true}\n');
+      });
+      const reply = yield* cuaRequest(path, { method: "call", name: "list_apps" });
+      expect(reply).toEqual({ ok: true, desktopEpoch: 3 });
+      expect(yield* Deferred.await(received)).toBe('{"method":"call","name":"list_apps"}\n');
+    }),
+  );
+
+  it.effect("refuses an oversized request before dispatch", () =>
+    Effect.gen(function* () {
+      const error = yield* transportError(
+        cuaRequest("/nonexistent", { text: "x".repeat(1024 * 1024) }, { mutation: true }),
+      );
+      expect(error.message).toBe("Invalid or oversized computer request.");
+      expect(error.effect).toBe("not-dispatched");
+    }),
+  );
+
+  it.effect("reports a failed connect as not dispatched", () =>
+    Effect.gen(function* () {
+      const error = yield* transportError(
+        cuaRequest("/nonexistent/cua.sock", { method: "call" }, { mutation: true }),
+      );
+      expect(error.message).toContain("ENOENT");
+      expect(error.effect).toBe("not-dispatched");
+    }),
+  );
+
+  it.effect("reports a mutation lost after dispatch as dispatched-unknown", () =>
+    Effect.gen(function* () {
+      const { path } = yield* host((_line, socket) => socket.end());
+      const mutation = yield* transportError(
+        cuaRequest(path, { name: "click" }, { mutation: true }),
+      );
+      expect(mutation.message).toBe("Computer connection closed before a result.");
+      expect(mutation.effect).toBe("dispatched-unknown");
+      const read = yield* transportError(cuaRequest(path, { name: "list_apps" }));
+      expect(read.effect).toBe("not-dispatched");
+    }),
+  );
+
+  it.effect("rejects an unparseable reply", () =>
+    Effect.gen(function* () {
+      const { path } = yield* host((_line, socket) => socket.write("not json\n"));
+      const error = yield* transportError(cuaRequest(path, {}));
+      expect(error.message).toBe("Invalid computer response.");
+    }),
+  );
+
+  it.effect("rejects a reply over the response byte budget", () =>
+    Effect.gen(function* () {
+      const { path } = yield* host((_line, socket) =>
+        socket.write(Buffer.alloc(CUA_MAX_RESPONSE_BYTES + 1, 0x20)),
+      );
+      const error = yield* transportError(cuaRequest(path, {}, { mutation: true }));
+      expect(error.message).toBe("Computer response exceeded its byte budget.");
+      expect(error.effect).toBe("dispatched-unknown");
+    }),
+  );
+
+  it.effect("times out an unanswered request and closes the connection", () =>
+    Effect.gen(function* () {
+      const received = yield* Deferred.make<void>();
+      const closed = yield* Deferred.make<void>();
+      const { path } = yield* host((_line, socket) => {
+        socket.once("close", () => Deferred.doneUnsafe(closed, Effect.void));
+        Deferred.doneUnsafe(received, Effect.void);
+      });
+      const fiber = yield* cuaRequest(path, { name: "click" }, { mutation: true }).pipe(
+        transportError,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(received);
+      yield* TestClock.adjust("14999 millis");
+      expect(fiber.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 millis");
+      const error = yield* Fiber.join(fiber);
+      expect(error.message).toBe("Computer request timed out; do not replay an uncertain action.");
+      expect(error.effect).toBe("dispatched-unknown");
+      yield* Deferred.await(closed);
+    }),
+  );
+
+  it.effect("honours a custom timeout such as the setup budget", () =>
+    Effect.gen(function* () {
+      const received = yield* Deferred.make<void>();
+      const { path } = yield* host(() => Deferred.doneUnsafe(received, Effect.void));
+      const fiber = yield* cuaRequest(path, { method: "setup" }, { timeoutMs: 120_000 }).pipe(
+        transportError,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(received);
+      yield* TestClock.adjust("119999 millis");
+      expect(fiber.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 millis");
+      expect((yield* Fiber.join(fiber)).effect).toBe("not-dispatched");
+    }),
+  );
+
+  it.effect("cancels before dispatch without reaching the host", () =>
+    Effect.gen(function* () {
+      const { path } = yield* host(() => expect.unreachable("request dispatched"));
+      const error = yield* transportError(
+        cuaRequest(path, { name: "click" }, { mutation: true, cancel: Effect.void }),
+      );
+      expect(error.message).toBe("Cancelled before dispatch.");
+      expect(error.effect).toBe("not-dispatched");
+    }),
+  );
+
+  it.effect("cancels a dispatched mutation as dispatched-unknown and closes the connection", () =>
+    Effect.gen(function* () {
+      const received = yield* Deferred.make<void>();
+      const closed = yield* Deferred.make<void>();
+      const cancel = yield* Deferred.make<void>();
+      const { path } = yield* host((_line, socket) => {
+        socket.once("close", () => Deferred.doneUnsafe(closed, Effect.void));
+        Deferred.doneUnsafe(received, Effect.void);
+      });
+      const fiber = yield* cuaRequest(
+        path,
+        { name: "type_text" },
+        { mutation: true, cancel: Deferred.await(cancel) },
+      ).pipe(transportError, Effect.forkChild);
+      yield* Deferred.await(received);
+      yield* Deferred.succeed(cancel, undefined);
+      const error = yield* Fiber.join(fiber);
+      expect(error.message).toBe(
+        "Computer operation cancelled. Input already dispatched may have taken effect; do not replay.",
+      );
+      expect(error.effect).toBe("dispatched-unknown");
+      yield* Deferred.await(closed);
+    }),
+  );
+
+  it.effect("closes the connection when the caller interrupts", () =>
+    Effect.gen(function* () {
+      const received = yield* Deferred.make<void>();
+      const closed = yield* Deferred.make<void>();
+      const { path } = yield* host((_line, socket) => {
+        socket.once("close", () => Deferred.doneUnsafe(closed, Effect.void));
+        Deferred.doneUnsafe(received, Effect.void);
+      });
+      const fiber = yield* Effect.forkChild(cuaRequest(path, { name: "list_apps" }));
+      yield* Deferred.await(received);
+      yield* Fiber.interrupt(fiber);
+      yield* Deferred.await(closed);
+    }),
+  );
 });
