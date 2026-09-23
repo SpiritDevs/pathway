@@ -5661,7 +5661,9 @@ function ChatViewContent(props: ChatViewProps) {
   const onWaitUntilUsageReset = useCallback(
     async (resetAt: string) => {
       if (serverConfig?.usageRecovery === true && usageRecovery.supportedProvider) {
-        usageRecovery.open(resetAt);
+        if (usageRecovery.canResumeNow && Date.parse(resetAt) <= Date.now())
+          void usageRecovery.resumeNow();
+        else usageRecovery.open(resetAt);
         return;
       }
       if (!activeThreadRef || !supportsSnooze || usageLimitWaitPending) return;
@@ -5704,6 +5706,8 @@ function ChatViewContent(props: ChatViewProps) {
       usageLimitWaitPending,
       serverConfig?.usageRecovery,
       usageRecovery.open,
+      usageRecovery.resumeNow,
+      usageRecovery.canResumeNow,
       usageRecovery.supportedProvider,
     ],
   );
@@ -9776,6 +9780,7 @@ function ChatViewContent(props: ChatViewProps) {
                   supportsSnooze ||
                   (serverConfig?.usageRecovery === true && usageRecovery.supportedProvider)
                 }
+                canResumeUsageNow={usageRecovery.canResumeNow}
                 onRollbackCheckpoint={onRollbackCheckpointForTimeline}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}

@@ -38,16 +38,26 @@ export function canResumeUsageRecovery(projection: OrchestrationV2ThreadProjecti
   );
 }
 
+/** Latest reset reported by these failures, or null when none reported one. */
+export function reportedResetAt(messages: ReadonlyArray<{ text: string; at: number }>) {
+  // Relative resets and clock dates are anchored to the error, never to the time a client opens it.
+  const reported = messages.flatMap(({ text, at }) => {
+    const reset = parseUsageLimitResetAt(text, at);
+    return reset === null ? [] : [Date.parse(reset)];
+  });
+  return reported.length === 0 ? null : Math.max(...reported);
+}
+
 export function recoveryRetryAt(
   messages: ReadonlyArray<{ text: string; at: number }>,
   now: number,
 ) {
-  // Relative resets and clock dates are anchored to the error, never to the time a client opens it.
-  const reported = messages.flatMap(({ text, at }) => {
-    const reset = parseUsageLimitResetAt(text, at);
-    return reset === null ? [] : [Date.parse(reset) + RECOVERY_DELAY_MS];
-  });
-  return DateTime.formatIso(DateTime.makeUnsafe(Math.max(now + RECOVERY_DELAY_MS, ...reported)));
+  const reset = reportedResetAt(messages);
+  return DateTime.formatIso(
+    DateTime.makeUnsafe(
+      Math.max(now + RECOVERY_DELAY_MS, reset === null ? 0 : reset + RECOVERY_DELAY_MS),
+    ),
+  );
 }
 
 /** When a child's usage-limit failure happened; later bookkeeping can bump `updatedAt`. */

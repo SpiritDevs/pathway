@@ -6,6 +6,7 @@ import {
   RuntimeRequestId,
   ThreadId,
 } from "@spiritdevs/contracts";
+import * as DateTime from "effect/DateTime";
 import { createRef, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
@@ -2178,12 +2179,13 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Copy message to AI");
   });
 
-  it("offers model recovery and reset waiting for usage-limit failures", async () => {
+  async function renderUsageLimitFailure(failedAtMs: number, canResumeUsageNow = false) {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
+    return renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
         canWaitUntilUsageReset
+        canResumeUsageNow={canResumeUsageNow}
         latestRun={
           {
             runId: "run-usage-limit",
@@ -2226,7 +2228,7 @@ describe("MessagesTimeline", () => {
                 title: "Provider error",
                 startedAt: null,
                 completedAt: null,
-                updatedAt: {},
+                updatedAt: DateTime.makeUnsafe(failedAtMs),
                 type: "error",
                 failure: {
                   class: "provider_error",
@@ -2240,10 +2242,20 @@ describe("MessagesTimeline", () => {
         ]}
       />,
     );
+  }
 
+  it("offers model recovery and reset waiting for usage-limit failures", async () => {
+    const markup = await renderUsageLimitFailure(Date.now());
     expect(markup).toContain('data-usage-limit-recovery="true"');
     expect(markup).toContain("Try another model");
     expect(markup).toContain("Wait until");
+  });
+
+  it("offers to resume now once the reported reset has passed", async () => {
+    // "resets 9:50pm" is anchored to the failure, so two days later it has passed.
+    const markup = await renderUsageLimitFailure(Date.now() - 2 * 86_400_000, true);
+    expect(markup).toContain("Resume now");
+    expect(markup).not.toContain("Wait until");
   });
 
   it("keeps inherited V2 work provenance on the rendered row", async () => {

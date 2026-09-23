@@ -21,7 +21,6 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { forkParked } from "../serverActivation.ts";
-import { parseUsageLimitResetAt } from "@spiritdevs/shared/usageLimitRecovery";
 import {
   canResumeUsageRecovery,
   childFailedAt,
@@ -31,6 +30,7 @@ import {
   recoveryMarker,
   recoveryPrompt,
   recoveryRetryAt,
+  reportedResetAt,
   resumedChildTask,
   runIsWorking,
   usageFailureForRun,
@@ -164,14 +164,13 @@ export const layer = Layer.effect(
             })),
           ];
           const now = DateTime.toEpochMillis(yield* DateTime.now);
-          const hasReset = messages.some(
-            ({ text, at }) => parseUsageLimitResetAt(text, at) !== null,
-          );
+          const resetAt = reportedResetAt(messages);
           return {
             recovery,
             eligibility: {
               sourceRunId: run.id,
-              suggestedResumeAt: hasReset ? recoveryRetryAt(messages, now) : null,
+              suggestedResumeAt: resetAt === null ? null : recoveryRetryAt(messages, now),
+              resetAt: resetAt === null ? null : DateTime.formatIso(DateTime.makeUnsafe(resetAt)),
               childCount: children.length,
             },
           };
@@ -534,8 +533,11 @@ export const layer = Layer.effect(
               );
             }
             const now = yield* DateTime.now;
-            if (Date.parse(input.resumeAt) <= DateTime.toEpochMillis(now))
-              return yield* recoveryError("Choose a future recovery time.");
+            // A time that has already passed means "resume now"; the next reconcile tick starts it.
+            const resumeAt =
+              Date.parse(input.resumeAt) <= DateTime.toEpochMillis(now)
+                ? DateTime.formatIso(now)
+                : input.resumeAt;
             if (previous?.status === "monitoring")
               return yield* recoveryError(
                 "Recovery is already running. Cancel it before scheduling another timer.",
@@ -559,7 +561,7 @@ export const layer = Layer.effect(
               startedAt: null,
               authorizedAt: DateTime.formatIso(now),
               status: "scheduled",
-              resumeAt: input.resumeAt,
+              resumeAt,
               attempts: previous?.status === "scheduled" ? previous.attempts : 0,
               children: children.map(({ ownerThreadId, task }) => ({
                 ownerThreadId,

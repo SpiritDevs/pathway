@@ -300,6 +300,20 @@ it.effect("persists one timer, includes nested children, and preserves completed
   }).pipe(Effect.provide(f.serviceLayer));
 });
 
+it.effect("resumes immediately once the reported reset has passed", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const service = yield* UsageRecoveryService;
+    yield* TestClock.adjust("2 minutes");
+    const eligibility = (yield* service.get(rootId)).eligibility!;
+    assert.equal(eligibility.resetAt, "1970-01-01T00:01:00.000Z");
+    const { recovery } = yield* service.schedule({ ...f.schedule, resumeAt: eligibility.resetAt! });
+    assert.equal(recovery?.resumeAt, "1970-01-01T00:02:00.000Z");
+    yield* service.reconcile();
+    assert.lengthOf(f.commands, 1);
+  }).pipe(Effect.provide(f.serviceLayer));
+});
+
 it.effect("uses the newly reported reset and stops after three attempts", () => {
   const f = fixture();
   return Effect.gen(function* () {

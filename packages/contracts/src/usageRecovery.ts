@@ -27,6 +27,8 @@ export const UsageRecoveryResult = Schema.Struct({
       Schema.Struct({
         sourceRunId: RunId,
         suggestedResumeAt: Schema.NullOr(IsoDateTime),
+        /** Latest reported allowance reset. Once it has passed, clients offer to resume now. */
+        resetAt: Schema.optional(Schema.NullOr(IsoDateTime)),
         childCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
       }),
     ),

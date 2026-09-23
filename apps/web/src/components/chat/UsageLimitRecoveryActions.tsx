@@ -7,8 +7,11 @@ import type {
   ServerProvider,
 } from "@spiritdevs/contracts";
 import type { TimestampFormat } from "@spiritdevs/contracts/settings";
-import { AlarmClockIcon, ArrowRightLeftIcon } from "lucide-react";
+import * as DateTime from "effect/DateTime";
+import { AlarmClockIcon, ArrowRightLeftIcon, PlayIcon } from "lucide-react";
 import { useMemo } from "react";
+
+import { useNowMinute } from "~/hooks/useNowMinute";
 
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentQuery } from "~/state/query";
@@ -24,12 +27,17 @@ export function UsageLimitRecoveryActionsPresentation(props: {
   readonly disabled?: boolean;
   readonly waiting?: boolean;
   readonly canWaitUntilReset?: boolean;
+  /** The reset has passed, so the second action resumes immediately instead of waiting. */
+  readonly resetPassed?: boolean;
+  readonly canResumeNow?: boolean;
   readonly onRecover: () => void;
   readonly onWaitUntilReset: () => void;
 }) {
-  const resetLabel = props.resetAt
-    ? `Wait until ${formatShortTimestamp(props.resetAt, props.timestampFormat)}`
-    : "Reset time unavailable";
+  const resetLabel = props.resetPassed
+    ? "Resume now"
+    : props.resetAt
+      ? `Wait until ${formatShortTimestamp(props.resetAt, props.timestampFormat)}`
+      : "Reset time unavailable";
   return (
     <div className="flex flex-wrap items-center gap-2" data-usage-limit-recovery="true">
       <Button size="xs" onClick={props.onRecover} disabled={props.disabled || props.waiting}>
@@ -44,13 +52,13 @@ export function UsageLimitRecoveryActionsPresentation(props: {
           props.disabled ||
           props.waiting ||
           props.resetAt === null ||
-          props.canWaitUntilReset === false
+          (props.resetPassed ? props.canResumeNow !== true : props.canWaitUntilReset === false)
         }
         title={
           props.resetAt === null ? "The provider did not report when this limit resets." : undefined
         }
       >
-        <AlarmClockIcon />
+        {props.resetPassed ? <PlayIcon /> : <AlarmClockIcon />}
         {props.waiting ? "Working…" : resetLabel}
       </Button>
     </div>
@@ -66,6 +74,7 @@ export function UsageLimitRecoveryActions(props: {
   readonly disabled?: boolean;
   readonly waiting?: boolean;
   readonly canWaitUntilReset?: boolean;
+  readonly canResumeNow?: boolean;
   readonly onRecover: (input: {
     readonly runId: RunId;
     readonly sourceModelSelection: ModelSelection;
@@ -98,8 +107,11 @@ export function UsageLimitRecoveryActions(props: {
     failureMessage: props.item.failure.message,
     ...(run === undefined ? {} : { model: run.modelSelection.model }),
     snapshot: usageSnapshot ?? null,
-    nowMs: Date.now(),
+    // Relative resets such as "resets 11:50pm" belong to the day of the failure, not today.
+    nowMs: DateTime.toEpochMillis(props.item.updatedAt),
   });
+  const nowMinute = useNowMinute();
+  const resetPassed = resetAt !== null && Date.parse(resetAt) <= Date.parse(`${nowMinute}:00Z`);
 
   if (run === undefined) return null;
   return (
@@ -109,6 +121,8 @@ export function UsageLimitRecoveryActions(props: {
       disabled={props.disabled === true}
       waiting={props.waiting === true}
       canWaitUntilReset={props.canWaitUntilReset !== false}
+      resetPassed={resetPassed}
+      canResumeNow={props.canResumeNow === true}
       onRecover={() => props.onRecover({ runId: run.id, sourceModelSelection: run.modelSelection })}
       onWaitUntilReset={() => {
         if (resetAt !== null) props.onWaitUntilReset(resetAt);
