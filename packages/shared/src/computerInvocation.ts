@@ -11,7 +11,11 @@ export function parseComputerInvocation(text: string | undefined): { prompt: str
   return match ? { prompt: (match[1] ?? "").trim() } : null;
 }
 
-/** Frozen queue metadata wins over text; new turns resolve only their own text. */
+/**
+ * Frozen queue metadata wins over text; new turns resolve only their own text.
+ * Only a user grants Computer, by the chat switch or a `/computer-use` turn:
+ * agent and automation messages resolve to off whatever they carry.
+ */
 export function resolveComputerInvocationMode(input: {
   readonly messageText?: string | undefined;
   readonly dispatchOrigin?: string | undefined;
@@ -19,7 +23,8 @@ export function resolveComputerInvocationMode(input: {
   readonly computerControlMode?: ComputerControlMode | undefined;
 }): ComputerControlMode {
   if (input.computerControlMode !== undefined) return input.computerControlMode;
-  if (input.enableComputerControl === true) return "chat";
   const userAuthored = input.dispatchOrigin === undefined || input.dispatchOrigin === "user";
-  return userAuthored && parseComputerInvocation(input.messageText) ? "request" : "off";
+  if (!userAuthored) return "off";
+  if (input.enableComputerControl === true) return "chat";
+  return parseComputerInvocation(input.messageText) ? "request" : "off";
 }

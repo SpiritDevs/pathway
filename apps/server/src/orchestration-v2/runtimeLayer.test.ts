@@ -3616,6 +3616,19 @@ it.layer(TestLayer)("decider computer-control pass-through", (it) => {
         assert.isUndefined(run.computerControl);
       }),
     );
+
+    // Deviation: Synara honours the chat switch from any origin; only a user grants it here.
+    it.effect(`drops the chat switch from a ${createdBy} message`, () =>
+      Effect.gen(function* () {
+        const threadId = yield* startThread(`origin-switch-${createdBy}`);
+        const run = yield* send(threadId, `computer-origin-switch-${createdBy}`, {
+          createdBy,
+          enableComputerControl: true,
+          computerControlGeneration: 7,
+        });
+        assert.isUndefined(run.computerControl);
+      }),
+    );
   }
 
   for (const [enableComputerControl, expected] of [
