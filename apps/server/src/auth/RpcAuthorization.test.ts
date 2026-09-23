@@ -1,5 +1,6 @@
 import {
   AuthAccessReadScope,
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
@@ -14,7 +15,11 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
-import { RPC_REQUIRED_SCOPES, requiredScopeForRpcMethod } from "./RpcAuthorization.ts";
+import {
+  RPC_REQUIRED_SCOPES,
+  extraScopeForServerSettingsPatch,
+  requiredScopeForRpcMethod,
+} from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
   it("declares exactly one scope for every RPC in the server group", () => {
@@ -119,5 +124,16 @@ describe("RPC authorization scopes", () => {
       AuthAccessReadScope,
     );
     expect(AuthStandardClientScopes).not.toContain(AuthAccessReadScope);
+  });
+
+  it("keeps the Computer access policy and autonomy ceiling to admin clients", () => {
+    expect(extraScopeForServerSettingsPatch({ environmentName: "Studio" })).toBeNull();
+    expect(extraScopeForServerSettingsPatch({ computer: { accessPolicy: "admins-only" } })).toBe(
+      AuthAccessWriteScope,
+    );
+    expect(extraScopeForServerSettingsPatch({ computer: { autonomy: "full-access" } })).toBe(
+      AuthAccessWriteScope,
+    );
+    expect(AuthStandardClientScopes).not.toContain(AuthAccessWriteScope);
   });
 });
