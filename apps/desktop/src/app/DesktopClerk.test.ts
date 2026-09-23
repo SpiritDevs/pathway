@@ -33,6 +33,7 @@ const makeDesktopClerkLayer = (isDevelopment = true, events: string[] = []) => {
   const environment = DesktopEnvironment.DesktopEnvironment.of({
     stateDir: "/tmp/pathway-state",
     isDevelopment,
+    desktopScheme: isDevelopment ? "pathway-dev" : "pathway",
     appDataDirectory: "/tmp/app-data",
     userDataDirName: isDevelopment ? "pathway-dev" : "pathway",
     legacyUserDataDirName: isDevelopment ? "Pathway (Dev)" : "Pathway (Alpha)",
@@ -209,29 +210,26 @@ describe("DesktopClerk", () => {
     );
   });
 
-  it.each([
-    { isDevelopment: true, scheme: "pathway-dev" },
-    { isDevelopment: false, scheme: "pathway" },
-  ])("configures the SDK with the $scheme renderer origin", ({ isDevelopment, scheme }) => {
-    const bridge = { cleanup: vi.fn(), isPrimaryInstance: true };
-    storageMock.mockReturnValue(storageAdapter);
-    createClerkBridgeMock.mockReturnValue(bridge);
+  it.each(["pathway-dev", "pathway", "pathway-cua"])(
+    "configures the SDK with the %s renderer origin",
+    (scheme) => {
+      const bridge = { cleanup: vi.fn(), isPrimaryInstance: true };
+      storageMock.mockReturnValue(storageAdapter);
+      createClerkBridgeMock.mockReturnValue(bridge);
 
-    assert.equal(
-      DesktopClerk.createDesktopClerkBridge("/tmp/pathway-state", isDevelopment),
-      bridge,
-    );
-    assert.deepEqual(storageMock.mock.calls, [[{ path: "/tmp/pathway-state" }]]);
-    assert.deepEqual(createClerkBridgeMock.mock.calls, [
-      [
-        {
-          storage: storageAdapter,
-          passkeys: true,
-          renderer: { scheme, host: "app" },
-        },
-      ],
-    ]);
-    storageMock.mockClear();
-    createClerkBridgeMock.mockClear();
-  });
+      assert.equal(DesktopClerk.createDesktopClerkBridge("/tmp/pathway-state", scheme), bridge);
+      assert.deepEqual(storageMock.mock.calls, [[{ path: "/tmp/pathway-state" }]]);
+      assert.deepEqual(createClerkBridgeMock.mock.calls, [
+        [
+          {
+            storage: storageAdapter,
+            passkeys: true,
+            renderer: { scheme, host: "app" },
+          },
+        ],
+      ]);
+      storageMock.mockClear();
+      createClerkBridgeMock.mockClear();
+    },
+  );
 });
