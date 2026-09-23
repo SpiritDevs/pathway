@@ -220,6 +220,7 @@ function launchInput(input: {
   readonly command: string;
   readonly thread: string;
   readonly message?: string;
+  readonly enableComputerControl?: boolean;
   readonly workspace?: ThreadLaunch.ThreadLaunchWorkspaceStrategy;
 }) {
   return {
@@ -238,6 +239,9 @@ function launchInput(input: {
             messageId: MessageId.make(`${input.message}:id`),
             text: input.message,
             attachments: [],
+            ...(input.enableComputerControl === undefined
+              ? {}
+              : { enableComputerControl: input.enableComputerControl }),
           },
         }),
     createdBy: "user" as const,
@@ -318,6 +322,35 @@ it.effect("refuses a launch that asks for Computer when the caller fails the acc
         )
         .pipe(Effect.provideService(ComputerDispatchAccess, operator));
       assert.lengthOf((yield* threads.getThreadProjection(plain.threadId)).runs, 1);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("arms chat-mode Computer for a first message sent with the chat setting on", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({
+      serverSettings: {
+        computer: { ...DEFAULT_SERVER_SETTINGS.computer, accessPolicy: "admins-only" },
+      },
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const refused = yield* launches
+        .launch(
+          launchInput({
+            command: "command:launch:computer-chat",
+            thread: "thread:launch:computer-chat",
+            message: "Open Calculator",
+            enableComputerControl: true,
+          }),
+        )
+        .pipe(
+          Effect.provideService(ComputerDispatchAccess, {
+            clearance: computerClearance("admins-only", ["orchestration:operate"]),
+          }),
+          Effect.exit,
+        );
+      assert.isTrue(Exit.isFailure(refused));
     }).pipe(Effect.provide(harness.layer));
   }),
 );
