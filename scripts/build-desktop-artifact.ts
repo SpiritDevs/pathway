@@ -3,6 +3,11 @@
 import * as NodeModule from "node:module";
 
 import { fromYaml } from "@spiritdevs/shared/schemaYaml";
+import {
+  PATHWAY_CUA_DESKTOP_IDENTITY,
+  PATHWAY_DESKTOP_FLAVORS,
+  type PathwayDesktopFlavor,
+} from "@spiritdevs/shared/desktopFlavor";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@spiritdevs/shared/relayAuth";
 import { resolveSpawnCommand } from "@spiritdevs/shared/shell";
@@ -43,6 +48,7 @@ const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
+const BuildFlavor = Schema.Literals(PATHWAY_DESKTOP_FLAVORS);
 
 const WorkspaceConfig = Schema.Struct({
   catalog: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -149,6 +155,7 @@ interface BuildCliInput {
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
   readonly wslPrebuild: Option.Option<string>;
+  readonly flavor: Option.Option<PathwayDesktopFlavor>;
 }
 
 function detectHostBuildPlatform(hostPlatform: string): typeof BuildPlatform.Type | undefined {
@@ -210,6 +217,17 @@ export class UnsupportedHostBuildPlatformError extends Schema.TaggedErrorClass<U
 ) {
   override get message(): string {
     return `Unsupported host platform '${this.hostPlatform}'.`;
+  }
+}
+
+// Production's NSIS GUID survives bundle ID changes, so an isolated Windows
+// installer would register itself as the production product.
+export class UnsupportedDesktopFlavorError extends Schema.TaggedErrorClass<UnsupportedDesktopFlavorError>()(
+  "UnsupportedDesktopFlavorError",
+  { platform: BuildPlatform, flavor: BuildFlavor },
+) {
+  override get message(): string {
+    return `The ${this.flavor} desktop flavor is supported on macOS and Linux only.`;
   }
 }
 
@@ -699,10 +717,12 @@ interface ResolvedBuildOptions {
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: number | undefined;
   readonly wslPrebuild: string | undefined;
+  readonly flavor: PathwayDesktopFlavor;
 }
 
 interface StagePackageJson {
   readonly name: string;
+  readonly pathwayDesktopFlavor?: PathwayDesktopFlavor;
   readonly version: string;
   readonly buildVersion: string;
   readonly pathwayCommitHash: string;
@@ -1194,6 +1214,9 @@ const BuildEnvConfig = Config.all({
   // into the staged node-pty so the WSL backend ships a ready binary and never
   // compiles on the user's machine.
   wslPrebuild: Config.string("PATHWAY_DESKTOP_WSL_PREBUILD").pipe(Config.option),
+  flavor: Config.schema(BuildFlavor, "PATHWAY_DESKTOP_FLAVOR").pipe(
+    Config.withDefault("production"),
+  ),
 });
 
 const MockUpdateServerPortSchema = Schema.NumberFromString.check(
@@ -1260,9 +1283,16 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     });
   }
   const version = mergeOptions(input.buildVersion, env.version, undefined);
-  const releaseDir = resolveBooleanFlag(input.mockUpdates, env.mockUpdates)
-    ? "release-mock"
-    : "release";
+  const flavor = Option.getOrElse(input.flavor, () => env.flavor);
+  if (platform === "win" && flavor !== "production") {
+    return yield* new UnsupportedDesktopFlavorError({ platform, flavor });
+  }
+  const releaseDir =
+    flavor === "cua"
+      ? "release-cua"
+      : resolveBooleanFlag(input.mockUpdates, env.mockUpdates)
+        ? "release-mock"
+        : "release";
   const outputDir = path.resolve(
     repoRoot,
     mergeOptions(input.outputDir, env.outputDir, releaseDir),
@@ -1303,6 +1333,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mockUpdates,
     mockUpdateServerPort,
     wslPrebuild,
+    flavor,
   } satisfies ResolvedBuildOptions;
 });
 
@@ -1820,11 +1851,21 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         readonly provisioningProfilePath: string;
       }
     | undefined,
+  flavor: PathwayDesktopFlavor = "production",
 ) {
+  if (platform === "win" && flavor !== "production") {
+    return yield* new UnsupportedDesktopFlavorError({ platform, flavor });
+  }
+  const cua = flavor === "cua";
+  const schemes = cua ? [PATHWAY_CUA_DESKTOP_IDENTITY.scheme] : ["pathway", "pathway-dev"];
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
-    productName: resolveDesktopProductName(version),
-    artifactName: "Pathway-Code-${version}-${arch}.${ext}",
+    appId: cua ? PATHWAY_CUA_DESKTOP_IDENTITY.bundleId : DESKTOP_APP_ID,
+    productName: cua
+      ? PATHWAY_CUA_DESKTOP_IDENTITY.displayName
+      : resolveDesktopProductName(version),
+    artifactName: cua
+      ? "Pathway-Cua-${version}-${arch}.${ext}"
+      : "Pathway-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [...DESKTOP_FILE_EXCLUSIONS],
     directories: {
@@ -1841,9 +1882,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(platform === "mac" ? PATHWAY_HELPER_EXTRA_RESOURCES : []),
     ],
   };
+  // The cua flavor is installed by hand and never joins an update feed.
   const updateChannel = resolveDesktopUpdateChannel(version);
-  const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
-  if (publishConfig) {
+  const publishConfig = cua ? undefined : yield* resolveGitHubPublishConfig(updateChannel);
+  if (cua) {
+    buildConfig.publish = null;
+  } else if (publishConfig) {
     buildConfig.publish = [publishConfig];
   } else if (mockUpdates) {
     buildConfig.publish = [
@@ -1881,7 +1925,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       protocols: [
         {
           name: "Pathway",
-          schemes: ["pathway", "pathway-dev"],
+          schemes,
         },
       ],
       ...(macPasskeySigning
@@ -1896,7 +1940,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
-      executableName: "pathway",
+      executableName: cua ? PATHWAY_CUA_DESKTOP_IDENTITY.linuxExecutableName : "pathway",
       icon: "icons",
       category: "Development",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
@@ -1905,12 +1949,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       protocols: [
         {
           name: "Pathway",
-          schemes: ["pathway", "pathway-dev"],
+          schemes,
         },
       ],
       desktop: {
         entry: {
-          StartupWMClass: "pathway",
+          StartupWMClass: cua ? PATHWAY_CUA_DESKTOP_IDENTITY.linuxExecutableName : "pathway",
         },
       },
     };
@@ -2334,7 +2378,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     stageDependencies,
   );
   const stagePackageJson: StagePackageJson = {
-    name: "pathway",
+    name: options.flavor === "cua" ? PATHWAY_CUA_DESKTOP_IDENTITY.linuxExecutableName : "pathway",
+    ...(options.flavor === "production" ? {} : { pathwayDesktopFlavor: options.flavor }),
     version: appVersion,
     buildVersion: appVersion,
     pathwayCommitHash: commitHash,
@@ -2361,6 +2406,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
           }
         : undefined,
+      options.flavor,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -2568,6 +2614,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   mockUpdateServerPort: Flag.integer("mock-update-server-port").pipe(
     Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
     Flag.withDescription("Mock update server port (env: PATHWAY_DESKTOP_MOCK_UPDATE_SERVER_PORT)."),
+    Flag.optional,
+  ),
+  flavor: Flag.choice("flavor", PATHWAY_DESKTOP_FLAVORS).pipe(
+    Flag.withDescription(
+      "Packaged identity; cua is an isolated side-by-side build (env: PATHWAY_DESKTOP_FLAVOR).",
+    ),
     Flag.optional,
   ),
   wslPrebuild: Flag.string("wsl-prebuild").pipe(

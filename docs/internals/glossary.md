@@ -307,6 +307,10 @@ _Avoid_: Computer permission mode (runtime mode is the thread's setting; autonom
 **Denylist**:
 The applications and system surfaces Computer Use always refuses: password managers, Keychain Access, Passwords, System Settings and SecurityAgent. No autonomy level overrides it.
 
+**Cua flavor**:
+The isolated "Pathway Cua" desktop build (`build-desktop-artifact --flavor cua`, macOS and Linux). It has its own bundle ID, `pathway-cua://` scheme, user-data directory and `~/.pathway-cua` home, so Computer Use testing never touches the installed app's permissions or state. It publishes no update feed.
+_Avoid_: Cua build (that is the driver build).
+
 ## Dictation
 
 **Dictation**:

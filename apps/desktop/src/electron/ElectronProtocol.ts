@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import * as Electron from "electron";
+import { PATHWAY_CUA_DESKTOP_IDENTITY } from "@spiritdevs/shared/desktopFlavor";
 import { isDevProxiedPath } from "@spiritdevs/shared/devProxy";
 
 export const DESKTOP_HOST = "app";
@@ -74,16 +75,8 @@ function readHeader(requestHeaders: Record<string, string>, expectedName: string
   return entry?.[1];
 }
 
-export function getDesktopScheme(isDevelopment: boolean): string {
-  return isDevelopment ? DESKTOP_DEVELOPMENT_SCHEME : DESKTOP_PRODUCTION_SCHEME;
-}
-
-export function getDesktopOrigin(isDevelopment: boolean): string {
-  return `${getDesktopScheme(isDevelopment)}://${DESKTOP_HOST}`;
-}
-
-export function getDesktopUrl(isDevelopment: boolean): string {
-  return `${getDesktopOrigin(isDevelopment)}/`;
+export function getDesktopUrl(scheme: string): string {
+  return `${scheme}://${DESKTOP_HOST}/`;
 }
 
 export class ElectronProtocolRegistrationError extends Schema.TaggedErrorClass<ElectronProtocolRegistrationError>()(
@@ -172,26 +165,21 @@ function withContentSecurityPolicy(response: Response, policy: string): Response
  * Must run synchronously during process bootstrap, before Electron emits `ready`.
  */
 export function registerDesktopSchemePrivilegesSync(): void {
-  Electron.protocol.registerSchemesAsPrivileged([
-    {
-      scheme: DESKTOP_PRODUCTION_SCHEME,
+  Electron.protocol.registerSchemesAsPrivileged(
+    [
+      DESKTOP_PRODUCTION_SCHEME,
+      DESKTOP_DEVELOPMENT_SCHEME,
+      PATHWAY_CUA_DESKTOP_IDENTITY.scheme,
+    ].map((scheme) => ({
+      scheme,
       privileges: {
         standard: true,
         secure: true,
         supportFetchAPI: true,
         corsEnabled: true,
       },
-    },
-    {
-      scheme: DESKTOP_DEVELOPMENT_SCHEME,
-      privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-        corsEnabled: true,
-      },
-    },
-  ]);
+    })),
+  );
 }
 
 const registerDesktopSchemePrivileges = Effect.sync(registerDesktopSchemePrivilegesSync).pipe(
