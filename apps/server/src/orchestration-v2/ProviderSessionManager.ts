@@ -313,6 +313,12 @@ export const layerWithOptions = (
         (mcpCredentialReservations.get(mcpReservationKey(threadId, mcpCredentialId)) ?? 0) > 0;
       const mcpPrepareLock = yield* makeKeyedSerialExecutor<ThreadId>();
       /**
+       * Whether each thread's next credential carries the `computer` toolkit,
+       * set by `open` from the admitted turn. A live credential is never
+       * changed: a different request reopens the idle session instead.
+       */
+      const computerControlRequests = new Map<ThreadId, boolean>();
+      /**
        * Resolves (or mints) the thread's MCP credential and returns it with a
        * reservation held; the caller must drop the reservation exactly once.
        * Serialized per thread so two concurrent prepares cannot interleave
@@ -348,7 +354,9 @@ export const layerWithOptions = (
                     resolved !== undefined &&
                     resolved.threadId === threadId &&
                     resolved.providerInstanceId === providerInstanceId &&
-                    resolved.providerDriverKind === providerDriverKind
+                    resolved.providerDriverKind === providerDriverKind &&
+                    resolved.capabilities.has("computer") ===
+                      (computerControlRequests.get(threadId) === true)
                   ) {
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
@@ -364,6 +372,7 @@ export const layerWithOptions = (
                   orchestratorOrigin: projection.thread.orchestratorOrigin,
                   providerInstanceId,
                   providerDriverKind,
+                  enableComputerControl: computerControlRequests.get(threadId) === true,
                 });
                 McpProviderSession.setMcpProviderSession(credential.config);
                 reserveMcpCredential(threadId, credential.config.providerSessionId);
@@ -1453,6 +1462,38 @@ export const layerWithOptions = (
                     providerSessionId: input.providerSessionId,
                     cause: "Wait for running provider work to finish before changing permissions.",
                   });
+                }
+              }
+              if (options.configureMcp !== false) {
+                const requested = input.runtimePolicy.enableComputerControl === true;
+                const provisioned =
+                  McpProviderSession.readMcpProviderSession(input.threadId)?.computerControl ===
+                  true;
+                computerControlRequests.set(input.threadId, requested);
+                if (
+                  existing !== undefined &&
+                  existing.attachedThreadIds.has(input.threadId) &&
+                  requested !== provisioned
+                ) {
+                  // The provider built its tool catalog from the live credential,
+                  // so Computer changes only between turns. While work is running
+                  // the change waits for the next turn and this one keeps the
+                  // catalog it has.
+                  const pendingWork = yield* (
+                    existing.runtime.hasPendingBackgroundWork ?? Effect.succeed(false)
+                  );
+                  if (existing.busyCount === 0 && !pendingWork) {
+                    yield* releaseEntry({
+                      providerSessionId: input.providerSessionId,
+                      reason: "manual_shutdown",
+                      detail: "Computer control changed; reopen with the requested tools.",
+                      onlyIfIdleGeneration: existing.idleGeneration,
+                    });
+                    existing = (yield* Ref.get(sessions)).get(key);
+                  }
+                  if (existing !== undefined) {
+                    computerControlRequests.set(input.threadId, provisioned);
+                  }
                 }
               }
               if (existing !== undefined) {

@@ -15,6 +15,8 @@ export interface McpProviderSessionConfig {
   readonly providerInstanceId: ProviderInstanceId;
   readonly endpoint: string;
   readonly authorizationHeader: string;
+  /** The credential carries the `computer` toolkit. */
+  readonly computerControl?: boolean;
 }
 
 const sessionsByThread = new Map<ThreadId, McpProviderSessionConfig>();
