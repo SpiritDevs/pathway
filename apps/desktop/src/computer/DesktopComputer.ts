@@ -17,17 +17,18 @@ export interface DesktopComputerService {
   readonly resume: Effect.Effect<void>;
 }
 
+/** No host: backends start exactly as they would without Computer. */
+export const inertDesktopComputer: DesktopComputerService = {
+  handoff: Option.none(),
+  suspend: Effect.void,
+  resume: Effect.void,
+};
+
 /**
- * The desktop Computer host as the backend lifecycle sees it. Inert unless the
- * Computer layer provides a live host, so backends start exactly as before.
+ * The desktop Computer host as the backend lifecycle sees it. Inert unless
+ * `DesktopComputerHost.layer` provides a live host.
  */
 export const DesktopComputer = Context.Reference<DesktopComputerService>(
   "@spiritdevs/desktop/computer/DesktopComputer",
-  {
-    defaultValue: () => ({
-      handoff: Option.none(),
-      suspend: Effect.void,
-      resume: Effect.void,
-    }),
-  },
+  { defaultValue: () => inertDesktopComputer },
 );
