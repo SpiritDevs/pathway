@@ -233,13 +233,14 @@ export const computerApprovalRequesterLayer = Layer.effect(
   makeComputerApprovalRequester,
 );
 
-/** Routes answers to Computer cards from `runtime-request.respond` to the gate. */
+/** Routes answers to Computer cards, and the end of their run, to the gate. */
 export const computerServerOwnedRuntimeRequestsLayer = Layer.effect(
   ServerOwnedRuntimeRequests,
   Effect.gen(function* () {
     const gate = yield* ComputerApprovalGate;
     return {
       respond: ({ threadId, requestId, decision }) => gate.respond(threadId, requestId, decision),
+      endRun: ({ threadId, runId }) => gate.endTurn(threadId, runId),
     };
   }),
 );
