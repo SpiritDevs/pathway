@@ -1566,15 +1566,18 @@ function ChatViewContent(props: ChatViewProps) {
       ),
     [queuedChat.row, activeCompanyId, queuedChat.messages, queueProviderStatuses],
   );
-  const serverThreadStatus = useThreadStatus(routeThreadRef);
-  const setThreadLoadEnabled = useAtomSet(
-    environmentThreads.loadEnabledAtom(environmentId, threadId),
-  );
-  const threadLoadStopped = serverThreadStatus === "stopped";
+  // A draft's reserved thread id has no server thread until its first send is
+  // accepted. Subscribing earlier exhausts the not-found retries and parks the
+  // thread as deleted, delaying the first live update after send.
   const routeThreadDetailRef = resolveThreadDetailRef(routeThreadRef, {
     shellExists: serverThread !== null,
     waitForShell: draftThread !== null || queuedChat.row !== undefined,
   });
+  const serverThreadStatus = useThreadStatus(routeThreadDetailRef);
+  const setThreadLoadEnabled = useAtomSet(
+    environmentThreads.loadEnabledAtom(environmentId, threadId),
+  );
+  const threadLoadStopped = serverThreadStatus === "stopped";
   const serverThreadProjection = useThreadProjection(
     threadLoadStopped ? null : routeThreadDetailRef,
   );

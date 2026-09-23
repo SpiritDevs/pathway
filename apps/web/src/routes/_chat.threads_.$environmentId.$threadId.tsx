@@ -19,7 +19,7 @@ import {
   resolveThreadRouteRenderState,
 } from "../threadRoutes";
 import { SidebarInset } from "~/components/ui/sidebar";
-import { useThreadShell, useThreadStatus } from "../state/entities";
+import { resolveThreadDetailRef, useThreadShell, useThreadStatus } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 
@@ -38,7 +38,6 @@ function ChatThreadRouteView() {
     ? queuedThreads.find((row) => row.queueId === queueId && row.threadId === threadRef?.threadId)
     : findQueuedThread(queuedThreads, threadRef?.environmentId, threadRef?.threadId);
   const serverThreadShell = useThreadShell(threadRef);
-  const serverThreadStatus = useThreadStatus(threadRef);
   const completedQueue = queuedThread !== undefined && isCompletedQueueEntry(queuedThread);
   const unavailableQueue =
     queueHydrated &&
@@ -50,6 +49,14 @@ function ChatThreadRouteView() {
   );
   const draftThread = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) : null,
+  );
+  // Until a draft's first send reaches the shell, its server thread may not
+  // exist; a premature not-found would close the optimistic thread.
+  const serverThreadStatus = useThreadStatus(
+    resolveThreadDetailRef(threadRef, {
+      shellExists: serverThreadShell !== null,
+      waitForShell: draftThread !== null && !draftThread.promotedTo,
+    }),
   );
   const unfilteredSnapshot = shell.data === null ? null : Option.getOrNull(shell.data.snapshot);
   const promotedThreadUnavailable = promotedDraftThreadIsUnavailable({

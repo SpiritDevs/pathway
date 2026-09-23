@@ -703,7 +703,19 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
             </span>
             <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-end">
               {session.pendingSend ? (
-                <span className="text-xs text-muted-foreground">Starting</span>
+                // Matches a working server row so the handoff to it is seamless.
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 text-xs font-medium text-sky-600 dark:text-sky-400",
+                    !props.isActive && "opacity-75",
+                  )}
+                >
+                  <CircleDashedIcon aria-hidden className="size-4 shrink-0" />
+                  <span role="status">Working</span>
+                  <span aria-hidden>
+                    <WorkingDuration startedAt={session.pendingSend.createdAt} />
+                  </span>
+                </span>
               ) : (
                 <button
                   type="button"

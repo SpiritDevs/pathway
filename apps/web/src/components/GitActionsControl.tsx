@@ -1287,7 +1287,8 @@ export default function GitActionsControl({
   const allSelected = excludedFiles.size === 0;
   const noneSelected = selectedFiles.length === 0;
 
-  const visibleTurnItems = useThreadVisibleTurnItems(activeThreadRef);
+  // A draft has no server thread (or touched paths) to read yet.
+  const visibleTurnItems = useThreadVisibleTurnItems(draftId ? null : activeThreadRef);
   const threadScopeSplit = useMemo(
     () =>
       splitWorkingTreeFilesByThread({

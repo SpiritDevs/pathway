@@ -1,6 +1,6 @@
 # Creating a worktree
 
-On web and desktop, a new conversation appears in the sidebar as **Starting** as soon as you send its first message. You can open another conversation and return while it starts. Once the server confirms the conversation, its regular sidebar entry replaces the starting entry. If sending fails, your message returns to its draft for retry.
+On web and desktop, a new conversation appears in the sidebar as **Working**, with a running timer, as soon as you send its first message. You can open another conversation and return while it starts. Once the server confirms the conversation, its regular sidebar entry takes over and the agent's progress streams in. If sending fails, your message returns to its draft for retry.
 
 If you reload during a send, Pathway checks the connected environment before recovering the draft. A message that was never accepted becomes editable again, with its saved attachments and context. Messages already accepted by the server stay in their conversations.
 

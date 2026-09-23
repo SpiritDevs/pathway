@@ -572,11 +572,13 @@ export function useQueuedStartThreadTurn() {
                 ? message.queueId === queued?.queueId
                 : message.environmentId === target.environmentId),
           );
-        const projection =
-          readThreadProjection({
-            environmentId: target.environmentId,
-            threadId: target.input.threadId,
-          })?.projection ?? null;
+        // A launch creates the thread, so there is no projection to read yet.
+        const projection = target.input.bootstrap?.createThread
+          ? null
+          : (readThreadProjection({
+              environmentId: target.environmentId,
+              threadId: target.input.threadId,
+            })?.projection ?? null);
         const activeRun = projection?.runs.find((run) =>
           ["preparing", "starting", "running", "waiting"].includes(run.status),
         );

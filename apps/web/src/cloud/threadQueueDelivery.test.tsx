@@ -148,6 +148,12 @@ describe("connected thread delivery without cloud queue readiness", () => {
     },
   );
 
+  it("launches a new thread without subscribing to its not-yet-created state", async () => {
+    expect(await renderSend()(target)).toMatchObject({ _tag: "Success" });
+    expect(readProjection).not.toHaveBeenCalled();
+    expect(startTurn).toHaveBeenCalledExactlyOnceWith(target);
+  });
+
   it("sends an existing thread directly while its client projection is loading", async () => {
     const { bootstrap: _, ...input } = target.input;
     const followup = { ...target, input };
