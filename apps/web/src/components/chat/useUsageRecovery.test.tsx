@@ -51,6 +51,9 @@ vi.mock("../../state/query", () => ({
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) => (command === "schedule" ? state.schedule : state.cancel),
 }));
+vi.mock("../../hooks/useNowMinute", () => ({
+  useNowMinute: () => new Date().toISOString().slice(0, 16),
+}));
 vi.mock("../../lib/utils", () => ({
   newCommandId: () => "new-recovery",
   cn: (...values: string[]) => values.join(" "),
@@ -127,6 +130,37 @@ it("opens while the live subscription waits for updates and schedules with the r
       resumeAt: "2026-09-23T11:02:00.000Z",
     },
   });
+});
+
+it("resumes immediately once the reported reset has passed", async () => {
+  state.result = {
+    recovery: null,
+    eligibility: {
+      sourceRunId,
+      suggestedResumeAt: "2026-09-23T10:01:00Z",
+      resetAt: "2026-09-23T09:50:00Z",
+      childCount: 2,
+    },
+  };
+  const view = render();
+  expect(view.canResumeNow).toBe(true);
+  expect(view.banner?.title).toBe("Usage allowance reset");
+  click(view.banner?.actions, "Resume now");
+  await Promise.resolve();
+  expect(state.schedule).toHaveBeenCalledWith({
+    environmentId,
+    input: {
+      commandId: "new-recovery",
+      threadId,
+      sourceRunId,
+      resumeAt: "2026-09-23T10:00:00.000Z",
+    },
+  });
+  state.result = {
+    recovery: null,
+    eligibility: { ...state.result.eligibility!, resetAt: "2026-09-23T10:00:30Z" },
+  };
+  expect(render().canResumeNow).toBe(false);
 });
 
 it("offers change and cancel controls for a persisted timer", async () => {

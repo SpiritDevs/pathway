@@ -256,6 +256,7 @@ interface TimelineRowSharedState {
   onWaitUntilUsageReset: (resetAt: string) => void;
   usageLimitRecoveryPending: boolean;
   canWaitUntilUsageReset: boolean;
+  canResumeUsageNow: boolean;
   onRollbackCheckpoint: (input: {
     readonly checkpointId: string;
     readonly scopeId: string;
@@ -348,6 +349,7 @@ interface MessagesTimelineProps {
   onWaitUntilUsageReset?: (resetAt: string) => void;
   usageLimitRecoveryPending?: boolean;
   canWaitUntilUsageReset?: boolean;
+  canResumeUsageNow?: boolean;
   onRollbackCheckpoint: (input: {
     readonly checkpointId: string;
     readonly scopeId: string;
@@ -428,6 +430,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onWaitUntilUsageReset = NOOP_WAIT_FOR_USAGE_RESET,
   usageLimitRecoveryPending = false,
   canWaitUntilUsageReset = false,
+  canResumeUsageNow = false,
   onRollbackCheckpoint,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
@@ -975,6 +978,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onWaitUntilUsageReset,
       usageLimitRecoveryPending,
       canWaitUntilUsageReset,
+      canResumeUsageNow,
       onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleAttemptFold,
@@ -1025,6 +1029,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onWaitUntilUsageReset,
       usageLimitRecoveryPending,
       canWaitUntilUsageReset,
+      canResumeUsageNow,
       onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleAttemptFold,
@@ -2451,6 +2456,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
                 disabled={ctx.usageLimitRecoveryPending}
                 waiting={ctx.usageLimitRecoveryPending}
                 canWaitUntilReset={ctx.canWaitUntilUsageReset}
+                canResumeNow={ctx.canResumeUsageNow}
                 onRecover={ctx.onRecoverUsageLimit}
                 onWaitUntilReset={ctx.onWaitUntilUsageReset}
               />

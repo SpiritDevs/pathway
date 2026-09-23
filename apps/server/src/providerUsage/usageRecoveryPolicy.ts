@@ -38,16 +38,62 @@ export function canResumeUsageRecovery(projection: OrchestrationV2ThreadProjecti
   );
 }
 
+/** Latest reset reported by these failures, or null when none reported one. */
+export function reportedResetAt(messages: ReadonlyArray<{ text: string; at: number }>) {
+  // Relative resets and clock dates are anchored to the error, never to the time a client opens it.
+  const reported = messages.flatMap(({ text, at }) => {
+    const reset = parseUsageLimitResetAt(text, at);
+    return reset === null ? [] : [Date.parse(reset)];
+  });
+  return reported.length === 0 ? null : Math.max(...reported);
+}
+
 export function recoveryRetryAt(
   messages: ReadonlyArray<{ text: string; at: number }>,
   now: number,
 ) {
-  // Relative resets and clock dates are anchored to the error, never to the time a client opens it.
-  const reported = messages.flatMap(({ text, at }) => {
-    const reset = parseUsageLimitResetAt(text, at);
-    return reset === null ? [] : [Date.parse(reset) + RECOVERY_DELAY_MS];
-  });
-  return DateTime.formatIso(DateTime.makeUnsafe(Math.max(now + RECOVERY_DELAY_MS, ...reported)));
+  const reset = reportedResetAt(messages);
+  return DateTime.formatIso(
+    DateTime.makeUnsafe(
+      Math.max(now + RECOVERY_DELAY_MS, reset === null ? 0 : reset + RECOVERY_DELAY_MS),
+    ),
+  );
+}
+
+/** When a child's usage-limit failure happened; later bookkeeping can bump `updatedAt`. */
+export function childFailedAt(task: OrchestrationV2Subagent) {
+  return DateTime.toEpochMillis(task.completedAt ?? task.updatedAt);
+}
+
+/**
+ * Delegated tasks track only their spawn run. When a child thread is resumed in place,
+ * its newest run is the child's real state, so a stale failure no longer blocks recovery.
+ */
+export function resumedChildTask(
+  task: OrchestrationV2Subagent,
+  child: OrchestrationV2ThreadProjection,
+): OrchestrationV2Subagent {
+  const run = recoveryLatestRun(child);
+  if (
+    !run ||
+    task.completedAt === null ||
+    DateTime.toEpochMillis(run.requestedAt) <= DateTime.toEpochMillis(task.completedAt)
+  )
+    return task;
+  const error = child.turnItems.findLast((item) => item.type === "error" && item.runId === run.id);
+  const working = runIsWorking(run);
+  return {
+    ...task,
+    status:
+      run.status === "completed" || run.status === "failed" || run.status === "interrupted"
+        ? run.status
+        : working
+          ? "running"
+          : "cancelled",
+    result: error?.type === "error" ? error.failure.message : null,
+    completedAt: working ? null : run.completedAt,
+    updatedAt: run.completedAt ?? run.requestedAt,
+  };
 }
 
 export type RecoveryChild = {

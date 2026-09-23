@@ -24,33 +24,20 @@ struct AgentThreadUsageRecovery: View {
     private var scheduled: Bool { status == "scheduled" }
     private var monitoring: Bool { status == "monitoring" }
     private var resumeDate: Date? { recovery["resumeAt"]?.stringValue.flatMap(pathwayDate(from:)) }
+    private var resetDate: Date? { eligibility?["resetAt"]?.stringValue.flatMap(pathwayDate(from:)) }
+
+    /// Once the reported reset has passed there is nothing to wait for, so offer to resume now.
+    private func canResumeNow(at now: Date) -> Bool {
+        guard !scheduled, !monitoring, !inherited, let resetDate else { return false }
+        return resetDate <= now
+    }
 
     var body: some View {
         Group {
             if supported && (eligibility != nil || scheduled || monitoring || status == "failed" || error != nil) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label(title, systemImage: "alarm").font(.subheadline.weight(.medium))
-                    Text(error ?? recovery["message"]?.stringValue ?? "Resume this thread and its unfinished children after the allowance resets.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    HStack {
-                        if !monitoring && !inherited, let sourceRunID = eligibility?["sourceRunId"]?.stringValue {
-                            Button(scheduled ? "Change time" : "Resume after reset") {
-                                let suggested = eligibility?["suggestedResumeAt"]?.stringValue.flatMap(pathwayDate(from:))
-                                editor = RecoveryEditor(sourceRunID: sourceRunID, date: max((scheduled ? resumeDate : suggested) ?? Date().addingTimeInterval(60), Date().addingTimeInterval(60)))
-                            }
-                        }
-                        if (scheduled || monitoring) && !inherited {
-                            Button("Cancel recovery", role: .cancel) {
-                                Task { await cancel() }
-                            }
-                        }
-                    }
-                    .buttonStyle(.bordered).controlSize(.small).disabled(isBusy || model.connectionState != .live)
+                TimelineView(.everyMinute) { context in
+                    content(resumeNow: canResumeNow(at: context.date))
                 }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                .accessibilityIdentifier("agent-thread-usage-recovery")
             }
         }
         .task(id: "\(model.threadID):\(supported):\(model.connectionState == .live)") {
@@ -69,12 +56,58 @@ struct AgentThreadUsageRecovery: View {
         }
     }
 
+    private func content(resumeNow: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(resumeNow ? "Usage allowance reset" : title, systemImage: "alarm").font(.subheadline.weight(.medium))
+            Text(error ?? (resumeNow ? "Resume this thread and its unfinished children now, with their context." : recovery["message"]?.stringValue ?? "Resume this thread and its unfinished children after the allowance resets."))
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                if !monitoring && !inherited, let sourceRunID = eligibility?["sourceRunId"]?.stringValue {
+                    if resumeNow {
+                        Button(isBusy ? "Resuming…" : "Resume now") {
+                            Task { await schedule(sourceRunID: sourceRunID) }
+                        }
+                    } else {
+                        Button(scheduled ? "Change time" : "Resume after reset") {
+                            let suggested = eligibility?["suggestedResumeAt"]?.stringValue.flatMap(pathwayDate(from:))
+                            editor = RecoveryEditor(sourceRunID: sourceRunID, date: max((scheduled ? resumeDate : suggested) ?? Date().addingTimeInterval(60), Date().addingTimeInterval(60)))
+                        }
+                    }
+                }
+                if (scheduled || monitoring) && !inherited {
+                    Button("Cancel recovery", role: .cancel) {
+                        Task { await cancel() }
+                    }
+                }
+            }
+            .buttonStyle(.bordered).controlSize(.small).disabled(isBusy || model.connectionState != .live)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityIdentifier("agent-thread-usage-recovery")
+    }
+
     private var title: String {
         if inherited { return "Included in the parent thread’s recovery" }
         if scheduled, let resumeDate { return "Resume thread + children \(resumeDate.formatted(date: .abbreviated, time: .shortened))" }
         if monitoring { return "Resuming thread + children · attempt \(recovery["attempts"]?.intValue ?? 1) of 3" }
         if status == "failed" { return "Automatic recovery needs attention" }
         return "Usage limit reached"
+    }
+
+    /// The environment starts a recovery whose time has already passed on its next tick.
+    private func schedule(sourceRunID: String) async {
+        guard !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            _ = try await model.request("usageRecovery.schedule", payload: .object([
+                "commandId": .string(UUID().uuidString), "threadId": .string(model.threadID),
+                "sourceRunId": .string(sourceRunID), "resumeAt": .string(Date().ISO8601Format()),
+            ]), reportsErrors: false)
+            error = nil
+        } catch { self.error = error.localizedDescription }
     }
 
     private func cancel() async {

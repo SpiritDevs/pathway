@@ -16,6 +16,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import { AlarmClockIcon } from "lucide-react";
 import { useState } from "react";
+import { useNowMinute } from "../../hooks/useNowMinute";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -50,6 +51,7 @@ export function useUsageRecovery(input: {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
   const busy = busyKey === key;
+  const nowMinute = useNowMinute();
   const schedule = useAtomCommand(serverEnvironment.scheduleUsageRecovery, {
     reportFailure: false,
   });
@@ -110,6 +112,10 @@ export function useUsageRecovery(input: {
     snapshot: usage.data?.find((entry) => entry.instanceId === provider?.instanceId) ?? null,
     nowMs: failureAt ? DateTime.toEpochMillis(failureAt) : Date.now(),
   });
+  const reportedReset = query.data?.eligibility?.resetAt ?? resetAt;
+  // Minute-quantized so the banner flips on the shared clock tick once the reset passes.
+  const resetPassed =
+    reportedReset != null && Date.parse(reportedReset) <= Date.parse(`${nowMinute}:00Z`);
   const open = (suggestedReset?: string) => {
     const defaultAt =
       recovery?.status === "scheduled"
@@ -124,13 +130,8 @@ export function useUsageRecovery(input: {
   };
   const report = (cause: unknown) =>
     setError({ key, message: cause instanceof Error ? cause.message : String(cause) });
-  const submit = async () => {
-    if (busy || editor?.key !== key || !latest) return;
-    const resumeMs = Date.parse(editor.value);
-    if (!Number.isFinite(resumeMs) || resumeMs <= Date.now()) {
-      report("Choose a future recovery time.");
-      return;
-    }
+  const scheduleAt = async (resumeMs: number) => {
+    if (busy || !latest) return;
     setBusyKey(key);
     setError(null);
     try {
@@ -150,6 +151,17 @@ export function useUsageRecovery(input: {
       setBusyKey(null);
     }
   };
+  const submit = () => {
+    if (editor?.key !== key) return;
+    const resumeMs = Date.parse(editor.value);
+    if (!Number.isFinite(resumeMs) || resumeMs <= Date.now()) {
+      report("Choose a future recovery time.");
+      return;
+    }
+    return scheduleAt(resumeMs);
+  };
+  /** The server starts a recovery whose time has already passed on its next tick. */
+  const resumeNow = () => scheduleAt(Date.now());
   const cancelTimer = async () => {
     if (busy) return;
     setBusyKey(key);
@@ -168,6 +180,7 @@ export function useUsageRecovery(input: {
   const scheduled = recovery?.status === "scheduled";
   const monitoring = recovery?.status === "monitoring";
   const failed = recovery?.status === "failed";
+  const canResumeNow = canSchedule && resetPassed && !scheduled && !monitoring;
   const visibleError = error?.key === key ? error.message : query.error;
   const banner: ComposerBannerStackItem | null =
     input.supported && (canSchedule || scheduled || monitoring || failed || error?.key === key)
@@ -185,18 +198,30 @@ export function useUsageRecovery(input: {
                 ? `Resuming thread + children · attempt ${recovery.attempts} of 3`
                 : failed
                   ? "Automatic recovery needs attention"
-                  : "Usage limit reached",
+                  : canResumeNow
+                    ? "Usage allowance reset"
+                    : "Usage limit reached",
           description:
             visibleError ??
             (scheduled || monitoring || failed
               ? recovery?.message
-              : "Schedule this thread and its unfinished children to continue after reset."),
+              : canResumeNow
+                ? "Resume this thread and its unfinished children now, with their context."
+                : "Schedule this thread and its unfinished children to continue after reset."),
           actions: (
             <>
-              {(scheduled || canSchedule) && !monitoring && !inherited && (
-                <Button size="xs" disabled={busy} onClick={() => open()}>
-                  {scheduled ? "Change time" : "Resume after reset"}
+              {canResumeNow ? (
+                <Button size="xs" disabled={busy} onClick={() => void resumeNow()}>
+                  {busy ? "Resuming…" : "Resume now"}
                 </Button>
+              ) : (
+                (scheduled || canSchedule) &&
+                !monitoring &&
+                !inherited && (
+                  <Button size="xs" disabled={busy} onClick={() => open()}>
+                    {scheduled ? "Change time" : "Resume after reset"}
+                  </Button>
+                )
               )}
               {(scheduled || monitoring) && !inherited && (
                 <Button
@@ -259,5 +284,5 @@ export function useUsageRecovery(input: {
       </DialogPopup>
     </Dialog>
   );
-  return { banner, dialog, open, busy, canSchedule, supportedProvider };
+  return { banner, dialog, open, resumeNow, busy, canSchedule, canResumeNow, supportedProvider };
 }
