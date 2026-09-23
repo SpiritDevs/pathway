@@ -139,7 +139,7 @@ describe("resolving a labelled desktop target", () => {
     }),
   );
 
-  it.effect.each([" ", " ", " "])(
+  it.effect.each(["\u00a0", "\u2007", "\u202f"])(
     "matches a visible form label containing a non-breaking space (%j)",
     (space) =>
       Effect.gen(function* () {
@@ -158,7 +158,7 @@ describe("resolving a labelled desktop target", () => {
       const desktop = node({
         role: "desktop",
         children: [
-          node({ role: "AXTextField", label: "First name *" }),
+          node({ role: "AXTextField", label: "First name\u00a0*" }),
           node({ role: "AXTextField", label: "First name *" }),
         ],
       });
