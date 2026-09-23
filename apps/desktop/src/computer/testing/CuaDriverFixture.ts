@@ -124,6 +124,8 @@ export interface Fixture {
   ) => Effect.Effect<T, CuaHostError>;
   /** Log messages the host wrote, in order. */
   readonly logs: ReadonlyArray<string>;
+  /** Waits until the host logged a message containing `text`. Push-driven, never polled. */
+  readonly waitForLog: (text: string) => Effect.Effect<void>;
   /** Parsed JSON log lines carrying `event`. */
   readonly logEvents: (event: string) => ReadonlyArray<Record<string, unknown>>;
   /** Moves the host's wall clock forward, e.g. past the Escape cooldown, without sleeping. */
@@ -304,9 +306,31 @@ export const makeFixture = Effect.fn("makeFixture")(function* (options: FixtureO
   );
 
   const logs: string[] = [];
+  const logWakers = new Set<(line: string) => void>();
   const capture = Logger.make(({ message }) => {
-    logs.push(logText(message));
+    const line = logText(message);
+    logs.push(line);
+    for (const waker of logWakers) waker(line);
   });
+  const waitForLog = (text: string) =>
+    Effect.callback<void>((resume) => {
+      if (logs.some((line) => line.includes(text))) return resume(Effect.void);
+      const waker = (line: string) => {
+        if (!line.includes(text)) return;
+        logWakers.delete(waker);
+        resume(Effect.void);
+      };
+      logWakers.add(waker);
+      return Effect.sync(() => {
+        logWakers.delete(waker);
+      });
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: 5_000,
+        orElse: () =>
+          Effect.die(new Error(`timed out waiting for log ${text}; saw ${logs.join("\n")}`)),
+      }),
+    );
   const base = yield* Clock.Clock;
   let offset = 0;
   const skewed: Clock.Clock = {
@@ -437,6 +461,7 @@ export const makeFixture = Effect.fn("makeFixture")(function* (options: FixtureO
     count: (event: string) =>
       Effect.map(events, (rows) => rows.filter((row) => row.event === event).length),
     waitForEvent,
+    waitForLog,
     send,
     logs,
     logEvents: (event: string) =>
