@@ -94,6 +94,12 @@ export function buildThreadQueueSubmission(
       ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
       ...(input.titleSeed ? { titleSeed: input.titleSeed } : {}),
       ...(input.sourceProposedPlan ? { sourcePlanRef: input.sourceProposedPlan } : {}),
+      ...(input.enableComputerControl === undefined
+        ? {}
+        : { enableComputerControl: input.enableComputerControl }),
+      ...(input.computerControlGeneration === undefined
+        ? {}
+        : { computerControlGeneration: input.computerControlGeneration }),
     },
   };
 }
