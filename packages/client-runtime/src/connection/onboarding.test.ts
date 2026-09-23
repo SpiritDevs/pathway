@@ -1,4 +1,8 @@
-import { AuthStandardClientScopes, EnvironmentId } from "@spiritdevs/contracts";
+import {
+  AuthComputerOperateScope,
+  AuthStandardClientScopes,
+  EnvironmentId,
+} from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -28,7 +32,7 @@ const CLIENT_PRESENTATION_LAYER = Layer.succeed(
 
 function pairingHttpLayer(
   calls: Array<{ readonly url: string; readonly init: RequestInit }>,
-  options?: { readonly failDescriptor?: boolean },
+  options?: { readonly failDescriptor?: boolean; readonly computerOperateScope?: boolean },
 ) {
   const fetchFn = ((input, init = {}) => {
     const url = String(input);
@@ -51,6 +55,7 @@ function pairingHttpLayer(
           serverVersion: "0.0.0-test",
           capabilities: {
             repositoryIdentity: true,
+            ...(options?.computerOperateScope === false ? {} : { computerOperateScope: true }),
           },
         }),
       );
@@ -115,6 +120,32 @@ describe("connection onboarding", () => {
       expect(tokenParams.get("subject_token")).toBe("pairing-token");
       expect(tokenParams.get("scope")).toBe(AuthStandardClientScopes.join(" "));
       expect(tokenParams.get("client_label")).toBe("Pathway Test");
+    }),
+  );
+
+  it.effect("does not request computer:operate from a server that predates it", () =>
+    Effect.gen(function* () {
+      const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
+      yield* preparePairingRegistration({
+        host: "remote.example.test",
+        pairingCode: "pairing-token",
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            CLIENT_PRESENTATION_LAYER,
+            pairingHttpLayer(calls, { computerOperateScope: false }),
+          ),
+        ),
+      );
+
+      const tokenRequest = calls.find((call) => call.url.endsWith("/oauth/token"));
+      const tokenBody =
+        tokenRequest?.init.body instanceof Uint8Array
+          ? new TextDecoder().decode(tokenRequest.init.body)
+          : String(tokenRequest?.init.body);
+      expect(new URLSearchParams(tokenBody).get("scope")).toBe(
+        AuthStandardClientScopes.filter((scope) => scope !== AuthComputerOperateScope).join(" "),
+      );
     }),
   );
 
