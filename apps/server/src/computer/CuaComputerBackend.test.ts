@@ -1278,6 +1278,35 @@ describe("Cua native boundary", () => {
       }),
   );
 
+  it.effect("aborts a dispatched semantic write when its caller is interrupted", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({ semanticTextLaneGapMs: 60 });
+      f.setElements([messageField()]);
+      const target = yield* exactTarget(f, "Message");
+      const typing = gate();
+      f.gateTypeText(typing.promise);
+      const caller = yield* start(f.backend.typeText("alpha", "cua:10:20", target));
+      yield* waitUntil(() => callsNamed(f, "type_text").length === 1);
+      const nativeSignal = f.request.mock.calls.find(
+        ([, body]) => (body as HostCall).name === "type_text",
+      )?.[2]?.signal;
+      expect(nativeSignal?.aborted).toBe(false);
+
+      yield* Fiber.interrupt(caller);
+      yield* waitUntil(() => nativeSignal?.aborted === true);
+
+      // The lane still drains in order: the next write waits out the gap.
+      f.gateTypeText(undefined);
+      const next = yield* start(f.backend.typeText("bravo", "cua:10:20", target));
+      yield* settle(64);
+      expect(callsNamed(f, "type_text")).toHaveLength(1);
+      yield* TestClock.adjust("60 millis");
+      yield* run(Fiber.join(next));
+      expect(callsNamed(f, "type_text").map((call) => call.args?.text)).toEqual(["alpha", "bravo"]);
+      typing.open();
+    }),
+  );
+
   it.effect("semantic text lane holds the gap between consecutive writes", () =>
     Effect.gen(function* () {
       const f = yield* fixture({ semanticTextLaneGapMs: 60 });
