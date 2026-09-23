@@ -11,6 +11,8 @@ when you hover or focus the row.
 
 Open the Alert Menu to change individual events. Right-click the bell, hold Control or Command while
 hovering it, press Control or Command + Enter while it has keyboard focus, or long-press on touch.
+A menu opened by hovering closes when the pointer leaves the bell and the menu, or when you
+release Control or Command away from the menu. Click inside it to keep it open.
 Each event can inherit, be on, or be off. Use project defaults removes the thread's overrides.
 
 Settings → Notifications contains the global defaults and project overrides. Project Settings also
