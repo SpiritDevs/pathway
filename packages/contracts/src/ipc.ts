@@ -1223,6 +1223,129 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
   input: PreviewAutomationWaitForInput,
 });
 
+// ── Computer (desktop host) ─────────────────────────────────────────
+// The macOS grants, permission guide, agent cursor and live frame tap of the
+// desktop Computer host. Desktop app only: plain browsers never see
+// `DesktopBridge.computer`, and remote clients set grants up at the host.
+
+/** A macOS privacy grant the Computer helper checks, in setup order. */
+export const DesktopComputerPermissionKind = Schema.Literals([
+  "accessibility",
+  "inputMonitoring",
+  "screenRecording",
+]);
+export type DesktopComputerPermissionKind = typeof DesktopComputerPermissionKind.Type;
+
+/** The System Settings privacy pane for one grant. */
+export const DesktopComputerSettingsPane = Schema.Literals([
+  "accessibility",
+  "input-monitoring",
+  "screen-recording",
+]);
+export type DesktopComputerSettingsPane = typeof DesktopComputerSettingsPane.Type;
+
+export const DesktopComputerPermissionState = Schema.Literals([
+  "granted",
+  "denied",
+  "not-determined",
+  "restricted",
+  "unknown",
+]);
+export type DesktopComputerPermissionState = typeof DesktopComputerPermissionState.Type;
+
+export const DesktopComputerPermissionSetupErrorCode = Schema.Literals([
+  "permission_setup_bundle_unavailable",
+  "permission_setup_registration_unresolved",
+  "permission_setup_identity_mismatch",
+]);
+export type DesktopComputerPermissionSetupErrorCode =
+  typeof DesktopComputerPermissionSetupErrorCode.Type;
+
+/**
+ * The host's grant snapshot plus helper health. Accessibility is present only
+ * once a caller asked about it; the helper answers just the grants queried.
+ */
+export const DesktopComputerHelperState = Schema.Struct({
+  supported: Schema.Boolean,
+  status: Schema.Literals(["unsupported", "ready", "error"]),
+  message: Schema.NullOr(Schema.String),
+  permissionSetupErrorCode: Schema.optionalKey(DesktopComputerPermissionSetupErrorCode),
+  /** Name macOS shows for this build in System Settings permission lists. */
+  appDisplayName: Schema.String,
+  accessibilityPermission: Schema.optionalKey(DesktopComputerPermissionState),
+  screenRecordingPermission: DesktopComputerPermissionState,
+  inputMonitoringPermission: DesktopComputerPermissionState,
+});
+export type DesktopComputerHelperState = typeof DesktopComputerHelperState.Type;
+
+/** A setup failure the user must act on. */
+export const DesktopComputerHelperError = Schema.Struct({
+  code: DesktopComputerPermissionSetupErrorCode,
+  message: Schema.String,
+  capturedAt: Schema.String,
+});
+export type DesktopComputerHelperError = typeof DesktopComputerHelperError.Type;
+
+/** The floating permission guide finished: its grant landed, or it was closed. */
+export const DesktopComputerPermissionGuideState = Schema.Literals(["granted", "closed"]);
+export type DesktopComputerPermissionGuideState = typeof DesktopComputerPermissionGuideState.Type;
+
+/**
+ * Agent cursor colors mirrored to the desktop host. Each channel is a
+ * `#rrggbb` string; an omitted channel keeps the driver's stock treatment for
+ * it, and `null` (at the bridge) is the stock monochrome cursor.
+ */
+export const DesktopAgentCursorStyle = Schema.Struct({
+  fill: Schema.optionalKey(Schema.String),
+  rim: Schema.optionalKey(Schema.String),
+  shadow: Schema.optionalKey(Schema.String),
+});
+export type DesktopAgentCursorStyle = typeof DesktopAgentCursorStyle.Type;
+
+/**
+ * One frame of the desktop app's native Computer frame tap: a complete JPEG of
+ * the driven window. `seq` is monotonic per host process; the first frame marks
+ * stream start and frames simply stop when the tap ends or dies. Sent over the
+ * desktop bridge only, never through the Computer frame socket.
+ */
+export interface DesktopComputerPreviewFrame {
+  readonly windowId: number;
+  readonly seq: number;
+  readonly jpeg: Uint8Array;
+}
+
+export interface DesktopComputerBridge {
+  /** Reads grants without prompting; `permissions` also asks about Accessibility. */
+  getState: (
+    permissions?: readonly DesktopComputerPermissionKind[],
+  ) => Promise<DesktopComputerHelperState>;
+  /** Raises the macOS prompts for these grants. */
+  requestPermissions: (
+    permissions?: readonly DesktopComputerPermissionKind[],
+  ) => Promise<DesktopComputerHelperState>;
+  /**
+   * Reads current grants without prompting, then walks the floating guide
+   * through each pane still missing a grant, opening its System Settings page.
+   */
+  startPermissionSetup: (
+    permissions: readonly DesktopComputerPermissionKind[],
+  ) => Promise<DesktopComputerHelperState>;
+  openPermissionSettings: (pane: DesktopComputerSettingsPane) => Promise<boolean>;
+  showPermissionGuide: (pane: DesktopComputerSettingsPane) => Promise<void>;
+  hidePermissionGuide: () => Promise<void>;
+  /** Screen Recording applies only after a relaunch. */
+  restartApp: () => Promise<void>;
+  /** Persists the agent cursor for the next driver session and live-pushes it. */
+  setCursorStyle: (style: DesktopAgentCursorStyle | null) => Promise<void>;
+  onState: (listener: (state: DesktopComputerHelperState) => void) => () => void;
+  onError: (listener: (error: DesktopComputerHelperError) => void) => () => void;
+  onPermissionGuideState: (
+    listener: (state: DesktopComputerPermissionGuideState) => void,
+  ) => () => void;
+  /** Live frames from the native frame tap while the host drives a window. */
+  onPreviewFrame: (listener: (frame: DesktopComputerPreviewFrame) => void) => () => void;
+}
+
 export interface DesktopBridge {
   readonly dictation?: DictationBridge;
   threadAlerts?: import("./threadAlerts.ts").DesktopThreadAlertsBridge;
@@ -1313,6 +1436,11 @@ export interface DesktopBridge {
    * Electron desktop build; web builds have `preview === undefined`.
    */
   preview?: DesktopPreviewBridge;
+  /**
+   * Desktop Computer host surfaces. Present only in the Electron desktop
+   * build; feature-detect it, because web and remote clients never have it.
+   */
+  computer?: DesktopComputerBridge;
 }
 
 export interface DesktopPreviewBridge {
