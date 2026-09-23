@@ -278,6 +278,35 @@ when the thread runs in a remote environment. Pending captures stay on that comp
 draft is saved or the user discards them. See [SnapShots](snap-shot.md) for delivery and provider
 boundaries and [the user guide](../user/snap-shot.md) for setup.
 
+## Computer Use
+
+These terms support the Computer Use design records ([0036](../adr/0036-computer-use-is-a-literal-mirror-of-synara.md), [0037](../adr/0037-computer-use-controls-the-environment-host.md)). They describe the design under discussion, not shipped support.
+
+**Computer Use**:
+An agent observing and driving desktop applications and a driver-owned browser through Pathway's `computer_*` tools. It is ported from Synara.
+_Avoid_: Computer control (that is the name of the Settings toggle, not the feature), CUA (that is the driver).
+
+**Controlled computer**:
+The host machine of the environment running the thread. It is never the device of the client that started the task. Contrast with a SnapShot, which captures the client's computer.
+_Avoid_: Local computer, this Mac.
+
+**Computer Host**:
+The process that owns the Cua driver child process, the native helper and the physical Escape monitor for one controlled computer. On macOS it is the Pathway desktop app. A headless server uses the standalone host, which has no native safety layer.
+
+**Cua driver**:
+The MIT-licensed native automation daemon (Cua AI, Inc.), pinned to one upstream commit and patched for Pathway. It is an implementation detail behind the Computer Host, not a user-facing name.
+_Avoid_: CUA as a name for the feature.
+
+**Computer access policy**:
+The environment setting that decides which paired clients may start Computer tasks: Any operator, Scoped (the `computer:operate` scope, default) or Admins only. Watching, approving and Stop are never restricted by it. See [0038](../adr/0038-computer-access-is-an-environment-policy.md).
+
+**Computer autonomy**:
+The environment's ceiling on Computer oversight: Supervised, Per task (default), Auto or Full access. A thread's composer runtime mode maps onto the same levels, and the stricter of the two applies. The denylist, Stop and Escape, and the audit log hold at every level. See [0040](../adr/0040-computer-autonomy-is-an-environment-ceiling-over-thread-mode.md).
+_Avoid_: Computer permission mode (runtime mode is the thread's setting; autonomy is the environment's).
+
+**Denylist**:
+The applications and system surfaces Computer Use always refuses: password managers, Keychain Access, Passwords, System Settings and SecurityAgent. No autonomy level overrides it.
+
 ## Dictation
 
 **Dictation**:
