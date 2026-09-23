@@ -740,6 +740,40 @@ it.layer(NodeServices.layer)("ComputerManager and FakeComputerBackend (observati
     }),
   );
 
+  it.effect("finishes keyframe recovery when its caller is interrupted", () =>
+    Effect.gen(function* () {
+      const backend = new FakeComputerBackend();
+      const detachStarted = yield* Deferred.make<void>();
+      const allowDetach = yield* Deferred.make<void>();
+      const detachStream = backend.detachStream.bind(backend);
+      Object.defineProperty(backend, "requestKeyframe", { value: undefined });
+      backend.detachStream = () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(detachStarted, undefined);
+          yield* Deferred.await(allowDetach);
+          yield* detachStream();
+        });
+      const scope = yield* Scope.make();
+      const manager = yield* ComputerManager.make({ backend }).pipe(Scope.provide(scope));
+      const unsubscribe = manager.subscribeFrames(new RecordingSink());
+      yield* manager.flushStreamTransitions;
+
+      const request = yield* Effect.forkChild(manager.requestKeyframe(), {
+        startImmediately: true,
+      });
+      yield* Deferred.await(detachStarted);
+      yield* Fiber.interrupt(request);
+      yield* Deferred.succeed(allowDetach, undefined);
+      yield* manager.flushStreamTransitions;
+
+      // The watched stream came back rather than staying detached.
+      expect(backend.callsFor("attachStream")).toHaveLength(2);
+      yield* Scope.close(scope, Exit.void);
+      expect(backend.callsFor("detachStream")).toHaveLength(2);
+      unsubscribe();
+    }),
+  );
+
   it.effect("carries the backend's capabilities onto every thread snapshot", () =>
     Effect.scoped(
       Effect.gen(function* () {
