@@ -36,6 +36,12 @@ import {
   selectInheritedBackgroundTurnItems,
 } from "./RunExecutionService.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { parseComputerInvocation } from "@spiritdevs/shared/computerInvocation";
+import {
+  admitRunComputerControl,
+  providerComputerInvocationText,
+} from "../computer/computerActivation.ts";
+import { ComputerService } from "../computer/Services/ComputerService.ts";
 import {
   ProviderAllowanceRuntime,
   awaitAllowanceAdmission,
@@ -88,6 +94,7 @@ export const layer: Layer.Layer<
     const serverSettings = yield* ServerSettingsService;
     const textGeneration = yield* TextGeneration;
     const allowance = yield* Effect.serviceOption(ProviderAllowanceRuntime);
+    const computer = yield* Effect.serviceOption(ComputerService);
 
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
@@ -325,14 +332,25 @@ export const layer: Layer.Layer<
         preparedHandoffs = [...preparedHandoffs, ...prepared];
       }
 
-      const resolvedRuntimePolicy = yield* runtimePolicy.resolve({
-        thread: {
-          ...projection.thread,
-          runtimeMode: run.runtimeMode ?? projection.thread.runtimeMode,
-          interactionMode: run.interactionMode ?? projection.thread.interactionMode,
-        },
-        modelSelection: run.modelSelection,
+      const enableComputerControl = yield* admitRunComputerControl({
+        computer,
+        threadId: projection.thread.id,
+        computerControl: run.computerControl,
+        explicitInvocation:
+          message.createdBy === "user" && parseComputerInvocation(message.text) !== null,
       });
+      const providerText = providerComputerInvocationText(message.text, message.createdBy);
+      const resolvedRuntimePolicy = {
+        ...(yield* runtimePolicy.resolve({
+          thread: {
+            ...projection.thread,
+            runtimeMode: run.runtimeMode ?? projection.thread.runtimeMode,
+            interactionMode: run.interactionMode ?? projection.thread.interactionMode,
+          },
+          modelSelection: run.modelSelection,
+        })),
+        ...(enableComputerControl ? { enableComputerControl } : {}),
+      };
       const existingSessionProjection = projection.providerSessions.find(
         (candidate) => candidate.id === providerSessionId,
       );
@@ -785,10 +803,10 @@ export const layer: Layer.Layer<
           messageId: message.id,
           text:
             effectiveHandoffs.length === 0
-              ? message.text
+              ? providerText
               : providerMessageWithContextHandoffs({
                   handoffs: effectiveHandoffs,
-                  userText: message.text,
+                  userText: providerText,
                 }),
           attachments: message.attachments,
           createdBy: message.createdBy,
