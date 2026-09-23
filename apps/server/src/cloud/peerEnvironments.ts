@@ -1,11 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- the server reuses its Node-backed DPoP and relay-JWT helpers so peer credentials are byte-for-byte compatible with the existing relay and client-runtime verifiers
 import * as NodeCrypto from "node:crypto";
 
-import {
-  AuthComputerOperateScope,
-  AuthStandardClientScopes,
-  type EnvironmentId,
-} from "@spiritdevs/contracts";
+import { AuthPeerEnvironmentScopes, type EnvironmentId } from "@spiritdevs/contracts";
 import {
   RELAY_ENVIRONMENT_DPOP_ACCESS_ASSERTION_TYP,
   RelayAccessTokenType,
@@ -49,12 +45,6 @@ import {
   type DpopKeyPair,
 } from "./convexServiceToken.ts";
 import { readCloudSyncLink } from "./syncDaemon.ts";
-
-/** A peer never drives this desktop. Cross-environment work runs as an agent on the host,
- * whose Computer calls stay local, so peers get the standard scopes without computer:operate. */
-const PEER_ENVIRONMENT_SCOPES = AuthStandardClientScopes.filter(
-  (scope) => scope !== AuthComputerOperateScope,
-);
 
 export const PeerEnvironmentGrantConsumption = Schema.Literals([
   "not-consumed",
@@ -386,7 +376,7 @@ export const make = Effect.gen(function* () {
         httpBaseUrl: connected.endpoint.httpBaseUrl,
         credential: connected.credential,
         dpopProof: bootstrapProof,
-        scopes: PEER_ENVIRONMENT_SCOPES,
+        scopes: AuthPeerEnvironmentScopes,
         clientMetadata: {
           label: "Pathway peer environment",
           deviceType: "bot",
