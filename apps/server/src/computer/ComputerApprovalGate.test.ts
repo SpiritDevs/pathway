@@ -8,6 +8,7 @@ import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 
 import {
+  COMPUTER_APPROVAL_DISMISS_BOUND,
   COMPUTER_APPROVAL_TIMEOUT,
   COMPUTER_APPROVAL_WAIT_BOUND,
   ComputerApprovalPublishError,
@@ -290,6 +291,86 @@ describe("ComputerApprovalGate", () => {
       expect(yield* Fiber.join(pending)).toBe("approved");
       expect(yield* gate.requestTask(task("pending"))).toBe("approved");
       expect(yield* Queue.size(opened)).toBe(0);
+    }),
+  );
+
+  it.effect("a desktop interruption drops a per-call accept still waiting for its retry", () =>
+    Effect.gen(function* () {
+      const { gate, opened } = yield* harness();
+      const first = yield* Effect.forkChild(gate.request(call("a")));
+      const prompt = yield* Queue.take(opened);
+      yield* TestClock.adjust(COMPUTER_APPROVAL_WAIT_BOUND);
+      expect(yield* Fiber.join(first)).toBe("pending");
+      expect(yield* gate.respond("a", prompt.requestId, "accept")).toBe(true);
+      yield* gate.revokeTaskGrants;
+      // The retry asks again instead of riding the pre-interruption accept.
+      const retry = yield* Effect.forkChild(gate.request(call("a")));
+      const reprompt = yield* Queue.take(opened);
+      expect(reprompt.requestId).not.toBe(prompt.requestId);
+      yield* gate.respond("a", reprompt.requestId, "accept");
+      expect(yield* Fiber.join(retry)).toBe("approved");
+    }),
+  );
+
+  it.effect("re-asks when a desktop interruption lands between an accept and its call", () =>
+    Effect.gen(function* () {
+      const { gate, opened, hooks } = yield* harness();
+      let posts = 0;
+      hooks.open = (prompt) =>
+        Effect.gen(function* () {
+          posts += 1;
+          yield* gate.respond("a", prompt.requestId, "accept");
+          if (posts === 1) yield* gate.revokeTaskGrants;
+        });
+      expect(yield* gate.request(call("a"))).toBe("approved");
+      expect(yield* Queue.size(opened)).toBe(2);
+    }),
+  );
+
+  it.effect("cannot approve a call when Stop races its accepted response", () =>
+    Effect.gen(function* () {
+      const { gate, hooks } = yield* harness();
+      hooks.open = (prompt) =>
+        gate.respond("a", prompt.requestId, "accept").pipe(Effect.andThen(gate.cancelThread("a")));
+      expect(yield* gate.request(call("a"))).toBe("denied");
+    }),
+  );
+
+  it.effect("withdrawing a prompt stops its publish", () =>
+    Effect.gen(function* () {
+      const { gate, opened, hooks } = yield* harness();
+      let publishing = 0;
+      hooks.open = () =>
+        Effect.suspend(() => {
+          publishing += 1;
+          return Effect.never;
+        }).pipe(Effect.onInterrupt(() => Effect.sync(() => (publishing -= 1))));
+      // More than the thread cap: withdrawn prompts must not keep publishers alive.
+      for (let i = 0; i < 12; i++) {
+        const waiter = yield* Effect.forkChild(gate.request(call("a", `call-${i}`)));
+        yield* Queue.take(opened);
+        yield* Fiber.interrupt(waiter);
+      }
+      expect(publishing).toBe(0);
+    }),
+  );
+
+  it.effect("abandons a dismissal that never finishes", () =>
+    Effect.gen(function* () {
+      const { gate, opened, resolved, hooks } = yield* harness();
+      let dismissing = 0;
+      hooks.resolve = () =>
+        Effect.suspend(() => {
+          dismissing += 1;
+          return Effect.never;
+        }).pipe(Effect.onInterrupt(() => Effect.sync(() => (dismissing -= 1))));
+      const waiter = yield* Effect.forkChild(gate.request(call("a")));
+      yield* Queue.take(opened);
+      yield* Fiber.interrupt(waiter);
+      yield* Queue.take(resolved);
+      expect(dismissing).toBe(1);
+      yield* TestClock.adjust(COMPUTER_APPROVAL_DISMISS_BOUND);
+      expect(dismissing).toBe(0);
     }),
   );
 
