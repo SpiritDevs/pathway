@@ -319,6 +319,19 @@ export const layerWithOptions = (
        */
       const computerControlRequests = new Map<ThreadId, boolean>();
       /**
+       * Forgets a thread's Computer request when its session goes away. Call
+       * before the thread's credential is cleared. A request that differs from
+       * the live credential belongs to an open that is reprovisioning right
+       * now, so it is kept for that open's new credential.
+       */
+      const forgetComputerControlRequest = (threadId: ThreadId) => {
+        const provisioned =
+          McpProviderSession.readMcpProviderSession(threadId)?.computerControl === true;
+        if ((computerControlRequests.get(threadId) === true) === provisioned) {
+          computerControlRequests.delete(threadId);
+        }
+      };
+      /**
        * Resolves (or mints) the thread's MCP credential and returns it with a
        * reservation held; the caller must drop the reservation exactly once.
        * Serialized per thread so two concurrent prepares cannot interleave
@@ -730,9 +743,11 @@ export const layerWithOptions = (
                               (other.attachedThreadIds.has(threadId) ||
                                 other.mcpCredentialIdByThread.get(threadId) === mcpCredentialId),
                           );
-                        return heldElsewhere
-                          ? Effect.void
-                          : clearMcpSession(threadId, mcpCredentialId);
+                        if (heldElsewhere) {
+                          return Effect.void;
+                        }
+                        forgetComputerControlRequest(threadId);
+                        return clearMcpSession(threadId, mcpCredentialId);
                       },
                       { discard: true },
                     ),
@@ -1744,6 +1759,13 @@ export const layerWithOptions = (
               updated.set(key, updatedEntry);
               return [Option.some(updatedEntry), updated] as const;
             });
+            if (
+              !Array.from((yield* Ref.get(sessions)).values()).some((entry) =>
+                entry.attachedThreadIds.has(input.threadId),
+              )
+            ) {
+              forgetComputerControlRequest(input.threadId);
+            }
             // Plain detaches deliberately do not revoke: a detached thread's
             // provider process may still be alive (shared multi-thread codex
             // session across a workspace handoff) and holds its MCP client's
