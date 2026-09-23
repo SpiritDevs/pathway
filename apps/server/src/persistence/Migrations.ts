@@ -86,6 +86,7 @@ import Migration0070 from "./Migrations/070_StartupThreadCreationIndex.ts";
 import Migration0071 from "./Migrations/071_EventMaintenanceIndex.ts";
 import Migration0072 from "./Migrations/072_ScheduledTaskAllowanceOrigin.ts";
 import Migration0073 from "./Migrations/073_AllowanceHeldRuns.ts";
+import Migration0074 from "./Migrations/074_ShellSnapshotIndexes.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -171,6 +172,7 @@ export const migrationEntries = [
   [71, "EventMaintenanceIndex", Migration0071],
   [72, "ScheduledTaskAllowanceOrigin", Migration0072],
   [73, "AllowanceHeldRuns", Migration0073],
+  [74, "ShellSnapshotIndexes", Migration0074],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
