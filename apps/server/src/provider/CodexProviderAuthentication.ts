@@ -13,6 +13,7 @@ import type * as CodexSchema from "effect-codex-app-server/schema";
 
 import type { CodexSettings } from "@spiritdevs/contracts";
 import { expandHomePath } from "../pathExpansion.ts";
+import { providerChildEnvironment } from "./ProviderInstanceEnvironment.ts";
 import { buildCodexInitializeParams } from "./Layers/CodexProvider.ts";
 import { codexAppServerArgs } from "./Layers/codexLaunchArgs.ts";
 import {
@@ -114,21 +115,23 @@ export const makeCodexAuthenticationClient = Effect.fn("makeCodexAuthenticationC
     const resolvedHomePath = input.settings.homePath
       ? expandHomePath(input.settings.homePath)
       : undefined;
-    const environment = {
-      ...input.environment,
-      ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
-    };
+    const childEnvironment = yield* providerChildEnvironment({
+      env: {
+        ...input.environment,
+        ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
+      },
+      extendEnv: true,
+    });
     const spawnCommand = yield* resolveSpawnCommand(
       input.settings.binaryPath,
       codexAppServerArgs(input.settings.launchArgs),
-      { env: environment, extendEnv: true },
+      childEnvironment,
     );
     const child = yield* spawner
       .spawn(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           cwd: input.cwd,
-          env: environment,
-          extendEnv: true,
+          ...childEnvironment,
           forceKillAfter: CODEX_AUTH_FORCE_KILL_AFTER,
           shell: spawnCommand.shell,
         }),
