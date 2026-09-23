@@ -190,7 +190,7 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - Computer WS RPCs keep Synara's method names but fail with `ComputerError` rather than `WsRpcError`, and defects stay defects.
 - There is no `withDesktopOperationSignal` around WS handlers. `getStatus`/`getThreadState` need no fallbacks. The `setComputerControlEnabled` registry is dropped, and `cancelThread` is injected.
 - Every Computer WS RPC is admitted by `requireComputerAccess` (ADR 0041). `access:write` satisfies the `scoped` policy, and a denied call carries a re-pair hint.
-- `getAuditHistory` needs `orchestration:read`, where Synara required the owner session. This is looser; whether it should need `access:read` is a maintainer decision.
+- `getAuditHistory` needs `access:read`, where Synara required the owner session. Pathway has no owner session, and the log spans every thread on the desktop, so only admin clients read it.
 - `subscribeEvents` has no `streamAdmission` or `bufferLiveUiStream`. Interests are keyed per socket and cleared when the socket closes.
 - Computer RPCs are served by their own per-socket `WsComputerRpcGroup.toLayer`, and the main WS layer serves `WsRpcGroup.omit(...)` of them. A single handler literal for the merged group exceeded TypeScript's inference depth and widened the layer's requirements to `any`.
 - Peer environments never receive `computer:operate`. `AuthPeerEnvironmentScopes` in `cloud/http.ts` and `peerEnvironments.ts` strips it, so a cloud-linked peer cannot drive this desktop.
