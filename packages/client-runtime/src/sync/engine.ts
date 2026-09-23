@@ -590,8 +590,9 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     }
 
     const flushed = yield* flush();
-    // Second drain confirms our own accepted operations and prunes them from the outbox.
-    yield* settle(yield* drain());
+    // Second drain confirms our own accepted operations and prunes them from the outbox. With none
+    // accepted there is nothing new to read, and every client runs this cycle on every head move.
+    if (flushed.accepted > 0) yield* settle(yield* drain());
 
     yield* setPhase("ready", null);
     return yield* receiptOf({

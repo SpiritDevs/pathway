@@ -192,4 +192,32 @@ describe("durable issue automation jobs", () => {
       expect(row).toMatchObject({ state: "pending", blockCode: null, diagnostic: null });
     });
   });
+  it("keeps pruning expired terminal jobs past one batch", async () => {
+    const t = harness();
+    await seed(t);
+    const expiredAt = NOW - 91 * 24 * 60 * 60 * 1_000;
+    await t.run(async (ctx) => {
+      const job = await ctx.db
+        .query("issueAutomationJobs")
+        .filter((q) => q.eq(q.field("id"), JOB_ID))
+        .unique();
+      if (job === null) throw new Error("missing job fixture");
+      const { _id, _creationTime, ...fields } = job;
+      for (let index = 0; index < 150; index += 1) {
+        await ctx.db.insert("issueAutomationJobs", {
+          ...fields,
+          id: `01990000-0000-7000-8000-${String(index).padStart(12, "0")}`,
+          state: "succeeded",
+          completedAt: expiredAt,
+        });
+      }
+    });
+
+    expect(await t.mutation(internal.issueAutomation.pruneCompleted, {})).toBe(100);
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await t.run(async (ctx) => {
+      const remaining = await ctx.db.query("issueAutomationJobs").collect();
+      expect(remaining.map((row) => row.id)).toEqual([JOB_ID]);
+    });
+  });
 });

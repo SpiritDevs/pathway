@@ -481,6 +481,44 @@ describe("sync.applyOperations", () => {
     });
   });
 
+  it("prunes expired feed rows and receipts without reopening deduplication", async () => {
+    const t = harness();
+    await seed(t);
+    const op = makeOps(WRITER_MEMBERSHIP_ID);
+    const expired = op("issue.create", ISSUE_A, { title: "Old issue", triage: true });
+    await asWriter(t).mutation(api.sync.applyOperations, {
+      companyId: COMPANY_ID,
+      operations: [expired],
+    });
+    await t.run(async (ctx) => {
+      for (const table of ["syncChanges", "syncOperationReceipts"] as const) {
+        for (const row of await ctx.db.query(table).collect()) {
+          await ctx.db.patch(row._id, { retainUntil: Date.now() - 1 });
+        }
+      }
+    });
+    const fresh = await asWriter(t).mutation(api.sync.applyOperations, {
+      companyId: COMPANY_ID,
+      operations: [op("issue.create", ISSUE_B, { title: "New issue", triage: true })],
+    });
+
+    await t.mutation(internal.sync.pruneExpired, {});
+
+    await t.run(async (ctx) => {
+      const changes = await ctx.db.query("syncChanges").collect();
+      expect(changes.every((row) => row.version >= fresh.versionFrom + 1)).toBe(true);
+      expect(await ctx.db.query("syncOperationReceipts").collect()).toHaveLength(1);
+    });
+    expect(
+      await asWriter(t).query(api.sync.listChanges, { companyId: COMPANY_ID, cursor: 0 }),
+    ).toMatchObject({ _tag: "CursorExpired" });
+    const resent = await asWriter(t).mutation(api.sync.applyOperations, {
+      companyId: COMPANY_ID,
+      operations: [expired],
+    });
+    expect(resent.receipts[0]).toMatchObject({ status: "accepted", duplicate: true });
+  });
+
   it("a payload that fails validation receipts invalid-arguments and moves nothing", async () => {
     const t = harness();
     await seed(t);

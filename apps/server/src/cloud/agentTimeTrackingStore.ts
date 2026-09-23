@@ -7,6 +7,9 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { AgentTimeSession, applyAgentTimeEvent } from "./agentTimeTracking.ts";
 
+/** Half the backend's 90s agent activity lease, so one missed tick cannot lapse a running session. */
+export const AGENT_TIME_HEARTBEAT_INTERVAL_MS = 30_000;
+
 const decodeSession = Schema.decodeUnknownSync(Schema.fromJsonString(AgentTimeSession));
 const encodeSession = Schema.encodeSync(Schema.fromJsonString(AgentTimeSession));
 const decodeEvent = Schema.decodeUnknownEffect(OrchestrationV2DomainEventJson);
@@ -126,12 +129,17 @@ export const makeAgentTimeTrackingStore = Effect.fn("AgentTimeTrackingStore.make
   const pending = Effect.fn("AgentTimeTrackingStore.pending")(function* (now: number) {
     // Keep the local crash boundary current even while a project's cloud binding is unavailable.
     yield* sql`UPDATE agent_time_tracking_sessions SET payload_json = json_set(payload_json,
-        '$.observedAt', MAX(${now}, json_extract(payload_json, '$.observedAt')),
-        '$.revision', json_extract(payload_json, '$.revision') + 1)
+        '$.observedAt', MAX(${now}, json_extract(payload_json, '$.observedAt')))
       WHERE company_id = ${companyId} AND state = 'running'`;
+    // The cloud copy only needs a heartbeat well inside its activity lease, not one per tick or
+    // per run event; each heartbeat is a Convex write that re-runs every open time tracker.
+    yield* sql`UPDATE agent_time_tracking_sessions SET payload_json = json_set(payload_json,
+        '$.revision', json_extract(payload_json, '$.revision') + 1), dirty = 1
+      WHERE company_id = ${companyId} AND state = 'running'
+        AND last_attempt_at <= ${now - AGENT_TIME_HEARTBEAT_INTERVAL_MS}`;
     const rows = yield* sql<{ payload_json: string }>`SELECT payload_json
       FROM agent_time_tracking_sessions WHERE company_id = ${companyId}
-        AND next_attempt_at <= ${now} AND (dirty = 1 OR state = 'running')
+        AND next_attempt_at <= ${now} AND dirty = 1
         ORDER BY last_attempt_at, run_id LIMIT 500`;
     const sessions: AgentTimeSession[] = [];
     for (const row of rows) {

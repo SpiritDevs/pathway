@@ -4,7 +4,7 @@ import { readEnvironmentPresence } from "../convex/lib/environmentRuntime.ts";
 import { convexTest } from "convex-test";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { api } from "../convex/_generated/api.js";
+import { api, internal } from "../convex/_generated/api.js";
 import type { Id } from "../convex/_generated/dataModel.js";
 import schema from "../convex/schema.ts";
 
@@ -550,6 +550,51 @@ describe("environment commands", () => {
     expect((await feedRows(t)).slice(feedBefore.length)).toMatchObject([
       { entityKind: "environmentCommand", payload: { state: "expired" } },
       { entityKind: "environmentCommand", payload: { state: "expired" } },
+    ]);
+  });
+
+  it("expires lapsed commands it reads so they cannot hold newer commands back", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    const lapsed = ["01990000-0000-7000-8000-000000001511", "01990000-0000-7000-8000-000000001512"];
+    const fresh = "01990000-0000-7000-8000-000000001513";
+    for (const id of lapsed) await issue(t, id);
+    await t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query("environmentCommands")
+        .withIndex("by_company", (q) => q.eq("companyId", seeded.companyDocId))
+        .collect();
+      for (const row of rows) await ctx.db.patch(row._id, { expiresAt: Date.now() - 1 });
+    });
+    await issue(t, fresh);
+
+    const claim = () =>
+      asEnvironment(t).mutation(api.environmentCommands.claim, { companyId: COMPANY_ID, limit: 2 });
+    await claim();
+    expect((await claim()).map((row) => row.id)).toEqual([fresh]);
+    const expired = await asMember(t, "manager").query(api.environmentCommands.list, {
+      companyId: COMPANY_ID,
+      state: "expired",
+    });
+    expect(expired.map((row) => row.id).sort()).toEqual(lapsed);
+  });
+
+  it("sweeps lapsed commands for environments that never poll again", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    const commandId = "01990000-0000-7000-8000-000000001521";
+    await issue(t, commandId, ENVIRONMENT_TWO);
+    await t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query("environmentCommands")
+        .withIndex("by_company", (q) => q.eq("companyId", seeded.companyDocId))
+        .collect();
+      for (const row of rows) await ctx.db.patch(row._id, { expiresAt: Date.now() - 1 });
+    });
+    const feedBefore = await feedRows(t);
+    await t.mutation(internal.environmentCommands.expireOverdueSweep, {});
+    expect((await feedRows(t)).slice(feedBefore.length)).toMatchObject([
+      { entityKind: "environmentCommand", entityId: commandId, payload: { state: "expired" } },
     ]);
   });
 

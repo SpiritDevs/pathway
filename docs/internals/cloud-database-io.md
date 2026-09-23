@@ -134,8 +134,9 @@ mail, primary/backup failover, account 26 beyond each scan window, unread counts
 after unmuting, and membership revocation. Two additional before/after fixture
 comparisons pass. Backend typechecking and targeted lint pass. No new schema
 fields, indexes, or client changes are required for this second pass.
-The combined production deployment dry run also passes; the changes have not
-been activated in production.
+The combined production deployment dry run also passes. These passes and the
+heartbeat, sync-head and mail runtime isolation below were live in production by
+September 23, 2026.
 
 ## Heartbeat isolation and worker wakeups
 
@@ -435,3 +436,44 @@ query executions on actual changes are additional work. This is a call-rate
 estimate, not a measured reduction in billed GB. Focused tests cover immediate
 updates, the recovery cadence, stale HTTP answers, auth refresh/revocation and
 subscription disposal/recreation.
+
+## Retention sweeps and idle write skips
+
+Production insights on September 23, 2026 showed no read-limit warnings; the
+remaining cost was growth-proportional reads and writes that changed nothing.
+
+- **Environment commands.** A claim marks lapsed commands it reads as `expired`
+  and publishes them. Previously they were filtered but left pending; with the
+  server's claim limit of two, two lapsed commands at the head of an
+  environment's queue hid every newer command and kept its wakeup hint true.
+  `expireOverdueSweep` runs every five minutes for environments that never poll.
+- **Sync feed retention.** `sync.pruneExpired` deletes `syncChanges` and
+  `syncOperationReceipts` rows past their 90-day `retainUntil`, 256 per table per
+  transaction, rescheduling while batches are full. Bootstrap reads entity
+  tables, older cursors already receive `CursorExpired`, and
+  `syncOperationDecisions` keeps answering resends, so nothing else changes.
+- **Confirming drain.** A sync cycle reads the feed a second time only when the
+  flush accepted operations. Every web, mobile and environment replica runs a
+  cycle on every head move, so an idle client now makes one `listChanges` call
+  per change instead of two.
+- **Slack deliveries.** Controllers read pending and claimed deliveries through
+  the integration/state index instead of the whole delivery history. Sent rows
+  remain as idempotency records but drop their message text.
+- **Issue automation.** Blocked-job recovery uses the state index instead of
+  two full-table scans a minute. Terminal-job pruning uses a new
+  state/completion index and keeps draining in batches of 100 rather than
+  stopping at 100 rows a day.
+- **Agent time.** Environment servers still advance the local crash boundary on
+  every 15-second tick, but republish a running session only every 30 seconds
+  (half the 90-second activity lease) and never merely because a run event
+  arrived. The backend finds the session's binding by local project instead of
+  scanning up to 2,000 bindings.
+- **Unchanged snapshots.** Provider capabilities are rewritten only when they
+  change or approach half the 90-second freshness window. Backup Slack
+  controllers no longer rewrite the shared lease when the failback count is
+  unchanged. Agent-thread upserts compare shells independent of key order,
+  since Convex does not promise to preserve it.
+
+The command, feed and automation changes add one index and two crons and need
+no migration. Agent-time savings require updated environment servers; the rest
+take effect on backend deploy.

@@ -23,8 +23,10 @@ import {
   isCancellableEnvironmentCommand,
 } from "../src/environmentCommands.ts";
 import { ENVIRONMENT_REGISTRATION_HEARTBEAT_INTERVAL_MS } from "../src/environmentRegistrations.ts";
+import { canonicalJson } from "../src/canonicalJson.ts";
+import type { SyncActor } from "../src/sync/protocol.ts";
 import type { Doc } from "./_generated/dataModel.js";
-import { mutation, query } from "./_generated/server.js";
+import { internalMutation, mutation, query } from "./_generated/server.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import { appendCompanyChanges, encodeEnvironmentCommand } from "./lib/companyApply.ts";
 import { backendError } from "./lib/errors.ts";
@@ -168,6 +170,15 @@ async function appendCommandChanges(
   actor: CompanyActor,
   rows: readonly Doc<"environmentCommands">[],
 ): Promise<void> {
+  await appendCommandRecords(ctx, actor.company._id, actorRecord(actor), rows);
+}
+
+async function appendCommandRecords(
+  ctx: MutationCtx,
+  companyId: Doc<"environmentCommands">["companyId"],
+  actor: SyncActor,
+  rows: readonly Doc<"environmentCommands">[],
+): Promise<void> {
   if (rows.length === 0) return;
   const changes = [];
   for (const row of rows) {
@@ -179,11 +190,18 @@ async function appendCommandChanges(
       payload: await encodeEnvironmentCommand(ctx, row),
     });
   }
-  await appendCompanyChanges(ctx, {
-    companyId: actor.company._id,
-    actor: actorRecord(actor),
-    changes,
-  });
+  await appendCompanyChanges(ctx, { companyId, actor, changes });
+}
+
+/** Records the command-level TTL lapsing; expiry is published, never silent. */
+async function expireCommand(
+  ctx: MutationCtx,
+  row: Doc<"environmentCommands">,
+  now: number,
+): Promise<Doc<"environmentCommands">> {
+  const patch = { state: "expired" as const, claimExpiresAt: null, updatedAt: now };
+  await ctx.db.patch(row._id, patch);
+  return { ...row, ...patch };
 }
 
 function sameCommandIdentity(
@@ -195,19 +213,6 @@ function sameCommandIdentity(
     existing.targetEnvironmentId === input.targetEnvironmentId &&
     canonicalJson(existing.args) === canonicalJson(input.args)
   );
-}
-
-/** Convex does not promise to preserve object key insertion order across a storage round trip. */
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (typeof value === "object" && value !== null) {
-    const source = value as Record<string, unknown>;
-    return `{${Object.keys(source)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(source[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "undefined";
 }
 
 function requireLiveOwnedClaim(
@@ -463,16 +468,18 @@ export const claim = mutation({
       )
       .take(limit);
 
-    const selected = [...pending, ...claimed]
-      .filter(
-        (row) =>
-          row.expiresAt > now &&
-          (row.state === "pending" || row.claimedByEnvironmentId === environmentId),
-      )
-      .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
-      .slice(0, limit);
     const changed: Doc<"environmentCommands">[] = [];
     const returned: Doc<"environmentCommands">[] = [];
+    const live: Doc<"environmentCommands">[] = [];
+    for (const row of [...pending, ...claimed]) {
+      if (row.state === "claimed" && row.claimedByEnvironmentId !== environmentId) continue;
+      // Expired rows sort first and would otherwise hold every newer command behind them.
+      if (row.expiresAt <= now) changed.push(await expireCommand(ctx, row, now));
+      else live.push(row);
+    }
+    const selected = live
+      .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+      .slice(0, limit);
     for (const row of selected) {
       if (await orchestratorCommandPaused(ctx, row)) continue;
       if (!(await orchestratorCommandAllowed(ctx, row))) {
@@ -613,8 +620,8 @@ export const cancel = mutation({
 /**
  * Moves commands past their command-level TTL to `expired` in a bounded company-scoped batch.
  *
- * No cron module exists in this deployment yet. This mutation is the scheduler-ready boundary; a
- * future cron can call the same bounded transition without creating a second expiry implementation.
+ * Claims expire what they read and `expireOverdueSweep` runs on a cron; this lets a manager force
+ * the same transition for one company.
  */
 export const expireOverdue = mutation({
   args: { companyId: domainIdArg, limit: v.optional(v.number()) },
@@ -638,12 +645,40 @@ export const expireOverdue = mutation({
       .sort((left, right) => left.expiresAt - right.expiresAt || left.id.localeCompare(right.id))
       .slice(0, limit);
     const expired: Doc<"environmentCommands">[] = [];
-    for (const row of rows) {
-      const patch = { state: "expired" as const, claimExpiresAt: null, updatedAt: now };
-      await ctx.db.patch(row._id, patch);
-      expired.push({ ...row, ...patch });
-    }
+    for (const row of rows) expired.push(await expireCommand(ctx, row, now));
     await appendCommandChanges(ctx, actor, expired);
     return { expired: expired.length };
+  },
+});
+
+/**
+ * Cron backstop for environments that stay offline: their own claims expire what they read, but a
+ * target that never polls again would otherwise keep lapsed commands pending forever.
+ */
+export const expireOverdueSweep = internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const now = Date.now();
+    const overdue = await Promise.all(
+      (["pending", "claimed"] as const).map((state) =>
+        ctx.db
+          .query("environmentCommands")
+          .withIndex("by_state_and_expiry", (q) => q.eq("state", state).lte("expiresAt", now))
+          .take(EXPIRE_MAX_LIMIT),
+      ),
+    );
+    const byCompany = new Map<
+      Doc<"environmentCommands">["companyId"],
+      Doc<"environmentCommands">[]
+    >();
+    for (const row of overdue.flat()) {
+      const expired = await expireCommand(ctx, row, now);
+      byCompany.set(row.companyId, [...(byCompany.get(row.companyId) ?? []), expired]);
+    }
+    for (const [companyId, rows] of byCompany) {
+      await appendCommandRecords(ctx, companyId, { kind: "system", source: "automation" }, rows);
+    }
+    return null;
   },
 });

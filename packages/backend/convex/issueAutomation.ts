@@ -4,6 +4,7 @@ import { readEnvironmentPresence } from "./lib/environmentRuntime.ts";
 import { v } from "convex/values";
 
 import { ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS } from "../src/environmentRegistrations.ts";
+import { internal } from "./_generated/api.js";
 import type { Doc } from "./_generated/dataModel.js";
 import {
   internalMutation,
@@ -25,6 +26,7 @@ const MAX_SETTINGS_BYTES = 256 * 1_024;
 const MAX_DIAGNOSTIC_CHARS = 1_000;
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000] as const;
 const COMPLETED_RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
+const PRUNE_BATCH_SIZE = 100;
 
 const jobState = v.union(
   v.literal("pending"),
@@ -964,13 +966,17 @@ export const pruneCompleted = internalMutation({
     for (const state of terminal) {
       const rows = await ctx.db
         .query("issueAutomationJobs")
-        .filter((q) => q.and(q.eq(q.field("state"), state), q.lt(q.field("completedAt"), cutoff)))
-        .take(100 - removed);
+        .withIndex("by_state_and_completed", (q) => q.eq("state", state).lt("completedAt", cutoff))
+        .take(PRUNE_BATCH_SIZE - removed);
       for (const row of rows) {
         await ctx.db.delete(row._id);
         removed += 1;
       }
-      if (removed >= 100) break;
+      if (removed >= PRUNE_BATCH_SIZE) break;
+    }
+    // A full batch means more expired rows remain; keep draining instead of waiting a day.
+    if (removed >= PRUNE_BATCH_SIZE) {
+      await ctx.scheduler.runAfter(0, internal.issueAutomation.pruneCompleted, {});
     }
     return removed;
   },
@@ -985,11 +991,11 @@ export const recoverBlocked = internalMutation({
     const [blocked, pending] = await Promise.all([
       ctx.db
         .query("issueAutomationJobs")
-        .filter((q) => q.eq(q.field("state"), "blocked"))
+        .withIndex("by_state_and_retry", (q) => q.eq("state", "blocked"))
         .take(100),
       ctx.db
         .query("issueAutomationJobs")
-        .filter((q) => q.eq(q.field("state"), "pending"))
+        .withIndex("by_state_and_retry", (q) => q.eq("state", "pending"))
         .take(100),
     ]);
     let changed = 0;

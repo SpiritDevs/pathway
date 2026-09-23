@@ -1237,6 +1237,7 @@ export default defineSchema({
     .index("by_target_and_state", ["targetEnvironmentId", "state"])
     .index("by_company_and_issue", ["companyId", "issueId"])
     .index("by_state_and_retry", ["state", "nextRetryAt"])
+    .index("by_state_and_completed", ["state", "completedAt"])
     .index("by_company_and_trigger", ["companyId", "triggerKey"]),
 
   environmentProviderCapabilities: defineTable({

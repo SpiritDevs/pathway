@@ -681,6 +681,48 @@ describe("SyncEngine", () => {
     }),
   );
 
+  it.effect("reads the feed once per cycle unless its own operations need confirming", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const reads = yield* Ref.make(0);
+      const transport = SyncTransport.of({
+        ...harness.server.transport,
+        listChanges: (input) =>
+          Ref.update(reads, (count) => count + 1).pipe(
+            Effect.andThen(harness.server.transport.listChanges(input)),
+          ),
+      });
+      const layer = Layer.mergeAll(
+        Layer.succeed(SyncStore, harness.store.service),
+        Layer.succeed(SyncTransport, transport),
+      );
+
+      yield* Effect.gen(function* () {
+        const engine = yield* openEngine("client-a");
+        yield* engine.sync;
+
+        yield* harness.server.applyExternal(
+          createNote({ id: NOTE_A, title: "Remote", body: "" }),
+          operationId("op-remote"),
+        );
+        yield* Ref.set(reads, 0);
+        yield* engine.sync;
+        expect(yield* Ref.get(reads)).toBe(1);
+
+        yield* engine.enqueue({
+          operationId: operationId("op-local"),
+          operation: createNote({ id: NOTE_B, title: "Local", body: "" }),
+        });
+        yield* Ref.set(reads, 0);
+        yield* engine.sync;
+        expect(yield* Ref.get(reads)).toBe(2);
+        expect(confirmedNote(yield* SubscriptionRef.get(engine.state), NOTE_B)).toMatchObject({
+          title: "Local",
+        });
+      }).pipe(Effect.provide(layer), Effect.provideService(CloudSyncCapability, ENABLED));
+    }),
+  );
+
   it.effect("gives up on a bootstrap whose epoch keeps moving, and keeps nothing from it", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();

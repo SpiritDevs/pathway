@@ -4,6 +4,7 @@ import { readEnvironmentPresence } from "./lib/environmentRuntime.ts";
 import { v } from "convex/values";
 import { makeFunctionReference } from "convex/server";
 
+import { canonicalJson } from "../src/canonicalJson.ts";
 import {
   decryptIntegrationCredential,
   encryptIntegrationCredential,
@@ -33,6 +34,8 @@ import { domainIdArg } from "./lib/validators.ts";
 const MAX_BACKUPS = 10;
 const LEASE_TTL_MS = 90_000;
 const CONTENDER_FRESH_MS = 90_000;
+/** Half the freshness window, so one missed publish cannot make a live environment look stale. */
+const CAPABILITY_REFRESH_MS = 45_000;
 const FAILBACK_HEARTBEATS = 2;
 const MAX_TOKEN_CHARS = 4_096;
 const MAX_ERROR_CHARS = 500;
@@ -1170,10 +1173,14 @@ export const heartbeat = mutation({
           expiresAt: now + LEASE_TTL_MS,
         };
       }
-      await ctx.db.patch(lease._id, {
-        preferredHealthyHeartbeats: preferredHeartbeatCount,
-        updatedAt: now,
-      });
+      // A backup's heartbeat only matters to the lease when it moves the failback count; an
+      // unchanged write would just conflict with the holder's renewals.
+      if (preferredHeartbeatCount !== lease.preferredHealthyHeartbeats) {
+        await ctx.db.patch(lease._id, {
+          preferredHealthyHeartbeats: preferredHeartbeatCount,
+          updatedAt: now,
+        });
+      }
       return {
         integrationId: integration.id,
         holderEnvironmentId: lease.holderEnvironmentId,
@@ -1505,6 +1512,25 @@ export const updateHealth = mutation({
 });
 
 /** Publishes the non-secret provider/model surface used by activation and job readiness. */
+function capabilitySnapshot(
+  capabilities: Pick<
+    Doc<"environmentProviderCapabilities">,
+    | "revision"
+    | "supportsSlackCoordination"
+    | "supportsAutomationJobs"
+    | "slackProtocolVersion"
+    | "providers"
+  >,
+) {
+  return {
+    revision: capabilities.revision,
+    supportsSlackCoordination: capabilities.supportsSlackCoordination,
+    supportsAutomationJobs: capabilities.supportsAutomationJobs,
+    slackProtocolVersion: capabilities.slackProtocolVersion,
+    providers: capabilities.providers,
+  };
+}
+
 export const publishCapabilities = mutation({
   args: {
     companyId: domainIdArg,
@@ -1561,6 +1587,15 @@ export const publishCapabilities = mutation({
       })),
       publishedAt: Date.now(),
     };
+    // Environments republish every 30s; an unchanged snapshot only needs its timestamp refreshed
+    // well inside the 90s freshness window readers apply.
+    if (
+      existing !== null &&
+      values.publishedAt - existing.publishedAt < CAPABILITY_REFRESH_MS &&
+      canonicalJson(capabilitySnapshot(existing)) === canonicalJson(capabilitySnapshot(values))
+    ) {
+      return null;
+    }
     if (existing === null) {
       await ctx.db.insert("environmentProviderCapabilities", {
         companyId: actor.company._id,

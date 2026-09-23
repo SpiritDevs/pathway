@@ -53,7 +53,7 @@ import {
 } from "../src/sync/protocol.ts";
 import { isChangeVisible, type ChangeViewer } from "../src/sync/visibility.ts";
 import type { Doc, Id } from "./_generated/dataModel.js";
-import { mutation, query } from "./_generated/server.js";
+import { internalMutation, mutation, query } from "./_generated/server.js";
 import type { MutationCtx } from "./_generated/server.js";
 import type { CompanyVersionedTable } from "./lib/companyApply.ts";
 import { backendError } from "./lib/errors.ts";
@@ -796,5 +796,35 @@ export const applyOperations = mutation({
       versionTo: assignment.nextHead,
       authorizationEpoch: actor.company.authorizationEpoch,
     };
+  },
+});
+
+const FEED_PRUNE_BATCH_SIZE = 256;
+
+/**
+ * Deletes feed rows and detailed receipts past the retention line. Bootstrap reads entity tables,
+ * `listChanges` reports `CursorExpired` for a cursor older than the oldest surviving row, and
+ * `syncOperationDecisions` keeps answering resends, so nothing here is load-bearing after expiry.
+ */
+export const pruneExpired = internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const now = Date.now();
+    const [changes, receipts] = await Promise.all([
+      ctx.db
+        .query("syncChanges")
+        .withIndex("by_retain_until", (q) => q.lt("retainUntil", now))
+        .take(FEED_PRUNE_BATCH_SIZE),
+      ctx.db
+        .query("syncOperationReceipts")
+        .withIndex("by_retain_until", (q) => q.lt("retainUntil", now))
+        .take(FEED_PRUNE_BATCH_SIZE),
+    ]);
+    for (const row of [...changes, ...receipts]) await ctx.db.delete(row._id);
+    if (changes.length === FEED_PRUNE_BATCH_SIZE || receipts.length === FEED_PRUNE_BATCH_SIZE) {
+      await ctx.scheduler.runAfter(0, internal.sync.pruneExpired, {});
+    }
+    return null;
   },
 });

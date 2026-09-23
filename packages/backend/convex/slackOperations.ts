@@ -24,6 +24,7 @@ import { domainIdArg } from "./lib/validators.ts";
 
 const DELIVERY_CLAIM_TTL_MS = 90_000;
 const MAX_REACTION_ROUTES = 25;
+const PENDING_DELIVERY_LIMIT = 100;
 
 type RoutingRule = CompanySlackRoutingRule;
 
@@ -1543,10 +1544,19 @@ export const pendingDeliveries = query({
       args.generation,
     );
     const now = Date.now();
-    const rows = await ctx.db
-      .query("slackOutboundDeliveries")
-      .withIndex("by_integration", (q) => q.eq("integrationId", integration._id))
-      .collect();
+    // Succeeded rows stay as idempotency records forever; only the open states are read.
+    const rows = (
+      await Promise.all(
+        (["pending", "claimed"] as const).map((state) =>
+          ctx.db
+            .query("slackOutboundDeliveries")
+            .withIndex("by_integration_and_state", (q) =>
+              q.eq("integrationId", integration._id).eq("state", state),
+            )
+            .take(PENDING_DELIVERY_LIMIT),
+        ),
+      )
+    ).flat();
     return rows
       .filter(
         (row) =>
@@ -1556,7 +1566,7 @@ export const pendingDeliveries = query({
               (row.claimExpiresAt === null || row.claimExpiresAt <= now))),
       )
       .sort((left, right) => left.createdAt - right.createdAt)
-      .slice(0, 100)
+      .slice(0, PENDING_DELIVERY_LIMIT)
       .map((row) => ({
         deliveryId: row.deliveryId,
         channelId: row.channelId,
@@ -1678,10 +1688,12 @@ export const completeDelivery = mutation({
     ) {
       throw backendError("stale-delivery-claim", "The Slack delivery claim is stale.");
     }
+    // The row remains the delivery's idempotency record; its text is never sent again.
     await ctx.db.patch(delivery._id, {
       state: "succeeded",
       slackMessageTs: trimmed(args.slackMessageTs, "Slack message timestamp"),
       claimExpiresAt: null,
+      text: undefined,
       updatedAt: Date.now(),
     });
     return null;

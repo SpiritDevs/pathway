@@ -23,6 +23,20 @@ crons.hourly(
   internal.issueAttachments.gcPending,
 );
 
+crons.hourly(
+  "prune sync feed rows past retention",
+  { minuteUTC: 47 },
+  internal.sync.pruneExpired,
+  {},
+);
+
+crons.interval(
+  "expire overdue environment commands",
+  { minutes: 5 },
+  internal.environmentCommands.expireOverdueSweep,
+  {},
+);
+
 crons.daily(
   "prune completed issue automation jobs",
   { hourUTC: 3, minuteUTC: 23 },

@@ -166,6 +166,34 @@ describe("Slack controller coordination", () => {
     ).resolves.toMatchObject([{ id: INTEGRATION_ID, workspaceId: "T123", state: "active" }]);
   });
 
+  it("refreshes an unchanged capability snapshot only when it nears staleness", async () => {
+    const t = harness();
+    await seed(t);
+    const publish = (revision: number) =>
+      asEnvironment(t, PRIMARY).mutation(api.slackIntegrations.publishCapabilities, {
+        companyId: COMPANY_ID,
+        revision,
+        supportsSlackCoordination: true,
+        supportsAutomationJobs: true,
+        providers: [],
+      });
+    const publishedAt = () =>
+      t.run(async (ctx) => {
+        const rows = await ctx.db.query("environmentProviderCapabilities").collect();
+        return rows.find((row) => row.environmentId === PRIMARY)?.publishedAt;
+      });
+
+    await publish(1);
+    vi.setSystemTime(NOW + 30_000);
+    await publish(1);
+    expect(await publishedAt()).toBe(NOW);
+    await publish(2);
+    expect(await publishedAt()).toBe(NOW + 30_000);
+    vi.setSystemTime(NOW + 76_000);
+    await publish(2);
+    expect(await publishedAt()).toBe(NOW + 76_000);
+  });
+
   it("saves the first V2 watched channel for a draft integration", async () => {
     const t = harness();
     await seed(t);
@@ -382,6 +410,64 @@ describe("Slack controller coordination", () => {
         error: null,
       }),
     ).rejects.toThrow("stale");
+  });
+
+  it("lists only open deliveries and drops the text of sent ones", async () => {
+    const t = harness();
+    await seed(t);
+    const { generation } = await asEnvironment(t, PRIMARY).mutation(
+      api.slackIntegrations.heartbeat,
+      {
+        companyId: COMPANY_ID,
+        integrationId: INTEGRATION_ID,
+        healthy: true,
+        capabilityRevision: 1,
+      },
+    );
+    const controller = { companyId: COMPANY_ID, integrationId: INTEGRATION_ID, generation };
+    const sent = "01990000-0000-7000-8000-000000000301";
+    const open = "01990000-0000-7000-8000-000000000302";
+    const delivery = {
+      channelId: "C1",
+      threadTs: "1.0",
+      kind: "comment" as const,
+    };
+    const claim = await asEnvironment(t, PRIMARY).mutation(api.slackOperations.claimDelivery, {
+      ...controller,
+      ...delivery,
+      deliveryId: sent,
+      text: "Already posted",
+    });
+    await asEnvironment(t, PRIMARY).mutation(api.slackOperations.completeDelivery, {
+      ...controller,
+      deliveryId: sent,
+      claimGeneration: claim.claimGeneration,
+      slackMessageTs: "2.0",
+    });
+    await t.run(async (ctx) => {
+      const sentRow = await ctx.db
+        .query("slackOutboundDeliveries")
+        .filter((q) => q.eq(q.field("deliveryId"), sent))
+        .unique();
+      if (sentRow === null) throw new Error("missing sent delivery");
+      expect(sentRow).toMatchObject({ state: "succeeded", slackMessageTs: "2.0" });
+      expect(sentRow.text).toBeUndefined();
+      const { _id, _creationTime, ...sentFields } = sentRow;
+      await ctx.db.insert("slackOutboundDeliveries", {
+        ...sentFields,
+        deliveryId: open,
+        text: "Waiting to post",
+        state: "pending",
+        claimedByEnvironmentId: null,
+        claimGeneration: 0,
+        claimExpiresAt: null,
+        slackMessageTs: null,
+      });
+    });
+
+    expect(
+      await asEnvironment(t, PRIMARY).query(api.slackOperations.pendingDeliveries, controller),
+    ).toEqual([{ deliveryId: open, ...delivery, text: "Waiting to post" }]);
   });
 
   it("creates one canonical issue for a Slack origin submitted twice", async () => {

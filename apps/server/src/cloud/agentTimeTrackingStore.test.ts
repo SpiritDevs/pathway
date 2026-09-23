@@ -323,6 +323,24 @@ layer("durable agent time capture", (it) => {
     }),
   );
 
+  it.effect("republishes a running session once per heartbeat interval, not every tick", () =>
+    Effect.gen(function* () {
+      yield* setup;
+      const store = yield* makeAgentTimeTrackingStore("company-1");
+      yield* append(runEvent("running", 0, "run.created"));
+      yield* store.capture();
+      const first = yield* store.pending(Date.parse(timestamp(0)));
+      assert.equal(first.length, 1);
+      yield* store.acknowledge(first[0]!);
+
+      assert.deepEqual(yield* store.pending(Date.parse(timestamp(15))), []);
+      const heartbeat = yield* store.pending(Date.parse(timestamp(30)));
+      assert.equal(heartbeat.length, 1);
+      assert.equal(heartbeat[0]!.observedAt, Date.parse(timestamp(30)));
+      assert.isAbove(heartbeat[0]!.revision, first[0]!.revision);
+    }),
+  );
+
   it.effect("replays runs started while the publisher was stopped without pausing them", () =>
     Effect.gen(function* () {
       yield* setup;

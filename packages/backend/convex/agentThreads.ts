@@ -4,6 +4,7 @@ import { notifyOrchestratorThreadUpdate } from "./lib/aiOrchestratorSignals.ts";
 /** Environment-published, cloud-safe Agent Thread discovery metadata. */
 import { v } from "convex/values";
 
+import { canonicalJson } from "../src/canonicalJson.ts";
 import type { Doc } from "./_generated/dataModel.js";
 import { mutation, type MutationCtx } from "./_generated/server.js";
 import { appendCompanyChanges, encodeAgentThread } from "./lib/companyApply.ts";
@@ -225,7 +226,7 @@ export const upsert = mutation({
       existing !== null &&
       existing.cloudProjectId === cloudProjectId &&
       existing.localProjectId === localProjectId &&
-      JSON.stringify(existing.shell) === JSON.stringify(args.shell)
+      canonicalJson(existing.shell) === canonicalJson(args.shell)
     ) {
       return { outcome: "unchanged" as const };
     }

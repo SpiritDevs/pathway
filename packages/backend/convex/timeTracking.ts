@@ -516,17 +516,14 @@ export const syncAgentSession = mutation({
     if (!existing || session.state !== "stopped") {
       const bindings = await ctx.db
         .query("environmentBindings")
-        .withIndex("by_company_and_environment", (q) =>
+        .withIndex("by_company_environment_local_project", (q) =>
           q
             .eq("companyId", actor.company._id)
-            .eq("environmentId", actor.registration.environmentId),
+            .eq("environmentId", actor.registration.environmentId)
+            .eq("localProjectId", session.localProjectId),
         )
-        .take(2_001);
-      if (bindings.length > 2_000)
-        throw backendError("invalid-arguments", "This environment has too many project bindings.");
-      const binding = bindings.find(
-        (row) => row.localProjectId === session.localProjectId && row.status === "active",
-      );
+        .collect();
+      const binding = bindings.find((row) => row.status === "active");
       if (!binding) return { outcome: "unbound" as const };
       project = await ctx.db.get(binding.cloudProjectId);
       if (!project || project.deletedAt !== null) return { outcome: "unbound" as const };

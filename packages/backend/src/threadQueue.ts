@@ -2,6 +2,8 @@
 import type { ChatAttachment } from "@spiritdevs/contracts";
 import type { ThreadQueueSubmission } from "@spiritdevs/contracts/threadQueue";
 
+import { canonicalJson } from "./canonicalJson.ts";
+
 const MAX_SUBMISSION_BYTES = 512 * 1024;
 export const THREAD_QUEUE_MAX_MESSAGES = 100;
 
@@ -121,17 +123,7 @@ export function validateModelSelection(value: unknown) {
   identifier(selection.model, "Model");
   return selection as { instanceId: string; model: string };
 }
-export function canonicalQueueJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalQueueJson).join(",")}]`;
-  if (typeof value === "object" && value !== null) {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalQueueJson(record[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "undefined";
-}
+export const canonicalQueueJson = canonicalJson;
 
 /** SHA-256 keeps the immutable request identity small without storing prompt text twice. */
 export async function queueSubmissionFingerprint(value: unknown): Promise<string> {
