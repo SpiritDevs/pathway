@@ -9,6 +9,7 @@ import {
   ThreadId,
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 
@@ -20,6 +21,7 @@ import {
 import { ComputerManager } from "../computer/ComputerManager.ts";
 import { FakeComputerBackend } from "../computer/FakeComputerBackend.ts";
 import { ComputerService } from "../computer/Services/ComputerService.ts";
+import { EventSinkV2 } from "../orchestration-v2/EventSink.ts";
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import { makeComputerMcpTools } from "./computerMcpTools.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
@@ -123,6 +125,25 @@ it.layer(TestLayer)("computerMcpTools", (it) => {
       assert.equal(errorCode(yield* call(2)), "capability_denied");
       const projection = yield* orchestrator.getThreadProjection(threadId);
       assert.lengthOf(noticesOf(projection.turnItems, "computer_capability_denied"), 1);
+    }),
+  );
+
+  it.effect("lets an interrupt through a notice it was posting", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const tools = yield* makeComputerMcpTools.pipe(
+        Effect.provideService(EventSinkV2, { ...eventSink, write: () => Effect.interrupt }),
+      );
+      const { threadId } = yield* seedRunningTurn("notice-interrupt");
+      const exit = yield* Effect.exit(
+        tools.call({
+          invocation: invocationFor(threadId, []),
+          name: "computer_click",
+          args: { x: 1, y: 1 },
+          jsonRpcRequestId: 1,
+        }),
+      );
+      assert.isTrue(Exit.hasInterrupts(exit));
     }),
   );
 
