@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as FiberSet from "effect/FiberSet";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import * as Electron from "electron";
@@ -192,7 +193,14 @@ const make = Effect.gen(function* () {
   yield* Effect.addFinalizer(() =>
     running.dispose.pipe(Effect.catch((error) => warn("host dispose failed", error))),
   );
-  const endpoint = yield* running.listen;
+  const listening = yield* Effect.result(running.listen);
+  // Like a missing binary, a socket that cannot bind leaves the desktop without Computer.
+  if (Result.isFailure(listening)) {
+    yield* warn("Computer host could not listen", listening.failure);
+    yield* running.dispose.pipe(Effect.catch((error) => warn("host dispose failed", error)));
+    return inertDesktopComputer;
+  }
+  const endpoint = listening.success;
 
   // powerMonitor exists only once Electron is ready.
   yield* electronApp.whenReady.pipe(
