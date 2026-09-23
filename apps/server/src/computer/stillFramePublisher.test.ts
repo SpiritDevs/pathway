@@ -334,6 +334,25 @@ describe("StillFramePublisher", () => {
     }),
   );
 
+  it.effect("an interrupted attach leaves the publisher detached", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      let hang = true;
+      const harness = yield* makeHarness(() => {
+        if (!hang) return Effect.succeed(FRAME_A);
+        hang = false;
+        return Effect.andThen(Deferred.succeed(started, undefined), Effect.never);
+      });
+      const attaching = yield* Effect.forkChild(harness.publisher.attach);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(attaching);
+      // Nothing is attached, so neither a keyframe nor a tick captures.
+      yield* harness.publisher.requestKeyframe;
+      yield* TestClock.adjust(INTERVAL);
+      expect(harness.frames).toHaveLength(0);
+    }),
+  );
+
   it.effect("cancels a keyframe capture on detach so the next attach can capture", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();
