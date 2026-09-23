@@ -171,6 +171,57 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
   );
 
+  it.effect("drops computer:operate when the pairing grant lacks it", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const pairingCredential = yield* serverAuth.issuePairingCredential({
+        scopes: ["orchestration:read", "orchestration:operate"],
+      });
+
+      const token = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        pairingCredential.credential,
+        ["orchestration:read", "orchestration:operate", "computer:operate"],
+        requestMetadata,
+      );
+
+      expect(token.scope).toBe("orchestration:read orchestration:operate");
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("keeps computer:operate when the pairing grant has it", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const pairingCredential = yield* serverAuth.issuePairingCredential();
+
+      const token = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        pairingCredential.credential,
+        ["orchestration:read", "computer:operate"],
+        requestMetadata,
+      );
+
+      expect(token.scope).toBe("orchestration:read computer:operate");
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("refuses a token request for computer:operate alone when the grant lacks it", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const pairingCredential = yield* serverAuth.issuePairingCredential({
+        scopes: ["orchestration:read"],
+      });
+
+      const error = yield* serverAuth
+        .exchangeBootstrapCredentialForAccessToken(
+          pairingCredential.credential,
+          ["computer:operate"],
+          requestMetadata,
+        )
+        .pipe(Effect.flip);
+
+      expect(error._tag).toBe("ServerAuthScopeNotGrantedError");
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
   it.effect("inherits a constrained pairing grant when token exchange omits scope", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;

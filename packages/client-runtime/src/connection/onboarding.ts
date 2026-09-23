@@ -1,4 +1,8 @@
-import type { DesktopSshEnvironmentTarget, EnvironmentId } from "@spiritdevs/contracts";
+import {
+  type DesktopSshEnvironmentTarget,
+  type EnvironmentId,
+  requestableEnvironmentScopes,
+} from "@spiritdevs/contracts";
 import { resolveRemotePairingTarget } from "@spiritdevs/shared/remote";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -94,7 +98,7 @@ export const preparePairingRegistration = Effect.fn(
   const access = yield* bootstrapRemoteBearerSession({
     httpBaseUrl: target.httpBaseUrl,
     credential: target.credential,
-    scopes: presentation.scopes,
+    scopes: requestableEnvironmentScopes(presentation.scopes, descriptor.capabilities),
     clientMetadata: presentation.metadata,
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
   const connectionId = `bearer:${descriptor.environmentId}`;

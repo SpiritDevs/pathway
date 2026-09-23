@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import { AuthComputerOperateScope, type AuthEnvironmentScope } from "./auth.ts";
 import { EnvironmentId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /**
@@ -158,8 +159,21 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** The supervising desktop app supports remote check/download and token-based installation.
       Absent on older desktop hosts, which must be updated locally first. */
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
+  /** Server accepts the computer:operate scope in token requests. Absent on older servers,
+      which reject the whole request with invalid_scope when it is named. */
+  computerOperateScope: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
+
+/** The scopes a client may request from an environment, without the ones it does not know. */
+export function requestableEnvironmentScopes(
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+  capabilities: ExecutionEnvironmentCapabilities,
+): ReadonlyArray<AuthEnvironmentScope> {
+  return capabilities.computerOperateScope === true
+    ? scopes
+    : scopes.filter((scope) => scope !== AuthComputerOperateScope);
+}
 
 export const ExecutionEnvironmentDescriptor = Schema.Struct({
   environmentId: EnvironmentId,

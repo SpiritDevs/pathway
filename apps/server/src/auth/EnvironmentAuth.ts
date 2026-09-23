@@ -2,6 +2,7 @@ import {
   AuthAccessTokenType,
   AuthAccessWriteScope,
   AuthAdministrativeScopes,
+  AuthComputerOperateScope,
   AuthStandardClientScopes,
   type AuthAccessTokenResult,
   type AuthBrowserSessionResult,
@@ -704,8 +705,15 @@ export const make = Effect.gen(function* () {
         Effect.mapError(toBootstrapExchangeError),
         Effect.flatMap((grant) =>
           Effect.gen(function* () {
-            const grantedScopes = requestedScopes ?? grant.scopes;
-            if (!grantedScopes.every((scope) => grant.scopes.includes(scope))) {
+            // computer:operate is optional: a pairing that predates it, or was created
+            // without it, still redeems, and the session cannot start Computer tasks.
+            const grantedScopes = (requestedScopes ?? grant.scopes).filter(
+              (scope) => scope !== AuthComputerOperateScope || grant.scopes.includes(scope),
+            );
+            if (
+              grantedScopes.length === 0 ||
+              !grantedScopes.every((scope) => grant.scopes.includes(scope))
+            ) {
               return yield* new ServerAuthScopeNotGrantedError({});
             }
             const session = yield* sessions.issue({

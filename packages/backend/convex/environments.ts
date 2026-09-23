@@ -102,6 +102,7 @@ const executionEnvironmentDescriptor = v.object({
     ),
     serverSelfUpdateProgress: v.optional(v.boolean()),
     desktopAppUpdate: v.optional(v.boolean()),
+    computerOperateScope: v.optional(v.boolean()),
   } satisfies Record<keyof ExecutionEnvironmentCapabilities, unknown>),
 });
 
