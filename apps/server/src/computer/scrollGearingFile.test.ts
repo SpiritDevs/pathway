@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
@@ -96,6 +98,32 @@ describe("ScrollGearingFile", () => {
         const reloaded = yield* ScrollGearingFile.load(directory);
         expect(reloaded.get("app1")).toBeUndefined();
         expect(reloaded.get("app64")).toBe(7);
+      }),
+    );
+
+    it.effect("finishes a write that shutdown interrupts mid-flight", () =>
+      Effect.gen(function* () {
+        const { directory, fs, filePath } = yield* stateDirectory;
+        const writing = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const file = yield* ScrollGearingFile.load(directory).pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            writeFileString: (path, data, options) =>
+              Deferred.succeed(writing, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(fs.writeFileString(path, data, options)),
+              ),
+          }),
+        );
+        const learning = yield* Effect.forkChild(file.learn("chromium", 400, 2_800));
+        yield* Deferred.await(writing);
+        const interrupting = yield* Effect.forkChild(Fiber.interrupt(learning));
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(interrupting);
+
+        expect((yield* ScrollGearingFile.load(directory)).get("chromium")).toBe(7);
+        expect(yield* fs.exists(`${filePath}.tmp`)).toBe(false);
       }),
     );
   });
