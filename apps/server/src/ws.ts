@@ -35,7 +35,6 @@ import {
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_V2_WS_METHODS,
-  type OrchestrationV2Command,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2ContinuationLaunchError,
   OrchestrationV2GetShellSnapshotError,
@@ -89,6 +88,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import { threadHistoryNeedsSnapshot } from "./orchestration-v2/ThreadHistory.ts";
+import { ComputerDispatchAccess } from "./orchestration-v2/ComputerDispatchAccess.ts";
 import { EffectOutboxV2 } from "./orchestration-v2/EffectOutbox.ts";
 import type { OrchestratorV2Error } from "./orchestration-v2/Orchestrator.ts";
 import { issuePullRequestFromStatus } from "./orchestration-v2/RunFinalizationService.ts";
@@ -108,8 +108,7 @@ import {
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationEventStore from "./persistence/Services/OrchestrationEventStore.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
-import { commandRequestsComputer } from "./computer/computerActivation.ts";
-import { requireComputerAccess } from "./computer/computerAccessPolicy.ts";
+import { computerClearance } from "./computer/computerAccessPolicy.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -710,15 +709,16 @@ const makeWsRpcLayer = (
         currentSession.scopes.includes(requiredScope)
           ? effect
           : Effect.fail(authorizationError(requiredScope));
-      // ADR 0041: the access policy guards the ways into Computer, read per send.
-      const requireComputerAccessForCommand = (command: OrchestrationV2Command) =>
-        commandRequestsComputer(command)
-          ? serverSettings.getSettings.pipe(
-              Effect.flatMap((settings) =>
-                requireComputerAccess(settings.computer.accessPolicy, currentSession.scopes),
-              ),
-            )
-          : Effect.void;
+      // ADR 0041: every message this session sends that asks for Computer is
+      // checked against the access policy where the orchestrator admits it.
+      const computerDispatchAccess = {
+        clearance: serverSettings.getSettings.pipe(
+          Effect.orDie,
+          Effect.flatMap((settings) =>
+            computerClearance(settings.computer.accessPolicy, currentSession.scopes),
+          ),
+        ),
+      };
       const authorizeStream = <A, E, R>(
         requiredScope: AuthEnvironmentScope,
         stream: Stream.Stream<A, E, R>,
@@ -733,7 +733,9 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcEffect(
           method,
-          authorizeEffect(requiredScopeForRpcMethod(method), effect),
+          authorizeEffect(requiredScopeForRpcMethod(method), effect).pipe(
+            Effect.provideService(ComputerDispatchAccess, computerDispatchAccess),
+          ),
           traceAttributes,
         );
       const issueRpcEffect = <A, R>(
@@ -1363,29 +1365,28 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
-            requireComputerAccessForCommand(command).pipe(
-              Effect.andThen(
-                startup.enqueueCommand(
-                  threadManagement.dispatch(
-                    ThreadManagementService.withCreationProvenance(command, {
-                      createdBy: "user",
-                      creationSource: "creationSource" in command ? command.creationSource : "web",
-                    }),
-                  ),
+            startup
+              .enqueueCommand(
+                threadManagement.dispatch(
+                  ThreadManagementService.withCreationProvenance(command, {
+                    createdBy: "user",
+                    creationSource: "creationSource" in command ? command.creationSource : "web",
+                  }),
                 ),
+              )
+              .pipe(
+                Effect.map((result) => ({ sequence: result.sequence })),
+                Effect.mapError((cause) => {
+                  const detail = userFacingDispatchErrorMessage(cause);
+                  return new OrchestrationV2DispatchCommandError({
+                    commandId: command.commandId,
+                    commandType: command.type,
+                    message: detail ?? "Failed to dispatch orchestration V2 command",
+                    ...(detail === undefined ? {} : { detail }),
+                    cause,
+                  });
+                }),
               ),
-              Effect.map((result) => ({ sequence: result.sequence })),
-              Effect.mapError((cause) => {
-                const detail = userFacingDispatchErrorMessage(cause);
-                return new OrchestrationV2DispatchCommandError({
-                  commandId: command.commandId,
-                  commandType: command.type,
-                  message: detail ?? "Failed to dispatch orchestration V2 command",
-                  ...(detail === undefined ? {} : { detail }),
-                  cause,
-                });
-              }),
-            ),
             {
               "rpc.aggregate": "orchestrationV2",
               "orchestration_v2.command_id": command.commandId,

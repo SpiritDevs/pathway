@@ -5,7 +5,6 @@
  */
 import type {
   ComputerControlMode,
-  OrchestrationV2Command,
   OrchestrationV2ConversationMessage,
   OrchestrationV2RunComputerControl,
 } from "@spiritdevs/contracts";
@@ -88,14 +87,3 @@ export const admitRunComputerControl = (input: {
       ),
     );
 };
-
-/**
- * Whether a user command asks for Computer, through the chat switch or a
- * `/computer-use` turn. The access policy guards exactly these ways in.
- */
-export function commandRequestsComputer(command: OrchestrationV2Command): boolean {
-  if (command.type !== "message.dispatch" && command.type !== "message.edit-and-restart") {
-    return false;
-  }
-  return command.enableComputerControl === true || parseComputerInvocation(command.text) !== null;
-}

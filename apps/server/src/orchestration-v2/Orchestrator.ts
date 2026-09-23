@@ -73,6 +73,7 @@ import {
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import { ProviderContinuationRequests } from "./ProviderContinuationRequests.ts";
+import { ComputerDispatchAccess } from "./ComputerDispatchAccess.ts";
 import { ServerOwnedRuntimeRequests } from "./ServerOwnedRuntimeRequests.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
@@ -4157,6 +4158,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               computerControlGeneration: command.computerControlGeneration,
             })
           : undefined;
+      // ADR 0041: the one access-policy check every way in passes — chat,
+      // launch, the cloud queue, and a reply to a question alike.
+      if (computerControl !== undefined) {
+        yield* (yield* ComputerDispatchAccess).clearance.pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestratorDispatchError({
+                commandId: command.commandId,
+                commandType: command.type,
+                cause,
+              }),
+          ),
+        );
+      }
       const sourcePlanProjection =
         command.sourcePlanRef === undefined
           ? null
