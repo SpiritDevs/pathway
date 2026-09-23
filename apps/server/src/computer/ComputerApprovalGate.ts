@@ -23,7 +23,7 @@ import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import type * as Fiber from "effect/Fiber";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -41,6 +41,8 @@ export const COMPUTER_APPROVAL_TIMEOUT = Duration.minutes(5);
  * default) so the provider never abandons the call first.
  */
 export const COMPUTER_APPROVAL_WAIT_BOUND = Duration.seconds(45);
+/** How long withdrawing or settling a card may take before it is abandoned. */
+export const COMPUTER_APPROVAL_DISMISS_BOUND = Duration.seconds(10);
 
 export class ComputerApprovalQueueFullError extends Schema.TaggedErrorClass<ComputerApprovalQueueFullError>()(
   "ComputerApprovalQueueFullError",
@@ -222,8 +224,10 @@ export interface ComputerApprovalGateShape {
   /**
    * A desktop interruption (screen lock, sleep, session switch) revokes every
    * standing grant, so consent given before it cannot authorize the desktop
-   * after it. Declines stay declined, and open cards stay open: an answer to
-   * one can only postdate the interruption, so it is the re-auth itself.
+   * after it. Per-call accepts still waiting for their retry are dropped too,
+   * so the retry asks again. Declines stay declined, and open cards stay open:
+   * an answer to one can only postdate the interruption, so it is the re-auth
+   * itself.
    */
   readonly revokeTaskGrants: Effect.Effect<void>;
 }
@@ -252,7 +256,11 @@ interface Prompt {
   readonly grant?: Grant | undefined;
   /** A per-call prompt with a live waiter; detached ones wait for the next identical call. */
   attached: boolean;
+  /** The desktop generation the answer was given in; a revoke makes an accept stale. */
+  answeredGeneration?: number | undefined;
   timer?: Fiber.Fiber<void> | undefined;
+  /** Posting the card; withdrawn with the prompt. */
+  publisher?: Fiber.Fiber<void> | undefined;
 }
 
 export interface ComputerApprovalGateOptions {
@@ -272,18 +280,31 @@ export const make = Effect.fn("ComputerApprovalGate.make")(function* (
   /** Open cards, plus per-call answers not yet consumed by their call. */
   const prompts = new Map<string, Prompt>();
   const tasks = new Map<string, TaskGrants>();
+  /** Bumped by every desktop interruption. */
+  let generation = 0;
+
+  /** Stops a prompt's own fiber, unless it is the one withdrawing the prompt. */
+  const stop = (fiber: Fiber.Fiber<void> | undefined) => {
+    if (fiber !== undefined && fiber !== Fiber.getCurrent()) fiber.interruptUnsafe();
+  };
 
   const remove = (prompt: Prompt) => {
     if (prompts.get(prompt.info.requestId) === prompt) prompts.delete(prompt.info.requestId);
     if (prompt.grant?.prompt === prompt) prompt.grant.prompt = undefined;
-    prompt.timer?.interruptUnsafe();
+    stop(prompt.timer);
+    stop(prompt.publisher);
   };
 
-  /** Best-effort dismissal: a hung or failed publish must not hold anyone. */
+  /** Best-effort, bounded dismissal: a hung or failed publish must not hold anyone. */
   const dismiss = (prompt: Prompt, decision: ProviderApprovalDecision) =>
     requester
       .resolve(prompt.info, decision)
-      .pipe(Effect.ignore, Effect.forkIn(scope), Effect.asVoid);
+      .pipe(
+        Effect.timeoutOption(COMPUTER_APPROVAL_DISMISS_BOUND),
+        Effect.ignore,
+        Effect.forkIn(scope),
+        Effect.asVoid,
+      );
 
   const settle = (prompt: Prompt, decision: ProviderApprovalDecision) =>
     Effect.suspend(() => {
@@ -343,11 +364,15 @@ export const make = Effect.fn("ComputerApprovalGate.make")(function* (
       Effect.forkIn(scope),
     );
     // Publishing is not the decision path: an answer or cancel that lands
-    // while the card is still being posted settles the call regardless.
-    yield* requester.open(prompt.info).pipe(
+    // while the card is still being posted settles the call regardless, and
+    // withdrawing the prompt stops the post.
+    const publisher = yield* requester.open(prompt.info).pipe(
       Effect.catch((error) => fail(prompt, error)),
       Effect.forkIn(scope, { startImmediately: true }),
     );
+    // The post may already have settled or withdrawn the prompt.
+    if (prompts.get(requestId) === prompt) prompt.publisher = publisher;
+    else publisher.interruptUnsafe();
     return prompt;
   });
 
@@ -389,8 +414,12 @@ export const make = Effect.fn("ComputerApprovalGate.make")(function* (
           current.attached = false;
           return "pending" as const;
         }
+        // Stop or a desktop interruption may land between the accept and here.
+        const live = prompts.get(current.info.requestId) === current;
         remove(current);
-        return decision.value === "accept" ? ("approved" as const) : ("denied" as const);
+        if (decision.value !== "accept") return "denied" as const;
+        if (current.answeredGeneration !== generation) return yield* restore(request(input));
+        return live ? ("approved" as const) : ("denied" as const);
       }),
     );
 
@@ -481,15 +510,20 @@ export const make = Effect.fn("ComputerApprovalGate.make")(function* (
         return Effect.succeed(false);
       }
       const effective = decision === "acceptForSession" ? "decline" : decision;
+      prompt.answeredGeneration = generation;
       if (prompt.grant?.prompt === prompt) prompt.grant.granted = effective === "accept";
       return settle(prompt, effective).pipe(Effect.as(true));
     });
 
   const revokeTaskGrants: ComputerApprovalGateShape["revokeTaskGrants"] = Effect.sync(() => {
+    generation += 1;
     for (const task of tasks.values()) {
       for (const grant of task.grants.values()) {
         if (grant.granted === true) delete grant.granted;
       }
+    }
+    for (const prompt of [...prompts.values()]) {
+      if (prompt.callKey !== undefined && prompt.answeredGeneration !== undefined) remove(prompt);
     }
   });
 
