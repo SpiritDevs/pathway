@@ -67,7 +67,6 @@ export const businessToolsTables = {
     lastRequestUserId: v.id("users"),
   })
     .index("by_company", ["companyId"])
-    .index("by_company_and_deleted", ["companyId", "deletedAt"])
     .index("by_company_and_id", ["companyId", "id"])
     .index("by_company_deleted_name", ["companyId", "deletedAt", "name"])
     .index("by_company_deleted_favorite_name", ["companyId", "deletedAt", "favorite", "name"])
@@ -120,6 +119,5 @@ export const businessToolsTables = {
     .index("by_company_environment_and_id", ["companyId", "environmentId", "id"])
     .index("by_user_and_state", ["userId", "state"])
     .index("by_user_state_source", ["userId", "state", "source"])
-    .index("by_user_and_state_and_stopped_at", ["userId", "state", "stoppedAt"])
-    .index("by_user_and_started_at", ["userId", "startedAt"]),
+    .index("by_user_and_state_and_stopped_at", ["userId", "state", "stoppedAt"]),
 };

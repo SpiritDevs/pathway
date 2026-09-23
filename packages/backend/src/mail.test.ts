@@ -190,6 +190,19 @@ async function measuredMailClaim(t: Harness, environmentId = "primary") {
 }
 afterEach(() => vi.useRealTimers());
 describe("connected mail", () => {
+  it("does not rewrite the rotation cursor when one sweep covers every account", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const t = harness();
+    const accountId = await seed(t);
+    await relay(t).mutation(api.mailRelay.claimSync, { accountId, leaseToken: "sync" });
+    const runtime = await t.run((ctx) => ctx.db.query("mailAccountRuntime").first());
+    expect(runtime).not.toBeNull();
+    vi.setSystemTime(Date.now() + 5 * 60_000);
+    await relay(t).mutation(api.mailRelay.sweepUnavailableAccounts, {});
+    expect(await t.run((ctx) => ctx.db.get(runtime!._id))).toEqual(runtime);
+  });
+
   it("keeps lease and auth bookkeeping out of account reads and preserves legacy fences", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_800_000_000_000);

@@ -310,8 +310,12 @@ export const markRead = mutation({
       state?.nextCleanupAt ?? NO_CLEANUP_DUE,
       row.createdAt + READ_RETENTION_MS,
     );
-    if (state !== null) await ctx.db.patch(state._id, { nextCleanupAt, updatedAt: now });
-    else
+    // Only an earlier cleanup time changes the state; rewriting it re-runs every list and badge.
+    if (state !== null) {
+      if (nextCleanupAt < (state.nextCleanupAt ?? NO_CLEANUP_DUE)) {
+        await ctx.db.patch(state._id, { nextCleanupAt, updatedAt: now });
+      }
+    } else
       await ctx.db.insert("focusNotificationStates", {
         userId: user.clerkSubject,
         readThrough: 0,

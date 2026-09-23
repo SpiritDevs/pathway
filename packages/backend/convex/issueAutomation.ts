@@ -27,6 +27,7 @@ const MAX_DIAGNOSTIC_CHARS = 1_000;
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000] as const;
 const COMPLETED_RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
 const PRUNE_BATCH_SIZE = 100;
+const ATTENTION_COUNT_LIMIT = 100;
 
 const jobState = v.union(
   v.literal("pending"),
@@ -390,18 +391,19 @@ export const attentionCount = query({
         .query("slackIntegrations")
         .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
         .collect(),
+      // Clients show "99+" past 99; failed jobs are kept for 90 days, so the tail is never read.
       ctx.db
         .query("issueAutomationJobs")
         .withIndex("by_company_and_state", (q) =>
           q.eq("companyId", actor.company._id).eq("state", "blocked"),
         )
-        .collect(),
+        .take(ATTENTION_COUNT_LIMIT),
       ctx.db
         .query("issueAutomationJobs")
         .withIndex("by_company_and_state", (q) =>
           q.eq("companyId", actor.company._id).eq("state", "failed"),
         )
-        .collect(),
+        .take(ATTENTION_COUNT_LIMIT),
     ]);
     const now = Date.now();
     let integrationAttention = 0;

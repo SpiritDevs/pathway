@@ -76,14 +76,15 @@ export const list = query({
     const user = await requireUser(ctx);
     const origin =
       args.origin === undefined ? undefined : normalizeBrowserPasswordOrigin(args.origin);
-    const rows = await ctx.db
-      .query("browserPasswords")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .take(500);
-    return rows
-      .filter((row) => origin === undefined || row.origin === origin)
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .map(present);
+    // The in-app browser's saved-login picker subscribes per origin; read only that origin's rows.
+    const rows = await (
+      origin === undefined
+        ? ctx.db.query("browserPasswords").withIndex("by_user", (q) => q.eq("userId", user._id))
+        : ctx.db
+            .query("browserPasswords")
+            .withIndex("by_user_origin", (q) => q.eq("userId", user._id).eq("origin", origin))
+    ).take(500);
+    return rows.sort((a, b) => b.updatedAt - a.updatedAt).map(present);
   },
 });
 

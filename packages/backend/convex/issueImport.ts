@@ -1,3 +1,4 @@
+import { readNextIssueNumber, writeNextIssueNumber } from "./lib/companyIssueCounter.ts";
 import { readCompanySyncVersion } from "./lib/companySyncHead.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock directly.
 /**
@@ -1413,10 +1414,10 @@ export const applyTrackerConfig = mutation({
       return {
         status: "alreadyApplied" as const,
         issueKeyPrefix: company.issueKeyPrefix,
-        nextIssueNumber: company.nextIssueNumber,
+        nextIssueNumber: await readNextIssueNumber(ctx, company),
       };
     }
-    if (next < company.nextIssueNumber)
+    if (next < (await readNextIssueNumber(ctx, company)))
       throw backendError("counter-regression", "The task counter may never move backwards.");
     const highestImportedIssue = await ctx.db
       .query("issues")
@@ -1445,11 +1446,8 @@ export const applyTrackerConfig = mutation({
         );
     }
     const now = Date.now();
-    await ctx.db.patch(company._id, {
-      issueKeyPrefix: prefix,
-      nextIssueNumber: next,
-      updatedAt: now,
-    });
+    await writeNextIssueNumber(ctx, company, next);
+    await ctx.db.patch(company._id, { issueKeyPrefix: prefix, updatedAt: now });
     await ctx.db.patch(run._id, {
       trackerApplied: true,
       trackerNextIssueNumber: next,
@@ -1600,12 +1598,13 @@ export const complete = mutation({
       );
     const ledger = await ctx.db
       .query("issueImportEntities")
-      .withIndex("by_run", (q) => q.eq("runId", run._id))
+      .withIndex("by_run_kind_and_entity", (q) =>
+        q.eq("runId", run._id).eq("entityKind", "environmentBinding"),
+      )
       .collect();
     const changes: CompanyChange[] = [];
     const now = Date.now();
     for (const entry of ledger) {
-      if (entry.entityKind !== "environmentBinding") continue;
       const binding = await byDomain(ctx, "environmentBindings", actor.company._id, entry.entityId);
       if (binding === null)
         throw backendError("entity-not-found", `Import binding ${entry.entityId} is missing.`);

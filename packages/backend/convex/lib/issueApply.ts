@@ -18,6 +18,7 @@ import { ISSUE_KEY_BLOCK_SIZE } from "../../src/issueKeys.ts";
 import type { PermissionKey } from "../../src/permissions.ts";
 import { hasRecordPermission } from "../../src/permissions.ts";
 import type { BootstrapEntityKind } from "../../src/sync/bootstrap.ts";
+import { readNextIssueNumber, writeNextIssueNumber } from "./companyIssueCounter.ts";
 import {
   auditEventDomainId,
   defaultIssueSortOrder,
@@ -955,6 +956,7 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
   // this same batch may have advanced it past the snapshot `actor.company` carries.
   const freshCompany = await ctx.db.get(company._id);
   if (freshCompany === null) return rejected("invalid-arguments", "The company has vanished.");
+  const nextIssueNumber = await readNextIssueNumber(ctx, freshCompany);
   let key: string;
   let keyNumber: number;
   if (args.key !== undefined) {
@@ -972,13 +974,13 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
     if (
       !Number.isSafeInteger(keyNumber) ||
       keyNumber < 1 ||
-      keyNumber > freshCompany.nextIssueNumber + ISSUE_KEY_BLOCK_SIZE
+      keyNumber > nextIssueNumber + ISSUE_KEY_BLOCK_SIZE
     ) {
       return rejected("invalid-arguments", `The key ${args.key} is outside this company's range.`);
     }
     key = args.key;
   } else {
-    keyNumber = freshCompany.nextIssueNumber;
+    keyNumber = nextIssueNumber;
     key = `${freshCompany.issueKeyPrefix}-${keyNumber}`;
   }
   // Checked on both paths: a counter nudged forward by an earlier accepted key can hand out a
@@ -990,8 +992,8 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
     .unique();
   if (collision !== null) return rejected("invalid-arguments", `The key ${key} is taken.`);
   // A key at or past the counter would collide with a future lease.
-  if (keyNumber >= freshCompany.nextIssueNumber) {
-    await ctx.db.patch(company._id, { nextIssueNumber: keyNumber + 1 });
+  if (keyNumber >= nextIssueNumber) {
+    await writeNextIssueNumber(ctx, freshCompany, keyNumber + 1);
   }
 
   const docId = await ctx.db.insert("issues", {

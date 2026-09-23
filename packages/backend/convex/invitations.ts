@@ -170,24 +170,22 @@ async function deliver(
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/**
- * The invitation named by its domain id inside one company.
- *
- * A scan of the company's invitations rather than an index read: `companyInvitations` is indexed by
- * token hash, by email, and by state, but not by domain id, and the list is the same one
- * {@link list} already collects for the invitation screen.
- */
+/** The invitation named by its domain id inside one company. */
+const findInvitation = (ctx: QueryCtx, companyDocId: Id<"companies">, invitationDomainId: string) =>
+  ctx.db
+    .query("companyInvitations")
+    .withIndex("by_company_and_domain_id", (q) =>
+      q.eq("companyId", companyDocId).eq("id", invitationDomainId),
+    )
+    .unique();
+
 async function requireInvitation(
   ctx: QueryCtx,
   companyDocId: Id<"companies">,
   invitationDomainId: string,
 ): Promise<Doc<"companyInvitations">> {
-  const invitations = await ctx.db
-    .query("companyInvitations")
-    .withIndex("by_company", (q) => q.eq("companyId", companyDocId))
-    .collect();
-  const invitation = invitations.find((candidate) => candidate.id === invitationDomainId);
-  if (invitation === undefined) {
+  const invitation = await findInvitation(ctx, companyDocId, invitationDomainId);
+  if (invitation === null) {
     throw backendError("entity-not-found", "No such invitation in this company.");
   }
   return invitation;
@@ -331,24 +329,22 @@ export const record = internalMutation({
     const company = actor.company;
     const now = Date.now();
 
-    const existing = await ctx.db
-      .query("companyInvitations")
-      .withIndex("by_company", (q) => q.eq("companyId", company._id))
-      .collect();
     // The domain id comes from the client, and an action the client retried after a lost response
     // would arrive with the same one. Refusing keeps one id to one invitation; the retry is told so
     // rather than quietly minting a second token for the same seat.
-    if (existing.some((invitation) => invitation.id === args.id)) {
+    if ((await findInvitation(ctx, company._id, args.id)) !== null) {
       throw backendError("invitation-exists", `Invitation ${args.id} already exists.`);
     }
     // One live invitation per address, for the same reason: two valid tokens for one seat, one of
     // which any later resend silently invalidates.
+    const sameAddress = await ctx.db
+      .query("companyInvitations")
+      .withIndex("by_company_and_email", (q) => q.eq("companyId", company._id).eq("email", email))
+      .collect();
     if (
-      existing.some(
+      sameAddress.some(
         (invitation) =>
-          invitation.email === email &&
-          invitation.state === "pending" &&
-          !isInvitationExpired(invitation.expiresAt, now),
+          invitation.state === "pending" && !isInvitationExpired(invitation.expiresAt, now),
       )
     ) {
       throw backendError(

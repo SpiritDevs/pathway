@@ -24,29 +24,28 @@ async function environmentActor(ctx: QueryCtx, companyId: string) {
     );
   return actor;
 }
-async function eligible(
+/** Whether this environment may claim the account's jobs; only a job's age varies per job. */
+async function accountEligibility(
   ctx: QueryCtx,
   account: Doc<"mailAccounts">,
   environmentId: string,
-  createdAt: number,
-) {
-  if (account.status !== "active" || !account.brain) return false;
+): Promise<(createdAt: number) => boolean> {
+  if (account.status !== "active" || !account.brain) return () => false;
   const membership = await ctx.db.get(account.ownerMembershipId);
-  if (membership?.state !== "active") return false;
-  if (account.brain.primaryEnvironmentId === environmentId) return true;
-  if (account.brain.backupEnvironmentId !== environmentId) return false;
+  if (membership?.state !== "active") return () => false;
+  if (account.brain.primaryEnvironmentId === environmentId) return () => true;
+  if (account.brain.backupEnvironmentId !== environmentId) return () => false;
   const primary = await ctx.db
     .query("environmentRegistrations")
     .withIndex("by_company_and_environment", (q) =>
       q.eq("companyId", account.companyId).eq("environmentId", account.brain!.primaryEnvironmentId),
     )
     .unique();
-  return (
+  const primaryUnavailable =
     !primary ||
     primary.state !== "active" ||
-    ((await readEnvironmentPresence(ctx, primary)).lastSeenAt ?? 0) < Date.now() - LEASE_MS ||
-    createdAt < Date.now() - LEASE_MS
-  );
+    ((await readEnvironmentPresence(ctx, primary)).lastSeenAt ?? 0) < Date.now() - LEASE_MS;
+  return (createdAt) => primaryUnavailable || createdAt < Date.now() - LEASE_MS;
 }
 async function currentClaim(
   ctx: MutationCtx,
@@ -134,12 +133,14 @@ export const claim = mutation({
       );
       const [briefings = [], drafts = [], analyses = []] = pendingByKind;
       const requested = [...briefings, ...drafts].sort((a, b) => a.createdAt - b.createdAt);
+      let eligible: ((createdAt: number) => boolean) | undefined;
       for (const job of [
         ...running.filter((j) => (j.leaseExpiresAt ?? 0) <= now),
         ...requested,
         ...analyses,
       ]) {
-        if (!(await eligible(ctx, account, environmentId, job.createdAt))) continue;
+        eligible ??= await accountEligibility(ctx, account, environmentId);
+        if (!eligible(job.createdAt)) continue;
         const message = await ctx.db
           .query("mailMessages")
           .withIndex("by_domain_id", (q) => q.eq("id", job.messageId))

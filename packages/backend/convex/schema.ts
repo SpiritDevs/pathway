@@ -246,7 +246,8 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_user", ["userId"])
-    .index("by_user_id", ["userId", "id"]),
+    .index("by_user_id", ["userId", "id"])
+    .index("by_user_origin", ["userId", "origin"]),
 
   /** Account-owned Agent Threads filters. Selection stays local to each client. */
   focuses: defineTable({
@@ -356,6 +357,12 @@ export default defineSchema({
   companySyncHeads: defineTable({
     companyId: v.id("companies"),
     version: v.number(),
+  }).index("by_company", ["companyId"]),
+
+  /** Issue-number counter; `companies.nextIssueNumber` is its legacy fallback. */
+  companyIssueCounters: defineTable({
+    companyId: v.id("companies"),
+    nextIssueNumber: v.number(),
   }).index("by_company", ["companyId"]),
 
   companySettings: defineTable({
@@ -520,10 +527,7 @@ export default defineSchema({
     updatedAt: v.number(),
     disconnectedAt: v.union(v.number(), v.null()),
     version: v.optional(v.number()),
-  })
-    .index("by_company_and_domain_id", ["companyId", "id"])
-    .index("by_company_and_owner", ["companyId", "ownerMembershipId"])
-    .index("by_company_and_provider_account", ["companyId", "provider", "providerAccountId"]),
+  }).index("by_company_and_domain_id", ["companyId", "id"]),
 
   /** The calendar row is the sharing and revocation boundary for all child events. */
   calendar: defineTable({
@@ -543,10 +547,7 @@ export default defineSchema({
     version: v.optional(v.number()),
   })
     .index("by_company_and_domain_id", ["companyId", "id"])
-    .index("by_company_and_owner", ["companyId", "ownerMembershipId"])
-    .index("by_company_and_account", ["companyId", "accountId"])
-    .index("by_company_account_and_deleted", ["companyId", "accountId", "deletedAt"])
-    .index("by_company_and_google_calendar", ["companyId", "googleCalendarId"]),
+    .index("by_company_account_and_deleted", ["companyId", "accountId", "deletedAt"]),
 
   calendarEvent: defineTable({
     id: domainId,
@@ -688,6 +689,7 @@ export default defineSchema({
   })
     .index("by_token_hash", ["tokenHash"])
     .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_email", ["companyId", "email"])
     .index("by_company_and_state", ["companyId", "state"])
     .index("by_state_and_expiry", ["state", "expiresAt"]),
@@ -972,8 +974,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_company", ["companyId"])
-    .index("by_integration", ["integrationId"])
-    .index("by_key_id", ["keyId"]),
+    .index("by_integration", ["integrationId"]),
 
   /** Minimal durable ownership marker so removal can never revive a legacy local poller. */
   slackIntegrationTombstones: defineTable({
@@ -1309,7 +1310,6 @@ export default defineSchema({
     .index("by_listing_expiration", ["listingExpiresAt"])
     .index("by_state_and_updated", ["state", "updatedAt"])
     .index("by_company_and_thread", ["companyId", "threadId"])
-    .index("by_company_and_member", ["companyId", "issuedByMembershipId"])
     .index("by_company_and_environment", ["companyId", "environmentId"])
     .index("by_company_environment_and_thread", ["companyId", "environmentId", "threadId"])
     .index("by_company_origin_and_thread", ["companyId", "originEnvironmentId", "threadId"])
@@ -1350,11 +1350,7 @@ export default defineSchema({
     .index("by_queue_and_message", ["companyId", "queueThreadId", "messageId"])
     .index("by_queue_and_sequence", ["companyId", "threadId", "queueThreadId", "sequence"])
     .index("by_queue_and_state", ["companyId", "threadId", "queueThreadId", "state", "sequence"])
-    .index("by_company_and_command", ["companyId", "commandId"])
-    .index("by_company_and_message", ["companyId", "messageId"])
-    .index("by_attachment_tracking", ["attachmentReferencesTracked"])
-    .index("by_company_thread_and_sequence", ["companyId", "threadId", "sequence"])
-    .index("by_company_thread_and_state", ["companyId", "threadId", "state", "sequence"]),
+    .index("by_attachment_tracking", ["attachmentReferencesTracked"]),
 
   threadQueueAttachments: defineTable({
     companyId: v.id("companies"),
@@ -1363,9 +1359,7 @@ export default defineSchema({
     /** Contracts ChatAttachment; metadata matched against uploaded bytes before registration. */
     attachment: v.any(),
     createdAt: v.number(),
-  })
-    .index("by_storage", ["storageId"])
-    .index("by_company_and_member", ["companyId", "issuedByMembershipId"]),
+  }).index("by_storage", ["storageId"]),
 
   /** Shared uploads remain alive until their last queued message is removed. */
   threadQueueAttachmentReferences: defineTable({
@@ -1412,7 +1406,6 @@ export default defineSchema({
     .index("by_company", ["companyId"])
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_environment", ["companyId", "environmentId"])
-    .index("by_company_and_environment_and_message", ["companyId", "environmentId", "messageId"])
     .index("by_company_and_project", ["companyId", "cloudProjectId"]),
 
   /** Durable delete intent prevents an offline source from republishing removed local mail. */
@@ -1579,8 +1572,6 @@ export default defineSchema({
     createdAt: v.string(),
   })
     .index("by_environment_key_and_thread", ["environmentId", "environmentPublicKey", "threadId"])
-    .index("by_environment_and_thread", ["environmentId", "threadId"])
-    .index("by_updated_at", ["updatedAt"])
     .index("by_phase_and_updated_at", ["phase", "updatedAt"]),
 
   relayDeliveryAttempts: defineTable({
@@ -1599,8 +1590,7 @@ export default defineSchema({
     transportError: v.union(v.string(), v.null()),
   })
     .index("by_attempt_id", ["id"])
-    .index("by_source_job", ["sourceJobId"])
-    .index("by_environment_thread_created", ["environmentId", "threadId", "createdAt"]),
+    .index("by_source_job", ["sourceJobId"]),
 
   relayDpopProofs: defineTable({
     thumbprint: v.string(),
@@ -1721,7 +1711,6 @@ export default defineSchema({
     retainUntil: v.number(),
   })
     .index("by_company_and_operation", ["companyId", "operationId"])
-    .index("by_company_and_client", ["companyId", "clientId", "localSequence"])
     .index("by_retain_until", ["retainUntil"]),
 
   /** Leased key blocks. Kept so an exhausted or crashed client can be reconciled, never recycled. */
@@ -1733,9 +1722,7 @@ export default defineSchema({
     blockStart: v.number(),
     blockEnd: v.number(),
     createdAt: v.number(),
-  })
-    .index("by_company", ["companyId"])
-    .index("by_company_and_client", ["companyId", "clientId"]),
+  }).index("by_company", ["companyId"]),
 
   // ---------------------------------------------------------------------------
   // Empty-company issue imports
@@ -1771,7 +1758,6 @@ export default defineSchema({
   })
     .index("by_company", ["companyId"])
     .index("by_company_and_domain_id", ["companyId", "id"])
-    .index("by_company_source_and_domain_id", ["companyId", "sourceEnvironmentId", "id"])
     .index("by_company_and_state", ["companyId", "state"]),
 
   /** Permanent provenance/dedupe ledger for rows accepted by an import run. */
@@ -1781,10 +1767,7 @@ export default defineSchema({
     entityKind: v.string(),
     entityId: domainId,
     appliedAt: v.number(),
-  })
-    .index("by_run", ["runId"])
-    .index("by_run_kind_and_entity", ["runId", "entityKind", "entityId"])
-    .index("by_company_kind_and_entity", ["companyId", "entityKind", "entityId"]),
+  }).index("by_run_kind_and_entity", ["runId", "entityKind", "entityId"]),
 
   // ---------------------------------------------------------------------------
   // Issue domain
@@ -1842,8 +1825,8 @@ export default defineSchema({
     .index("by_company_and_import_run", ["companyId", "issueImportRunId"])
     .index("by_company_import_run_and_key_number", ["companyId", "issueImportRunId", "keyNumber"])
     .index("by_company_and_key", ["companyId", "key"])
-    .index("by_company_and_status", ["companyId", "statusId"])
     .index("by_company_and_project", ["companyId", "projectId"])
+    .index("by_company_and_parent", ["companyId", "parentId"])
     /**
      * The sweeps: every live issue a status deletion or a milestone move has to migrate. `deletedAt`
      * is the last index field so the range covers live rows only — a company that has tombstoned a
@@ -1874,9 +1857,6 @@ export default defineSchema({
     version: v.number(),
   })
     .index("by_company_and_domain_id", ["companyId", "id"])
-    .index("by_company_and_scope", ["companyId", "scope"])
-    .index("by_company_and_team", ["companyId", "teamId"])
-    .index("by_company_and_base_status", ["companyId", "baseStatusId"])
     /**
      * Resolving one effective workflow reads its whole chain, so the chain reads are the ones that
      * have to stay bounded: `deletedAt` last keeps a tombstoned column out of the range instead of
@@ -1900,10 +1880,7 @@ export default defineSchema({
     updatedAt: v.number(),
     deletedAt: v.union(v.number(), v.null()),
     version: v.number(),
-  })
-    .index("by_company_and_domain_id", ["companyId", "id"])
-    .index("by_company_and_team", ["companyId", "teamId"])
-    .index("by_company_and_version", ["companyId", "version"]),
+  }).index("by_company_and_domain_id", ["companyId", "id"]),
 
   /**
    * Project-owned, unlike labels and cycles. Mirrors `IssueMilestone` in `contracts/issues`, whose
@@ -1929,8 +1906,7 @@ export default defineSchema({
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_project", ["companyId", "cloudProjectId"])
     /** Appending to a project's timeline reads one row — the last position — instead of them all. */
-    .index("by_company_project_and_position", ["companyId", "cloudProjectId", "position"])
-    .index("by_company_and_version", ["companyId", "version"]),
+    .index("by_company_project_and_position", ["companyId", "cloudProjectId", "position"]),
 
   /**
    * Mirrors `IssueCycle` in `contracts/issues`. Only the dates are stored: upcoming/active/ended is
@@ -1953,10 +1929,7 @@ export default defineSchema({
     updatedAt: v.number(),
     deletedAt: v.union(v.number(), v.null()),
     version: v.number(),
-  })
-    .index("by_company_and_domain_id", ["companyId", "id"])
-    .index("by_company_and_team", ["companyId", "teamId"])
-    .index("by_company_and_version", ["companyId", "version"]),
+  }).index("by_company_and_domain_id", ["companyId", "id"]),
 
   issueTodos: defineTable({
     id: domainId,
@@ -1974,8 +1947,7 @@ export default defineSchema({
     .index("by_company_and_issue", ["companyId", "issueId"])
     /** Appending to a checklist reads its last order key; the scope migration reads its live rows. */
     .index("by_company_issue_and_sort_order", ["companyId", "issueId", "sortOrder"])
-    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
-    .index("by_company_and_version", ["companyId", "version"]),
+    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"]),
 
   /**
    * The canonical directed pair, named as `IssueRelation` in `contracts/issues` names it. `blocks`
@@ -2005,8 +1977,7 @@ export default defineSchema({
     ])
     /** Both ends, live only: a relation is visible from either, so a scope change reaches both. */
     .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
-    .index("by_company_related_issue_and_deleted", ["companyId", "relatedIssueId", "deletedAt"])
-    .index("by_company_and_version", ["companyId", "version"]),
+    .index("by_company_related_issue_and_deleted", ["companyId", "relatedIssueId", "deletedAt"]),
 
   issueComments: defineTable({
     id: domainId,
@@ -2026,8 +1997,7 @@ export default defineSchema({
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_issue", ["companyId", "issueId"])
     /** Live rows of one issue, for the scope migration a team change performs. */
-    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
-    .index("by_company_and_version", ["companyId", "version"]),
+    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"]),
 
   /** Metadata only. New bytes live in UploadThing; `storageId` remains for clean-cutover imports. */
   issueAttachments: defineTable({
@@ -2066,8 +2036,7 @@ export default defineSchema({
       "clientRequestId",
     ])
     /** Live rows of one issue, for the scope migration a team change performs. */
-    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
-    .index("by_company_and_version", ["companyId", "version"]),
+    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"]),
 
   issueViews: defineTable({
     id: domainId,
@@ -2089,9 +2058,7 @@ export default defineSchema({
     version: v.number(),
   })
     .index("by_company_and_domain_id", ["companyId", "id"])
-    .index("by_company_and_owner", ["companyId", "ownerMembershipId"])
-    .index("by_company_and_visibility", ["companyId", "visibility"])
-    .index("by_company_and_version", ["companyId", "version"]),
+    .index("by_company_and_visibility", ["companyId", "visibility"]),
 
   /**
    * Retained until company deletion, unlike the 90-day change feed. `issueAuditEvent` is a
@@ -2113,8 +2080,7 @@ export default defineSchema({
     version: v.number(),
   })
     .index("by_company_and_domain_id", ["companyId", "id"])
-    .index("by_company_and_issue", ["companyId", "issueId", "createdAt"])
-    .index("by_company_and_version", ["companyId", "version"]),
+    .index("by_company_and_issue", ["companyId", "issueId", "createdAt"]),
 
   /**
    * The link is cloud-owned; the thread itself stays environment-owned, so both ids are stored and
@@ -2144,6 +2110,5 @@ export default defineSchema({
       "deletedAt",
     ])
     /** Live rows of one issue, for the scope migration a team change performs. */
-    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
-    .index("by_company_and_version", ["companyId", "version"]),
+    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"]),
 });

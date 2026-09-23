@@ -17,6 +17,8 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { mutation } from "./_generated/server.js";
+import { readNextIssueNumber, writeNextIssueNumber } from "./lib/companyIssueCounter.ts";
+import { projectAutomationJobs } from "./lib/projectScopedRows.ts";
 import {
   appendCompanyChanges,
   type CompanyChange,
@@ -315,9 +317,10 @@ export const moveProjectToCompany = mutation({
         .then((rows) => rows.filter((row) => row.status !== "revoked")),
       ctx.db
         .query("environmentCommands")
-        .withIndex("by_company", (q) => q.eq("companyId", from.company._id))
-        .collect()
-        .then((rows) => rows.filter((row) => row.cloudProjectId === project._id)),
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", from.company._id).eq("cloudProjectId", project._id),
+        )
+        .collect(),
       ctx.db
         .query("agentThreads")
         .withIndex("by_company_and_project", (q) =>
@@ -330,15 +333,7 @@ export const moveProjectToCompany = mutation({
           q.eq("companyId", from.company._id).eq("cloudProjectId", project._id),
         )
         .collect(),
-      ctx.db
-        .query("issueAutomationJobs")
-        .withIndex("by_company", (q) => q.eq("companyId", from.company._id))
-        .collect()
-        .then((rows) =>
-          rows.filter(
-            (row) => movingIssueIds.has(row.issueId) || row.cloudProjectId === project._id,
-          ),
-        ),
+      projectAutomationJobs(ctx, from.company._id, project._id, movingIssueIds),
       ctx.db
         .query("slackChannelWatches")
         .withIndex("by_company", (q) => q.eq("companyId", from.company._id))
@@ -350,13 +345,10 @@ export const moveProjectToCompany = mutation({
     const now = Date.now();
     // One contiguous block so the moved issues read in their original order under the new prefix.
     const reservation = reserveIssueKeyBlock(
-      to.company.nextIssueNumber,
+      await readNextIssueNumber(ctx, to.company),
       Math.max(1, issues.length),
     );
-    await ctx.db.patch(to.company._id, {
-      nextIssueNumber: reservation.nextIssueNumber,
-      updatedAt: now,
-    });
+    await writeNextIssueNumber(ctx, to.company, reservation.nextIssueNumber);
 
     let droppedLabels = 0;
 

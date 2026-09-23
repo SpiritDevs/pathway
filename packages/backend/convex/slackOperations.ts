@@ -723,11 +723,11 @@ export const deleteWatch = mutation({
     if (cursor !== null) await ctx.db.delete(cursor._id);
     const pending = await ctx.db
       .query("slackPendingIntake")
-      .withIndex("by_integration", (q) => q.eq("integrationId", owner._id))
+      .withIndex("by_integration_channel_and_message", (q) =>
+        q.eq("integrationId", owner._id).eq("channelId", row.channelId),
+      )
       .collect();
-    for (const item of pending) {
-      if (item.channelId === row.channelId) await ctx.db.delete(item._id);
-    }
+    for (const item of pending) await ctx.db.delete(item._id);
     await ctx.db.delete(row._id);
     await ctx.db.patch(owner._id, {
       watchCount: Math.max(0, owner.watchCount - 1),

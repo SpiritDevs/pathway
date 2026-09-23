@@ -1,3 +1,4 @@
+import { readNextIssueNumber } from "../convex/lib/companyIssueCounter.ts";
 import { readCompanySyncVersion } from "../convex/lib/companySyncHead.ts";
 // @effect-diagnostics globalDate:off -- Test rows mirror Convex documents, whose clock is `Date.now()`.
 /**
@@ -940,7 +941,10 @@ describe("issue key assignment", () => {
         .query("companies")
         .filter((q) => q.eq(q.field("id"), COMPANY_ID))
         .unique();
-      expect(company?.nextIssueNumber).toBe(3);
+      if (company === null) throw new Error("missing company fixture");
+      expect(await readNextIssueNumber(ctx, company)).toBe(3);
+      // Issue numbering must not rewrite the company row every reader subscribes to.
+      expect(company.nextIssueNumber).toBe(1);
     });
   });
 

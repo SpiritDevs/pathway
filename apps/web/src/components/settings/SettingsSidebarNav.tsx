@@ -481,7 +481,9 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                             <span className="truncate">{SETTINGS_SECTION_LABELS[to]}</span>
                             {to === "/settings/integrations" && integrationsAttentionCount > 0 ? (
                               <span className="ms-auto flex min-w-4 items-center justify-center rounded-full bg-warning/15 px-1 text-[10px] font-medium text-warning-foreground">
-                                {integrationsAttentionCount}
+                                {integrationsAttentionCount > 99
+                                  ? "99+"
+                                  : integrationsAttentionCount}
                               </span>
                             ) : null}
                           </SidebarMenuButton>

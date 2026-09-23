@@ -18,6 +18,7 @@ import {
 import { mintDomainId } from "./lib/domainIds.ts";
 import { backendError } from "./lib/errors.ts";
 import { deleteThreadAlertPolicies } from "./lib/threadAlertPolicy.ts";
+import { projectAutomationJobs, projectSlackAutomationIntents } from "./lib/projectScopedRows.ts";
 import {
   actorRecord,
   requireCompanyActor,
@@ -206,18 +207,19 @@ async function collectProjectIssueData(
     for (const relation of [...from, ...to]) relationsByDocId.set(relation._id, relation);
   }
 
-  const childrenToDetach = (
-    await ctx.db
-      .query("issues")
-      .withIndex("by_company_and_version", (q) => q.eq("companyId", companyId))
-      .collect()
-  ).filter(
-    (issue) =>
-      issue.deletedAt === null &&
-      issue.parentId !== null &&
-      issueIds.has(issue.parentId) &&
-      !issueIds.has(issue.id),
+  const children = await Promise.all(
+    issues.map((issue) =>
+      ctx.db
+        .query("issues")
+        .withIndex("by_company_and_parent", (q) =>
+          q.eq("companyId", companyId).eq("parentId", issue.id),
+        )
+        .collect(),
+    ),
   );
+  const childrenToDetach = children
+    .flat()
+    .filter((issue) => issue.deletedAt === null && !issueIds.has(issue.id));
 
   return {
     issues,
@@ -1568,9 +1570,10 @@ export const deleteCompanyProject = mutation({
         .collect(),
       ctx.db
         .query("environmentCommands")
-        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-        .collect()
-        .then((rows) => rows.filter((row) => row.cloudProjectId === project._id)),
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", project._id),
+        )
+        .collect(),
       ctx.db
         .query("slackChannelWatches")
         .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
@@ -1583,20 +1586,8 @@ export const deleteCompanyProject = mutation({
     ]);
     const issueIds = new Set(issueData.issues.map((issue) => issue.id));
     const [automationJobs, slackAutomationIntents] = await Promise.all([
-      ctx.db
-        .query("issueAutomationJobs")
-        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-        .collect()
-        .then((rows) =>
-          rows.filter((row) => row.cloudProjectId === project._id || issueIds.has(row.issueId)),
-        ),
-      ctx.db
-        .query("slackIssueAutomationIntents")
-        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-        .collect()
-        .then((rows) =>
-          rows.filter((row) => row.cloudProjectId === project._id || issueIds.has(row.issueId)),
-        ),
+      projectAutomationJobs(ctx, actor.company._id, project._id, issueIds),
+      projectSlackAutomationIntents(ctx, actor.company._id, project._id, issueIds),
     ]);
     const slackProcessedMessages: Doc<"slackProcessedMessages">[] = [];
     for (const issueId of issueIds) {

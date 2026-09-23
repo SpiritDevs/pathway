@@ -2,6 +2,8 @@
 import { v } from "convex/values";
 import * as DateTime from "effect/DateTime";
 
+import { canonicalJson } from "../src/canonicalJson.ts";
+
 import type { Doc, Id, TableNames } from "./_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import { mutation, query } from "./_generated/server.js";
@@ -1314,6 +1316,8 @@ export const upsertAgentActivityRow = mutation({
           .eq("threadId", args.state.threadId),
       )
       .unique();
+    // An identical redelivery skips the write, which would otherwise re-run every subscriber.
+    if (row && canonicalJson(row.state) === canonicalJson(args.state)) return null;
     const fields = { state: args.state, phase: args.state.phase, updatedAt: args.state.updatedAt };
     if (row) await ctx.db.patch(row._id, fields);
     else

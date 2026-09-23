@@ -51,6 +51,8 @@ async function ownerAvailable(ctx: QueryCtx, account: Doc<"mailAccounts">) {
   const membership = await ctx.db.get(account.ownerMembershipId);
   return company?.lifecycleState === "active" && membership?.state === "active";
 }
+const AUTHORIZATION_SWEEP_SIZE = 50;
+
 async function retireUnavailable(ctx: MutationCtx, account: Doc<"mailAccounts">) {
   if (await ownerAvailable(ctx, account)) return false;
   if (account.status !== "disconnected") {
@@ -912,10 +914,15 @@ export const sweepUnavailableAccounts = mutation({
   args: {},
   handler: async (ctx) => {
     await requireRelayControlPlane(ctx);
-    const accounts = await mailAuthorizationCandidates(ctx, 50);
+    const candidates = await mailAuthorizationCandidates(ctx, AUTHORIZATION_SWEEP_SIZE + 1);
+    // `lastAuthCheckAt` is only a rotation cursor: it needs to move when more accounts exist than
+    // one sweep checks, and on legacy accounts, which the write copies into their runtime row.
+    const rotate = candidates.length > AUTHORIZATION_SWEEP_SIZE;
     let retired = 0;
-    for (const account of accounts) {
-      await patchMailAccount(ctx, account, { lastAuthCheckAt: Date.now() });
+    for (const account of candidates.slice(0, AUTHORIZATION_SWEEP_SIZE)) {
+      if (rotate || account.runtimeMigrated === undefined) {
+        await patchMailAccount(ctx, account, { lastAuthCheckAt: Date.now() });
+      }
       if (await retireUnavailable(ctx, account)) retired++;
     }
     return retired;

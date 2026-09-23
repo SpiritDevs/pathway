@@ -1,3 +1,4 @@
+import { readNextIssueNumber, writeNextIssueNumber } from "./lib/companyIssueCounter.ts";
 import { readCompanySyncVersion, writeCompanySyncVersion } from "./lib/companySyncHead.ts";
 import { internal } from "./_generated/api.js";
 // @effect-diagnostics globalDate:off -- Convex mutations are not Effect programs; the transaction clock is `Date.now()`.
@@ -433,12 +434,10 @@ export const reserveIssueKeys = mutation({
     const actor = await requireCompanyActor(ctx, args.companyId);
     const size = clampPageLimit(args.blockSize, ISSUE_KEY_BLOCK_SIZE);
 
-    const reservation = reserveIssueKeyBlock(actor.company.nextIssueNumber, size);
+    const reservation = reserveIssueKeyBlock(await readNextIssueNumber(ctx, actor.company), size);
     const now = Date.now();
 
-    await ctx.db.patch(actor.company._id, {
-      nextIssueNumber: reservation.nextIssueNumber,
-    });
+    await writeNextIssueNumber(ctx, actor.company, reservation.nextIssueNumber);
     await ctx.db.insert("issueKeyReservations", {
       companyId: actor.company._id,
       clientId: args.clientId,

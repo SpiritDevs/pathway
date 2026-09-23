@@ -506,3 +506,30 @@ take effect on backend deploy.
 
 Deploy the backend before updated environment servers: an older backend rejects
 the new `refreshPresence` claim argument.
+
+## Hot company row, growth-proportional reads and dead indexes
+
+- **Issue counter.** `companyIssueCounters` owns the next server-assigned
+  issue number. Every company-scoped query and subscription reads the company
+  row, so each issue create or key lease used to re-run all of them. Readers
+  fall back to `companies.nextIssueNumber` until the company's first write
+  creates the counter; keep the legacy field during rollout.
+- **Project delete and move.** Child issues to detach are found through a new
+  `issues` company/parent index instead of reading every issue in the company.
+  Commands, automation jobs and Slack automation intents are read through their
+  project and issue indexes rather than whole-company collections.
+- **Bounded lookups.** Import completion reads only binding ledger entries.
+  Invitations resolve by a company/domain-id index and check duplicates by
+  address. Slack watch deletion reads only that channel's pending intake. The
+  in-app browser's saved-login picker reads one origin's passwords. The
+  integrations badge counts at most 100 blocked and 100 failed jobs and shows
+  "99+".
+- **No-op writes.** Focus read acknowledgements rewrite per-user state only when
+  the cleanup time moves earlier. Relay activity upserts skip identical states.
+  The mailbox authorization sweep advances its rotation cursor only when more
+  accounts exist than one sweep checks, or to migrate a legacy account. Mail
+  claims evaluate an account's eligibility once instead of once per job.
+- **Indexes.** Dropped 30 indexes that no function queries, plus the
+  `by_company_and_version` index on ten issue child tables whose feed version
+  changes on every write. Index names are only ever passed as literals, so a
+  name absent outside the schema is unused.
