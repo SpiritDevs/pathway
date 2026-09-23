@@ -210,6 +210,7 @@ it.layer(NodeServices.layer)("computer approval lease", (it) => {
           actionSettleMs: 0,
           approvals: {
             cancelThread: gate.cancelThread,
+            appAllowed: gate.appAllowed,
             revokeTaskGrants: gate.revokeTaskGrants.pipe(
               Effect.andThen(Deferred.succeed(revoked, undefined)),
             ),

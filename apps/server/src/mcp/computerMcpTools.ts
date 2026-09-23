@@ -71,6 +71,9 @@ const HIDDEN_DETAIL_KEYS = new Set(["text", "value", "prompt_text"]);
 
 const NOTICE_MEMORY = 512;
 
+/** The app a browser tool drives, for once-per-app consent: the driver-owned Chromium. */
+const COMPUTER_BROWSER_APP = "Browser";
+
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 export interface ComputerMcpTools {
@@ -247,18 +250,6 @@ export const makeComputerMcpTools = Effect.gen(function* () {
       });
     }).pipe(Effect.ignore({ log: true }));
 
-  /** Apps each turn has driven; the first is covered by the task's own consent. */
-  const drivenApps = new Map<string, Set<string>>();
-  const appNeedsConsent = (turnKey: string, app: string) => {
-    const apps = drivenApps.get(turnKey);
-    if (apps === undefined) {
-      drivenApps.set(turnKey, new Set([app]));
-      if (drivenApps.size > NOTICE_MEMORY) drivenApps.delete(drivenApps.keys().next().value!);
-      return false;
-    }
-    return !apps.has(app);
-  };
-
   /**
    * The autonomy the caller acts under now (ADR 0043): the environment ceiling
    * bounds the thread's own mode, and alone governs unattended callers. None
@@ -311,20 +302,27 @@ export const makeComputerMcpTools = Effect.gen(function* () {
         return yield* gate.authorizeClipboardRead({ ...call, autonomy });
       }
       const outcome = yield* gate.authorizeAction({ ...call, autonomy });
-      const app = typeof args.app === "string" ? args.app.trim() : "";
-      if (outcome !== "approved" || turnId === undefined || app.length === 0) return outcome;
-      const turnKey = `${context.callerThreadId}:${turnId}`;
-      if (!appNeedsConsent(turnKey, app)) return outcome;
-      const appOutcome = yield* gate.authorizeApp({
-        threadId: context.callerThreadId,
-        turnId,
-        toolName: name,
-        detail,
-        app,
-        autonomy,
-      });
-      if (appOutcome === "approved") drivenApps.get(turnKey)?.add(app);
-      return appOutcome;
+      if (outcome !== "approved" || turnId === undefined) return outcome;
+      // The desktop refuses input for an app the turn may not drive yet; the
+      // next call asks for it here. Browser tools and a declared `app` ask up front.
+      const declared = name.startsWith("computer_browser_")
+        ? COMPUTER_BROWSER_APP
+        : typeof args.app === "string"
+          ? args.app.trim()
+          : "";
+      if (declared.length > 0) gate.appAllowed(context.callerThreadId, turnId, declared);
+      for (const app of gate.takeWantedApps(context.callerThreadId, turnId)) {
+        const appOutcome = yield* gate.authorizeApp({
+          threadId: context.callerThreadId,
+          turnId,
+          toolName: name,
+          detail,
+          app,
+          autonomy,
+        });
+        if (appOutcome !== "approved") return appOutcome;
+      }
+      return outcome;
     });
 
   // Full access allows foreground outright; below it only the task's own request does.

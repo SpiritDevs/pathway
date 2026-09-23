@@ -204,6 +204,15 @@ export interface ComputerApprovalGateShape {
   readonly authorizeAction: (
     input: CallInput & { readonly autonomy: ComputerAutonomy },
   ) => Effect.Effect<ComputerApprovalOutcome, ComputerApprovalError>;
+  /**
+   * Whether the turn may send input to `app` now: always below once-per-app
+   * autonomy, and otherwise the first app it drives (the task's own consent
+   * covers it) or one the user allowed. A refused app waits in
+   * `takeWantedApps` for the next call to ask about it.
+   */
+  readonly appAllowed: (threadId: string, turnId: string, app: string) => boolean;
+  /** The apps the turn's input was refused for since the last call asked. */
+  readonly takeWantedApps: (threadId: string, turnId: string) => ReadonlyArray<string>;
   /** Driving an application the task has not driven yet. */
   readonly authorizeApp: (
     input: TaskInput & { readonly app: string; readonly autonomy: ComputerAutonomy },
@@ -252,6 +261,12 @@ interface Grant {
 interface TaskGrants {
   readonly turnId: string;
   readonly grants: Map<string, Grant>;
+  /** Whether each further app needs its own consent, as the turn's last authorized call set it. */
+  perApp: boolean;
+  /** The first app the turn's input reached, lowercased. */
+  firstApp?: string | undefined;
+  /** Apps input was refused for, by lowercased name, until a call asks for them. */
+  readonly wantedApps: Map<string, string>;
 }
 
 interface Prompt {
@@ -464,17 +479,21 @@ export const make = Effect.fn("ComputerApprovalGate.make")(function* (
       ),
     );
 
+  /** The turn's grants; a new turn drops the previous one's and withdraws its cards. */
+  const turnGrants = Effect.fnUntraced(function* (threadId: string, turnId: string) {
+    const task = tasks.get(threadId);
+    if (task?.turnId === turnId) return task;
+    yield* cancelThread(threadId);
+    const fresh: TaskGrants = { turnId, grants: new Map(), perApp: false, wantedApps: new Map() };
+    tasks.set(threadId, fresh);
+    return fresh;
+  });
+
   const requestGrant = Effect.fnUntraced(function* (
     key: string,
     input: TaskInput & { readonly app?: string },
   ) {
-    let task = tasks.get(input.threadId);
-    if (task?.turnId !== input.turnId) {
-      yield* cancelThread(input.threadId);
-      task = { turnId: input.turnId, grants: new Map() };
-      tasks.set(input.threadId, task);
-    }
-    const current = task;
+    const current = yield* turnGrants(input.threadId, input.turnId);
     let grant = current.grants.get(key);
     if (grant === undefined) {
       grant = {};
@@ -514,12 +533,36 @@ export const make = Effect.fn("ComputerApprovalGate.make")(function* (
 
   const approved = Effect.succeed("approved" as const);
 
-  const authorizeAction: ComputerApprovalGateShape["authorizeAction"] = (input) => {
-    const mode = computerApprovalPolicy(input.autonomy).mutation;
-    if (mode === "none") return approved;
-    return mode === "once-per-task" && input.turnId !== undefined
-      ? requestTask({ ...input, turnId: input.turnId })
-      : request(input);
+  const authorizeAction: ComputerApprovalGateShape["authorizeAction"] = Effect.fnUntraced(
+    function* (input) {
+      const policy = computerApprovalPolicy(input.autonomy);
+      if (input.turnId !== undefined) {
+        const task = yield* turnGrants(input.threadId, input.turnId);
+        task.perApp = policy.extraApp === "once-per-app";
+      }
+      if (policy.mutation === "none") return "approved" as const;
+      return policy.mutation === "once-per-task" && input.turnId !== undefined
+        ? yield* requestTask({ ...input, turnId: input.turnId })
+        : yield* request(input);
+    },
+  );
+
+  const appAllowed: ComputerApprovalGateShape["appAllowed"] = (threadId, turnId, app) => {
+    const task = tasks.get(threadId);
+    if (task === undefined || task.turnId !== turnId || !task.perApp) return true;
+    const key = app.trim().toLowerCase();
+    task.firstApp ??= key;
+    if (key === task.firstApp || task.grants.get(`app:${key}`)?.granted === true) return true;
+    task.wantedApps.set(key, app.trim());
+    return false;
+  };
+
+  const takeWantedApps: ComputerApprovalGateShape["takeWantedApps"] = (threadId, turnId) => {
+    const task = tasks.get(threadId);
+    if (task?.turnId !== turnId) return [];
+    const apps = [...task.wantedApps.values()];
+    task.wantedApps.clear();
+    return apps;
   };
 
   const authorizeApp: ComputerApprovalGateShape["authorizeApp"] = (input) =>
@@ -562,6 +605,8 @@ export const make = Effect.fn("ComputerApprovalGate.make")(function* (
     requestTask,
     requestApp,
     authorizeAction,
+    appAllowed,
+    takeWantedApps,
     authorizeApp,
     authorizeClipboardRead,
     respond,
