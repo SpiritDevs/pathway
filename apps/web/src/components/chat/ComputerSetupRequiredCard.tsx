@@ -16,6 +16,7 @@ import {
   computerStaleGrantAdvice,
   listComputerPermissions,
 } from "@spiritdevs/shared/computerGrants";
+import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
 import { useCachedComputerStatus, useComputerStateStore } from "~/computerStateStore";
@@ -161,6 +162,10 @@ type ConnectedProps = Pick<
  * the environment's live status rather than the notice's snapshot.
  */
 export function ConnectedComputerSetupRequiredCard({ environmentId, ...props }: ConnectedProps) {
+  const navigate = useNavigate();
+  const openSettings = useCallback(() => {
+    void navigate({ to: "/settings/computer" });
+  }, [navigate]);
   const status = useCachedComputerStatus(environmentId);
   const refreshStatus = useAtomCommand(computerEnvironment.refreshStatus, {
     reportFailure: false,
@@ -205,6 +210,7 @@ export function ConnectedComputerSetupRequiredCard({ environmentId, ...props }: 
   });
   return (
     <ComputerSetupRequiredCard
+      onOpenSettings={openSettings}
       {...props}
       status={status}
       statusError={statusError}

@@ -1,5 +1,5 @@
 import { Clock3Icon } from "lucide-react";
-import { CameraIcon } from "lucide-react";
+import { CameraIcon, MonitorIcon } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -48,6 +48,7 @@ import { useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
 import { useDictationAvailability } from "../../dictation/useDictation";
 import { dictationSettingsPathVisible } from "../dictation/dictationUi";
 import { isElectron } from "../../env";
+import { useComputerSettingsVisible } from "./ComputerSettingsVisibility";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Kbd } from "../ui/kbd";
@@ -102,6 +103,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/appearance": PaletteIcon,
   "/settings/keybindings": KeyboardIcon,
   "/settings/snap-shot": CameraIcon,
+  "/settings/computer": MonitorIcon,
   "/settings/dictation": MicIcon,
   "/settings/dictation/models": HardDriveIcon,
   "/settings/dictation/history": HistoryIcon,
@@ -138,6 +140,7 @@ function SettingsSectionIcon({ to }: { to: SettingsSearchPath }) {
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const companySettings = useCompanySettings();
   const dictationAvailability = useDictationAvailability();
+  const computerSettingsVisible = useComputerSettingsVisible();
   const integrationsClient = useCompanyIntegrationsClient();
   const [integrationsAttentionCount, setIntegrationsAttentionCount] = useState(0);
   const workspaceKind = companySettings.workspaceKind;
@@ -184,9 +187,10 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
         (item) =>
           settingsPathIsVisibleForWorkspace(item.to, workspaceKind) &&
           (isElectron || item.to !== "/settings/snap-shot") &&
+          (computerSettingsVisible || item.to !== "/settings/computer") &&
           dictationSettingsPathVisible(item.to, dictationAvailability),
       ),
-    [query, workspaceKind, dictationAvailability],
+    [query, workspaceKind, dictationAvailability, computerSettingsVisible],
   );
   const isSearching = query.trim().length > 0;
   const hasResults = results.length > 0;
@@ -464,6 +468,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                       (to) =>
                         settingsPathIsVisibleForWorkspace(to, workspaceKind) &&
                         (isElectron || to !== "/settings/snap-shot") &&
+                        (computerSettingsVisible || to !== "/settings/computer") &&
                         dictationSettingsPathVisible(to, dictationAvailability),
                     )
                     .map((to) => {
