@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   flattenUiTree,
   resolveUiTreeTarget,
   uiTreeActivationPoint,
   type UiTreeTargetSpec,
-} from "./uiTreeTargeting";
+} from "./uiTreeTargeting.ts";
 
 interface TestNode {
   readonly label: string;
@@ -22,15 +22,19 @@ const node = (partial: Partial<TestNode> & { readonly label: string }): TestNode
 });
 
 class NoMatch extends Error {
-  constructor(readonly pool: readonly TestNode[]) {
+  readonly pool: readonly TestNode[];
+  constructor(pool: readonly TestNode[]) {
     super(`nothing matched; pool: ${pool.map((entry) => entry.label).join(",")}`);
+    this.pool = pool;
     this.name = "NoMatch";
   }
 }
 
 class Ambiguous extends Error {
-  constructor(readonly matches: readonly TestNode[]) {
+  readonly matches: readonly TestNode[];
+  constructor(matches: readonly TestNode[]) {
     super(`${matches.length} matched: ${matches.map((entry) => entry.label).join(",")}`);
+    this.matches = matches;
     this.name = "Ambiguous";
   }
 }
