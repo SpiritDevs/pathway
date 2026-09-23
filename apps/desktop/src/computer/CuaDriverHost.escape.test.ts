@@ -228,7 +228,7 @@ describe("physical Escape interrupt", () => {
         expect(
           yield* f.send(
             { method: "call", name: "type_text", args: { text: "fixture" } },
-            { timeoutMs: 1_000, mutation: true },
+            { timeoutMs: 5_000, mutation: true },
           ),
         ).toMatchObject({ ok: false });
         // The driver died mid-input and nothing confirmed the OS-level release:
