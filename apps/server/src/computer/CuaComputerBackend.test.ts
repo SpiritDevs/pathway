@@ -2291,6 +2291,33 @@ describe("Cua native boundary", () => {
     }),
   );
 
+  it.effect("keeps a pause refusal typed when the native pid is outside the contract range", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      f.setWindows([
+        {
+          pid: 4_294_967_296,
+          window_id: 21,
+          title: "Wide pid",
+          bounds: { x: -300, y: 20, width: 200, height: 100 },
+          is_on_screen: true,
+          on_current_space: true,
+          z_index: 2,
+        },
+      ]);
+      f.onTool("press_key", () => ({
+        isError: true,
+        structuredContent: { effect: "refused", code: "computer_input_paused" },
+      }));
+      const error = yield* fails(f.backend.pressKey("enter", "cua:4294967296:21"));
+      expect(error).toMatchObject({
+        code: "computer_input_paused",
+        inputPause: { windowId: "cua:4294967296:21" },
+      });
+      expect(error.inputPause).not.toHaveProperty("pid");
+    }),
+  );
+
   it.effect("preserves the launched process identity without claiming window readiness", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
