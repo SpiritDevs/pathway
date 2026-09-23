@@ -3,6 +3,7 @@ import {
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
+  COMPUTER_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
   WsServerProbeRpc,
@@ -92,5 +93,22 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.retryWorkspaceCleanup)).toBe(
       AuthOrchestrationOperateScope,
     );
+  });
+
+  it("lets read access watch Computer and requires operation access to act on it", () => {
+    const watching = new Set<string>([
+      COMPUTER_WS_METHODS.getStatus,
+      COMPUTER_WS_METHODS.getAuditHistory,
+      COMPUTER_WS_METHODS.listWindows,
+      COMPUTER_WS_METHODS.getState,
+      COMPUTER_WS_METHODS.getScreenSize,
+      COMPUTER_WS_METHODS.getThreadState,
+      COMPUTER_WS_METHODS.subscribeEvents,
+    ]);
+    for (const method of Object.values(COMPUTER_WS_METHODS)) {
+      expect(requiredScopeForRpcMethod(method)).toBe(
+        watching.has(method) ? AuthOrchestrationReadScope : AuthOrchestrationOperateScope,
+      );
+    }
   });
 });
