@@ -592,6 +592,30 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(entitlements, "<string>ABC1234567.com.spiritdevs.pathway.webauthn</string>");
   });
 
+  it("signs the cua flavor as its own App ID with its own provisioning profile", () => {
+    const env = {
+      PATHWAY_APPLE_TEAM_ID: "ABC1234567",
+      PATHWAY_MACOS_PROVISIONING_PROFILE: "/tmp/pathway.provisionprofile",
+      PATHWAY_MACOS_CUA_PROVISIONING_PROFILE: "/tmp/pathway-cua.provisionprofile",
+      PATHWAY_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
+    };
+    const configuration = resolveMacPasskeySigningConfiguration(env, "cua");
+    const entitlements = renderMacPasskeyEntitlements(configuration);
+
+    assert.equal(configuration.appId, "com.spiritdevs.pathway.cua");
+    assert.equal(configuration.provisioningProfilePath, "/tmp/pathway-cua.provisionprofile");
+    assert.include(entitlements, "<string>ABC1234567.com.spiritdevs.pathway.cua</string>");
+    assert.include(entitlements, "<string>ABC1234567.com.spiritdevs.pathway.cua.webauthn</string>");
+    assert.notInclude(entitlements, "com.spiritdevs.pathway.webauthn");
+
+    const { PATHWAY_MACOS_CUA_PROVISIONING_PROFILE: _, ...productionOnly } = env;
+    assert.throws(
+      () => resolveMacPasskeySigningConfiguration(productionOnly, "cua"),
+      MissingMacPasskeyProvisioningProfileError,
+      "PATHWAY_MACOS_CUA_PROVISIONING_PROFILE must point to an Associated Domains provisioning profile.",
+    );
+  });
+
   it("rejects incomplete macOS passkey signing configuration", () => {
     const captureError = (env: Readonly<Record<string, string | undefined>>) => {
       try {
