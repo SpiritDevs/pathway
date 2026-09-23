@@ -935,4 +935,27 @@ describe("physical Escape interrupt", () => {
       assert.include(reply.error, "Unsupported computer host request.");
     }),
   );
+
+  for (const monitor of [{ ready: true }, { ready: false, error: "unavailable" }]) {
+    it.live(
+      `refuses Linux browser input without the admission adapter (monitor ready: ${monitor.ready})`,
+      () =>
+        Effect.gen(function* () {
+          const f = yield* makeFixture({
+            platform: "linux",
+            nativeRevision: null,
+            unpatched: true,
+            inputMonitorState: Effect.succeed(monitor),
+          });
+          const reply = yield* f.send({
+            method: "call",
+            name: "browser_type",
+            task: { threadId: "thread", turnId: "turn" },
+            args: { text: "unsafe" },
+          });
+          assert.strictEqual(reply.result?.structuredContent?.code, "input_monitor_unavailable");
+          assert.isFalse((yield* f.eventNames).some((event) => event.startsWith("browser:")));
+        }),
+    );
+  }
 });
