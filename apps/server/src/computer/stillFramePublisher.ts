@@ -310,26 +310,37 @@ export const makeStillFramePublisher = (
       );
     });
 
-    const attach = Effect.gen(function* () {
-      const generation = yield* supersede;
-      if (options.prepare) yield* options.prepare;
-      // A detach or newer attach supersedes this preparation, even when
-      // preparations finish out of order.
-      if (state.generation !== generation) return;
-      state.attached = true;
-      yield* publish({ force: true });
-      if (state.generation !== generation) return;
-      const fiber = yield* Effect.forkIn(loop, scope);
-      // Installing the loop and checking the generation happen in one step, so
-      // an attach that lost a race never leaves an orphaned loop behind.
-      const orphan = yield* Effect.sync(() => {
-        if (state.generation !== generation) return fiber;
-        const previous = state.loop;
-        state.loop = fiber;
-        return previous;
-      });
-      yield* stopLoop(orphan);
-    });
+    // Interruptible only while preparing and during the first capture: an
+    // attach interrupted there ends detached, never marked attached without
+    // its loop or with a loop nobody owns.
+    const attach = Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const generation = yield* supersede;
+        if (options.prepare) yield* restore(options.prepare);
+        // A detach or newer attach supersedes this preparation, even when
+        // preparations finish out of order.
+        if (state.generation !== generation) return;
+        state.attached = true;
+        yield* restore(publish({ force: true })).pipe(
+          Effect.onInterrupt(() =>
+            Effect.sync(() => {
+              if (state.generation === generation) state.attached = false;
+            }),
+          ),
+        );
+        if (state.generation !== generation) return;
+        const fiber = yield* Effect.forkIn(loop, scope);
+        // Installing the loop and checking the generation happen in one step, so
+        // an attach that lost a race never leaves an orphaned loop behind.
+        const orphan = yield* Effect.sync(() => {
+          if (state.generation !== generation) return fiber;
+          const previous = state.loop;
+          state.loop = fiber;
+          return previous;
+        });
+        yield* stopLoop(orphan);
+      }),
+    );
 
     const detach = Effect.asVoid(supersede);
 
