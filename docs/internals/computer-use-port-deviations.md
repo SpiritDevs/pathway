@@ -148,6 +148,7 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - `EscapeKillSwitchMonitor`, `ComputerShield`, `ComputerFrameTap` and `ComputerHelper` are torn down by closing their scope, in addition to an explicit `dispose`.
 - `EscapeKillSwitchMonitor` drops Synara's late-stdout-after-dispose case. The scope-owned reader stops before dispose returns, so the case cannot occur.
 - `ComputerShield` no longer keeps a stale spawning promise after a failed spawn, so the next engage respawns. It also drops the `engageTimeoutMs` test seam, because the Effect clock controls time.
+- `ComputerShield.stop` and `dispose` wait for a spawn still in flight. The late helper is stopped and its engage fails as `stopped`. Synara cleared the pending spawn without awaiting it, so a helper that landed after teardown could engage a shield and stay alive.
 - `ComputerFrameTap` reports an unexpected helper exit through `onError` and marks the tap dead synchronously. It keys tasks with `cuaComputerTaskKey`. The renderer channel stays `computerPreview.frame` until P6 names the preload bridge.
 - `ComputerDesktopLifecycle` takes a narrow power-monitor interface. `ElectronPowerMonitor.onSimpleEvent` gains `user-did-resign-active` and `user-did-become-active`.
 - `ComputerEmergencyStopNotice` posts through `HttpClient` with an injected `{ httpBaseUrl, bearerToken }` endpoint, not Synara's shutdown token. A missing credential is retried like a failed post, and `[::1]` counts as loopback.

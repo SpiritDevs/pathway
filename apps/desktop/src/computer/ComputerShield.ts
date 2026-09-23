@@ -108,8 +108,10 @@ export const make = Effect.fn("desktop.computer.ComputerShield.make")(function* 
   const context = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
 
   let helper: ActiveHelper | undefined;
-  let spawning: Deferred.Deferred<ActiveHelper, HelperSpawnError> | undefined;
+  let spawning: Deferred.Deferred<ActiveHelper, ComputerShieldError | HelperSpawnError> | undefined;
   let closed = false;
+  /** Bumped by every stop; a spawn that started before one is obsolete. */
+  let stops = 0;
   const live = new Map<string, LiveShield>();
   const pending = new Map<string, Deferred.Deferred<void, ComputerShieldError>>();
   const endedTasks = new Set<string>();
@@ -177,6 +179,7 @@ export const make = Effect.fn("desktop.computer.ComputerShield.make")(function* 
     });
 
   const start = Effect.gen(function* () {
+    const startedAfter = stops;
     const active: { current?: ActiveHelper } = {};
     const process = yield* spawnHelper(workScope, {
       command: options.helperPath,
@@ -185,26 +188,35 @@ export const make = Effect.fn("desktop.computer.ComputerShield.make")(function* 
       onStdoutLine: helperLine,
       onExit: () => (active.current ? helperDied(active.current) : Effect.void),
     }).pipe(Effect.provideContext(context));
-    const state: ActiveHelper = { process, exited: yield* process.hasExited };
+    const exited = yield* process.hasExited;
+    // A stop that ran during the spawn waits for it; the late helper must
+    // not engage anything. No yield separates this check from adoption.
+    if (startedAfter !== stops) {
+      yield* Effect.ignore(stopHelper(process));
+      return yield* shieldError("stopped", "The activation shield host stopped.");
+    }
+    const state: ActiveHelper = { process, exited };
     active.current = state;
     if (!state.exited) helper = state;
     return state;
   });
 
-  const ensureStarted = Effect.suspend((): Effect.Effect<ActiveHelper, HelperSpawnError> => {
-    if (helper && !helper.exited) return Effect.succeed(helper);
-    if (spawning) return Deferred.await(spawning);
-    const deferred = Deferred.makeUnsafe<ActiveHelper, HelperSpawnError>();
-    spawning = deferred;
-    return start.pipe(
-      Effect.onExit((exit) =>
-        Effect.sync(() => {
-          if (spawning === deferred) spawning = undefined;
-          Deferred.doneUnsafe(deferred, exit);
-        }),
-      ),
-    );
-  });
+  const ensureStarted = Effect.suspend(
+    (): Effect.Effect<ActiveHelper, ComputerShieldError | HelperSpawnError> => {
+      if (helper && !helper.exited) return Effect.succeed(helper);
+      if (spawning) return Deferred.await(spawning);
+      const deferred = Deferred.makeUnsafe<ActiveHelper, ComputerShieldError | HelperSpawnError>();
+      spawning = deferred;
+      return start.pipe(
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (spawning === deferred) spawning = undefined;
+            Deferred.doneUnsafe(deferred, exit);
+          }),
+        ),
+      );
+    },
+  );
 
   const release = (shieldId: string) =>
     Effect.suspend(() => {
@@ -283,12 +295,16 @@ export const make = Effect.fn("desktop.computer.ComputerShield.make")(function* 
     });
 
   const stop = Effect.gen(function* () {
+    stops += 1;
     const active = helper;
+    const starting = spawning;
     helper = undefined;
     spawning = undefined;
     const released = live.size;
     live.clear();
     failPending(shieldError("stopped", "The activation shield host stopped."));
+    // A spawn in flight stops its own helper when it lands.
+    if (starting) yield* Effect.exit(Deferred.await(starting));
     if (!active) return;
     // Graceful first: `quit` lets the helper drop every shield itself before
     // the signal ladder.
