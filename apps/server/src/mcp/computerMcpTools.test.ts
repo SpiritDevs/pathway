@@ -4,6 +4,8 @@ import {
   CommandId,
   type ComputerAutonomy,
   EnvironmentId,
+  MessageId,
+  type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -24,6 +26,7 @@ import { FakeComputerBackend } from "../computer/FakeComputerBackend.ts";
 import { ComputerService } from "../computer/Services/ComputerService.ts";
 import { EventSinkV2 } from "../orchestration-v2/EventSink.ts";
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
+import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { makeComputerMcpTools } from "./computerMcpTools.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
@@ -62,14 +65,48 @@ const errorCode = (result: McpToolCallResult | undefined) => {
     : null;
 };
 
+/** How a scheduled run and a subagent look to Computer. */
+const unattended = {
+  subagent: (projection: OrchestrationV2ThreadProjection) => ({
+    ...projection,
+    thread: {
+      ...projection.thread,
+      lineage: { ...projection.thread.lineage, relationshipToParent: "subagent" as const },
+    },
+  }),
+  scheduled: (projection: OrchestrationV2ThreadProjection) => ({
+    ...projection,
+    runs: projection.runs.map((run) => ({
+      ...run,
+      userMessageId: MessageId.make(`scheduled-task-message:${run.id}`),
+    })),
+  }),
+};
+
 const noticesOf = (items: ReadonlyArray<OrchestrationV2TurnItem>, toolName: string) =>
   items.filter((item) => item.type === "dynamic_tool" && item.toolName === toolName);
 
-/** Tools reading an environment ceiling the test can change between steps. */
-const toolsUnderCeiling = Effect.fn("toolsUnderCeiling")(function* (ceiling: ComputerAutonomy) {
+const callsTo = (method: string) => backend.calls.filter((call) => call.method === method).length;
+
+/**
+ * Tools reading an environment ceiling the test can change between steps, and
+ * thread projections as `reshape` presents them.
+ */
+const toolsUnderCeiling = Effect.fn("toolsUnderCeiling")(function* (
+  ceiling: ComputerAutonomy,
+  reshape: (projection: OrchestrationV2ThreadProjection) => OrchestrationV2ThreadProjection = (
+    projection,
+  ) => projection,
+) {
   const settings = yield* ServerSettingsService;
+  const projections = yield* ProjectionStoreV2;
   const policy = { autonomy: ceiling };
   const tools = yield* makeComputerMcpTools.pipe(
+    Effect.provideService(ProjectionStoreV2, {
+      ...projections,
+      getThreadProjection: (threadId) =>
+        projections.getThreadProjection(threadId).pipe(Effect.map(reshape)),
+    }),
     Effect.provideService(ServerSettingsService, {
       ...settings,
       getSettings: settings.getSettings.pipe(
@@ -199,8 +236,6 @@ it.layer(TestLayer)("computerMcpTools", (it) => {
       const tools = yield* makeComputerMcpTools;
       const orchestrator = yield* OrchestratorV2;
       const { threadId } = yield* seedRunningTurn("ceiling", "full-access");
-      const callsTo = (method: string) =>
-        backend.calls.filter((call) => call.method === method).length;
       const call = (name: string, args: Record<string, unknown>) =>
         tools.call({
           invocation: invocationFor(threadId, ["computer"]),
@@ -258,5 +293,31 @@ it.layer(TestLayer)("computerMcpTools", (it) => {
       assert.notEqual(raised?.isError, true, JSON.stringify(raised));
       yield* manager.releaseDesktopControl(threadId);
     }),
+  );
+  it.effect.each(["subagent", "scheduled"] as const)(
+    "keeps a %s caller to the environment ceiling alone",
+    (kind) =>
+      Effect.gen(function* () {
+        const { manager } = yield* ComputerService;
+        const { tools, policy } = yield* toolsUnderCeiling("auto", unattended[kind]);
+        // A supervised thread mode would ask; the ceiling alone governs an unattended run.
+        const { threadId } = yield* seedRunningTurn(`unattended-${kind}`, "approval-required");
+        const type = () =>
+          tools.call({
+            invocation: invocationFor(threadId, ["computer"]),
+            name: "computer_type_text",
+            args: { text: kind, window_id: "fake-terminal", include_screenshot: false },
+            jsonRpcRequestId: 1,
+          });
+        const typedBefore = callsTo("typeText");
+        assert.equal(errorCode(yield* type()), "unattended_not_allowed");
+        assert.equal(callsTo("typeText"), typedBefore);
+
+        policy.autonomy = "full-access";
+        const typed = yield* type();
+        assert.notEqual(typed?.isError, true, JSON.stringify(typed));
+        assert.equal(callsTo("typeText"), typedBefore + 1);
+        yield* manager.releaseDesktopControl(threadId);
+      }),
   );
 });

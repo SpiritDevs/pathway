@@ -40,6 +40,7 @@ import { EventSinkV2 } from "../orchestration-v2/EventSink.ts";
 import { IdAllocatorV2 } from "../orchestration-v2/IdAllocator.ts";
 import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
+import { SCHEDULED_TASK_MESSAGE_ID_PREFIX } from "../scheduledTasks/ScheduledTaskService.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { makeComputerBrowserTools } from "./toolkits/computer/computerBrowserTools.ts";
@@ -92,6 +93,13 @@ export function activeComputerRun(
   return projection.runs.findLast((run) => ACTIVE_RUN_STATUSES.has(run.status));
 }
 
+/** Scheduled runs and subagents act with nobody watching; ADR 0043 gives them the ceiling alone. */
+export function isUnattendedComputerCaller(projection: OrchestrationV2ThreadProjection): boolean {
+  if (projection.thread.lineage.relationshipToParent === "subagent") return true;
+  const run = activeComputerRun(projection);
+  return run !== undefined && run.userMessageId.startsWith(SCHEDULED_TASK_MESSAGE_ID_PREFIX);
+}
+
 /** Pathway messages in the shape the visible-use and Space resolvers read. */
 export function computerVisibleUseMessages(
   messages: ReadonlyArray<OrchestrationV2ConversationMessage>,
@@ -129,6 +137,12 @@ function recentKeys() {
     return true;
   };
 }
+
+const unattendedNotAllowed = new ComputerToolError({
+  code: "unattended_not_allowed",
+  message:
+    "Scheduled tasks and subagents may use Computer only when this environment allows full access. Nothing was sent.",
+});
 
 const capabilityDenied = (name: string) =>
   computerToolErrorResult(
@@ -235,14 +249,25 @@ export const makeComputerMcpTools = Effect.gen(function* () {
     return !apps.has(app);
   };
 
-  /** The autonomy the caller acts under now: the environment ceiling bounds the thread's own mode (ADR 0043). */
+  /**
+   * The autonomy the caller acts under now (ADR 0043): the environment ceiling
+   * bounds the thread's own mode, and alone governs unattended callers. None
+   * when the ceiling keeps unattended callers off the desktop.
+   */
   const callerAutonomy = (threadId: string) =>
     Effect.gen(function* () {
       const projection = yield* projectionOf(threadId);
       const { computer: policy } = yield* settings.getSettings.pipe(Effect.orDie);
-      return resolveComputerAutonomy(
-        policy.autonomy,
-        Option.isNone(projection) ? null : projection.value.thread.runtimeMode,
+      if (Option.isSome(projection) && isUnattendedComputerCaller(projection.value)) {
+        return computerApprovalPolicy(policy.autonomy).unattended
+          ? Option.some(policy.autonomy)
+          : Option.none();
+      }
+      return Option.some(
+        resolveComputerAutonomy(
+          policy.autonomy,
+          Option.isNone(projection) ? null : projection.value.thread.runtimeMode,
+        ),
       );
     });
 
@@ -255,7 +280,9 @@ export const makeComputerMcpTools = Effect.gen(function* () {
             (error) => new ComputerApprovalPublishError({ message: error.message, cause: error }),
           ),
         );
-      const autonomy = yield* callerAutonomy(context.callerThreadId);
+      const resolved = yield* callerAutonomy(context.callerThreadId);
+      if (Option.isNone(resolved)) return "denied";
+      const autonomy = resolved.value;
       const turnId = context.callerTurnId ?? undefined;
       const detail = computerApprovalDetail(args);
       const call = {
@@ -290,7 +317,10 @@ export const makeComputerMcpTools = Effect.gen(function* () {
   const resolveForegroundAuthorization = (context: ToolContext) =>
     Effect.gen(function* () {
       const autonomy = yield* callerAutonomy(context.callerThreadId);
-      if (computerApprovalPolicy(autonomy).foreground === "allowed") {
+      if (
+        Option.isSome(autonomy) &&
+        computerApprovalPolicy(autonomy.value).foreground === "allowed"
+      ) {
         return { userRequestedVisibleUse: true };
       }
       return computerForegroundAuthorizationForMessages(yield* messagesOf(context), {
@@ -405,6 +435,9 @@ export const makeComputerMcpTools = Effect.gen(function* () {
           { toolName: name },
         );
         return capabilityDenied(name);
+      }
+      if (Option.isNone(yield* callerAutonomy(invocation.threadId))) {
+        return computerToolErrorResult(unattendedNotAllowed);
       }
       return yield* entry
         .handler(args, context)
