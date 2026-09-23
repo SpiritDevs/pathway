@@ -137,6 +137,13 @@ import { ComposerControl, ComposerControlIcon, ComposerSelectControl } from "./C
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { searchSlashCommandItems } from "./composerSlashCommandSearch";
 import {
+  buildBuiltInSlashCommandItems,
+  shouldHideProviderNativeSlashCommand,
+} from "./composerSlashCommands.logic";
+import { useComputerSupport } from "../../hooks/useComputerSupport";
+import { useComputerControlEffortHint } from "../../hooks/useComputerControlEffortHint";
+import { ComposerComputerControlEffortHint } from "./ComposerComputerControlEffortHint";
+import {
   getComposerPromptInjectionState,
   getComposerProviderState,
   renderProviderTraitsMenuContent,
@@ -1240,6 +1247,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerCatalog =
     selectedProvider === "claudeAgent" ? scopedCatalog.data : selectedProviderStatus;
 
+  const computerUseAvailable = useComputerSupport(environmentId);
+  const computerControlEffortHint = useComputerControlEffortHint({
+    draftTarget: composerDraftTarget,
+    threadRef: routeThreadRef,
+    environmentId,
+    computerSupported: computerUseAvailable,
+    computerControlEnabled: settings.computerControlEnabled,
+    dismissed: settings.dismissedComputerControlEffortHint,
+    prompt,
+    provider: selectedProvider,
+    instanceId: selectedInstanceId,
+    model: selectedModel,
+    models: selectedProviderModels,
+    modelOptions: composerModelOptions?.[selectedInstanceId],
+    focusComposer: scheduleComposerFocus,
+  });
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
@@ -1253,37 +1276,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }));
     }
     if (composerTrigger.kind === "slash-command") {
-      const builtInSlashCommandItems = [
-        {
-          id: "slash:model",
-          type: "slash-command",
-          command: "model",
-          label: "/model",
-          description: "Switch response model for this thread",
-        },
-        {
-          id: "slash:plan",
-          type: "slash-command",
-          command: "plan",
-          label: "/plan",
-          description: "Switch this thread into plan mode",
-        },
-        {
-          id: "slash:default",
-          type: "slash-command",
-          command: "default",
-          label: "/default",
-          description: "Switch this thread back to normal build mode",
-        },
-      ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
-      const providerSlashCommandItems = (composerCatalog?.slashCommands ?? []).map((command) => ({
-        id: `provider-slash-command:${selectedProvider}:${command.name}`,
-        type: "provider-slash-command" as const,
-        provider: selectedProvider,
-        command,
-        label: `/${command.name}`,
-        description: command.description ?? command.input?.hint ?? "Run provider command",
-      }));
+      const builtInSlashCommandItems = buildBuiltInSlashCommandItems({
+        computerUseAvailable,
+      }) satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
+      const providerSlashCommandItems = (composerCatalog?.slashCommands ?? [])
+        .filter((command) => !shouldHideProviderNativeSlashCommand(command.name))
+        .map((command) => ({
+          id: `provider-slash-command:${selectedProvider}:${command.name}`,
+          type: "provider-slash-command" as const,
+          provider: selectedProvider,
+          command,
+          label: `/${command.name}`,
+          description: command.description ?? command.input?.hint ?? "Run provider command",
+        }));
       const query = composerTrigger.query.trim().toLowerCase();
       const slashCommandItems = [...builtInSlashCommandItems, ...providerSlashCommandItems];
       return searchSlashCommandItems(slashCommandItems, query, composerTrigger.rangeStart === 0);
@@ -1304,7 +1309,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       );
     }
     return [];
-  }, [composerTrigger, selectedProvider, composerCatalog, workspaceEntries.entries]);
+  }, [
+    composerTrigger,
+    selectedProvider,
+    composerCatalog,
+    workspaceEntries.entries,
+    computerUseAvailable,
+  ]);
 
   const composerMenuOpen = Boolean(composerTrigger);
   const composerMenuSearchKey = composerTrigger
@@ -1883,6 +1894,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           if (applied) {
             setComposerHighlightedItemId(null);
             setIsComposerModelPickerOpen(true);
+          }
+          return;
+        }
+        if (item.command === "computer-use") {
+          const replacement = "/computer-use ";
+          const applied = applyPromptReplacement(
+            trigger.rangeStart,
+            trigger.rangeEnd,
+            replacement,
+            { expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd) },
+          );
+          if (applied) {
+            setComposerHighlightedItemId(null);
           }
           return;
         }
@@ -3157,6 +3181,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
               />
             </div>
+          ) : computerControlEffortHint.show ? (
+            <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
+              <ComposerComputerControlEffortHint
+                onApply={computerControlEffortHint.apply}
+                onDismiss={computerControlEffortHint.dismiss}
+              />
+            </div>
           ) : null}
 
           <div ref={setComposerMenuAnchor} className="relative px-3 py-3 sm:px-4">
@@ -3517,7 +3548,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         {activePendingApproval ? (
           <div className="flex flex-wrap items-center justify-end gap-2 px-3 pb-3 sm:px-4 sm:pb-4">
             <ComposerPendingApprovalActions
-              requestId={activePendingApproval.requestId}
+              approval={activePendingApproval}
               isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
               canRespond={activePendingApproval.responseCapability === "live"}
               onRespondToApproval={onRespondToApproval}
