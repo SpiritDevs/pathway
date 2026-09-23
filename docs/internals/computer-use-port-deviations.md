@@ -15,7 +15,8 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - Computer RPCs fail with a `ComputerError | EnvironmentAuthorizationError` union, not Synara's `WsRpcError`. Pathway has no shared RPC error, and scope checks raise `EnvironmentAuthorizationError`.
 - `WsComputerRpcGroup` stays outside `WsRpcGroup` until P4 adds the server handlers and `RpcAuthorization` entries. Merging it earlier would require handlers that do not exist yet.
 - The `WsPushComputerEvent` push channel is not ported. Pathway has no push channels, so `computer.subscribeEvents` is a stream RPC. `COMPUTER_WS_CHANNELS` is kept literally for parity.
-- `ComputerControlMode` and `ComputerError` live in `computer.ts`, not `orchestration.ts`. This keeps Computer contracts self-contained.
+- `ComputerControlMode` lives in `computer.ts`, not `orchestration.ts`. This keeps Computer contracts self-contained.
+- `ComputerError` is a Pathway type in `computer.ts`. Synara has none; it is a Computer-scoped copy of Synara's generic `WsRpcError` with the same fields.
 - The `COMPUTER_PERMISSION_KINDS` AppSnap alias is dropped. `missingComputerAppSnapPermissions` is now `missingComputerHelperPermissions` with a local `ComputerHelperGrants` type. AppSnap is not ported, because SnapShot covers it.
 - `SYNARA_DESKTOP_BUNDLE_ID_ENV` is now `PATHWAY_DESKTOP_BUNDLE_ID_ENV`, and the test bundle ids use `com.spiritdevs.pathway`. This is a product rename.
 - The `frameTransport` and `computerFrame` tests use a local device-codec fixture instead of Synara's `deviceFrame` module. Device mirroring is not part of the port.
@@ -27,3 +28,4 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - The OAuth token endpoint now derives its allowed scopes from `AuthEnvironmentScope` instead of a hardcoded list. Without this, `computer:operate` would have been rejected with `invalid_scope`.
 - `computer:operate` is optional during token exchange. The server drops it when the pairing grant lacks it, rather than failing with `scope_not_granted`, so pairings from before the upgrade, or created without "Use Computer", still redeem. Those sessions cannot start Computer tasks under the `scoped` policy.
 - Servers advertise the `computerOperateScope` descriptor capability. Clients request `computer:operate` only when it is advertised (`requestableEnvironmentScopes`), because older servers reject the whole token request with `invalid_scope`.
+- Peer environments request the standard scopes without `computer:operate`, even from targets that advertise it. A peer never drives another desktop; cross-environment work runs as an agent on the host, whose Computer calls stay local.
