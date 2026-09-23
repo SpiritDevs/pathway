@@ -4033,14 +4033,14 @@ export class ComputerManager {
    * thread serialize on a browser lane keyed to the thread so lifecycle
    * transitions (prepare, navigate, end) cannot interleave mid-flight.
    */
-  browserCall(
+  browserCall<E = never>(
     threadId: string,
     turnId: string | undefined,
     name: string,
     args: Record<string, unknown>,
     signal?: DesktopSignal,
-    beforeDispatch?: Effect.Effect<void, ComputerOperationError>,
-  ): Effect.Effect<ComputerBrowserCallResult, ComputerOperationError> {
+    beforeDispatch?: Effect.Effect<void, E>,
+  ): Effect.Effect<ComputerBrowserCallResult, ComputerOperationError | E> {
     const browser = this.backend.browser;
     if (!browser) {
       return Effect.fail(
@@ -4074,8 +4074,9 @@ export class ComputerManager {
           task: { threadId, ...(turnId ? { turnId } : {}) },
           mutation: name !== "get_browser_state",
         });
-        // Only the gateway's successful visible-use recheck can stamp a
-        // visible launch as authorized. Model arguments alone cannot do so.
+        // Only a gateway recheck that passed can stamp a visible launch as
+        // authorized; for one it includes visible use. Model arguments alone
+        // cannot do so.
         return yield* beforeDispatch && windowed
           ? withDesktopDeliveryMode("foreground", invoke)
           : invoke;

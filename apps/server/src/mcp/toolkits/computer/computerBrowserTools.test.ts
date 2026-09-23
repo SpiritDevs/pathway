@@ -34,7 +34,7 @@ import {
   makeComputerBrowserTools,
   type ComputerBrowserToolsOptions,
 } from "./computerBrowserTools.ts";
-import type { McpToolCallResult, ToolContext } from "./toolRuntime.ts";
+import { ComputerToolError, type McpToolCallResult, type ToolContext } from "./toolRuntime.ts";
 
 const THREAD = "thread-browser";
 
@@ -515,13 +515,15 @@ it.layer(NodeServices.layer)("computer_browser_* gateway tools", (it) => {
         const secondQueued = yield* Deferred.make<void>();
         const originalBrowserCall = manager.browserCall.bind(manager);
         let queued = 0;
-        vi.spyOn(manager, "browserCall").mockImplementation((...args) => {
-          queued += 1;
-          const invoke = originalBrowserCall(...args);
-          return queued === 2
-            ? Effect.andThen(Deferred.succeed(secondQueued, undefined), invoke)
-            : invoke;
-        });
+        vi.spyOn(manager, "browserCall").mockImplementation(
+          <E>(...args: Parameters<typeof originalBrowserCall<E>>) => {
+            queued += 1;
+            const invoke = originalBrowserCall(...args);
+            return queued === 2
+              ? Effect.andThen(Deferred.succeed(secondQueued, undefined), invoke)
+              : invoke;
+          },
+        );
         const first = yield* Effect.forkChild(
           call("computer_browser_state", { target_id: "t", tab_id: "tab" }),
         );
@@ -542,6 +544,63 @@ it.layer(NodeServices.layer)("computer_browser_* gateway tools", (it) => {
         const result = yield* Fiber.join(visible);
         expect(textOf(result)).toContain("foreground_not_requested");
         expect(visibility).toHaveBeenCalledTimes(2);
+        expect(browserNames).toEqual(["get_browser_state"]);
+      }),
+    ),
+  );
+
+  it.effect("refuses a queued browser mutation whose turn ended while it waited", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstEntered = yield* Deferred.make<void>();
+        const firstRelease = yield* Deferred.make<void>();
+        const browserNames: string[] = [];
+        const browser = (request: ComputerBrowserCall) =>
+          Effect.gen(function* () {
+            browserNames.push(request.name);
+            if (request.name === "get_browser_state") {
+              yield* Deferred.succeed(firstEntered, undefined);
+              yield* Deferred.await(firstRelease);
+            }
+            return { structuredContent: { status: "ok" } };
+          });
+        const { manager, byName } = yield* setup({
+          backend: new FakeComputerBackend({ browser }),
+          authorizeAction: approve,
+        });
+        let active = true;
+        const secondQueued = yield* Deferred.make<void>();
+        const context: ToolContext = {
+          ...makeContext(),
+          // The check before queueing passes and signals; the one at
+          // admission sees the ended turn.
+          assertCallerTurnActive: () =>
+            active
+              ? Deferred.succeed(secondQueued, undefined).pipe(Effect.asVoid)
+              : Effect.fail(
+                  new ComputerToolError({ code: "caller_turn_inactive", message: "Turn ended." }),
+                ),
+        };
+        const first = yield* Effect.forkChild(
+          manager.browserCall(THREAD, "turn-browser", "get_browser_state", {}),
+        );
+        yield* Deferred.await(firstEntered);
+        const navigate = byName.get("computer_browser_navigate");
+        if (!navigate) return yield* Effect.die(new Error("no navigate tool"));
+        const second = yield* Effect.forkChild(
+          navigate.handler(
+            { target_id: "t", tab_id: "tab", url: "https://example.invalid" },
+            context,
+          ),
+        );
+        yield* Deferred.await(secondQueued);
+        active = false;
+        yield* Deferred.succeed(firstRelease, undefined);
+
+        yield* Fiber.join(first);
+        const result = yield* Fiber.join(second);
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).toContain("Turn ended.");
         expect(browserNames).toEqual(["get_browser_state"]);
       }),
     ),
