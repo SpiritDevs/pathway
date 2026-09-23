@@ -1,4 +1,7 @@
-import { heartbeat as workerHeartbeat } from "../convex/aiOrchestratorJobs.ts";
+import {
+  claim as claimReasoning,
+  heartbeat as workerHeartbeat,
+} from "../convex/aiOrchestratorJobs.ts";
 import { pending as workerPending } from "../convex/workerWakeups.ts";
 import {
   patchEnvironmentPresence,
@@ -8,7 +11,7 @@ import {
 import { notifyOrchestratorIssueChanges } from "../convex/lib/aiOrchestratorIssueSignals.ts";
 // @effect-diagnostics globalDate:off -- Convex transaction time in fixtures.
 import { convexTest } from "convex-test";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, onTestFinished, vi } from "vite-plus/test";
 import { defaultOrchestratorConfig } from "@spiritdevs/contracts/aiOrchestrator";
 import { allowanceWindowKey, budgetAdmission } from "@spiritdevs/contracts/providerAllowanceBudget";
 import { api, internal } from "../convex/_generated/api.js";
@@ -25,6 +28,7 @@ process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
 process.env.PATHWAY_RELAY_JWKS_URL = "https://relay.example.test/.well-known/jwks.json";
 const modules = {
   "../convex/workerWakeups.ts": () => import("../convex/workerWakeups.ts"),
+  "../convex/agentThreads.ts": () => import("../convex/agentThreads.ts"),
   "../convex/aiOrchestratorControls.ts": () => import("../convex/aiOrchestratorControls.ts"),
   "../convex/aiOrchestratorAttachments.ts": () => import("../convex/aiOrchestratorAttachments.ts"),
   "../convex/http.ts": () => import("../convex/http.ts"),
@@ -1092,6 +1096,8 @@ describe("coordinator reasoning claims and action boundaries", () => {
           updatedAt: Date.now() - 300_000,
         });
       });
+      // The worker's terminal publish or the repair cron refreshes observed work.
+      await test.t.mutation(internal.aiOrchestratorJobs.refreshWork, { orchestratorId: test.id });
       expect(await test.claim()).toBeNull();
       expect(
         await test
@@ -1471,6 +1477,7 @@ describe("coordinator reasoning claims and action boundaries", () => {
           updatedAt: Date.now(),
         });
     });
+    await test.t.mutation(internal.aiOrchestratorJobs.refreshWork, { orchestratorId: test.id });
     const update = (await test.claim())!;
     expect(update.context).toContain("api: completed");
     expect(update.context).toContain("ios: completed");
@@ -3510,6 +3517,8 @@ describe("coordinator direct inspection and continuity", () => {
   });
 
   it("queues a PR follow-up in the original thread and waits for that message's result", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    onTestFinished(() => void vi.useRealTimers());
     const test = await coordinatorHarness();
     await seedInspectionThread(test.t);
     await test.t.run(async (ctx) => {
@@ -3570,6 +3579,7 @@ describe("coordinator direct inspection and continuity", () => {
       result: { kind: "sendMessage", threadId: "existing-thread", turnId: null },
       error: null,
     });
+    await test.t.finishAllScheduledFunctions(vi.runAllTimers);
     expect(await test.claim()).toBeNull();
     const [work] = await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId });
     expect(work).toMatchObject({
@@ -6236,4 +6246,260 @@ it("watches bounded worker readiness without loading chat history or presence", 
     await ctx.db.patch(row._id, { state: "revoked" });
   });
   await expect(check("reasoning")).rejects.toThrow();
+});
+
+describe("event-driven delegated work refresh", () => {
+  const workerShell = (status: string, activeRunId: string | null) => ({
+    id: "worker-thread",
+    projectId: "local-project",
+    title: "Assignment",
+    providerInstanceId: "codex",
+    modelSelection: { instanceId: "codex", model: "gpt-6-astra" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: "worker-thread" },
+    locations: [],
+    forkedFrom: null,
+    activeProviderThreadId: null,
+    latestRunId: "run-1",
+    activeRunId,
+    status,
+    pendingRuntimeRequest: null,
+    latestVisibleMessage: null,
+    latestUserMessageAt: null,
+    hasActionableProposedPlan: false,
+    itemCount: 2,
+    visibleItemCount: 2,
+    createdAt: "2026-09-01T00:00:00.000Z",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+    archivedAt: null,
+    deletedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    createdBy: "agent",
+    creationSource: "mcp",
+  });
+
+  async function delegatedWork() {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    onTestFinished(() => void vi.useRealTimers());
+    const test = await coordinatorHarness();
+    await seedCoordinatorProject(test.t);
+    // Environments publish thread shells under a projects.manage service role.
+    await test.t.run(async (ctx) => {
+      const company = (await ctx.db.query("companies").first())!;
+      await ctx.db.insert("roles", {
+        id: "publisher",
+        companyId: company._id,
+        name: "Publisher",
+        description: "",
+        permissions: ["projects.manage"],
+        seeded: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      const studio = (await ctx.db
+        .query("environmentRegistrations")
+        .withIndex("by_environment", (q) => q.eq("environmentId", "studio"))
+        .unique())!;
+      await ctx.db.patch(studio._id, { serviceRoleIds: ["publisher"] });
+    });
+    const run = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+      result: { ...decision(), actions: [delegate()] },
+    });
+    const [command] = await test
+      .environment()
+      .mutation(api.environmentCommands.claim, { companyId: "workspace" });
+    const report = (state: "succeeded" | "failed") =>
+      test.environment().mutation(api.environmentCommands.reportStatus, {
+        companyId: "workspace",
+        commandId: command!.id,
+        claimGeneration: command!.claimGeneration,
+        state,
+        result: state === "succeeded" ? { kind: "startThread", threadId: "worker-thread" } : null,
+        error: state === "failed" ? "The worker could not start." : null,
+      });
+    const publish = (status: string, activeRunId: string | null) =>
+      test.environment().mutation(api.agentThreads.upsert, {
+        companyId: "workspace",
+        environmentId: "studio",
+        threadId: "worker-thread",
+        localProjectId: "local-project",
+        shell: workerShell(status, activeRunId),
+      });
+    const work = async () =>
+      (await test.t.run((ctx) => ctx.db.query("aiOrchestratorWork").first()))!;
+    const announcements = () =>
+      test.t.run(async (ctx) =>
+        (await ctx.db.query("aiOrchestratorMessages").collect())
+          .filter((message) => message.senderId === "delegated-work")
+          .map((message) => message.text),
+      );
+    const settle = () => test.t.finishAllScheduledFunctions(vi.runAllTimers);
+    return { ...test, report, publish, work, announcements, settle };
+  }
+
+  it("detects a finished worker thread and announces its findings without a claim", async () => {
+    const test = await delegatedWork();
+    await test.report("succeeded");
+    await test.settle();
+    expect(await test.work()).toMatchObject({ status: "working", threadId: "worker-thread" });
+    await test.publish("running", "run-1");
+    await test.settle();
+    expect((await test.work()).status).toBe("working");
+    await test.publish("completed", null);
+    await test.settle();
+    const finished = await test.work();
+    expect(finished).toMatchObject({ status: "completed", resultRunId: "run-1" });
+    expect(
+      await test
+        .environment()
+        .query(api.aiOrchestratorJobs.pendingWorkResults, { companyId: "workspace" }),
+    ).toEqual([{ workId: finished.id, threadId: "worker-thread", runId: "run-1" }]);
+    expect(
+      await test.environment().mutation(api.aiOrchestratorJobs.collectWorkResult, {
+        companyId: "workspace",
+        workId: finished.id,
+        threadId: "worker-thread",
+        runId: "run-1",
+        text: "Verified the change.",
+      }),
+    ).toBe(true);
+    await test.settle();
+    expect(await test.announcements()).toEqual([expect.stringContaining("Assignment: completed")]);
+    expect((await test.claim())?.context).toContain("Verified the change.");
+  });
+
+  it("announces a failed dispatch from the command outcome alone", async () => {
+    const test = await delegatedWork();
+    await test.report("failed");
+    await test.settle();
+    expect(await test.work()).toMatchObject({
+      status: "failed",
+      detail: "The worker could not start.",
+      completionNotified: true,
+    });
+    expect(await test.announcements()).toEqual([expect.stringContaining("Assignment: failed")]);
+  });
+
+  it("marks accepted work uncertain while its host is offline and restores it on return", async () => {
+    const test = await delegatedWork();
+    await test.report("succeeded");
+    await test.settle();
+    await test.t.run(async (ctx) => {
+      const studio = (await ctx.db
+        .query("environmentRegistrations")
+        .withIndex("by_environment", (q) => q.eq("environmentId", "studio"))
+        .unique())!;
+      await patchEnvironmentPresence(ctx, studio, { lastSeenAt: Date.now() - 91_000 });
+    });
+    await test.t.mutation(internal.aiOrchestratorEvents.checkOffline, {});
+    await test.settle();
+    expect(await test.work()).toMatchObject({
+      status: "unknown",
+      detail: expect.stringContaining("Environment offline"),
+    });
+    await test.environment().mutation(api.aiOrchestratorJobs.heartbeat, { companyId: "workspace" });
+    await test.settle();
+    expect(await test.work()).toMatchObject({ status: "working" });
+  });
+
+  it("claims read no delegated work and tracked work alone does not wake reasoning", async () => {
+    const test = await delegatedWork();
+    await test.report("succeeded");
+    await test.settle();
+    // A terminal shell written without its event stays unobserved until the repair sweep.
+    await test.t.run(async (ctx) => {
+      const company = (await ctx.db.query("companies").first())!;
+      const project = (await ctx.db.query("cloudProjects").first())!;
+      await ctx.db.insert("agentThreads", {
+        id: "studio:worker-thread",
+        companyId: company._id,
+        environmentId: "studio",
+        cloudProjectId: project._id,
+        localProjectId: "local-project",
+        threadId: "worker-thread",
+        shell: workerShell("completed", null),
+        updatedAt: Date.now(),
+      });
+    });
+    const measured = await test.environment().run(async (ctx) => {
+      const meter = measureDatabaseReads(ctx.db);
+      const run = await functionHandler(claimReasoning)(
+        { ...ctx, db: meter.db },
+        { companyId: "workspace", providers: [{ instanceId: "codex", driver: "codex" }] },
+      );
+      return { run, work: meter.documents.get("aiOrchestratorWork") ?? 0 };
+    });
+    expect(measured).toEqual({ run: null, work: 0 });
+    expect((await test.work()).status).toBe("working");
+    expect(
+      await test
+        .environment()
+        .query(api.workerWakeups.pending, { companyId: "workspace", kind: "reasoning" }),
+    ).toBe(false);
+    await test.t.mutation(internal.aiOrchestratorJobs.repairWork, {});
+    await test.settle();
+    expect((await test.work()).status).toBe("completed");
+  });
+
+  it("stamps a real company on reasoning jobs and migrates legacy company-less jobs", async () => {
+    const test = await delegatedWork();
+    const jobs = () => test.t.run((ctx) => ctx.db.query("aiOrchestratorJobs").collect());
+    expect((await jobs()).every((job) => job.companyId === "workspace")).toBe(true);
+    await test.t.run(async (ctx) => {
+      for (const [id, orchestratorId] of [
+        ["legacy", test.id],
+        ["orphan", "deleted-orchestrator"],
+      ] as const) {
+        await ctx.db.insert("aiOrchestratorMessages", {
+          id: `${id}-message`,
+          chatId: test.chatId,
+          sequence: 100,
+          senderKind: "user",
+          senderId: "owner",
+          senderName: "owner",
+          text: "Legacy request",
+          status: "queued",
+          replyToId: null,
+          createdAt: Date.now(),
+        });
+        await ctx.db.insert("aiOrchestratorJobs", {
+          id,
+          orchestratorId,
+          chatId: test.chatId,
+          messageId: `${id}-message`,
+          companyId: "",
+          status: "queued",
+          environmentId: null,
+          generation: 0,
+          leaseExpiresAt: 0,
+          modelIndex: 0,
+          error: "",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
+    });
+    expect(await test.claim()).toBeNull();
+    expect(
+      await test
+        .environment()
+        .query(api.workerWakeups.pending, { companyId: "workspace", kind: "reasoning" }),
+    ).toBe(false);
+    await test.t.mutation(internal.aiOrchestratorJobs.repairWork, {});
+    const migrated = await jobs();
+    expect(migrated.find((job) => job.id === "legacy")?.companyId).toBe("workspace");
+    expect(migrated.find((job) => job.id === "orphan")).toMatchObject({
+      companyId: "",
+      status: "failed",
+    });
+    expect((await test.claim())?.id).toBe("legacy");
+  });
 });

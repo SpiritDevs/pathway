@@ -40,7 +40,14 @@ import {
   COORDINATOR_DRIVERS,
 } from "@spiritdevs/contracts/aiOrchestrator";
 import type { OrchestratorRun } from "@spiritdevs/contracts/aiOrchestrator";
-import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
+import {
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server.js";
+import { internal } from "./_generated/api.js";
 import type { Doc } from "./_generated/dataModel.js";
 import { requireCompanyActor } from "./lib/identity.ts";
 import { backendError } from "./lib/errors.ts";
@@ -49,8 +56,10 @@ import {
   eligibleOrchestratorEnvironment,
   orchestratorCanReadWork,
   orchestratorCommandAllowed,
+  orchestratorJobCompanyId,
   orchestratorOwnerScope,
 } from "./lib/aiOrchestratorAuthority.ts";
+import { scheduleOrchestratorWorkRefresh } from "./lib/aiOrchestratorWorkRefresh.ts";
 import {
   humanRecipients,
   appendChatMessage,
@@ -734,6 +743,12 @@ async function notifyFinishedWork(ctx: MutationCtx, orchestrator: Doc<"aiOrchest
       for (const item of work) await ctx.db.patch(item._id, { completionNotified: true });
       continue;
     }
+    const companyId =
+      work[0]!.companyId ?? (await orchestratorJobCompanyId(ctx, orchestrator, chat));
+    if (!companyId) {
+      for (const item of work) await ctx.db.patch(item._id, { completionNotified: true });
+      continue;
+    }
     const text = visibleWork
       .map((item) => `${item.title}: ${item.status}. ${item.detail}`)
       .join("\n");
@@ -753,7 +768,7 @@ async function notifyFinishedWork(ctx: MutationCtx, orchestrator: Doc<"aiOrchest
       orchestratorId: orchestrator.id,
       chatId: chat.id,
       messageId,
-      companyId: work[0]!.companyId ?? orchestrator.companyId ?? "",
+      companyId,
       status: "queued",
       environmentId: null,
       generation: 0,
@@ -766,6 +781,132 @@ async function notifyFinishedWork(ctx: MutationCtx, orchestrator: Doc<"aiOrchest
     for (const item of work) await ctx.db.patch(item._id, { completionNotified: true });
   }
 }
+
+/**
+ * Refreshes one orchestrator's tracked work and notifies it of finished work. Scheduled by the
+ * events in lib/aiOrchestratorWorkRefresh.ts and by `repairWork`; safe to run redundantly.
+ */
+export const refreshWork = internalMutation({
+  args: { orchestratorId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const orchestrator = await findOrchestrator(ctx, args.orchestratorId);
+    if (!orchestrator) return null;
+    await refreshOrchestratorWork(ctx, orchestrator);
+    await notifyFinishedWork(ctx, orchestrator);
+    return null;
+  },
+});
+
+const REPAIR_PAGE = 50;
+const LEGACY_JOB_PAGE = 25;
+
+/** Skip-scans one status group for the next distinct orchestrators after `after`. */
+async function trackedOrchestrators(
+  ctx: QueryCtx,
+  group: { status: Doc<"aiOrchestratorWork">["status"]; unnotified: boolean },
+  after: string | undefined,
+) {
+  const ids: string[] = [];
+  let cursor = after;
+  while (ids.length < REPAIR_PAGE) {
+    const next = group.unnotified
+      ? await ctx.db
+          .query("aiOrchestratorWork")
+          .withIndex("by_notification_orchestrator", (q) => {
+            const scope = q.eq("completionNotified", false).eq("status", group.status);
+            return cursor === undefined ? scope : scope.gt("orchestratorId", cursor);
+          })
+          .first()
+      : await ctx.db
+          .query("aiOrchestratorWork")
+          .withIndex("by_status_orchestrator", (q) => {
+            const scope = q.eq("status", group.status);
+            return cursor === undefined ? scope : scope.gt("orchestratorId", cursor);
+          })
+          .first();
+    if (!next) break;
+    ids.push(next.orchestratorId);
+    cursor = next.orchestratorId;
+  }
+  return ids;
+}
+
+/**
+ * Queued jobs from before every creation path named a company. Claims no longer read the ""
+ * scope, so each is moved to its derived company or failed visibly. Claims stamped running jobs.
+ */
+async function migrateCompanylessJobs(ctx: MutationCtx) {
+  const jobs = await ctx.db
+    .query("aiOrchestratorJobs")
+    .withIndex("by_company_status", (q) => q.eq("companyId", "").eq("status", "queued"))
+    .take(LEGACY_JOB_PAGE);
+  for (const job of jobs) {
+    const orchestrator = await findOrchestrator(ctx, job.orchestratorId);
+    const chat = await findChat(ctx, job.chatId);
+    const companyId =
+      orchestrator && chat ? await orchestratorJobCompanyId(ctx, orchestrator, chat) : null;
+    if (companyId) {
+      await ctx.db.patch(job._id, { companyId });
+      continue;
+    }
+    await ctx.db.patch(job._id, {
+      status: "failed",
+      error: "No workspace can run this request.",
+      updatedAt: Date.now(),
+    });
+    const message = await ctx.db
+      .query("aiOrchestratorMessages")
+      .withIndex("by_domain_id", (q) => q.eq("id", job.messageId))
+      .unique();
+    if (message?.status === "queued") await ctx.db.patch(message._id, { status: "failed" });
+  }
+  if (jobs.length === LEGACY_JOB_PAGE)
+    await ctx.scheduler.runAfter(0, internal.aiOrchestratorJobs.migrateCompanyless, {});
+}
+
+export const migrateCompanyless = internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx): Promise<null> => {
+    await migrateCompanylessJobs(ctx);
+    return null;
+  },
+});
+
+/**
+ * Cron backstop for missed refresh events and inputs without one (permission, chat, or
+ * registration changes). Pages through orchestrators with tracked or unannounced work.
+ */
+export const repairWork = internalMutation({
+  args: { after: v.optional(v.string()) },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    if (args.after === undefined) await migrateCompanylessJobs(ctx);
+    const groups = [
+      ...(["queued", "working", "unknown"] as const).map((status) => ({
+        status,
+        unnotified: false,
+      })),
+      ...terminalWorkStates.map((status) => ({ status, unnotified: true })),
+    ];
+    const pages = await Promise.all(
+      groups.map((group) => trackedOrchestrators(ctx, group, args.after)),
+    );
+    // A full page only proves coverage up to its last id; resume from the smallest such bound.
+    const end = pages
+      .filter((page) => page.length === REPAIR_PAGE)
+      .map((page) => page.at(-1)!)
+      .sort()[0];
+    await scheduleOrchestratorWorkRefresh(
+      ctx,
+      pages.flat().filter((id) => end === undefined || id <= end),
+    );
+    if (end !== undefined)
+      await ctx.scheduler.runAfter(0, internal.aiOrchestratorJobs.repairWork, { after: end });
+    return null;
+  },
+});
 
 async function publishWorkerPresence(
   ctx: MutationCtx,
@@ -835,55 +976,22 @@ export const claim = mutation({
       args.refreshPresence !== false,
     );
     const now = Date.now();
-    const tracked = await Promise.all(
-      (["queued", "working", "unknown"] as const).map((status) =>
-        ctx.db
-          .query("aiOrchestratorWork")
-          .withIndex("by_company_status", (q) =>
-            q.eq("companyId", args.companyId).eq("status", status),
-          )
-          .take(32),
-      ),
-    );
-    const finished = await Promise.all(
-      terminalWorkStates.map((status) =>
-        ctx.db
-          .query("aiOrchestratorWork")
-          .withIndex("by_company_notification", (q) =>
-            q.eq("companyId", args.companyId).eq("completionNotified", false).eq("status", status),
-          )
-          .take(32),
-      ),
-    );
-    for (const id of new Set(
-      [...tracked.flat(), ...finished.flat()].map((work) => work.orchestratorId),
-    )) {
-      const orchestrator = await findOrchestrator(ctx, id);
-      if (
-        orchestrator &&
-        (await eligibleOrchestratorEnvironment(ctx, orchestrator, actor.registration))
-      ) {
-        await refreshOrchestratorWork(ctx, orchestrator);
-        await notifyFinishedWork(ctx, orchestrator);
-      }
-    }
+    // Delegated work refreshes on its own events (see refreshWork); claims only read jobs.
     const groups = await Promise.all(
-      [...new Set([args.companyId, ""])].flatMap((companyId) =>
-        (["running", "queued"] as const).map((status) =>
-          status === "queued"
-            ? ctx.db
-                .query("aiOrchestratorJobs")
-                .withIndex("by_company_ready", (q) =>
-                  q.eq("companyId", companyId).eq("status", status).lte("notBefore", now),
-                )
-                .take(32)
-            : ctx.db
-                .query("aiOrchestratorJobs")
-                .withIndex("by_company_status", (q) =>
-                  q.eq("companyId", companyId).eq("status", status),
-                )
-                .take(32),
-        ),
+      (["running", "queued"] as const).map((status) =>
+        status === "queued"
+          ? ctx.db
+              .query("aiOrchestratorJobs")
+              .withIndex("by_company_ready", (q) =>
+                q.eq("companyId", args.companyId).eq("status", status).lte("notBefore", now),
+              )
+              .take(32)
+          : ctx.db
+              .query("aiOrchestratorJobs")
+              .withIndex("by_company_status", (q) =>
+                q.eq("companyId", args.companyId).eq("status", status),
+              )
+              .take(32),
       ),
     );
     for (const job of groups
@@ -1003,7 +1111,6 @@ export const claim = mutation({
       const generation = job.generation + 1;
       await ctx.db.patch(job._id, {
         status: "running",
-        companyId: args.companyId,
         environmentId: actor.registration.environmentId,
         generation,
         configRevision: orchestrator.revision,
@@ -1935,6 +2042,8 @@ export const collectWorkResult = mutation({
       updatedAt: Date.now(),
     });
     await notifyFinishedWork(ctx, orchestrator);
+    // A finished follow-up frees an assignment slot for queued work.
+    await scheduleOrchestratorWorkRefresh(ctx, [orchestrator.id]);
     return true;
   },
 });
@@ -2018,7 +2127,10 @@ export const workerAccess = query({
   },
 });
 
-/** Observations are host-owned and sampled only when reasoning work is actually claimed. */
+/**
+ * Observations are host-owned and sampled only when reasoning work is actually claimed. Context
+ * trusts a sample for 90 seconds, so one renewed halfway through that window is kept.
+ */
 export const reportHostResources = mutation({
   args: { companyId: v.string(), resources: v.any() },
   handler: async (ctx, args) => {
@@ -2026,6 +2138,10 @@ export const reportHostResources = mutation({
     const resources = decodeResources(args.resources);
     const age = Date.now() - resources.sampledAt;
     if (age < -5000 || age > 90000) return fail("A fresh host resource observation is required.");
+    const stored = inspectResources(
+      (await readEnvironmentRuntime(ctx, actor.registration)).orchestratorResources,
+    );
+    if (stored._tag === "Success" && resources.sampledAt - stored.value.sampledAt < 45_000) return;
     await patchEnvironmentRuntime(ctx, actor.registration, { orchestratorResources: resources });
   },
 });

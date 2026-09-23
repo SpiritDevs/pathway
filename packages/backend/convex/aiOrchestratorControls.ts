@@ -23,6 +23,7 @@ import {
   workVisibilityForConversation,
 } from "./lib/aiOrchestratorContext.ts";
 import { controlOrchestratorWork } from "./lib/aiOrchestratorWork.ts";
+import { scheduleOrchestratorWorkRefresh } from "./lib/aiOrchestratorWorkRefresh.ts";
 
 const chatMessage = (ctx: QueryCtx, id: string) =>
   ctx.db
@@ -967,6 +968,7 @@ export const reportConversationStop = mutation({
         detail: args.detail.slice(0, 1000),
         updatedAt: Date.now(),
       });
+    if (args.confirmed) await scheduleOrchestratorWorkRefresh(ctx, [work.orchestratorId]);
     const chat = await ctx.db
       .query("aiOrchestratorChats")
       .withIndex("by_domain_id", (q) => q.eq("id", work.chatId))

@@ -39,6 +39,8 @@ import { backendError } from "./lib/errors.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { orchestratorConfig, orchestratorMemoryScope } from "./lib/aiOrchestratorSchema.ts";
 import { requestOrchestratorStop } from "./lib/aiOrchestratorWork.ts";
+import { scheduleOrchestratorWorkRefresh } from "./lib/aiOrchestratorWorkRefresh.ts";
+import { orchestratorJobCompanyId } from "./lib/aiOrchestratorAuthority.ts";
 import {
   resolveWorkAssignments,
   workVisibilityForConversation,
@@ -326,6 +328,8 @@ export const configure = mutation({
       revision: row.revision + 1,
       updatedAt: Date.now(),
     });
+    // Assignment limits and delegation grants decide what queued work may dispatch.
+    await scheduleOrchestratorWorkRefresh(ctx, [row.id]);
     return row.revision + 1;
   },
 });
@@ -350,6 +354,8 @@ export const setStatus = mutation({
       revision: row.revision + 1,
       updatedAt: now,
     });
+    // Resuming dispatches queued assignments and delivers completions held while paused.
+    if (args.status === "active") await scheduleOrchestratorWorkRefresh(ctx, [row.id]);
     if (args.stopWork || args.status === "deleted") {
       await requestOrchestratorStop(ctx, row);
       for (const status of ["queued", "running"] as const) {
@@ -1173,13 +1179,15 @@ export const send = mutation({
     const { row } = await readableOrchestrator(ctx, target);
     if (!canDirectOrchestrator(row, user.clerkSubject))
       return fail("You need direction permission to assign work to this orchestrator.");
+    const companyId = await orchestratorJobCompanyId(ctx, row, chat);
+    if (!companyId) return fail("Join a workspace before messaging this orchestrator.");
     const now = Date.now();
     await ctx.db.insert("aiOrchestratorJobs", {
       id: mintDomainId(Date.now()),
       orchestratorId: target,
       chatId: chat.id,
       messageId: args.id,
-      companyId: row.companyId ?? chat.companyIds[0] ?? "",
+      companyId,
       status: "queued",
       environmentId: null,
       generation: 0,

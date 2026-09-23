@@ -1,3 +1,4 @@
+// @effect-diagnostics globalDate:off -- Reasoning readiness uses the Convex query clock.
 /** Read-only hints: claims still own authorization, readiness, and lease fencing. */
 import { v } from "convex/values";
 import { query } from "./_generated/server.js";
@@ -84,40 +85,22 @@ export const pending = query({
       );
     }
     if (kind === "reasoning") {
-      for (const scope of new Set([companyId, ""])) {
-        for (const status of ["queued", "running"] as const) {
-          if (
-            await ctx.db
-              .query("aiOrchestratorJobs")
-              .withIndex("by_company_status", (q) => q.eq("companyId", scope).eq("status", status))
-              .first()
+      // Only claimable jobs wake reasoning. Delegated work refreshes itself on its own events.
+      const now = Date.now();
+      if (
+        await ctx.db
+          .query("aiOrchestratorJobs")
+          .withIndex("by_company_ready", (q) =>
+            q.eq("companyId", companyId).eq("status", "queued").lte("notBefore", now),
           )
-            return true;
-        }
-      }
-      for (const status of ["queued", "working", "unknown"] as const) {
-        if (
-          await ctx.db
-            .query("aiOrchestratorWork")
-            .withIndex("by_company_status", (q) =>
-              q.eq("companyId", companyId).eq("status", status),
-            )
-            .first()
-        )
-          return true;
-      }
-      for (const status of ["completed", "failed", "cancelled"] as const) {
-        if (
-          await ctx.db
-            .query("aiOrchestratorWork")
-            .withIndex("by_company_notification", (q) =>
-              q.eq("companyId", companyId).eq("completionNotified", false).eq("status", status),
-            )
-            .first()
-        )
-          return true;
-      }
-      return false;
+          .first()
+      )
+        return true;
+      const running = await ctx.db
+        .query("aiOrchestratorJobs")
+        .withIndex("by_company_status", (q) => q.eq("companyId", companyId).eq("status", "running"))
+        .take(32);
+      return running.some((job) => job.leaseExpiresAt <= now);
     }
     if (
       await ctx.db

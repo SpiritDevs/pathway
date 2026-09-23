@@ -42,6 +42,7 @@ import {
   orchestratorCommandAllowed,
   orchestratorCommandPaused,
 } from "./lib/aiOrchestratorAuthority.ts";
+import { scheduleOrchestratorWorkRefresh } from "./lib/aiOrchestratorWorkRefresh.ts";
 
 const LIST_DEFAULT_LIMIT = 100;
 const LIST_MAX_LIMIT = 500;
@@ -49,6 +50,7 @@ const CLAIM_DEFAULT_LIMIT = 10;
 const CLAIM_MAX_LIMIT = 25;
 const EXPIRE_DEFAULT_LIMIT = 50;
 const EXPIRE_MAX_LIMIT = 200;
+const terminalCommandStates = new Set(["succeeded", "failed", "canceled", "expired"]);
 
 const commandKind = v.union(
   v.literal("startThread"),
@@ -180,6 +182,13 @@ async function appendCommandRecords(
   rows: readonly Doc<"environmentCommands">[],
 ): Promise<void> {
   if (rows.length === 0) return;
+  // An orchestrator's dispatch outcome decides its assignment's status.
+  await scheduleOrchestratorWorkRefresh(
+    ctx,
+    rows.flatMap((row) =>
+      row.orchestratorId && terminalCommandStates.has(row.state) ? [row.orchestratorId] : [],
+    ),
+  );
   const changes = [];
   for (const row of rows) {
     changes.push({

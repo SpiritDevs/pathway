@@ -533,3 +533,49 @@ the new `refreshPresence` claim argument.
   `by_company_and_version` index on ten issue child tables whose feed version
   changes on every write. Index names are only ever passed as literals, so a
   name absent outside the schema is unused.
+
+## Event-driven delegated work
+
+Production insights over 72 hours attributed hundreds of OCC conflicts to
+`aiOrchestratorJobs.claim` on `environmentPresence`, `agentThreads`,
+`environmentRuntime`, `aiOrchestratorMessages` and `aiOrchestratorJobs`. Every
+claim from every environment in a company refreshed up to 96 delegated work
+rows, reading each assignment's command, thread shell, worker registration and
+presence. The reasoning wakeup stayed true while any work was tracked, so every
+environment claimed every 10 seconds for as long as any assignment was queued,
+working, or stuck `unknown` behind an offline worker.
+
+- **Refresh on events.** `aiOrchestratorJobs.refreshWork` refreshes and notifies
+  one orchestrator's work in its own transaction, so a trigger never contends
+  with orchestrator-wide reads. It is scheduled when an orchestrator's command
+  reaches a terminal state, when an agent-thread publish changes a field the
+  refresh reads (status, run ids, allowance hold, model) on a thread with
+  tracked work, when a host crosses the 90-second offline boundary in either
+  direction, and when work is stopped, confirmed stopped, collected, resumed
+  or reconfigured. Delegation still dispatches inline from `complete`. The
+  claiming environment never mattered to the refresh, so the eligibility gate
+  on it is gone; a notification job still waits for an eligible claimant.
+- **Repair sweep.** `repairWork` runs every five minutes and schedules a
+  refresh for each orchestrator with queued, working or unknown work, or with
+  a terminal assignment not yet announced. It skip-scans two new status-first
+  indexes one orchestrator at a time, 50 per status group, and reschedules
+  itself from the lowest full page. It covers inputs without an event:
+  permission, chat, project and registration changes.
+- **Reasoning wakeups.** The hint is true only for a ready queued job or a
+  running job whose lease has lapsed. A lapse without a write is found by the
+  one-minute idle check, as is a hold that ends without a write.
+- **Company-less jobs.** Jobs used to fall back to `companyId: ""`, which every
+  claim and hint in the deployment read. Creation now stamps the work's,
+  orchestrator's or conversation's company; a company-less personal
+  conversation uses the company where its owner's registered host was last
+  seen, then the owner's first workspace. The repair sweep moves legacy queued
+  `""` jobs the same way in pages of 25, failing any with no derivable company
+  and marking its message failed.
+- **Host resources.** Claims report host resources after every successful
+  claim, but CPU and memory samples differ every time, so an equality check
+  would never skip. The backend keeps a stored sample younger than 45 seconds,
+  half the window context trusts.
+
+Tracked-work status changes now land within one scheduler hop of their event
+instead of within one ten-second claim. Inputs without an event can take up to
+five minutes. All changes take effect on backend deploy; servers need no update.

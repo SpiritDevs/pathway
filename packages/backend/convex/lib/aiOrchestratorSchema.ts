@@ -409,7 +409,9 @@ export const aiOrchestratorTables = {
     .index("by_environment_result", ["companyId", "environmentId", "resultCollected", "status"])
     .index("by_company_notification", ["companyId", "completionNotified", "status"])
     .index("by_orchestrator_notification", ["orchestratorId", "completionNotified", "status"])
-    .index("by_orchestrator_status", ["orchestratorId", "status"]),
+    .index("by_orchestrator_status", ["orchestratorId", "status"])
+    .index("by_status_orchestrator", ["status", "orchestratorId"])
+    .index("by_notification_orchestrator", ["completionNotified", "status", "orchestratorId"]),
   aiOrchestratorInspections: defineTable({
     id: v.string(),
     jobId: v.string(),

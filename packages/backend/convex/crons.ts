@@ -85,6 +85,14 @@ crons.interval(
   {},
 );
 
+// Delegated work refreshes on its own events; this catches misses and event-less inputs.
+crons.interval(
+  "repair delegated orchestrator work",
+  { minutes: 5 },
+  internal.aiOrchestratorJobs.repairWork,
+  {},
+);
+
 crons.interval(
   "prune unused orchestrator attachments",
   { hours: 1 },

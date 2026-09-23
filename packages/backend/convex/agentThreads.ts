@@ -1,5 +1,6 @@
 import { readEnvironmentRuntime, patchEnvironmentRuntime } from "./lib/environmentRuntime.ts";
 import { notifyOrchestratorThreadUpdate } from "./lib/aiOrchestratorSignals.ts";
+import { scheduleThreadWorkRefresh } from "./lib/aiOrchestratorWorkRefresh.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Environment-published, cloud-safe Agent Thread discovery metadata. */
 import { v } from "convex/values";
@@ -276,6 +277,7 @@ export const upsert = mutation({
       ],
     });
     await notifyOrchestratorThreadUpdate(ctx, row, existing?.shell);
+    await scheduleThreadWorkRefresh(ctx, actor.company.id, row, existing?.shell);
     return { outcome: "published" as const };
   },
 });

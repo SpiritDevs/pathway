@@ -4,6 +4,7 @@ import { internalMutation } from "./_generated/server.js";
 import type { Doc } from "./_generated/dataModel.js";
 import { appendChatMessage } from "./aiOrchestrators.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
+import { orchestratorJobCompanyId } from "./lib/aiOrchestratorAuthority.ts";
 
 export function nextResponsibilityReview(
   contact: {
@@ -71,6 +72,8 @@ export const wakeDue = internalMutation({
         ),
       );
       if (pending.some(Boolean)) continue;
+      const companyId = await orchestratorJobCompanyId(ctx, contact, chat);
+      if (!companyId) continue;
       const id = `responsibility-review:${contact.id}:${contact.nextReviewAt}`;
       await appendChatMessage(ctx, chat, {
         id,
@@ -86,7 +89,7 @@ export const wakeDue = internalMutation({
         orchestratorId: contact.id,
         chatId: chat.id,
         messageId: id,
-        companyId: contact.companyId ?? chat.companyIds[0] ?? "",
+        companyId,
         responsibilityReview: true,
         status: "queued",
         environmentId: null,

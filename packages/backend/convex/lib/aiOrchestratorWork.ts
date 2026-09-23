@@ -25,6 +25,7 @@ import { appendCompanyChanges, encodeEnvironmentCommand } from "./companyApply.t
 import { ORCHESTRATOR_WORKER_REPORT_INSTRUCTIONS } from "@spiritdevs/contracts/orchestratorInspection";
 import { orchestratorReadTarget } from "./aiOrchestratorTargets.ts";
 import { inheritAllowanceScopes } from "../providerAllowanceBudgets.ts";
+import { scheduleOrchestratorWorkRefresh } from "./aiOrchestratorWorkRefresh.ts";
 
 const fail = (message: string): never => {
   throw backendError("orchestrator-work", message);
@@ -621,6 +622,8 @@ export async function requestOrchestratorStop(
     if (!unstarted && !work.controlsPending && work.threadId && !work.interruptCommandId)
       await interruptWork(ctx, orchestrator, work, work.threadId);
   }
+  // Cancelled work frees assignment slots and settles its completion notice.
+  if (rows.size) await scheduleOrchestratorWorkRefresh(ctx, [orchestrator.id]);
 }
 
 /** Redirects only work whose old command is provably unclaimed, in the same transaction. */

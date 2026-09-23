@@ -3,6 +3,7 @@ import type { QueryCtx } from "../_generated/server.js";
 import { membershipAuthorization } from "./identity.ts";
 import { hasCompanyPermission, hasRecordPermission } from "../../src/permissions.ts";
 import { orchestratorReadTarget } from "./aiOrchestratorTargets.ts";
+import { readEnvironmentPresence } from "./environmentRuntime.ts";
 
 /** Action grants belong to the orchestrator; the directing human does not lend its own grants. */
 export async function orchestratorOwnerScope(
@@ -33,6 +34,49 @@ export async function orchestratorOwnerScope(
     .unique();
   const { permissions } = await membershipAuthorization(ctx, membership, ownership !== null);
   return { company, membership, user, permissions };
+}
+
+/**
+ * Reasoning jobs are claimed by company, so each one names the company whose environments run it.
+ * A company-less personal conversation runs where its owner last had a registered host, as the
+ * first eligible environment would have claimed it; otherwise in the owner's first workspace.
+ */
+export async function orchestratorJobCompanyId(
+  ctx: QueryCtx,
+  orchestrator: Doc<"aiOrchestrators">,
+  chat: Doc<"aiOrchestratorChats">,
+) {
+  if (orchestrator.companyId) return orchestrator.companyId;
+  if (chat.companyIds[0]) return chat.companyIds[0];
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", orchestrator.ownerSubject))
+    .unique();
+  if (!user) return null;
+  const memberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_user", (q) => q.eq("userId", user._id))
+    .take(20);
+  let fallback: string | null = null;
+  let latest: { companyId: string; seenAt: number } | null = null;
+  for (const membership of memberships) {
+    if (membership.state !== "active") continue;
+    const company = await ctx.db.get(membership.companyId);
+    if (company?.lifecycleState !== "active") continue;
+    fallback ??= company.id;
+    const registrations = await ctx.db
+      .query("environmentRegistrations")
+      .withIndex("by_company_and_state", (q) =>
+        q.eq("companyId", company._id).eq("state", "active"),
+      )
+      .take(50);
+    for (const registration of registrations) {
+      if (registration.registeredByMembershipId !== membership._id) continue;
+      const seenAt = (await readEnvironmentPresence(ctx, registration)).lastSeenAt ?? 0;
+      if (!latest || seenAt > latest.seenAt) latest = { companyId: company.id, seenAt };
+    }
+  }
+  return latest?.companyId ?? fallback;
 }
 
 export async function eligibleOrchestratorEnvironment(

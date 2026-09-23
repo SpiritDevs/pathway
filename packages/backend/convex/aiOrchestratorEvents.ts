@@ -5,6 +5,7 @@ import { notifyOrchestratorEnvironmentChange } from "./lib/aiOrchestratorEnviron
 import { v } from "convex/values";
 import { internalMutation } from "./_generated/server.js";
 import { notifyOrchestratorIssueChanges } from "./lib/aiOrchestratorIssueSignals.ts";
+import { scheduleEnvironmentWorkRefresh } from "./lib/aiOrchestratorWorkRefresh.ts";
 
 export const issueChanges = internalMutation({
   args: { companyId: v.id("companies"), issueIds: v.array(v.string()) },
@@ -37,12 +38,15 @@ export const checkOffline = internalMutation({
     for (const presence of presenceRows) {
       await ctx.db.patch(presence._id, { orchestratorPresence: "offline" });
       const registration = await ctx.db.get(presence.registrationId);
-      if (registration?.state === "active")
+      if (registration?.state === "active") {
         await notifyOrchestratorEnvironmentChange(ctx, registration);
+        await scheduleEnvironmentWorkRefresh(ctx, registration);
+      }
     }
     for (const registration of registrations) {
       await patchEnvironmentPresence(ctx, registration, { orchestratorPresence: "offline" });
       await notifyOrchestratorEnvironmentChange(ctx, registration);
+      await scheduleEnvironmentWorkRefresh(ctx, registration);
     }
   },
 });

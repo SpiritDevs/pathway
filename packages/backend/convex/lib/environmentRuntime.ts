@@ -1,5 +1,9 @@
 import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "../_generated/server.js";
+import { scheduleEnvironmentWorkRefresh } from "./aiOrchestratorWorkRefresh.ts";
+
+/** Delegated work treats a host silent this long as offline. */
+export const ENVIRONMENT_OFFLINE_AFTER_MS = 90_000;
 
 type Registration = Doc<"environmentRegistrations">;
 type Presence = Pick<Registration, "lastSeenAt" | "orchestratorPresence">;
@@ -58,7 +62,10 @@ export async function readEnvironmentRuntime(
   return runtimeFields(row ?? registration);
 }
 
-/** The first write copies legacy state atomically. Existing API callers need no migration flag. */
+/**
+ * The first write copies legacy state atomically. Existing API callers need no migration flag.
+ * A host returning after the offline window refreshes its tracked work, whichever heartbeat lands.
+ */
 export async function patchEnvironmentPresence(
   ctx: MutationCtx,
   registration: Registration,
@@ -68,6 +75,9 @@ export async function patchEnvironmentPresence(
     .query("environmentPresence")
     .withIndex("by_registration", (q) => q.eq("registrationId", registration._id))
     .unique();
+  const previousSeenAt = (row ?? registration).lastSeenAt ?? 0;
+  if (patch.lastSeenAt && patch.lastSeenAt - previousSeenAt >= ENVIRONMENT_OFFLINE_AFTER_MS)
+    await scheduleEnvironmentWorkRefresh(ctx, registration);
   if (row) await ctx.db.patch(row._id, patch);
   else {
     await ctx.db.insert("environmentPresence", {
