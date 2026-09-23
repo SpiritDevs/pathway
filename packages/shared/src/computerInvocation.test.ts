@@ -41,6 +41,15 @@ describe("explicit Computer invocation", () => {
     ).toBe("off");
   });
 
+  it.each(["agent", "automation"])("ignores the chat switch on %s output", (dispatchOrigin) => {
+    expect(resolveComputerInvocationMode({ enableComputerControl: true, dispatchOrigin })).toBe(
+      "off",
+    );
+    expect(
+      resolveComputerInvocationMode({ enableComputerControl: true, dispatchOrigin: "user" }),
+    ).toBe("chat");
+  });
+
   it("keeps Settings opt-in distinct and gives frozen queue metadata precedence", () => {
     expect(
       resolveComputerInvocationMode({
