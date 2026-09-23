@@ -34,6 +34,7 @@ import {
   ComputerApprovalPublishError,
   computerApprovalPolicy,
 } from "../computer/ComputerApprovalGate.ts";
+import { ComputerRunCalls } from "../computer/ComputerRunCalls.ts";
 import { DesktopDispatchAuthority } from "../computer/DesktopOperationQueue.ts";
 import { ComputerService } from "../computer/Services/ComputerService.ts";
 import { isStricterComputerAccess } from "../computer/computerAccessPolicy.ts";
@@ -205,6 +206,7 @@ export const makeComputerMcpTools = Effect.gen(function* () {
     } satisfies ComputerMcpTools;
   }
   const manager = computer.value.manager;
+  const calls = yield* ComputerRunCalls;
   const gate = yield* ComputerApprovalGate;
   const projections = yield* ProjectionStoreV2;
   const eventSink = yield* EventSinkV2;
@@ -453,7 +455,11 @@ export const makeComputerMcpTools = Effect.gen(function* () {
     const currentTurn = Effect.gen(function* () {
       const current = yield* projectionOf(invocation.threadId);
       const active = Option.isNone(current) ? undefined : activeComputerRun(current.value);
-      if (callerTurnId === null || active?.id !== callerTurnId) {
+      if (
+        callerTurnId === null ||
+        active?.id !== callerTurnId ||
+        calls.stopped(invocation.threadId, callerTurnId)
+      ) {
         return yield* callerTurnInactive;
       }
       return current;
@@ -530,9 +536,16 @@ export const makeComputerMcpTools = Effect.gen(function* () {
           ),
         ),
       );
-      const outcome = yield* Effect.exit(handled);
+      const runId = context.callerTurnId;
+      const outcome = yield* Effect.exit(
+        runId === null ? handled : calls.run(invocation.threadId, runId, handled),
+      );
       if (Exit.isFailure(outcome) && Cause.hasInterruptsOnly(outcome.cause)) {
         return yield* Effect.interrupt;
+      }
+      // Stop ended the call wherever it was waiting.
+      if (runId !== null && calls.stopped(invocation.threadId, runId)) {
+        return computerToolErrorResult(callerTurnInactive);
       }
       if (refusal !== undefined) return computerToolErrorResult(refusal);
       return Exit.isSuccess(outcome)

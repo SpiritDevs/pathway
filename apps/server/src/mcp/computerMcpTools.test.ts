@@ -7,6 +7,7 @@ import {
   EnvironmentId,
   EventId,
   MessageId,
+  NodeId,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
   ProviderDriverKind,
@@ -638,6 +639,71 @@ it.layer(TestLayer)("computerMcpTools", (it) => {
       const clicked = yield* Fiber.join(clicking);
       assert.equal(clicked?.isError, true);
       assert.equal(callsTo("click"), clicksBefore);
+    }),
+  );
+
+  it.effect("Stop ends a call still finding its target, and nothing is clicked", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* ComputerService;
+      const orchestrator = yield* OrchestratorV2;
+      const { threadId, runId } = yield* seedRunningTurn("stopped-targeting", "full-access");
+      yield* Effect.addFinalizer(() => Effect.orDie(manager.releaseDesktopControl(threadId)));
+      const run = yield* seededRun(threadId, runId);
+      const now = yield* DateTime.now;
+      const rootNodeId = run.rootNodeId ?? NodeId.make("stopped-targeting-root");
+      // A run Stop can reach has its root node.
+      yield* (yield* EventSinkV2).write({
+        events: [
+          {
+            id: EventId.make("stopped-targeting-node"),
+            type: "node.updated",
+            threadId,
+            runId,
+            nodeId: rootNodeId,
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              id: rootNodeId,
+              threadId,
+              runId,
+              parentNodeId: null,
+              rootNodeId,
+              kind: "root_turn",
+              status: "running",
+              countsForRun: true,
+              providerThreadId: run.providerThreadId,
+              providerTurnId: null,
+              nativeItemRef: null,
+              runtimeRequestId: null,
+              checkpointScopeId: null,
+              startedAt: now,
+              completedAt: null,
+            },
+          },
+        ],
+      });
+      const { tools } = yield* toolsUnderCeiling("full-access");
+      const { targeting, release } = yield* holdTargeting();
+      const clicksBefore = callsTo("click");
+      const clicking = yield* Effect.forkChild(clickDisplay(tools, threadId));
+      yield* Deferred.await(targeting);
+      yield* orchestrator.dispatch({
+        type: "run.interrupt",
+        commandId: CommandId.make("stopped-targeting-stop"),
+        threadId,
+        runId,
+      });
+      // Stop returned once the call unwound; a lookup that resumes now finds nothing to do.
+      yield* Deferred.succeed(release, undefined);
+      const stopped = yield* Fiber.join(clicking);
+      assert.equal(errorCode(stopped), "caller_turn_inactive");
+      assert.equal(callsTo("click"), clicksBefore);
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (candidate) => candidate.id === runId,
+        )?.status,
+        "interrupted",
+      );
     }),
   );
 

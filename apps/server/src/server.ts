@@ -154,6 +154,7 @@ import {
 import { layer as IdAllocatorV2Layer } from "./orchestration-v2/IdAllocator.ts";
 import { layer as ProjectionStoreV2Layer } from "./orchestration-v2/ProjectionStore.ts";
 import * as ComputerApprovalGate from "./computer/ComputerApprovalGate.ts";
+import * as ComputerRunCalls from "./computer/ComputerRunCalls.ts";
 import {
   computerApprovalRequesterLayer,
   computerServerOwnedRuntimeRequestsLayer,
@@ -495,13 +496,21 @@ const ComputerApprovalGateLayerLive = ComputerApprovalGate.layer.pipe(
   ),
 );
 
+// One registry of each run's Computer calls: the MCP tools run calls through
+// it, and the orchestrator's Stop reaches them through `RunStopFence`.
+const ComputerRunCallsLive = ComputerRunCalls.layer;
+
 const ComputerLayerLive = ComputerServiceLive.pipe(
   Layer.provideMerge(ComputerApprovalGateLayerLive),
+  Layer.provideMerge(ComputerRunCallsLive),
 );
 
 const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
   Layer.provide(
     computerServerOwnedRuntimeRequestsLayer.pipe(Layer.provide(ComputerApprovalGateLayerLive)),
+  ),
+  Layer.provide(
+    ComputerRunCalls.computerRunStopFenceLayer.pipe(Layer.provide(ComputerRunCallsLive)),
   ),
   // Turn start admits each run's Computer intent against the host.
   Layer.provide(ComputerLayerLive),
