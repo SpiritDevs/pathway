@@ -239,6 +239,30 @@ export class ComputerDenylistError extends ComputerTargetError {
 /** Every failure a computer operation can surface to its caller. */
 export type ComputerOperationError = ComputerBackendError | ComputerTargetError;
 
+// `Schema.is` is only valid on the two root classes: effect-smol memoizes the
+// class schema on the base, so `Schema.is(Subclass)` accepts every sibling.
+// The subclasses are told apart with `instanceof`.
+
+export function isComputerLeaseError(error: unknown): error is ComputerLeaseError {
+  // @effect-diagnostics-next-line instanceOfSchema:off -- Schema.is would accept any ComputerBackendError.
+  return error instanceof ComputerLeaseError;
+}
+
+export function isCuaActionError(error: unknown): error is CuaActionError {
+  // @effect-diagnostics-next-line instanceOfSchema:off -- Schema.is would accept any ComputerBackendError.
+  return error instanceof CuaActionError;
+}
+
+export function isComputerSpaceError(error: unknown): error is ComputerSpaceError {
+  // @effect-diagnostics-next-line instanceOfSchema:off -- Schema.is would accept any ComputerTargetError.
+  return error instanceof ComputerSpaceError;
+}
+
+export function isComputerDenylistError(error: unknown): error is ComputerDenylistError {
+  // @effect-diagnostics-next-line instanceOfSchema:off -- Schema.is would accept any ComputerTargetError.
+  return error instanceof ComputerDenylistError;
+}
+
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
