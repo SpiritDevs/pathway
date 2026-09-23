@@ -163,12 +163,50 @@ export function companyScopedEnvironmentThreads(
       threadProjects.set(value.shell.id, value.shell.projectId);
     }
   }
-  const filtered = threads.filter((thread) =>
-    thread.projectId === null
-      ? thread.conversationCompanyId === companyId
-      : threadProjects.get(thread.id) === thread.projectId,
+  const admitted = new Set<OrchestrationV2ThreadShell["id"]>();
+  for (const thread of threads) {
+    if (
+      thread.projectId === null
+        ? thread.conversationCompanyId === companyId
+        : threadProjects.get(thread.id) === thread.projectId
+    ) {
+      admitted.add(thread.id);
+    }
+  }
+  admitLineageChildren(threads, admitted);
+  if (admitted.size === threads.length) return threads;
+  return threads.filter((thread) => admitted.has(thread.id));
+}
+
+/**
+ * Subagent and fork threads reach the company index only after the environment
+ * publishes them, which lags their creation mid-turn. Until then a child in its
+ * parent's project follows the parent's visibility, so it can be opened at once.
+ */
+function admitLineageChildren(
+  threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+  admitted: Set<OrchestrationV2ThreadShell["id"]>,
+): void {
+  const projectByThreadId = new Map(threads.map((thread) => [thread.id, thread.projectId]));
+  let pending = threads.filter(
+    (thread) => !admitted.has(thread.id) && thread.lineage.parentThreadId !== null,
   );
-  return filtered.length === threads.length ? threads : filtered;
+  while (pending.length > 0) {
+    const next = pending.filter((thread) => {
+      const parentThreadId = thread.lineage.parentThreadId;
+      if (
+        parentThreadId === null ||
+        !admitted.has(parentThreadId) ||
+        projectByThreadId.get(parentThreadId) !== thread.projectId
+      ) {
+        return true;
+      }
+      admitted.add(thread.id);
+      return false;
+    });
+    if (next.length === pending.length) return;
+    pending = next;
+  }
 }
 
 export function companyScopedEnvironmentSnapshot<

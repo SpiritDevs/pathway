@@ -599,4 +599,48 @@ describe("cloud Agent Thread read model", () => {
       archivedSnapshot,
     );
   });
+
+  it("shows unpublished subagent threads through their visible parent", () => {
+    const replicas = new Map([
+      [COMPANY_ID, replica(cloudProject, binding, agentThread)],
+      [OTHER_COMPANY_ID, replica(otherCloudProject, otherBinding, otherAgentThread)],
+    ]);
+    const [parent, other] = cloudEnvironmentThreadsFromReplicas(replicas, ENVIRONMENT_ID);
+    if (parent === undefined || other === undefined) throw new Error("missing shell fixture");
+    const child = (id: string, from: typeof parent, projectId = from.projectId): typeof parent => ({
+      ...from,
+      id: ThreadId.make(id),
+      projectId,
+      lineage: {
+        parentThreadId: from.id,
+        relationshipToParent: "subagent",
+        rootThreadId: from.lineage.rootThreadId,
+      },
+    });
+    const subagent = child("subagent-one", parent);
+    const nestedSubagent = child("subagent-nested", subagent);
+    const movedSubagent = child("subagent-moved", parent, ProjectId.make("local-project-two"));
+    const otherSubagent = child("subagent-other", other);
+    const orphanSubagent = child("subagent-orphan", { ...parent, id: ThreadId.make("missing") });
+    const threads = [
+      nestedSubagent,
+      parent,
+      subagent,
+      movedSubagent,
+      other,
+      otherSubagent,
+      orphanSubagent,
+    ];
+
+    expect(
+      companyScopedEnvironmentThreads(threads, COMPANY_ID, replicas, ENVIRONMENT_ID).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual(["subagent-nested", THREAD_ID, "subagent-one"]);
+    expect(
+      companyScopedEnvironmentThreads(threads, OTHER_COMPANY_ID, replicas, ENVIRONMENT_ID).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual(["thread-two", "subagent-other"]);
+  });
 });
