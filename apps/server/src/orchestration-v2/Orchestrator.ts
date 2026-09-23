@@ -6132,7 +6132,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...runId,
           nodeId: runtimeRequest.nodeId,
           occurredAt: now,
-          payload: { ...runtimeRequest, status: "resolved", resolvedAt: now },
+          payload: {
+            ...runtimeRequest,
+            status: decision === "cancel" ? "cancelled" : "resolved",
+            resolvedAt: now,
+          },
         });
         if (requestNode !== undefined) {
           yield* emitEvent({
