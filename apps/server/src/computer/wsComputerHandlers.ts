@@ -157,6 +157,27 @@ export function makeWsComputerHandlers(
     : handlers;
 }
 
+/**
+ * Runs every handler through `wrap` - the socket's scope check and tracing.
+ * Keeping the Computer handlers one typed object, spread into the WS group,
+ * keeps that group's handler literal small enough for the compiler to infer.
+ */
+export function wrapWsComputerHandlers(
+  handlers: WsComputerHandlers,
+  wrap: <A>(
+    method: string,
+    effect: Effect.Effect<A, WsComputerError>,
+  ) => Effect.Effect<A, WsComputerError>,
+): WsComputerHandlers {
+  const wrapped: Record<string, Handler<unknown, unknown>> = {};
+  for (const [method, handler] of Object.entries(handlers) as ReadonlyArray<
+    [string, Handler<unknown, unknown>]
+  >) {
+    wrapped[method] = (input) => wrap(method, handler(input));
+  }
+  return wrapped as unknown as WsComputerHandlers;
+}
+
 function makeUnrestrictedHandlers(
   computerService: ComputerServiceShape | undefined,
   approvalGate: Pick<ComputerApprovalGateShape, "cancelThread"> | undefined,
