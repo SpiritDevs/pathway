@@ -1,0 +1,95 @@
+name: Provision verified Cua
+description: Restore an exact trusted native build or build the pinned source on a cache miss
+inputs:
+  targets:
+    description: Extra Rust targets for the pinned toolchain (space separated)
+    default: ""
+  save-cache:
+    description: Only the trusted default-branch producer may save
+    default: "false"
+outputs:
+  cache-hit:
+    value: ${{ steps.cache.outputs.cache-hit }}
+  cache-key:
+    value: ${{ steps.key.outputs.key }}
+runs:
+  using: composite
+  steps:
+    # The pinned toolchain is scoped to this action's steps so the rest of the
+    # job keeps its own Rust. Later steps only reuse the verified artifact.
+    - name: Install pinned Rust toolchain
+      id: toolchain
+      shell: bash
+      env:
+        RUST_TARGETS: ${{ inputs.targets }}
+      run: |
+        set -euo pipefail
+        rust_version=$(node -p 'require("./packages/shared/src/cuaDriverRelease.json").rustVersion')
+        target_args=()
+        for target in $RUST_TARGETS; do target_args+=(--target "$target"); done
+        rustup toolchain install "$rust_version" --profile minimal "${target_args[@]}"
+        echo "rust-version=$rust_version" >> "$GITHUB_OUTPUT"
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          echo "strip=none" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Install Linux native build dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev
+
+    - name: Fingerprint native build inputs
+      id: key
+      shell: bash
+      env:
+        RUSTUP_TOOLCHAIN: ${{ steps.toolchain.outputs.rust-version }}
+        CARGO_PROFILE_RELEASE_STRIP: ${{ steps.toolchain.outputs.strip }}
+      run: |
+        set -euo pipefail
+        [[ -n "$CARGO_PROFILE_RELEASE_STRIP" ]] || unset CARGO_PROFILE_RELEASE_STRIP
+        node scripts/cua-cache-key.ts
+
+    - name: Restore exact Cua artifact
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/cua-artifact
+        key: ${{ steps.key.outputs.key }}
+
+    - name: Build on a valid cache miss
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        CACHE_KEY: ${{ steps.key.outputs.key }}
+        RUSTUP_TOOLCHAIN: ${{ steps.toolchain.outputs.rust-version }}
+        CARGO_PROFILE_RELEASE_STRIP: ${{ steps.toolchain.outputs.strip }}
+      run: |
+        set -euo pipefail
+        [[ -n "$CARGO_PROFILE_RELEASE_STRIP" ]] || unset CARGO_PROFILE_RELEASE_STRIP
+        # Even primary cache keys can prefix-match. Never consume that result.
+        rm -rf "$RUNNER_TEMP/cua-artifact"
+        unset PATHWAY_CUA_ARTIFACT_DIR PATHWAY_CUA_SIGN_IDENTITY
+        node scripts/provision-cua-driver.ts --destination "$RUNNER_TEMP/cua-artifact"
+        printf '%s\n' "$CACHE_KEY" > "$RUNNER_TEMP/cua-artifact/build-key.txt"
+
+    - name: Validate and stage cached Cua
+      shell: bash
+      env:
+        CACHE_KEY: ${{ steps.key.outputs.key }}
+        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+      run: |
+        set -euo pipefail
+        test "$(cat "$RUNNER_TEMP/cua-artifact/build-key.txt")" = "$CACHE_KEY"
+        unset PATHWAY_CUA_SIGN_IDENTITY
+        node scripts/provision-cua-driver.ts --artifact-dir "$RUNNER_TEMP/cua-artifact" --destination "$RUNNER_TEMP/cua-verified"
+        echo "PATHWAY_CUA_ARTIFACT_DIR=$RUNNER_TEMP/cua-verified" >> "$GITHUB_ENV"
+        echo "Cua exact cache hit: $CACHE_HIT; key: $CACHE_KEY" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Save trusted default-branch Cua artifact
+      if: inputs.save-cache == 'true' && steps.cache.outputs.cache-hit != 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/cua-artifact
+        key: ${{ steps.key.outputs.key }}

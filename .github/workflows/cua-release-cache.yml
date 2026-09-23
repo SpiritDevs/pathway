@@ -1,0 +1,43 @@
+name: Prepare release Cua cache
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/shared/src/cuaDriverRelease.json
+      - native/cua-driver/patches/**
+      - scripts/provision-cua-driver.ts
+      - scripts/cua-cache-key.ts
+      - scripts/lib/cua-artifact-provenance.ts
+      - scripts/lib/native-command.ts
+      - .github/actions/provision-cua/action.yml
+      - .github/workflows/cua-release-cache.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cua-release-cache-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    # Matches the release build runner so the fingerprinted toolchain agrees.
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@spiritdevs/scripts...
+      - uses: ./.github/actions/provision-cua
+        with:
+          targets: aarch64-apple-darwin
+          save-cache: "true"
