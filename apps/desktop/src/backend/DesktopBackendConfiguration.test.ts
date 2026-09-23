@@ -397,6 +397,7 @@ describe("DesktopBackendConfiguration", () => {
         }),
         suspend: Effect.void,
         resume: Effect.void,
+        setEmergencyStopNotice: () => Effect.void,
       }),
     ),
   );
