@@ -58,6 +58,7 @@ import * as EmailWaitStoreLive from "../email/EmailWaitStore.ts";
 import { IssueTrackerService } from "../issues/IssueTrackerService.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { type ComputerMcpTools, makeComputerMcpTools } from "./computerMcpTools.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
@@ -741,8 +742,29 @@ interface HandlerBuildOptions {
   >;
   readonly email?: EmailMcpService.EmailMcpService["Service"];
   readonly projects?: ReadonlyArray<EmailProjectSettings>;
+  /** Computer tools; listed only for credentials holding the `computer` capability. */
+  readonly computer?: ComputerMcpTools;
   readonly runtimeContext: Context.Context<never>;
 }
+
+/** The tool a `tools/call` body names, whatever the protocol era. */
+const toolCallOf = (body: unknown) => {
+  if (!Predicate.hasProperty(body, "method") || body.method !== "tools/call") return undefined;
+  if (!Predicate.hasProperty(body, "id")) return undefined;
+  const id = body.id;
+  if (typeof id !== "string" && typeof id !== "number") return undefined;
+  const params = Predicate.hasProperty(body, "params") ? body.params : undefined;
+  if (!Predicate.hasProperty(params, "name") || typeof params.name !== "string") return undefined;
+  const args = Predicate.hasProperty(params, "arguments") ? params.arguments : undefined;
+  return {
+    id,
+    name: params.name,
+    args:
+      typeof args === "object" && args !== null && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : {},
+  };
+};
 
 const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler => {
   const customSubscriptions = new Map<string, () => void>();
@@ -765,6 +787,10 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
           description: Tool.getDescription(PreviewSnapshotTool),
           annotations: toolAnnotations(PreviewSnapshotTool),
         };
+  const computerRegistrations = (options.computer?.advertised ?? []).map(({ definition }) => ({
+    definition,
+    inputSchema: fromJsonSchema<object>(definition.inputSchema),
+  }));
   const sdk = createMcpHandler(
     ({ authInfo }) => {
       const invocation = authInfo?.extra?.invocation as
@@ -803,6 +829,32 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
                 )
               : invokeBuiltTool(built, tool.name, payload, invocation, options.runtimeContext),
         );
+      }
+      if (options.computer !== undefined && invocation.capabilities.has("computer")) {
+        const computer = options.computer;
+        for (const { definition, inputSchema } of computerRegistrations) {
+          // Listing only: `fetch` answers every Computer call before the SDK.
+          server.registerTool<typeof inputSchema, typeof inputSchema>(
+            definition.name,
+            {
+              description: definition.description,
+              inputSchema,
+              ...(definition.annotations === undefined
+                ? {}
+                : { annotations: definition.annotations }),
+              ...(definition._meta === undefined ? {} : { _meta: { ...definition._meta } }),
+            },
+            async (payload) =>
+              ((await Effect.runPromiseWith(options.runtimeContext)(
+                computer.call({
+                  invocation,
+                  name: definition.name,
+                  args: payload as Record<string, unknown>,
+                  jsonRpcRequestId: null,
+                }),
+              )) ?? { content: [], isError: true }) as CallToolResult,
+          );
+        }
       }
       if (snapshotRegistration !== undefined) {
         const { annotations, built, description, inputSchema, tool } = snapshotRegistration;
@@ -1123,6 +1175,25 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
           }
         }
       }
+      const computerCall = classified.kind === "reject" ? undefined : toolCallOf(parsedBody);
+      if (options.computer !== undefined && computerCall !== undefined) {
+        const computer = options.computer;
+        if (computer.handles(computerCall.name)) {
+          const result = await Effect.runPromiseWith(options.runtimeContext)(
+            computer.call({
+              invocation,
+              name: computerCall.name,
+              args: computerCall.args,
+              jsonRpcRequestId: computerCall.id,
+            }),
+          );
+          if (result !== undefined) {
+            return classified.kind === "modern"
+              ? jsonRpcResult(computerCall.id, result)
+              : Response.json({ jsonrpc: "2.0", id: computerCall.id, result });
+          }
+        }
+      }
       const requestInvocation =
         classified.kind === "modern" &&
         classified.messageKind === "request" &&
@@ -1290,6 +1361,13 @@ export const makeEmailTestHandler = (projects: ReadonlyArray<EmailProjectSetting
     return handler;
   }).pipe(Effect.provide(EmailToolkitHandlersLive));
 
+/** Serves only the given Computer tools, for tests of the Computer MCP surface. */
+export const makeComputerTestHandler = (computer: ComputerMcpTools) =>
+  Effect.gen(function* () {
+    const runtimeContext = yield* Effect.context<never>();
+    return yield* makeScopedPathwayMcpHandler({ toolkits: [], computer, runtimeContext });
+  });
+
 class McpV2HttpHandler extends Context.Service<McpV2HttpHandler, PathwayMcpHandler>()(
   "@spiritdevs/pathway/mcp/McpHttpServer/McpV2HttpHandler",
 ) {}
@@ -1313,6 +1391,7 @@ const McpV2HttpHandlerLive = Layer.effect(
     const issueTracker = yield* IssueTrackerService;
     const runtimeContext = yield* Effect.context<never>();
     const authority = yield* OrchestratorWorkerAuthority.OrchestratorWorkerAuthority;
+    const computer = yield* makeComputerMcpTools;
     const handler = makePathwayMcpHandler({
       authorize: (invocation, name, payload) =>
         Effect.runPromiseWith(runtimeContext)(authority.authorize(invocation, name, payload)),
@@ -1325,6 +1404,7 @@ const McpV2HttpHandlerLive = Layer.effect(
       ),
       email: emailService,
       projects: settings.emailCapture.projects,
+      computer,
       runtimeContext,
     });
     const stored = yield* emailStore.subscribeStored;

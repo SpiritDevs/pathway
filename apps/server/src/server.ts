@@ -484,18 +484,13 @@ const RunFinalizationObserverLayerLive = RunFinalizationService.observerLive.pip
 // card answers to it, and the Computer tools, WS handlers and manager wait on
 // it. It posts cards through the same event sink the orchestration runtime
 // writes, so both sides share one instance by layer memoization.
+const ComputerOrchestrationStoresLive = Layer.mergeAll(
+  OrchestrationV2EventSinkLayerLive,
+  ProjectionStoreV2Layer,
+  IdAllocatorV2Layer,
+);
 const ComputerApprovalGateLayerLive = ComputerApprovalGate.layer.pipe(
-  Layer.provide(
-    computerApprovalRequesterLayer.pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          OrchestrationV2EventSinkLayerLive,
-          ProjectionStoreV2Layer,
-          IdAllocatorV2Layer,
-        ),
-      ),
-    ),
-  ),
+  Layer.provide(computerApprovalRequesterLayer.pipe(Layer.provide(ComputerOrchestrationStoresLive))),
 );
 
 const ComputerLayerLive = ComputerServiceLive.pipe(
@@ -669,8 +664,11 @@ export const makeRoutesLayer = Layer.mergeAll(
       desktopComputerEmergencyStopRouteLayer,
     ),
     // The MCP session registry is provided globally (shared with V2 provider
-    // sessions) rather than inline here.
-    McpHttpServer.layerWithSharedEmailPersistence,
+    // sessions) rather than inline here. Computer tools read the thread and
+    // post notices through the stores the orchestration runtime shares.
+    McpHttpServer.layerWithSharedEmailPersistence.pipe(
+      Layer.provide(ComputerOrchestrationStoresLive),
+    ),
   ).pipe(Layer.provide(commandReadinessLayer)),
   staticAndDevRouteLayer,
   rendererShellReadinessRouteLayer,
