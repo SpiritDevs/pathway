@@ -44,7 +44,9 @@ You can still scroll to the latest message while reconnecting.
 
 Active threads show the project above the thread title, with the branch and environment below it.
 The branch stays on the left; the environment name sits on the right beside the provider logo.
-The filter icon opens **Thread options**, with **Focus** and **Filters** submenus.
+The filter icon opens **Thread options**, with **Focus**, **Sort & view**, and **Filters** submenus.
+**Sort & view** sets how the selected Focus (including All threads) sorts active threads and whether
+its pinned threads collapse under a **Pinned** header. These choices sync with desktop and web.
 Notifications and New Thread remain separate toolbar buttons.
 Choose a Focus or create one from the Focus submenu. When a specific Focus is selected,
 a separate target icon also opens the picker; choosing All threads hides that shortcut.

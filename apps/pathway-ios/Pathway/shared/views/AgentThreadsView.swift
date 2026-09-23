@@ -200,7 +200,25 @@ struct AgentThreadsView: View {
             if listFilter == .archived {
                 ForEach(archivedThreads) { thread in compactThreadLink(thread, icon: "archivebox") }
             } else {
-            ForEach(activeThreads) { thread in
+            if focusView.collapsiblePinned && !pinnedThreads.isEmpty {
+                Section {
+                    if !isPinnedCollapsed {
+                        ForEach(pinnedThreads) { thread in threadLink(thread) }
+                    }
+                } header: {
+                    ThreadLifecycleShelfHeader(
+                        title: "Pinned",
+                        count: pinnedThreads.count,
+                        isExpanded: !isPinnedCollapsed,
+                        tint: .secondary
+                    ) {
+                        focuses.togglePinnedCollapsed(focuses.selectedID)
+                    }
+                }
+            } else {
+                ForEach(pinnedThreads) { thread in threadLink(thread) }
+            }
+            ForEach(sortedUnpinnedThreads) { thread in
                 threadLink(thread)
             }
 
@@ -339,6 +357,15 @@ struct AgentThreadsView: View {
     }
 
     private var activeThreads: [PathwayAgentThread] { appModel.cloud.activeThreads.filter(matches) }
+    private var focusView: PathwayFocusView { focuses.view(for: focuses.selectedID) }
+    private var isPinnedCollapsed: Bool { focuses.collapsedPinnedFocusIDs.contains(focuses.selectedID) }
+    /// Pinned threads keep their arranged order above the Focus's chosen sort.
+    private var pinnedThreads: [PathwayAgentThread] { activeThreads.filter { $0.shell.pinnedAt != nil } }
+    private var sortedUnpinnedThreads: [PathwayAgentThread] {
+        PathwayFocusThreadSorter.sorted(activeThreads.filter { $0.shell.pinnedAt == nil }, by: focusView.sort) { thread in
+            thread.shell.projectId == nil ? nil : appModel.cloud.projectName(companyId: thread.companyId, projectId: thread.cloudProjectId)
+        }
+    }
     private var snoozedThreads: [PathwayAgentThread] { appModel.cloud.snoozedThreads.filter(matches) }
     private var settledThreads: [PathwayAgentThread] { appModel.cloud.settledThreads.filter(matches) }
     private var archivedThreads: [PathwayAgentThread] { appModel.cloud.threads.filter { $0.shell.archivedAt != nil && matches($0) } }
@@ -420,6 +447,7 @@ struct AgentThreadsView: View {
                 }
                 Divider()
                 focusMenu
+                viewMenu
                 filtersMenu
             } label: { Image(systemName: "line.3.horizontal.decrease").frame(minWidth: 44, minHeight: 44) }
             .accessibilityLabel("Thread options")
@@ -433,6 +461,36 @@ struct AgentThreadsView: View {
     private var focusMenu: some View {
         Menu { focusMenuContents } label: {
             Label("Focus", image: PathwayFocusIconCatalog.assetName(for: selectedFocus?.iconName ?? "Layers3"))
+        }
+    }
+
+    /// Sort and pinned-shelf choices for the selected Focus, All included; synced per user.
+    private var viewMenu: some View {
+        Menu {
+            Picker("Sort threads", selection: Binding(
+                get: { focusView.sort },
+                set: { sort in saveFocusView { $0.sort = sort } }
+            )) {
+                ForEach(PathwayFocusThreadSort.allCases) { Text($0.title).tag($0) }
+            }
+            Toggle("Collapsible pinned chats", isOn: Binding(
+                get: { focusView.collapsiblePinned },
+                set: { collapsible in saveFocusView { $0.collapsiblePinned = collapsible } }
+            ))
+        } label: {
+            Label("Sort & view", systemImage: "arrow.up.arrow.down")
+        }
+    }
+
+    private func saveFocusView(_ change: (inout PathwayFocusView) -> Void) {
+        var view = focusView
+        change(&view)
+        let focusID = focuses.selectedID
+        Task {
+            do {
+                try await focuses.saveView(view, for: focusID, cloud: appModel.cloud)
+                focuses.errorMessage = nil
+            } catch { focuses.errorMessage = error.localizedDescription }
         }
     }
 

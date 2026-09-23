@@ -16,6 +16,7 @@ import {
   type Focus,
   type FocusNotification,
   type FocusReadModel,
+  type FocusThreadSortOrder,
 } from "@spiritdevs/contracts/focus";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
@@ -88,6 +89,14 @@ export const FOCUS_FUNCTION_REFERENCES = {
   unassignProject: mutationReference<{ readonly projectKey: FocusProjectKey }, null>(
     "focuses:unassignProject",
   ),
+  setViewPreference: mutationReference<
+    {
+      readonly focusId: string;
+      readonly sortOrder?: FocusThreadSortOrder;
+      readonly collapsiblePinned?: boolean;
+    },
+    null
+  >("focuses:setViewPreference"),
   unreadCount: queryReference<{}, number>("focusNotifications:unreadCount"),
   notifications: queryReference<{ readonly limit?: number }, ReadonlyArray<FocusNotification>>(
     "focusNotifications:list",
@@ -125,6 +134,12 @@ export interface FocusMutations {
     readonly projectKey: FocusProjectKey;
   }) => Promise<null>;
   readonly unassignProject: (input: { readonly projectKey: FocusProjectKey }) => Promise<null>;
+  /** focusId is a Focus id, "all", or "conversations". */
+  readonly setViewPreference: (input: {
+    readonly focusId: string;
+    readonly sortOrder?: FocusThreadSortOrder;
+    readonly collapsiblePinned?: boolean;
+  }) => Promise<null>;
   readonly clearAllNotifications: () => Promise<null>;
   readonly markAllNotificationsSeen: () => Promise<null>;
   readonly markAllNotificationsRead: () => Promise<null>;
@@ -170,6 +185,8 @@ function makeFocusMutations(client: ConvexClient): FocusMutations {
     remove: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.remove, input),
     assignProject: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.assignProject, input),
     unassignProject: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.unassignProject, input),
+    setViewPreference: (input) =>
+      client.mutation(FOCUS_FUNCTION_REFERENCES.setViewPreference, input),
     clearAllNotifications: () => client.mutation(FOCUS_FUNCTION_REFERENCES.clearAll, {}),
     markAllNotificationsSeen: () => client.mutation(FOCUS_FUNCTION_REFERENCES.markAllSeen, {}),
     markAllNotificationsRead: () => client.mutation(FOCUS_FUNCTION_REFERENCES.markAllRead, {}),

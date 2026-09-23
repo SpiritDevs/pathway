@@ -34,6 +34,7 @@ const READ_MODEL: FocusReadModel = {
     },
   ],
   assignments: [{ focusId: WORK, projectKey: PROJECT, createdAt: 1, updatedAt: 1 }],
+  viewPreferences: [],
 };
 
 function memoryStorage(initial: Readonly<Record<string, string>> = {}) {

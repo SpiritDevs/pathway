@@ -5,12 +5,15 @@ between sets such as Work and Personal without changing or moving the threads th
 is a filter, not a container. Pinned, snoozed, active, and settled states still belong to each thread.
 
 The **All** tab always comes first in the Focus Strip at the bottom of the sidebar. It shows every
-project and project thread available in the current company scope. You cannot edit, reorder, or delete it.
+project and project thread available in the current company scope. You cannot rename, reorder, or
+delete it. Right-click **All** to choose its sort order and whether its pinned chats can collapse.
 
 ## Create and manage Focuses
 
 Select **Create Focus** at the right end of the Focus Strip, then choose a name, icon, color, and
-projects. Right-click a Focus in the strip to edit it. Drag Focuses in the strip to change their
+projects. Right-click a Focus in the strip to edit it. The editor opens with just the Focus's icon
+and name; select the pencil beside the name to show the icon and color choices. When there are
+more than four projects, a search field at the top of the project list narrows them by name. Drag Focuses in the strip to change their
 order. Connections grouped as one project in the project dropdown also appear as one project here.
 Assigning that row applies the Focus to every connection in the group.
 
@@ -30,6 +33,31 @@ remain available under **All**.
 
 Focus names, icons, colors, order, and project assignments sync across your machines. The active
 Focus does not sync. Each machine remembers its own selection.
+
+## Sort order and pinned chats
+
+Each Focus, including **All**, has its own **Sort threads** choice for active threads. Pinned
+threads always stay above the sorted list in their pinned order.
+
+- **Custom order** (default): drag threads to arrange them on web and desktop. New threads appear
+  above your arranged ones, and the arrangement is shared by every Focus. On iPhone and iPad,
+  Custom order lists the newest thread first.
+- **Recent work**: the thread where you most recently sent a message comes first.
+- **Recent activity**: the thread with the latest message from you or the latest agent run comes first.
+- **Date created**: the newest thread comes first.
+- **Needs attention first**: threads waiting for approval or your input, or whose last run failed,
+  come first. Each group then follows recent activity.
+- **Project**: threads grouped by project name from A to Z, with conversations last. Each project
+  follows recent activity.
+
+Turn on **Collapsible pinned chats** to add a **Pinned** header above that Focus's pinned threads.
+Select the header to collapse or expand them. A collapsed header shows how many threads it hides.
+On web and desktop, the thread you have open stays visible.
+
+Sort order and **Collapsible pinned chats** sync across your devices. Whether the Pinned header is
+currently collapsed is remembered on each device. On iPhone and iPad, choose both from **Sort &
+view** in the thread options menu for the selected Focus, or in the **View** section when editing
+a Focus.
 
 ## Company scope and search
 

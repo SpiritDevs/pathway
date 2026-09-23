@@ -101,10 +101,12 @@ describe("Focus definitions", () => {
         },
       ],
       assignments: [],
+      viewPreferences: [],
     });
     await expect(asUser(t, "user-two").query(api.focuses.list, {})).resolves.toEqual({
       focuses: [],
       assignments: [],
+      viewPreferences: [],
     });
     await expect(
       asUser(t, "user-two").mutation(api.focuses.update, { focusId: WORK, name: "Mine" }),
@@ -159,6 +161,47 @@ describe("Focus definitions", () => {
     );
   });
 
+  it("syncs per-user view preferences for Focuses and All, and drops them with the Focus", async () => {
+    const t = harness();
+    await seedUser(t, "user-one");
+    await seedUser(t, "user-two");
+    const owner = asUser(t, "user-one");
+    await owner.mutation(api.focuses.create, createFocus(WORK, "Work"));
+    await owner.mutation(api.focuses.setViewPreference, { focusId: "all", sortOrder: "project" });
+    await owner.mutation(api.focuses.setViewPreference, { focusId: WORK, collapsiblePinned: true });
+    await owner.mutation(api.focuses.setViewPreference, {
+      focusId: WORK,
+      sortOrder: "needs_attention",
+    });
+    const views = (await owner.query(api.focuses.list, {})).viewPreferences;
+    expect(
+      views.map(({ focusId, sortOrder, collapsiblePinned }) => ({
+        focusId,
+        sortOrder,
+        collapsiblePinned,
+      })),
+    ).toEqual(
+      expect.arrayContaining([
+        { focusId: "all", sortOrder: "project", collapsiblePinned: false },
+        { focusId: WORK, sortOrder: "needs_attention", collapsiblePinned: true },
+      ]),
+    );
+    expect((await asUser(t, "user-two").query(api.focuses.list, {})).viewPreferences).toEqual([]);
+    await expect(
+      owner.mutation(api.focuses.setViewPreference, { focusId: WORK, sortOrder: "random" }),
+    ).rejects.toThrow("sort order");
+    await expect(
+      asUser(t, "user-two").mutation(api.focuses.setViewPreference, {
+        focusId: WORK,
+        sortOrder: "created_at",
+      }),
+    ).rejects.toThrow("No such Focus");
+    await owner.mutation(api.focuses.remove, { focusId: WORK });
+    expect(
+      (await owner.query(api.focuses.list, {})).viewPreferences.map((view) => view.focusId),
+    ).toEqual(["all"]);
+  });
+
   it("rejects empty and untrimmed Focus ids", async () => {
     const t = harness();
     await seedUser(t, "user-one");
@@ -173,6 +216,7 @@ describe("Focus definitions", () => {
     await expect(owner.query(api.focuses.list, {})).resolves.toEqual({
       focuses: [],
       assignments: [],
+      viewPreferences: [],
     });
   });
 

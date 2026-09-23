@@ -1,5 +1,6 @@
 import { useSidebarPrRevalidation } from "../state/sidebarPrRevalidation";
 import { QueuedThreadSidebar } from "./QueuedThreadSidebar";
+import { sortActiveThreadsForFocus, useFocusViews } from "./focus/focusViewPreferences";
 import {
   threadQueueEntriesAtom,
   threadQueueDestinationsAtom,
@@ -2879,14 +2880,43 @@ export default function Sidebar() {
     });
   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
 
+  // Each Focus (All included) chooses its inbox sort and whether pinned rows
+  // fold behind a shelf header. A collapsed pinned shelf keeps the routed row.
+  const { viewFor: focusViewFor, togglePinnedCollapsed } = useFocusViews();
+  const focusView = focusViewFor(activeFocusId);
+  const pinnedShelfCollapsed = focusView.collapsiblePinned && focusView.pinnedCollapsed;
+  const togglePinnedShelf = useCallback(
+    () => togglePinnedCollapsed(activeFocusId),
+    [activeFocusId, togglePinnedCollapsed],
+  );
+  const visiblePinnedThreads = useMemo(
+    () =>
+      getVisibleThreadsForCollapsibleShelf({
+        threads: pinnedThreads,
+        isExpanded: !pinnedShelfCollapsed,
+        activeThreadKey: routeThreadKey,
+        getThreadKey: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      }),
+    [pinnedShelfCollapsed, pinnedThreads, routeThreadKey],
+  );
+  const displayedActiveThreads = useMemo(
+    () =>
+      sortActiveThreadsForFocus(orderedActiveThreads, focusView.sortOrder, (thread) =>
+        thread.projectId === null
+          ? null
+          : (projectDisplayNameByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null),
+      ),
+    [focusView.sortOrder, orderedActiveThreads, projectDisplayNameByKey],
+  );
+
   const orderedThreads = useMemo(
     () => [
-      ...pinnedThreads,
-      ...orderedActiveThreads,
+      ...visiblePinnedThreads,
+      ...displayedActiveThreads,
       ...visibleSnoozedThreads,
       ...renderedSettledThreads,
     ],
-    [pinnedThreads, orderedActiveThreads, visibleSnoozedThreads, renderedSettledThreads],
+    [visiblePinnedThreads, displayedActiveThreads, visibleSnoozedThreads, renderedSettledThreads],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -3306,6 +3336,16 @@ export default function Sidebar() {
       getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
     });
   }, [optimisticPinnedOrder, pinnedThreads]);
+  const visibleOrderedPinnedThreads = useMemo(
+    () =>
+      pinnedShelfCollapsed
+        ? orderedPinnedThreads.filter(
+            (thread) =>
+              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+          )
+        : orderedPinnedThreads,
+    [orderedPinnedThreads, pinnedShelfCollapsed, routeThreadKey],
+  );
   useEffect(() => {
     if (optimisticPinnedOrder === null) return;
     const canonical = pinnedThreads.filter((thread) =>
@@ -4760,7 +4800,34 @@ export default function Sidebar() {
                       routeDraftId={routeDraftIdForRows}
                       onNavigateToDraft={navigateToDraft}
                     />,
-                    pinnedThreads.length > 0 ? (
+                    focusView.collapsiblePinned && pinnedThreads.length > 0 ? (
+                      <li
+                        key="pinned-shelf-header"
+                        data-thread-selection-safe
+                        className="list-none"
+                      >
+                        <button
+                          type="button"
+                          onClick={togglePinnedShelf}
+                          aria-expanded={!pinnedShelfCollapsed}
+                          data-testid="sidebar-pinned-shelf-toggle"
+                          className="mb-1 mt-1 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
+                        >
+                          <span className="text-xs font-medium text-muted-foreground/70">
+                            {pinnedShelfCollapsed ? `Pinned (${pinnedThreads.length})` : "Pinned"}
+                          </span>
+                          <span className="h-px flex-1 bg-sidebar-border/60" />
+                          <ChevronDownIcon
+                            aria-hidden
+                            className={cn(
+                              "size-3 text-muted-foreground/70 transition-transform",
+                              !pinnedShelfCollapsed && "rotate-180",
+                            )}
+                          />
+                        </button>
+                      </li>
+                    ) : null,
+                    visiblePinnedThreads.length > 0 ? (
                       <li key="pinned-dnd" className="list-none">
                         <DndContext
                           sensors={threadDndSensors}
@@ -4769,7 +4836,7 @@ export default function Sidebar() {
                           onDragEnd={handlePinnedDragEnd}
                         >
                           <SortableContext
-                            items={orderedPinnedThreads
+                            items={visibleOrderedPinnedThreads
                               .map((thread) =>
                                 scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
                               )
@@ -4781,7 +4848,7 @@ export default function Sidebar() {
                               aria-label="Pinned threads"
                               className="flex flex-col gap-px"
                             >
-                              {orderedPinnedThreads.map((thread) => {
+                              {visibleOrderedPinnedThreads.map((thread) => {
                                 const threadKey = scopedThreadKey(
                                   scopeThreadRef(thread.environmentId, thread.id),
                                 );
@@ -4800,7 +4867,7 @@ export default function Sidebar() {
                       </li>
                     ) : null,
                   ];
-                  if (pinnedThreads.length > 0) {
+                  if (visiblePinnedThreads.length > 0) {
                     items.push(
                       <li
                         key="pinned-divider"
@@ -4810,35 +4877,42 @@ export default function Sidebar() {
                       />,
                     );
                   }
-                  // Active rows are always sortable: unlike pins the order is
-                  // client-local, so there is no server capability to gate on.
-                  items.push(
-                    <DndContext
-                      key="active-dnd"
-                      sensors={threadDndSensors}
-                      collisionDetection={closestCenter}
-                      modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
-                      onDragEnd={handleActiveDragEnd}
-                    >
-                      <SortableContext
-                        items={orderedActiveThreads.map((thread) =>
-                          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-                        )}
-                        strategy={verticalListSortingStrategy}
+                  // Active rows are sortable in Custom order: unlike pins the order
+                  // is client-local, so there is no server capability to gate on.
+                  // Automatic sorts render plain rows.
+                  if (focusView.sortOrder !== "custom") {
+                    for (const thread of displayedActiveThreads) {
+                      items.push(renderThreadRow(thread, "active"));
+                    }
+                  } else {
+                    items.push(
+                      <DndContext
+                        key="active-dnd"
+                        sensors={threadDndSensors}
+                        collisionDetection={closestCenter}
+                        modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
+                        onDragEnd={handleActiveDragEnd}
                       >
-                        {orderedActiveThreads.map((thread) => {
-                          const threadKey = scopedThreadKey(
-                            scopeThreadRef(thread.environmentId, thread.id),
-                          );
-                          return (
-                            <SortableThreadRow key={threadKey} id={threadKey}>
-                              {(bag) => renderThreadRow(thread, "active", bag)}
-                            </SortableThreadRow>
-                          );
-                        })}
-                      </SortableContext>
-                    </DndContext>,
-                  );
+                        <SortableContext
+                          items={orderedActiveThreads.map((thread) =>
+                            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                          )}
+                          strategy={verticalListSortingStrategy}
+                        >
+                          {orderedActiveThreads.map((thread) => {
+                            const threadKey = scopedThreadKey(
+                              scopeThreadRef(thread.environmentId, thread.id),
+                            );
+                            return (
+                              <SortableThreadRow key={threadKey} id={threadKey}>
+                                {(bag) => renderThreadRow(thread, "active", bag)}
+                              </SortableThreadRow>
+                            );
+                          })}
+                        </SortableContext>
+                      </DndContext>,
+                    );
+                  }
                   // Snoozed shelf: between the inbox and Settled — out of the
                   // way, never gone. The header always renders while anything
                   // is snoozed (the count is the whole footprint when

@@ -1,5 +1,11 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
-import { FOCUS_NAME_MAX_CHARS } from "@spiritdevs/contracts/focus";
+import {
+  ALL_FOCUS_VIEW_ID,
+  CONVERSATIONS_FOCUS_VIEW_ID,
+  FOCUS_NAME_MAX_CHARS,
+  FOCUS_THREAD_SORT_ORDERS,
+  focusThreadSortOrder,
+} from "@spiritdevs/contracts/focus";
 import { v } from "convex/values";
 
 import type { Doc, Id } from "./_generated/dataModel.js";
@@ -27,10 +33,23 @@ const assignmentResult = v.object({
   updatedAt: v.number(),
 });
 
+const viewPreferenceResult = v.object({
+  focusId: v.string(),
+  sortOrder: v.string(),
+  collapsiblePinned: v.boolean(),
+  updatedAt: v.number(),
+});
+
 const readModelResult = v.object({
   focuses: v.array(focusResult),
   assignments: v.array(assignmentResult),
+  viewPreferences: v.array(viewPreferenceResult),
 });
+
+const RESERVED_VIEW_IDS: ReadonlySet<string> = new Set([
+  ALL_FOCUS_VIEW_ID,
+  CONVERSATIONS_FOCUS_VIEW_ID,
+]);
 
 function trimRequired(value: string, label: string): string {
   const trimmed = value.trim();
@@ -136,7 +155,7 @@ export const list = query({
   returns: readModelResult,
   handler: async (ctx) => {
     const user = await requireUser(ctx);
-    const [focusRows, assignmentRows] = await Promise.all([
+    const [focusRows, assignmentRows, viewRows] = await Promise.all([
       ctx.db
         .query("focuses")
         .withIndex("by_user", (q) => q.eq("userId", user._id))
@@ -145,7 +164,12 @@ export const list = query({
         .query("focusAssignments")
         .withIndex("by_user", (q) => q.eq("userId", user._id))
         .collect(),
+      ctx.db
+        .query("focusViewPreferences")
+        .withIndex("by_user", (q) => q.eq("userId", user._id))
+        .collect(),
     ]);
+    const liveFocusIds = new Set(focusRows.map((focus) => focus.id));
     const focusIdByDocId = new Map(focusRows.map((focus) => [focus._id, focus.id] as const));
     return {
       focuses: [...focusRows].sort(compareFocus).map(encodeFocus),
@@ -162,6 +186,14 @@ export const list = query({
               },
             ];
       }),
+      viewPreferences: viewRows
+        .filter((row) => RESERVED_VIEW_IDS.has(row.focusId) || liveFocusIds.has(row.focusId))
+        .map((row) => ({
+          focusId: row.focusId,
+          sortOrder: focusThreadSortOrder(row.sortOrder),
+          collapsiblePinned: row.collapsiblePinned ?? false,
+          updatedAt: row.updatedAt,
+        })),
     };
   },
 });
@@ -272,6 +304,11 @@ export const remove = mutation({
       .withIndex("by_focus", (q) => q.eq("focusId", row._id))
       .collect();
     for (const assignment of assignments) await ctx.db.delete(assignment._id);
+    const view = await ctx.db
+      .query("focusViewPreferences")
+      .withIndex("by_user_and_focus", (q) => q.eq("userId", user._id).eq("focusId", row.id))
+      .unique();
+    if (view !== null) await ctx.db.delete(view._id);
     await ctx.db.delete(row._id);
     return null;
   },
@@ -302,6 +339,41 @@ export const unassignProject = mutation({
       )
       .unique();
     if (existing !== null) await ctx.db.delete(existing._id);
+    return null;
+  },
+});
+
+/** One view row per Focus key; omitted fields keep their stored value. */
+export const setViewPreference = mutation({
+  args: {
+    focusId: v.string(),
+    sortOrder: v.optional(v.string()),
+    collapsiblePinned: v.optional(v.boolean()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const user = await requireUser(ctx);
+    const viewId = focusId(args.focusId);
+    if (!RESERVED_VIEW_IDS.has(viewId)) await ownedFocus(ctx, user._id, viewId);
+    if (
+      args.sortOrder !== undefined &&
+      !(FOCUS_THREAD_SORT_ORDERS as readonly string[]).includes(args.sortOrder)
+    )
+      throw backendError("invalid-arguments", "Unknown thread sort order.");
+    const patch = {
+      ...(args.sortOrder === undefined ? {} : { sortOrder: args.sortOrder }),
+      ...(args.collapsiblePinned === undefined
+        ? {}
+        : { collapsiblePinned: args.collapsiblePinned }),
+      updatedAt: Date.now(),
+    };
+    const existing = await ctx.db
+      .query("focusViewPreferences")
+      .withIndex("by_user_and_focus", (q) => q.eq("userId", user._id).eq("focusId", viewId))
+      .unique();
+    if (existing === null)
+      await ctx.db.insert("focusViewPreferences", { userId: user._id, focusId: viewId, ...patch });
+    else await ctx.db.patch(existing._id, patch);
     return null;
   },
 });
