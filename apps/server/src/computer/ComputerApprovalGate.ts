@@ -333,15 +333,19 @@ export const make = Effect.fn("ComputerApprovalGate.make")(function* (
   ) {
     // A stuck turn must not starve every other chat: each thread gets a small
     // cap inside the shared one, and both refuse retryably so the model waits
-    // instead of treating a full queue as a denial.
+    // instead of treating a full queue as a denial. Only unanswered prompts
+    // count: an accept kept for its call's retry is no longer waiting on anyone.
+    let pending = 0;
     let threadPending = 0;
-    for (const pending of prompts.values()) {
-      if (pending.info.threadId === info.threadId) threadPending += 1;
+    for (const prompt of prompts.values()) {
+      if (Deferred.isDoneUnsafe(prompt.answer)) continue;
+      pending += 1;
+      if (prompt.info.threadId === info.threadId) threadPending += 1;
     }
     if (threadPending >= COMPUTER_APPROVAL_QUEUE_THREAD_LIMIT) {
       return yield* new ComputerApprovalQueueFullError({ scope: "thread" });
     }
-    if (prompts.size >= COMPUTER_APPROVAL_QUEUE_GLOBAL_LIMIT) {
+    if (pending >= COMPUTER_APPROVAL_QUEUE_GLOBAL_LIMIT) {
       return yield* new ComputerApprovalQueueFullError({ scope: "global" });
     }
     const requestId = `computer:${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`;

@@ -213,6 +213,27 @@ describe("ComputerApprovalGate", () => {
     }),
   );
 
+  it.effect("answered prompts waiting for their retry do not fill the queue", () =>
+    Effect.gen(function* () {
+      const { gate, opened } = yield* harness();
+      const waiting = [];
+      for (let i = 0; i < 8; i++) {
+        waiting.push(yield* Effect.forkChild(gate.request(call("slow", `call-${i}`))));
+      }
+      const prompts = yield* Queue.takeN(opened, 8);
+      yield* TestClock.adjust(COMPUTER_APPROVAL_WAIT_BOUND);
+      expect(yield* Fiber.joinAll(waiting)).toEqual(Array(8).fill("pending"));
+      for (const prompt of prompts) yield* gate.respond("slow", prompt.requestId, "accept");
+      const next = yield* Effect.forkChild(gate.request(call("slow", "call-8")), {
+        startImmediately: true,
+      });
+      expect(yield* Queue.size(opened)).toBe(1);
+      const prompt = yield* Queue.take(opened);
+      yield* gate.respond("slow", prompt.requestId, "accept");
+      expect(yield* Fiber.join(next)).toBe("approved");
+    }),
+  );
+
   it.effect("refuses past the shared queue cap with the same retryable code", () =>
     Effect.gen(function* () {
       const { gate, opened } = yield* harness();
