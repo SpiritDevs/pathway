@@ -4722,7 +4722,10 @@ export class ComputerManager {
         return Effect.void;
       }
       const epoch = this.streamEpoch;
-      return this.enqueueStreamTransition(
+      // Forked so an interrupted caller only stops waiting: the detach/attach
+      // fallback cut short would leave a watched stream detached, or attached
+      // without `streamAttached` for dispose to tear down.
+      const transition = this.enqueueStreamTransition(
         Effect.gen({ self: this }, function* () {
           if (!this.isStreamWanted(epoch) || !this.streamAttached) return;
           if (this.backend.requestKeyframe) {
@@ -4743,6 +4746,7 @@ export class ComputerManager {
           this.streamAttached = true;
         }),
       );
+      return Fiber.join(this.runFork(transition));
     });
   }
 
