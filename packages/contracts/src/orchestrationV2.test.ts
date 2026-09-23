@@ -25,13 +25,16 @@ import {
   OrchestrationV2Command,
   OrchestrationV2ContinuationLaunchInput,
   OrchestrationV2DomainEvent,
+  OrchestrationV2DomainEventJson,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderThreadJson,
   OrchestrationV2ShellSnapshot,
+  OrchestrationV2ShellStreamItem,
   OrchestrationV2Subagent,
   OrchestrationV2SubscribeThreadInput,
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadShell,
+  OrchestrationV2ThreadStreamItem,
   OrchestrationV2TurnItem,
   OrchestrationV2TurnItemJson,
 } from "./orchestrationV2.ts";
@@ -910,5 +913,229 @@ describe("orchestration V2 contracts", () => {
     expect(decoded.sourceRunId).toBe("run:source");
     expect(decoded.workspaceTarget).toBe("new-worktree");
     expect(decoded.modelSelection.instanceId).toBe("claudeAgent");
+  });
+});
+
+// Clients (and servers) built before Computer use (205c32c2c) decode request
+// kinds from this closed enum; every other field of these schemas is unchanged.
+const PreComputerRequestKind = Schema.Literals(["command", "file-read", "file-change"]);
+const PreComputerRuntimeRequest = Schema.Struct({
+  kind: Schema.Union([
+    PreComputerRequestKind,
+    Schema.Literals(["dynamic_tool_call", "user_input", "auth_refresh"]),
+  ]),
+});
+const PreComputerApprovalItem = Schema.Struct({
+  type: Schema.Literal("approval_request"),
+  requestKind: PreComputerRequestKind,
+});
+const decodePreComputerThreadEvents = Schema.decodeUnknownSync(
+  Schema.NonEmptyArray(
+    Schema.Struct({
+      kind: Schema.Literal("event"),
+      event: Schema.Struct({
+        payload: Schema.Union([PreComputerRuntimeRequest, PreComputerApprovalItem]),
+      }),
+    }),
+  ),
+);
+const decodePreComputerShellSnapshot = Schema.decodeUnknownSync(
+  Schema.Struct({
+    snapshot: Schema.Struct({
+      threads: Schema.Array(
+        Schema.Struct({ pendingRuntimeRequest: Schema.NullOr(PreComputerRuntimeRequest) }),
+      ),
+    }),
+  }),
+);
+const decodePreComputerStoredRequest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ payload: PreComputerRuntimeRequest })),
+);
+const decodeStoredRequestMarker = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      payload: Schema.Struct({ serverKind: Schema.optionalKey(Schema.String) }),
+    }),
+  ),
+);
+
+// The RPC client decodes each stream chunk as one array, so one bad item fails the batch.
+const ThreadChunkWire = Schema.toCodecJson(Schema.NonEmptyArray(OrchestrationV2ThreadStreamItem));
+const decodeThreadChunkWire = Schema.decodeUnknownSync(ThreadChunkWire);
+const encodeThreadChunkWire = Schema.encodeUnknownSync(ThreadChunkWire);
+const ShellItemWire = Schema.toCodecJson(OrchestrationV2ShellStreamItem);
+const decodeShellItemWire = Schema.decodeUnknownSync(ShellItemWire);
+const encodeShellItemWire = Schema.encodeUnknownSync(ShellItemWire);
+const StoredEventJson = Schema.fromJsonString(OrchestrationV2DomainEventJson);
+const decodeStoredEventJson = Schema.decodeUnknownSync(StoredEventJson);
+const decodeDomainEventJson = Schema.decodeUnknownSync(OrchestrationV2DomainEventJson);
+const encodeStoredEventJson = Schema.encodeUnknownSync(StoredEventJson);
+
+const computerThreadId = "thread-computer";
+const computerRequestId = "request-computer";
+const computerTimestamp = "2026-04-20T00:00:00.000Z";
+const computerRuntimeRequest = {
+  id: computerRequestId,
+  nodeId: "node-approval",
+  providerTurnId: null,
+  nativeRequestRef: null,
+  kind: "computer",
+  status: "pending",
+  responseCapability: { type: "live", providerSessionId: "session-1" },
+  createdAt: computerTimestamp,
+  resolvedAt: null,
+};
+const computerApprovalItem = {
+  id: "item-approval",
+  threadId: computerThreadId,
+  runId: "run-1",
+  nodeId: "node-approval",
+  providerThreadId: null,
+  providerTurnId: null,
+  nativeItemRef: null,
+  parentItemId: null,
+  ordinal: 1,
+  status: "waiting",
+  title: null,
+  startedAt: computerTimestamp,
+  completedAt: null,
+  updatedAt: computerTimestamp,
+  type: "approval_request",
+  requestId: computerRequestId,
+  requestKind: "computer",
+  prompt: "Allow Computer for this task",
+};
+const computerRequestEvent = {
+  threadId: computerThreadId,
+  runId: "run-1",
+  occurredAt: computerTimestamp,
+  id: "event-1",
+  type: "runtime-request.updated",
+  payload: computerRuntimeRequest,
+};
+
+describe("computer runtime requests on the wire", () => {
+  it("encodes computer kinds as command approvals that pre-Computer clients decode", () => {
+    const chunk = [
+      { kind: "event", sequence: 10, event: computerRequestEvent },
+      {
+        kind: "event",
+        sequence: 11,
+        event: {
+          ...computerRequestEvent,
+          id: "event-2",
+          type: "turn-item.updated",
+          payload: computerApprovalItem,
+        },
+      },
+    ];
+    const wire = encodeThreadChunkWire(decodeThreadChunkWire(chunk));
+
+    expect(wire).toMatchObject([
+      { event: { payload: { kind: "command", serverKind: "computer" } } },
+      { event: { payload: { requestKind: "command", serverKind: "computer" } } },
+    ]);
+    expect(() => decodePreComputerThreadEvents(chunk)).toThrow();
+    expect(decodePreComputerThreadEvents(wire).map((item) => item.event.payload)).toEqual([
+      { kind: "command" },
+      { type: "approval_request", requestKind: "command" },
+    ]);
+
+    const [requestEvent, itemEvent] = decodeThreadChunkWire(wire);
+    expect(
+      requestEvent?.kind === "event" && requestEvent.event.type === "runtime-request.updated"
+        ? requestEvent.event.payload.kind
+        : null,
+    ).toBe("computer");
+    expect(
+      itemEvent?.kind === "event" &&
+        itemEvent.event.type === "turn-item.updated" &&
+        itemEvent.event.payload.type === "approval_request"
+        ? itemEvent.event.payload.requestKind
+        : null,
+    ).toBe("computer");
+  });
+
+  it("keeps a pending computer card from failing the whole shell snapshot", () => {
+    const shellThread = {
+      id: computerThreadId,
+      projectId: "project-1",
+      title: "Thread",
+      providerInstanceId: "codex",
+      modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      activeProviderThreadId: null,
+      lineage: {
+        rootThreadId: computerThreadId,
+        parentThreadId: null,
+        relationshipToParent: null,
+      },
+      forkedFrom: null,
+      createdBy: "user",
+      creationSource: "web",
+      latestRunId: "run-1",
+      activeRunId: "run-1",
+      status: "running",
+      pendingRuntimeRequest: {
+        id: computerRequestId,
+        kind: "computer",
+        createdAt: computerTimestamp,
+      },
+      latestVisibleMessage: null,
+      latestUserMessageAt: null,
+      hasActionableProposedPlan: false,
+      itemCount: 1,
+      visibleItemCount: 1,
+      createdAt: computerTimestamp,
+      updatedAt: computerTimestamp,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      deletedAt: null,
+    };
+    const snapshot = {
+      kind: "snapshot",
+      snapshot: {
+        schemaVersion: 1,
+        snapshotSequence: 5,
+        projects: [],
+        threads: [shellThread],
+        archivedThreads: [],
+      },
+    };
+    const wire = encodeShellItemWire(decodeShellItemWire(snapshot));
+
+    expect(wire).toMatchObject({
+      snapshot: {
+        threads: [{ pendingRuntimeRequest: { kind: "command", serverKind: "computer" } }],
+      },
+    });
+    expect(() => decodePreComputerShellSnapshot(snapshot)).toThrow();
+    expect(decodePreComputerShellSnapshot(wire)).toEqual({
+      snapshot: { threads: [{ pendingRuntimeRequest: { kind: "command" } }] },
+    });
+    const decoded = decodeShellItemWire(wire);
+    expect(
+      decoded.kind === "snapshot" ? decoded.snapshot.threads[0]?.pendingRuntimeRequest?.kind : null,
+    ).toBe("computer");
+  });
+
+  it("stores computer kinds in the compatible form and leaves provider kinds alone", () => {
+    const stored = encodeStoredEventJson(decodeDomainEventJson(computerRequestEvent));
+    expect(decodePreComputerStoredRequest(stored).payload.kind).toBe("command");
+    expect(decodeStoredRequestMarker(stored).payload.serverKind).toBe("computer");
+    expect(decodeStoredEventJson(stored).payload).toMatchObject({ kind: "computer" });
+
+    const commandStored = encodeStoredEventJson(
+      decodeDomainEventJson({
+        ...computerRequestEvent,
+        payload: { ...computerRuntimeRequest, kind: "command" },
+      }),
+    );
+    expect(decodePreComputerStoredRequest(commandStored).payload.kind).toBe("command");
+    expect(decodeStoredRequestMarker(commandStored).payload).toEqual({});
   });
 });
