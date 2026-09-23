@@ -101,7 +101,9 @@ export const assertLinuxCuaBinaryIdentity = (
     architectures.length === 1 &&
     bytes.length >= 20 &&
     bytes[0] === 0x7f &&
-    new TextDecoder("ascii").decode(bytes.subarray(1, 4)) === "ELF" &&
+    bytes[1] === 0x45 && // E
+    bytes[2] === 0x4c && // L
+    bytes[3] === 0x46 && // F
     bytes[4] === 2 &&
     bytes[5] === 1 &&
     view.getUint16(18, true) === machine;
