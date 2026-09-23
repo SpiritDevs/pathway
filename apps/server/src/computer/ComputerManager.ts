@@ -4695,25 +4695,31 @@ export class ComputerManager {
   }
 
   /**
-   * Adds a remote-preview frame sink. A pane attach is a user asking to watch
-   * the desktop, which is a real use: the stream cannot exist without a
-   * connected backend anyway. The returned function unsubscribes, and the
-   * stream detaches once nobody is watching.
+   * Adds a remote-preview frame sink until the surrounding scope closes. A pane
+   * attach is a user asking to watch the desktop, which is a real use: the
+   * stream cannot exist without a connected backend anyway. The stream
+   * detaches once nobody is watching.
    */
-  subscribeFrames(sink: FrameSink): () => void {
-    this.engageBackend();
-    const unsubscribe = this.transport.subscribe(this.computerId, sink);
-    this.streamDesired = true;
-    this.streamEpoch += 1;
-    this.runFork(this.reconcileStream().pipe(Effect.catch((error) => this.recordError(error))));
-    return () => {
-      unsubscribe();
-      if (this.transport.streamSubscriberCount(this.computerId) === 0) {
-        this.streamDesired = false;
-        this.streamEpoch += 1;
-        this.runFork(this.reconcileStream().pipe(Effect.catch((error) => this.recordError(error))));
-      }
-    };
+  subscribeFrames(sink: FrameSink): Effect.Effect<void, never, Scope.Scope> {
+    return Effect.gen({ self: this }, function* () {
+      this.engageBackend();
+      // Finalizers run in reverse, so this detach check runs after the
+      // transport has removed the sink below.
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (this.transport.streamSubscriberCount(this.computerId) > 0) return;
+          this.streamDesired = false;
+          this.streamEpoch += 1;
+          this.runFork(
+            this.reconcileStream().pipe(Effect.catch((error) => this.recordError(error))),
+          );
+        }),
+      );
+      yield* this.transport.subscribe(this.computerId, sink);
+      this.streamDesired = true;
+      this.streamEpoch += 1;
+      this.runFork(this.reconcileStream().pipe(Effect.catch((error) => this.recordError(error))));
+    });
   }
 
   requestKeyframe(): Effect.Effect<void, ComputerOperationError> {
