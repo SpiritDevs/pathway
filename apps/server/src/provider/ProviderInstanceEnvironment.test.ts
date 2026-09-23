@@ -19,3 +19,19 @@ describe("mergeProviderInstanceEnvironment", () => {
     });
   });
 });
+
+describe("provider child environment", () => {
+  it("never passes Computer host authority to a provider child", () => {
+    const env = mergeProviderInstanceEnvironment(
+      [{ name: "PATHWAY_CUA_HOST_SOCKET", value: "/tmp/injected.sock", sensitive: false }],
+      {
+        PATH: "/bin",
+        PATHWAY_BROWSER_HOST_CAPABILITY: "secret",
+        PATHWAY_BROWSER_HOST_CAPABILITY_FD: "3",
+        PATHWAY_CUA_HOST_SOCKET: "/tmp/cua.sock",
+        PATHWAY_HOME: "/home/pathway",
+      },
+    );
+    expect(env).toEqual({ PATH: "/bin", PATHWAY_HOME: "/home/pathway" });
+  });
+});
