@@ -3,12 +3,14 @@ import * as Effect from "effect/Effect";
 
 import {
   assertCuaArtifactProvenance,
+  assertCuaSidecarChecksums,
   assertLinuxCuaBinaryIdentity,
   assertLinuxCuaBuildHost,
   assertLinuxCuaSidecarChecksums,
   type CuaArch,
   type CuaArtifactProvenance,
   type CuaPlatform,
+  CUA_DRIVER_SIGN_IDENTIFIER,
   LINUX_CUA_INPUT_SCOPE,
   LINUX_CUA_SIDECAR_PATHS,
 } from "./cua-artifact-provenance.ts";
@@ -75,10 +77,29 @@ const expectFail = <E extends { readonly message: string }>(
   });
 
 describe("Cua platform and build provenance", () => {
-  it.effect("retains legacy signed Mac artifact reuse without requiring the Linux delta", () =>
+  it.effect("accepts Mac artifacts with the embedded signing identifier and no Linux delta", () =>
     Effect.gen(function* () {
-      yield* expectPass(validate(provenance({ signedIdentity: "Developer ID" }), "darwin"));
-      yield* expectPass(validate(provenance({ platform: "darwin" }), "darwin"));
+      const mac = provenance({ platform: "darwin", signingIdentifier: CUA_DRIVER_SIGN_IDENTIFIER });
+      yield* expectPass(validate(mac, "darwin"));
+      yield* expectPass(validate({ ...mac, signedIdentity: "Developer ID" }, "darwin"));
+    }),
+  );
+
+  it.effect("rejects Mac artifacts built before the embedded signing identifier", () =>
+    Effect.gen(function* () {
+      yield* expectFail(validate(provenance({ platform: "darwin" }), "darwin"), "identifier");
+      yield* expectFail(
+        validate(
+          provenance({ platform: "darwin", signingIdentifier: "cua-driver-1234" }),
+          "darwin",
+        ),
+        "identifier",
+      );
+      // Legacy artifacts without a platform field no longer qualify either.
+      yield* expectFail(
+        validate(provenance({ signingIdentifier: CUA_DRIVER_SIGN_IDENTIFIER }), "darwin"),
+        "platform",
+      );
     }),
   );
 
@@ -191,6 +212,28 @@ describe("Cua platform and build provenance", () => {
       );
       yield* expectFail(assertLinuxCuaSidecarChecksums(value, {}), "sidecar");
       yield* expectFail(assertLinuxCuaSidecarChecksums(linuxProvenance(), checksums), "sidecar");
+    }),
+  );
+
+  it.effect("requires exactly the recorded sidecars, byte for byte", () =>
+    Effect.gen(function* () {
+      const checksums = { "cua-cursor-theme.exe": "a", "uia/helper.dll": "b" };
+      const value = provenance({ platform: "win32", patched: false, sidecarSha256: checksums });
+      yield* expectPass(assertCuaSidecarChecksums(value, checksums));
+      yield* expectPass(assertCuaSidecarChecksums(provenance({ sidecarSha256: {} }), {}));
+      yield* expectFail(
+        assertCuaSidecarChecksums(value, { ...checksums, "uia/helper.dll": "swapped" }),
+        "sidecar",
+      );
+      yield* expectFail(
+        assertCuaSidecarChecksums(value, { ...checksums, "injected.dll": "c" }),
+        "sidecar",
+      );
+      yield* expectFail(
+        assertCuaSidecarChecksums(value, { "cua-cursor-theme.exe": "a" }),
+        "sidecar",
+      );
+      yield* expectFail(assertCuaSidecarChecksums(provenance(), {}), "sidecar");
     }),
   );
 });
