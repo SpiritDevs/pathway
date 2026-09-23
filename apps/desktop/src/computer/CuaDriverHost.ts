@@ -1193,6 +1193,7 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
   /** Spawn plus the validated handshake: the warmable half of startup. */
   const ensureSpawned = (): Task<Generation> => {
     if (starting) return starting;
+    let settled = false;
     const task = start(
       Effect.gen(function* () {
         yield* retiring;
@@ -1351,12 +1352,15 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
       }).pipe(
         Effect.ensuring(
           Effect.sync(() => {
+            settled = true;
             starting = undefined;
           }),
         ),
       ),
     );
-    starting = task;
+    // A live generation settles synchronously; caching that finished task
+    // would hand the retired generation to every later call.
+    if (!settled) starting = task;
     return task;
   };
 
