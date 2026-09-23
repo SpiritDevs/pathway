@@ -76,7 +76,7 @@ import {
 } from "~/state/issues";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { readFileAsDataUrl } from "../ChatView.logic";
-import { QuickCreateProjectDialog } from "../projects/QuickCreateProjectDialog";
+import { CreateProjectDialog } from "../projects/CreateProjectDialog";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -798,7 +798,7 @@ export function NewIssueDialog({
   return (
     <>
       {/* Sibling, not nested: a dialog inside a dialog's popup would close with it. */}
-      <QuickCreateProjectDialog
+      <CreateProjectDialog
         environmentId={primaryEnvironmentId}
         onCreated={(created) => {
           setProjectId(created.projectId);

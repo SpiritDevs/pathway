@@ -37,7 +37,7 @@ import type { FocusMutations } from "../../cloud/focusReadModel";
 import { cn } from "../../lib/utils";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
-import { FocusEditor, type FocusProjectOption } from "./FocusEditor";
+import { AllFocusViewEditor, FocusEditor, type FocusProjectOption } from "./FocusEditor";
 import { FocusIcon } from "./FocusIcon";
 import { FocusNotificationTray } from "./FocusNotificationTray";
 import { focusOrderKeyForMove } from "./FocusStrip.logic";
@@ -160,7 +160,10 @@ export function FocusStrip(props: {
   readonly onNotificationSelect: (notification: FocusNotification) => void;
   readonly mutations: FocusMutations | null;
 }) {
-  const [editorFocusId, setEditorFocusId] = useState<FocusId | null | undefined>(undefined);
+  // undefined: closed; null: creating; All opens its view-only editor.
+  const [editorFocusId, setEditorFocusId] = useState<
+    FocusId | typeof ALL_FOCUS_ID | null | undefined
+  >(undefined);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [clearingNotifications, setClearingNotifications] = useState(false);
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
@@ -180,7 +183,7 @@ export function FocusStrip(props: {
     [props.focuses, props.assignments, props.visibleProjectKeys],
   );
   const editingFocus =
-    editorFocusId == null
+    editorFocusId == null || editorFocusId === ALL_FOCUS_ID
       ? null
       : (orderedFocuses.find((focus) => focus.id === editorFocusId) ?? null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -306,6 +309,18 @@ export function FocusStrip(props: {
             aria-label="All Focus"
             title="All"
             onClick={() => props.onActiveFocusChange(ALL_FOCUS_ID)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setNotificationsOpen(false);
+              setEditorFocusId(ALL_FOCUS_ID);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                event.preventDefault();
+                setNotificationsOpen(false);
+                setEditorFocusId(ALL_FOCUS_ID);
+              }
+            }}
             className={cn(
               "flex h-7 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
               props.activeFocusId === ALL_FOCUS_ID && "text-sidebar-foreground",
@@ -425,15 +440,19 @@ export function FocusStrip(props: {
           className="max-w-[calc(100vw-1rem)]"
           viewportClassName="p-3"
         >
-          <FocusEditor
-            key={editingFocus?.id ?? "create"}
-            focus={editingFocus}
-            focuses={orderedFocuses}
-            assignments={props.assignments}
-            projects={props.editorProjects}
-            mutations={props.mutations}
-            onClose={() => setEditorFocusId(undefined)}
-          />
+          {editorFocusId === ALL_FOCUS_ID ? (
+            <AllFocusViewEditor onClose={() => setEditorFocusId(undefined)} />
+          ) : (
+            <FocusEditor
+              key={editingFocus?.id ?? "create"}
+              focus={editingFocus}
+              focuses={orderedFocuses}
+              assignments={props.assignments}
+              projects={props.editorProjects}
+              mutations={props.mutations}
+              onClose={() => setEditorFocusId(undefined)}
+            />
+          )}
         </PopoverPopup>
       ) : null}
     </Popover>

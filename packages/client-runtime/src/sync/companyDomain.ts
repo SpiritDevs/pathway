@@ -43,7 +43,11 @@ import {
   SyncTeamPayload,
   type SyncEntityKind,
 } from "@spiritdevs/contracts/cloudSync";
-import { CloudProjectId, EnvironmentBindingId } from "@spiritdevs/contracts/cloudProject";
+import {
+  CloudProjectId,
+  EnvironmentBindingId,
+  ProjectIcon,
+} from "@spiritdevs/contracts/cloudProject";
 import { CloudTimestamp, TeamId, WorkflowOwner } from "@spiritdevs/contracts/company";
 import { RepositoryIdentity } from "@spiritdevs/contracts";
 import * as Option from "effect/Option";
@@ -193,6 +197,7 @@ const cloudProjectSyncEntityFields = {
   preferredBindingId: Schema.NullOr(EnvironmentBindingId),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   repositoryIdentityAuthority: Schema.optional(Schema.Literal("merge")),
+  icon: Schema.optional(Schema.NullOr(ProjectIcon)),
   archivedAt: Schema.NullOr(CloudTimestamp),
   createdAt: CloudTimestamp,
   updatedAt: CloudTimestamp,

@@ -1,5 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { projectFaviconSourceAtom } from "../state/projectFavicons";
+import { projectIconAtom, projectIconCheckoutKey } from "../state/projectIcons";
+import { FocusIcon } from "./focus/FocusIcon";
 import { projectFaviconSourceKey } from "../state/projectFaviconSources";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import {
@@ -27,6 +29,19 @@ export function ProjectFavicon(input: {
   className?: string | undefined;
   fallbackIcon?: ComponentType<{ className?: string }>;
 }) {
+  // A library icon chosen for the company project wins over anything detected in the checkout.
+  const libraryIcon = useAtomValue(
+    projectIconAtom(input.cwd ? projectIconCheckoutKey(input.environmentId, input.cwd) : ""),
+  );
+  if (libraryIcon !== null) {
+    return (
+      <FocusIcon
+        iconName={libraryIcon.name}
+        color={libraryIcon.color}
+        className={cn("size-3.5 shrink-0", input.className)}
+      />
+    );
+  }
   if (!input.cwd) {
     return (
       <ProjectFaviconFallback className={input.className} icon={input.fallbackIcon ?? FolderIcon} />

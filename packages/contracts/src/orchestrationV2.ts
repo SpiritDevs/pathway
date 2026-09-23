@@ -2517,6 +2517,8 @@ export const OrchestrationV2Command = Schema.Union([
     messageId: MessageId,
     /** Runtime continuation after an explicit allowance renewal; stale candidates must not start. */
     allowanceResumeOfRunId: Schema.optional(RunId),
+    /** Opt-in usage-limit recovery; checked against newer work under the dispatch lock. */
+    usageRecoveryOfRunId: Schema.optional(RunId),
     text: Schema.String,
     replyToRuntimeRequestId: Schema.optional(RuntimeRequestId),
     attachments: Schema.Array(ChatAttachment),

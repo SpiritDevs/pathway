@@ -239,6 +239,10 @@
       "types": "./src/devProxy.ts",
       "import": "./src/devProxy.ts"
     },
+    "./usageLimitRecovery": {
+      "types": "./src/usageLimitRecovery.ts",
+      "import": "./src/usageLimitRecovery.ts"
+    },
     "./usageMerge": {
       "types": "./src/usageMerge.ts",
       "import": "./src/usageMerge.ts"

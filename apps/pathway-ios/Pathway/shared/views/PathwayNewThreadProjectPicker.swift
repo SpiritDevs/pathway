@@ -124,11 +124,20 @@ private struct PathwayNewThreadProjectIcon: View {
         }
     }
 
+    private var syncedIcon: PathwayProjectIcon? {
+        guard !project.isConversation, let option = project.bindings.first else { return nil }
+        return appModel.cloud.projectIcon(companyId: option.environment.companyId, projectId: option.projectID)
+    }
+
     var body: some View {
         let candidates = contexts
+        let icon = syncedIcon
         let cachedImage = candidates.lazy.compactMap { appModel.projectIcons.images[$0.key] }.first
         Group {
-            if let cachedImage {
+            if let icon {
+                PathwayFocusIcon(name: icon.name, size: 24)
+                    .foregroundStyle(PathwayFocusIcon.color(icon.color))
+            } else if let cachedImage {
                 Image(uiImage: cachedImage).resizable().scaledToFit()
             } else {
                 Image(systemName: project.isConversation ? "bubble.left.and.bubble.right" : "folder")
@@ -138,8 +147,8 @@ private struct PathwayNewThreadProjectIcon: View {
         .frame(width: 28, height: 28)
         .clipShape(.rect(cornerRadius: 4))
         .accessibilityHidden(true)
-        .task(id: candidates.map(\.key)) {
-            guard cachedImage == nil, let connect = appModel.connect else { return }
+        .task(id: icon == nil ? candidates.map(\.key) : []) {
+            guard icon == nil, cachedImage == nil, let connect = appModel.connect else { return }
             for context in candidates {
                 guard !Task.isCancelled else { return }
                 await appModel.projectIcons.load(context, using: connect)

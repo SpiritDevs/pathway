@@ -11,6 +11,7 @@ import {
   type EnvironmentCommandArgs,
   type EnvironmentCommandKind,
   type EnvironmentCommandState,
+  type ProjectIcon,
 } from "@spiritdevs/contracts/cloudProject";
 import { ConvexClient, ConvexHttpClient } from "convex/browser";
 import { makeFunctionReference, type FunctionReference } from "convex/server";
@@ -193,6 +194,14 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
     },
     string | null
   >("cloudProjects:ensureEnvironmentProject"),
+  setCompanyProjectIcon: mutationReference<
+    {
+      readonly companyId: CompanyId;
+      readonly cloudProjectId: string;
+      readonly icon: ProjectIcon | null;
+    },
+    null
+  >("cloudProjects:setCompanyProjectIcon"),
   setPreferredEnvironmentBinding: mutationReference<
     {
       readonly companyId: CompanyId;
@@ -356,6 +365,12 @@ export interface EnvironmentControlClient {
      */
     readonly project: Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot" | "title"> &
       Partial<Pick<EnvironmentProject, "repositoryIdentity" | "internalWorkspaceRoot">>;
+  }) => Promise<string | null>;
+  /** A built-in library icon shown on every device instead of detected favicons; null clears it. */
+  readonly setCompanyProjectIcon: (args: {
+    readonly companyId: CompanyId;
+    readonly cloudProjectId: string;
+    readonly icon: ProjectIcon | null;
   }) => Promise<void>;
   readonly setPreferredEnvironmentBinding: (args: {
     readonly companyId: CompanyId;
@@ -511,7 +526,7 @@ export function makeEnvironmentControlClient(options: {
         matchRepository: matchRepository ?? null,
       });
       // #endregion DEBUG
-      return cloudProjectMutation(
+      return cloudProjectMutationResult<string | null>(
         ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.ensureEnvironmentProject,
         {
           companyId,
@@ -527,12 +542,13 @@ export function makeEnvironmentControlClient(options: {
           name: project.title,
         },
       ).then(
-        () => {
+        (cloudProjectId) => {
           // #region DEBUG
           debugEnvironmentProjectAssignment("H10", "ensure-client-finished", {
             durationMs: Math.round(performance.now() - startedAt),
           });
           // #endregion DEBUG
+          return cloudProjectId;
         },
         (cause: unknown) => {
           // #region DEBUG
@@ -549,6 +565,8 @@ export function makeEnvironmentControlClient(options: {
         },
       );
     },
+    setCompanyProjectIcon: (args) =>
+      cloudProjectMutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.setCompanyProjectIcon, args),
     setPreferredEnvironmentBinding: (args) =>
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.setPreferredEnvironmentBinding, args),
     releaseEnvironmentProject: (args) =>

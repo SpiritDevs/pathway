@@ -11,6 +11,8 @@ import {
   type SourceControlCloneRepositoryInput,
   type SourceControlCloneRepositoryResult,
   type SourceControlCloneProtocol,
+  type SourceControlListRepositoryOwnersInput,
+  type SourceControlListRepositoryOwnersResult,
   type SourceControlProviderKind,
   type SourceControlPublishRepositoryInput,
   type SourceControlPublishRepositoryResult,
@@ -36,6 +38,9 @@ export class SourceControlRepositoryService extends Context.Service<
     readonly publishRepository: (
       input: SourceControlPublishRepositoryInput,
     ) => Effect.Effect<SourceControlPublishRepositoryResult, SourceControlRepositoryError>;
+    readonly listRepositoryOwners: (
+      input: SourceControlListRepositoryOwnersInput,
+    ) => Effect.Effect<SourceControlListRepositoryOwnersResult, SourceControlRepositoryError>;
   }
 >()("@spiritdevs/pathway/sourceControl/SourceControlRepositoryService") {}
 
@@ -275,6 +280,15 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  const listRepositoryOwners = Effect.fn("SourceControlRepositoryService.listRepositoryOwners")(
+    function* (input: SourceControlListRepositoryOwnersInput) {
+      if (input.provider === "unknown") return { owners: [] };
+      const provider = yield* providers.get(input.provider);
+      if (provider.listRepositoryOwners === undefined) return { owners: [] };
+      return { owners: yield* provider.listRepositoryOwners({ cwd: config.cwd }) };
+    },
+  );
+
   return SourceControlRepositoryService.of({
     lookupRepository: (input) =>
       lookupRepository(input).pipe(mapRepositoryError("lookupRepository", input.provider)),
@@ -284,6 +298,8 @@ export const make = Effect.gen(function* () {
       ),
     publishRepository: (input) =>
       publishRepository(input).pipe(mapRepositoryError("publishRepository", input.provider)),
+    listRepositoryOwners: (input) =>
+      listRepositoryOwners(input).pipe(mapRepositoryError("listRepositoryOwners", input.provider)),
   });
 });
 

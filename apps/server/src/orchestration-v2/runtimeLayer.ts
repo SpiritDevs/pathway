@@ -1,3 +1,4 @@
+import { layer as usageRecoveryLayer } from "../providerUsage/UsageRecoveryService.ts";
 import * as Layer from "effect/Layer";
 import {
   OrchestrationEventInfrastructureLayerLive,
@@ -316,6 +317,7 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   threadLaunchProvided,
   threadLifecycleProvided,
   scheduledTaskProvided,
+  usageRecoveryLayer.pipe(Layer.provide(threadManagementProvided)),
   providerContinuationWorkerProvided,
   temporaryThreadSettlementLayer.pipe(Layer.provide(threadManagementProvided)),
   allowanceResumeLayer.pipe(

@@ -26,7 +26,7 @@ import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { useInvestigatedIssueIds, useIssueEnrichmentRuns, useTriageAccept } from "~/state/issues";
-import { QuickCreateProjectDialog } from "../projects/QuickCreateProjectDialog";
+import { CreateProjectDialog } from "../projects/CreateProjectDialog";
 import { PROVIDER_CLIENT_DEFINITION_BY_VALUE } from "../settings/providerDriverMeta";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -245,7 +245,7 @@ export function TriageAcceptDialog({
   return (
     <>
       {/* Sibling, not nested: a dialog inside a dialog's popup would close with it. */}
-      <QuickCreateProjectDialog
+      <CreateProjectDialog
         environmentId={primaryEnvironmentId}
         onCreated={(created) => patch({ projectId: created.projectId, runEnrichment: true })}
         onOpenChange={setQuickCreateProjectOpen}

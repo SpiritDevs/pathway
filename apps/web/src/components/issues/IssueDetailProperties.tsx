@@ -40,7 +40,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { useSlackChannelNames } from "~/state/issues";
-import { QuickCreateProjectDialog } from "../projects/QuickCreateProjectDialog";
+import { CreateProjectDialog } from "../projects/CreateProjectDialog";
 import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import { Button } from "../ui/button";
 import {
@@ -295,7 +295,7 @@ export function IssueDetailProperties({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <QuickCreateProjectDialog
+      <CreateProjectDialog
         environmentId={primaryEnvironmentId}
         onCreated={(created) => onProject(created.projectId)}
         onOpenChange={setQuickCreateProjectOpen}

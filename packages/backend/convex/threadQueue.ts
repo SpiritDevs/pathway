@@ -51,6 +51,7 @@ import {
   QUEUE_ORPHAN_GRACE_MS,
   QUEUE_CLEANUP_BATCH_SIZE,
   trackQueueAttachments,
+  deleteQueueMessage,
   pruneOrphanQueue,
   pruneQueueAttachment,
 } from "./lib/threadQueueRetention.ts";
@@ -1121,6 +1122,23 @@ export const retry = mutation({
         nextSequence: thread.nextSequence + 1,
       });
     await refreshThread(ctx, thread);
+    return null;
+  },
+});
+/** Deletes canceled work, which is otherwise kept for retry. Outstanding work stays fenced. */
+export const discard = mutation({
+  args: identityArgs,
+  handler: async (ctx, args) => {
+    const { actor, thread } = await ownedThread(ctx, args);
+    member(actor, false);
+    const canceled = await threadMessageStateQuery(ctx, thread, "canceled").collect();
+    if (canceled.some((message) => message.issuedByMembershipId !== actor.membership._id))
+      requirePermission(actor, "remoteAgents.control");
+    for (const message of canceled) await deleteQueueMessage(ctx, message);
+    // A canceled launch was never accepted, so no receipt needs to outlive it.
+    if (thread.state === "canceled" && (await threadMessageQuery(ctx, thread).first()) === null)
+      await ctx.db.delete(thread._id);
+    else if (thread.state !== "canceled") await refreshThread(ctx, thread);
     return null;
   },
 });

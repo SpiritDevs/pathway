@@ -4,6 +4,7 @@ import type { AlertPolicyRow } from "@spiritdevs/contracts/threadAlerts";
 import { reactHookHarness as hooks } from "../test/reactHookHarness";
 import { visitElements } from "../test/reactElementTree";
 import { AlertPolicyChoices, ThreadAlertBell } from "./ThreadAlertBell";
+import { PopoverPopup } from "./ui/popover";
 
 const mutations = vi.hoisted(() => ({ upsert: vi.fn(), ready: true }));
 vi.mock("@effect/atom-react", () => ({
@@ -39,6 +40,9 @@ function render(policies: readonly AlertPolicyRow[] = []) {
 }
 function button(tree: ReactElement) {
   return visitElements(tree, (element) => element.type === "button")!;
+}
+function popup(tree: ReactElement) {
+  return visitElements(tree, (element) => element.type === PopoverPopup)!;
 }
 function fire(
   element: ReactElement<Record<string, unknown>>,
@@ -123,6 +127,39 @@ describe("ThreadAlertBell", () => {
     fire(button(render()), "onPointerCancel");
     vi.advanceTimersByTime(500);
     expect(render().props.open).toBe(false);
+  });
+  it("closes a modifier-hover peek once the pointer leaves the bell", () => {
+    vi.useFakeTimers();
+    fire(button(render()), "onMouseMove", { ctrlKey: true });
+    expect(render().props.open).toBe(true);
+    fire(button(render()), "onMouseLeave");
+    vi.advanceTimersByTime(150);
+    expect(render().props.open).toBe(false);
+  });
+  it("keeps a peek open while the pointer is over its popup", () => {
+    vi.useFakeTimers();
+    fire(button(render()), "onMouseMove", { ctrlKey: true });
+    fire(button(render()), "onMouseLeave");
+    fire(popup(render()), "onMouseEnter");
+    vi.advanceTimersByTime(150);
+    expect(render().props.open).toBe(true);
+    fire(popup(render()), "onMouseLeave");
+    vi.advanceTimersByTime(150);
+    expect(render().props.open).toBe(false);
+  });
+  it("keeps the menu open after clicking inside a peek or opening it explicitly", () => {
+    vi.useFakeTimers();
+    fire(button(render()), "onMouseMove", { ctrlKey: true });
+    fire(popup(render()), "onMouseEnter");
+    fire(popup(render()), "onPointerDown");
+    fire(popup(render()), "onMouseLeave");
+    vi.advanceTimersByTime(150);
+    expect(render().props.open).toBe(true);
+    hooks.reset();
+    fire(button(render()), "onContextMenu");
+    fire(button(render()), "onMouseLeave");
+    vi.advanceTimersByTime(150);
+    expect(render().props.open).toBe(true);
   });
   it("can restore one event to inherit without changing another override", () => {
     const change = vi.fn();

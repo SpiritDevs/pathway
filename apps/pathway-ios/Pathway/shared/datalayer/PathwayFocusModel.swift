@@ -46,6 +46,12 @@ struct PathwayFocusNotification: Decodable, Identifiable {
     private(set) var notifications: [PathwayFocusNotification] = []
     private(set) var unreadCount = 0
     private(set) var unreadThreadKeys: Set<String> = []
+    private(set) var viewPreferences: [PathwayFocusViewPreference] = []
+    /// Folding the pinned shelf is this device's view state, like the snoozed and settled shelves.
+    private(set) var collapsedPinnedFocusIDs: Set<String> = Set(
+        UserDefaults.standard.stringArray(forKey: PathwayFocusModel.collapsedPinnedKey) ?? []
+    )
+    private static let collapsedPinnedKey = "pathway.focus.pinnedCollapsed"
     var selectedID = "all" { didSet { if let preferenceKey { UserDefaults.standard.set(selectedID, forKey: preferenceKey) } } }
     var errorMessage: String?
     @ObservationIgnored private var preferenceKey: String?
@@ -57,6 +63,31 @@ struct PathwayFocusNotification: Decodable, Identifiable {
             return focuses.first { $0.id == selectedID }?.includeConversations == true
         }
         return assignments.contains { $0.focusId == selectedID && $0.projectKey == "\(thread.environmentId):\(projectID)" }
+    }
+
+    func view(for focusID: String) -> PathwayFocusView {
+        PathwayFocusView(viewPreferences.first { $0.focusId == focusID })
+    }
+
+    /// Applies immediately and rolls back if the cloud rejects the write.
+    func saveView(_ view: PathwayFocusView, for focusID: String, cloud: PathwayCloudModel) async throws {
+        let previous = viewPreferences
+        viewPreferences = previous.filter { $0.focusId != focusID } + [
+            PathwayFocusViewPreference(focusId: focusID, sortOrder: view.sort.rawValue, collapsiblePinned: view.collapsiblePinned)
+        ]
+        do {
+            _ = try await cloud.request(kind: "mutation", name: "focuses:setViewPreference", arguments: .object([
+                "focusId": .string(focusID), "sortOrder": .string(view.sort.rawValue), "collapsiblePinned": .bool(view.collapsiblePinned)
+            ]))
+        } catch {
+            viewPreferences = previous
+            throw error
+        }
+    }
+
+    func togglePinnedCollapsed(_ focusID: String) {
+        if collapsedPinnedFocusIDs.remove(focusID) == nil { collapsedPinnedFocusIDs.insert(focusID) }
+        UserDefaults.standard.set(collapsedPinnedFocusIDs.sorted(), forKey: Self.collapsedPinnedKey)
     }
 
     func notificationFocusID(_ notification: PathwayFocusNotification) -> String {
@@ -84,7 +115,7 @@ struct PathwayFocusNotification: Decodable, Identifiable {
     func observe(cloud: PathwayCloudModel, storageDirectory: URL?) async {
         observationGeneration += 1
         let generation = observationGeneration
-        focuses = []; assignments = []; notifications = []; unreadCount = 0; unreadThreadKeys = []; errorMessage = nil
+        focuses = []; assignments = []; viewPreferences = []; notifications = []; unreadCount = 0; unreadThreadKeys = []; errorMessage = nil
         preferenceKey = storageDirectory.map { "pathway.focus.\($0.lastPathComponent)" }
         selectedID = preferenceKey.flatMap { UserDefaults.standard.string(forKey: $0) } ?? "all"
         #if DEBUG
@@ -107,13 +138,18 @@ struct PathwayFocusNotification: Decodable, Identifiable {
     }
 
     private func observeFocuses(cloud: PathwayCloudModel, generation: Int) async {
-        struct Snapshot: Decodable { let focuses: [PathwayFocus]; let assignments: [PathwayFocusAssignment] }
+        struct Snapshot: Decodable {
+            let focuses: [PathwayFocus]
+            let assignments: [PathwayFocusAssignment]
+            let viewPreferences: [PathwayFocusViewPreference]?
+        }
         do {
             for try await value in cloud.subscribe(name: "focuses:list") {
                 guard !Task.isCancelled, generation == observationGeneration else { return }
                 let snapshot = try decodePathwayPayload(Snapshot.self, from: value)
                 focuses = snapshot.focuses.sorted { $0.orderKey == $1.orderKey ? $0.id < $1.id : $0.orderKey < $1.orderKey }
                 assignments = snapshot.assignments
+                viewPreferences = snapshot.viewPreferences ?? []
             }
         } catch is CancellationError {} catch { if generation == observationGeneration { errorMessage = error.localizedDescription } }
     }

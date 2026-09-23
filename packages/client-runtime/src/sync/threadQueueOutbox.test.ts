@@ -1,8 +1,38 @@
 import "fake-indexeddb/auto";
 import { describe, expect, it } from "vite-plus/test";
-import { readQueuedIntents, removeQueuedIntent, saveQueuedIntent } from "./threadQueueOutbox.ts";
+import {
+  readQueuedIntents,
+  removeCanceledLocalQueuedThread,
+  removeQueuedIntent,
+  saveQueuedIntent,
+} from "./threadQueueOutbox.ts";
 
 describe("durable thread outbox", () => {
+  it("removes only a thread's canceled intents", async () => {
+    const base = {
+      accountId: "account-d",
+      companyId: "company",
+      environmentId: "environment",
+      threadId: "thread",
+      submission: {},
+      attachments: [],
+      createdAt: 1,
+    };
+    await saveQueuedIntent({ ...base, key: "canceled", commandId: "a", canceled: true });
+    await saveQueuedIntent({ ...base, key: "pending", commandId: "b" });
+    await saveQueuedIntent({
+      ...base,
+      key: "other-thread",
+      commandId: "c",
+      threadId: "other",
+      canceled: true,
+    });
+    await removeCanceledLocalQueuedThread(base);
+    expect((await readQueuedIntents("account-d")).map((row) => row.key).toSorted()).toEqual([
+      "other-thread",
+      "pending",
+    ]);
+  });
   it("persists prompt and file bytes together and scopes recovery to the signed-in account", async () => {
     const record = {
       key: "account-a:company:message",

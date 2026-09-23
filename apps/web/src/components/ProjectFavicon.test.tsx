@@ -6,6 +6,7 @@ const testState = vi.hoisted(() => ({
   faviconUrl: "https://environment.test/api/assets/token-a/v1-20-favicon.svg",
   lastResource: null as unknown,
   sharedSource: null as { environmentId: EnvironmentId; cwd: string; faviconPath: string } | null,
+  libraryIcon: null as { name: string; color: string } | null,
 }));
 
 const hooks = vi.hoisted(() => {
@@ -44,7 +45,15 @@ const hooks = vi.hoisted(() => {
   };
 });
 
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => testState.sharedSource }));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: (atom: unknown) =>
+    atom === "library-icon" ? testState.libraryIcon : testState.sharedSource,
+}));
+
+vi.mock("../state/projectIcons", () => ({
+  projectIconAtom: () => "library-icon",
+  projectIconCheckoutKey: (environmentId: string, cwd: string) => `${environmentId}:${cwd}`,
+}));
 
 vi.mock("../state/projectFavicons", () => ({ projectFaviconSourceAtom: () => null }));
 
@@ -111,7 +120,20 @@ function renderImage(
 describe("ProjectFavicon", () => {
   beforeEach(() => {
     testState.sharedSource = null;
+    testState.libraryIcon = null;
     hooks.reset();
+  });
+
+  it("shows a company project's library icon instead of any detected favicon", () => {
+    testState.lastResource = null;
+    testState.libraryIcon = { name: "Rocket", color: "#ef4444" };
+    const element = ProjectFavicon({
+      environmentId: "environment-test" as EnvironmentId,
+      cwd: "/workspace-test",
+    }) as ReactElement<{ readonly iconName: string; readonly color: string }>;
+
+    expect(element.props).toMatchObject({ iconName: "Rocket", color: "#ef4444" });
+    expect(testState.lastResource).toBeNull();
   });
 
   it("falls back when the displayed favicon fails without discarding a valid older image early", () => {

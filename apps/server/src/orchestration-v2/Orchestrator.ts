@@ -1,3 +1,4 @@
+import { canResumeUsageRecovery } from "../providerUsage/usageRecoveryPolicy.ts";
 import { questionDismissal } from "./questionDismissal.ts";
 import { canResumeAllowance } from "../providerUsage/allowanceResumePolicy.ts";
 import { invalidateStorageInventory } from "../storage/pressureState.ts";
@@ -3898,6 +3899,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) =>
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      if (
+        command.usageRecoveryOfRunId !== undefined &&
+        !canResumeUsageRecovery(projection, command.usageRecoveryOfRunId)
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "This usage recovery was superseded by newer work or a user action.",
+        });
+      }
       if (
         command.allowanceResumeOfRunId !== undefined &&
         !canResumeAllowance(projection, command.allowanceResumeOfRunId)

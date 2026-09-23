@@ -970,6 +970,56 @@ describe("durable thread queue", () => {
     expect(detail.thread.queuedCount).toBe(1);
   });
 
+  it("deletes a canceled launch and its messages without touching outstanding work", async () => {
+    const t = harness();
+    await seed(t);
+    await enqueue(t);
+    const client = asMember(t, "manager");
+    await client.mutation(api.threadQueue.discard, queueIdentity);
+    expect((await client.query(api.threadQueue.getThread, queueIdentity)).thread.state).toBe(
+      "queued",
+    );
+    await client.mutation(api.threadQueue.cancel, firstFence);
+    await client.mutation(api.threadQueue.discard, queueIdentity);
+    expect(await client.query(api.threadQueue.list, { companyId: COMPANY_ID })).toEqual([]);
+    expect(await t.run((ctx) => ctx.db.query("threadQueueThreads").collect())).toEqual([]);
+    expect(await t.run((ctx) => ctx.db.query("threadQueueMessages").collect())).toEqual([]);
+  });
+
+  it("discards canceled follow-ups while keeping delivered receipts", async () => {
+    const t = harness();
+    await seed(t);
+    const saved = await enqueue(t);
+    const client = asMember(t, "manager");
+    await asEnvironment(t).mutation(api.threadQueue.accept, firstFence);
+    await asEnvironment(t).mutation(api.threadQueue.acknowledge, firstFence);
+    const identity = { ...queueIdentity, queueId: saved.thread.queueId! };
+    await client.mutation(api.threadQueue.enqueue, {
+      ...identity,
+      environmentId: ENVIRONMENT_ONE,
+      submission: followup(),
+      attachmentIds: [],
+    });
+    await client.mutation(api.threadQueue.cancel, {
+      ...identity,
+      commandId: "followup-one",
+      revision: 1,
+    });
+    expect((await client.query(api.threadQueue.getThread, identity)).thread.state).toBe("canceled");
+    await client.mutation(api.threadQueue.discard, identity);
+    const detail = await client.query(api.threadQueue.getThread, identity);
+    expect(detail.thread.state).toBe("delivered");
+    expect(detail.messages).toEqual([]);
+    expect(
+      (
+        await client.query(api.threadQueue.submissionStatus, {
+          ...identity,
+          commandId: "launch-one",
+        })
+      )?.state,
+    ).toBe("delivered");
+  });
+
   it("retains attachment bytes across handoff and rejects unowned metadata references", async () => {
     const t = harness();
     await seed(t);

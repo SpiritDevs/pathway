@@ -298,8 +298,7 @@ function ProviderUsageDetails({
   const hasUsage = limits.length > 0 || snapshot.usageLines.length > 0;
   return (
     <div className={cn("space-y-3", compact && "space-y-2.5")}>
-      {(snapshot.stale ||
-        nowMs - Date.parse(snapshot.fetchedAt ?? snapshot.updatedAt) >= 300_000) &&
+      {(snapshot.stale || nowMs - Date.parse(snapshot.updatedAt) >= 300_000) &&
       (detail || captureAge) ? (
         <p className="text-xs leading-relaxed text-warning-foreground">
           {[detail, captureAge].filter(Boolean).join(" · ")}

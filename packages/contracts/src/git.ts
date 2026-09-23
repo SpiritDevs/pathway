@@ -189,6 +189,8 @@ export type VcsSwitchRefInput = typeof VcsSwitchRefInput.Type;
 export const VcsInitInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   kind: Schema.optional(VcsDriverKind),
+  /** Create `cwd` (and parents) first, for a project folder that does not exist yet. */
+  createDirectory: Schema.optional(Schema.Boolean),
 });
 export type VcsInitInput = typeof VcsInitInput.Type;
 

@@ -1,3 +1,9 @@
+import {
+  UsageRecoveryThreadInput,
+  UsageRecoveryScheduleInput,
+  UsageRecoveryResult,
+  UsageRecoveryError,
+} from "./usageRecovery.ts";
 import { ThreadId } from "./baseSchemas.ts";
 import {
   StorageSnapshot,
@@ -368,6 +374,8 @@ import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
+  SourceControlListRepositoryOwnersInput,
+  SourceControlListRepositoryOwnersResult,
   SourceControlPublishRepositoryInput,
   SourceControlPublishRepositoryResult,
   SourceControlRepositoryError,
@@ -490,6 +498,10 @@ export const WS_METHODS = {
   serverSubscribeProviderUsage: "server.subscribeProviderUsage",
 
   // Scheduled tasks
+  usageRecoveryGet: "usageRecovery.get",
+  usageRecoverySubscribe: "usageRecovery.subscribe",
+  usageRecoverySchedule: "usageRecovery.schedule",
+  usageRecoveryCancel: "usageRecovery.cancel",
   scheduledTasksList: "scheduledTasks.list",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
@@ -522,6 +534,7 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
+  sourceControlListRepositoryOwners: "sourceControl.listRepositoryOwners",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -935,6 +948,15 @@ export const WsSourceControlPublishRepositoryRpc = Rpc.make(
   {
     payload: SourceControlPublishRepositoryInput,
     success: SourceControlPublishRepositoryResult,
+    error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsSourceControlListRepositoryOwnersRpc = Rpc.make(
+  WS_METHODS.sourceControlListRepositoryOwners,
+  {
+    payload: SourceControlListRepositoryOwnersInput,
+    success: SourceControlListRepositoryOwnersResult,
     error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
   },
 );
@@ -1402,6 +1424,28 @@ export const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServer
   success: ServerLifecycleStreamEvent,
   error: EnvironmentAuthorizationError,
   stream: true,
+});
+
+export const WsUsageRecoveryGetRpc = Rpc.make(WS_METHODS.usageRecoveryGet, {
+  payload: UsageRecoveryThreadInput,
+  success: UsageRecoveryResult,
+  error: Schema.Union([UsageRecoveryError, EnvironmentAuthorizationError]),
+});
+export const WsUsageRecoverySubscribeRpc = Rpc.make(WS_METHODS.usageRecoverySubscribe, {
+  payload: UsageRecoveryThreadInput,
+  success: UsageRecoveryResult,
+  error: Schema.Union([UsageRecoveryError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+export const WsUsageRecoveryScheduleRpc = Rpc.make(WS_METHODS.usageRecoverySchedule, {
+  payload: UsageRecoveryScheduleInput,
+  success: UsageRecoveryResult,
+  error: Schema.Union([UsageRecoveryError, EnvironmentAuthorizationError]),
+});
+export const WsUsageRecoveryCancelRpc = Rpc.make(WS_METHODS.usageRecoveryCancel, {
+  payload: UsageRecoveryThreadInput,
+  success: UsageRecoveryResult,
+  error: Schema.Union([UsageRecoveryError, EnvironmentAuthorizationError]),
 });
 
 export const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
@@ -2035,6 +2079,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProviderUsageRpc,
   WsServerSubscribeProviderUsageRpc,
   WsServerSignalProcessRpc,
+  WsUsageRecoveryGetRpc,
+  WsUsageRecoverySubscribeRpc,
+  WsUsageRecoveryScheduleRpc,
+  WsUsageRecoveryCancelRpc,
   WsScheduledTasksListRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,
@@ -2064,6 +2112,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
+  WsSourceControlListRepositoryOwnersRpc,
   WsProjectsListEntriesRpc,
   WsProjectsReadFileRpc,
   WsProjectsSearchContentsRpc,

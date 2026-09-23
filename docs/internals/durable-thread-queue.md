@@ -102,7 +102,9 @@ preserved; ambiguous legacy lookups require a destination or stable queue ID.
 A delivered queue with no pending or canceled messages is a receipt, not pending work. Web and
 Electron do not render it as a queued sidebar placeholder. Opening an old queue link resolves the
 canonical thread when available; otherwise it explains that the conversation is unavailable.
-Canceled content remains visible and retryable.
+Canceled content remains visible and retryable until it is deleted. `discard` removes
+only canceled messages and their attachment references; a canceled launch was never accepted, so
+its queue row goes too. A delivered queue keeps its receipts and resumes normal listing expiry.
 
 Deleting a published thread schedules removal of its completed queue and message receipts. An
 hourly, paginated sweep repairs missed deletes after a 24-hour shell-publication grace period.

@@ -413,6 +413,40 @@ describe("checkoutless project setup", () => {
   });
 });
 
+describe("company project icon", () => {
+  it("sets, normalizes, publishes, and clears a built-in icon", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const owner = asOwner(t);
+    await owner.mutation(api.cloudProjects.setCompanyProjectIcon, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PROJECT_ID,
+      icon: { name: "Rocket", color: "#EF4444" },
+    });
+    const published = await t.run(async (ctx) => ({
+      project: await ctx.db.get(ids.projectId),
+      change: (await ctx.db.query("syncChanges").collect()).findLast(
+        (row) => row.entityKind === "cloudProject" && row.entityId === PROJECT_ID,
+      ),
+    }));
+    expect(published.project?.icon).toEqual({ name: "Rocket", color: "#ef4444" });
+    expect(published.change?.payload).toMatchObject({ icon: { name: "Rocket", color: "#ef4444" } });
+    await expect(
+      owner.mutation(api.cloudProjects.setCompanyProjectIcon, {
+        companyId: COMPANY_ID,
+        cloudProjectId: PROJECT_ID,
+        icon: { name: "Rocket", color: "red" },
+      }),
+    ).rejects.toThrow("six-digit hex color");
+    await owner.mutation(api.cloudProjects.setCompanyProjectIcon, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PROJECT_ID,
+      icon: null,
+    });
+    expect((await t.run((ctx) => ctx.db.get(ids.projectId)))?.icon).toBeNull();
+  });
+});
+
 describe("company project merge", () => {
   it("moves duplicate connections and threads while preserving the selected repository", async () => {
     const t = harness();

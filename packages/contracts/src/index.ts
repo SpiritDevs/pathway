@@ -50,6 +50,7 @@ export * from "./previewRemote.ts";
 export * from "./resourceTelemetry.ts";
 export * from "./usage.ts";
 export * from "./scheduledTask.ts";
+export * from "./usageRecovery.ts";
 export * from "./worktreeMcp.ts";
 export * from "./rpc.ts";
 export * from "./mail.ts";
