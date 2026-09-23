@@ -114,8 +114,26 @@ export const withDesktopOperationSignal = <A, E, R>(
     runInOperationScope({ active: true, signal: composeDesktopSignals(parent, signal) }, effect),
   );
 
+/**
+ * The caller's standing to drive the desktop, checked with the signal at every
+ * dispatch point, so a check that passed before targeting is asked again after
+ * it. The Computer tools bind it to the call's run and policy; pane input and
+ * cleanup carry none.
+ */
+export class DesktopDispatchAuthority extends Context.Reference<
+  Effect.Effect<void, ComputerOperationError>
+>("@spiritdevs/pathway/computer/DesktopDispatchAuthority", {
+  defaultValue: () => Effect.void,
+}) {}
+
+const assertDispatchAuthority: Effect.Effect<void, ComputerOperationError> = Effect.flatten(
+  Effect.service(DesktopDispatchAuthority),
+);
+
 export const assertDesktopOperationActive: Effect.Effect<void, ComputerOperationError> =
-  Effect.flatMap(desktopOperationSignal, checkDesktopSignal);
+  Effect.flatMap(desktopOperationSignal, checkDesktopSignal).pipe(
+    Effect.andThen(assertDispatchAuthority),
+  );
 
 /** A detached continuation cannot turn a completed call into fresh input authority. */
 export const assertDesktopOperationAdmission: Effect.Effect<void, ComputerOperationError> =
@@ -127,13 +145,16 @@ export const assertDesktopOperationAdmission: Effect.Effect<void, ComputerOperat
         }),
       );
     }
-    return checkDesktopSignal(operation?.signal);
+    return Effect.andThen(checkDesktopSignal(operation?.signal), assertDispatchAuthority);
   });
 
 /** Cleanup that must finish even when the operation around it is cancelled. */
 export const withoutDesktopCancellation = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.uninterruptible(
-    Effect.provideService(effect, DesktopOperationContext, { active: true, signal: undefined }),
+    effect.pipe(
+      Effect.provideService(DesktopOperationContext, { active: true, signal: undefined }),
+      Effect.provideService(DesktopDispatchAuthority, Effect.void),
+    ),
   );
 
 export type DesktopDeliveryModeValue = "background" | "foreground";

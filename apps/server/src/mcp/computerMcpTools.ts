@@ -12,17 +12,20 @@
  */
 import {
   CommandId,
+  type ComputerAccessPolicy,
   ComputerAutonomy,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
   resolveComputerAutonomy,
+  type RuntimeMode,
   ThreadId,
   TurnItemId,
 } from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -31,7 +34,10 @@ import {
   ComputerApprovalPublishError,
   computerApprovalPolicy,
 } from "../computer/ComputerApprovalGate.ts";
+import { DesktopDispatchAuthority } from "../computer/DesktopOperationQueue.ts";
 import { ComputerService } from "../computer/Services/ComputerService.ts";
+import { isStricterComputerAccess } from "../computer/computerAccessPolicy.ts";
+import { ComputerBackendError } from "../computer/computerErrors.ts";
 import { computerSpaceDesignationForMessages } from "../computer/computerSpaceDesignation.ts";
 import {
   computerForegroundAuthorizationForMessages,
@@ -131,6 +137,14 @@ export function computerApprovalDetail(args: Record<string, unknown>): string | 
   return Object.keys(shown).length === 0 ? undefined : encodeJson(shown);
 }
 
+/** What a Computer call's authority rests on, beyond the call itself. */
+interface CallerStanding {
+  readonly unattended: boolean;
+  readonly runtimeMode: RuntimeMode | null;
+  /** The strictest access policy the run's sender cleared; none clears only `any-operator`. */
+  readonly clearance: ComputerAccessPolicy;
+}
+
 /** Remembers the last few keys, so a notice posts once per turn and reason. */
 function recentKeys() {
   const keys = new Set<string>();
@@ -142,6 +156,11 @@ function recentKeys() {
   };
 }
 
+const callerTurnInactive = new ComputerToolError({
+  code: "caller_turn_inactive",
+  message: "The turn that made this call is no longer active, so Computer refused it.",
+});
+
 const unattendedNotAllowed = new ComputerToolError({
   code: "unattended_not_allowed",
   message:
@@ -152,6 +171,12 @@ const policyTightened = new ComputerToolError({
   code: "computer_policy_changed",
   message:
     "Computer's approval policy became stricter after this call was approved, so nothing was sent. Call again to ask under the new policy.",
+});
+
+const accessTightened = new ComputerToolError({
+  code: "computer_policy_changed",
+  message:
+    "Computer's access policy became stricter than the person who started this turn is cleared for, so nothing more was sent.",
 });
 
 const isStricter = (autonomy: ComputerAutonomy, than: ComputerAutonomy) =>
@@ -189,6 +214,18 @@ export const makeComputerMcpTools = Effect.gen(function* () {
 
   const projectionOf = (threadId: string) =>
     projections.getThreadProjection(ThreadId.make(threadId)).pipe(Effect.option);
+
+  /** What a call's authority rests on, read from the thread when the call arrives. */
+  const standingOf = (projection: Option.Option<OrchestrationV2ThreadProjection>) => {
+    if (Option.isNone(projection)) {
+      return { unattended: false, runtimeMode: null, clearance: "any-operator" } as const;
+    }
+    return {
+      unattended: isUnattendedComputerCaller(projection.value),
+      runtimeMode: projection.value.thread.runtimeMode,
+      clearance: activeComputerRun(projection.value)?.computerControl?.clearance ?? "any-operator",
+    } satisfies CallerStanding;
+  };
 
   const messagesOf = (context: ToolContext) =>
     projectionOf(context.callerThreadId).pipe(
@@ -251,30 +288,46 @@ export const makeComputerMcpTools = Effect.gen(function* () {
     }).pipe(Effect.ignore({ log: true }));
 
   /**
-   * The autonomy the caller acts under now (ADR 0043): the environment ceiling
+   * The autonomy the caller acts under at `ceiling` (ADR 0043): the ceiling
    * bounds the thread's own mode, and alone governs unattended callers. None
    * when the ceiling keeps unattended callers off the desktop.
    */
-  const autonomyOf = (projection: Option.Option<OrchestrationV2ThreadProjection>) =>
-    Effect.gen(function* () {
-      const { computer: policy } = yield* settings.getSettings.pipe(Effect.orDie);
-      if (Option.isSome(projection) && isUnattendedComputerCaller(projection.value)) {
-        return computerApprovalPolicy(policy.autonomy).unattended
-          ? Option.some(policy.autonomy)
-          : Option.none();
-      }
-      return Option.some(
-        resolveComputerAutonomy(
-          policy.autonomy,
-          Option.isNone(projection) ? null : projection.value.thread.runtimeMode,
-        ),
-      );
-    });
+  const autonomyUnder = (ceiling: ComputerAutonomy, standing: CallerStanding) => {
+    if (standing.unattended) {
+      return computerApprovalPolicy(ceiling).unattended ? Option.some(ceiling) : Option.none();
+    }
+    return Option.some(resolveComputerAutonomy(ceiling, standing.runtimeMode));
+  };
   const callerAutonomy = (threadId: string) =>
-    projectionOf(threadId).pipe(Effect.flatMap(autonomyOf));
+    Effect.gen(function* () {
+      const standing = standingOf(yield* projectionOf(threadId));
+      const { computer: policy } = yield* settings.getSettings.pipe(Effect.orDie);
+      return autonomyUnder(policy.autonomy, standing);
+    });
 
   /** The autonomy each call was authorized under; its dispatch refuses a stricter one. */
   const authorizedUnder = new WeakMap<ToolContext, ComputerAutonomy>();
+
+  /**
+   * The one authority check a Computer call passes when it starts, after each
+   * wait, and immediately before each backend dispatch: the access policy asks
+   * no more than the run's sender cleared (ADR 0041), and the caller's autonomy
+   * is no stricter than the call was authorized under (ADR 0043). Reads only
+   * the cached settings, so dispatch points can afford it.
+   */
+  const assertStanding = (context: ToolContext, standing: CallerStanding) =>
+    Effect.gen(function* () {
+      const { computer: policy } = yield* settings.getSettings.pipe(Effect.orDie);
+      if (isStricterComputerAccess(policy.accessPolicy, standing.clearance)) {
+        return yield* accessTightened;
+      }
+      const autonomy = autonomyUnder(policy.autonomy, standing);
+      if (Option.isNone(autonomy)) return yield* unattendedNotAllowed;
+      const authorized = authorizedUnder.get(context);
+      if (authorized !== undefined && isStricter(autonomy.value, authorized)) {
+        return yield* policyTightened;
+      }
+    });
 
   const authorizeAction: ComputerAuthorizeAction = (name, args, context) =>
     Effect.gen(function* () {
@@ -396,6 +449,15 @@ export const makeComputerMcpTools = Effect.gen(function* () {
     const projection = yield* projectionOf(invocation.threadId);
     const run = Option.isNone(projection) ? undefined : activeComputerRun(projection.value);
     const callerTurnId = run?.id ?? null;
+    const standing = standingOf(projection);
+    const currentTurn = Effect.gen(function* () {
+      const current = yield* projectionOf(invocation.threadId);
+      const active = Option.isNone(current) ? undefined : activeComputerRun(current.value);
+      if (callerTurnId === null || active?.id !== callerTurnId) {
+        return yield* callerTurnInactive;
+      }
+      return current;
+    });
     const context: ToolContext = {
       callerThreadId: invocation.threadId,
       callerThreadLabel: Option.isNone(projection) ? null : projection.value.thread.title,
@@ -407,42 +469,33 @@ export const makeComputerMcpTools = Effect.gen(function* () {
       // must not act for a turn that ended meanwhile, nor under a policy
       // that became stricter after the call was authorized.
       assertCallerTurnActive: () =>
-        Effect.gen(function* () {
-          const current = yield* projectionOf(invocation.threadId);
-          const active = Option.isNone(current) ? undefined : activeComputerRun(current.value);
-          if (callerTurnId === null || active?.id !== callerTurnId) {
-            return yield* new ComputerToolError({
-              code: "caller_turn_inactive",
-              message: "The turn that made this call is no longer active, so Computer refused it.",
-            });
-          }
-          const autonomy = yield* autonomyOf(current);
-          if (Option.isNone(autonomy)) return yield* unattendedNotAllowed;
-          const authorized = authorizedUnder.get(context);
-          if (authorized !== undefined && isStricter(autonomy.value, authorized)) {
-            return yield* policyTightened;
-          }
-        }),
+        currentTurn.pipe(Effect.flatMap((current) => assertStanding(context, standingOf(current)))),
       jsonRpcRequestId,
     };
-    return context;
+    // Authority belongs to the admitted run: a credential that outlived its
+    // run's admission, or a Stop generation, holds none for the next run.
+    const admitted =
+      run?.computerControl !== undefined &&
+      manager.canActivateControl(invocation.threadId, run.computerControl.generation);
+    return { context, standing, admitted, turnActive: Effect.asVoid(currentTurn) };
   });
 
   // `handles` admits only catalog and Computer-family names.
   const call: ComputerMcpTools["call"] = ({ invocation, name, args, jsonRpcRequestId }) =>
     Effect.gen(function* () {
       const entry = tools.get(name);
-      const permitted = invocation.capabilities.has(
+      const capable = invocation.capabilities.has(
         entry?.requiredCapability ?? COMPUTER_CONTROL_CAPABILITY,
       );
-      // A permitted caller naming a tool this host lacks gets the SDK's unknown tool.
-      if (entry === undefined && permitted) return undefined;
-      const context = yield* contextFor(invocation, jsonRpcRequestId);
-      if (!permitted || entry?.requiresActiveTurn === true) {
-        const inactive = yield* context.assertCallerTurnActive().pipe(Effect.flip, Effect.option);
+      // A capable caller naming a tool this host lacks gets the SDK's unknown tool.
+      if (entry === undefined && capable) return undefined;
+      const { context, standing, admitted, turnActive } = yield* contextFor(
+        invocation,
+        jsonRpcRequestId,
+      );
+      if (!capable || !admitted || entry === undefined) {
+        const inactive = yield* turnActive.pipe(Effect.flip, Effect.option);
         if (Option.isSome(inactive)) return computerToolErrorResult(inactive.value);
-      }
-      if (!permitted || entry === undefined) {
         yield* postNotice(
           context,
           `denied:${name}`,
@@ -452,18 +505,39 @@ export const makeComputerMcpTools = Effect.gen(function* () {
         );
         return capabilityDenied(name);
       }
+      if (entry.requiresActiveTurn === true) {
+        const refused = yield* context.assertCallerTurnActive().pipe(Effect.flip, Effect.option);
+        if (Option.isSome(refused)) return computerToolErrorResult(refused.value);
+      }
       if (Option.isNone(yield* callerAutonomy(invocation.threadId))) {
         return computerToolErrorResult(unattendedNotAllowed);
       }
-      return yield* entry
-        .handler(args, context)
-        .pipe(
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.failCause(cause)
-              : Effect.succeed(mcpToolResultError(`${name} failed unexpectedly.`)),
+      // Every dispatch point asks again, so a check passed before targeting or
+      // a card does not carry the call past a stricter policy. The handler
+      // renders the refusal as a failed action; the agent reads its code.
+      let refusal: ComputerToolError | undefined;
+      const handled = entry.handler(args, context).pipe(
+        Effect.provideService(
+          DesktopDispatchAuthority,
+          assertStanding(context, standing).pipe(
+            Effect.mapError((refused) => {
+              refusal = refused;
+              return new ComputerBackendError({
+                message: refused.message,
+                rejectedOperation: name,
+              });
+            }),
           ),
-        );
+        ),
+      );
+      const outcome = yield* Effect.exit(handled);
+      if (Exit.isFailure(outcome) && Cause.hasInterruptsOnly(outcome.cause)) {
+        return yield* Effect.interrupt;
+      }
+      if (refusal !== undefined) return computerToolErrorResult(refusal);
+      return Exit.isSuccess(outcome)
+        ? outcome.value
+        : mcpToolResultError(`${name} failed unexpectedly.`);
     });
 
   return {

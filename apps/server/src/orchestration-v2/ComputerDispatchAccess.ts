@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 /**
  * Who is sending, as the Computer access policy sees it (ADR 0041). The
  * orchestrator asks once for every message that requests Computer, whatever
- * path it came in on.
+ * path it came in on, and freezes the answer on the run.
  *
  * `clearance` is the strictest policy the sender satisfies, and fails with the
  * re-pair hint when the sender does not satisfy the current policy. Edges that

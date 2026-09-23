@@ -174,6 +174,7 @@ export const seedRunningTurn = Effect.fn("seedRunningTurn")(function* (
           rootNodeId,
           activeAttemptId: attemptId,
           status: "running",
+          computerControl: { mode: "request", generation: 0, clearance: "admins-only" },
           requestedAt: now,
           startedAt: now,
           completedAt: null,
@@ -207,7 +208,9 @@ export const seedRunningTurn = Effect.fn("seedRunningTurn")(function* (
 });
 
 /** The Computer card the gate posted for the thread, once it lands. */
-export const pendingComputerRequest = Effect.fn("pendingComputerRequest")(function* (threadId: ThreadId) {
+export const pendingComputerRequest = Effect.fn("pendingComputerRequest")(function* (
+  threadId: ThreadId,
+) {
   const orchestrator = yield* OrchestratorV2;
   // The card is posted from the gate's publisher fiber; let it land.
   for (let attempt = 0; attempt < 100; attempt += 1) {

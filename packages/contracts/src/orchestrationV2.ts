@@ -38,6 +38,7 @@ import {
   OrchestrationGetTurnDiffResult,
 } from "./checkpointDiff.ts";
 import { ProviderOptionSelections } from "./model.ts";
+import { ComputerAccessPolicy } from "./settings.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import {
   ProviderApprovalDecision,
@@ -523,10 +524,16 @@ export const OrchestrationV2DelegatedCompletionCohort = Schema.Struct({
 export type OrchestrationV2DelegatedCompletionCohort =
   typeof OrchestrationV2DelegatedCompletionCohort.Type;
 
-/** How a run was opted into Computer and the Stop generation it was opted in under. */
+/**
+ * How a run was opted into Computer, the Stop generation it was opted in under,
+ * and the strictest access policy its sender cleared (ADR 0041). Every Computer
+ * call re-checks the current policy against that clearance; a run persisted
+ * without one clears nothing past `any-operator`.
+ */
 export const OrchestrationV2RunComputerControl = Schema.Struct({
   mode: Schema.Literals(["request", "chat"]),
   generation: NonNegativeInt,
+  clearance: Schema.optional(ComputerAccessPolicy),
 });
 export type OrchestrationV2RunComputerControl = typeof OrchestrationV2RunComputerControl.Type;
 
