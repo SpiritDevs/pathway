@@ -72,6 +72,7 @@ import {
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import { ProviderContinuationRequests } from "./ProviderContinuationRequests.ts";
+import { ServerOwnedRuntimeRequests } from "./ServerOwnedRuntimeRequests.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
@@ -665,6 +666,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const projectionStore = yield* ProjectionStoreV2;
   const providerAdapters = yield* ProviderAdapterRegistryV2;
   const continuationRequests = yield* ProviderContinuationRequests;
+  const serverOwnedRequests = yield* ServerOwnedRuntimeRequests;
   const questionDelivery = yield* Effect.serviceOption(QuestionAnswerDelivery);
   const providerSessions = yield* ProviderSessionManagerV2;
   const providerSwitchService = yield* ProviderSwitchServiceV2;
@@ -6102,6 +6104,60 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           commandType: command.type,
           cause: `Runtime request ${command.requestId} is ${runtimeRequest.status}.`,
         });
+      }
+      // Pathway posted this card, so no provider is waiting on it: the owner
+      // settles the waiting call, and the answer resolves the card here.
+      if (runtimeRequest.kind === "computer") {
+        const decision = command.decision ?? "decline";
+        const answered = yield* serverOwnedRequests.respond({
+          threadId: command.threadId,
+          requestId: command.requestId,
+          decision,
+        });
+        if (!answered) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "This Computer approval is no longer open.",
+          });
+        }
+        const now = yield* DateTime.now;
+        const emitEvent = emit(events, command);
+        const status = decision === "accept" ? ("completed" as const) : ("cancelled" as const);
+        const requestNode = projection.nodes.find((node) => node.id === runtimeRequest.nodeId);
+        const runId = requestNode?.runId == null ? {} : { runId: requestNode.runId };
+        yield* emitEvent({
+          type: "runtime-request.updated",
+          threadId: command.threadId,
+          ...runId,
+          nodeId: runtimeRequest.nodeId,
+          occurredAt: now,
+          payload: { ...runtimeRequest, status: "resolved", resolvedAt: now },
+        });
+        if (requestNode !== undefined) {
+          yield* emitEvent({
+            type: "node.updated",
+            threadId: command.threadId,
+            ...runId,
+            nodeId: requestNode.id,
+            occurredAt: now,
+            payload: { ...requestNode, status, completedAt: now },
+          });
+        }
+        const card = projection.turnItems.find(
+          (item) => item.type === "approval_request" && item.requestId === command.requestId,
+        );
+        if (card !== undefined) {
+          yield* emitEvent({
+            type: "turn-item.updated",
+            threadId: command.threadId,
+            ...runId,
+            nodeId: runtimeRequest.nodeId,
+            occurredAt: now,
+            payload: { ...card, status, completedAt: now, updatedAt: now },
+          });
+        }
+        return;
       }
       const questionItem = projection.turnItems.find(
         (item) => item.type === "user_input_request" && item.requestId === command.requestId,
