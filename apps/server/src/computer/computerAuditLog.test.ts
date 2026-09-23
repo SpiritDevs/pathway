@@ -2,8 +2,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Scope from "effect/Scope";
 
 import {
   COMPUTER_AUDIT_LOG_FILE,
@@ -147,6 +149,20 @@ it.layer(NodeServices.layer)("ComputerAuditLog", (it) => {
         ax_error: -25202,
       });
       expect(saved).not.toContain("private");
+    }),
+  );
+
+  it.effect("answers flush and history reads after its scope closes", () =>
+    Effect.gen(function* () {
+      const { fs, file } = yield* fixture;
+      const scope = yield* Scope.make();
+      const log = yield* makeComputerAuditLog(file).pipe(Effect.provideService(Scope.Scope, scope));
+      yield* log.record({ tool: "computer_click", effect: "verified" });
+      yield* Scope.close(scope, Exit.void);
+      yield* log.record({ tool: "computer_type", effect: "verified" });
+      yield* log.flush;
+      expect(yield* log.readHistory({})).toMatchObject({ entries: [{ tool: "computer_click" }] });
+      expect(yield* readLines(fs, file)).toHaveLength(1);
     }),
   );
 

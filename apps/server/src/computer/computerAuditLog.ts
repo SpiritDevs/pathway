@@ -210,7 +210,8 @@ type AuditWork =
 /**
  * Opens the audit log at `filePath`; `undefined` turns auditing off and
  * history reads report `disabled`. The writer fiber lives in the caller's
- * scope, and closing the scope first writes everything already queued.
+ * scope, and closing the scope first writes everything already queued; later
+ * records are dropped.
  */
 export const makeComputerAuditLog = Effect.fn("makeComputerAuditLog")(function* (
   filePath: string | undefined,
@@ -296,6 +297,9 @@ export const makeComputerAuditLog = Effect.fn("makeComputerAuditLog")(function* 
     const done = Deferred.makeUnsafe<void>();
     return Queue.offerUnsafe(work, { _tag: "flush", done }) ? Deferred.await(done) : Effect.void;
   });
+  // Runs after the final flush: a late record is refused and a late flush or
+  // history read returns at once instead of waiting on a writer that is gone.
+  yield* Effect.addFinalizer(() => Queue.shutdown(work));
   yield* Effect.addFinalizer(() => flush);
 
   const record = (entry: Omit<ComputerAuditEntry, "ts">): Effect.Effect<void> =>
