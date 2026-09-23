@@ -1,5 +1,9 @@
 import { assert, describe, expect, it } from "@effect/vitest";
-import { EnvironmentId } from "@spiritdevs/contracts";
+import {
+  AuthComputerOperateScope,
+  AuthStandardClientScopes,
+  EnvironmentId,
+} from "@spiritdevs/contracts";
 import {
   RELAY_ENVIRONMENT_DPOP_ACCESS_ASSERTION_TYP,
   RelayAccessTokenType,
@@ -57,7 +61,8 @@ const descriptor = {
   label: "Target environment",
   platform: { os: "linux" as const, arch: "x64" as const },
   serverVersion: "0.0.0-test",
-  capabilities: { repositoryIdentity: true, connectionProbe: true },
+  // The target can grant computer:operate; peers must still never ask for it.
+  capabilities: { repositoryIdentity: true, connectionProbe: true, computerOperateScope: true },
 };
 
 const decodeAssertion = Schema.decodeUnknownSync(
@@ -399,6 +404,11 @@ describe("PeerEnvironments", () => {
           const targetExchangeForm = new URLSearchParams(targetExchange.body);
           expect(targetExchangeForm.get("subject_token")).toBe(TARGET_BOOTSTRAP_CREDENTIAL);
           expect(targetExchangeForm.get("client_device_type")).toBe("bot");
+          expect(targetExchangeForm.get("scope")).toBe(
+            AuthStandardClientScopes.filter((scope) => scope !== AuthComputerOperateScope).join(
+              " ",
+            ),
+          );
           const ticket = harness.requests[4];
           assert.isDefined(ticket);
           expect(ticket.headers["authorization"]).toBe(`DPoP ${TARGET_ACCESS_TOKEN}`);
