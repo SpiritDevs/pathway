@@ -1,7 +1,8 @@
 // FILE: useComputerEventBridge.ts
 // Purpose: Capture computer events per environment and arm the in-chat preview sessions.
 // Layer: Web event bridge hook
-// Exports: useComputerEventBridge, useComputerEnvironmentEvents and their pure handlers
+// Exports: useComputerEventBridge, useComputerEnvironmentEvents, useComputerEnvironmentLifetime
+// and their pure handlers
 // Depends on: computerEnvironment.events, computerStateStore, computerPreviewStore
 //
 // The computer engine lives in apps/server, so every signal is a push on the
@@ -220,7 +221,8 @@ export function useConnectedGeneration(environmentId: EnvironmentId | null): num
  * for the seeds and pushes to replace as soon as the connection drops (or,
  * if the drop was never rendered, when the new generation shows up). That
  * also fences answers the old connection owed. Previews, their Hide, float
- * and layout survive a reconnect; leaving the catalog clears all.
+ * and layout survive a reconnect. Closing the pipe keeps them too, along with
+ * the status that closed it; `useComputerEnvironmentLifetime` clears them.
  */
 export function useComputerEnvironmentEvents(environmentId: EnvironmentId): void {
   const registry = useContext(RegistryContext);
@@ -244,10 +246,16 @@ export function useComputerEnvironmentEvents(environmentId: EnvironmentId): void
       ),
     [environmentId, registry],
   );
+}
 
+/**
+ * Mounted for as long as the environment is in the catalog, whether or not
+ * its event pipe is open. Unmounting means the environment left, so nothing
+ * of it may linger.
+ */
+export function useComputerEnvironmentLifetime(environmentId: EnvironmentId): void {
   useEffect(
     () => () => {
-      // The environment left the catalog: nothing of it may linger.
       useComputerStateStore.getState().clearEnvironment(environmentId);
       useComputerPreviewStore.getState().clearEnvironment(environmentId);
     },

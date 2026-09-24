@@ -1,6 +1,6 @@
 // One environment's Computer event pipe across its connection lifecycle: a
-// reconnect keeps what the user sees, leaving the catalog clears everything,
-// and a status answer requested before a clear never lands after it. The root
+// reconnect keeps what the user sees, closing the pipe keeps the status that
+// closed it, leaving the catalog clears everything, and a status answer requested before a clear never lands after it. The root
 // bridge applies the desktop's local grant pushes to its own primary only. The
 // hooks run for real under a slot-tracked React harness; the connection state,
 // the primary environment and the RPC command are stubbed.
@@ -65,7 +65,27 @@ vi.mock("react", async (importOriginal) => ({
 }));
 vi.mock("@effect/atom-react", () => ({
   RegistryContext: {},
-  useAtomValue: () => AsyncResult.success(harness.connection),
+  useAtomValue: (atom: unknown) =>
+    atom === "server-config"
+      ? {
+          environment: {
+            platform: { os: "linux" },
+            capabilities: { computerOperateScope: true, computerPolicy: true },
+          },
+        }
+      : AsyncResult.success(harness.connection),
+}));
+// The selector hook needs a renderer; read the real store directly instead.
+vi.mock("../computerStateStore", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../computerStateStore")>();
+  return {
+    ...actual,
+    useCachedComputerStatus: (environmentId: EnvironmentId) =>
+      actual.useComputerStateStore.getState().statusByEnvironment[environmentId],
+  };
+});
+vi.mock("~/state/server", () => ({
+  serverEnvironment: { configValueAtom: () => "server-config" },
 }));
 vi.mock("@spiritdevs/client-runtime/state/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@spiritdevs/client-runtime/state/runtime")>()),
@@ -83,8 +103,10 @@ const {
   refreshComputerStatus,
   subscribeComputerPreviewSessions,
   useComputerEnvironmentEvents,
+  useComputerEnvironmentLifetime,
   useComputerEventBridge,
 } = await import("./useComputerEventBridge");
+const { useComputerEventsServed } = await import("./useComputerSupport");
 
 const ENV = EnvironmentId.make("environment-1");
 const THREAD = ThreadId.make("thread-1");
@@ -172,8 +194,26 @@ describe("useComputerEnvironmentEvents", () => {
     expect(isComputerThreadStateCurrent(kept!)).toBe(false);
   });
 
-  it("clears everything of the environment when it leaves the catalog", () => {
+  it("keeps the status that closed the pipe, so the pipe stays closed", () => {
+    expect(useComputerEventsServed(ENV)).toBe(true);
     render();
+    useComputerStateStore.getState().upsertThreadState(ENV, driving(1));
+    const unsupported = {
+      availability: { kind: "unsupported-platform", platform: "linux" },
+    } as ComputerStatusResult;
+    useComputerStateStore.getState().setStatus(ENV, unsupported);
+    expect(useComputerEventsServed(ENV)).toBe(false);
+    // The event gate unmounts its pipe once the above turns false.
+    harness.unmount();
+    expect(useComputerStateStore.getState().statusByEnvironment[ENV]).toBe(unsupported);
+    expect(useComputerStateStore.getState().threadStates[KEY]).toBeDefined();
+    expect(useComputerEventsServed(ENV)).toBe(false);
+  });
+
+  it("clears everything of the environment when it leaves the catalog", () => {
+    harness.beginRender();
+    useComputerEnvironmentLifetime(ENV);
+    useComputerEnvironmentEvents(ENV);
     useComputerStateStore.getState().upsertThreadState(ENV, driving(1));
     useComputerPreviewStore.getState().requestPreviewSurface(REF);
     harness.unmount();

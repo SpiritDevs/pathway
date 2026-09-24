@@ -2,6 +2,7 @@ import type { EnvironmentId } from "@spiritdevs/contracts";
 
 import {
   useComputerEnvironmentEvents,
+  useComputerEnvironmentLifetime,
   useComputerEventBridge,
 } from "~/hooks/useComputerEventBridge";
 import { useComputerEventsServed } from "~/hooks/useComputerSupport";
@@ -12,8 +13,13 @@ function ComputerEnvironmentEventBridge({ environmentId }: { environmentId: Envi
   return null;
 }
 
-/** Subscribes only once the environment's server is known to serve Computer events. */
+/**
+ * Subscribes only once the environment's server is known to serve Computer
+ * events. Mounted per catalog environment, so it owns the environment's
+ * Computer state: closing the pipe keeps the status that closed it.
+ */
 function ComputerEnvironmentEventGate({ environmentId }: { environmentId: EnvironmentId }) {
+  useComputerEnvironmentLifetime(environmentId);
   return useComputerEventsServed(environmentId) ? (
     <ComputerEnvironmentEventBridge environmentId={environmentId} />
   ) : null;
