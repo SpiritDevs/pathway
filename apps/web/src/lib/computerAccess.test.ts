@@ -5,7 +5,7 @@ import {
 } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { sessionCanUseComputer } from "./computerAccess";
+import { sessionCanUseComputer, sessionKnownToUseComputer } from "./computerAccess";
 
 const operator = { authenticated: true, scopes: [AuthOrchestrationOperateScope] };
 const computerOperator = {
@@ -33,5 +33,24 @@ describe("sessionCanUseComputer", () => {
     expect(sessionCanUseComputer("admins-only", { authenticated: true })).toBe(true);
     expect(sessionCanUseComputer("admins-only", { authenticated: false, scopes: [] })).toBe(true);
     expect(sessionCanUseComputer("admins-only", null)).toBe(true);
+  });
+});
+
+describe("sessionKnownToUseComputer", () => {
+  it("holds a known session to the environment's access policy", () => {
+    expect(sessionKnownToUseComputer("scoped", operator)).toBe(false);
+    expect(sessionKnownToUseComputer("scoped", computerOperator)).toBe(true);
+    expect(sessionKnownToUseComputer("admins-only", admin)).toBe(true);
+  });
+
+  it("does not read an unknown session as allowed", () => {
+    expect(sessionKnownToUseComputer("any-operator", { authenticated: true })).toBe(false);
+    expect(
+      sessionKnownToUseComputer("any-operator", {
+        authenticated: false,
+        scopes: [AuthOrchestrationOperateScope],
+      }),
+    ).toBe(false);
+    expect(sessionKnownToUseComputer("any-operator", null)).toBe(false);
   });
 });

@@ -6,7 +6,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import { isElectron } from "../env";
 import { primarySessionStateAtom } from "../environments/primary/sessionState";
-import { sessionCanUseComputer } from "../lib/computerAccess";
+import { sessionCanUseComputer, sessionKnownToUseComputer } from "../lib/computerAccess";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { environmentSession } from "../state/session";
 import { useComputerSupport } from "./useComputerSupport";
@@ -21,10 +21,14 @@ const selectComputerControlEnabled = (settings: UnifiedSettings) => settings.com
 
 /**
  * Whether this client may use Computer on the environment: its access policy
- * admits this session's scopes. The desktop app owns its primary server
- * outright, so it never reads the session there.
+ * admits this session's scopes, as `judge` reads an unknown session. The
+ * desktop app owns its primary server outright, so it never reads the session
+ * there.
  */
-export function useCanUseComputer(environmentId: EnvironmentId | null): boolean {
+export function useCanUseComputer(
+  environmentId: EnvironmentId | null,
+  judge = sessionCanUseComputer,
+): boolean {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const isPrimary = environmentId !== null && environmentId === primaryEnvironmentId;
   const owned = isPrimary && isElectron;
@@ -37,19 +41,19 @@ export function useCanUseComputer(environmentId: EnvironmentId | null): boolean 
   );
   const policy = useEnvironmentSettings(environmentId, selectAccessPolicy);
   if (owned) return true;
-  return sessionCanUseComputer(policy, Option.getOrNull(AsyncResult.value(result)));
+  return judge(policy, Option.getOrNull(AsyncResult.value(result)));
 }
 
 /**
  * The device-wide Computer control setting as it applies to one environment:
- * on only where that environment can drive a desktop and this session may use
- * it there. Every send reads this, so an environment that would refuse
- * Computer never refuses ordinary messages. An explicit `/computer-use` is
- * not gated; the user asked for it, and a refusal is the right answer.
+ * on only where that environment can drive a desktop and this session is known
+ * to be allowed there. Every send reads this, so an environment that would
+ * refuse Computer never refuses ordinary messages. An explicit `/computer-use`
+ * is not gated; the user asked for it, and a refusal is the right answer.
  */
 export function useComputerControlSetting(environmentId: EnvironmentId | null): boolean {
   const enabled = useEnvironmentSettings(environmentId, selectComputerControlEnabled);
   const supported = useComputerSupport(environmentId);
-  const allowed = useCanUseComputer(environmentId);
+  const allowed = useCanUseComputer(environmentId, sessionKnownToUseComputer);
   return enabled && supported && allowed;
 }
