@@ -127,10 +127,10 @@ describe("useComputerControlSetting", () => {
     expect(renderSetting(REMOTE)).toBe(false);
   });
 
-  it("keeps the setting while scopes are unknown, and on the desktop's own server", () => {
-    expect(renderSetting(REMOTE)).toBe(true);
+  it("drops the setting while scopes are unknown, but not on the desktop's own server", () => {
+    expect(renderSetting(REMOTE)).toBe(false);
     current.session = { authenticated: true };
-    expect(renderSetting(REMOTE)).toBe(true);
+    expect(renderSetting(REMOTE)).toBe(false);
 
     current.isElectron = true;
     current.primaryEnvironmentId = PRIMARY;

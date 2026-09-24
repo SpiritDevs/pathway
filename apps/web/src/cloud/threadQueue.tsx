@@ -34,13 +34,18 @@ import { toastManager } from "../components/ui/toast";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { readThreadShell, readThreadProjection } from "../state/entities";
 import { environmentCatalog } from "../connection/catalog";
+import { serverEnvironment } from "../state/server";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
   verifyReadyAttachmentUpload,
   uploadStandaloneFileAttachment,
 } from "../lib/attachmentUploadQueue";
-import { shouldSendTurnToEnvironment, prepareDirectTurnAttachments } from "./threadTurnDelivery";
+import {
+  cloudQueuedTurnInput,
+  shouldSendTurnToEnvironment,
+  prepareDirectTurnAttachments,
+} from "./threadTurnDelivery";
 import { watchQueueConnection, awaitQueueMutation } from "./threadQueueConnection";
 import { subscribeThreadQueuePages } from "./threadQueuePages";
 import { isDefinitiveQueueRejection } from "./threadQueueErrors";
@@ -452,9 +457,17 @@ export interface QueuedThreadTurnTarget {
   }>;
 }
 
-export async function queueThreadTurn(target: QueuedThreadTurnTarget) {
+export async function queueThreadTurn(queued: QueuedThreadTurnTarget) {
   const current = session;
   if (!current) throw new Error("Sign in to Pathway Cloud before sending.");
+  const target = {
+    ...queued,
+    input: cloudQueuedTurnInput(
+      queued.input,
+      appAtomRegistry.get(serverEnvironment.configValueAtom(queued.environmentId))?.settings
+        .computer.accessPolicy,
+    ),
+  };
   const files = target.durableAttachments
     ? target.durableAttachments.map((file, index) => {
         if (file.blob === null)
