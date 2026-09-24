@@ -18,6 +18,7 @@ import type {
   ScopedThreadRef,
   ThreadComputerState,
 } from "@spiritdevs/contracts";
+import * as Equal from "effect/Equal";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
@@ -70,7 +71,9 @@ export const useComputerStateStore = create<ComputerStateStore>()((set) => ({
   removeThreadState: (ref) => set((current) => removeComputerThreadState(current, ref)),
   setStatus: (environmentId, status) =>
     set((current) =>
-      current.statusByEnvironment[environmentId] === status
+      // A periodic refresh usually answers the same thing; keep identity so
+      // subscribers to the whole record do not re-render.
+      Equal.equals(current.statusByEnvironment[environmentId], status)
         ? current
         : { statusByEnvironment: { ...current.statusByEnvironment, [environmentId]: status } },
     ),
