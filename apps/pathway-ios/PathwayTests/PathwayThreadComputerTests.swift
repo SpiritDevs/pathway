@@ -159,6 +159,38 @@ struct PathwayThreadComputerTests {
         #expect(model.session.state?.version == 4)
     }
 
+    @Test func aConnectionChangePausesStillsUntilItsSeedConfirmsTheComputer() {
+        var session = PathwayThreadComputerSession(threadID: "thread")
+        session.apply(event: stateEvent(version: 9, agentActive: true))
+        session.viewed()
+        #expect(session.streamingComputerID == "mac")
+        session.rebase()
+        #expect(session.isOpen)
+        #expect(session.streamingComputerID == nil)
+        session.apply(event: stateEvent(version: 0, agentActive: true))
+        #expect(session.streamingComputerID == "mac")
+    }
+
+    @Test func stoppingOrSwitchingAQuietStreamClosesItsSocket() async throws {
+        let session = try #require((NSClassFromString("PathwayFakeFrameSession") as? NSObject.Type)?.init() as? URLSession)
+        let frames = PathwayComputerFrameStream(session: session) { _ in URL(string: "wss://unused.invalid/ws/computer-frames")! }
+        func quietSocket(_ start: () -> Void) async throws -> NSObject {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let ready: @convention(block) () -> Void = { continuation.resume() }
+                session.setValue(ready, forKey: "onReceive")
+                start()
+            }
+            return try #require((session.value(forKey: "sockets") as? [NSObject])?.last)
+        }
+        let stopped = try await quietSocket { frames.stream("mac") }
+        frames.stream(nil)
+        #expect(stopped.value(forKey: "cancelCount") as? Int == 1)
+        let switched = try await quietSocket { frames.stream("mac") }
+        frames.stream("mini")
+        #expect(switched.value(forKey: "cancelCount") as? Int == 1)
+        frames.stream(nil)
+    }
+
     private func stateEvent(version: Int, agentActive: Bool, owner: String? = nil, controlledByOther: Bool = false,
                             availability: String = "available") -> JSONValue {
         var state: [String: JSONValue] = [
