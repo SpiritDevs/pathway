@@ -4,12 +4,14 @@ import {
   EnvironmentId,
   ThreadId,
   type ComputerEvent,
+  type DesktopComputerBridge,
   type DesktopComputerHelperState,
 } from "@spiritdevs/contracts";
 import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { threadComputerState } from "~/components/computer/computerTestFixtures";
+import { toastManager } from "~/components/ui/toast";
 import {
   selectThreadComputerPreviewSession,
   useComputerPreviewStore,
@@ -20,6 +22,7 @@ import {
   subscribeComputerEnvironmentEvents,
   subscribeComputerPermissionStatus,
   subscribeComputerPreviewSessions,
+  subscribeComputerSetupErrors,
 } from "./useComputerEventBridge";
 
 const ENV = EnvironmentId.make("environment-1");
@@ -63,6 +66,7 @@ afterEach(() => {
   useComputerStateStore.getState().clearEnvironment(OTHER_ENV);
   useComputerPreviewStore.getState().clear();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("native Computer permission status bridge", () => {
@@ -97,6 +101,38 @@ describe("native Computer permission status bridge", () => {
     const stop = subscribeComputerPermissionStatus(refresh);
     stop();
     expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe("native Computer setup errors", () => {
+  it("toasts a failure the desktop pushes while a permission guide is open", () => {
+    const toast = vi.spyOn(toastManager, "add");
+    let onError!: Parameters<DesktopComputerBridge["onError"]>[0];
+    const unsubscribe = vi.fn();
+    const stop = subscribeComputerSetupErrors({
+      onError: (listener) => {
+        onError = listener;
+        return unsubscribe;
+      },
+    });
+    onError({
+      code: "permission_setup_identity_mismatch",
+      message: "This copy of Pathway is not the one macOS granted.",
+      capturedAt: "2026-09-24T00:00:00.000Z",
+    });
+    expect(toast).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        type: "error",
+        description: "This copy of Pathway is not the one macOS granted.",
+      }),
+    );
+    stop();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("is inert in a browser without the desktop Computer bridge", () => {
+    vi.stubGlobal("window", {});
+    subscribeComputerSetupErrors()();
   });
 });
 

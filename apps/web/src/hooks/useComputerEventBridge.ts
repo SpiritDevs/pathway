@@ -25,6 +25,7 @@ import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity
 import { useContext, useEffect, useRef } from "react";
 
 import { computerActionStatusLabel } from "~/components/computer/ComputerPanel.logic";
+import { toastManager } from "~/components/ui/toast";
 import { removedThreadComputerStateIds } from "~/components/chat/ComputerPreviewPopover.logic";
 import { environmentCatalog } from "~/connection/catalog";
 import { computerEnvironment } from "~/state/computer";
@@ -159,6 +160,26 @@ export function subscribeComputerPermissionStatus(
   });
 }
 
+type ComputerSetupErrorBridge = Pick<DesktopComputerBridge, "onError">;
+
+/**
+ * Native permission setup can fail while System Settings owns focus. The
+ * desktop brings the app forward and pushes the failure, which is toasted so
+ * an open guide does not keep watching for a change that will never land.
+ */
+export function subscribeComputerSetupErrors(
+  bridge: ComputerSetupErrorBridge | null = globalThis.window?.desktopBridge?.computer ?? null,
+): () => void {
+  if (!bridge) return () => undefined;
+  return bridge.onError((error) => {
+    toastManager.add({
+      type: "error",
+      title: "Couldn't set up computer control",
+      description: error.message,
+    });
+  });
+}
+
 /**
  * Deliver every pushed event of one environment's `computer.events` stream.
  * The same result object can be re-announced (a `waiting` flip on
@@ -239,6 +260,7 @@ export function useComputerEventBridge(): void {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
 
   useEffect(() => subscribeComputerPreviewSessions(), []);
+  useEffect(() => subscribeComputerSetupErrors(), []);
 
   useEffect(() => {
     if (primaryEnvironmentId === null) return;

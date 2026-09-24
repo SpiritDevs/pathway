@@ -246,7 +246,7 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - The permission-guide push accepts only `granted` or `closed`. Synara forwarded any string.
 - `computer` is exposed in preload on every platform. An inert host (not macOS, `PATHWAY_COMPUTER_USE` unset, helpers missing, or a host that could not start) answers `status: "unsupported"` with a reason message, and the web hides the grant section on `supported: false`. Synara's manager ran on every platform.
 - The agent cursor preference is read from the desktop state directory once at startup and cached in memory; the IPC handler updates both. Synara re-read the file at each driver session open. The file format (`{version: 1, style}`, deleted for the stock cursor) is unchanged.
-- A setup error logs a warning, reveals the main window if one exists, and pushes the error to it. There is no desktop-notification fallback, and no window is created.
+- A setup error logs a warning, reveals the main window if one exists, and pushes the error to it. The web toasts it from `useComputerEventBridge`, as Synara's `AppSnapCoordinator` did. If the renderer is mid-reload, the last error waits for `did-finish-load`, as Synara replayed captures. There is no desktop-notification fallback, and no window is created.
 - The relaunch after Screen Recording goes through `DesktopLifecycle.relaunch`, Pathway's graceful quit.
 
 ### Composer

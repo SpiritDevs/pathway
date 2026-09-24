@@ -59,7 +59,7 @@ vi.mock("./CuaDriverHost.ts", async (importOriginal) => {
   };
 });
 
-const { computerUseEnabled, layer } = await import("./DesktopComputerHost.ts");
+const { computerUseEnabled, layer, makeRendererPush } = await import("./DesktopComputerHost.ts");
 
 const enabledFor = (platform: NodeJS.Platform, env: Record<string, string>) =>
   computerUseEnabled.pipe(
@@ -199,5 +199,47 @@ describe("DesktopComputerHost.layer", () => {
         message: "The Computer host could not start.",
       });
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
+describe("makeRendererPush", () => {
+  /** A main window whose renderer is mid-reload until `finishLoad` runs. */
+  const loadingWindow = () => {
+    let loading = true;
+    const finish: Array<() => void> = [];
+    const sent: Array<[string, unknown]> = [];
+    const webContents = {
+      isDestroyed: () => false,
+      isLoadingMainFrame: () => loading,
+      send: (channel: string, payload: unknown) => sent.push([channel, payload]),
+      once: (event: string, listener: () => void) => {
+        if (event === "did-finish-load") finish.push(listener);
+      },
+    };
+    const window = { isDestroyed: () => false, webContents } as unknown as Electron.BrowserWindow;
+    const finishLoad = () => {
+      loading = false;
+      for (const listener of finish.splice(0)) listener();
+    };
+    return { window, sent, finishLoad };
+  };
+
+  it.effect("holds the last setup error raised during a reload until the renderer loads", () =>
+    Effect.gen(function* () {
+      const main = loadingWindow();
+      const renderer = makeRendererPush(Effect.succeed(Option.some(main.window)));
+      yield* renderer.pushLatest("desktop:computer-error", { message: "first" });
+      yield* renderer.pushLatest("desktop:computer-error", { message: "second" });
+      // Ordinary state pushes are not replayed; the next snapshot supersedes them.
+      expect(yield* renderer.push("desktop:computer-state", { status: "ready" })).toBe(false);
+      expect(main.sent).toEqual([]);
+
+      main.finishLoad();
+      expect(main.sent).toEqual([["desktop:computer-error", { message: "second" }]]);
+
+      yield* renderer.pushLatest("desktop:computer-error", { message: "third" });
+      expect(main.sent.at(-1)).toEqual(["desktop:computer-error", { message: "third" }]);
+      expect(main.sent).toHaveLength(2);
+    }),
   );
 });
