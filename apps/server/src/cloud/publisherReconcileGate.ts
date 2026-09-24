@@ -21,24 +21,30 @@ export const makePublisherReconcileGate = Effect.fn("cloud.publisher_reconcile_g
       null,
     );
 
+    /** Whether an inventory of `ids` would reconcile now; lets callers skip the fresh read. */
+    const due = (ids: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const previous = yield* Ref.get(last);
+        const current = new Set(ids);
+        return (
+          previous === null ||
+          now - previous.at >= repairMs ||
+          [...previous.ids].some((id) => !current.has(id))
+        );
+      });
+
     /** Runs `reconcile` when due and records the inventory it settled. */
     const run = <E, R>(
       ids: ReadonlyArray<string>,
       reconcile: Effect.Effect<void, E, R>,
     ): Effect.Effect<void, E, R> =>
       Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        const previous = yield* Ref.get(last);
-        const current = new Set(ids);
-        const due =
-          previous === null ||
-          now - previous.at >= repairMs ||
-          [...previous.ids].some((id) => !current.has(id));
-        if (!due) return;
+        if (!(yield* due(ids))) return;
         yield* reconcile;
-        yield* Ref.set(last, { ids: current, at: now });
+        yield* Ref.set(last, { ids: new Set(ids), at: yield* Clock.currentTimeMillis });
       });
 
-    return { run } as const;
+    return { due, run } as const;
   },
 );

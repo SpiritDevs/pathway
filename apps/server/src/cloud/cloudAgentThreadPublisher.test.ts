@@ -460,3 +460,136 @@ for (const change of ["edited", "deleted"] as const) {
     }),
   );
 }
+
+describe("cloud Agent Thread publisher database reads", () => {
+  /** A thread service over mutable shells that counts every projection read. */
+  function countingService(initial: ReadonlyArray<OrchestrationV2ThreadShell>) {
+    const shells = new Map(initial.map((shell) => [shell.id as string, shell]));
+    const reads = { snapshots: 0, threadShells: [] as Array<string> };
+    return Effect.gen(function* () {
+      const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+      const service = {
+        streamDomainEvents: Stream.fromQueue(events),
+        getShellSnapshot: () =>
+          Effect.sync(() => {
+            reads.snapshots += 1;
+            return { threads: [...shells.values()], archivedThreads: [] };
+          }),
+        getThreadShell: (threadId: string) =>
+          Effect.sync(() => {
+            reads.threadShells.push(threadId);
+            return shells.get(threadId) ?? null;
+          }),
+      } as unknown as ThreadManagement.ThreadManagementService["Service"];
+      return { service, shells, reads, events } as const;
+    });
+  }
+
+  /** Advances virtual time, then lets the fake client's promises settle in real time. */
+  const advance = (duration: Parameters<typeof TestClock.adjust>[0]) =>
+    Effect.gen(function* () {
+      for (let round = 0; round < 3; round++) {
+        yield* TestClock.adjust(round === 0 ? duration : "0 millis");
+        yield* TestClock.withLive(Effect.sleep("5 millis"));
+      }
+    });
+
+  const recordingClient = () => {
+    const calls: Array<{ readonly name: string; readonly args: Record<string, unknown> }> = [];
+    const client: ConvexClientLike = {
+      setAuth: () => {},
+      query: (() => Promise.reject(new Error("unexpected query"))) as ConvexClientLike["query"],
+      mutation: ((reference: FunctionReference<"mutation">, args: Record<string, unknown>) => {
+        const name = getFunctionName(reference);
+        calls.push({ name, args });
+        return Promise.resolve(name === "agentThreads:upsert" ? { outcome: "published" } : null);
+      }) as ConvexClientLike["mutation"],
+    };
+    return { client, calls };
+  };
+
+  it.effect("stays off the database while idle and re-reads only touched threads", () =>
+    Effect.gen(function* () {
+      const first = shellOf("thread-one", "project-one");
+      const second = shellOf("thread-two", "project-one");
+      const { service, shells, reads, events } = yield* countingService([first, second]);
+      const { client, calls } = recordingClient();
+      const worker = yield* runCloudAgentThreadPublisher({
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        convexUrl: "https://convex.example.test",
+        tokens,
+        client,
+        reconcileInterval: "15 seconds",
+        reconcileRepairInterval: "1 hour",
+      }).pipe(
+        Effect.provideService(ThreadManagement.ThreadManagementService, service),
+        Effect.forkChild,
+      );
+
+      // Startup: one inventory snapshot, one re-read per unpublished shell, one confirming
+      // snapshot for the first removal reconcile.
+      yield* advance("1 second");
+      expect(reads.snapshots).toBe(2);
+      expect(reads.threadShells.toSorted()).toEqual(["thread-one", "thread-two"]);
+      expect(calls.filter((call) => call.name === "agentThreads:upsert")).toHaveLength(2);
+
+      // Idle ticks read nothing.
+      yield* advance("5 minutes");
+      expect(reads.snapshots).toBe(2);
+      expect(reads.threadShells).toHaveLength(2);
+
+      // Streaming activity is not published live, but the next tick re-reads that thread once.
+      shells.set("thread-one", { ...first, itemCount: 7, visibleItemCount: 7 });
+      yield* Queue.offer(events, {
+        type: "turn-item.updated",
+        threadId: first.id,
+        payload: { type: "agent_message" },
+      } as unknown as OrchestrationV2DomainEvent);
+      yield* Queue.offer(events, {
+        type: "turn-item.updated",
+        threadId: first.id,
+        payload: { type: "agent_message" },
+      } as unknown as OrchestrationV2DomainEvent);
+      yield* advance("15 seconds");
+      expect(reads.threadShells.slice(2)).toEqual(["thread-one"]);
+      expect(calls.filter((call) => call.name === "agentThreads:upsert")).toHaveLength(3);
+
+      // The hourly repair scan reads one snapshot and re-reads nothing that is already current.
+      yield* advance("1 hour");
+      expect(reads.threadShells).toHaveLength(3);
+      expect(calls.filter((call) => call.name === "agentThreads:upsert")).toHaveLength(3);
+      yield* Fiber.interrupt(worker);
+    }),
+  );
+
+  it.effect("removes a conversation from the index as soon as it moves company", () =>
+    Effect.gen(function* () {
+      const conversation = {
+        ...shellOf("conversation-one", "project-one"),
+        projectId: null,
+        conversationCompanyId: COMPANY_ID,
+      } as OrchestrationV2ThreadShell;
+      const { client, calls } = recordingClient();
+      const publisher = yield* makeCloudAgentThreadPublisher({
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        convexUrl: "https://convex.example.test",
+        tokens,
+        client,
+      });
+      yield* publisher.publish(conversation);
+      const moved = {
+        ...conversation,
+        conversationCompanyId: "0198f900-0000-7000-8000-000000000002",
+      } as OrchestrationV2ThreadShell;
+      expect(yield* publisher.isCurrent(moved)).toBe(false);
+      yield* publisher.publish(moved);
+      expect(calls.map((call) => call.name)).toEqual([
+        "agentThreads:upsert",
+        "agentThreads:remove",
+      ]);
+      expect(yield* publisher.isCurrent(moved)).toBe(true);
+    }),
+  );
+});

@@ -483,10 +483,20 @@ take effect on backend deploy.
 - **Agent-thread shells.** Live events publish immediately only when a field
   other than `updatedAt`, item counts, `latestVisibleMessage`,
   `latestUserMessageAt` or `lastVisitedAt` changed. Those cosmetic fields move
-  with nearly every transcript item; the 15-second reconcile pass publishes them
+  with nearly every transcript item; the 15-second tick publishes them
   without deferral, so cross-client lists lag by at most one tick. Every
   publish is a Convex write, a company sync-head bump and a feed drain on every
   connected replica.
+- **Agent-thread local reads.** The 15-second tick re-reads only threads that
+  saw a domain event (or a failed publish, or an expired unbound park) since the
+  previous tick, so an idle environment does no SQLite work between scans. The
+  full inventory scan runs at startup and hourly: one shell snapshot, then a
+  fresh read only for shells that differ from what was last published.
+  Previously every tick re-read every thread's shell in its own transaction
+  (~300 transactions every 15 seconds on a 300-thread environment), which held
+  the single SQLite connection for seconds and delayed user commands such as
+  Settle behind it. Deleted threads and conversations moved to another company
+  are removed live instead of waiting for a scan.
 - **Inventory reconcile.** Reconcile only deletes rows whose ids left the
   environment's inventory, yet each backend scan reads every published thread
   or captured email (email rows carry full message payloads). Environment
