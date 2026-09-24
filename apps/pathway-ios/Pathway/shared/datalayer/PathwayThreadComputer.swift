@@ -90,7 +90,7 @@ struct PathwayThreadComputerSession: Equatable, Sendable {
         if drove { phase = phase == .live ? .live : .armed } else if phase != nil { phase = .ended }
     }
 
-    /// A new connection: keep what shows, and let the next snapshot replace it whatever its version.
+    /// A lost or new connection: keep what shows, and let the next snapshot replace it whatever its version.
     mutating func rebase() {
         state?.version = -1
         hostInputStopped = false
@@ -103,6 +103,12 @@ struct PathwayThreadComputerSession: Equatable, Sendable {
     mutating func hide() { if phase == .armed || phase == .live { phase = .hiddenForTask } }
 
     var isOpen: Bool { phase == .live }
+
+    /// Whether the current connection has delivered a snapshot since the last rebase.
+    var isConfirmed: Bool { (state?.version ?? -1) >= 0 }
+
+    /// The control epoch a send may pin to: only one the current connection confirmed.
+    var confirmedControlGeneration: Int? { isConfirmed ? state?.controlGeneration : nil }
 
     /// The computer whose stills the open card streams.
     var streamingComputerID: String? { isOpen && state?.availability == "available" ? state?.computerID : nil }
@@ -162,6 +168,7 @@ final class PathwayThreadComputerModel {
         var seed: Task<Void, Never>?
         defer {
             seed?.cancel()
+            session.rebase()
             frames.stream(nil)
             Task { await rpc.stop() }
         }
@@ -169,9 +176,9 @@ final class PathwayThreadComputerModel {
             // Thread states are whole snapshots, so a burst may drop older ones.
             for try await value in await rpc.subscribe("computer.subscribeEvents", payload: .object([:]), bufferingPolicy: .bufferingNewest(64)) {
                 if let transport = value.objectValue?["_pathwayTransport"]?.stringValue {
-                    guard transport == "connecting" else { continue }
                     session.rebase()
                     seed?.cancel()
+                    guard transport == "connecting" else { continue }
                     // Also registers this socket's interest in the thread's pushes.
                     seed = Task { [weak self] in
                         guard let value = try? await rpc.request("computer.getThreadState", payload: .object(["threadId": .string(threadID)])),
