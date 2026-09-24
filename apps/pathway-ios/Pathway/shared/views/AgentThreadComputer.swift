@@ -75,3 +75,65 @@ struct AgentTranscriptComputerNotice: View {
         .accessibilityIdentifier("thread-computer-notice-\(item.id)")
     }
 }
+
+/// Watches the thread's Computer state while its chat is on screen and in the foreground,
+/// and opens an armed preview there. Leaving or backgrounding the chat closes its sockets.
+struct AgentThreadComputerWatch: ViewModifier {
+    let computer: PathwayThreadComputerModel?
+    let model: PathwayAgentThreadModel
+    @Environment(\.scenePhase) private var scenePhase
+
+    func body(content: Content) -> some View {
+        content
+            .task(id: computer != nil && model.supportsComputer && scenePhase == .active) {
+                guard let computer, model.supportsComputer, scenePhase == .active else { return }
+                await computer.watch()
+            }
+            .onChange(of: computer?.session.phase, initial: true) { _, phase in
+                if phase == .armed { computer?.viewed() }
+            }
+            .onChange(of: computer?.session.state?.controlGeneration, initial: true) { _, generation in
+                model.computerControlGeneration = generation
+            }
+    }
+}
+
+/// The live card above the composer while this thread's agent drives the desktop.
+/// It appears with its first still, or with the reason there is none.
+struct AgentThreadComputerPreview: View {
+    let computer: PathwayThreadComputerModel
+
+    var body: some View {
+        let frames = computer.frames
+        if computer.session.isOpen, frames.image != nil || frames.errorMessage != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label(computer.session.statusLabel ?? "Computer", systemImage: "desktopcomputer")
+                        .font(.caption).lineLimit(1)
+                    Spacer()
+                    Button("Hide", systemImage: "xmark") { computer.hide() }
+                        .labelStyle(.iconOnly).font(.caption)
+                        .accessibilityIdentifier("thread-computer-preview-hide")
+                }
+                if let image = frames.image {
+                    Image(decorative: image, scale: 1).resizable().scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: 220)
+                        .clipShape(.rect(cornerRadius: 12))
+                        .accessibilityLabel("Live view of the computer")
+                }
+                if let error = frames.errorMessage {
+                    Text(error).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(12)
+            #if os(visionOS)
+            .background(.regularMaterial, in: .rect(cornerRadius: 22))
+            #else
+            .glassEffect(.regular, in: .rect(cornerRadius: 22))
+            #endif
+            .padding(.horizontal)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("thread-computer-preview")
+        }
+    }
+}
