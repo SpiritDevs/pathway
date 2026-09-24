@@ -41,6 +41,22 @@ describe("computerStateStore", () => {
     expect(useComputerStateStore.getState()).toBe(stopped);
   });
 
+  it("keeps store identity when a refresh answers the same status", () => {
+    const store = useComputerStateStore.getState();
+    store.setStatus(ENV, status());
+    const before = useComputerStateStore.getState();
+    store.setStatus(ENV, status());
+    expect(useComputerStateStore.getState()).toBe(before);
+
+    store.setStatus(ENV, {
+      ...status(),
+      availability: { kind: "backend-unavailable", message: "Off" },
+    });
+    expect(useComputerStateStore.getState().statusByEnvironment[ENV]?.availability.kind).toBe(
+      "backend-unavailable",
+    );
+  });
+
   it("drops the Escape latch, the status and late answers when the environment is reset", () => {
     const store = useComputerStateStore.getState();
     store.upsertThreadState(ENV, threadComputerState({ threadId: THREAD }));
