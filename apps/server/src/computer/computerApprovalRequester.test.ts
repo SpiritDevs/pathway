@@ -32,6 +32,23 @@ it("asks for task consent when an app prompt names no app", () => {
   );
 });
 
+// Web and iOS parse these exact lines back into the card's scope
+// (docs/internals/computer-use-approval-text.md); their parser tests use the same literals.
+it("writes a supervised call's line with and without its display-safe arguments", () => {
+  const prompt = {
+    requestId: "request-1",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    scope: "call",
+    toolName: "computer_click",
+  } as const;
+  assert.equal(computerApprovalCardText(prompt), "Computer action needs approval: computer_click");
+  assert.equal(
+    computerApprovalCardText({ ...prompt, detail: '{"x":812,"y":344,"label":"Save"}' }),
+    'Computer action needs approval: computer_click {"x":812,"y":344,"label":"Save"}',
+  );
+});
+
 it.layer(ComputerApprovalsTestLayer)("computerApprovalRequester", (it) => {
   it.effect("posts a Computer card and routes the user's answer to the waiting call", () =>
     Effect.gen(function* () {
