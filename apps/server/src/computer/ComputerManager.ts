@@ -566,6 +566,8 @@ export class ComputerManager {
   private streamAttached = false;
   private streamDesired = false;
   private streamEpoch = 0;
+  /** The last sequence a client was sent; see `handleFrame`. */
+  private frameSequence = 0;
   /** The last queued attach/detach transition; each waits for the one before it. */
   private streamTransition: Deferred.Deferred<void> = Deferred.makeUnsafe<void>();
   private disposed = false;
@@ -5161,9 +5163,16 @@ export class ComputerManager {
    * too; its only consumer read the header and did nothing with it, so every
    * still frame paid for a serialized event that told no one anything.
    */
+  /**
+   * Clients get the manager's frame sequence, not the publisher's. A replaced
+   * backend's publisher counts from 1 again, and a client still holding the
+   * old one's higher number would drop every new frame as stale. One counter
+   * per computer stream keeps the sequence monotonic across occupants.
+   */
   private handleFrame(frame: ComputerStreamFrame): void {
     if (this.disposed || (!this.streamDesired && !this.streamAttached)) return;
-    this.transport.publish(this.computerId, frame);
+    this.frameSequence += 1;
+    this.transport.publish(this.computerId, { ...frame, sequence: this.frameSequence });
   }
 
   /**

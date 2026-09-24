@@ -1,8 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import { decodeComputerFrame } from "@spiritdevs/shared/computerFrame";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import type { ComputerBackendEvent } from "./ComputerBackend.ts";
@@ -192,6 +194,44 @@ it.layer(NodeServices.layer)("replacing the desktop under the manager", (it) => 
         expect(yield* Effect.flip(Fiber.join(pane))).toMatchObject({ retryable: true });
         expect(first.callsFor("click")).toHaveLength(0);
         expect(second.callsFor("click")).toHaveLength(0);
+      }),
+    ),
+  );
+
+  it.effect("keeps the preview sequence rising across a replacement", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const first = new FakeComputerBackend();
+        const second = new FakeComputerBackend();
+        const slot = yield* makeSwitchableComputerBackend(first);
+        const manager = yield* ComputerManager.make({ backend: slot.backend });
+        const frames = yield* Queue.unbounded<Uint8Array>();
+        yield* manager.subscribeFrames({
+          isOpen: () => true,
+          bufferedAmount: () => 0,
+          send: (bytes) => {
+            Queue.offerUnsafe(frames, bytes);
+            return true;
+          },
+        });
+        const nextSequence = Effect.map(Queue.take(frames), (bytes) => {
+          const decoded = decodeComputerFrame(bytes);
+          return decoded.ok ? decoded.frame.header.sequence : undefined;
+        });
+        // The attach sends a codec config and a keyframe, then eight stills.
+        const seen = [yield* nextSequence, yield* nextSequence];
+        for (let index = 0; index < 8; index += 1) {
+          yield* first.emitFrame(true);
+          seen.push(yield* nextSequence);
+        }
+        expect(seen).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+        // The replacement's own publisher counts from 1; a client still
+        // holding 10 must see its frames as newer.
+        yield* manager.replaceDesktop(slot.swap(second, { desktopChanged: true }));
+        expect([yield* nextSequence, yield* nextSequence]).toEqual([11, 12]);
+        yield* second.emitFrame(true, false, Uint8Array.of(0xff, 0xd8, 0xff), "image/jpeg");
+        expect(yield* nextSequence).toBe(13);
       }),
     ),
   );
