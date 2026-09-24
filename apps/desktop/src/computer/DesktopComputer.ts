@@ -49,6 +49,8 @@ export interface DesktopComputerService {
    * and live-pushes it to an open one. Persisting it is the caller's job.
    */
   readonly setCursorStyle: (style: DesktopAgentCursorStyle | null) => Effect.Effect<void>;
+  /** Whether the renderer shows a live preview; native capture runs only while it does. */
+  readonly setPreviewWatched: (watched: boolean) => Effect.Effect<void>;
 }
 
 /** The helper state every inert host reports: no grants to check or set up. */
@@ -79,6 +81,7 @@ export const makeInertDesktopComputer = (
   showPermissionGuide: () => Effect.void,
   hidePermissionGuide: Effect.void,
   setCursorStyle: () => Effect.void,
+  setPreviewWatched: () => Effect.void,
 });
 
 export const inertDesktopComputer: DesktopComputerService = makeInertDesktopComputer(

@@ -170,3 +170,15 @@ export const setComputerCursorStyle = DesktopIpc.makeIpcMethod({
     yield* computer.setCursorStyle(style);
   }),
 });
+
+/** The renderer's preview demand; anything but `true` reads as nobody watching. */
+export const setComputerPreviewWatched = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.COMPUTER_PREVIEW_WATCHED_CHANNEL,
+  payload: Schema.Unknown,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.computer.setPreviewWatched")(function* (watched, event) {
+    yield* ensureTrustedComputerSender(event);
+    const computer = yield* DesktopComputer;
+    yield* computer.setPreviewWatched(watched === true);
+  }),
+});

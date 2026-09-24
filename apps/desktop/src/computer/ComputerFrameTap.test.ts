@@ -44,6 +44,7 @@ const withTap = <A, E>(body: (harness: Harness) => Effect.Effect<A, E, Scope.Sco
       Scope.provide(scope),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.layer),
     );
+    yield* tap.setWatched(true);
     return yield* body({ tap, fake, frames, errors }).pipe(
       Effect.scoped,
       Effect.ensuring(Scope.close(scope, Exit.void)),
@@ -308,6 +309,35 @@ describe("ComputerFrameTap", () => {
         yield* tap.dispose;
         assert.deepStrictEqual(helper.signals, ["SIGTERM"]);
         assert.isFalse(NodeFS.existsSync(directory));
+      }),
+    ),
+  );
+
+  it.effect("captures only while a preview watches, and resumes the kept target", () =>
+    withTap(({ tap, fake, frames }) =>
+      Effect.gen(function* () {
+        yield* tap.setWatched(false);
+        yield* tap.update(TARGET);
+        yield* tap.setWatched(false);
+        assert.strictEqual(fake.spawned.length, 0);
+
+        yield* tap.setWatched(true);
+        const first = yield* fake.next;
+        yield* write(yield* connect(first), framed(bytes(1)));
+        assert.deepStrictEqual([...(yield* Queue.take(frames)).frame.jpeg], [1]);
+
+        // Hiding the preview stops capture without poisoning the target.
+        yield* tap.setWatched(false);
+        assert.deepStrictEqual(first.signals, ["SIGTERM"]);
+        assert.isFalse(NodeFS.existsSync(socketPathOf(first)));
+        assert.strictEqual(fake.spawned.length, 1);
+
+        yield* tap.setWatched(true);
+        const resumed = yield* fake.next;
+        assert.deepStrictEqual(resumed.args.slice(0, 5), first.args.slice(0, 5));
+        yield* write(yield* connect(resumed), framed(bytes(2)));
+        const frame = (yield* Queue.take(frames)).frame;
+        assert.deepStrictEqual([[...frame.jpeg], frame.seq], [[2], 2]);
       }),
     ),
   );

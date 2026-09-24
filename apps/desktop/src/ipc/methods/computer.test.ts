@@ -35,6 +35,7 @@ import {
   requestComputerPermissions,
   restartComputerApp,
   setComputerCursorStyle,
+  setComputerPreviewWatched,
   showComputerPermissionGuide,
   startComputerPermissionSetup,
 } from "./computer.ts";
@@ -60,6 +61,7 @@ interface Calls {
   showPermissionGuide: string[];
   hidePermissionGuide: number;
   setCursorStyle: Array<DesktopAgentCursorStyle | null>;
+  previewWatched: boolean[];
   relaunch: string[];
 }
 
@@ -97,6 +99,7 @@ const makeHarness = () => {
     showPermissionGuide: [],
     hidePermissionGuide: 0,
     setCursorStyle: [],
+    previewWatched: [],
     relaunch: [],
   };
   const layer = Layer.mergeAll(
@@ -143,6 +146,10 @@ const makeHarness = () => {
         Effect.sync(() => {
           calls.setCursorStyle.push(style);
         }),
+      setPreviewWatched: (watched) =>
+        Effect.sync(() => {
+          calls.previewWatched.push(watched);
+        }),
     }),
   ).pipe(Layer.provideMerge(NodeServices.layer));
   return { calls, layer };
@@ -170,12 +177,14 @@ describe("computer IPC", () => {
           yield* failed(hideComputerPermissionGuide.handler(undefined, untrusted)),
           yield* failed(restartComputerApp.handler(undefined, untrusted)),
           yield* failed(setComputerCursorStyle.handler({ fill: "#aabbcc" }, untrusted)),
+          yield* failed(setComputerPreviewWatched.handler(true, untrusted)),
           yield* failed(getComputerState.handler(undefined)),
         ];
         assert.deepStrictEqual(
           results,
-          Array.from({ length: 9 }, () => true),
+          Array.from({ length: 10 }, () => true),
         );
+        assert.deepStrictEqual(calls.previewWatched, []);
         assert.deepStrictEqual(calls.getState, []);
         assert.deepStrictEqual(calls.setCursorStyle, []);
         assert.deepStrictEqual(calls.relaunch, []);
@@ -241,6 +250,17 @@ describe("computer IPC", () => {
         assert.deepStrictEqual(calls.openPermissionSettings, ["screen-recording"]);
         assert.deepStrictEqual(calls.showPermissionGuide, ["input-monitoring"]);
         assert.strictEqual(calls.hidePermissionGuide, 1);
+      }),
+    ),
+  );
+
+  it.effect("reads anything but true as nobody watching the preview", () =>
+    withHarness(({ calls }) =>
+      Effect.gen(function* () {
+        yield* setComputerPreviewWatched.handler(true, trusted);
+        yield* setComputerPreviewWatched.handler("true", trusted);
+        yield* setComputerPreviewWatched.handler(false, trusted);
+        assert.deepStrictEqual(calls.previewWatched, [true, false, false]);
       }),
     ),
   );

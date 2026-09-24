@@ -122,3 +122,5 @@ export const COMPUTER_ERROR_CHANNEL = "desktop:computer-error";
 export const COMPUTER_PERMISSION_GUIDE_STATE_CHANNEL = "desktop:computer-permission-guide-state";
 /** Live frame-tap JPEGs for the desktop's own renderer; never the orchestration socket. */
 export const COMPUTER_PREVIEW_FRAME_CHANNEL = "desktop:computer-preview-frame";
+/** Whether the renderer has a preview subscribed to those frames. */
+export const COMPUTER_PREVIEW_WATCHED_CHANNEL = "desktop:computer-preview-watched";
