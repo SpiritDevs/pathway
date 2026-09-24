@@ -128,6 +128,13 @@ export function resolveComputerAvailabilityView(
       description: "Pathway can see and control the desktop through its computer tools.",
     };
   }
+  if (availability.kind === "checking") {
+    return {
+      kind: "checking",
+      title: "Checking computer availability",
+      description: availability.message,
+    };
+  }
   if (availability.kind === "unsupported-platform") {
     return {
       kind: "blocked",
@@ -167,7 +174,13 @@ export function computerStatusNeedsSetup(
   grantsConfirmed = false,
 ): boolean {
   if (!status) return false;
-  if (status.availability.kind === "unsupported-platform") return false;
+  // Nothing is known yet, so nothing can be owed; the answer arrives by itself.
+  if (
+    status.availability.kind === "unsupported-platform" ||
+    status.availability.kind === "checking"
+  ) {
+    return false;
+  }
   // An idle backend's placeholder health proves nothing either way; only the
   // OS's own answer that every grant is in place lets it skip Set up.
   const idle = grantsConfirmed && computerBackendIsIdle(status.health);

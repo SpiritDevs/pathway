@@ -367,6 +367,8 @@ enum PathwayComputerPolicy {
             return "Needs \(PathwayComputerNotice.permissionList(missing)) on the host"
         case "backend-unavailable":
             return availability["message"]?.stringValue ?? "Unavailable"
+        case "checking":
+            return availability["message"]?.stringValue ?? "Checking the desktop"
         case "unsupported-platform":
             return "This host can't be controlled"
         default:
