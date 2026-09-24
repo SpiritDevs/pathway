@@ -595,6 +595,8 @@ export class ComputerManager {
     | undefined;
   private physicalRead: Fiber.Fiber<void> | undefined;
   private physicalFailure: string | undefined;
+  /** Bumped when the desktop is replaced; a read of the previous occupant lands nowhere. */
+  private physicalGeneration = 0;
   private readonly activeAuthorities = new Map<string, Set<DesktopAbort>>();
   /** Pane input carries no agent authority; a desktop replacement aborts it here. */
   private readonly livePaneInput = new Set<DesktopAbort>();
@@ -768,6 +770,8 @@ export class ComputerManager {
   private refreshPhysicalState(): Effect.Effect<void> {
     return Effect.suspend(() => {
       if (!this.physicalRead) {
+        const generation = this.physicalGeneration;
+        const current = () => generation === this.physicalGeneration;
         const read = Effect.gen({ self: this }, function* () {
           this.physicalFailure = undefined;
           if (this.backendEngaged) {
@@ -775,13 +779,15 @@ export class ComputerManager {
               [this.backend.availability(), this.readWindows(), this.backend.getScreenSize()],
               { concurrency: "unbounded" },
             );
-            this.physicalState = { availability, windows, screenSize };
+            if (current()) this.physicalState = { availability, windows, screenSize };
           } else {
-            this.physicalState = { availability: yield* this.backend.probeAvailability() };
+            const availability = yield* this.backend.probeAvailability();
+            if (current()) this.physicalState = { availability };
           }
         }).pipe(
           Effect.catch((error) =>
             Effect.sync(() => {
+              if (!current()) return;
               this.physicalFailure = clampComputerMessage(
                 errorMessage(error),
                 "Computer state is unavailable.",
@@ -790,7 +796,7 @@ export class ComputerManager {
           ),
           Effect.ensuring(
             Effect.sync(() => {
-              this.physicalRead = undefined;
+              if (current()) this.physicalRead = undefined;
             }),
           ),
         );
@@ -1343,7 +1349,42 @@ export class ComputerManager {
           // Only a closed queue, which never ran the swap, fails here.
           onFailure: () => (ran ? Effect.void : swap),
           onSuccess: (result) =>
-            result._tag === "Success" ? Effect.void : Effect.fail(result.failure),
+            result._tag === "Success" ? this.refreshReplacedDesktop() : Effect.fail(result.failure),
+        }),
+      );
+    });
+  }
+
+  /**
+   * Drops what threads were shown about the previous occupant (the selection
+   * placeholder's "checking", or a desktop that is gone) and pushes the new
+   * one's availability to every seeded thread. Health and capability events
+   * republish cached state only, so without this a thread seeded before the
+   * swap keeps its old availability until it asks again. The probe is the
+   * passive one, because nothing has asked to use the new desktop yet. It runs
+   * after the swap's queue barrier, so it never holds input back.
+   */
+  private refreshReplacedDesktop(): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      if (this.disposed) return Effect.void;
+      this.physicalGeneration += 1;
+      this.physicalRead = undefined;
+      this.physicalState = undefined;
+      this.physicalFailure = undefined;
+      const generation = this.physicalGeneration;
+      return this.backend.probeAvailability().pipe(
+        Effect.catch((error) =>
+          Effect.succeed<ComputerAvailability>({
+            kind: "backend-unavailable",
+            message: clampComputerMessage(errorMessage(error), "The computer backend failed."),
+          }),
+        ),
+        Effect.flatMap((availability) => {
+          if (this.disposed || generation !== this.physicalGeneration) return Effect.void;
+          this.physicalState ??= { availability };
+          return Effect.forEach([...this.threads.keys()], (threadId) => this.publish(threadId), {
+            discard: true,
+          });
         }),
       );
     });
