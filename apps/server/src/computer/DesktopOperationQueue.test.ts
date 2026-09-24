@@ -315,9 +315,12 @@ it.effect("admits a barrier past the backlog limit, behind the work already queu
     yield* Effect.yieldNow;
     expect(failureMessage(yield* Effect.exit(queue.run(Effect.void)))).toContain("Too many");
 
+    // Admitted while every slot is still held: waiting, not refused.
     const barrier = yield* Effect.forkChild(
       queue.runBarrier(Effect.sync(() => events.push("barrier"))),
+      { startImmediately: true },
     );
+    expect(barrier.pollUnsafe()).toBeUndefined();
     yield* Deferred.succeed(release, undefined);
     yield* Fiber.joinAll([running, ...waiting, barrier]);
     expect(events).toHaveLength(DESKTOP_OPERATION_QUEUE_LIMIT + 1);
