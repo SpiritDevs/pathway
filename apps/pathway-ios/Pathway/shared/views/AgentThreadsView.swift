@@ -1018,6 +1018,7 @@ struct AgentThreadConversationView: View {
     @State private var chromeOwner = UUID()
     @State private var model: PathwayAgentThreadModel
     @State private var subscriptionLifetime: PathwayThreadSubscriptionLifetime
+    @State private var computer: PathwayThreadComputerModel?
     @State private var isComposerExpanded = false
     @State private var isNearBottom = true
     @State private var followsLatest = true
@@ -1050,6 +1051,7 @@ struct AgentThreadConversationView: View {
         let model = PathwayAgentThreadModel(thread: thread, environment: environment, connect: connect, storageDirectory: storageDirectory)
         _model = State(initialValue: model)
         _subscriptionLifetime = State(initialValue: PathwayThreadSubscriptionLifetime(start: { model.start() }, stop: { await model.stop() }))
+        _computer = State(initialValue: model.connect.map { PathwayThreadComputerModel(threadID: model.threadID, environment: model.environment, connect: $0) })
         _showsGitReview = State(initialValue: initiallyReviewChanges)
     }
 
@@ -1057,6 +1059,7 @@ struct AgentThreadConversationView: View {
         self.workspaceRoot = workspaceRoot
         _model = State(initialValue: model)
         _subscriptionLifetime = State(initialValue: PathwayThreadSubscriptionLifetime(start: { model.start() }, stop: { await model.stop() }))
+        _computer = State(initialValue: model.connect.map { PathwayThreadComputerModel(threadID: model.threadID, environment: model.environment, connect: $0) })
     }
 
     private func collapseComposer() {
@@ -1159,6 +1162,7 @@ struct AgentThreadConversationView: View {
             .simultaneousGesture(TapGesture().onEnded { collapseComposer() })
             .safeAreaInset(edge: .bottom, spacing: 4) {
                 VStack(spacing: 8) {
+                    if let computer { AgentThreadComputerPreview(computer: computer) }
                     if let connect = appModel.connect {
                         PathwayConversationStorageNotice(environment: model.environment, connect: connect, threadID: model.thread.threadId, isStartingConversation: false,
                             chooseEnvironment: { showsAlternateEnvironment = true },
@@ -1323,6 +1327,7 @@ struct AgentThreadConversationView: View {
 
     private var synchronizedConversation: some View {
         conversationLifecycle
+        .modifier(AgentThreadComputerWatch(computer: computer, model: model))
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             do {

@@ -278,6 +278,8 @@ final class PathwayAgentThreadModel {
     /// The environment's Computer access policy and this device's scopes there; nil while unknown.
     var computerAccessPolicy: String?
     var computerSessionScopes: Set<String>?
+    /// The thread's Computer control epoch from its latest snapshot, while the chat watches it.
+    @ObservationIgnored var computerControlGeneration: Int?
     private(set) var browserTakeover: [String: JSONValue]?
     private(set) var checkpoints: [JSONValue] = []
     private(set) var plans: [JSONValue] = []
