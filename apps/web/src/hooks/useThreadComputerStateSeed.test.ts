@@ -58,6 +58,11 @@ function render(ref: typeof REF | null = REF) {
   useThreadComputerStateSeed(ref);
 }
 
+/** The seed chained its `.then` on this answer first, so it has run once this resumes. */
+async function seedAnswered(): Promise<void> {
+  await harness.runAtomCommand.mock.results.at(-1)?.value;
+}
+
 beforeEach(() => {
   harness.reset();
   harness.generation = null;
@@ -81,9 +86,8 @@ it("restores thread state and server event interests after reconnect", async () 
     environmentId: ENV,
     input: { threadId: THREAD },
   });
-  await vi.waitFor(() =>
-    expect(useComputerStateStore.getState().threadStates[scopedThreadKey(REF)]).toBeDefined(),
-  );
+  await seedAnswered();
+  expect(useComputerStateStore.getState().threadStates[scopedThreadKey(REF)]).toBeDefined();
 
   harness.generation = null;
   render();
@@ -111,8 +115,7 @@ it("drops an answer that lands after the surface unmounted", async () => {
   render();
   harness.reset();
   resolve(AsyncResult.success(threadComputerState({ threadId: THREAD })));
-  await Promise.resolve();
-  await Promise.resolve();
+  await seedAnswered();
   expect(useComputerStateStore.getState().threadStates[scopedThreadKey(REF)]).toBeUndefined();
 });
 
@@ -120,7 +123,7 @@ it("keeps the cache on a failed seed and asks nothing without a thread", async (
   harness.runAtomCommand.mockResolvedValue(AsyncResult.failure(Cause.fail("offline")));
   harness.generation = 1;
   render();
-  await Promise.resolve();
+  await seedAnswered();
   expect(useComputerStateStore.getState().threadStates[scopedThreadKey(REF)]).toBeUndefined();
 
   harness.reset();

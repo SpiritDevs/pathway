@@ -79,14 +79,18 @@ describe("Computer activation permission guide", () => {
   it("does not reopen setup after Off overtakes a permission check", async () => {
     const f = fixture();
     let resolve!: (state: DesktopComputerHelperState) => void;
-    f.permissions.getState.mockImplementationOnce(
-      () =>
-        new Promise((done) => {
-          resolve = done;
-        }),
-    );
+    let asked!: () => void;
+    const checking = new Promise<void>((done) => {
+      asked = done;
+    });
+    f.permissions.getState.mockImplementationOnce(() => {
+      asked();
+      return new Promise((done) => {
+        resolve = done;
+      });
+    });
     const pending = f.change("request");
-    await vi.waitFor(() => expect(f.permissions.getState).toHaveBeenCalledOnce());
+    await checking;
     await f.change("off");
     expect(f.setMode).toHaveBeenLastCalledWith("off", { generation: 4 });
     resolve(grantState({ accessibilityPermission: "denied" }));

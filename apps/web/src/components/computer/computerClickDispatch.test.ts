@@ -44,7 +44,6 @@ describe("computer click dispatch", () => {
     const queue = createComputerInputQueue();
     const sent: ComputerClickCommand[] = [];
     queue.push(() => gate);
-    await Promise.resolve();
     const clicks = createComputerClickDispatch({
       dispatch: (command) => {
         queue.push(async () => {
@@ -59,7 +58,7 @@ describe("computer click dispatch", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(sent).toEqual([]);
     release();
-    await vi.advanceTimersByTimeAsync(0);
+    await queue.settled();
     expect(sent).toEqual([{ x: 10, y: 20, clickCount: 2 }]);
     expect(queue.pending()).toBe(0);
   });
