@@ -33,6 +33,7 @@ import {
   resolveThreadLastVisitedAt,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
+  resolveSidebarThreadModels,
   resolveWorkingStartedAt,
   searchSidebarThreadsByTitle,
   filterSidebarWorkspaceProjectsForFocus,
@@ -1095,6 +1096,37 @@ describe("getVisibleThreadsForCollapsibleShelf", () => {
         getThreadKey: (thread) => thread.key,
       }),
     ).toBe(threads);
+  });
+});
+
+describe("resolveSidebarThreadModels", () => {
+  const claude = ProviderInstanceId.make("claudeAgent");
+  const codex = ProviderInstanceId.make("codex");
+
+  it("falls back to the current selection before the first run", () => {
+    expect(
+      resolveSidebarThreadModels({
+        usedModels: [],
+        modelSelection: { instanceId: codex, model: "gpt-6-astra" },
+        runtime: null,
+      }),
+    ).toEqual([{ instanceId: codex, model: "gpt-6-astra" }]);
+  });
+
+  it("keeps earlier models and moves the current selection last", () => {
+    expect(
+      resolveSidebarThreadModels({
+        usedModels: [
+          { instanceId: codex, model: "gpt-6-astra" },
+          { instanceId: claude, model: "claude-opus-5-5" },
+        ],
+        modelSelection: { instanceId: codex, model: "gpt-6-astra" },
+        runtime: null,
+      }),
+    ).toEqual([
+      { instanceId: claude, model: "claude-opus-5-5" },
+      { instanceId: codex, model: "gpt-6-astra" },
+    ]);
   });
 });
 

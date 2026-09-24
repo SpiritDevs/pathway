@@ -206,6 +206,7 @@ import {
   sortThreadsForSidebar,
   filterSidebarWorkspaceProjectsForFocus,
   intersectSidebarProjectScopes,
+  resolveSidebarThreadModels,
   useThreadJumpHintVisibility,
 } from "./Sidebar.logic";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -363,6 +364,67 @@ function WorkingDuration(props: { startedAt: string | null }) {
 
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, ProviderInstanceEntry> = new Map();
 
+type SidebarThreadModelDisplay = {
+  readonly key: string;
+  readonly providerEntry: ProviderInstanceEntry;
+  readonly showBadge: boolean;
+  readonly label: string;
+};
+
+/** Displayable models for a thread row and hover card, latest last. */
+function resolveThreadModelDisplays(
+  thread: SidebarThreadSummary,
+  providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>,
+): ReadonlyArray<SidebarThreadModelDisplay> {
+  return resolveSidebarThreadModels(thread).flatMap((used) => {
+    const providerEntry = providerEntryByInstanceId.get(used.instanceId);
+    if (!providerEntry) return [];
+    const model = providerEntry.models.find((candidate) => candidate.slug === used.model);
+    return [
+      {
+        key: `${used.instanceId}:${used.model}`,
+        providerEntry,
+        showBadge: shouldShowProviderInstanceBadge(
+          providerEntry,
+          providerEntryByInstanceId.values(),
+        ),
+        label: model ? getTriggerDisplayModelLabel(model) : used.model,
+      },
+    ];
+  });
+}
+
+const MAX_STACKED_PROVIDER_ICONS = 3;
+// Cuts a gap where the next icon overlaps, so the stack reads on any row background.
+const STACKED_PROVIDER_ICON_MASK =
+  "[mask-image:radial-gradient(circle_at_calc(100%_+_3px)_50%,transparent_8.5px,#000_9px)]";
+
+/** One icon per provider the thread has used; the latest sits in front. */
+function ThreadProviderIconStack({ models }: { models: ReadonlyArray<SidebarThreadModelDisplay> }) {
+  const byInstance = new Map<string, SidebarThreadModelDisplay>();
+  for (const model of models) {
+    byInstance.delete(model.providerEntry.instanceId);
+    byInstance.set(model.providerEntry.instanceId, model);
+  }
+  const stacked = [...byInstance.values()].slice(-MAX_STACKED_PROVIDER_ICONS);
+  return (
+    <span className="inline-flex shrink-0 items-center -space-x-1 opacity-60">
+      {stacked.map((model, index) => (
+        <ProviderInstanceIcon
+          key={model.providerEntry.instanceId}
+          driverKind={model.providerEntry.driverKind}
+          displayName={model.providerEntry.displayName}
+          accentColor={model.providerEntry.accentColor}
+          showBadge={model.showBadge}
+          className={cn(index < stacked.length - 1 && STACKED_PROVIDER_ICON_MASK)}
+          badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-2.5 min-w-2.5 px-px text-[6px]"
+          iconClassName="size-3.5"
+        />
+      ))}
+    </span>
+  );
+}
+
 function terminalProcessLabel(count: number): string {
   return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
 }
@@ -375,9 +437,7 @@ function SidebarThreadTooltip({
   projectCwd,
   projectFaviconPath,
   environmentLabel,
-  providerEntry,
-  showProviderBadge,
-  modelLabel,
+  models,
   branchMismatch,
   terminalStatus,
   terminalProcessCount,
@@ -392,9 +452,7 @@ function SidebarThreadTooltip({
   projectCwd: string | null;
   projectFaviconPath: string | null;
   environmentLabel: string | null;
-  providerEntry: ProviderInstanceEntry | null;
-  showProviderBadge: boolean;
-  modelLabel: string;
+  models: ReadonlyArray<SidebarThreadModelDisplay>;
   branchMismatch: {
     threadBranch: string;
     currentBranch: string;
@@ -467,19 +525,19 @@ function SidebarThreadTooltip({
               </div>
             </div>
           ) : null}
-          {providerEntry ? (
-            <div className="flex min-w-0 items-center gap-2">
+          {models.map((model) => (
+            <div key={model.key} className="flex min-w-0 items-center gap-2">
               <ProviderInstanceIcon
-                driverKind={providerEntry.driverKind}
-                displayName={providerEntry.displayName}
-                accentColor={providerEntry.accentColor}
-                showBadge={showProviderBadge}
+                driverKind={model.providerEntry.driverKind}
+                displayName={model.providerEntry.displayName}
+                accentColor={model.providerEntry.accentColor}
+                showBadge={model.showBadge}
                 badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-2.5 min-w-2.5 px-px text-[6px]"
                 iconClassName="size-3 shrink-0 grayscale opacity-60"
               />
-              <div className="min-w-0 truncate text-foreground/75">{modelLabel}</div>
+              <div className="min-w-0 truncate text-foreground/75">{model.label}</div>
             </div>
-          ) : null}
+          ))}
           {terminalStatus ? (
             <div className="flex min-w-0 items-center gap-2">
               <TerminalIcon
@@ -1139,18 +1197,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   });
   const settledPrHoverClass = prState ? settledPrHoverColorClass(prState) : undefined;
 
-  const modelInstanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
-  const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
-  const driverKind = providerEntry?.driverKind ?? null;
-  const showProviderBadge = providerEntry
-    ? shouldShowProviderInstanceBadge(providerEntry, props.providerEntryByInstanceId.values())
-    : false;
-  const selectedModel = providerEntry?.models.find(
-    (model) => model.slug === thread.modelSelection.model,
+  const models = useMemo(
+    () => resolveThreadModelDisplays(thread, props.providerEntryByInstanceId),
+    [thread, props.providerEntryByInstanceId],
   );
-  const modelLabel = selectedModel
-    ? getTriggerDisplayModelLabel(selectedModel)
-    : thread.modelSelection.model;
 
   const isRemote =
     props.currentEnvironmentId !== null && thread.environmentId !== props.currentEnvironmentId;
@@ -1164,9 +1214,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       projectCwd={props.projectCwd}
       projectFaviconPath={props.projectFaviconPath}
       environmentLabel={props.environmentLabel}
-      providerEntry={providerEntry}
-      showProviderBadge={showProviderBadge}
-      modelLabel={modelLabel}
+      models={models}
       branchMismatch={branchMismatch}
       terminalStatus={terminalStatus}
       terminalProcessCount={terminalProcessCount}
@@ -1884,22 +1932,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     <ServerIcon aria-hidden className="size-3.5" />
                   </span>
                 ) : null}
-                {driverKind ? (
-                  <span className="inline-flex shrink-0 items-center opacity-60">
-                    <ProviderInstanceIcon
-                      driverKind={driverKind}
-                      displayName={
-                        providerEntry?.displayName ??
-                        thread.runtime?.providerName ??
-                        modelInstanceId
-                      }
-                      accentColor={providerEntry?.accentColor}
-                      showBadge={showProviderBadge}
-                      badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-2.5 min-w-2.5 px-px text-[6px]"
-                      iconClassName="size-3.5"
-                    />
-                  </span>
-                ) : null}
+                {models.length > 0 ? <ThreadProviderIconStack models={models} /> : null}
               </span>
             </div>
           </div>
@@ -1955,17 +1988,10 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
     activeThreadBranch: thread.branch,
     currentGitBranch: gitStatus.data?.refName ?? null,
   });
-  const modelInstanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
-  const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
-  const showProviderBadge = providerEntry
-    ? shouldShowProviderInstanceBadge(providerEntry, props.providerEntryByInstanceId.values())
-    : false;
-  const selectedModel = providerEntry?.models.find(
-    (model) => model.slug === thread.modelSelection.model,
+  const models = useMemo(
+    () => resolveThreadModelDisplays(thread, props.providerEntryByInstanceId),
+    [thread, props.providerEntryByInstanceId],
   );
-  const modelLabel = selectedModel
-    ? getTriggerDisplayModelLabel(selectedModel)
-    : thread.modelSelection.model;
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: thread.environmentId,
     threadId: thread.id,
@@ -2021,9 +2047,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           projectCwd={props.projectCwd}
           projectFaviconPath={props.projectFaviconPath}
           environmentLabel={props.environmentLabel}
-          providerEntry={providerEntry}
-          showProviderBadge={showProviderBadge}
-          modelLabel={modelLabel}
+          models={models}
           branchMismatch={branchMismatch}
           terminalStatus={terminalStatus}
           terminalProcessCount={runningTerminalIds.length}

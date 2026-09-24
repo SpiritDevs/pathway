@@ -740,6 +740,24 @@ export function sortSettledThreadsForSidebar<
   );
 }
 
+type SidebarThreadModel = SidebarThreadSummary["usedModels"][number];
+
+/** Models a thread has used, then its current selection, latest last and deduped. */
+export function resolveSidebarThreadModels(
+  thread: Pick<SidebarThreadSummary, "usedModels" | "modelSelection" | "runtime">,
+): ReadonlyArray<SidebarThreadModel> {
+  const current: SidebarThreadModel = {
+    instanceId: thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId,
+    model: thread.modelSelection.model,
+  };
+  return [
+    ...thread.usedModels.filter(
+      (used) => used.instanceId !== current.instanceId || used.model !== current.model,
+    ),
+    current,
+  ];
+}
+
 /** The timestamp a working thread's elapsed label counts from: the running
     turn's start (request time until adoption), falling back to the session's
     last transition when the turn projection lags behind. Malformed
