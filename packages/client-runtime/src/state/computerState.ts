@@ -155,6 +155,15 @@ export function rebaseComputerEnvironment(
 const REBASED_VERSION = -1;
 
 /**
+ * False for a state carried across a reconnect that no snapshot of the
+ * current connection has replaced yet. Such a state is fine to show, but its
+ * control generation may be stale, so a send must not pin intent to it.
+ */
+export function isComputerThreadStateCurrent(state: ThreadComputerState): boolean {
+  return state.version !== REBASED_VERSION;
+}
+
+/**
  * Forgets one environment wholesale, e.g. after its server restarted. The old
  * latch is dropped too: the new server's own `computer.input-stopped` is the truth.
  */

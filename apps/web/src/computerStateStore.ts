@@ -38,19 +38,28 @@ interface ComputerStateStore extends ComputerClientState {
   readonly recordAction: (environmentId: EnvironmentId, action: ComputerActionEvent) => void;
   readonly removeThreadState: (ref: ScopedThreadRef) => void;
   readonly setStatus: (environmentId: EnvironmentId, status: ComputerStatusResult) => void;
-  /** A new connection generation: keep what shows, let snapshots replace it. */
+  /**
+   * The connection dropped or was replaced: keep what shows, let snapshots
+   * replace it, and fence off answers requested before.
+   */
   readonly rebaseEnvironment: (environmentId: EnvironmentId) => void;
   /** The environment left: nothing of it may linger, nor land later. */
   readonly clearEnvironment: (environmentId: EnvironmentId) => void;
 }
 
-// Bumped when an environment is cleared, so an answer requested before the
-// clear cannot repopulate it.
+// Bumped when an environment's connection drops or is replaced, and when it
+// is cleared, so an answer requested before cannot land after.
 const environmentEpochs = new Map<EnvironmentId, number>();
 
+function advanceEnvironmentEpoch(environmentId: EnvironmentId): void {
+  environmentEpochs.set(environmentId, (environmentEpochs.get(environmentId) ?? 0) + 1);
+}
+
 /**
- * A check that an asynchronous status answer still belongs: false once the
- * environment was cleared after the request went out.
+ * A check that an asynchronous Computer answer still belongs: false once the
+ * environment's connection dropped, was replaced, or the environment was
+ * cleared after the request went out. Every async write to either store
+ * checks one.
  */
 export function computerEnvironmentFence(environmentId: EnvironmentId): () => boolean {
   const epoch = environmentEpochs.get(environmentId) ?? 0;
@@ -77,11 +86,13 @@ export const useComputerStateStore = create<ComputerStateStore>()((set) => ({
         ? current
         : { statusByEnvironment: { ...current.statusByEnvironment, [environmentId]: status } },
     ),
-  rebaseEnvironment: (environmentId) =>
-    set((current) => rebaseComputerEnvironment(current, environmentId)),
+  rebaseEnvironment: (environmentId) => {
+    advanceEnvironmentEpoch(environmentId);
+    set((current) => rebaseComputerEnvironment(current, environmentId));
+  },
   clearEnvironment: (environmentId) =>
     set((current) => {
-      environmentEpochs.set(environmentId, (environmentEpochs.get(environmentId) ?? 0) + 1);
+      advanceEnvironmentEpoch(environmentId);
       const next = clearComputerEnvironment(current, environmentId);
       if (!Object.hasOwn(current.statusByEnvironment, environmentId)) return next;
       const statusByEnvironment = { ...current.statusByEnvironment };
