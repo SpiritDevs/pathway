@@ -227,6 +227,7 @@ struct PathwayComputerTests {
         #expect(status(["kind": .string("permission-required"), "missing": .array([.string("screenRecording"), .string("accessibility")])])
             == "Needs Accessibility and Screen Recording on the host")
         #expect(status(["kind": .string("backend-unavailable"), "message": .string("No Wayland session")]) == "No Wayland session")
+        #expect(status(["kind": .string("checking"), "message": .string("Finding the desktop.")]) == "Finding the desktop.")
         #expect(status([:]) == "Unavailable")
     }
 
