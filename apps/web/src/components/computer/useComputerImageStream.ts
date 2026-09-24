@@ -15,6 +15,7 @@ import {
   type ComputerFrameSourceResetReason,
 } from "~/lib/computerFrameSource";
 import { useConnectedGeneration } from "~/hooks/useComputerEventBridge";
+import type { ComputerFrameSocketUrl } from "@spiritdevs/client-runtime/state/computer-frame-socket";
 import { resolveComputerFrameSocketUrl } from "./computerFrameSocketUrl";
 
 const FRAME_RECONNECT_MAX_DELAY_MS = 5_000;
@@ -25,6 +26,8 @@ const FRAME_RECONNECT_MAX_DELAY_MS = 5_000;
  * so instead of spinning on "connecting".
  */
 const FRAME_RECONNECT_MAX_ATTEMPTS = 5;
+/** A ticket this close to its expiry is replaced before the next connect. */
+const FRAME_TICKET_REFRESH_MARGIN_MS = 30_000;
 /** A policy close is a refusal a retry cannot change. */
 const POLICY_VIOLATION_CLOSE_CODE = 1008;
 export const COMPUTER_LIVE_VIEW_UNAVAILABLE = "Live view unavailable";
@@ -114,10 +117,11 @@ export function useComputerImageStream(input: {
     let gate: ComputerFrameGateState = createComputerFrameGateState();
     let source: ComputerFrameSource | null = null;
     let reconnectAttempts = 0;
-    // The resolved URL is reused until an upgrade is refused: a ticket stays
+    // The resolved URL is reused until its ticket nears expiry: a ticket stays
     // valid for minutes, and minting one is an HTTP round trip (with a DPoP
-    // proof on relay).
-    let url: string | null = null;
+    // proof on relay). A close cannot tell a refused ticket from a dropped
+    // connection, so no close replaces it.
+    let resolvedUrl: ComputerFrameSocketUrl | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let decoding = false;
     let pendingFrame: ComputerFrame | null = null;
@@ -193,18 +197,22 @@ export function useComputerImageStream(input: {
     };
 
     const openFrameSource = () => {
-      if (url !== null) {
-        connect(url);
+      if (
+        resolvedUrl !== null &&
+        (resolvedUrl.expiresAt === null ||
+          resolvedUrl.expiresAt - Date.now() > FRAME_TICKET_REFRESH_MARGIN_MS)
+      ) {
+        connect(resolvedUrl.url);
         return;
       }
       void resolveComputerFrameSocketUrl(registry, environmentId, computerId).then((resolved) => {
         if (disposed || !isCurrent()) return;
-        url = resolved;
+        resolvedUrl = resolved;
         if (resolved === null) {
           handleReset("closed");
           return;
         }
-        connect(resolved);
+        connect(resolved.url);
       });
     };
 
@@ -227,8 +235,6 @@ export function useComputerImageStream(input: {
           return;
         }
         reconnectAttempts += 1;
-        // A refused upgrade may be a refused ticket; any other close reuses the URL.
-        if (close !== undefined && !close.opened) url = null;
         if (reconnectAttempts > FRAME_RECONNECT_MAX_ATTEMPTS) {
           giveUp();
           return;
