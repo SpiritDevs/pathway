@@ -143,6 +143,44 @@ struct PathwayComputerDeliveryTests {
         #expect(model.computerAccessPolicy == "any-operator")
     }
 
+    @Test func aRestartIsReservedUntilItIsSent() async throws {
+        let gate = ComputerReadGate()
+        var dispatches = 0
+        let model = makeModel { method, _ in
+            if method == "computer.getThreadState" { return await gate.read() }
+            dispatches += 1; return .object([:])
+        }
+        installEditable(in: model)
+        let item = try #require(model.items.first)
+        let first = Task { try await model.editLatestUserMessage(item, text: "/computer-use open Notes") }
+        await gate.started(1)
+        #expect(model.isRestartingMessage)
+        let second = Task { try await model.editLatestUserMessage(item, text: "/computer-use open Notes") }
+        gate.settle(.object(["controlGeneration": .number(4)]))
+        try await first.value
+        await #expect(throws: PathwayThreadConversationError.self) { try await second.value }
+        #expect(dispatches == 1)
+        #expect(!model.isRestartingMessage)
+    }
+
+    @Test func aRestartThatStoppedBeingEditableWhileWaitingIsNotSent() async throws {
+        let gate = ComputerReadGate()
+        var dispatches = 0
+        let model = makeModel { method, _ in
+            if method == "computer.getThreadState" { return await gate.read() }
+            dispatches += 1; return .object([:])
+        }
+        installEditable(in: model)
+        let item = try #require(model.items.first)
+        let restart = Task { try await model.editLatestUserMessage(item, text: "/computer-use open Notes") }
+        await gate.started(1)
+        installEditable(in: model, laterMessage: true)
+        gate.finish(.object(["controlGeneration": .number(4)]))
+        await #expect(throws: PathwayThreadConversationError.self) { try await restart.value }
+        #expect(dispatches == 0)
+        #expect(!model.isRestartingMessage)
+    }
+
     @Test func onlyTheCurrentConnectionConfirmsAGeneration() throws {
         var session = PathwayThreadComputerSession(threadID: "thread")
         func state(version: Int, generation: Int) throws -> PathwayThreadComputerState {
@@ -162,6 +200,23 @@ struct PathwayComputerDeliveryTests {
         let model = PathwayAgentThreadModel(thread: makeAgentThread(), environment: computerTestEnvironment(), request: request)
         model.serverConfig = config
         return model
+    }
+
+    /// A failed run whose user message can be edited and restarted; a later message makes it stale.
+    private func installEditable(in model: PathwayAgentThreadModel, laterMessage: Bool = false) {
+        func message(_ id: String) -> JSONValue {
+            .object(["item": .object(["id": .string(id), "type": .string("user_message"), "createdBy": .string("user"),
+                                      "messageId": .string(id), "runId": .string("run"), "text": .string("Original")])])
+        }
+        let selection = try! PathwayAgentThreadModel.json(model.currentModelSelection)
+        model.installSnapshot(.object(["thread": .object(["id": .string(model.threadID)]),
+            "runs": .array([.object(["id": .string("run"), "ordinal": .number(1), "status": .string("failed"),
+                                    "providerThreadId": .string("provider-thread"), "userMessageId": .string("message"), "modelSelection": selection])]),
+            "providerThreads": .array([.object(["id": .string("provider-thread"), "providerSessionId": .string("session")])]),
+            "providerSessions": .array([.object(["id": .string("session"), "capabilities": .object(["checkpointing": .object(["providerCanRollbackConversation": .bool(true)])])])]),
+            "checkpointScopes": .array([.object(["id": .string("scope"), "runId": .string("run"), "kind": .string("root_run")])]),
+            "checkpoints": .array([.object(["id": .string("checkpoint"), "scopeId": .string("scope"), "status": .string("ready"), "ordinalWithinScope": .number(0)])]),
+            "visibleTurnItems": .array([message("message")] + (laterMessage ? [message("message-2")] : []))]))
     }
 
     /// Turns the device-wide Computer control setting on, returning its restore.
@@ -184,11 +239,13 @@ func computerTestEnvironment() -> PathwayCompanyEnvironment {
 @MainActor
 final class ComputerReadGate {
     private var count = 0
+    private var settled: JSONValue?
     private var reads: [CheckedContinuation<JSONValue, Never>] = []
     private var waiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
     func read() async -> JSONValue {
         count += 1
+        if let settled { return settled }
         return await withCheckedContinuation { continuation in
             reads.append(continuation)
             let ready = waiters.filter { $0.0 <= count }
@@ -206,5 +263,11 @@ final class ComputerReadGate {
         let pending = reads
         reads.removeAll()
         pending.forEach { $0.resume(returning: value) }
+    }
+
+    /// Finishes the waiting reads and answers every later one at once.
+    func settle(_ value: JSONValue) {
+        settled = value
+        finish(value)
     }
 }

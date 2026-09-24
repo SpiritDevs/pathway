@@ -51,9 +51,10 @@ struct AgentThreadTranscript: View {
                         .disabled(preparingEditID != nil)
                 }
                 if item.isUserMessage && model.activeRunID == nil && model.canEdit(item) && model.run(for: item)?.status == "failed" {
-                    Button("Retry message", systemImage: "arrow.clockwise") {
+                    Button(model.isRestartingMessage ? "Retrying…" : "Retry message", systemImage: "arrow.clockwise") {
                         Task { do { try await model.editLatestUserMessage(item, text: AgentTranscriptMessageEditor.editableText(item.text ?? "")) } catch { errorMessage = error.localizedDescription } }
                     }
+                    .disabled(model.isRestartingMessage)
                 }
                 if !item.isUserMessage && !item.streaming && item.runID != nil {
                     Button("Fork from here", systemImage: "arrow.triangle.branch") { fork(item) }
@@ -691,7 +692,7 @@ struct AgentTranscriptMessageEditor: View {
                             }
                             catch { self.error = error.localizedDescription }
                         }
-                    }.disabled(busy || queuedMessageDeparted || (!isQueued && !model.canEdit(item)) || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }.disabled(busy || queuedMessageDeparted || (!isQueued && (!model.canEdit(item) || model.isRestartingMessage)) || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             .disabled(busy).interactiveDismissDisabled(busy)
