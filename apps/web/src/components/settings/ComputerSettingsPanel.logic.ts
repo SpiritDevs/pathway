@@ -234,7 +234,8 @@ export type ComputerScopeAccess = "granted" | "denied" | "pending";
  * owns its primary server outright. A browser on the primary must be granted
  * the scope explicitly (that server always reports scopes). A remote server
  * that predates scope reporting stays optimistic. A failed session read stays
- * pending, so the policy controls never unlock on a guess.
+ * pending, even when it still holds an earlier answer, so the policy controls
+ * never unlock on a guess.
  */
 export function resolveComputerScopeAccess(input: {
   readonly scope: typeof AuthAccessReadScope | typeof AuthAccessWriteScope;
@@ -245,10 +246,8 @@ export function resolveComputerScopeAccess(input: {
   readonly hasError: boolean;
 }): ComputerScopeAccess {
   if (input.isPrimary && input.isElectron) return "granted";
-  if (input.session === null) {
-    if (input.isPending) return "pending";
-    return input.hasError ? "pending" : "denied";
-  }
+  if (input.hasError) return "pending";
+  if (input.session === null) return input.isPending ? "pending" : "denied";
   if (!input.session.authenticated) return "denied";
   if (input.session.scopes === undefined) return input.isPrimary ? "denied" : "granted";
   return input.session.scopes.includes(input.scope) ? "granted" : "denied";
