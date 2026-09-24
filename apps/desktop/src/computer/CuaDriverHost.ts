@@ -14,6 +14,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FiberSet from "effect/FiberSet";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -56,8 +57,15 @@ export class CuaHostError extends Schema.TaggedErrorClass<CuaHostError>()("CuaHo
 
 const isCuaHostError = Schema.is(CuaHostError);
 const hostError = (message: string) => new CuaHostError({ message });
+/** Keeps the message of a {@link SurfaceError}, an `Error` or a host error. */
 const toHostError = (cause: unknown) =>
-  isCuaHostError(cause) ? cause : hostError(cause instanceof Error ? cause.message : String(cause));
+  isCuaHostError(cause)
+    ? cause
+    : hostError(
+        Predicate.hasProperty(cause, "message") && Predicate.isString(cause.message)
+          ? cause.message
+          : String(cause),
+      );
 
 /** A per-call cancellation: completing it cancels that call's driver request. */
 type CallCancel = Deferred.Deferred<void>;
@@ -228,7 +236,7 @@ const doneTask: Task<void> = { await: Effect.void };
 export const CUA_CURSOR_IDLE_HIDE_MS = 60_000;
 /** A raw ENOENT names a path, not a remedy; source builds stage the driver themselves. */
 const CUA_DRIVER_MISSING_MESSAGE =
-  "Cua Driver is not bundled. Run the provisioning script (`node apps/desktop/scripts/provision-cua-driver.mjs`, needs the pinned Rust toolchain) in this checkout, then relaunch Pathway.";
+  "Cua Driver is not bundled. Run the provisioning script (`node scripts/provision-cua-driver.ts`, needs the pinned Rust toolchain) in this checkout, then relaunch Pathway.";
 
 interface ControlledTarget {
   pid: number;
@@ -720,7 +728,7 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
           options.nativeRevision !== null &&
           CUA_BROWSER_MUTATION_TOOLS.has(name));
       if (!required) return true;
-      // The adapter carries the Linux Escape safeguard; fail closed until P8 supplies it.
+      // The adapter carries the Linux Escape safeguard; a host without it fails closed.
       if (linuxBrowserMutation && linux === undefined) return false;
       const monitor = yield* monitorState;
       // Portable native paths have no listener contract. The verified Linux

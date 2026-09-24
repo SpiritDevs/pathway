@@ -26,7 +26,18 @@ export type ComputerInputMonitorError =
   | "input_monitor_unavailable"
   | "input-monitoring-required"
   | "event_tap_disabled"
-  | "event_tap_unavailable";
+  | "event_tap_unavailable"
+  | LinuxEscapeError;
+
+/** Why the Linux Escape shortcut cannot back native input admission. */
+export type LinuxEscapeError =
+  | "linux_escape_shortcut_suspended"
+  | "linux_escape_shortcut_lost"
+  | "linux_escape_shortcut_conflict"
+  | "linux_escape_registration_failed"
+  | "linux_escape_release_failed"
+  | "linux_escape_portal_unverified"
+  | "linux_escape_session_unavailable";
 
 export interface ComputerInputMonitorState {
   readonly ready: boolean;
