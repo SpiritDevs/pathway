@@ -165,3 +165,18 @@ export function resolveComputerControlForSend(input: {
     },
   };
 }
+
+/**
+ * The Computer fields one send carries. A thread's first message rides on
+ * `launchThread.initialMessage`, which a server without the `computerPolicy`
+ * capability silently strips. There the intent is dropped outright: the turn
+ * runs without Computer, and a denied card's Enable arms the next message,
+ * which `message.dispatch` carries on every Computer-capable server.
+ */
+export function computerControlFieldsForTurn(input: {
+  readonly fields: ReturnType<typeof resolveComputerControlForSend>["fields"];
+  readonly launchesThread: boolean;
+  readonly serverTakesLaunchIntent: boolean;
+}): ReturnType<typeof resolveComputerControlForSend>["fields"] {
+  return input.launchesThread && !input.serverTakesLaunchIntent ? {} : input.fields;
+}
