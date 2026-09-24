@@ -236,6 +236,15 @@ describe("useProvisionComputer", () => {
     expect(storedStatus()).toBeUndefined();
   });
 
+  it("clears a failed attempt so setup can be retried", async () => {
+    provisionCommand.mockResolvedValueOnce(fail(new Error("Helper disconnected")));
+    await mountProvisionHook().provision();
+    provisionCommand.mockResolvedValueOnce(succeed({ summary: "Ready.", status: status() }));
+    await mountProvisionHook().provision();
+    expect(provisionCommand).toHaveBeenCalledTimes(2);
+    expect(storedStatus()).toBeDefined();
+  });
+
   it("shares pending setup across surfaces before either component rerenders", async () => {
     let finish!: (result: unknown) => void;
     provisionCommand.mockImplementation(
