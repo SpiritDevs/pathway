@@ -2800,4 +2800,74 @@ describe("MessagesTimeline Computer rows", () => {
     expect(markup).toContain("Computer task approved");
     expect(markup).not.toContain("Approval requested");
   });
+
+  it("tells task consent apart from an approved click", () => {
+    const approval = (status: string, prompt: string) =>
+      renderToStaticMarkup(
+        <MessagesTimeline
+          {...buildProps()}
+          timelineEntries={[
+            computerEvent("approval", {
+              type: "approval_request",
+              requestId: "request-1",
+              requestKind: "computer",
+              prompt,
+              status,
+            }),
+          ]}
+        />,
+      );
+    const task = "Allow Computer for this task";
+    expect(approval("waiting", task)).toContain("Computer task approval requested");
+    expect(approval("cancelled", task)).toContain("Computer task declined");
+
+    const click = approval(
+      "completed",
+      'Computer action needs approval: computer_click {"label":"Search","app":"Safari"}',
+    );
+    expect(click).toContain("Computer approved");
+    expect(click).toContain("Click on “Search” in Safari");
+    expect(click).not.toContain("Computer task approved");
+    expect(click).not.toContain("computer_click");
+  });
+
+  it("marks Computer tool calls, browser ones included, with the cursor icon", () => {
+    const toolRow = (toolName: string) =>
+      renderToStaticMarkup(
+        <MessagesTimeline
+          {...buildProps()}
+          timelineEntries={
+            [
+              {
+                id: "tool",
+                kind: "work",
+                createdAt: MESSAGE_CREATED_AT,
+                entry: {
+                  id: "tool",
+                  createdAt: MESSAGE_CREATED_AT,
+                  label: toolName,
+                  tone: "tool",
+                  itemType: "dynamic_tool",
+                  toolTitle: toolName,
+                  toolLifecycleStatus: "completed",
+                  structuredPayload: { type: "dynamic_tool", toolName, input: {} },
+                },
+              },
+            ] as never
+          }
+        />,
+      );
+    for (const toolName of [
+      "computer_click",
+      "mcp__pathway__computer_click",
+      "computer_browser_click",
+    ]) {
+      const markup = toolRow(toolName);
+      expect(markup).toContain("lucide-mouse-pointer-2");
+      expect(markup).not.toContain("lucide-wrench");
+    }
+    const other = toolRow("mcp__other__browser_open");
+    expect(other).toContain("lucide-wrench");
+    expect(other).not.toContain("lucide-mouse-pointer-2");
+  });
 });
