@@ -1,6 +1,9 @@
+import CoreGraphics
 import Foundation
+import ImageIO
 @testable import Pathway
 import Testing
+import UniformTypeIdentifiers
 
 @MainActor
 struct PathwayThreadComputerTests {
@@ -249,6 +252,74 @@ struct PathwayThreadComputerTests {
         frames.stream(nil)
     }
 
+    @Test func aLateReceiveFromAStoppedStreamNeverReachesItsReopening() async throws {
+        let session = try #require((NSClassFromString("PathwayFakeFrameSession") as? NSObject.Type)?.init() as? URLSession)
+        let frames = PathwayComputerFrameStream(session: session) { _ in URL(string: "wss://unused.invalid/ws/computer-frames")! }
+        let old = try await quietSocket(on: session) { frames.stream("mac") }
+        old.setValue(true, forKey: "holdsReceiveOnCancel")
+        frames.stream(nil)
+        let reopened = try await quietSocket(on: session) { frames.stream("mac") }
+        // The old socket's in-flight message lands, and its receive exits to close the socket again.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let closed: @convention(block) () -> Void = { continuation.resume() }
+            old.setValue(closed, forKey: "onCancel")
+            _ = old.perform(NSSelectorFromString("deliver:"), with: Data([1, 2, 3]) as NSData)
+        }
+        #expect(frames.errorMessage == nil)
+        #expect(reopened.value(forKey: "cancelCount") as? Int == 0)
+        frames.stream(nil)
+    }
+
+    @Test func aDecodeFromAStoppedStreamNeverReachesItsReopening() async throws {
+        let session = try #require((NSClassFromString("PathwayFakeFrameSession") as? NSObject.Type)?.init() as? URLSession)
+        let gate = FrameDecodeGate()
+        let frames = PathwayComputerFrameStream(session: session, sleep: { _ in }, decode: { payload in
+            await gate.hold()
+            return PathwayComputerFrameStream.decode(payload)
+        }) { _ in URL(string: "wss://unused.invalid/ws/computer-frames")! }
+        let old = try await quietSocket(on: session) { frames.stream("mac") }
+        old.setValue(true, forKey: "holdsReceiveOnCancel")
+        _ = old.perform(NSSelectorFromString("deliver:"), with: envelope(sequence: 1, computerID: "mac", flags: 1, payload: try onePixelPNG()) as NSData)
+        await gate.started()
+        let oldDecode = try #require(frames.decoding)
+        frames.stream(nil)
+        let reopened = try await quietSocket(on: session) { frames.stream("mac") }
+        _ = try await quietSocket(on: session) {
+            reopened.setValue(1006, forKey: "fakeCloseCode")
+            _ = reopened.perform(NSSelectorFromString("fail"))
+        }
+        #expect(frames.reconnect.failures == 1)
+        gate.release()
+        await oldDecode.value
+        // No socket of the reopened stream delivered a frame, so nothing shows and its budget stands.
+        #expect(frames.image == nil)
+        #expect(frames.reconnect.failures == 1)
+        frames.stream(nil)
+        _ = old.perform(NSSelectorFromString("fail"))
+    }
+
+    /// Starts a socket and waits until its first receive is pending.
+    private func quietSocket(on session: URLSession, _ start: () -> Void) async throws -> NSObject {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let ready: @convention(block) () -> Void = { continuation.resume() }
+            session.setValue(ready, forKey: "onReceive")
+            start()
+        }
+        return try #require((session.value(forKey: "sockets") as? [NSObject])?.last)
+    }
+
+    private func onePixelPNG() throws -> [UInt8] {
+        let provider = try #require(CGDataProvider(data: Data([255, 0, 0, 255]) as CFData))
+        let image = try #require(CGImage(width: 1, height: 1, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let png = NSMutableData()
+        let destination = try #require(CGImageDestinationCreateWithData(png, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        #expect(CGImageDestinationFinalize(destination))
+        return [UInt8](png as Data)
+    }
+
     private func stateEvent(version: Int, agentActive: Bool, owner: String? = nil, controlledByOther: Bool = false,
                             availability: String = "available") -> JSONValue {
         var state: [String: JSONValue] = [
@@ -269,6 +340,24 @@ struct PathwayThreadComputerTests {
         bytes.append(UInt8(id.count))
         return Data(bytes + id + payload)
     }
+}
+
+/// Holds a frame decode until the test releases it, and lets the test wait for it to start.
+@MainActor
+private final class FrameDecodeGate {
+    private var held: CheckedContinuation<Void, Never>?
+    private var waiter: CheckedContinuation<Void, Never>?
+    func hold() async {
+        await withCheckedContinuation { continuation in
+            held = continuation
+            waiter?.resume(); waiter = nil
+        }
+    }
+    func started() async {
+        if held != nil { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+    func release() { let pending = held; held = nil; pending?.resume() }
 }
 
 /// Resumes a continuation for whichever of several callbacks fires first.
