@@ -181,6 +181,22 @@ struct PathwayComputerDeliveryTests {
         #expect(!model.isRestartingMessage)
     }
 
+    @Test func aBareCommandNeverStartsANewChatOrRestartsAMessage() async throws {
+        var calls: [String] = []
+        let model = makeModel { method, _ in calls.append(method); return .object([:]) }
+        installEditable(in: model, status: "completed")
+        model.draft = "/computer-use"
+        for sideChat in [false, true] {
+            #expect(await failure { _ = try await model.startDraftInNewThread(sideChat: sideChat) } == PathwayComputerInvocation.bareCommandMessage)
+        }
+        #expect(model.preparedNewSend == nil)
+        #expect(model.draft == "/computer-use")
+        installEditable(in: model)
+        let item = try #require(model.items.first)
+        #expect(await failure { try await model.editLatestUserMessage(item, text: " /computer-use ") } == PathwayComputerInvocation.bareCommandMessage)
+        #expect(calls.isEmpty)
+    }
+
     @Test func onlyTheCurrentConnectionConfirmsAGeneration() throws {
         var session = PathwayThreadComputerSession(threadID: "thread")
         func state(version: Int, generation: Int) throws -> PathwayThreadComputerState {
@@ -203,20 +219,24 @@ struct PathwayComputerDeliveryTests {
     }
 
     /// A failed run whose user message can be edited and restarted; a later message makes it stale.
-    private func installEditable(in model: PathwayAgentThreadModel, laterMessage: Bool = false) {
+    private func installEditable(in model: PathwayAgentThreadModel, status: String = "failed", laterMessage: Bool = false) {
         func message(_ id: String) -> JSONValue {
             .object(["item": .object(["id": .string(id), "type": .string("user_message"), "createdBy": .string("user"),
                                       "messageId": .string(id), "runId": .string("run"), "text": .string("Original")])])
         }
         let selection = try! PathwayAgentThreadModel.json(model.currentModelSelection)
         model.installSnapshot(.object(["thread": .object(["id": .string(model.threadID)]),
-            "runs": .array([.object(["id": .string("run"), "ordinal": .number(1), "status": .string("failed"),
+            "runs": .array([.object(["id": .string("run"), "ordinal": .number(1), "status": .string(status),
                                     "providerThreadId": .string("provider-thread"), "userMessageId": .string("message"), "modelSelection": selection])]),
             "providerThreads": .array([.object(["id": .string("provider-thread"), "providerSessionId": .string("session")])]),
             "providerSessions": .array([.object(["id": .string("session"), "capabilities": .object(["checkpointing": .object(["providerCanRollbackConversation": .bool(true)])])])]),
             "checkpointScopes": .array([.object(["id": .string("scope"), "runId": .string("run"), "kind": .string("root_run")])]),
             "checkpoints": .array([.object(["id": .string("checkpoint"), "scopeId": .string("scope"), "status": .string("ready"), "ordinalWithinScope": .number(0)])]),
             "visibleTurnItems": .array([message("message")] + (laterMessage ? [message("message-2")] : []))]))
+    }
+
+    private func failure(_ body: () async throws -> Void) async -> String? {
+        do { try await body(); return nil } catch { return error.localizedDescription }
     }
 
     /// Turns the device-wide Computer control setting on, returning its restore.
