@@ -1428,6 +1428,17 @@ function chatActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
 }
 
+/** Explains why a bare `/computer-use` stayed put; the caller keeps the text. */
+function toastBareComputerUseInvocation() {
+  toastManager.add(
+    stackedThreadToast({
+      type: "info",
+      title: "Add a task after /computer-use",
+      description: "For example: /computer-use open Calculator and calculate 123 × 45.",
+    }),
+  );
+}
+
 /**
  * Drops the send-time anchored end space. That space is what holds a sent
  * message near the top while its turn streams, and it keeps LegendList's
@@ -7560,13 +7571,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
     if (textOnlySend && isBareComputerUseInvocation(trimmed)) {
       // Keep the draft: the command still needs its task.
-      toastManager.add(
-        stackedThreadToast({
-          type: "info",
-          title: "Add a task after /computer-use",
-          description: "For example: /computer-use open Calculator and calculate 123 × 45.",
-        }),
-      );
+      toastBareComputerUseInvocation();
       scheduleComposerFocus();
       return;
     }
@@ -8518,6 +8523,16 @@ function ChatViewContent(props: ChatViewProps) {
       ) {
         return false;
       }
+      // The restarted message keeps the original's attachments, so those still count as the task.
+      if (
+        isBareComputerUseInvocation(text) &&
+        !serverProjection?.messages.some(
+          (message) => message.id === messageId && message.attachments.length > 0,
+        )
+      ) {
+        toastBareComputerUseInvocation();
+        return false;
+      }
       if (!requireConversationStorage()) return false;
       sendInFlightRef.current = true;
       setThreadError(activeThread.id, null);
@@ -8577,6 +8592,7 @@ function ChatViewContent(props: ChatViewProps) {
       environmentId,
       isServerThread,
       latestRunSettled,
+      serverProjection,
       setThreadError,
       computerControlChangeSequence,
       computerControlSetting,
