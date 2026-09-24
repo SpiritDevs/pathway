@@ -7,6 +7,18 @@
 
 export type FrameSourceResetReason = "closed" | "error" | "decode-failed";
 
+/** What a browser reveals about a closed socket. */
+export interface FrameSourceClose {
+  /** The close code; 1006 when the connection ended without a close frame. */
+  readonly code: number;
+  readonly reason: string;
+  /**
+   * False when the upgrade itself never completed. A browser hides a refused
+   * upgrade's HTTP status, so this is the only sign a ticket was refused.
+   */
+  readonly opened: boolean;
+}
+
 /** The narrow slice of WebSocket the frame path uses, so tests need no DOM. */
 export interface WebSocketLike {
   binaryType: string;
@@ -35,8 +47,9 @@ interface BinaryFrameSourceOptions<Frame> {
     /**
      * The socket dropped. The pane resets its decoder because the next
      * connection starts a new stream generation with its own parameter sets.
+     * A `closed` reset carries what the close event revealed.
      */
-    readonly onReset: (reason: FrameSourceResetReason) => void;
+    readonly onReset: (reason: FrameSourceResetReason, close?: FrameSourceClose) => void;
   };
   /** Test seam; defaults to the browser's WebSocket. */
   readonly createSocket?: (url: string) => WebSocketLike;
@@ -82,9 +95,10 @@ export function createBinaryFrameSource<Frame>(
   // dropping it, or the canvas waits for the server's next natural keyframe.
   let resyncPending = false;
 
-  const reset = (reason: FrameSourceResetReason) => {
+  const reset = (reason: FrameSourceResetReason, close?: FrameSourceClose) => {
     if (closed) return;
-    options.handlers.onReset(reason);
+    if (close === undefined) options.handlers.onReset(reason);
+    else options.handlers.onReset(reason, close);
   };
 
   const sendResync = (): boolean => {
@@ -124,7 +138,12 @@ export function createBinaryFrameSource<Frame>(
     options.handlers.onFrame(result.frame);
   }) as (event: never) => void);
 
-  socket.addEventListener("close", (() => reset("closed")) as (event: never) => void);
+  socket.addEventListener("close", ((event: { code?: number; reason?: string }) =>
+    reset("closed", {
+      code: event.code ?? 1006,
+      reason: event.reason ?? "",
+      opened: open,
+    })) as (event: never) => void);
   socket.addEventListener("error", (() => reset("error")) as (event: never) => void);
 
   return {

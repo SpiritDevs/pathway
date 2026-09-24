@@ -6,16 +6,18 @@ import {
 
 import {
   createBinaryFrameSource,
+  type FrameSourceClose,
   type FrameSourceResetReason,
   type WebSocketLike,
 } from "./binaryFrameSource";
 
 export interface ComputerFrameSourceHandlers {
   readonly onFrame: (frame: ComputerFrame) => void;
-  readonly onReset: (reason: ComputerFrameSourceResetReason) => void;
+  readonly onReset: (reason: ComputerFrameSourceResetReason, close?: FrameSourceClose) => void;
 }
 
 export type ComputerFrameSourceResetReason = FrameSourceResetReason;
+export type ComputerFrameSourceClose = FrameSourceClose;
 
 export const COMPUTER_FRAME_RESYNC_COOLDOWN_MS = 1_000;
 
@@ -28,7 +30,7 @@ export interface ComputerFrameSourceOptions {
   /**
    * Resolved by `resolveComputerFrameSocketUrl` for the environment's prepared
    * connection. Remote URLs carry a short-lived ticket, so a source reuses
-   * the last URL and resolves a fresh one after a socket closed unanswered.
+   * the last URL and resolves a fresh one only after an upgrade was refused.
    */
   readonly url: string;
   readonly handlers: ComputerFrameSourceHandlers;
