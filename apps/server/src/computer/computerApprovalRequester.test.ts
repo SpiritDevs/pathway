@@ -10,11 +10,27 @@ import * as TestClock from "effect/testing/TestClock";
 import { EventSinkV2 } from "../orchestration-v2/EventSink.ts";
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import * as ComputerApprovalGate from "./ComputerApprovalGate.ts";
+import { computerApprovalCardText } from "./computerApprovalRequester.ts";
 import {
   ComputerApprovalsTestLayer,
   pendingComputerRequest,
   seedRunningTurn,
 } from "./computerApprovals.testkit.ts";
+
+it("asks for task consent when an app prompt names no app", () => {
+  const prompt = {
+    requestId: "request-1",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    scope: "app",
+    toolName: "computer_launch_app",
+  } as const;
+  assert.equal(computerApprovalCardText(prompt), "Allow Computer for this task");
+  assert.equal(
+    computerApprovalCardText({ ...prompt, app: "Safari" }),
+    "Allow Computer to use Safari in this task",
+  );
+});
 
 it.layer(ComputerApprovalsTestLayer)("computerApprovalRequester", (it) => {
   it.effect("posts a Computer card and routes the user's answer to the waiting call", () =>
