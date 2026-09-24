@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import type { ComposerComputerControlMode } from "../computerControlMode";
 import {
   COMPUTER_PERMISSION_KINDS,
+  draftRequestsComputerControl,
   readLocalComputerPermissionBridge,
   resolveComputerControlForSend,
   runComputerControlModeChange,
@@ -186,5 +187,30 @@ describe("resolveComputerControlForSend", () => {
       mode: "chat",
       fields: { enableComputerControl: true, computerControlGeneration: 0 },
     });
+  });
+});
+
+describe("draftRequestsComputerControl", () => {
+  it("follows the live text after Enable, not the mode Enable armed", () => {
+    // Enable on a denied card prefixes the draft; the user then deletes it.
+    const armed = { prompt: "/computer-use open Notes", computerControlEnabled: false };
+    expect(draftRequestsComputerControl(armed)).toBe(true);
+    const edited = { prompt: "open Notes", computerControlEnabled: false };
+    expect(draftRequestsComputerControl(edited)).toBe(false);
+    // The send of that draft carries no Computer intent either, so the card
+    // must offer Enable again.
+    expect(
+      resolveComputerControlForSend({ messageText: edited.prompt, ...edited, generation: 2 }).mode,
+    ).toBe("off");
+  });
+
+  it("counts a hand-typed command and the chat setting as on", () => {
+    expect(
+      draftRequestsComputerControl({ prompt: "/computer-use", computerControlEnabled: false }),
+    ).toBe(true);
+    expect(draftRequestsComputerControl({ prompt: undefined, computerControlEnabled: true })).toBe(
+      true,
+    );
+    expect(draftRequestsComputerControl({ prompt: "", computerControlEnabled: false })).toBe(false);
   });
 });

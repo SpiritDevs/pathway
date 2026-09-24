@@ -119,6 +119,23 @@ export async function runComputerControlModeChange(
 }
 
 /**
+ * Whether the draft as typed would drive the computer: the chat setting, or a
+ * `/computer-use` at the start of its text. A denied card offers Enable only
+ * while this is off, so it follows the live text exactly as the send does.
+ */
+export function draftRequestsComputerControl(input: {
+  readonly prompt: string | undefined;
+  readonly computerControlEnabled: boolean;
+}): boolean {
+  return (
+    resolveComputerInvocationMode({
+      messageText: input.prompt,
+      enableComputerControl: input.computerControlEnabled,
+    }) !== "off"
+  );
+}
+
+/**
  * The Computer intent one user send carries. The setting enables the whole
  * chat; otherwise a leading `/computer-use` enables only this request. The
  * generation pins the intent to the control epoch it was made in, so a Stop
