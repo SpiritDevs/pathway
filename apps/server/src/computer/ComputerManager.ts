@@ -594,6 +594,8 @@ export class ComputerManager {
   private physicalRead: Fiber.Fiber<void> | undefined;
   private physicalFailure: string | undefined;
   private readonly activeAuthorities = new Map<string, Set<DesktopAbort>>();
+  /** Pane input carries no agent authority; a desktop replacement aborts it here. */
+  private readonly livePaneInput = new Set<DesktopAbort>();
   private readonly authorityTurns = new Map<string, string>();
 
   private constructor(parts: ComputerManagerParts, cursorActivity: CursorActivity) {
@@ -1310,11 +1312,12 @@ export class ComputerManager {
    *
    * The slot resolves each backend member against its occupant at the moment
    * of the call, so a swap landing between an action's targeting and its input
-   * would send the rest of that action to the new desktop. The exclusive
-   * transaction waits for aborted and queued-ahead work to finish, so no
-   * operation straddles the two desktops. A queue that is closed or full
-   * cannot take the swap; it then runs directly, since a desktop that is gone
-   * has to be replaced regardless.
+   * would send the rest of that action to the new desktop. Pane input, which
+   * was aimed at the old desktop's pixels, is aborted too. The swap is a queue
+   * barrier the admission limit cannot refuse: it waits for aborted and
+   * queued-ahead work to finish, so no operation straddles the two desktops.
+   * Only a closed queue — a manager shutting down, admitting nothing — lets
+   * the swap run directly.
    */
   replaceDesktop<E>(swap: Effect.Effect<void, E>): Effect.Effect<void, E> {
     return Effect.suspend(() => {
@@ -1327,14 +1330,15 @@ export class ComputerManager {
       for (const live of this.activeAuthorities.values()) {
         for (const abort of live) Deferred.doneUnsafe(abort, Effect.fail(reason));
       }
+      for (const abort of this.livePaneInput) Deferred.doneUnsafe(abort, Effect.fail(reason));
       let ran = false;
       const exclusive = Effect.suspend(() => {
         ran = true;
         return Effect.result(withoutDesktopCancellation(swap));
       });
-      return this.operations.run(exclusive).pipe(
+      return this.operations.runBarrier(exclusive).pipe(
         Effect.matchEffect({
-          // Only a queue that never ran the swap fails here.
+          // Only a closed queue, which never ran the swap, fails here.
           onFailure: () => (ran ? Effect.void : swap),
           onSuccess: (result) =>
             result._tag === "Success" ? Effect.void : Effect.fail(result.failure),
@@ -2507,6 +2511,29 @@ export class ComputerManager {
   }
 
   /**
+   * Queues one input transaction: exclusive, or scoped to `key`. Pane input
+   * (no `owner`) stays abortable by a desktop replacement from its wait for
+   * the queue to its dispatch; agent calls already are, through their
+   * authority.
+   */
+  private queueInput<A, E>(
+    owner: string | undefined,
+    key: string | undefined,
+    action: Effect.Effect<A, E>,
+  ): Effect.Effect<A, E | ComputerOperationError> {
+    const queued =
+      key === undefined ? this.operations.run(action) : this.operations.runScoped(key, action);
+    if (owner !== undefined) return queued;
+    return Effect.suspend(() => {
+      const abort = makeDesktopAbort();
+      this.livePaneInput.add(abort);
+      return withDesktopOperationSignal(desktopSignal(abort), queued).pipe(
+        Effect.ensuring(Effect.sync(() => this.livePaneInput.delete(abort))),
+      );
+    });
+  }
+
+  /**
    * A human clicks the live pane in desktop coordinates. Resolve its current
    * topmost window once, then keep that identity through capture and injection.
    */
@@ -2516,7 +2543,9 @@ export class ComputerManager {
   ): Effect.Effect<A, E | ComputerOperationError> {
     return Effect.andThen(
       assertDesktopOperationAdmission,
-      this.operations.run(
+      this.queueInput(
+        undefined,
+        undefined,
         Effect.gen({ self: this }, function* () {
           if (this.agentDialect !== "macos") return yield* action(point);
           this.engageBackend();
@@ -4415,7 +4444,9 @@ export class ComputerManager {
       if (owner === undefined) this.lastUserDesktopInputAt = this.now();
       // Process-scoped native input and its observation remain one exclusive
       // queue transaction. Only logical ownership is narrower than the desktop.
-      return yield* this.operations.run(
+      return yield* this.queueInput(
+        owner,
+        undefined,
         Effect.gen({ self: this }, function* () {
           yield* this.assertControlAuthority(owner);
           yield* this.assertInputNotPaused(owner);
@@ -4532,7 +4563,8 @@ export class ComputerManager {
       // stamp it so a foreground excursion cannot raise a window into the middle
       // of their interaction.
       if (owner === undefined) this.lastUserDesktopInputAt = this.now();
-      return yield* this.operations.runScoped(
+      return yield* this.queueInput(
+        owner,
         windowId,
         Effect.gen({ self: this }, function* () {
           yield* this.assertControlAuthority(owner);
@@ -4589,7 +4621,9 @@ export class ComputerManager {
       ) {
         return yield* new ComputerLeaseError();
       }
-      return yield* this.operations.run(
+      return yield* this.queueInput(
+        owner,
+        undefined,
         Effect.gen({ self: this }, function* () {
           yield* this.assertControlAuthority(owner);
           // Readiness first: a paused thread is refused before it can take the
