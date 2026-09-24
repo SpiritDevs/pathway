@@ -99,6 +99,50 @@ const quitSystemSettings = Effect.fn("desktop.computer.quitSystemSettings")(func
 });
 
 /**
+ * Helper events reach only a main renderer that is up and has loaded.
+ * `pushLatest` holds an event raised while the renderer loads and sends it once
+ * the load finishes, keeping only the last, so a reload never swallows it.
+ */
+export const makeRendererPush = (main: Effect.Effect<Option.Option<Electron.BrowserWindow>>) => {
+  const push = (channel: string, payload: unknown) =>
+    Effect.gen(function* () {
+      const window = yield* main;
+      if (Option.isNone(window)) return false;
+      const { webContents } = window.value;
+      if (
+        window.value.isDestroyed() ||
+        webContents.isDestroyed() ||
+        webContents.isLoadingMainFrame()
+      )
+        return false;
+      webContents.send(channel, payload);
+      return true;
+    }).pipe(Effect.catchDefect(() => Effect.succeed(false)));
+
+  let queued: { readonly webContents: Electron.WebContents; payload: unknown } | undefined;
+  const pushLatest = (channel: string, payload: unknown) =>
+    Effect.gen(function* () {
+      if (yield* push(channel, payload)) return;
+      const window = yield* main;
+      if (Option.isNone(window) || window.value.isDestroyed()) return;
+      const { webContents } = window.value;
+      if (webContents.isDestroyed()) return;
+      if (queued?.webContents === webContents) {
+        queued.payload = payload;
+        return;
+      }
+      const entry = { webContents, payload };
+      queued = entry;
+      webContents.once("did-finish-load", () => {
+        if (queued === entry) queued = undefined;
+        if (!webContents.isDestroyed()) webContents.send(channel, entry.payload);
+      });
+    }).pipe(Effect.catchDefect(() => Effect.void));
+
+  return { push, pushLatest };
+};
+
+/**
  * Starts the macOS Computer host when `PATHWAY_COMPUTER_USE=1`: the Cua driver
  * host on its socket, with pathway-helper serving permissions, the Escape
  * kill switch and the masked-activation shield. Everything else gets the
@@ -141,21 +185,8 @@ const make = Effect.gen(function* () {
     yield* agentCursorPreferencePath,
   );
 
-  // Helper events reach only a main renderer that is up and has loaded.
-  const pushToRenderer = (channel: string, payload: unknown) =>
-    Effect.gen(function* () {
-      const main = yield* electronWindow.main;
-      if (Option.isNone(main)) return false;
-      const window = main.value;
-      if (
-        window.isDestroyed() ||
-        window.webContents.isDestroyed() ||
-        window.webContents.isLoadingMainFrame()
-      )
-        return false;
-      window.webContents.send(channel, payload);
-      return true;
-    }).pipe(Effect.catchDefect(() => Effect.succeed(false)));
+  const renderer = makeRendererPush(electronWindow.main);
+  const pushToRenderer = renderer.push;
 
   const helper = yield* ComputerHelper.make({
     helperPath,
@@ -171,7 +202,7 @@ const make = Effect.gen(function* () {
         yield* warn("permission setup failed", error);
         const main = yield* electronWindow.main;
         if (Option.isSome(main)) yield* electronWindow.reveal(main.value);
-        yield* pushToRenderer(IpcChannels.COMPUTER_ERROR_CHANNEL, error);
+        yield* renderer.pushLatest(IpcChannels.COMPUTER_ERROR_CHANNEL, error);
       }).pipe(Effect.catchDefect(() => Effect.void)),
     openSettingsPane: (pane) =>
       Effect.promise(() =>
