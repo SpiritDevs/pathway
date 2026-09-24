@@ -154,35 +154,47 @@ export function approvalShortcutAction(
   return actions[Number(event.key) - 1] ?? null;
 }
 
-/** Whether a respond command settled as a failure (a rejection, or an atom `Failure` result). */
-export function approvalResponseFailed(result: unknown): boolean {
+/** Whether a respond command was sent: an atom `Success`. A local guard that sent nothing resolves empty. */
+export function approvalResponseSent(result: unknown): boolean {
   return (
     result !== null &&
     typeof result === "object" &&
     "_tag" in result &&
-    (result as { readonly _tag: unknown })._tag === "Failure"
+    (result as { readonly _tag: unknown })._tag === "Success"
   );
 }
 
 /**
- * Sends one decision per request. Clicks and shortcuts share the claim; a
- * failed send releases it so the user can retry, while a sent one keeps it
- * until the request disappears and a new request id arrives.
+ * One response attempt of a request: its id plus the live provider session the
+ * answer goes to, so a request re-posted to a new session can be answered again.
+ */
+export function approvalSubmissionKey(approval: {
+  readonly requestId: string;
+  readonly responseAttemptKey?: string;
+}): string {
+  return JSON.stringify([approval.requestId, approval.responseAttemptKey ?? null]);
+}
+
+/**
+ * Sends one decision per response attempt. Clicks and shortcuts share the
+ * claim; only a sent response keeps it, until a new attempt key arrives. A
+ * failed send, or one a local guard refused, releases it so the user can
+ * retry or cancel. Returns null when suppressed, else a promise that settles
+ * once the claim is kept or released.
  */
 export function respondToApprovalOnce(input: {
   readonly claim: { current: string | null };
   readonly requestKey: string;
   readonly isResponding: boolean;
   readonly respond: () => Promise<unknown>;
-}): boolean {
+}): Promise<void> | null {
   const { claim, requestKey } = input;
-  if (input.isResponding || claim.current === requestKey) return false;
+  if (input.isResponding || claim.current === requestKey) return null;
   claim.current = requestKey;
   const release = () => {
     if (claim.current === requestKey) claim.current = null;
   };
-  void input.respond().then((result) => {
-    if (approvalResponseFailed(result)) release();
+  return input.respond().then((result) => {
+    if (!approvalResponseSent(result)) release();
   }, release);
-  return true;
 }

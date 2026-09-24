@@ -5,6 +5,7 @@ import { type PendingApproval } from "../../session-logic";
 import { Button } from "../ui/button";
 import {
   approvalShortcutAction,
+  approvalSubmissionKey,
   resolveApprovalActions,
   respondToApprovalOnce,
   type ApprovalAction,
@@ -45,13 +46,14 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
   const actions = resolveApprovalActions(parseComputerApprovalPrompt(approval));
   const disabled = isResponding || !canRespond;
 
-  const respond = (action: ApprovalAction) =>
-    respondToApprovalOnce({
+  const respond = (action: ApprovalAction) => {
+    void respondToApprovalOnce({
       claim,
-      requestKey: approval.requestId,
+      requestKey: approvalSubmissionKey(approval),
       isResponding: disabled,
       respond: () => onRespondToApproval(approval.requestId, action.decision),
     });
+  };
 
   // Digit shortcuts bubble from focused controls inside this group only; a bare
   // number key elsewhere in the app must never approve a tool request.
