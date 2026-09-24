@@ -148,6 +148,8 @@ final class PathwayThreadComputerModel {
     let frames: PathwayComputerFrameStream
     @ObservationIgnored private let connect: PathwayConnectClient
     @ObservationIgnored private let environment: PathwayCompanyEnvironment
+    /// Bumped on every connection change, so a seed read from an older socket never lands.
+    @ObservationIgnored private var connection = 0
 
     init(threadID: String, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient) {
         session = PathwayThreadComputerSession(threadID: threadID)
@@ -168,7 +170,7 @@ final class PathwayThreadComputerModel {
         var seed: Task<Void, Never>?
         defer {
             seed?.cancel()
-            session.rebase()
+            connectionChanged()
             frames.stream(nil)
             Task { await rpc.stop() }
         }
@@ -176,20 +178,32 @@ final class PathwayThreadComputerModel {
             // Thread states are whole snapshots, so a burst may drop older ones.
             for try await value in await rpc.subscribe("computer.subscribeEvents", payload: .object([:]), bufferingPolicy: .bufferingNewest(64)) {
                 if let transport = value.objectValue?["_pathwayTransport"]?.stringValue {
-                    session.rebase()
+                    connectionChanged()
                     seed?.cancel()
                     guard transport == "connecting" else { continue }
                     // Also registers this socket's interest in the thread's pushes.
                     seed = Task { [weak self] in
-                        guard let value = try? await rpc.request("computer.getThreadState", payload: .object(["threadId": .string(threadID)])),
-                              let state = PathwayThreadComputerState(value) else { return }
-                        self?.update { $0.upsert(state) }
+                        await self?.applySeed { try? await rpc.request("computer.getThreadState", payload: .object(["threadId": .string(threadID)])) }
                     }
                 } else {
                     update { $0.apply(event: value) }
                 }
             }
         } catch {}
+    }
+
+    /// A lost or new socket: what shows stays, but nothing from before it is trusted.
+    func connectionChanged() {
+        connection += 1
+        session.rebase()
+    }
+
+    /// Lands one seed read, unless it was cancelled or its connection has since changed.
+    func applySeed(_ read: () async -> JSONValue?) async {
+        let connection = connection
+        guard let value = await read(), !Task.isCancelled, connection == self.connection,
+              let state = PathwayThreadComputerState(value) else { return }
+        update { $0.upsert(state) }
     }
 
     /// The chat rendering the card: an armed preview opens.

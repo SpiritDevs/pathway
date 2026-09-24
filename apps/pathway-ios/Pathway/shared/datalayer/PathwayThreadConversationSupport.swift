@@ -92,6 +92,7 @@ extension PathwayAgentThreadModel {
     func installServerConfig(_ value: JSONValue) {
         let object = value.objectValue ?? [:]
         serverConfig = object
+        computerAccessPolicy = object["settings"]?.objectValue?["computer"]?.objectValue?["accessPolicy"]?.stringValue
         let capabilities = object["environment"]?.objectValue?["capabilities"]?.objectValue ?? [:]
         supportsAttachmentUploads = threadQueue != nil || capabilities["attachmentUploads"]?.boolValue == true
         maximumFileAttachmentBytes = threadQueue != nil ? 50 * 1024 * 1024 : (supportsAttachmentUploads ? capabilities["fileAttachments"]?.objectValue?["maxUploadBytes"]?.intValue : nil)
@@ -530,8 +531,10 @@ extension PathwayAgentThreadModel {
 
 extension PathwayAgentThreadModel {
     func refreshServerConfig() async {
-        do { installServerConfig(try await request("server.getConfig", payload: .object([:]), reportsErrors: false)) }
-        catch { /* Keep the last usable provider list while temporarily disconnected. */ }
+        // A read that outlives its caller (a stopped chat, a closed sheet) must not land.
+        guard let value = try? await request("server.getConfig", payload: .object([:]), reportsErrors: false),
+              !Task.isCancelled else { return } // Keep the last usable provider list while temporarily disconnected.
+        installServerConfig(value)
     }
     func refreshParentRoster() async {
         guard thread.shell.lineage?.relationshipToParent == "subagent", let parentID = thread.shell.lineage?.parentThreadId else {

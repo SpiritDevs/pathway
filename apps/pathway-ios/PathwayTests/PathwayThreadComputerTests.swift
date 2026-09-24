@@ -138,6 +138,27 @@ struct PathwayThreadComputerTests {
         #expect(session.state?.version == 2)
     }
 
+    @Test func aSeedFromAnOlderConnectionOrACancelledWatchNeverLands() async throws {
+        let model = PathwayThreadComputerModel(threadID: "thread", environment: computerTestEnvironment(),
+                                               connect: PathwayConnectClient(relayURL: URL(string: "https://relay.test")!, clerkTokenProvider: { "unused" }))
+        let gate = ComputerReadGate()
+        let state = try #require(stateEvent(version: 4, agentActive: true).objectValue?["state"])
+        let stale = Task { await model.applySeed { await gate.read() } }
+        await gate.started(1)
+        model.connectionChanged()
+        gate.finish(state)
+        await stale.value
+        #expect(model.session.state == nil)
+        let cancelled = Task { await model.applySeed { await gate.read() } }
+        await gate.started(2)
+        cancelled.cancel()
+        gate.finish(state)
+        await cancelled.value
+        #expect(model.session.state == nil)
+        await model.applySeed { state }
+        #expect(model.session.state?.version == 4)
+    }
+
     private func stateEvent(version: Int, agentActive: Bool, owner: String? = nil, controlledByOther: Bool = false,
                             availability: String = "available") -> JSONValue {
         var state: [String: JSONValue] = [
