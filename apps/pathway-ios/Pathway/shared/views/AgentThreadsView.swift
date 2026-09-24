@@ -1237,7 +1237,10 @@ struct AgentThreadConversationView: View {
             .simultaneousGesture(TapGesture().onEnded { collapseComposer() })
             .safeAreaInset(edge: .bottom, spacing: 4) {
                 VStack(spacing: 8) {
-                    if let computer { AgentThreadComputerPreview(computer: computer) }
+                    if let computer {
+                        AgentThreadComputerPreview(computer: computer)
+                        AgentThreadComputerEffortHint(computer: computer, model: model)
+                    }
                     if let connect = appModel.connect {
                         PathwayConversationStorageNotice(environment: model.environment, connect: connect, threadID: model.thread.threadId, isStartingConversation: false,
                             chooseEnvironment: { showsAlternateEnvironment = true },

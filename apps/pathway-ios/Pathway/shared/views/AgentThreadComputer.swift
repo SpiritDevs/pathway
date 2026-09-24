@@ -137,3 +137,35 @@ struct AgentThreadComputerPreview: View {
         }
     }
 }
+
+/// The Medium-effort tip above the composer while a Claude chat is set to drive the desktop.
+/// Using or dismissing it hides it for good on this device.
+struct AgentThreadComputerEffortHint: View {
+    let computer: PathwayThreadComputerModel
+    let model: PathwayAgentThreadModel
+    @AppStorage(PathwayAgentThreadModel.computerControlDefaultsKey) private var controlSetting = false
+    @AppStorage(PathwayComputerEffortHint.dismissedDefaultsKey) private var dismissed = false
+
+    var body: some View {
+        if !dismissed, computer.session.state?.availability == "available",
+           PathwayComputerInvocation(text: model.draft, controlEnabled: model.computerControlApplies(setting: controlSetting)) != .off,
+           let medium = PathwayComputerEffortHint.mediumSelection(for: model.currentModelSelection, providers: model.providers) {
+            HStack {
+                Label(PathwayComputerEffortHint.message, systemImage: "gauge.with.dots.needle.33percent")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button(PathwayComputerEffortHint.actionLabel) {
+                    dismissed = true
+                    Task {
+                        do { try await model.changeModelSelection(medium) } catch { model.actionError = error.localizedDescription }
+                    }
+                }
+                .font(.caption.bold())
+                Button("Dismiss", systemImage: "xmark") { dismissed = true }
+                    .labelStyle(.iconOnly).font(.caption)
+            }
+            .padding(.horizontal, 20)
+            .accessibilityIdentifier("thread-computer-effort-hint")
+        }
+    }
+}
