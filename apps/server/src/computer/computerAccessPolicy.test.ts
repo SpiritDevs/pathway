@@ -6,15 +6,12 @@ import {
   AuthOrchestrationReadScope,
   AuthStandardClientScopes,
   type AuthEnvironmentScope,
+  canUseComputer,
 } from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import {
-  COMPUTER_ACCESS_DENIED_MESSAGE,
-  canUseComputer,
-  requireComputerAccess,
-} from "./computerAccessPolicy.ts";
+import { COMPUTER_ACCESS_DENIED_MESSAGE, requireComputerAccess } from "./computerAccessPolicy.ts";
 
 const operatorWithoutComputer: ReadonlyArray<AuthEnvironmentScope> =
   AuthStandardClientScopes.filter((scope) => scope !== AuthComputerOperateScope);
