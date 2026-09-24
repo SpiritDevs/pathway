@@ -2,6 +2,7 @@ import {
   EMPTY_COMPUTER_CLIENT_STATE,
   applyComputerWindowsChanged,
   clearComputerEnvironment,
+  rebaseComputerEnvironment,
   recordComputerAction,
   removeComputerThreadState,
   setComputerInputStopped,
@@ -36,7 +37,23 @@ interface ComputerStateStore extends ComputerClientState {
   readonly recordAction: (environmentId: EnvironmentId, action: ComputerActionEvent) => void;
   readonly removeThreadState: (ref: ScopedThreadRef) => void;
   readonly setStatus: (environmentId: EnvironmentId, status: ComputerStatusResult) => void;
+  /** A new connection generation: keep what shows, let snapshots replace it. */
+  readonly rebaseEnvironment: (environmentId: EnvironmentId) => void;
+  /** The environment left: nothing of it may linger, nor land later. */
   readonly clearEnvironment: (environmentId: EnvironmentId) => void;
+}
+
+// Bumped when an environment is cleared, so an answer requested before the
+// clear cannot repopulate it.
+const environmentEpochs = new Map<EnvironmentId, number>();
+
+/**
+ * A check that an asynchronous status answer still belongs: false once the
+ * environment was cleared after the request went out.
+ */
+export function computerEnvironmentFence(environmentId: EnvironmentId): () => boolean {
+  const epoch = environmentEpochs.get(environmentId) ?? 0;
+  return () => (environmentEpochs.get(environmentId) ?? 0) === epoch;
 }
 
 export const useComputerStateStore = create<ComputerStateStore>()((set) => ({
@@ -57,8 +74,11 @@ export const useComputerStateStore = create<ComputerStateStore>()((set) => ({
         ? current
         : { statusByEnvironment: { ...current.statusByEnvironment, [environmentId]: status } },
     ),
+  rebaseEnvironment: (environmentId) =>
+    set((current) => rebaseComputerEnvironment(current, environmentId)),
   clearEnvironment: (environmentId) =>
     set((current) => {
+      environmentEpochs.set(environmentId, (environmentEpochs.get(environmentId) ?? 0) + 1);
       const next = clearComputerEnvironment(current, environmentId);
       if (!Object.hasOwn(current.statusByEnvironment, environmentId)) return next;
       const statusByEnvironment = { ...current.statusByEnvironment };
