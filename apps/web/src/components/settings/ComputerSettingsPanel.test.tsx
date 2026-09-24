@@ -4,10 +4,14 @@
 // render time. Pressing Set up belongs to the provision hook.
 
 import {
+  ClientSettingsSchema,
   ComputerId,
   DEFAULT_CLIENT_SETTINGS,
+  normalizeCursorHexColor,
+  resolveAgentCursorColors,
   type ComputerStatusResult,
 } from "@spiritdevs/contracts";
+import * as Schema from "effect/Schema";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -62,11 +66,11 @@ function render(
   return renderToStaticMarkup(
     <ComputerSettingsView
       settings={{ ...DEFAULT_CLIENT_SETTINGS, computerControlEnabled: true, ...input.settings }}
-      updateSettings={vi.fn()}
+      updateSettings={() => undefined}
       status={input.status}
       attention={attention}
-      setup={{ provision: vi.fn(), isPending: false, note: undefined, ...input.setup }}
-      retry={{ isChecking: false, onRetry: vi.fn() }}
+      setup={{ provision: () => undefined, isPending: false, note: undefined, ...input.setup }}
+      retry={{ isChecking: false, onRetry: () => undefined }}
       permissions={input.permissions ?? null}
     />,
   );
@@ -209,7 +213,7 @@ describe("ComputerSettingsView", () => {
         }),
       }),
     });
-    expect(markup).toContain("Cua 0.28.2");
+    expect(markup).toContain("Cua");
     expect(markup).toContain("native desktop input is unavailable");
     expect(markup).toContain("verified browser runtime");
     expect(markup).not.toContain("shares your Mac");
@@ -221,7 +225,7 @@ describe("ComputerSettingsView", () => {
     expect(markup).toContain("Advanced");
     expect(markup).toContain('aria-expanded="false"');
     // Mounted but hidden, so an open permission guide keeps its state.
-    expect(markup).toContain("hidden");
+    expect(markup).toContain('<div hidden=""');
     expect(markup).toContain("Desktop abilities");
     expect(markup).toContain("macOS desktop");
   });
@@ -282,6 +286,35 @@ describe("ComputerSettingsView", () => {
       expect(markup).toContain('value="#112233"');
       expect(markup).toContain("background-color:#aabbcc");
       expect(markup).toContain("background-color:#112233");
+    });
+
+    it("round-trips custom colors through the stored client settings", () => {
+      const decode = Schema.decodeUnknownSync(ClientSettingsSchema);
+      const defaults = decode({});
+      // The default is stock with no overrides stored.
+      expect(defaults.agentCursorColorMode).toBe("stock");
+      expect(defaults.agentCursorFillColor).toBe("");
+      expect(defaults.agentCursorRimColor).toBe("");
+      expect(resolveAgentCursorColors(defaults)).toBeNull();
+
+      // The color field commits only a complete hex color, lowercased.
+      expect(normalizeCursorHexColor("#AABBCC")).toBe("#aabbcc");
+      expect(normalizeCursorHexColor("not-a-color")).toBe("");
+      const stored = decode(
+        Schema.encodeSync(ClientSettingsSchema)({
+          ...defaults,
+          agentCursorColorMode: "custom",
+          agentCursorFillColor: "#aabbcc",
+        }),
+      );
+      expect(stored.agentCursorColorMode).toBe("custom");
+      expect(resolveAgentCursorColors(stored)).toEqual({ fill: "#aabbcc" });
+
+      // Stock means zero overrides even when colors are still remembered for
+      // a later switch back to custom.
+      const backToStock = decode({ ...stored, agentCursorColorMode: "stock" });
+      expect(backToStock.agentCursorFillColor).toBe("#aabbcc");
+      expect(resolveAgentCursorColors(backToStock)).toBeNull();
     });
   });
 });
