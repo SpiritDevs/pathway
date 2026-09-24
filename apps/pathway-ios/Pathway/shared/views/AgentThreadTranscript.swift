@@ -71,6 +71,8 @@ struct AgentThreadTranscript: View {
             } else {
                 AgentTranscriptQuestions(item: item, model: model)
             }
+        } else if let notice = PathwayComputerNotice(item) {
+            AgentTranscriptComputerNotice(item: item, notice: notice, model: model)
         } else {
             AgentTranscriptEventRow(item: item, model: model, onOpenChild: onOpenChild)
         }

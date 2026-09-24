@@ -1,0 +1,77 @@
+import SwiftUI
+
+/// What a Computer approval allows, under its title.
+struct AgentComputerApprovalDetail: View {
+    let prompt: PathwayComputerApprovalPrompt
+
+    var body: some View {
+        switch prompt {
+        case .task:
+            Text(PathwayComputerApprovalPrompt.taskAcceptDescription).font(.subheadline).foregroundStyle(.secondary)
+        case .app:
+            Text("The agent asks to control this app until the response ends.").font(.subheadline).foregroundStyle(.secondary)
+        case let .call(toolName, args):
+            VStack(alignment: .leading, spacing: 6) {
+                Text(PathwayComputerTool.title(toolName)).font(.body.weight(.medium))
+                ForEach((args ?? [:]).sorted { $0.key < $1.key }, id: \.key) { name, value in
+                    LabeledContent(name) { Text(Self.display(value)).lineLimit(3).textSelection(.enabled) }
+                        .font(.footnote)
+                }
+            }
+        }
+    }
+
+    private static func display(_ value: JSONValue) -> String {
+        switch value {
+        case let .string(text): text
+        case let .bool(flag): flag ? "true" : "false"
+        case let .number(number): number.rounded() == number && abs(number) < 1e15 ? String(Int64(number)) : String(number)
+        case .null: "null"
+        default:
+            (try? JSONEncoder().encode(value)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        }
+    }
+}
+
+/// A Computer notice in place of its tool row: the host needs setup, or Computer control
+/// was off (or out of reach for this device) when the agent reached for the desktop.
+struct AgentTranscriptComputerNotice: View {
+    let item: PathwayTimelineItem
+    let notice: PathwayComputerNotice
+    let model: PathwayAgentThreadModel
+    @AppStorage(PathwayAgentThreadModel.computerControlDefaultsKey) private var controlSetting = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            switch notice {
+            case let .setupRequired(missing):
+                Label("Computer needs setup", systemImage: "exclamationmark.triangle").font(.headline)
+                let permissions = PathwayComputerNotice.permissionList(missing)
+                Text(permissions.isEmpty
+                     ? "Open Pathway on the host computer and grant the permissions Computer asks for, then try again."
+                     : "Open Pathway on the host computer and grant \(permissions), then try again.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            case .controlDenied where model.computerAccessDenied:
+                Label("This device can't use Computer", systemImage: "xmark.octagon").font(.headline)
+                Text(PathwayComputerNotice.accessDeniedHint).font(.subheadline).foregroundStyle(.secondary)
+            case .controlDenied:
+                let enabled = model.computerControlApplies(setting: controlSetting)
+                Label(enabled ? "Computer control is on for this chat" : "Computer control is off",
+                      systemImage: enabled ? "checkmark.circle" : "desktopcomputer").font(.headline)
+                Text(enabled ? "Queued desktop turns stay cancelled — send a fresh message to continue."
+                             : "Turn it on in Settings to let the agent use the desktop.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                // Only this chat's own rows arm its composer; a child's notice would enable the wrong chat.
+                if !enabled, item.fields["threadId"]?.stringValue.map({ $0 == model.threadID }) ?? true {
+                    Button("Enable") { model.armComputerUse() }.buttonStyle(.bordered)
+                        .accessibilityIdentifier("thread-computer-enable-\(item.id)")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color(uiColor: .secondarySystemBackground), in: .rect(cornerRadius: 22))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("thread-computer-notice-\(item.id)")
+    }
+}

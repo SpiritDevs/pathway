@@ -274,6 +274,10 @@ final class PathwayAgentThreadModel {
     private(set) var runs: [PathwayThreadRun] = []
     private(set) var subagents: [PathwayThreadSubagent] = []
     private(set) var runtimeRequests: [JSONValue] = []
+    private(set) var approvalClaims: [String: String] = [:]
+    /// The environment's Computer access policy and this device's scopes there; nil while unknown.
+    var computerAccessPolicy: String?
+    var computerSessionScopes: Set<String>?
     private(set) var browserTakeover: [String: JSONValue]?
     private(set) var checkpoints: [JSONValue] = []
     private(set) var plans: [JSONValue] = []
@@ -392,11 +396,16 @@ final class PathwayAgentThreadModel {
             }
             guard !Task.isCancelled else { return }
             let environment = environment
-            let rpc = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+            let rpc = PathwayRPCClient { [weak self] in
+                let connection = try await connect.prepare(environment: environment)
+                await self?.setComputerSessionScopes(connection.scopes)
+                return connection.webSocketURL
+            }
             self.rpc = rpc
             configTask = Task { [weak self] in
                 if let value = try? await rpc.request("server.getConfig", payload: .object([:])) {
                     self?.installServerConfig(value)
+                    await self?.loadComputerAccessPolicy()
                 }
                 await self?.refreshParentRoster()
             }
@@ -698,9 +707,29 @@ final class PathwayAgentThreadModel {
         if !isSubscriptionReady { return "Reconnect and wait for the latest thread state before responding." }
         return canRespond(to: item) ? nil : "This request is no longer connected to a live agent."
     }
+    /// One response attempt of a request: its id plus the live provider session the
+    /// answer goes to, so a request re-posted to a new session can be answered again.
+    func approvalAttemptKey(requestID: String) -> String {
+        let capability = runtimeRequests.first { $0.objectValue?["id"]?.stringValue == requestID }?
+            .objectValue?["responseCapability"]?.objectValue
+        let session = capability?["type"]?.stringValue == "live" ? capability?["providerSessionId"]?.stringValue : nil
+        return "\(requestID)|\(session ?? "")"
+    }
+    func hasAnsweredApproval(_ item: PathwayTimelineItem) -> Bool {
+        guard let requestID = item.requestID else { return false }
+        return approvalClaims[requestID] == approvalAttemptKey(requestID: requestID)
+    }
+    /// Sends one decision per response attempt. Only a sent response keeps the claim;
+    /// a failed send, or one a local guard refused, releases it so the user can retry.
     func respondToApproval(requestID: String, decision: String) async {
+        let key = approvalAttemptKey(requestID: requestID)
+        guard approvalClaims[requestID] != key else { return }
+        approvalClaims[requestID] = key
         do { try await respond(requestID: requestID, fields: ["decision": .string(decision)]) }
-        catch { actionError = error.localizedDescription }
+        catch {
+            if approvalClaims[requestID] == key { approvalClaims[requestID] = nil }
+            actionError = error.localizedDescription
+        }
     }
     func respondToQuestion(requestID: String, questionID: String, answer: String) async {
         do { try await respondToQuestions(requestID: requestID, answers: [questionID: .string(answer)]) }
