@@ -53,6 +53,7 @@ import { ComputerEnvironmentPolicySection } from "./ComputerEnvironmentPolicySec
 import { ComputerGettingStarted } from "./ComputerGettingStarted";
 import {
   ComputerHostPermissionNote,
+  ComputerHostUnavailableNote,
   ComputerPermissionSection,
   useComputerPermissionGuideBridge,
 } from "./ComputerPermissionSection";
@@ -61,6 +62,7 @@ import {
   computerCapabilitiesDescription,
   computerCapabilitySummary,
   environmentSupportsComputer,
+  resolveComputerPermissionsView,
   resolveComputerScopeAccess,
   resolveComputerSettingsAttention,
   type ComputerScopeAccess,
@@ -372,18 +374,24 @@ function ComputerEnvironmentSettings({
     missing: attention.missingPermissions,
   });
 
-  const platform = environment.descriptor?.platform.os;
+  const permissionsView = resolveComputerPermissionsView({
+    hasNativeBridge: bridge !== null,
+    nativeState,
+    platform: environment.descriptor?.platform.os,
+  });
   const permissions =
-    bridge !== null && hasNativePermissionSetup && nativeState ? (
+    bridge !== null && permissionsView?.kind === "grants" ? (
       <ComputerPermissionSection
         bridge={bridge}
         permissionKinds={COMPUTER_PERMISSION_KINDS}
-        state={nativeState}
+        state={permissionsView.state}
         onStateChange={setNativeState}
         guidePane={guidePane}
         onGuidePaneChange={setGuidePane}
       />
-    ) : bridge === null && platform === "darwin" ? (
+    ) : permissionsView?.kind === "unavailable" ? (
+      <ComputerHostUnavailableNote message={permissionsView.message} />
+    ) : permissionsView?.kind === "host-note" ? (
       <ComputerHostPermissionNote />
     ) : null;
 
