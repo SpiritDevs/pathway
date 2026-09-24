@@ -1,4 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
+import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import { isComputerThreadStateCurrent } from "@spiritdevs/client-runtime/state/computer-state";
 import { runAtomCommand } from "@spiritdevs/client-runtime/state/runtime";
 import type { ScopedThreadRef } from "@spiritdevs/contracts";
 import { resolveComputerInvocationMode } from "@spiritdevs/shared/computerInvocation";
@@ -6,7 +8,7 @@ import { AsyncResult, type AtomRegistry } from "effect/unstable/reactivity";
 import { useContext, useEffect } from "react";
 
 import { computerEnvironment } from "~/state/computer";
-import { useComputerStateStore } from "../computerStateStore";
+import { computerEnvironmentFence, useComputerStateStore } from "../computerStateStore";
 import { useConnectedGeneration } from "./useComputerEventBridge";
 
 /**
@@ -34,11 +36,13 @@ export function seedThreadComputerState(
 }
 
 /**
- * The control generation a send's Computer intent is pinned to. A send right
- * after a reload or reconnect can beat the seed, so an unseeded server thread
- * asks the server rather than fall back to 0, which a stopped thread refuses.
- * Sends with no Computer intent, and threads the server has not seen yet, ask
- * nothing. Undefined when the server cannot answer.
+ * The control generation a send's Computer intent is pinned to. Only a state
+ * this connection confirmed counts: a send right after a reload or reconnect
+ * can beat the seed, and the carried-over or drafted generation may be stale
+ * (another device's Stop advances it), so the thread's server is asked
+ * instead. Sends with no Computer intent ask nothing; a draft with no server
+ * thread uses the generation it recorded. Undefined when the server cannot
+ * answer, or the connection that answered is gone.
  */
 export async function readComputerControlGenerationForSend(
   registry: AtomRegistry.AtomRegistry,
@@ -47,24 +51,27 @@ export async function readComputerControlGenerationForSend(
     readonly ref: ScopedThreadRef | null;
     readonly messageText: string;
     readonly computerControlEnabled: boolean;
-    /** The seeded generation, or the one the draft recorded. */
-    readonly known: number | undefined;
+    /** The generation the draft recorded, used only while there is no server thread. */
+    readonly draftGeneration: number | undefined;
   },
 ): Promise<number | undefined> {
-  if (input.known !== undefined || input.ref === null) return input.known;
+  if (input.ref === null) return input.draftGeneration;
   const mode = resolveComputerInvocationMode({
     messageText: input.messageText,
     enableComputerControl: input.computerControlEnabled,
   });
   if (mode === "off") return undefined;
   const ref = input.ref;
+  const known = useComputerStateStore.getState().threadStates[scopedThreadKey(ref)];
+  if (known !== undefined && isComputerThreadStateCurrent(known)) return known.controlGeneration;
+  const isCurrent = computerEnvironmentFence(ref.environmentId);
   const result = await runAtomCommand(
     registry,
     computerEnvironment.threadState,
     { environmentId: ref.environmentId, input: { threadId: ref.threadId } },
     { reportFailure: false },
   );
-  if (!AsyncResult.isSuccess(result)) return undefined;
+  if (!AsyncResult.isSuccess(result) || !isCurrent()) return undefined;
   useComputerStateStore.getState().upsertThreadState(ref.environmentId, result.value);
   return result.value.controlGeneration;
 }

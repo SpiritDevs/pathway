@@ -130,13 +130,6 @@ export function useThreadComputerAvailability(ref: ScopedThreadRef | null) {
   );
 }
 
-/** Observe revocation only, without rerendering the composer for desktop actions. */
-export function useThreadComputerControlGeneration(ref: ScopedThreadRef | null) {
-  return useComputerStateStore((state) =>
-    ref ? state.threadStates[scopedThreadKey(ref)]?.controlGeneration : undefined,
-  );
-}
-
 /** The environment's host-wide Escape latch. */
 export function useComputerInputStopped(environmentId: EnvironmentId | null) {
   return useComputerStateStore((state) =>
