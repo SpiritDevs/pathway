@@ -354,7 +354,7 @@ extension PathwayAgentThreadModel {
         isSending = true
         defer { isSending = false }
         let text = "PLEASE IMPLEMENT THIS PLAN:\n" + markdown.trimmingCharacters(in: .whitespacesAndNewlines)
-        let computer = await computerFields(for: text)
+        let computer = await computerFields(for: text, queued: threadQueue != nil)
         if let threadQueue {
             // A plan has one implementation command, including after navigation or restart.
             let identity = try JSONEncoder().encode([thread.companyId, threadID, planID])
@@ -441,7 +441,7 @@ extension PathwayAgentThreadModel {
                 var command = PathwayAgentThreadCommands.dispatchMessage(threadID: transaction.target,
                     text: text, hasActiveRun: false, identifier: transaction.messageID).objectValue ?? [:]
                 command["modelSelection"] = try Self.json(transaction.modelSelection)
-                command.merge(computerNewChatFields(for: text, launches: false)) { $1 }
+                command.merge(computerNewChatFields(for: text, launches: false, queued: true)) { $1 }
                 submission = .object(["kind": .string("message"), "input": .object(command),
                     "runtimeMode": .string(transaction.runtimeMode), "interactionMode": .string(transaction.interactionMode)])
             } else {
@@ -456,7 +456,7 @@ extension PathwayAgentThreadModel {
                     "modelSelection": try Self.json(transaction.modelSelection), "runtimeMode": .string(transaction.runtimeMode),
                     "interactionMode": .string(transaction.interactionMode), "locations": .array([.string("agents")]),
                     "workspaceStrategy": .object(workspace), "initialMessage": .object(["messageId": .string(transaction.messageID),
-                        "text": .string(text), "attachments": .array([])].merging(computerNewChatFields(for: text, launches: true)) { $1 })])])
+                        "text": .string(text), "attachments": .array([])].merging(computerNewChatFields(for: text, launches: true, queued: true)) { $1 })])])
             }
             try await threadQueue.enqueue(companyID: thread.companyId, environmentID: environment.environment.environmentId,
                 threadID: transaction.target, submission: submission, files: files)
