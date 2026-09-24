@@ -17,6 +17,7 @@ const hooks = vi.hoisted(() => ({
   servers: {} as Record<string, { os: string; computer: boolean } | undefined>,
   statuses: {} as Record<string, ComputerStatusResult | undefined>,
   useComputerEnvironmentEvents: vi.fn(),
+  useComputerEnvironmentLifetime: vi.fn(),
 }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (environmentId: string) => {
@@ -39,6 +40,7 @@ vi.mock("~/computerStateStore", () => ({
 }));
 vi.mock("~/hooks/useComputerEventBridge", () => ({
   useComputerEnvironmentEvents: hooks.useComputerEnvironmentEvents,
+  useComputerEnvironmentLifetime: hooks.useComputerEnvironmentLifetime,
   useComputerEventBridge: () => undefined,
 }));
 vi.mock("~/state/environments", () => ({
@@ -66,4 +68,8 @@ it("subscribes to Computer events only where the server is known to serve them",
   };
   renderToStaticMarkup(<ComputerEventBridges />);
   expect(hooks.useComputerEnvironmentEvents.mock.calls).toEqual([[MAC]]);
+  // Every catalog environment's state outlives its pipe until it leaves.
+  expect(hooks.useComputerEnvironmentLifetime.mock.calls).toEqual(
+    [MAC, OLD_MAC, UNSUPPORTED_LINUX, WINDOWS, PENDING].map((environmentId) => [environmentId]),
+  );
 });
