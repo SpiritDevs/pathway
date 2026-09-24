@@ -85,8 +85,8 @@ struct AgentThreadComputerWatch: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .task(id: computer != nil && model.supportsComputer && scenePhase == .active) {
-                guard let computer, model.supportsComputer, scenePhase == .active else { return }
+            .task(id: computer != nil && model.servesComputer && scenePhase == .active) {
+                guard let computer, model.servesComputer, scenePhase == .active else { return }
                 await computer.watch()
             }
             .onChange(of: computer?.session.phase, initial: true) { _, phase in

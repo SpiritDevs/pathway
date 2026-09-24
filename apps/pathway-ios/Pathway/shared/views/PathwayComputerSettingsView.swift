@@ -97,12 +97,14 @@ struct PathwayComputerSettingsView: View {
             var settings: JSONValue?, status: String?, canWrite = false
             if supports {
                 settings = try await client.run("server.getSettings")
-                status = (try? await client.run("computer.getStatus")).map(PathwayComputerPolicy.summary)
+                if PathwayComputerAccess.servesComputer(serverConfig: config) {
+                    status = (try? await client.run("computer.getStatus")).map(PathwayComputerPolicy.summary)
+                }
                 canWrite = (try? await appModel.connect?.prepare(environment: client.environment))?.scopes.contains("access:write") == true
             }
             guard id == loadID, !Task.isCancelled else { return }
             supported = supports
-            policyReadable = PathwayComputerAccess.capability("computerPolicy", in: config)
+            policyReadable = PathwayComputerAccess.servesComputer(serverConfig: config)
             if let settings { apply(settings) }
             self.status = status
             self.canWrite = canWrite
