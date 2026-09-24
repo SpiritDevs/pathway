@@ -254,6 +254,30 @@ export function resolveComputerScopeAccess(input: {
   return input.session.scopes.includes(input.scope) ? "granted" : "denied";
 }
 
+/**
+ * What fills the permissions slot. The desktop's own host shows its grants
+ * once the helper answers, or the reason it cannot run (for example, Computer
+ * not enabled on this build). A client without the desktop bridge is pointed
+ * at the Mac host.
+ */
+export type ComputerPermissionsView =
+  | { readonly kind: "grants"; readonly state: DesktopComputerHelperState }
+  | { readonly kind: "unavailable"; readonly message: string }
+  | { readonly kind: "host-note" }
+  | null;
+
+export function resolveComputerPermissionsView(input: {
+  readonly hasNativeBridge: boolean;
+  readonly nativeState: DesktopComputerHelperState | null;
+  readonly platform: string | undefined;
+}): ComputerPermissionsView {
+  const { nativeState } = input;
+  if (!input.hasNativeBridge) return input.platform === "darwin" ? { kind: "host-note" } : null;
+  if (nativeState === null) return null;
+  if (nativeState.supported) return { kind: "grants", state: nativeState };
+  return nativeState.message ? { kind: "unavailable", message: nativeState.message } : null;
+}
+
 // ── Environments ───────────────────────────────────────────────────────
 
 const COMPUTER_CAPABLE_PLATFORMS: ReadonlySet<string> = new Set(["darwin", "linux"]);

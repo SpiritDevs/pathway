@@ -278,3 +278,12 @@ export function ComputerHostPermissionNote() {
     </SettingsSection>
   );
 }
+
+/** The desktop's own host cannot run Computer; its message says why. */
+export function ComputerHostUnavailableNote({ message }: { readonly message: string }) {
+  return (
+    <SettingsSection title="Desktop permissions">
+      <SettingsRow title="Unavailable on this desktop" description={message} />
+    </SettingsSection>
+  );
+}
