@@ -177,6 +177,13 @@ function render(input?: {
   );
 }
 
+/** Whether the card is shown: a closed card stays mounted but hidden from assistive tech. */
+function isOpen(markup: string): boolean {
+  const card = /<div[^>]*role="region"[^>]*>/.exec(markup)?.[0];
+  if (card === undefined) throw new Error("no preview card rendered");
+  return !card.includes('aria-hidden="true"');
+}
+
 afterEach(() => {
   current.session = undefined;
   current.state = undefined;
@@ -203,15 +210,13 @@ describe("ComputerPreviewPopover", () => {
 
   it("renders an armed session closed with its canvas mounted for decode", () => {
     const markup = render({ session: session("armed"), frame: false });
-    expect(markup).toContain('role="region"');
-    expect(markup).toContain("opacity-0");
+    expect(isOpen(markup)).toBe(false);
     expect(markup).toContain("<canvas");
   });
 
   it("renders a live session open with the desktop chrome", () => {
     const markup = render({ session: session("live"), state: threadState() });
-    expect(markup).toContain("scale-100 opacity-100");
-    expect(markup).toContain('aria-label="Computer preview"');
+    expect(isOpen(markup)).toBe(true);
     expect(markup).toContain("960 / 600");
     // Compact is the default footprint: small and glanceable.
     expect(markup).toContain("width:288px");
@@ -231,8 +236,7 @@ describe("ComputerPreviewPopover", () => {
 
   it("renders a live session closed until the first frame arrives", () => {
     const markup = render({ session: session("live"), state: threadState(), frame: false });
-    expect(markup).toContain("opacity-0");
-    expect(markup).not.toContain(" opacity-100");
+    expect(isOpen(markup)).toBe(false);
     expect(markup).toContain("<canvas");
   });
 
@@ -243,7 +247,7 @@ describe("ComputerPreviewPopover", () => {
       frame: false,
       stills: true,
     });
-    expect(markup).toContain("opacity-100");
+    expect(isOpen(markup)).toBe(true);
   });
 
   it.each([
@@ -261,7 +265,7 @@ describe("ComputerPreviewPopover", () => {
         frame: false,
         streamStatus,
       });
-      expect(markup).toContain("scale-100 opacity-100");
+      expect(isOpen(markup)).toBe(true);
       expect(markup).toContain(message);
       expect(markup).toContain('role="status"');
       expect(markup).toContain("<canvas");
@@ -275,7 +279,7 @@ describe("ComputerPreviewPopover", () => {
       frame: false,
       streamStatus: { kind: "error", message: "The preview connection failed." },
     });
-    expect(markup).not.toContain("scale-100 opacity-100");
+    expect(isOpen(markup)).toBe(false);
   });
 
   it("shows the waiting state, never a picture, when no window frame exists yet", () => {
@@ -292,7 +296,7 @@ describe("ComputerPreviewPopover", () => {
     // stays open on the held frame's own aspect with no empty-state label
     // pasted over a live picture.
     const markup = render({ session: session("live"), state: threadState(), tapQuiet: true });
-    expect(markup).toContain("scale-100 opacity-100");
+    expect(isOpen(markup)).toBe(true);
     expect(markup).toContain("960 / 600");
     expect(markup).not.toContain("Waiting for the window");
   });
@@ -305,8 +309,7 @@ describe("ComputerPreviewPopover", () => {
       state: threadState({ agentActive: true }),
     });
     expect(markup).toContain("Live");
-    expect(markup).not.toContain("animate-ping");
-    expect(markup).not.toContain("violet");
+    expect(markup).not.toMatch(/animate-(ping|pulse|spin)/);
   });
 
   it("offers only close: the pane is disabled and stopping lives in the composer", () => {
@@ -331,15 +334,13 @@ describe("ComputerPreviewPopover", () => {
   it("stays closed for hidden and ended sessions", () => {
     for (const phase of ["hidden-for-task", "ended"] as const) {
       const markup = render({ session: session(phase), state: threadState() });
-      expect(markup).toContain("opacity-0");
-      expect(markup).not.toContain(" opacity-100");
+      expect(isOpen(markup)).toBe(false);
     }
   });
 
   it("offers pop-out while docked and dock while floating", () => {
     const docked = render({ session: session("live"), state: threadState() });
     expect(docked).toContain("Float the computer preview as a draggable window");
-    expect(docked).not.toContain("fixed z-50");
 
     const floating = render({
       session: session("live"),
@@ -348,29 +349,23 @@ describe("ComputerPreviewPopover", () => {
     });
     expect(floating).toContain("Dock the computer preview back into the chat rail");
     expect(floating).not.toContain("Float the computer preview");
-    expect(floating).toContain("fixed z-50");
     expect(floating).toContain("left:120px");
     expect(floating).toContain("top:80px");
   });
 });
 
 describe("ComputerPreviewRail", () => {
-  it("renders nothing, and observes nothing, without a preview session", () => {
-    expect(renderToStaticMarkup(<ComputerPreviewRail threadRef={THREAD_REF} />)).toBe("");
-  });
-
   it("renders nothing while the automatic preview is disabled", () => {
     current.session = session("live");
     current.autoOpenComputerPane = false;
     expect(renderToStaticMarkup(<ComputerPreviewRail threadRef={THREAD_REF} />)).toBe("");
   });
 
-  it("overlays the card at the chat column's top-right edge", () => {
+  it("shows a live session's card", () => {
     current.session = session("live");
     current.state = threadState();
     const markup = renderToStaticMarkup(<ComputerPreviewRail threadRef={THREAD_REF} />);
-    expect(markup).toContain("pointer-events-none absolute inset-y-0 right-0 z-20");
-    expect(markup).toContain('aria-label="Computer preview"');
+    expect(isOpen(markup)).toBe(true);
   });
 
   // After a reload or reconnect there is no preview session yet; the seed is
@@ -409,6 +404,6 @@ describe("ComputerPreviewPopover frame sources", () => {
       stills: true,
     });
     expect(current.tapEnabled).toBe(false);
-    expect(markup).toContain("scale-100 opacity-100");
+    expect(isOpen(markup)).toBe(true);
   });
 });

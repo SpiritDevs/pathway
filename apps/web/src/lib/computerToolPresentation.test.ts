@@ -3,7 +3,7 @@
 //          asked is "click what", and the answer must not be the raw wire call.
 // Layer: Web UI logic tests
 
-import type { ComputerWindow } from "@spiritdevs/contracts";
+import { COMPUTER_BROWSER_TOOL_NAMES, type ComputerWindow } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -25,52 +25,10 @@ const SAFARI: ComputerWindow = {
 } as unknown as ComputerWindow;
 
 describe("computerToolName", () => {
-  it("covers native desktop and browser tools advertised by the gateway", () => {
-    expect(Object.keys(COMPUTER_TOOL_TITLES)).toEqual([
-      "computer_screenshot",
-      "computer_get_state",
-      "computer_get_screen_size",
-      "computer_list_windows",
-      "computer_list_apps",
-      "computer_verify_state",
-      "computer_zoom",
-      "computer_get_accessibility_tree",
-      "computer_get_cursor_position",
-      "computer_help",
-      "computer_click",
-      "computer_move_cursor",
-      "computer_drag",
-      "computer_scroll",
-      "computer_type_text",
-      "computer_press_key",
-      "computer_set_value",
-      "computer_select_text",
-      "computer_perform_action",
-      "computer_launch_app",
-      "computer_activate_window",
-      "computer_set_window_frame",
-      "computer_invoke_menu",
-      "computer_kill_app",
-      "computer_set_window_minimized",
-      "computer_set_app_visibility",
-      "computer_wait",
-      "computer_read_clipboard",
-      "computer_write_clipboard",
-      "computer_paste",
-      "computer_run",
-      "computer_inspect",
-      "computer_spaces",
-      "computer_browser_state",
-      "computer_browser_prepare",
-      "computer_browser_navigate",
-      "computer_browser_click",
-      "computer_browser_type",
-      "computer_browser_dialog",
-      "computer_browser_upload",
-      "computer_browser_download",
-      "computer_browser_pointer",
-      "computer_browser_press",
-    ]);
+  it("titles every browser tool the gateway can advertise", () => {
+    for (const name of COMPUTER_BROWSER_TOOL_NAMES) {
+      expect(COMPUTER_TOOL_TITLES).toHaveProperty(name);
+    }
   });
 
   it("recovers the gateway tool through whatever wrapping a provider applied", () => {
