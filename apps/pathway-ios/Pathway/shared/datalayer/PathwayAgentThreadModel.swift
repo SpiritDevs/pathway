@@ -454,6 +454,8 @@ final class PathwayAgentThreadModel {
     }
 
     func send(mode: String = "queue") async {
+        // Keep the draft: the command still needs its task.
+        if PathwayComputerInvocation.isBare(draft), draftAttachments.isEmpty { actionError = PathwayComputerInvocation.bareCommandMessage; return }
         if let threadQueue {
             let retriesDirectSend = preparedSend?.attachmentsPrepared == true
                 && preparedSend?.text == draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -528,9 +530,10 @@ final class PathwayAgentThreadModel {
                 await persistDraftNow()
             }
             guard let prepared = preparedSend else { return }
+            let computer = await computerFields(for: prepared.text)
             try await dispatch("message.dispatch", fields: ["commandId": .string(prepared.messageID), "createdBy": .string("user"), "creationSource": .string("mobile"),
                 "messageId": .string(prepared.messageID), "text": .string(prepared.text), "attachments": .array(prepared.attachments), "dispatchMode": prepared.dispatchMode,
-                "modelSelection": try Self.json(currentModelSelection), "runtimeMode": .string(runtimeMode), "interactionMode": .string(interactionMode)])
+                "modelSelection": try Self.json(currentModelSelection), "runtimeMode": .string(runtimeMode), "interactionMode": .string(interactionMode)].merging(computer) { $1 })
             if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
             preparedSend = nil
             let sentIDs = Set(selected.map(\.id))
@@ -558,6 +561,7 @@ final class PathwayAgentThreadModel {
             var command = PathwayAgentThreadCommands.dispatchMessage(threadID: threadID, text: text,
                 hasActiveRun: true, identifier: preparedSend.messageID).objectValue ?? [:]
             command["modelSelection"] = try Self.json(currentModelSelection)
+            command.merge(await computerFields(for: text)) { $1 }
             if mode == "steer", let activeRunID {
                 command["dispatchMode"] = .object(["type": .string("steer_active"), "targetRunId": .string(activeRunID)])
             }
@@ -607,8 +611,10 @@ final class PathwayAgentThreadModel {
         guard activeRunID == nil, canEdit(item), let messageID = item.messageID, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw PathwayThreadConversationError.message("Only the latest message can be edited after the agent stops.")
         }
+        let computer = await computerFields(for: text)
         try await dispatch("message.edit-and-restart", fields: ["createdBy": .string("user"), "creationSource": .string("mobile"),
-            "messageId": .string(messageID), "replacementMessageId": .string(UUID().uuidString), "text": .string(Self.preservingMessageContext(original: item.text ?? "", edited: text))])
+            "messageId": .string(messageID), "replacementMessageId": .string(UUID().uuidString),
+            "text": .string(Self.preservingMessageContext(original: item.text ?? "", edited: text))].merging(computer) { $1 })
     }
     func fork(from item: PathwayTimelineItem? = nil) async throws -> String {
         guard !thread.shell.isTemporary else {

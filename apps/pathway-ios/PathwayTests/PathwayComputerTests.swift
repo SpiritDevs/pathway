@@ -154,6 +154,56 @@ struct PathwayComputerTests {
         #expect(!model.computerAccessDenied)
     }
 
+    @Test func everySendCarriesTheComputerRule() async {
+        let model = makeModel { _, _ in .object([:]) }
+        model.serverConfig = ["environment": .object(["platform": .object(["os": .string("darwin")])])]
+        #expect(await model.computerFields(for: "hello", setting: false).isEmpty)
+        #expect(await model.computerFields(for: "/computer-use open Notes", setting: false) == ["computerControlGeneration": .number(0)])
+        model.computerControlGeneration = 5
+        #expect(await model.computerFields(for: "hello", setting: true)
+            == ["computerControlGeneration": .number(5), "enableComputerControl": .bool(true)])
+        model.computerAccessPolicy = "admins-only"
+        model.computerSessionScopes = ["orchestration:operate"]
+        #expect(await model.computerFields(for: "hello", setting: true).isEmpty)
+    }
+
+    @Test func aNewChatCarriesIntentOnlyToServersThatReadIt() {
+        let request = "/computer-use open Notes"
+        #expect(PathwayComputerInvocation.newChatFields(text: request, controlEnabled: false, launches: false, serverConfig: [:])
+            == ["computerControlGeneration": .number(0)])
+        #expect(PathwayComputerInvocation.newChatFields(text: request, controlEnabled: false, launches: true, serverConfig: [:]).isEmpty)
+        let policy: [String: JSONValue] = ["environment": .object(["capabilities": .object(["computerPolicy": .bool(true)])])]
+        #expect(PathwayComputerInvocation.newChatFields(text: "hello", controlEnabled: true, launches: true, serverConfig: policy)
+            == ["computerControlGeneration": .number(0), "enableComputerControl": .bool(true)])
+    }
+
+    @Test func aBareCommandKeepsTheDraft() async {
+        var sent = 0
+        let model = makeModel { _, _ in sent += 1; return .object([:]) }
+        model.draft = "/computer-use  "
+        await model.send()
+        #expect(sent == 0)
+        #expect(model.draft == "/computer-use  ")
+        #expect(model.actionError == PathwayComputerInvocation.bareCommandMessage)
+        #expect(!PathwayComputerInvocation.isBare("/computer-use open Notes"))
+        #expect(!PathwayComputerInvocation.isBare("hello"))
+    }
+
+    @Test func effortHintOffersMediumOnlyWhileEffortIsAtItsDefault() {
+        func provider(driver: String = "claudeAgent", defaultEffort: String = "high", choices: [String] = ["low", "medium", "high"]) -> [PathwayServerProvider] {
+            let effort = PathwayProviderOptionDescriptor(id: "effort", label: "Effort", type: "select",
+                choices: choices.map { .init(id: $0, label: $0, isDefault: $0 == defaultEffort) }, currentValue: nil)
+            return [.init(id: "claude", driver: driver, name: "Claude", models: [.init(id: "opus", name: "Opus", isDefault: true, optionDescriptors: [effort])], showsInteractionMode: true)]
+        }
+        let untouched = PathwayModelSelection(instanceId: "claude", model: "opus", options: nil)
+        #expect(PathwayComputerEffortHint.mediumSelection(for: untouched, providers: provider())?.options == [.init(id: "effort", value: .string("medium"))])
+        let chosen = PathwayModelSelection(instanceId: "claude", model: "opus", options: [.init(id: "effort", value: .string("low"))])
+        #expect(PathwayComputerEffortHint.mediumSelection(for: chosen, providers: provider()) == nil)
+        #expect(PathwayComputerEffortHint.mediumSelection(for: untouched, providers: provider(driver: "codex")) == nil)
+        #expect(PathwayComputerEffortHint.mediumSelection(for: untouched, providers: provider(defaultEffort: "medium")) == nil)
+        #expect(PathwayComputerEffortHint.mediumSelection(for: untouched, providers: provider(choices: ["low", "high"])) == nil)
+    }
+
     private func makeModel(request: @escaping PathwayAgentThreadModel.Request) -> PathwayAgentThreadModel {
         let thread = makeAgentThread()
         let environment = PathwayCompanyEnvironment(companyId: thread.companyId, environment: PathwayEnvironment(id: "environment", environmentId: thread.environmentId,
