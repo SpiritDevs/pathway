@@ -1,0 +1,66 @@
+# Builds the macOS Computer Use helper and runs its native tests. Release
+# builds the helper for packaging; this catches a broken Swift build or a
+# failing native test on the pull request that caused it.
+name: Pathway Helper
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/pathway-helper.yml"
+      - "native/pathway-helper/**"
+      - "scripts/build-pathway-helper.ts"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/pathway-helper.yml"
+      - "native/pathway-helper/**"
+      - "scripts/build-pathway-helper.ts"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pathway-helper-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  helper:
+    name: Build and test
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@spiritdevs/scripts...
+
+      - name: Run native tests
+        run: node scripts/build-pathway-helper.ts --native-tests
+
+      # The same universal release build packaging ships, written outside the
+      # checkout. The identifier check guards the linked Info.plist, which keeps
+      # the signing identity stable through electron-builder's re-sign.
+      - name: Build universal release helper
+        run: |
+          set -euo pipefail
+          helper="$RUNNER_TEMP/pathway-helper/pathway-helper"
+          node scripts/build-pathway-helper.ts --arch universal --release --output "$helper"
+          test "$(lipo -archs "$helper")" = "x86_64 arm64"
+          codesign -dv "$helper" 2>&1 | grep -qx "Identifier=com.spiritdevs.pathway.helper"
+          status=0
+          "$helper" --unknown-mode || status=$?
+          test "$status" -eq 64
