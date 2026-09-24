@@ -7743,19 +7743,26 @@ function ChatViewContent(props: ChatViewProps) {
     );
     const shouldQueueBehindActiveRun = phase === "running" && dispatchMode === "queue";
     const computerControlSequenceForSend = computerControlChangeSequence.current;
+    // Another thread's control epoch never applies to a new chat.
+    const generationForSend = sendsToCurrentThread
+      ? await readComputerControlGenerationForSend(appAtomRegistry, {
+          ref: isServerThread ? activeThreadRef : null,
+          messageText: promptForSend,
+          computerControlEnabled: computerControlSetting,
+          draftGeneration: useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+            ?.computerControlGeneration,
+        })
+      : undefined;
+    // The environment left or reconnected mid-read; the composer still holds the message.
+    if (generationForSend === "superseded") {
+      sendInFlightRef.current = false;
+      resetLocalDispatch();
+      return;
+    }
     const computerControlForSend = resolveComputerControlForSend({
       messageText: promptForSend,
       computerControlEnabled: computerControlSetting,
-      // Another thread's control epoch never applies to a new chat.
-      generation: sendsToCurrentThread
-        ? await readComputerControlGenerationForSend(appAtomRegistry, {
-            ref: isServerThread ? activeThreadRef : null,
-            messageText: promptForSend,
-            computerControlEnabled: computerControlSetting,
-            draftGeneration: useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
-              ?.computerControlGeneration,
-          })
-        : undefined,
+      generation: generationForSend,
     });
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
@@ -8548,15 +8555,20 @@ function ChatViewContent(props: ChatViewProps) {
       sendInFlightRef.current = true;
       setThreadError(activeThread.id, null);
       const computerControlSequenceForEdit = computerControlChangeSequence.current;
+      const generationForEdit = await readComputerControlGenerationForSend(appAtomRegistry, {
+        ref: activeThreadRef,
+        messageText: text,
+        computerControlEnabled: computerControlSetting,
+        draftGeneration: undefined,
+      });
+      if (generationForEdit === "superseded") {
+        sendInFlightRef.current = false;
+        return false;
+      }
       const computerControlForEdit = resolveComputerControlForSend({
         messageText: text,
         computerControlEnabled: computerControlSetting,
-        generation: await readComputerControlGenerationForSend(appAtomRegistry, {
-          ref: activeThreadRef,
-          messageText: text,
-          computerControlEnabled: computerControlSetting,
-          draftGeneration: undefined,
-        }),
+        generation: generationForEdit,
       });
       const result = await editAndRestartMessage({
         environmentId,
@@ -8939,15 +8951,20 @@ function ChatViewContent(props: ChatViewProps) {
     const threadIdForSend = activeThread.id;
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
+    const generationForFollowUp = await readComputerControlGenerationForSend(appAtomRegistry, {
+      ref: isServerThread ? activeThreadRef : null,
+      messageText: trimmed,
+      computerControlEnabled: computerControlSetting,
+      draftGeneration: undefined,
+    });
+    if (generationForFollowUp === "superseded") {
+      sendInFlightRef.current = false;
+      return;
+    }
     const computerControlForFollowUp = resolveComputerControlForSend({
       messageText: trimmed,
       computerControlEnabled: computerControlSetting,
-      generation: await readComputerControlGenerationForSend(appAtomRegistry, {
-        ref: isServerThread ? activeThreadRef : null,
-        messageText: trimmed,
-        computerControlEnabled: computerControlSetting,
-        draftGeneration: undefined,
-      }),
+      generation: generationForFollowUp,
     });
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
