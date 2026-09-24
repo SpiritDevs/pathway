@@ -224,6 +224,23 @@ struct PathwayComputerDeliveryTests {
         #expect(calls.isEmpty)
     }
 
+    @Test func aBareCommandNeverReplacesAQueuedMessageUnlessItsAttachmentsAreTheTask() async throws {
+        let model = makeModel { method, _ in Issue.record("Unexpected \(method)"); return .object([:]) }
+        model.threadQueue = PathwayThreadQueueModel(request: { _, _, _ in .object([:]) }, subscribe: { _, _ in AsyncThrowingStream { _ in } })
+        model.cloudQueuedThread = PathwayQueuedThread(companyID: "company-1", fields: ["threadId": .string(model.threadID), "environmentId": .string("environment")])
+        func queued(_ id: String, attachments: [JSONValue]) -> JSONValue {
+            .object(["commandId": .string(id), "state": .string("queued"), "acceptedAt": .null, "submission": .object([
+                "kind": .string("message"), "input": .object(["messageId": .string(id), "text": .string("Open Calculator"), "attachments": .array(attachments)])])])
+        }
+        model.cloudQueueMessages = [queued("plain", attachments: []),
+                                    queued("attached", attachments: [.object(["id": .string("image"), "type": .string("image"), "name": .string("task.png")])])]
+        let plain = try #require(model.cloudPendingItems.first { $0.messageID == "plain" })
+        let attached = try #require(model.cloudPendingItems.first { $0.messageID == "attached" })
+        #expect(await failure { try await model.mutateCloudQueueMessage(plain, action: "edit", text: " /computer-use ") } == PathwayComputerInvocation.bareCommandMessage)
+        #expect(await failure { try await model.mutateCloudQueueMessage(attached, action: "edit", text: "/computer-use") } != PathwayComputerInvocation.bareCommandMessage)
+        #expect(await failure { try await model.mutateCloudQueueMessage(plain, action: "edit", text: "/computer-use open Calculator") } != PathwayComputerInvocation.bareCommandMessage)
+    }
+
     @Test func onlyTheCurrentConnectionConfirmsAGeneration() throws {
         var session = PathwayThreadComputerSession(threadID: "thread")
         func state(version: Int, generation: Int) throws -> PathwayThreadComputerState {
