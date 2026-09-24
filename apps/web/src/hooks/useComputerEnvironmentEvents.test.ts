@@ -1,11 +1,17 @@
 // One environment's Computer event pipe across its connection lifecycle: a
 // reconnect keeps what the user sees, leaving the catalog clears everything,
-// and a status answer requested before a clear never lands after it. The hook
-// runs for real under a slot-tracked React harness; the connection state and
-// the RPC command are stubbed.
+// and a status answer requested before a clear never lands after it. The root
+// bridge applies the desktop's local grant pushes to its own primary only. The
+// hooks run for real under a slot-tracked React harness; the connection state,
+// the primary environment and the RPC command are stubbed.
 
 import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
-import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  type ComputerStatusResult,
+  type DesktopComputerHelperState,
+} from "@spiritdevs/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -20,6 +26,7 @@ const harness = vi.hoisted(() => {
   let cursor = 0;
   return {
     connection: { phase: "connected", generation: 1 } as { phase: string; generation: number },
+    primary: null as string | null,
     registry: { subscribe: () => () => undefined },
     runAtomCommand: vi.fn(),
     beginRender() {
@@ -67,12 +74,16 @@ vi.mock("~/connection/catalog", () => ({ environmentCatalog: { stateAtom: () => 
 vi.mock("~/state/computer", () => ({
   computerEnvironment: { events: () => ({}), refreshStatus: {} },
 }));
-vi.mock("~/state/environments", () => ({ usePrimaryEnvironmentId: () => null }));
+vi.mock("~/state/environments", () => ({ usePrimaryEnvironmentId: () => harness.primary }));
 
 const { useComputerPreviewStore } = await import("../computerPreviewStore");
 const { useComputerStateStore } = await import("../computerStateStore");
-const { refreshComputerStatus, subscribeComputerPreviewSessions, useComputerEnvironmentEvents } =
-  await import("./useComputerEventBridge");
+const {
+  refreshComputerStatus,
+  subscribeComputerPreviewSessions,
+  useComputerEnvironmentEvents,
+  useComputerEventBridge,
+} = await import("./useComputerEventBridge");
 
 const ENV = EnvironmentId.make("environment-1");
 const THREAD = ThreadId.make("thread-1");
@@ -93,12 +104,17 @@ function driving(version: number, agentActive = true) {
   });
 }
 
+const REMOTE_ENV = EnvironmentId.make("environment-remote");
+
 afterEach(() => {
   harness.unmount();
   harness.connection = { phase: "connected", generation: 1 };
+  harness.primary = null;
   harness.runAtomCommand.mockReset();
   useComputerStateStore.getState().clearEnvironment(ENV);
+  useComputerStateStore.getState().clearEnvironment(REMOTE_ENV);
   useComputerPreviewStore.getState().clear();
+  vi.unstubAllGlobals();
 });
 
 describe("useComputerEnvironmentEvents", () => {
@@ -159,5 +175,69 @@ describe("refreshComputerStatus", () => {
     // The bridge's `.then` was queued first, so it has run once this resumes.
     await pending;
     expect(useComputerStateStore.getState().statusByEnvironment[ENV]).toBeUndefined();
+  });
+});
+
+describe("useComputerEventBridge", () => {
+  function status(): ComputerStatusResult {
+    const { computerId, availability, capabilities, health } = driving(1);
+    return { computerId, availability, capabilities, health };
+  }
+
+  function grantState(
+    overrides: Partial<DesktopComputerHelperState> = {},
+  ): DesktopComputerHelperState {
+    return {
+      supported: true,
+      status: "ready",
+      message: null,
+      appDisplayName: "Pathway",
+      accessibilityPermission: "granted",
+      inputMonitoringPermission: "granted",
+      screenRecordingPermission: "granted",
+      ...overrides,
+    };
+  }
+
+  /** Mounts the root bridge in a desktop app whose primary is `primary`. */
+  function mountBridge(primary: EnvironmentId | null) {
+    harness.primary = primary;
+    const onState = vi.fn<(listener: (state: DesktopComputerHelperState) => void) => () => void>(
+      () => () => undefined,
+    );
+    vi.stubGlobal("window", {
+      desktopBridge: { computer: { onState, onError: () => () => undefined } },
+    });
+    harness.beginRender();
+    useComputerEventBridge();
+    return {
+      onState,
+      push: (state: DesktopComputerHelperState) => onState.mock.calls[0]?.[0](state),
+    };
+  }
+
+  it("does not apply local grant pushes to a remote Computer host", () => {
+    harness.runAtomCommand.mockReturnValue(new Promise(() => undefined));
+    useComputerStateStore.getState().setStatus(REMOTE_ENV, status());
+    const bridge = mountBridge(ENV);
+
+    // The primary has no status yet, so nothing is asked; the remote host's
+    // grants are not this Mac's and are never refreshed from its pushes.
+    bridge.push(grantState({ accessibilityPermission: "denied" }));
+    expect(harness.runAtomCommand).not.toHaveBeenCalled();
+
+    useComputerStateStore.getState().setStatus(ENV, status());
+    bridge.push(grantState());
+    expect(harness.runAtomCommand).toHaveBeenCalledExactlyOnceWith(
+      harness.registry,
+      expect.anything(),
+      { environmentId: ENV, input: {} },
+      { reportFailure: false },
+    );
+  });
+
+  it("does not listen for local grants without a primary environment", () => {
+    const bridge = mountBridge(null);
+    expect(bridge.onState).not.toHaveBeenCalled();
   });
 });
