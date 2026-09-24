@@ -939,14 +939,13 @@ describe("Computer transcript entries", () => {
     const [entry] = entriesOf([
       dynamicTool("shot", "mcp__pathway__computer_screenshot", {}, "Dynamic tool call"),
     ]);
-    expect(entry?.kind).toBe("work");
-    if (entry?.kind === "work") {
-      expect(entry.entry.toolTitle).toBe("Take a screenshot");
-      expect(entry.entry.label).toBe("Take a screenshot");
-    }
+    expect(entry).toMatchObject({
+      kind: "work",
+      entry: { toolTitle: "Take a screenshot", label: "Take a screenshot" },
+    });
     const [titled] = entriesOf([
       dynamicTool("titled", "mcp__pathway__computer_screenshot", {}, "Capture the login form"),
     ]);
-    if (titled?.kind === "work") expect(titled.entry.toolTitle).toBe("Capture the login form");
+    expect(titled).toMatchObject({ kind: "work", entry: { toolTitle: "Capture the login form" } });
   });
 });
