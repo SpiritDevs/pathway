@@ -214,11 +214,13 @@ export function useConnectedGeneration(environmentId: EnvironmentId | null): num
 }
 
 /**
- * One environment's event pipe. A new connection generation may be a
- * restarted server whose thread-state versions start over, which the
- * version gate would reject as stragglers, so the environment's thread
- * states are rebased for the seeds and pushes to replace. Previews, their
- * Hide, float and layout survive a reconnect; leaving the catalog clears all.
+ * One environment's event pipe. The next connection may reach a restarted
+ * server whose thread-state versions start over, which the version gate
+ * would reject as stragglers, so the environment's thread states are rebased
+ * for the seeds and pushes to replace as soon as the connection drops (or,
+ * if the drop was never rendered, when the new generation shows up). That
+ * also fences answers the old connection owed. Previews, their Hide, float
+ * and layout survive a reconnect; leaving the catalog clears all.
  */
 export function useComputerEnvironmentEvents(environmentId: EnvironmentId): void {
   const registry = useContext(RegistryContext);
@@ -226,7 +228,6 @@ export function useComputerEnvironmentEvents(environmentId: EnvironmentId): void
   const seenGeneration = useRef<number | null>(null);
 
   useEffect(() => {
-    if (generation === null) return;
     if (seenGeneration.current !== null && seenGeneration.current !== generation) {
       useComputerStateStore.getState().rebaseEnvironment(environmentId);
     }

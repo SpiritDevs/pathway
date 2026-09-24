@@ -19,7 +19,11 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
-import { useCachedComputerStatus, useComputerStateStore } from "~/computerStateStore";
+import {
+  computerEnvironmentFence,
+  useCachedComputerStatus,
+  useComputerStateStore,
+} from "~/computerStateStore";
 import { useComputerStatusRefresh } from "~/hooks/useComputerStatusRefresh";
 import { useProvisionComputer } from "~/hooks/useProvisionComputer";
 import {
@@ -172,7 +176,9 @@ export function ConnectedComputerSetupRequiredCard({ environmentId, ...props }: 
   });
   const [statusError, setStatusError] = useState<string | undefined>(undefined);
   const recheck = useCallback(() => {
+    const isCurrent = computerEnvironmentFence(environmentId);
     void refreshStatus({ environmentId, input: {} }).then((outcome) => {
+      if (!isCurrent()) return;
       if (outcome._tag === "Success") {
         useComputerStateStore.getState().setStatus(environmentId, outcome.value);
         setStatusError(undefined);
