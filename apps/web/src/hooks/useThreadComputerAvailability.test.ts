@@ -1,32 +1,66 @@
-import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
+// The composer's availability subscription through the real hook and the real
+// zustand binding. zustand calls React from outside the module graph, so React's
+// own hook dispatcher is pointed at a slot-tracked harness that re-renders the
+// way React does: when the store changes and the snapshot is a new value.
+
 import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
+import React from "react";
 import { afterEach, expect, it } from "vite-plus/test";
-import { shallow } from "zustand/shallow";
 
 import { threadComputerState } from "~/components/computer/computerTestFixtures";
-import { useComputerStateStore } from "../computerStateStore";
+import { useComputerStateStore, useThreadComputerAvailability } from "../computerStateStore";
 
 const ENV = EnvironmentId.make("environment-1");
 const ref = { environmentId: ENV, threadId: ThreadId.make("availability-test") };
 
+const internals = (
+  React as unknown as {
+    __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE: { H: unknown };
+  }
+).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+
+/** Mounts `hook` and re-renders it whenever its store snapshot changes identity. */
+function mount<T>(hook: () => T) {
+  const slots: Array<{ current: unknown }> = [];
+  let cursor = 0;
+  let getSnapshot: () => unknown = () => undefined;
+  let rendered: unknown;
+  let unsubscribe: (() => void) | undefined;
+  const result = { renders: 0, value: undefined as T, unmount: () => unsubscribe?.() };
+  const dispatcher = {
+    useRef: (initial: unknown) => (slots[cursor++] ??= { current: initial }),
+    useCallback: <F>(callback: F) => callback,
+    useDebugValue: () => undefined,
+    useSyncExternalStore: (subscribe: (onChange: () => void) => () => void, get: () => unknown) => {
+      getSnapshot = get;
+      rendered = get();
+      unsubscribe ??= subscribe(() => {
+        if (!Object.is(getSnapshot(), rendered)) render();
+      });
+      return rendered;
+    },
+  };
+  const render = () => {
+    cursor = 0;
+    result.renders += 1;
+    const previous = internals.H;
+    internals.H = dispatcher;
+    try {
+      result.value = hook();
+    } finally {
+      internals.H = previous;
+    }
+  };
+  render();
+  return result;
+}
+
 afterEach(() => useComputerStateStore.getState().clearEnvironment(ENV));
 
-// `useThreadComputerAvailability` subscribes through `useShallow`, so its
-// component re-renders exactly when the shallow comparison below fails. There
-// is no DOM renderer in this suite; the render count is derived the same way.
 it("does not render the composer subscription for activity and geometry updates", () => {
   const initial = threadComputerState({ threadId: ref.threadId });
-  const select = () =>
-    useComputerStateStore.getState().threadStates[scopedThreadKey(ref)]?.availability;
   useComputerStateStore.getState().upsertThreadState(ENV, initial);
-  let rendered = select();
-  let renders = 0;
-  const stop = useComputerStateStore.subscribe(() => {
-    const next = select();
-    if (shallow(rendered, next)) return;
-    rendered = next;
-    renders += 1;
-  });
+  const probe = mount(() => useThreadComputerAvailability(ref));
   try {
     for (let version = 2; version < 10; version++) {
       useComputerStateStore.getState().upsertThreadState(ENV, {
@@ -37,16 +71,16 @@ it("does not render the composer subscription for activity and geometry updates"
         cursor: { x: version, y: version },
       });
     }
-    expect(renders).toBe(0);
+    expect(probe.renders).toBe(1);
 
     useComputerStateStore.getState().upsertThreadState(ENV, {
       ...initial,
       version: 10,
       availability: { kind: "backend-unavailable", message: "Disconnected" },
     });
-    expect(renders).toBe(1);
-    expect(rendered).toEqual({ kind: "backend-unavailable", message: "Disconnected" });
+    expect(probe.renders).toBe(2);
+    expect(probe.value).toEqual({ kind: "backend-unavailable", message: "Disconnected" });
   } finally {
-    stop();
+    probe.unmount();
   }
 });
