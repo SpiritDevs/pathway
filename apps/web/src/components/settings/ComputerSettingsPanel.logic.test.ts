@@ -169,9 +169,9 @@ describe("resolveComputerScopeAccess", () => {
     );
   });
 
-  it("waits for the session, and stays optimistic when it cannot be read", () => {
+  it("waits for the session, and keeps waiting when it cannot be read", () => {
     expect(resolveComputerScopeAccess({ ...base, isPending: true })).toBe("pending");
-    expect(resolveComputerScopeAccess({ ...base, hasError: true })).toBe("granted");
+    expect(resolveComputerScopeAccess({ ...base, hasError: true })).toBe("pending");
     expect(resolveComputerScopeAccess(base)).toBe("denied");
   });
 
