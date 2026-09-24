@@ -29,6 +29,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { ComputerDispatchAccess } from "../orchestration-v2/ComputerDispatchAccess.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { ProviderAllowanceRuntime } from "../providerUsage/AllowanceRuntime.ts";
@@ -531,6 +532,8 @@ export const layer = Layer.effect(
                       creationSource: active.creationSource,
                     }),
                   ),
+                  // A schedule is the server sending for itself (ADR 0041).
+                  Effect.provideService(ComputerDispatchAccess, ComputerDispatchAccess.server),
                 ),
               )
             : yield* Effect.exit(
@@ -549,6 +552,8 @@ export const layer = Layer.effect(
                       creationSource: active.creationSource,
                     }),
                   ),
+                  // A schedule is the server sending for itself (ADR 0041).
+                  Effect.provideService(ComputerDispatchAccess, ComputerDispatchAccess.server),
                 ),
               );
 

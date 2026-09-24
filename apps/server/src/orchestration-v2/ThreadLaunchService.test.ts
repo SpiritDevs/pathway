@@ -330,6 +330,42 @@ it.effect("refuses a launch that asks for Computer when the caller fails the acc
   }),
 );
 
+it.effect("refuses a launch that asks for Computer when no edge said who is sending", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const refused = yield* launches
+        .launch(
+          launchInput({
+            command: "command:launch:computer-unprovided",
+            thread: "thread:launch:computer-unprovided",
+            message: "/computer-use Open Calculator",
+          }),
+        )
+        .pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(refused));
+      assert.isEmpty(
+        (yield* threads.getThreadProjection(ThreadId.make("thread:launch:computer-unprovided")))
+          .runs,
+      );
+
+      const served = yield* launches
+        .launch(
+          launchInput({
+            command: "command:launch:computer-server",
+            thread: "thread:launch:computer-server",
+            message: "/computer-use Open Calculator",
+          }),
+        )
+        .pipe(Effect.provideService(ComputerDispatchAccess, ComputerDispatchAccess.server));
+      const [run] = (yield* threads.getThreadProjection(served.threadId)).runs;
+      assert.strictEqual(run?.computerControl?.clearance, "admins-only");
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
 it.effect("arms chat-mode Computer for a first message sent with the chat setting on", () =>
   Effect.gen(function* () {
     const dispatched: Array<import("@spiritdevs/contracts").OrchestrationV2Command> = [];
