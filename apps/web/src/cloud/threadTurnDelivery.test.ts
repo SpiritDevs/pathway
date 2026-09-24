@@ -1,5 +1,19 @@
+import type { StartThreadTurnInput } from "@spiritdevs/client-runtime/operations";
+import {
+  AuthAccessWriteScope,
+  AuthOrchestrationOperateScope,
+  MessageId,
+  ThreadId,
+} from "@spiritdevs/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { prepareDirectTurnAttachments, shouldSendTurnToEnvironment } from "./threadTurnDelivery";
+
+import { resolveComputerControlForSend } from "../hooks/useComputerControlModeChange.logic";
+import { sessionKnownToUseComputer } from "../lib/computerAccess";
+import {
+  cloudQueuedTurnInput,
+  prepareDirectTurnAttachments,
+  shouldSendTurnToEnvironment,
+} from "./threadTurnDelivery";
 
 const connectedThread = {
   connected: true,
@@ -149,5 +163,50 @@ describe("direct follow-up attachments", () => {
         },
       ),
     ).rejects.toThrow("Attachment unavailable");
+  });
+});
+
+describe("cloud-queued Computer intent", () => {
+  // The setting as an admin paired on a scoped environment sees it.
+  const setting = sessionKnownToUseComputer("scoped", {
+    authenticated: true,
+    scopes: [AuthOrchestrationOperateScope, AuthAccessWriteScope],
+  });
+  const turn = (text: string): StartThreadTurnInput => ({
+    threadId: ThreadId.make("thread"),
+    message: { messageId: MessageId.make("message"), role: "user", text, attachments: [] },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    ...resolveComputerControlForSend({
+      messageText: text,
+      computerControlEnabled: setting,
+      generation: 4,
+    }).fields,
+  });
+
+  it("drops the setting's intent where the queue's operate-only clearance is refused", () => {
+    const input = turn("summarise the README");
+    expect(input.enableComputerControl).toBe(true);
+    const queued = cloudQueuedTurnInput(input, "scoped");
+    expect(queued).not.toHaveProperty("enableComputerControl");
+    expect(queued).not.toHaveProperty("computerControlGeneration");
+    expect(cloudQueuedTurnInput(input, "admins-only")).not.toHaveProperty("enableComputerControl");
+  });
+
+  it("drops the setting's intent while the environment's policy is unknown", () => {
+    expect(cloudQueuedTurnInput(turn("summarise the README"), undefined)).not.toHaveProperty(
+      "enableComputerControl",
+    );
+  });
+
+  it("keeps the setting's intent where any operator may use Computer", () => {
+    const input = turn("summarise the README");
+    expect(cloudQueuedTurnInput(input, "any-operator")).toBe(input);
+  });
+
+  it("keeps an explicit /computer-use as an explicit request", () => {
+    const queued = cloudQueuedTurnInput(turn("/computer-use open Notes"), "scoped");
+    expect(queued).not.toHaveProperty("enableComputerControl");
+    expect(queued.computerControlGeneration).toBe(4);
   });
 });

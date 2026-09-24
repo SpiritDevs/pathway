@@ -1,9 +1,13 @@
 import type { StartThreadTurnInput } from "@spiritdevs/client-runtime/operations";
-import type {
-  ChatAttachment,
-  PendingChatAttachment,
-  UploadChatAttachment,
+import {
+  AuthOrchestrationOperateScope,
+  canUseComputer,
+  type ChatAttachment,
+  type ComputerAccessPolicy,
+  type PendingChatAttachment,
+  type UploadChatAttachment,
 } from "@spiritdevs/contracts";
+import { parseComputerInvocation } from "@spiritdevs/shared/computerInvocation";
 
 /** Connected environments launch work directly unless saved messages must be delivered first. */
 export function shouldSendTurnToEnvironment(input: {
@@ -25,6 +29,25 @@ export function shouldSendTurnToEnvironment(input: {
         input.dispatchMode === "queue")
     )
   );
+}
+
+/**
+ * The turn as the cloud queue may carry it. The queue delivers with only
+ * `orchestration:operate` (ADR 0041), so the chat setting's implicit Computer
+ * intent rides along only where the environment's policy is known to admit
+ * that. An explicit `/computer-use` stays: the user asked for it, and a refusal
+ * is the right answer.
+ */
+export function cloudQueuedTurnInput(
+  input: StartThreadTurnInput,
+  policy: ComputerAccessPolicy | undefined,
+): StartThreadTurnInput {
+  if (input.enableComputerControl !== true) return input;
+  if (policy !== undefined && canUseComputer(policy, [AuthOrchestrationOperateScope])) return input;
+  const { enableComputerControl: _, computerControlGeneration, ...rest } = input;
+  return parseComputerInvocation(input.message.text) && computerControlGeneration !== undefined
+    ? { ...rest, computerControlGeneration }
+    : rest;
 }
 
 export async function prepareDirectTurnAttachments(
