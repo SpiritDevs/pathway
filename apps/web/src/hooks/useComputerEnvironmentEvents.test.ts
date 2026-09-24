@@ -6,6 +6,7 @@
 // the primary environment and the RPC command are stubbed.
 
 import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import { isComputerThreadStateCurrent } from "@spiritdevs/client-runtime/state/computer-state";
 import {
   EnvironmentId,
   ThreadId,
@@ -106,6 +107,15 @@ function driving(version: number, agentActive = true) {
 
 const REMOTE_ENV = EnvironmentId.make("environment-remote");
 
+/** A promise the test settles by hand. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 afterEach(() => {
   harness.unmount();
   harness.connection = { phase: "connected", generation: 1 };
@@ -152,6 +162,16 @@ describe("useComputerEnvironmentEvents", () => {
     }
   });
 
+  it("stops trusting a thread's generation as soon as the connection drops", () => {
+    render();
+    useComputerStateStore.getState().upsertThreadState(ENV, driving(7));
+    harness.connection = { phase: "disconnected", generation: 1 };
+    render();
+    const kept = useComputerStateStore.getState().threadStates[KEY];
+    expect(kept).toBeDefined();
+    expect(isComputerThreadStateCurrent(kept!)).toBe(false);
+  });
+
   it("clears everything of the environment when it leaves the catalog", () => {
     render();
     useComputerStateStore.getState().upsertThreadState(ENV, driving(1));
@@ -175,6 +195,24 @@ describe("refreshComputerStatus", () => {
     // The bridge's `.then` was queued first, so it has run once this resumes.
     await pending;
     expect(useComputerStateStore.getState().statusByEnvironment[ENV]).toBeUndefined();
+  });
+
+  it("drops a status answer the previous connection owed", async () => {
+    const answer = deferred<unknown>();
+    harness.runAtomCommand.mockReturnValue(answer.promise);
+    render();
+    refreshComputerStatus(harness.registry as never, ENV);
+    harness.connection = { phase: "disconnected", generation: 1 };
+    render();
+    harness.connection = { phase: "connected", generation: 2 };
+    render();
+    const fresh = { availability: { kind: "available" } } as ComputerStatusResult;
+    useComputerStateStore.getState().setStatus(ENV, fresh);
+    answer.resolve(
+      AsyncResult.success({ availability: { kind: "backend-unavailable", message: "old host" } }),
+    );
+    await answer.promise;
+    expect(useComputerStateStore.getState().statusByEnvironment[ENV]).toBe(fresh);
   });
 });
 
