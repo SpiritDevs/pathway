@@ -18,6 +18,7 @@ import { DesktopComputer } from "../../computer/DesktopComputer.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
+import { watchRendererLifetime } from "../watchRendererLifetime.ts";
 
 const MAX_PERMISSION_KINDS = 8;
 
@@ -50,6 +51,7 @@ const ensureTrustedComputerSender = Effect.fn("desktop.ipc.computer.ensureTruste
     ) {
       return yield* new ComputerIpcUnauthorizedSenderError();
     }
+    return main.value;
   },
 );
 
@@ -172,13 +174,31 @@ export const setComputerCursorStyle = DesktopIpc.makeIpcMethod({
 });
 
 /** The renderer's preview demand; anything but `true` reads as nobody watching. */
+// Preview demand belongs to the renderer that raised it, and ends when that
+// renderer navigates away, crashes, or is destroyed without saying so.
+let previewDemand: { readonly dispose: () => void } | undefined;
+
 export const setComputerPreviewWatched = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.COMPUTER_PREVIEW_WATCHED_CHANNEL,
   payload: Schema.Unknown,
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.computer.setPreviewWatched")(function* (watched, event) {
-    yield* ensureTrustedComputerSender(event);
+    const { webContents } = yield* ensureTrustedComputerSender(event);
     const computer = yield* DesktopComputer;
+    previewDemand?.dispose();
+    previewDemand = undefined;
+    if (watched === true) {
+      const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+      const demand = {
+        dispose: watchRendererLifetime(webContents, () => {
+          if (previewDemand !== demand) return;
+          demand.dispose();
+          previewDemand = undefined;
+          void runPromise(computer.setPreviewWatched(false));
+        }),
+      };
+      previewDemand = demand;
+    }
     yield* computer.setPreviewWatched(watched === true);
   }),
 });
