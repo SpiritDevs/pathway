@@ -85,20 +85,12 @@ describe("createComputerFrameSource", () => {
   it("reconnect-facing reset reasons and close are single-use", () => {
     const refused = subscribe();
     refused.socket.emit("close", { code: 1006, reason: "" });
-    expect(refused.onReset).toHaveBeenCalledWith("closed", {
-      code: 1006,
-      reason: "",
-      opened: false,
-    });
+    expect(refused.onReset).toHaveBeenCalledWith("closed", { code: 1006, reason: "" });
 
     const policy = subscribe();
     policy.socket.emit("open", {});
     policy.socket.emit("close", { code: 1008, reason: "not allowed" });
-    expect(policy.onReset).toHaveBeenCalledWith("closed", {
-      code: 1008,
-      reason: "not allowed",
-      opened: true,
-    });
+    expect(policy.onReset).toHaveBeenCalledWith("closed", { code: 1008, reason: "not allowed" });
 
     const errored = subscribe();
     errored.socket.emit("error", {});

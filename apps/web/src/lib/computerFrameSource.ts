@@ -29,8 +29,8 @@ export interface ComputerFrameSource {
 export interface ComputerFrameSourceOptions {
   /**
    * Resolved by `resolveComputerFrameSocketUrl` for the environment's prepared
-   * connection. Remote URLs carry a short-lived ticket, so a source reuses
-   * the last URL and resolves a fresh one only after an upgrade was refused.
+   * connection. Remote URLs carry a short-lived ticket; the stream reuses
+   * one URL across reconnects until its ticket nears expiry.
    */
   readonly url: string;
   readonly handlers: ComputerFrameSourceHandlers;

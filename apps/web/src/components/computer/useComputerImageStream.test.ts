@@ -232,10 +232,13 @@ function setVisibility(value: "visible" | "hidden", canvasRef: { current: unknow
 
 const createImageBitmapMock = vi.hoisted(() => vi.fn());
 
-/** The upgrade never completed: a browser's only sign of a refused ticket. */
-const REFUSED: ComputerFrameSourceClose = { code: 1006, reason: "", opened: false };
-/** The socket opened, then dropped. */
-const DROPPED: ComputerFrameSourceClose = { code: 1006, reason: "", opened: true };
+/**
+ * An abnormal close. Before the socket opens, a browser shows a refused ticket,
+ * a missing route and a dropped connection alike as this.
+ */
+const DROPPED: ComputerFrameSourceClose = { code: 1006, reason: "" };
+/** How long the test server's tickets last, like the real server's. */
+const TICKET_TTL_MS = 5 * 60_000;
 
 /** Settles the hook's URL resolution: its `.then` runs before this await resumes. */
 async function urlResolved(call = frameSourceHarness.resolveUrl.mock.results.length - 1) {
@@ -250,8 +253,10 @@ beforeEach(() => {
   frameSourceHarness.urls = [];
   frameSourceHarness.resolveUrl.mockReset();
   frameSourceHarness.resolveUrl.mockImplementation(
-    async (_registry: unknown, environmentId: string, computerId: string) =>
-      `wss://remote.example.com/ws/computer-frames?computerId=${computerId}&env=${environmentId}&wsTicket=${frameSourceHarness.urls.length}`,
+    async (_registry: unknown, environmentId: string, computerId: string) => ({
+      url: `wss://remote.example.com/ws/computer-frames?computerId=${computerId}&env=${environmentId}&wsTicket=${frameSourceHarness.urls.length}`,
+      expiresAt: Date.now() + TICKET_TTL_MS,
+    }),
   );
   frameSourceHarness.close.mockClear();
   frameSourceHarness.requestResync.mockClear();
@@ -394,7 +399,7 @@ describe("useComputerImageStream lifecycle", () => {
 });
 
 describe("useComputerImageStream frame socket authorization", () => {
-  it("mints a fresh socket URL after a refused upgrade", async () => {
+  it("reuses the ticket URL when a socket closes before it opens", async () => {
     vi.useFakeTimers();
     try {
       const { canvasRef } = createCanvas();
@@ -405,8 +410,29 @@ describe("useComputerImageStream frame socket authorization", () => {
         ENVIRONMENT_ID,
         COMPUTER_ID,
       );
-      frameSourceHarness.handlers?.onReset("closed", REFUSED);
+      // No open event: a refusal and a dropped connection look the same.
+      frameSourceHarness.handlers?.onReset("closed", DROPPED);
       expect(renderStream({ enabled: true, canvasRef }).status.kind).toBe("connecting");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(frameSourceHarness.resolveUrl).toHaveBeenCalledOnce();
+      expect(frameSourceHarness.urls).toEqual([
+        frameSourceHarness.urls[0],
+        frameSourceHarness.urls[0],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("mints a fresh socket URL once the ticket nears its expiry", async () => {
+    vi.useFakeTimers();
+    try {
+      const { canvasRef } = createCanvas();
+      renderStream({ enabled: true, canvasRef });
+      await urlResolved();
+      frameSourceHarness.handlers?.onReset("closed", DROPPED);
+      // Minutes of streaming later, the ticket has under 30 seconds left.
+      vi.setSystemTime(Date.now() + TICKET_TTL_MS - 30_000);
       await vi.advanceTimersByTimeAsync(500);
       await urlResolved();
       expect(frameSourceHarness.resolveUrl).toHaveBeenCalledTimes(2);
@@ -441,7 +467,7 @@ describe("useComputerImageStream frame socket authorization", () => {
       const { canvasRef } = createCanvas();
       renderStream({ enabled: true, canvasRef });
       await urlResolved();
-      frameSourceHarness.handlers?.onReset("closed", { code: 1008, reason: "", opened: true });
+      frameSourceHarness.handlers?.onReset("closed", { code: 1008, reason: "" });
       await vi.advanceTimersByTimeAsync(60_000);
       expect(frameSourceHarness.opened).toBe(1);
       expect(frameSourceHarness.resolveUrl).toHaveBeenCalledOnce();
@@ -474,16 +500,19 @@ describe("useComputerImageStream frame socket authorization", () => {
   });
 
   it("drops a URL that resolves after the stream was disabled", async () => {
-    let resolveUrl!: (url: string) => void;
+    let resolveUrl!: (resolved: { url: string; expiresAt: number | null }) => void;
     frameSourceHarness.resolveUrl.mockReturnValue(
-      new Promise<string>((resolve) => {
+      new Promise((resolve) => {
         resolveUrl = resolve;
       }),
     );
     const { canvasRef } = createCanvas();
     renderStream({ enabled: true, canvasRef });
     renderStream({ enabled: false, canvasRef });
-    resolveUrl("wss://remote.example.com/ws/computer-frames?computerId=desktop");
+    resolveUrl({
+      url: "wss://remote.example.com/ws/computer-frames?computerId=desktop",
+      expiresAt: null,
+    });
     await urlResolved();
     expect(frameSourceHarness.opened).toBe(0);
   });
@@ -541,15 +570,16 @@ describe("useComputerImageStream connection lifecycle", () => {
       const { canvasRef } = createCanvas();
       renderStream({ enabled: true, canvasRef });
       await urlResolved();
+      // A refused ticket closes like this every time; the bound ends it.
       for (let attempt = 0; attempt < 5; attempt += 1) {
-        frameSourceHarness.handlers?.onReset("closed", REFUSED);
+        frameSourceHarness.handlers?.onReset("closed", DROPPED);
         await vi.advanceTimersByTimeAsync(5_000);
       }
       expect(frameSourceHarness.opened).toBe(6);
-      frameSourceHarness.handlers?.onReset("closed", REFUSED);
+      frameSourceHarness.handlers?.onReset("closed", DROPPED);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(frameSourceHarness.opened).toBe(6);
-      expect(frameSourceHarness.resolveUrl).toHaveBeenCalledTimes(6);
+      expect(frameSourceHarness.resolveUrl).toHaveBeenCalledOnce();
       expect(renderStream({ enabled: true, canvasRef }).status).toEqual({
         kind: "error",
         message: COMPUTER_LIVE_VIEW_UNAVAILABLE,

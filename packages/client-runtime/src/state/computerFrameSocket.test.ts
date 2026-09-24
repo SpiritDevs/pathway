@@ -63,21 +63,24 @@ describe("resolveComputerFrameSocketUrl", () => {
   it.effect("keeps cookie-authenticated primary connections ticketless", () =>
     Effect.gen(function* () {
       const fetch = ticketFetch("unused");
-      const url = yield* resolveComputerFrameSocketUrl({
+      const resolved = yield* resolveComputerFrameSocketUrl({
         prepared: prepared("ws://127.0.0.1:4321/ws", null),
         computerId: COMPUTER_ID,
         signer: Option.none(),
       }).pipe(Effect.provide(remoteHttpClientLayer(fetch.fetchFn)));
 
-      expect(url).toBe("ws://127.0.0.1:4321/ws/computer-frames?computerId=desktop");
+      expect(resolved).toEqual({
+        url: "ws://127.0.0.1:4321/ws/computer-frames?computerId=desktop",
+        expiresAt: null,
+      });
       expect(fetch.calls).toHaveLength(0);
     }),
   );
 
-  it.effect("mints a fresh bearer ticket for the frame route", () =>
+  it.effect("mints a fresh bearer ticket for the frame route, with its expiry", () =>
     Effect.gen(function* () {
       const fetch = ticketFetch("frame-ticket");
-      const url = yield* resolveComputerFrameSocketUrl({
+      const { url, expiresAt } = yield* resolveComputerFrameSocketUrl({
         prepared: prepared("wss://remote.example.com/ws?wsTicket=used", {
           _tag: "Bearer",
           token: "bearer-token",
@@ -90,6 +93,7 @@ describe("resolveComputerFrameSocketUrl", () => {
       expect(parsed.pathname).toBe("/ws/computer-frames");
       expect(parsed.searchParams.get("computerId")).toBe("desktop");
       expect(parsed.searchParams.get("wsTicket")).toBe("frame-ticket");
+      expect(expiresAt).toBe(Date.parse("2026-05-01T12:05:00.000Z"));
       expect(String(fetch.calls[0]?.[0])).toBe(
         "https://remote.example.com/api/auth/websocket-ticket",
       );
@@ -103,7 +107,7 @@ describe("resolveComputerFrameSocketUrl", () => {
     Effect.gen(function* () {
       const fetch = ticketFetch("relay-ticket");
       const proofs: Array<unknown> = [];
-      const url = yield* resolveComputerFrameSocketUrl({
+      const { url, expiresAt } = yield* resolveComputerFrameSocketUrl({
         prepared: prepared("wss://remote.example.com/ws?wsTicket=used", {
           _tag: "Dpop",
           accessToken: "access-token",
@@ -119,6 +123,7 @@ describe("resolveComputerFrameSocketUrl", () => {
       }).pipe(Effect.provide(remoteHttpClientLayer(fetch.fetchFn)));
 
       expect(new URL(url).searchParams.get("wsTicket")).toBe("relay-ticket");
+      expect(expiresAt).toBe(Date.parse("2026-05-01T12:05:00.000Z"));
       expect(proofs).toEqual([
         {
           method: "POST",
