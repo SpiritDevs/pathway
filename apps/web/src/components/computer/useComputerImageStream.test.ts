@@ -172,9 +172,21 @@ function feedSequence(sequence: number): void {
   } as unknown as ComputerFrame);
 }
 
-/** The PNG decode awaits a mocked createImageBitmap; a few microtask turns settle it. */
-async function flushDecode(): Promise<void> {
-  for (let index = 0; index < 10; index += 1) await Promise.resolve();
+/** A fake bitmap whose `closed` settles when the hook's decode `finally` releases it. */
+function fakeBitmap() {
+  let release!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { width: 320, height: 200, close: vi.fn(() => release()), closed };
+}
+
+/** Resolves once the hook is done with the newest decode. */
+async function decoded(): Promise<void> {
+  const bitmap = (await createImageBitmapMock.mock.results.at(-1)?.value) as ReturnType<
+    typeof fakeBitmap
+  >;
+  await bitmap.closed;
 }
 
 function renderStream(input: {
@@ -239,11 +251,7 @@ beforeEach(() => {
   frameSourceHarness.requestResync.mockClear();
   vi.unstubAllGlobals();
   createImageBitmapMock.mockReset();
-  createImageBitmapMock.mockImplementation(async () => ({
-    width: 320,
-    height: 200,
-    close: vi.fn(),
-  }));
+  createImageBitmapMock.mockImplementation(async () => fakeBitmap());
   vi.stubGlobal("createImageBitmap", createImageBitmapMock);
   stubVisibleDocument();
 });
@@ -255,7 +263,7 @@ describe("useComputerImageStream disable path", () => {
     // The handoff shape: the stream was enabled while the tap owned the
     // canvas, so no stills frame ever decoded before the tap took over.
     renderStream({ enabled: true, canvasRef });
-    await flushDecode();
+    await urlResolved();
     renderStream({ enabled: false, canvasRef });
 
     expect(frameSourceHarness.close).toHaveBeenCalledOnce();
@@ -267,9 +275,9 @@ describe("useComputerImageStream disable path", () => {
     const { canvas, context, canvasRef } = createCanvas();
 
     renderStream({ enabled: true, canvasRef });
-    await flushDecode();
+    await urlResolved();
     feedSequence(1);
-    await flushDecode();
+    await decoded();
 
     expect(createImageBitmapMock).toHaveBeenCalledOnce();
     expect(canvas.width).toBe(320);
@@ -297,10 +305,10 @@ describe("useComputerImageStream lifecycle", () => {
   it("closes hidden streams and restores dimensions when equal-sized frames resume", async () => {
     const { canvasRef } = createCanvas();
     renderStream({ enabled: true, canvasRef });
-    await flushDecode();
+    await urlResolved();
     expect(frameSourceHarness.opened).toBe(1);
     feedSequence(1);
-    await flushDecode();
+    await decoded();
     expect(renderStream({ enabled: true, canvasRef }).dimensions).toEqual({
       width: 320,
       height: 200,
@@ -311,10 +319,10 @@ describe("useComputerImageStream lifecycle", () => {
     expect(renderStream({ enabled: true, canvasRef }).dimensions).toBeNull();
 
     setVisibility("visible", canvasRef);
-    await flushDecode();
+    await urlResolved();
     expect(frameSourceHarness.opened).toBe(2);
     feedSequence(1);
-    await flushDecode();
+    await decoded();
     const resumed = renderStream({ enabled: true, canvasRef });
     expect(resumed.dimensions).toEqual({ width: 320, height: 200 });
     expect(resumed.status.kind).toBe("streaming");
@@ -324,7 +332,7 @@ describe("useComputerImageStream lifecycle", () => {
 
   it("closes an in-flight bitmap without drawing it after the document hides", async () => {
     const { context, canvasRef } = createCanvas();
-    const bitmap = { width: 320, height: 200, close: vi.fn() };
+    const bitmap = fakeBitmap();
     let finish!: (value: typeof bitmap) => void;
     createImageBitmapMock.mockImplementationOnce(
       () =>
@@ -333,12 +341,12 @@ describe("useComputerImageStream lifecycle", () => {
         }),
     );
     renderStream({ enabled: true, canvasRef });
-    await flushDecode();
+    await urlResolved();
     feedSequence(1);
     setVisibility("hidden", canvasRef);
     expect(frameSourceHarness.close).toHaveBeenCalledOnce();
     finish(bitmap);
-    await flushDecode();
+    await bitmap.closed;
     expect(bitmap.close).toHaveBeenCalledOnce();
     expect(context.drawImage).not.toHaveBeenCalled();
     const hidden = renderStream({ enabled: true, canvasRef });
@@ -348,8 +356,8 @@ describe("useComputerImageStream lifecycle", () => {
 
   it("bounds decoding to one active frame and the newest pending frame", async () => {
     const { canvasRef } = createCanvas();
-    const first = { width: 320, height: 200, close: vi.fn() };
-    const last = { width: 320, height: 200, close: vi.fn() };
+    const first = fakeBitmap();
+    const last = fakeBitmap();
     let finish!: (value: typeof first) => void;
     createImageBitmapMock
       .mockImplementationOnce(
@@ -360,7 +368,7 @@ describe("useComputerImageStream lifecycle", () => {
       )
       .mockResolvedValueOnce(last);
     renderStream({ enabled: true, canvasRef });
-    await flushDecode();
+    await urlResolved();
     for (const sequence of [1, 2, 3]) {
       frameSourceHarness.handlers?.onFrame({
         header: { computerId: COMPUTER_ID, sequence },
@@ -369,11 +377,11 @@ describe("useComputerImageStream lifecycle", () => {
     }
     expect(createImageBitmapMock).toHaveBeenCalledTimes(1);
     finish(first);
-    await flushDecode();
+    await first.closed;
     expect(createImageBitmapMock).toHaveBeenCalledTimes(2);
     const blob = createImageBitmapMock.mock.calls[1]![0] as Blob;
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array([3]));
-    await flushDecode();
+    await last.closed;
     expect(last.close).toHaveBeenCalledOnce();
     expect(first.close).toHaveBeenCalledOnce();
   });
@@ -385,7 +393,7 @@ describe("useComputerImageStream frame socket authorization", () => {
     try {
       const { canvasRef } = createCanvas();
       renderStream({ enabled: true, canvasRef });
-      await flushDecode();
+      await urlResolved();
       expect(frameSourceHarness.resolveUrl).toHaveBeenCalledWith(
         expect.anything(),
         ENVIRONMENT_ID,
@@ -408,7 +416,7 @@ describe("useComputerImageStream frame socket authorization", () => {
       frameSourceHarness.resolveUrl.mockResolvedValue(null);
       const { canvasRef } = createCanvas();
       renderStream({ enabled: true, canvasRef });
-      await flushDecode();
+      await urlResolved();
       expect(frameSourceHarness.opened).toBe(0);
       expect(renderStream({ enabled: true, canvasRef }).status.kind).toBe("connecting");
       await vi.advanceTimersByTimeAsync(500);
@@ -432,7 +440,7 @@ describe("useComputerImageStream frame socket authorization", () => {
     renderStream({ enabled: true, canvasRef });
     renderStream({ enabled: false, canvasRef });
     resolveUrl("wss://remote.example.com/ws/computer-frames?computerId=desktop");
-    await flushDecode();
+    await urlResolved();
     expect(frameSourceHarness.opened).toBe(0);
   });
 });

@@ -30,14 +30,14 @@ describe("pushAgentCursorStyleToDesktop", () => {
     expect(() => pushAgentCursorStyleToDesktop({ fill: "#aabbcc" })).not.toThrow();
   });
 
-  it("swallows a failed send instead of surfacing it", async () => {
-    const setCursorStyle = vi.fn(async () => {
-      throw new Error("host unavailable");
-    });
+  it("swallows a failed send instead of surfacing it", () => {
+    const failed = Promise.reject(new Error("host unavailable"));
+    const handled = vi.spyOn(failed, "catch");
+    const setCursorStyle = vi.fn(() => failed);
     vi.stubGlobal("window", { desktopBridge: { computer: { setCursorStyle } } });
 
     expect(() => pushAgentCursorStyleToDesktop({ rim: "#112233" })).not.toThrow();
-    await Promise.resolve();
     expect(setCursorStyle).toHaveBeenCalledTimes(1);
+    expect(handled).toHaveBeenCalledOnce();
   });
 });

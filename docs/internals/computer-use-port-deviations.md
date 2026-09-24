@@ -303,3 +303,8 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - The `computer-status` search item targets the `computer-control` section, because the attention row has no anchor.
 - Not ported: restore-defaults and the "always allowed" search entry, which belong to a feature outside this port.
 - Copy: Synara → Pathway, AppSnap → SnapShot.
+
+### Tests
+
+- Synara's `*.browser.tsx` tests run under Vitest without a DOM, because Pathway has no browser test runner. Hooks run for real under slot-tracked React harnesses. `useThreadComputerAvailability` runs through the real zustand binding, with React's hook dispatcher pointed at the harness, because zustand imports React from outside the mocked module graph.
+- Tests await the promise the code chains on, never sleeps or microtask counts. The input queue gains `settled()`, which resolves once everything queued so far has run, so its tests have something to await. Decode tests await the fake bitmap's `close`, which the hook's `finally` always calls.
