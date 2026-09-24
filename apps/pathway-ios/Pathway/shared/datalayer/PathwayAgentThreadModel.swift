@@ -612,6 +612,10 @@ final class PathwayAgentThreadModel {
     func editLatestUserMessage(_ item: PathwayTimelineItem, text: String) async throws {
         let notEditable = PathwayThreadConversationError.message("Only the latest message can be edited after the agent stops.")
         guard !isRestartingMessage else { throw PathwayThreadConversationError.message("This message is already restarting.") }
+        // The restarted message keeps the original's attachments, so those still count as the task.
+        if PathwayComputerInvocation.isBare(text), item.attachments.isEmpty {
+            throw PathwayThreadConversationError.message(PathwayComputerInvocation.bareCommandMessage)
+        }
         guard activeRunID == nil, canEdit(item), let messageID = item.messageID, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw notEditable
         }

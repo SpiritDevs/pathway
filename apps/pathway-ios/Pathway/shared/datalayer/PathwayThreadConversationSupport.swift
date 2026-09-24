@@ -409,6 +409,9 @@ extension PathwayAgentThreadModel {
             throw PathwayThreadConversationError.message("Keep conversation before starting another chat from this workspace.")
         }
         guard canSend else { throw PathwayThreadConversationError.message("Finish preparing the message before starting a chat.") }
+        if PathwayComputerInvocation.isBare(draft), draftAttachments.isEmpty {
+            throw PathwayThreadConversationError.message(PathwayComputerInvocation.bareCommandMessage)
+        }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let selected = draftAttachments
         isSending = true
