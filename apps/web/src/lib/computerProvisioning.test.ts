@@ -17,9 +17,15 @@ import {
   computerProvisionOutcome,
   computerProvisionResultToast,
   computerProvisionStartToast,
+  computerStatusNeedsSetup,
   prepareComputerPermissionGuide,
   readLocalComputerPermissionBridge,
+  resolveComputerAvailabilityView,
 } from "./computerProvisioning";
+import {
+  connectedComputerHealth,
+  threadComputerState,
+} from "../components/computer/computerTestFixtures";
 
 function grantState(
   overrides: Partial<DesktopComputerHelperState> = {},
@@ -134,6 +140,15 @@ describe("local Computer permission ownership", () => {
     const computer = {};
     vi.stubGlobal("window", { desktopBridge: { computer } });
     expect(readLocalComputerPermissionBridge({ environmentIsDesktopPrimary: true })).toBe(computer);
+    expect(readLocalComputerPermissionBridge({ environmentIsDesktopPrimary: false })).toBeNull();
+  });
+
+  it("does not infer locality from an unrelated desktop endpoint", () => {
+    // A desktop app connected to a remote environment still has a loopback
+    // server of its own; that endpoint says nothing about this environment.
+    vi.stubGlobal("window", {
+      desktopBridge: { getWsUrl: () => "ws://127.0.0.1:4111", computer: {} },
+    });
     expect(readLocalComputerPermissionBridge({ environmentIsDesktopPrimary: false })).toBeNull();
   });
 
@@ -277,5 +292,153 @@ describe("computerProvisionNote", () => {
     expect(computerProvisionNote({ isPending: true, error: new Error("nope") })).toContain(
       "Setting up the agent's desktop",
     );
+  });
+});
+
+describe("resolveComputerAvailabilityView", () => {
+  it("maps availability into ready, checking, and blocked views", () => {
+    expect(resolveComputerAvailabilityView(undefined).kind).toBe("checking");
+    expect(resolveComputerAvailabilityView({ kind: "available" }).kind).toBe("ready");
+    expect(
+      resolveComputerAvailabilityView({ kind: "backend-unavailable", message: "Backend is off" }),
+    ).toMatchObject({ kind: "blocked", description: "Backend is off" });
+  });
+
+  it("names the withheld grants in the blocked title", () => {
+    const view = resolveComputerAvailabilityView({
+      kind: "permission-required",
+      missing: ["accessibility", "screenRecording"],
+      message: "Pathway needs Accessibility and Screen Recording to control this Mac.",
+      buildSignature: "signed",
+    });
+    expect(view.kind).toBe("blocked");
+    expect(view.title).toBe("Computer control needs Accessibility and Screen Recording");
+    expect(view.description).toContain("Screen Recording");
+  });
+
+  it("does not call an installed but unprobed helper ready", () => {
+    expect(
+      resolveComputerAvailabilityView(
+        { kind: "available", backend: "mac" },
+        { ...connectedComputerHealth(), status: "unavailable", captureAvailable: false },
+      ),
+    ).toMatchObject({ kind: "checking", title: "Computer access has not been checked" });
+  });
+
+  it("calls an idle helper ready only when the OS confirms every grant", () => {
+    const idle = {
+      ...connectedComputerHealth(),
+      status: "unavailable" as const,
+      captureAvailable: false,
+    };
+    expect(
+      resolveComputerAvailabilityView({ kind: "available", backend: "mac" }, idle, true),
+    ).toMatchObject({ kind: "ready", title: "All permissions granted" });
+    // A helper that already failed is not idle, whatever the grants say.
+    expect(
+      resolveComputerAvailabilityView(
+        { kind: "available", backend: "mac" },
+        {
+          ...idle,
+          consecutiveFailures: 1,
+          lastFailure: { at: "2026-01-01T00:00:00.000Z", message: "helper exited" },
+        },
+        true,
+      ),
+    ).toMatchObject({ kind: "checking", title: "Computer access has not been checked" });
+  });
+
+  it("does not claim full desktop readiness when capture is denied", () => {
+    expect(
+      resolveComputerAvailabilityView(
+        { kind: "available", backend: "mac" },
+        { ...connectedComputerHealth(), captureAvailable: false },
+      ),
+    ).toMatchObject({ kind: "blocked", title: "Screen capture is unavailable" });
+  });
+
+  it("keeps the pre-availability and unsupported copy platform-neutral", () => {
+    expect(resolveComputerAvailabilityView(undefined).description).not.toContain("Linux");
+    const unsupported = resolveComputerAvailabilityView({
+      kind: "unsupported-platform",
+      platform: "win32",
+    });
+    expect(unsupported.kind).toBe("blocked");
+    expect(unsupported.description).toContain("win32");
+    expect(unsupported.description).toContain("macOS");
+  });
+
+  it("shows a reconnecting backend as checking rather than blocked", () => {
+    expect(
+      resolveComputerAvailabilityView(
+        { kind: "backend-unavailable", message: "Reconnecting to the desktop. Last failure: boom" },
+        {
+          ...connectedComputerHealth(),
+          status: "reconnecting",
+          consecutiveFailures: 2,
+          lastFailure: { message: "boom", at: "2026-08-16T10:00:00.000Z" },
+        },
+      ),
+    ).toMatchObject({ kind: "checking", description: "boom" });
+  });
+});
+
+describe("computerStatusNeedsSetup", () => {
+  it("says no when there is no state yet, so no surface offers Set up on a guess", () => {
+    expect(computerStatusNeedsSetup(undefined)).toBe(false);
+  });
+
+  it("says no on a host that could never have a desktop backend", () => {
+    expect(
+      computerStatusNeedsSetup(
+        threadComputerState({ availability: { kind: "unsupported-platform", platform: "win32" } }),
+      ),
+    ).toBe(false);
+  });
+
+  it("says no on a ready desktop", () => {
+    expect(computerStatusNeedsSetup(threadComputerState())).toBe(false);
+  });
+
+  it("says yes on a withheld grant and on a backend that is not there", () => {
+    expect(computerStatusNeedsSetup({ ...threadComputerState(), ...PERMISSION_REQUIRED })).toBe(
+      true,
+    );
+    expect(
+      computerStatusNeedsSetup(
+        threadComputerState({
+          availability: { kind: "backend-unavailable", message: "no helper" },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("asks for setup on an idle backend unless the OS confirms every grant", () => {
+    const idle = {
+      ...threadComputerState({
+        health: { ...connectedComputerHealth(), status: "unavailable", captureAvailable: false },
+      }),
+      provisionable: true,
+    };
+    expect(computerStatusNeedsSetup(idle)).toBe(true);
+    expect(computerStatusNeedsSetup(idle, true)).toBe(false);
+  });
+
+  it("says yes when the desktop is driveable but blind", () => {
+    expect(
+      computerStatusNeedsSetup(
+        threadComputerState({ health: { ...connectedComputerHealth(), captureAvailable: false } }),
+      ),
+    ).toBe(true);
+  });
+
+  it("says yes when the backend has not been provisioned into existence yet", () => {
+    const status = threadComputerState();
+    expect(
+      computerStatusNeedsSetup({
+        ...status,
+        capabilities: { ...status.capabilities, input: false, capture: false },
+      }),
+    ).toBe(true);
   });
 });
