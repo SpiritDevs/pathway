@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import type { ComposerComputerControlMode } from "../computerControlMode";
 import {
   COMPUTER_PERMISSION_KINDS,
+  computerControlFieldsForTurn,
   draftRequestsComputerControl,
   readLocalComputerPermissionBridge,
   resolveComputerControlForSend,
@@ -212,5 +213,36 @@ describe("draftRequestsComputerControl", () => {
       true,
     );
     expect(draftRequestsComputerControl({ prompt: "", computerControlEnabled: false })).toBe(false);
+  });
+});
+
+describe("computerControlFieldsForTurn", () => {
+  const fields = resolveComputerControlForSend({
+    messageText: "open Notes",
+    computerControlEnabled: true,
+    generation: 4,
+  }).fields;
+
+  it("sends no first-message intent a server would strip without saying so", () => {
+    expect(
+      computerControlFieldsForTurn({
+        fields,
+        launchesThread: true,
+        serverTakesLaunchIntent: false,
+      }),
+    ).toEqual({});
+  });
+
+  it("keeps the intent where the launch carries it, and on every later message", () => {
+    expect(
+      computerControlFieldsForTurn({ fields, launchesThread: true, serverTakesLaunchIntent: true }),
+    ).toEqual({ enableComputerControl: true, computerControlGeneration: 4 });
+    expect(
+      computerControlFieldsForTurn({
+        fields,
+        launchesThread: false,
+        serverTakesLaunchIntent: false,
+      }),
+    ).toBe(fields);
   });
 });

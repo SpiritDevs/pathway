@@ -7,6 +7,7 @@ import type { ComputerAccessPolicy, ComputerAutonomy, EnvironmentId } from "@spi
 import { DEFAULT_UNIFIED_SETTINGS } from "@spiritdevs/contracts/settings";
 
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
+import { useServerConfigs } from "../../state/entities";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import {
   COMPUTER_ACCESS_POLICY_OPTIONS,
@@ -67,7 +68,11 @@ export function ComputerEnvironmentPolicySection({
   const computer = useEnvironmentSettings(environmentId, selectComputerSettings);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const defaults = DEFAULT_UNIFIED_SETTINGS.computer;
-  const readOnly = writeAccess !== "granted";
+  // An older server would decode the patch as empty and report success.
+  const serverConfig = useServerConfigs().get(environmentId);
+  const serverTooOld =
+    serverConfig !== undefined && serverConfig.environment.capabilities.computerPolicy !== true;
+  const readOnly = writeAccess !== "granted" || serverConfig === undefined || serverTooOld;
   const accessPolicy = computerPolicyOption(COMPUTER_ACCESS_POLICY_OPTIONS, computer.accessPolicy);
   const autonomy = computerPolicyOption(COMPUTER_AUTONOMY_OPTIONS, computer.autonomy);
   const setAccessPolicy = (accessPolicy: ComputerAccessPolicy) =>
@@ -76,7 +81,11 @@ export function ComputerEnvironmentPolicySection({
 
   return (
     <SettingsSection title="Access and oversight">
-      {writeAccess === "denied" ? (
+      {serverTooOld ? (
+        <p className="@xl/settings:px-4 px-3 text-xs text-muted-foreground">
+          Update this environment's Pathway server to change these settings.
+        </p>
+      ) : writeAccess === "denied" ? (
         <p className="@xl/settings:px-4 px-3 text-xs text-muted-foreground">
           Only an admin connection (access:write) can change these settings.
         </p>
