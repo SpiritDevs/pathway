@@ -292,3 +292,41 @@ enum PathwayComputerEffortHint {
         return PathwayModelSelection(instanceId: selection.instanceId, model: selection.model, options: options)
     }
 }
+
+/// The environment-wide Computer settings Settings → Computer shows, with the web client's copy.
+enum PathwayComputerPolicy {
+    struct Option: Identifiable { let id: String; let label: String; let detail: String }
+
+    static let accessPolicies = [
+        Option(id: "any-operator", label: "Any operator", detail: "Any paired client that can operate threads can start Computer tasks."),
+        Option(id: "scoped", label: "Scoped", detail: "Only clients granted Computer access can start Computer tasks."),
+        Option(id: "admins-only", label: "Admins only", detail: "Only admin clients can start Computer tasks.")
+    ]
+    static let autonomies = [
+        Option(id: "supervised", label: "Supervised", detail: "Every desktop action needs your approval."),
+        Option(id: "per-task", label: "Per task", detail: "Approve once per task and once for each additional app."),
+        Option(id: "auto", label: "Auto", detail: "No task or app approvals. Foreground use and clipboard reads still ask."),
+        Option(id: "full-access", label: "Full access",
+               detail: "No approvals. Foreground use and clipboard reads are allowed, and scheduled tasks and subagents can use the computer.")
+    ]
+
+    /// One line for a `computer.getStatus` result.
+    static func summary(_ status: JSONValue) -> String {
+        let fields = status.objectValue ?? [:]
+        let availability = fields["availability"]?.objectValue ?? [:]
+        if fields["inputStopped"]?.boolValue == true { return "Stopped via Escape on the host" }
+        switch availability["kind"]?.stringValue {
+        case "available":
+            return fields["health"]?.objectValue?["status"]?.stringValue == "reconnecting" ? "Reconnecting to the desktop" : "Ready"
+        case "permission-required":
+            let missing = (availability["missing"]?.arrayValue ?? []).compactMap(\.stringValue)
+            return "Needs \(PathwayComputerNotice.permissionList(missing)) on the host"
+        case "backend-unavailable":
+            return availability["message"]?.stringValue ?? "Unavailable"
+        case "unsupported-platform":
+            return "This host can't be controlled"
+        default:
+            return "Unavailable"
+        }
+    }
+}

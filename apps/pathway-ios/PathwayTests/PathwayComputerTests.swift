@@ -204,6 +204,20 @@ struct PathwayComputerTests {
         #expect(PathwayComputerEffortHint.mediumSelection(for: untouched, providers: provider(choices: ["low", "high"])) == nil)
     }
 
+    @Test func statusReadsTheHostsDesktop() {
+        func status(_ availability: [String: JSONValue], health: String = "connected", stopped: Bool = false) -> String {
+            PathwayComputerPolicy.summary(.object(["availability": .object(availability), "health": .object(["status": .string(health)]),
+                                                   "inputStopped": .bool(stopped)]))
+        }
+        #expect(status(["kind": .string("available")]) == "Ready")
+        #expect(status(["kind": .string("available")], health: "reconnecting") == "Reconnecting to the desktop")
+        #expect(status(["kind": .string("available")], stopped: true) == "Stopped via Escape on the host")
+        #expect(status(["kind": .string("permission-required"), "missing": .array([.string("screenRecording"), .string("accessibility")])])
+            == "Needs Accessibility and Screen Recording on the host")
+        #expect(status(["kind": .string("backend-unavailable"), "message": .string("No Wayland session")]) == "No Wayland session")
+        #expect(status([:]) == "Unavailable")
+    }
+
     private func makeModel(request: @escaping PathwayAgentThreadModel.Request) -> PathwayAgentThreadModel {
         let thread = makeAgentThread()
         let environment = PathwayCompanyEnvironment(companyId: thread.companyId, environment: PathwayEnvironment(id: "environment", environmentId: thread.environmentId,

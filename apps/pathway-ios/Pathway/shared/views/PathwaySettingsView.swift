@@ -36,6 +36,7 @@ struct PathwaySettingsView: View {
                 NavigationLink("Agent notifications") { PathwayNotificationsSettingsView() }
                 NavigationLink("Shared Drafts") { PathwaySharedDraftsDestination() }
             }
+            PathwayComputerSettingsSection(environments: appModel.cloud.environments, client: client(for:))
             Section("Orchestrators") {
                 ForEach(PathwayOrchestratorSettingsPage.allCases) { page in
                     NavigationLink(page.rawValue) { PathwayOrchestratorSettingsView(page: page) }
