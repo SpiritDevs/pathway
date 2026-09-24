@@ -1,10 +1,10 @@
 /** Still-image computer frame WebSocket route. */
-import { AuthOrchestrationReadScope } from "@spiritdevs/contracts";
 import {
+  AuthOrchestrationReadScope,
   COMPUTER_FRAME_RESYNC_MESSAGE,
   COMPUTER_FRAME_WS_COMPUTER_ID_PARAM,
   COMPUTER_FRAME_WS_PATH,
-} from "@spiritdevs/shared/computerFrame";
+} from "@spiritdevs/contracts";
 import {
   decodeFrameResyncRequest,
   makeFrameSink,
