@@ -13,6 +13,7 @@ import { RpcGroup, RpcTest } from "effect/unstable/rpc";
 import {
   AuthAdministrativeScopes,
   type AuthEnvironmentScope,
+  AuthSessionId,
   AuthStandardClientScopes,
   ChatAttachment,
   ChatAttachmentId,
@@ -26,6 +27,7 @@ import {
   WsServerUpdateSettingsRpc,
 } from "@spiritdevs/contracts";
 import * as ServerConfig from "./config.ts";
+import type { AuthenticatedSession } from "./auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import { resolveAttachmentPath } from "./attachmentStore.ts";
@@ -66,18 +68,26 @@ it.effect("allows a cached thread resume when the owning environment still has t
   ),
 );
 
-// Drives the settings handlers the WebSocket handler map spreads in, through an
-// RPC client, so a handler that skips the session's policy check fails here.
+// Drives the settings handlers the WebSocket handler map spreads in, built from
+// an authenticated session the way the map builds them, through an RPC client,
+// so a handler that skips the session's policy check fails here.
 it.effect("keeps Computer policy out of reach of a standard session's settings patch", () =>
   Effect.gen(function* () {
     const settings = yield* ServerSettings.ServerSettingsService;
     const group = RpcGroup.make(WsServerGetSettingsRpc, WsServerUpdateSettingsRpc);
-    const clientFor = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
-      RpcTest.makeClient(group).pipe(
+    const clientFor = (scopes: ReadonlyArray<AuthEnvironmentScope>) => {
+      const session: AuthenticatedSession = {
+        sessionId: AuthSessionId.make("session-settings"),
+        subject: "settings-client",
+        method: "browser-session-cookie",
+        scopes,
+      };
+      return RpcTest.makeClient(group).pipe(
         Effect.provide(
-          group.toLayer(serverSettingsRpcHandlers(settings, scopes, (_method, effect) => effect)),
+          group.toLayer(serverSettingsRpcHandlers(settings, session, (_method, effect) => effect)),
         ),
       );
+    };
     const standard = yield* clientFor(AuthStandardClientScopes);
     const administrative = yield* clientFor(AuthAdministrativeScopes);
 

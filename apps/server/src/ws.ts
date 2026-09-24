@@ -594,12 +594,13 @@ const updateServerSettingsForSession = (
   });
 
 /**
- * The settings RPCs for a session holding `scopes`. `observe` applies the RPC's
- * own scope and tracing, as it does for every other method.
+ * The settings RPCs for one authenticated session, whose scopes gate a
+ * Computer policy patch. `observe` applies the RPC's own scope and tracing,
+ * as it does for every other method.
  */
 export const serverSettingsRpcHandlers = (
   serverSettings: ServerSettings.ServerSettingsService["Service"],
-  scopes: ReadonlyArray<AuthEnvironmentScope>,
+  session: EnvironmentAuth.AuthenticatedSession,
   observe: <A, E>(
     method: string,
     effect: Effect.Effect<A, E>,
@@ -615,7 +616,7 @@ export const serverSettingsRpcHandlers = (
   [WS_METHODS.serverUpdateSettings]: ({ patch }: { readonly patch: ServerSettingsPatch }) =>
     observe(
       WS_METHODS.serverUpdateSettings,
-      updateServerSettingsForSession(serverSettings, scopes, patch).pipe(
+      updateServerSettingsForSession(serverSettings, session.scopes, patch).pipe(
         Effect.map(ServerSettings.redactServerSettingsForClient),
       ),
       { "rpc.aggregate": "server" },
@@ -1884,7 +1885,7 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "server" },
           ),
-        ...serverSettingsRpcHandlers(serverSettings, currentSession.scopes, observeRpcEffect),
+        ...serverSettingsRpcHandlers(serverSettings, currentSession, observeRpcEffect),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverDiscoverSourceControl,
