@@ -68,6 +68,22 @@ describe("computer frame gate", () => {
     expect(wrapped.action).toBe("decode");
     expect(wrapped.requestResync).toBe(true);
   });
+
+  it("draws a replacement desktop's frames on a socket that stayed open", () => {
+    // The first desktop's stream reached 10 before the server replaced it.
+    let gate = createComputerFrameGateState();
+    for (let sequence = 1; sequence <= 10; sequence += 1) {
+      gate = stepComputerFrameGate(gate, header(sequence), COMPUTER_ID).state;
+    }
+    // The server numbers the replacement's frames on from the old stream, so
+    // each one draws. Its publisher's own count, from 1, would all be stale.
+    for (const sequence of [11, 12, 13]) {
+      const step = stepComputerFrameGate(gate, header(sequence), COMPUTER_ID);
+      expect(step).toMatchObject({ action: "decode", requestResync: false });
+      gate = step.state;
+    }
+    expect(stepComputerFrameGate(gate, header(1), COMPUTER_ID).action).toBe("drop-stale");
+  });
 });
 
 describe("computer panel state helpers", () => {
