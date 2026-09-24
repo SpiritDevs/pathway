@@ -92,6 +92,18 @@ struct PathwayComputerTests {
         #expect(PathwayComputerAccess.canUse(policy: "admins-only", scopes: operate.union(["access:write"])))
     }
 
+    @Test func asksForComputerOnlyWhereTheServerAcceptsIt() {
+        let standard = PathwayConnectClient.environmentScopes(computerOperateScope: false)
+        #expect(!standard.contains("computer:operate"))
+        let computer = PathwayConnectClient.environmentScopes(computerOperateScope: true)
+        #expect(computer == standard + ["computer:operate"])
+        #expect(PathwayConnectClient.acceptsGrantedScopes(computer.joined(separator: " "), requested: computer))
+        #expect(PathwayConnectClient.acceptsGrantedScopes(standard.joined(separator: " "), requested: computer))
+        #expect(!PathwayConnectClient.acceptsGrantedScopes(computer.joined(separator: " "), requested: standard))
+        #expect(!PathwayConnectClient.acceptsGrantedScopes(standard.dropLast().joined(separator: " "), requested: computer))
+        #expect(!PathwayConnectClient.acceptsGrantedScopes((standard + ["access:write"]).joined(separator: " "), requested: standard))
+    }
+
     @Test func onlyDesktopHostsSupportComputer() {
         func config(_ os: String) -> [String: JSONValue] { ["environment": .object(["platform": .object(["os": .string(os)])])] }
         #expect(PathwayComputerAccess.supportsComputer(serverConfig: config("darwin")))
