@@ -122,6 +122,10 @@ enum PathwayComputerInvocation: String, Equatable, Sendable {
         return String(tail).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// `/computer-use` with no task, which the composer keeps rather than sends.
+    static func isBare(_ text: String) -> Bool { prompt(in: text)?.isEmpty == true }
+    static let bareCommandMessage = "Add a task after /computer-use. For example: /computer-use open Calculator and calculate 123 × 45."
+
     init(text: String, controlEnabled: Bool) {
         self = controlEnabled ? .chat : Self.prompt(in: text) == nil ? .off : .request
     }
@@ -134,6 +138,13 @@ enum PathwayComputerInvocation: String, Equatable, Sendable {
         var fields: [String: JSONValue] = ["computerControlGeneration": .number(Double(generation ?? 0))]
         if controlEnabled { fields["enableComputerControl"] = .bool(true) }
         return fields
+    }
+
+    /// A new chat's first message: no control epoch applies yet. A launch carries the intent only
+    /// where the server takes it (`computerPolicy`); elsewhere it is dropped and the turn runs without.
+    static func newChatFields(text: String, controlEnabled: Bool, launches: Bool, serverConfig: [String: JSONValue]) -> [String: JSONValue] {
+        guard !launches || PathwayComputerAccess.capability("computerPolicy", in: serverConfig) else { return [:] }
+        return fields(text: text, controlEnabled: controlEnabled, generation: nil)
     }
 }
 
@@ -231,10 +242,53 @@ extension PathwayAgentThreadModel {
         draft = "/\(PathwayComputerInvocation.slashCommand) " + draft
     }
 
+    /// The Computer fields a send of `text` to this chat carries. The control epoch comes from the
+    /// watched thread state, or is read once when unknown; offline it falls back to 0, which the
+    /// server treats as stale rather than re-arming control after a Stop.
+    func computerFields(for text: String, setting: Bool = UserDefaults.standard.bool(forKey: PathwayAgentThreadModel.computerControlDefaultsKey)) async -> [String: JSONValue] {
+        let enabled = computerControlApplies(setting: setting)
+        guard PathwayComputerInvocation(text: text, controlEnabled: enabled) != .off else { return [:] }
+        var generation = computerControlGeneration
+        if generation == nil, isSubscriptionReady,
+           let state = try? await request("computer.getThreadState", payload: .object(["threadId": .string(threadID)]), reportsErrors: false) {
+            generation = state.objectValue?["controlGeneration"]?.intValue
+        }
+        return PathwayComputerInvocation.fields(text: text, controlEnabled: enabled, generation: generation)
+    }
+
+    /// The Computer fields of a new chat started from this one.
+    func computerNewChatFields(for text: String, launches: Bool,
+                               setting: Bool = UserDefaults.standard.bool(forKey: PathwayAgentThreadModel.computerControlDefaultsKey)) -> [String: JSONValue] {
+        PathwayComputerInvocation.newChatFields(text: text, controlEnabled: computerControlApplies(setting: setting), launches: launches, serverConfig: serverConfig)
+    }
+
     func setComputerSessionScopes(_ scopes: Set<String>) { computerSessionScopes = scopes }
 
     func loadComputerAccessPolicy() async {
         guard supportsComputer, let settings = try? await request("server.getSettings", payload: .object([:]), reportsErrors: false) else { return }
         computerAccessPolicy = settings.objectValue?["computer"]?.objectValue?["accessPolicy"]?.stringValue
+    }
+}
+
+/// The composer's one-time tip for Claude chats that drive the desktop: Medium effort is faster.
+/// Offered only while effort sits untouched at a default other than Medium.
+enum PathwayComputerEffortHint {
+    static let effort = "medium"
+    static let message = "Desktop actions are faster at Medium effort"
+    static let actionLabel = "Use Medium"
+    static let dismissedDefaultsKey = "pathway.computerEffortHintDismissed"
+
+    /// `selection` with effort moved to Medium, or nil when the hint does not apply.
+    static func mediumSelection(for selection: PathwayModelSelection, providers: [PathwayServerProvider]) -> PathwayModelSelection? {
+        guard let provider = providers.first(where: { $0.id == selection.instanceId }), provider.driver == "claudeAgent",
+              let descriptor = provider.models.first(where: { $0.id == selection.model })?.optionDescriptors.first(where: { $0.type == "select" }),
+              descriptor.choices.contains(where: { $0.id == effort }),
+              let defaultEffort = descriptor.choices.first(where: \.isDefault)?.id, defaultEffort != effort else { return nil }
+        var options = selection.options ?? []
+        let current = options.first { $0.id == descriptor.id }?.value ?? descriptor.currentValue ?? .string(defaultEffort)
+        guard current == .string(defaultEffort) else { return nil }
+        options.removeAll { $0.id == descriptor.id }
+        options.append(.init(id: descriptor.id, value: .string(effort)))
+        return PathwayModelSelection(instanceId: selection.instanceId, model: selection.model, options: options)
     }
 }
