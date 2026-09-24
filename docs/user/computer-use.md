@@ -5,8 +5,8 @@ scrolls, while you watch a live preview in the chat. The computer it uses is alw
 running the environment, not the device you are typing on. Ask from your phone or a browser, and
 the agent works on the Mac that hosts your environment.
 
-Computer currently works when the environment runs in the Pathway desktop app on macOS. On other
-environments, `/computer-use` does not appear and **Settings** > **Computer** explains why.
+Computer currently works when the environment is a Mac running the Pathway server, such as the
+Pathway desktop app. On other environments, `/computer-use` does not appear.
 
 ## Setting up
 
