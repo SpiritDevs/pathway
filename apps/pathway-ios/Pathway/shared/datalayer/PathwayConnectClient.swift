@@ -93,6 +93,7 @@ private struct PathwayRemoteEnvironmentDescriptor: Decodable, Sendable {
     let environmentId: String
     let applicationId: String?
     let label: String
+    let capabilities: [String: JSONValue]?
 }
 
 private struct PathwayWebSocketTicket: Decodable, Sendable {
@@ -121,6 +122,18 @@ actor PathwayConnectClient {
         "review:write",
         "relay:read"
     ]
+
+    /// The scopes to request. `computer:operate` is named only to a server that advertises
+    /// it; older servers refuse the whole request when it appears.
+    static func environmentScopes(computerOperateScope: Bool) -> [String] {
+        standardEnvironmentScopes + (computerOperateScope ? ["computer:operate"] : [])
+    }
+
+    /// A grant may leave out Computer; every standard scope must be there and nothing unasked.
+    static func acceptsGrantedScopes(_ granted: String, requested: [String]) -> Bool {
+        let granted = Set(granted.split(separator: " ").map(String.init))
+        return granted.isSubset(of: requested) && Set(standardEnvironmentScopes).isSubset(of: granted)
+    }
 
     private let relayURL: URL
     private let clerkTokenProvider: ClerkTokenProvider
@@ -177,7 +190,8 @@ actor PathwayConnectClient {
         let accessToken = try await exchangeEnvironmentToken(
             bootstrapCredential: bootstrap.credential,
             endpoint: bootstrap.endpoint,
-            thumbprint: thumbprint
+            thumbprint: thumbprint,
+            scopes: Self.environmentScopes(computerOperateScope: descriptor.capabilities?["computerOperateScope"]?.boolValue == true)
         )
         let socketURL = try await webSocketURL(
             endpoint: bootstrap.endpoint,
@@ -346,14 +360,15 @@ private extension PathwayConnectClient {
     private func exchangeEnvironmentToken(
         bootstrapCredential: String,
         endpoint managedEndpoint: PathwayManagedEndpoint,
-        thumbprint: String
+        thumbprint: String,
+        scopes requestedScopes: [String]
     ) async throws -> PathwayRelayAccessToken {
         guard let httpBaseURL = managedEndpoint.httpBaseURL else {
             throw PathwayConnectError.invalidURL
         }
         let target = endpoint(httpBaseURL, path: ["oauth", "token"])
         let proof = try await signer.proof(method: "POST", url: target)
-        let scopes = Self.standardEnvironmentScopes.joined(separator: " ")
+        let scopes = requestedScopes.joined(separator: " ")
         var request = URLRequest(url: target)
         request.httpMethod = "POST"
         request.httpBody = formEncoded([
@@ -374,8 +389,7 @@ private extension PathwayConnectClient {
         )
         guard response.issuedTokenType == Self.accessTokenType,
               response.tokenType == "DPoP",
-              Set(response.scope.split(separator: " ").map(String.init))
-              == Set(Self.standardEnvironmentScopes),
+              Self.acceptsGrantedScopes(response.scope, requested: requestedScopes),
               !response.accessToken.isEmpty,
               thumbprint == proof.thumbprint
         else {
