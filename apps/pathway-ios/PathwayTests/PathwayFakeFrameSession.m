@@ -2,16 +2,33 @@
 #import <objc/runtime.h>
 
 // A frame socket with no network. Swift cannot construct a URLSessionWebSocketTask subclass,
-// so the tests reach these by name. A receive stays pending until the socket is cancelled,
-// as a quiet real socket does, so Foundation's own async receive() wrapper runs unchanged.
+// so the tests reach these by name. A receive stays pending until the test delivers, fails or
+// cancels it, as a quiet real socket does, so Foundation's own async receive() wrapper runs unchanged.
 @interface PathwayFakeFrameSocket : NSURLSessionWebSocketTask
 @property(nonatomic, copy) void (^onReceive)(void);
 @property(nonatomic, copy) void (^pendingReceive)(NSURLSessionWebSocketMessage *, NSError *);
 @property(nonatomic) NSInteger cancelCount;
+/// The refused upgrade's HTTP status, or 0 once upgraded.
+@property(nonatomic) NSInteger status;
+@property(nonatomic) NSInteger fakeCloseCode;
 @end
 
 @implementation PathwayFakeFrameSocket
 - (void)resume {}
+- (NSURLResponse *)response {
+    if (self.status == 0) return nil;
+    return [[NSHTTPURLResponse alloc] initWithURL:[NSURL URLWithString:@"wss://unused.invalid"] statusCode:self.status HTTPVersion:nil headerFields:nil];
+}
+- (NSURLSessionWebSocketCloseCode)closeCode { return self.fakeCloseCode; }
+- (void)complete:(NSURLSessionWebSocketMessage *)message error:(NSError *)error {
+    void (^pending)(NSURLSessionWebSocketMessage *, NSError *) = self.pendingReceive;
+    self.pendingReceive = nil;
+    if (pending) pending(message, error);
+}
+/// Hands the pending receive one binary message.
+- (void)deliver:(NSData *)data { [self complete:[[NSURLSessionWebSocketMessage alloc] initWithData:data] error:nil]; }
+/// Ends the socket as the server did, with `status` and `fakeCloseCode` already set.
+- (void)fail { [self complete:nil error:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorNetworkConnectionLost userInfo:nil]]; }
 - (void)receiveMessageWithCompletionHandler:(void (^)(NSURLSessionWebSocketMessage *, NSError *))completion {
     self.pendingReceive = completion;
     void (^ready)(void) = self.onReceive;
@@ -20,9 +37,7 @@
 }
 - (void)cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)code reason:(NSData *)reason {
     self.cancelCount += 1;
-    void (^pending)(NSURLSessionWebSocketMessage *, NSError *) = self.pendingReceive;
-    self.pendingReceive = nil;
-    if (pending) pending(nil, [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]);
+    [self complete:nil error:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]];
 }
 @end
 
