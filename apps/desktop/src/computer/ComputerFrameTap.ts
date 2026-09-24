@@ -59,6 +59,12 @@ export type ComputerFrameTapFailure = ComputerFrameTapError | HelperSpawnError |
 export interface ComputerFrameTap {
   /** Points the tap at `target`. Returns at once; a dead target is ignored until its task ends. */
   readonly update: (target: CuaPreviewTarget) => Effect.Effect<void>;
+  /**
+   * Whether a preview is on screen to receive frames. Unwatched, the helper
+   * stops but the target is kept, so watching again resumes the same capture.
+   * Starts unwatched; completes once the helper has stopped or started.
+   */
+  readonly setWatched: (watched: boolean) => Effect.Effect<void>;
   /** Stops a tap owned by `task` and forgets that task's dead targets. */
   readonly endTask: (task: CuaComputerTask) => Effect.Effect<void, ComputerFrameTapFailure>;
   readonly stop: Effect.Effect<void, ComputerFrameTapFailure>;
@@ -111,6 +117,7 @@ export const make = Effect.fn("desktop.computer.ComputerFrameTap.make")(function
   const runFork = yield* FiberSet.makeRuntime<never>().pipe(Scope.provide(workScope));
 
   let desired: CuaPreviewTarget | undefined;
+  let watched = false;
   let active: ActiveTap | undefined;
   let reconciling: Deferred.Deferred<void, ComputerFrameTapFailure> | undefined;
   let failure: ComputerFrameTapFailure | undefined;
@@ -343,7 +350,9 @@ export const make = Effect.fn("desktop.computer.ComputerFrameTap.make")(function
   const run: Effect.Effect<void, ComputerFrameTapFailure> = Effect.gen(function* () {
     for (;;) {
       const current = active;
-      const target = desired;
+      const goal = desired;
+      const goalWatched = watched;
+      const target = goalWatched ? goal : undefined;
       if (current && (!target || current.exited || current.key !== tapTargetKey(target))) {
         yield* recordFailure(retire(current));
         if (active === current) active = undefined;
@@ -357,7 +366,7 @@ export const make = Effect.fn("desktop.computer.ComputerFrameTap.make")(function
       }
       if (failure) return yield* failure;
       if (!current) yield* recordFailure(start(target));
-      if (target === desired) {
+      if (goal === desired && goalWatched === watched) {
         appliedRevision = revision;
         return;
       }
@@ -398,6 +407,14 @@ export const make = Effect.fn("desktop.computer.ComputerFrameTap.make")(function
       return reconcileInBackground;
     });
 
+  const setWatched = (next: boolean) =>
+    Effect.suspend(() => {
+      if (watched === next) return Effect.void;
+      watched = next;
+      revision += 1;
+      return reconcile.pipe(Effect.catch(reportError));
+    });
+
   const stop = Effect.suspend(() => {
     desired = undefined;
     revision += 1;
@@ -435,6 +452,6 @@ export const make = Effect.fn("desktop.computer.ComputerFrameTap.make")(function
 
   yield* Scope.addFinalizer(scope, dispose.pipe(Effect.catch(reportError)));
 
-  const tap: ComputerFrameTap = { update, endTask, stop, dispose };
+  const tap: ComputerFrameTap = { update, setWatched, endTask, stop, dispose };
   return tap;
 });

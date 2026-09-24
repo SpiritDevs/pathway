@@ -63,6 +63,13 @@ const objectPayload = <T>(payload: unknown): T | null =>
  * persistence and the live push to a running driver.
  */
 export function createComputerPreloadBridge(): DesktopComputerBridge {
+  // Native capture runs only while a preview listens. A reloaded renderer
+  // starts from nobody watching, whatever the page before it left behind.
+  let previewListeners = 0;
+  const setPreviewWatched = (watched: boolean) => {
+    ipcRenderer.invoke(IpcChannels.COMPUTER_PREVIEW_WATCHED_CHANNEL, watched).catch(() => {});
+  };
+  setPreviewWatched(false);
   return {
     getState: (permissions) =>
       ipcRenderer.invoke(IpcChannels.COMPUTER_GET_STATE_CHANNEL, permissions),
@@ -97,7 +104,20 @@ export function createComputerPreloadBridge(): DesktopComputerBridge {
         (state) => (state === "granted" || state === "closed" ? state : null),
         listener,
       ),
-    onPreviewFrame: (listener) =>
-      subscribe(IpcChannels.COMPUTER_PREVIEW_FRAME_CHANNEL, parseComputerPreviewFrame, listener),
+    onPreviewFrame: (listener) => {
+      const unsubscribe = subscribe(
+        IpcChannels.COMPUTER_PREVIEW_FRAME_CHANNEL,
+        parseComputerPreviewFrame,
+        listener,
+      );
+      if (++previewListeners === 1) setPreviewWatched(true);
+      let subscribed = true;
+      return () => {
+        if (!subscribed) return;
+        subscribed = false;
+        unsubscribe();
+        if (--previewListeners === 0) setPreviewWatched(false);
+      };
+    },
   };
 }

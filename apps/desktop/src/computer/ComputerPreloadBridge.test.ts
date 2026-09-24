@@ -64,6 +64,7 @@ describe("createComputerPreloadBridge", () => {
     await bridge.setCursorStyle({ fill: "#aabbcc" });
     await bridge.setCursorStyle(null);
     expect(mocks.invoke.mock.calls).toStrictEqual([
+      [IpcChannels.COMPUTER_PREVIEW_WATCHED_CHANNEL, false],
       [IpcChannels.COMPUTER_GET_STATE_CHANNEL, ["accessibility"]],
       [IpcChannels.COMPUTER_REQUEST_PERMISSIONS_CHANNEL, undefined],
       [IpcChannels.COMPUTER_START_PERMISSION_SETUP_CHANNEL, ["screenRecording"]],
@@ -112,5 +113,26 @@ describe("createComputerPreloadBridge", () => {
     expect(states).toHaveLength(1);
     expect(frames).toHaveLength(1);
     expect(ipcRenderer.listenerCount(IpcChannels.COMPUTER_PREVIEW_FRAME_CHANNEL)).toBe(0);
+  });
+
+  it("reports preview demand on the first subscriber and after the last leaves", () => {
+    const bridge = createComputerPreloadBridge();
+    const watched = () =>
+      mocks.invoke.mock.calls
+        .filter(([channel]) => channel === IpcChannels.COMPUTER_PREVIEW_WATCHED_CHANNEL)
+        .map(([, value]) => value);
+    // A fresh renderer clears whatever demand the page before it left behind.
+    expect(watched()).toStrictEqual([false]);
+
+    const first = bridge.onPreviewFrame(() => {});
+    const second = bridge.onPreviewFrame(() => {});
+    expect(watched()).toStrictEqual([false, true]);
+    first();
+    first();
+    expect(watched()).toStrictEqual([false, true]);
+    second();
+    expect(watched()).toStrictEqual([false, true, false]);
+    bridge.onPreviewFrame(() => {});
+    expect(watched()).toStrictEqual([false, true, false, true]);
   });
 });

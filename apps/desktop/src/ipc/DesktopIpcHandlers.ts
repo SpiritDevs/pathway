@@ -143,4 +143,5 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(ComputerIpc.hideComputerPermissionGuide);
   yield* ipc.handle(ComputerIpc.restartComputerApp);
   yield* ipc.handle(ComputerIpc.setComputerCursorStyle);
+  yield* ipc.handle(ComputerIpc.setComputerPreviewWatched);
 });
