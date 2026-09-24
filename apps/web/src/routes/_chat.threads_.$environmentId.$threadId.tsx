@@ -7,7 +7,8 @@ import {
   isCompletedQueueEntry,
 } from "../cloud/threadQueueState";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import * as Option from "effect/Option";
+import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
+import { Atom } from "effect/unstable/reactivity";
 import { useEffect } from "react";
 
 import ChatView from "../components/ChatView";
@@ -20,16 +21,33 @@ import {
 } from "../threadRoutes";
 import { SidebarInset } from "~/components/ui/sidebar";
 import { resolveThreadDetailRef, useThreadShell, useThreadStatus } from "../state/entities";
-import { useEnvironmentQuery } from "../state/query";
-import { environmentShell } from "../state/shell";
+import { environmentSnapshotAtom } from "../state/shell";
+
+/**
+ * The only facts the route needs from the (unfiltered) shell stream. A string keeps the route,
+ * and the chat view under it, from re-rendering when unrelated threads update.
+ */
+const threadRouteShellPresenceAtom = Atom.family((key: string) => {
+  const [environmentId, threadId] = JSON.parse(key) as [EnvironmentId, ThreadId];
+  return Atom.make((get) => {
+    const snapshot = get(environmentSnapshotAtom(environmentId));
+    if (snapshot === null) return "loading" as const;
+    return snapshot.threads.some((thread) => thread.id === threadId)
+      ? ("present" as const)
+      : ("absent" as const);
+  }).pipe(Atom.withLabel(`thread-route-shell-presence:${key}`));
+});
+const NO_THREAD_ROUTE_SHELL_ATOM = Atom.make("loading" as const);
 
 function ChatThreadRouteView() {
   const navigate = useNavigate();
   const threadRef = Route.useParams({
     select: (params) => resolveThreadRouteRef(params),
   });
-  const shell = useEnvironmentQuery(
-    threadRef === null ? null : environmentShell.stateAtom(threadRef.environmentId),
+  const shellPresence = useAtomValue(
+    threadRef === null
+      ? NO_THREAD_ROUTE_SHELL_ATOM
+      : threadRouteShellPresenceAtom(JSON.stringify([threadRef.environmentId, threadRef.threadId])),
   );
   const queuedThreads = useAtomValue(threadQueueEntriesAtom);
   const { queueId } = Route.useSearch();
@@ -43,7 +61,7 @@ function ChatThreadRouteView() {
     queueHydrated &&
     serverThreadShell === null &&
     (completedQueue || (queueId !== undefined && !queuedThread));
-  const bootstrapComplete = shell.data?.snapshot._tag === "Some";
+  const bootstrapComplete = shellPresence !== "loading";
   const draftThreadExists = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) !== null : false,
   );
@@ -58,12 +76,9 @@ function ChatThreadRouteView() {
       waitForShell: draftThread !== null && !draftThread.promotedTo,
     }),
   );
-  const unfilteredSnapshot = shell.data === null ? null : Option.getOrNull(shell.data.snapshot);
   const promotedThreadUnavailable = promotedDraftThreadIsUnavailable({
     hasPromotedThread: draftThreadExists && !queuedThread,
-    promotedThreadExists:
-      threadRef !== null &&
-      (unfilteredSnapshot?.threads.some((thread) => thread.id === threadRef.threadId) ?? false),
+    promotedThreadExists: shellPresence === "present",
     promotedThreadVisible: serverThreadShell !== null,
     promotedThreadDeleted: serverThreadStatus === "deleted",
   });

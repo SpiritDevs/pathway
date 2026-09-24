@@ -9,6 +9,8 @@ import {
   createEnvironmentSnapshotAtom,
   createShellEnvironmentAtoms,
 } from "@spiritdevs/client-runtime/state/shell";
+import { useAtomValue } from "@effect/atom-react";
+import type { EnvironmentId } from "@spiritdevs/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
@@ -18,6 +20,22 @@ import { connectionAtomRuntime } from "../connection/runtime";
 export const shellEnvironment = createShellEnvironmentAtoms(connectionAtomRuntime);
 export const environmentShell = createEnvironmentShellAtoms(connectionAtomRuntime);
 export const environmentSnapshotAtom = createEnvironmentSnapshotAtom(environmentShell.stateAtom);
+const environmentShellBootstrappedAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) => get(environmentSnapshotAtom(environmentId)) !== null).pipe(
+    Atom.withLabel(`environment-shell-bootstrapped:${environmentId}`),
+  ),
+);
+const NO_ENVIRONMENT_SHELL_ATOM = Atom.make(false);
+
+/** Whether the environment's shell has loaded, without re-rendering on every thread update. */
+export function useEnvironmentShellBootstrapped(environmentId: EnvironmentId | null): boolean {
+  return useAtomValue(
+    environmentId === null
+      ? NO_ENVIRONMENT_SHELL_ATOM
+      : environmentShellBootstrappedAtom(environmentId),
+  );
+}
+
 export const environmentShellSummaryAtom = createEnvironmentShellSummaryAtom({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   shellStateValueAtom: environmentShell.stateValueAtom,

@@ -82,8 +82,7 @@ import {
   resolveThreadProviderSession,
 } from "@spiritdevs/client-runtime/state/thread-workflows";
 import { USAGE_LIMIT_RECOVERY_PROMPT } from "@spiritdevs/client-runtime/state/usage-limit-recovery";
-import { resolveThreadForkKind } from "@spiritdevs/client-runtime/state/thread-relationships";
-import { getSidebarForkParentThreadId, resolveThreadLastVisitedAt } from "./Sidebar.logic";
+import { resolveThreadLastVisitedAt } from "./Sidebar.logic";
 import { derivePendingThreadRequests } from "@spiritdevs/client-runtime/state/thread-requests";
 import {
   parseScopedThreadKey,
@@ -346,7 +345,6 @@ import {
   useThreadProjection,
   useThreadHistory,
   useThreadShell,
-  useThreadShells,
   useThreadStatus,
   useThreadRefs,
   useThreadTitlesByKey,
@@ -354,7 +352,7 @@ import {
   useAllEnvironmentShellsBootstrapped,
   waitForThreadShell,
 } from "../state/entities";
-import { environmentShell } from "../state/shell";
+import { useEnvironmentShellBootstrapped } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { IssueDetailSheet } from "./issues/IssueDetailSheet";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
@@ -363,7 +361,8 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ContinuationDialog, type ContinuationWorkspaceTarget } from "./chat/ContinuationDialog";
 import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
-import { ChatHeader, resolveThreadBreadcrumbAncestors } from "./chat/ChatHeader";
+import { ChatHeader } from "./chat/ChatHeader";
+import { useSideChatThreadIds, useThreadBreadcrumbAncestors } from "../state/threadLineage";
 import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
 import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
 import {
@@ -1847,7 +1846,6 @@ function ChatViewContent(props: ChatViewProps) {
   const storeSetActiveTerminal = useTerminalUiStateStore((s) => s.setActiveTerminal);
   const storeCloseTerminal = useTerminalUiStateStore((s) => s.closeTerminal);
   const serverThreadRefs = useThreadRefs();
-  const serverThreadShells = useThreadShells();
   const serverThreadKeys = useMemo(() => serverThreadRefs.map(scopedThreadKey), [serverThreadRefs]);
   const draftThreadsByThreadKey = useComposerDraftStore((store) => store.draftThreadsByThreadKey);
   const draftThreadKeys = useMemo(
@@ -2116,25 +2114,7 @@ function ChatViewContent(props: ChatViewProps) {
       ),
     [activeThreadRef, serverThreadRefs, threadTitlesByKey],
   );
-  const sideChatThreadIds = useMemo(
-    () =>
-      activeThreadRef
-        ? serverThreadShells
-            .filter(
-              (thread) =>
-                thread.environmentId === activeThreadRef.environmentId &&
-                getSidebarForkParentThreadId(thread) === activeThreadRef.threadId &&
-                thread.settledOverride !== "settled" &&
-                resolveThreadForkKind(thread) === "side_chat",
-            )
-            .toSorted(
-              (left, right) =>
-                left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
-            )
-            .map((thread) => thread.id)
-        : [],
-    [activeThreadRef, serverThreadShells],
-  );
+  const sideChatThreadIds = useSideChatThreadIds(activeThreadRef);
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
     readonly messageId: MessageId | null;
@@ -2336,10 +2316,9 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeThread, isServerThread, updateThreadMetadata],
   );
-  const activeEnvironmentShell = useEnvironmentQuery(
-    activeThread ? environmentShell.stateAtom(activeThread.environmentId) : null,
+  const activeEnvironmentBootstrapComplete = useEnvironmentShellBootstrapped(
+    activeThread?.environmentId ?? null,
   );
-  const activeEnvironmentBootstrapComplete = activeEnvironmentShell.data?.snapshot._tag === "Some";
   const activeProjectKey = activeProject
     ? `${activeProject.environmentId}:${activeProject.workspaceRoot}`
     : activeThread?.conversationPath
@@ -6759,10 +6738,7 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [environmentId, navigate],
   );
-  const threadBreadcrumbAncestors = useMemo(
-    () => resolveThreadBreadcrumbAncestors(activeThread, serverThreadShells),
-    [activeThread, serverThreadShells],
-  );
+  const threadBreadcrumbAncestors = useThreadBreadcrumbAncestors(activeThread);
   const projectSwitchInFlightRef = useRef(false);
   const canChangeHeaderProject =
     (isLocalDraftThread && timelineEntries.length === 0 && !isWorking) ||

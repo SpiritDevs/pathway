@@ -39,7 +39,7 @@ export interface ThreadBreadcrumbAncestor {
   readonly title: string;
 }
 
-interface ThreadWithLineage extends ThreadBreadcrumbAncestor {
+export interface ThreadWithLineage extends ThreadBreadcrumbAncestor {
   readonly environmentId: EnvironmentId;
   readonly forkedFrom?: {
     readonly type: string;
@@ -50,10 +50,30 @@ interface ThreadWithLineage extends ThreadBreadcrumbAncestor {
   };
 }
 
-function breadcrumbParentThreadId(thread: ThreadWithLineage): ThreadId | null {
+export function breadcrumbParentThreadId(thread: ThreadWithLineage): ThreadId | null {
   return thread.forkedFrom?.type === "run" && thread.forkedFrom.threadId !== undefined
     ? thread.forkedFrom.threadId
     : thread.lineage.parentThreadId;
+}
+
+/** Walks breadcrumb parents through `lookup`, stopping at a missing parent or a cycle. */
+export function walkThreadBreadcrumbAncestors(
+  activeThread: ThreadWithLineage,
+  lookup: (threadId: ThreadId) => ThreadWithLineage | undefined,
+): ReadonlyArray<ThreadBreadcrumbAncestor> {
+  const ancestors: ThreadBreadcrumbAncestor[] = [];
+  const visited = new Set<ThreadId>([activeThread.id]);
+  let parentThreadId = breadcrumbParentThreadId(activeThread);
+
+  while (parentThreadId !== null && !visited.has(parentThreadId)) {
+    visited.add(parentThreadId);
+    const parent = lookup(parentThreadId);
+    if (parent === undefined) break;
+    ancestors.unshift({ id: parent.id, title: parent.title });
+    parentThreadId = breadcrumbParentThreadId(parent);
+  }
+
+  return ancestors;
 }
 
 export function resolveThreadBreadcrumbAncestors(
@@ -67,19 +87,7 @@ export function resolveThreadBreadcrumbAncestors(
       .filter((thread) => thread.environmentId === activeThread.environmentId)
       .map((thread) => [thread.id, thread] as const),
   );
-  const ancestors: ThreadBreadcrumbAncestor[] = [];
-  const visited = new Set<ThreadId>([activeThread.id]);
-  let parentThreadId = breadcrumbParentThreadId(activeThread);
-
-  while (parentThreadId !== null && !visited.has(parentThreadId)) {
-    visited.add(parentThreadId);
-    const parent = threadsById.get(parentThreadId);
-    if (parent === undefined) break;
-    ancestors.unshift({ id: parent.id, title: parent.title });
-    parentThreadId = breadcrumbParentThreadId(parent);
-  }
-
-  return ancestors;
+  return walkThreadBreadcrumbAncestors(activeThread, (threadId) => threadsById.get(threadId));
 }
 
 export const ChatHeader = memo(function ChatHeader({
