@@ -661,12 +661,15 @@ describe("ServerSettings Computer policy", () => {
     expect(() => decodeServerSettings({ computer: { autonomy: "unrestricted" } })).toThrow();
   });
 
-  it("cannot be changed through the operator settings patch", () => {
+  it("travels in the settings patch, which the server guards with access:write", () => {
     const patch = decodeServerSettingsPatch({
       environmentName: "Studio",
       computer: { accessPolicy: "any-operator", autonomy: "full-access" },
     });
-    expect(patch).toEqual({ environmentName: "Studio" });
+    expect(patch).toEqual({
+      environmentName: "Studio",
+      computer: { accessPolicy: "any-operator", autonomy: "full-access" },
+    });
   });
 });
 
