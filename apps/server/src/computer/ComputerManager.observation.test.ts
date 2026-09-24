@@ -669,6 +669,15 @@ it.layer(NodeServices.layer)("ComputerManager and FakeComputerBackend (observati
         yield* backend.emitFrame(false, false, Uint8Array.of(7, 8));
         yield* sink.waitFor(3);
         expect(sink.received).toHaveLength(3);
+        // A backend's JPEG preview still reaches the pane labelled as one.
+        yield* backend.emitFrame(true, false, Uint8Array.of(0xff, 0xd8), "image/jpeg");
+        yield* sink.waitFor(4);
+        const jpeg = decodeComputerFrame(sink.received[3]!);
+        expect(jpeg.ok && jpeg.frame.header.mimeType).toBe("image/jpeg");
+        expect(decodeComputerFrame(sink.received[2]!)).toMatchObject({
+          ok: true,
+          frame: { header: { mimeType: "image/png" } },
+        });
 
         yield* unsubscribe;
         yield* manager.flushStreamTransitions;

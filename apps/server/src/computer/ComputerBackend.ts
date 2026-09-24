@@ -10,6 +10,7 @@ import {
   type ComputerCapabilities,
   type ComputerCursorPosition,
   type ComputerDeliveryVerification,
+  type ComputerFrameMimeType,
   type ComputerHealth,
   type ComputerId,
   type ComputerInputModifier,
@@ -28,6 +29,7 @@ import {
   type ComputerZoomResult,
 } from "@spiritdevs/contracts";
 import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@spiritdevs/shared/modelImageBudget";
+import type * as Deferred from "effect/Deferred";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
@@ -85,12 +87,27 @@ export type ComputerCaptureRequest =
   | { readonly kind: "window"; readonly windowId: string; readonly maxDimension?: number }
   | { readonly kind: "region"; readonly region: ComputerRect; readonly maxDimension?: number };
 
+/** A single-channel capture; see `ComputerBackend.captureLuma`. */
+export interface ComputerLumaCapture {
+  readonly width: number;
+  readonly height: number;
+  /** Row-major, one byte per pixel, no row padding: `width * height` bytes. */
+  readonly data: Uint8Array;
+  /** Capture pixels per desktop pixel, as on `ComputerScreenshot.scale`. */
+  readonly scale: number;
+}
+
 export interface ComputerStreamFrame {
   readonly sequence: number;
   readonly timestampMs: number;
   readonly keyframe: boolean;
   readonly codecConfig: boolean;
   readonly data: Uint8Array;
+  /**
+   * The still's image type, carried to the pane per frame. Absent means PNG.
+   * Only the preview may use JPEG: every screenshot a model reads stays PNG.
+   */
+  readonly mimeType?: ComputerFrameMimeType;
 }
 
 export interface ComputerResolvedTarget {
@@ -162,6 +179,16 @@ export type ComputerBackendEvent =
       /** The pause reasons the host reported active at reply time. */
       readonly pauses: readonly string[];
     }
+  /**
+   * The desktop this backend was bound to no longer exists and will not come
+   * back on its own: the compositor instance it drove exited. Distinct from a
+   * reconnect, which the backend handles itself. The service re-runs backend
+   * selection, except for a backend an explicit override named. When
+   * selection picks the same tier again nothing is swapped, so a backend that
+   * emits this owns the retry and keeps looking for its desktop at a slow
+   * cadence. `message` says what was lost.
+   */
+  | { readonly type: "desktop-gone"; readonly message: string }
   | { readonly type: "frame"; readonly frame: ComputerStreamFrame };
 
 /**
@@ -209,6 +236,16 @@ export interface ComputerBrowserBackend {
 }
 
 /**
+ * One pending single-use clipboard offer; see `ComputerBackend.writeClipboardForPaste`.
+ * `consumed` completes once a paste target has read the payload. It fails, or
+ * never completes, when the offer ended some other way (replaced, the helper
+ * died); the manager treats both as "not observed" and falls back to its bound.
+ */
+export interface ComputerClipboardPasteOffer {
+  readonly consumed: Deferred.Deferred<void, ComputerOperationError>;
+}
+
+/**
  * What a backend that does not exist can do, which is nothing. An absent
  * capability set reads as a fully capable one, so state payloads with no
  * backend behind them carry this instead.
@@ -233,6 +270,25 @@ export const NO_COMPUTER_CAPABILITIES: ComputerCapabilities = {
  */
 export type ComputerAgentDialect = "linux" | "macos";
 
+/**
+ * The two facts about a desktop the model is told once, at session start, by
+ * guidance rendered far from the backend (`mcp/toolkits/computer/computerGuidance.ts`).
+ */
+export interface ComputerGuidanceProfile {
+  readonly dialect: ComputerAgentDialect;
+  /** See `ComputerBackend.dedicatedSeat`. */
+  readonly dedicatedSeat: boolean;
+}
+
+export function computerGuidanceProfile(
+  backend: Pick<ComputerBackend, "agentDialect" | "dedicatedSeat">,
+): ComputerGuidanceProfile {
+  return {
+    dialect: backend.agentDialect ?? "linux",
+    dedicatedSeat: backend.dedicatedSeat === true,
+  };
+}
+
 type BackendEffect<A> = Effect.Effect<A, ComputerOperationError>;
 export type ComputerBackendAction = BackendEffect<ComputerBackendActionResult | undefined>;
 
@@ -242,10 +298,30 @@ export type ComputerBackendAction = BackendEffect<ComputerBackendActionResult | 
  * Every native call is an Effect that fails with a typed computer error and is
  * cancelled by interruption. Synchronous members stay synchronous because the
  * contract promises they are free reads of what the backend already knows.
+ *
+ * Optional members are read by presence, on every use. The manager may run on
+ * a switchable slot that resolves each member against its current occupant,
+ * and a backend may offer a member only while its desktop supports it. So a
+ * caller checks a member where it is about to use it, never caches the verdict
+ * across a suspension point, and binds it once when one use spans several.
  */
 export interface ComputerBackend {
   /** Absent means `"linux"`: the evdev + AT-SPI pair. */
   readonly agentDialect?: ComputerAgentDialect;
+  /**
+   * The agent drives this desktop through a seat of its own (a compositor
+   * plugin's dedicated seat, or a private compositor), so its input never
+   * touches the human's cursor, focus or keystrokes, and it has no browser
+   * route. Only the Linux compositor backends set it. Guidance reads it rather
+   * than live capabilities because the model is told about its desktop once,
+   * at session start, before an on-demand desktop has booted.
+   */
+  readonly dedicatedSeat?: boolean;
+  /**
+   * Whether `selectText` can succeed here. `false` refuses the call before the
+   * lease is claimed and the window restacked and aimed. Absent means supported.
+   */
+  readonly textRangeSelection?: boolean;
   readonly computerId: ComputerId;
   /**
    * Whether this host could drive a desktop, answered without doing anything to
@@ -254,6 +330,13 @@ export interface ComputerBackend {
    * failure mode.
    */
   readonly probeAvailability: () => BackendEffect<ComputerAvailability>;
+  /**
+   * The passive status read, for a backend whose desktop boots on demand and
+   * must not be respawned by the settings screen's status poll. It reports the
+   * last established state without touching the desktop, and the manager uses
+   * it for every status read. Absent means `availability()` is safe to poll.
+   */
+  readonly statusAvailability?: () => BackendEffect<ComputerAvailability>;
   /**
    * Availability as established, not as guessed: this may connect, install, and
    * load whatever the backend needs. `refresh` bypasses an established snapshot.
@@ -293,15 +376,41 @@ export interface ComputerBackend {
   readonly captureScreenshot: (
     request: ComputerCaptureRequest,
   ) => BackendEffect<ComputerScreenshot>;
+  /**
+   * The same capture as `captureScreenshot(request)`, as raw 8-bit luma, for a
+   * scroll baseline that is only ever measured. It must report the `width`,
+   * `height` and `scale` that capture would, with luma computed exactly as
+   * `decodePngLuma` derives it: `floor((299 R + 587 G + 114 B) / 1000)`. A
+   * failure falls back to the PNG baseline.
+   */
+  readonly captureLuma?: (request: ComputerCaptureRequest) => BackendEffect<ComputerLumaCapture>;
+  /**
+   * The desktop rect an untargeted observation photographs when no window
+   * holds the agent's focus: on a multi-monitor desktop, the one output the
+   * agent works on. `undefined` (or a failure) keeps the whole workspace.
+   */
+  readonly defaultObservationRegion?: () => BackendEffect<ComputerRect | undefined>;
   /** Pin or release the per-seat target window when supported. */
   readonly focusWindow?: (windowId: string) => BackendEffect<void>;
   /** Restack a window above the ones covering it, without moving keyboard focus. */
   readonly raiseWindow?: (windowId: string) => BackendEffect<void>;
   readonly clearFocusWindow?: () => BackendEffect<void>;
+  /**
+   * The seat as the next owner must find it: nothing aimed, nothing held,
+   * nothing remembered about the previous owner's targets. The manager calls it
+   * on every lease change and release. Absent means `clearFocusWindow`.
+   */
+  readonly resetInputDelivery?: () => BackendEffect<void>;
   /** Names the thread holding the desktop, for an agent-cursor label. Best effort. */
   readonly setDrivingAgent?: (name: string | null) => BackendEffect<void>;
   /** Cosmetic activity only: never activates a window or sends input. */
   readonly setCursorActivity?: (text: string | null) => BackendEffect<void>;
+  /**
+   * Start `app`. Window readiness matches the result's `pid` exactly unless it
+   * also names `appId`, the identity its windows report as `appName`; set it
+   * when the launch may hand the window to another process (a flatpak or
+   * `gio launch` wrapper, a single-instance app forwarding to its running copy).
+   */
   readonly launchApp: (
     app: string,
     args: readonly string[],
@@ -320,11 +429,35 @@ export interface ComputerBackend {
     readonly windowId: string;
     readonly timeoutMs: number;
     readonly quietMs: number;
+    /**
+     * How long `quietMs` of quiet is looked for. Past it, a surface that has
+     * changed since the action counts as settled even though it keeps
+     * repainting. Absent: quiet is waited for until `timeoutMs`.
+     */
+    readonly quietWithinMs?: number;
+    /**
+     * How long a first change is looked for. A surface that has not changed by
+     * then counts as settled: the action changed nothing it paints. Absent: a
+     * first change is waited for as long as quiet is.
+     */
+    readonly changeWithinMs?: number;
   }) => BackendEffect<{
     readonly settled: boolean;
     readonly waitedMs: number;
     readonly eventsSeen?: number;
   }>;
+  /**
+   * The post-action settle this backend's `waitForSettle` is tuned for. The
+   * manager waits `min(quietMs, its configured settle)` of quiet, capped at
+   * `timeoutMs`, passing the windows through; an explicit `computer_wait`
+   * keeps its own timeout. Absent means the manager's defaults.
+   */
+  readonly actionSettle?: {
+    readonly quietMs: number;
+    readonly timeoutMs: number;
+    readonly quietWithinMs?: number;
+    readonly changeWithinMs?: number;
+  };
   /** The process-level app list, for backends that can enumerate it. */
   readonly listApps?: () => BackendEffect<readonly ComputerApp[]>;
   /** Move and resize the exact window to `frame` in desktop coordinates. */
@@ -428,6 +561,15 @@ export interface ComputerBackend {
   readonly readClipboard?: () => BackendEffect<string>;
   /** Writes the same shared system clipboard `readClipboard` reads. */
   readonly writeClipboard?: (text: string) => BackendEffect<void>;
+  /**
+   * Writes `text` to the shared clipboard for exactly one paste, and says when
+   * that paste has read it, so the manager can restore the human's clipboard
+   * as soon as the target is done rather than after a guessed wait. Completes
+   * once the payload is on the clipboard. A later `writeClipboard` must replace
+   * an unconsumed offer, and the offer must not outlive the backend. Absent
+   * means the fixed restore wait.
+   */
+  readonly writeClipboardForPaste?: (text: string) => BackendEffect<ComputerClipboardPasteOffer>;
   readonly setValue: (target: ComputerResolvedTarget, value: string) => ComputerBackendAction;
   readonly performAction: (target: ComputerResolvedTarget, action: string) => ComputerBackendAction;
   /** Select an exact character range through the accessibility layer. */

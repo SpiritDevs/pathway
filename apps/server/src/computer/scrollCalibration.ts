@@ -42,6 +42,20 @@ const CHANNELS_BY_COLOR_TYPE = new Map<number, number>([
 const decodedCaptures = new WeakMap<Uint8Array, Fiber.Fiber<LumaImage | undefined>>();
 
 /**
+ * One side of a travel measurement: a captured PNG, or luma a backend produced
+ * directly (`ComputerBackend.captureLuma`) for a capture nobody looks at.
+ */
+export type ScrollMeasurementFrame =
+  | { readonly kind: "png"; readonly bytes: Uint8Array }
+  | { readonly kind: "luma"; readonly image: LumaImage };
+
+/** The luma a measurement frame carries, decoding a PNG on the way; see `decodePngLuma`. */
+export const measurementFrameLuma = (
+  frame: ScrollMeasurementFrame,
+): Effect.Effect<LumaImage | undefined> =>
+  frame.kind === "png" ? decodePngLuma(frame.bytes) : Effect.succeed(frame.image);
+
+/**
  * Decodes a captured PNG down to luma.
  *
  * Deliberately minimal — 8-bit, non-interlaced, gray/RGB/RGBA, which is what

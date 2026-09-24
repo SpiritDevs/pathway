@@ -513,6 +513,69 @@ it.layer(NodeServices.layer)("ComputerManager and FakeComputerBackend (control)"
         ),
     );
 
+    it.effect("asks the observer again once the backend's capabilities change", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* setEnv("PATHWAY_CUA_CONDITIONAL_SETTLE", undefined);
+          let known = false;
+          const backend = new ProvenBackend({
+            waitForSettle: () =>
+              known
+                ? Effect.succeed({ settled: true, waitedMs: 0 })
+                : refuseSettle("Unknown tool: waitForSettle"),
+          });
+          const manager = yield* ComputerManager.make({ backend, actionSettleMs: 60 });
+          const sleeps = yield* recordSleeps;
+          yield* sleeps.run(pressThenObserve(manager, "fake-terminal"));
+          yield* sleeps.run(pressThenObserve(manager, "fake-terminal"));
+          // "Unsupported" is remembered for this backend...
+          expect(backend.callsFor("waitForSettle")).toHaveLength(1);
+
+          // ...but not across a new occupant or a reconnect to a newer plugin.
+          known = true;
+          const events = yield* manager.subscribeEvents;
+          backend.emitCapabilitiesChanged();
+          // Backend events are handled in order: once the manager has
+          // published this window list, it has taken the capability change.
+          backend.emitWindowsChanged([]);
+          while ((yield* PubSub.take(events)).type !== "computer.windows-changed");
+          yield* sleeps.run(pressThenObserve(manager, "fake-terminal"));
+          expect(backend.callsFor("waitForSettle")).toHaveLength(2);
+        }),
+      ),
+    );
+
+    it.effect("uses the backend's own post-action settle policy when it names one", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* setEnv("PATHWAY_CUA_CONDITIONAL_SETTLE", undefined);
+          const backend = new ProvenBackend({ waitForSettle: true });
+          Object.assign(backend, {
+            actionSettle: {
+              quietMs: 25,
+              timeoutMs: 1_500,
+              quietWithinMs: 250,
+              changeWithinMs: 200,
+            },
+          });
+          const manager = yield* ComputerManager.make({ backend, actionSettleMs: 60 });
+          const sleeps = yield* recordSleeps;
+          yield* sleeps.run(pressThenObserve(manager, "fake-terminal"));
+          expect(backend.callsFor("waitForSettle")[0]?.args[0]).toMatchObject({
+            windowId: "fake-terminal",
+            timeoutMs: 1_500,
+            quietMs: 25,
+            quietWithinMs: 250,
+            changeWithinMs: 200,
+          });
+          // The configured settle stays a ceiling on the quiet window.
+          Object.assign(backend, { actionSettle: { quietMs: 500, timeoutMs: 1_500 } });
+          yield* sleeps.run(pressThenObserve(manager, "fake-terminal"));
+          expect(backend.callsFor("waitForSettle")[1]?.args[0]).toMatchObject({ quietMs: 60 });
+        }),
+      ),
+    );
+
     it.effect(
       "a busy verdict from the observer still ends the wait — the timeout already covered the bound",
       () =>

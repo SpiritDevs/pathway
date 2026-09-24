@@ -74,12 +74,16 @@ import {
   clampComputerMessage,
   COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION,
   computerBackendActionResult,
+  computerGuidanceProfile,
   type ComputerAgentDialect,
   type ComputerBackend,
   type ComputerBackendActionResult,
   type ComputerBackendEvent,
   type ComputerBrowserCallResult,
   type ComputerCaptureRequest,
+  type ComputerClipboardPasteOffer,
+  type ComputerGuidanceProfile,
+  type ComputerLumaCapture,
   type ComputerMenuTarget,
   type ComputerResolvedTarget,
   type ComputerStreamFrame,
@@ -148,7 +152,12 @@ import {
   composeDesktopSignals,
   type DesktopSignal,
 } from "./DesktopOperationQueue.ts";
-import { decodePngLuma, estimateVerticalTravel, ScrollGearingStore } from "./scrollCalibration.ts";
+import {
+  estimateVerticalTravel,
+  measurementFrameLuma,
+  ScrollGearingStore,
+  type ScrollMeasurementFrame,
+} from "./scrollCalibration.ts";
 import { ScrollGearingFile } from "./scrollGearingFile.ts";
 import {
   activationPointForNode,
@@ -215,6 +224,13 @@ export const COMPUTER_ACTION_OBSERVER_SETTLE_QUIET_MS = COMPUTER_ACTION_SETTLE_M
  * there is no observable "the app read it" event.
  */
 export const COMPUTER_PASTE_RESTORE_MS = 250;
+/**
+ * The longest paste waits for a backend that can observe the paste
+ * (`writeClipboardForPaste`) to report the payload read before restoring
+ * anyway: long enough for a slow toolkit, short enough that a shortcut the
+ * target ignored does not hold the human's clipboard hostage.
+ */
+export const COMPUTER_PASTE_CONSUME_TIMEOUT_MS = 2_000;
 
 /**
  * Trailing-edge window on the republish that a backend window change triggers.
@@ -331,12 +347,20 @@ export interface ComputerManagerOptions {
   readonly actionSettleMs?: number;
   /** Injected for tests, so window-churn tests do not wait out the real window. */
   readonly windowsPublishDebounceMs?: number;
-  /** Injected for tests; decodes and correlates two PNG captures. */
+  /** Injected for tests; decodes and correlates two captures. */
   readonly measureScrollTravel?: (
-    before: Uint8Array,
-    after: Uint8Array,
+    before: ScrollMeasurementFrame,
+    after: ScrollMeasurementFrame,
   ) => Effect.Effect<number | undefined>;
 }
+
+/**
+ * What a scroll leg is measured from: a capture that may also become the
+ * action's observation, or a luma-only baseline nobody will ever see.
+ */
+type ScrollBaseline =
+  | { readonly kind: "capture"; readonly capture: ComputerCapturedWindow }
+  | { readonly kind: "luma"; readonly luma: ComputerLumaCapture };
 
 /**
  * A resolved pointer target, plus what the window read taken while resolving it
@@ -494,8 +518,8 @@ export class ComputerManager {
   private readonly actionSettleMs: number;
   private readonly windowsPublishDebounceMs: number;
   private readonly measureScrollTravel: (
-    before: Uint8Array,
-    after: Uint8Array,
+    before: ScrollMeasurementFrame,
+    after: ScrollMeasurementFrame,
   ) => Effect.Effect<number | undefined>;
   /** Learned per window and kept for the manager's life; see ScrollGearingStore. */
   private readonly scrollGearing = new ScrollGearingStore();
@@ -505,8 +529,9 @@ export class ComputerManager {
   private windowsPublishPending = false;
   /**
    * Whether this backend answers `waitForSettle`. "unsupported" is sticky — the
-   * driver and the host's tool allowlist are fixed for the backend's life — but
-   * a transient failure never flips it.
+   * driver and the host's tool allowlist are fixed for the backend's life, and
+   * a `capabilities-changed` (a swapped occupant, a reconnect) starts a new
+   * one — but a transient failure never flips it.
    */
   private observerSettle: "unknown" | "supported" | "unsupported" = "unknown";
   private windowsPublishTimer: Fiber.Fiber<void> | undefined;
@@ -609,7 +634,7 @@ export class ComputerManager {
       options.actionSettleMs ?? cuaActionSettleMsOverride() ?? COMPUTER_ACTION_SETTLE_MS;
     this.windowsPublishDebounceMs =
       options.windowsPublishDebounceMs ?? COMPUTER_WINDOWS_PUBLISH_DEBOUNCE_MS;
-    this.measureScrollTravel = options.measureScrollTravel ?? measureScrollTravelFromPng;
+    this.measureScrollTravel = options.measureScrollTravel ?? measureScrollTravelFromFrames;
     this.backendHealth = options.backend.health();
     this.transport =
       options.transport ??
@@ -623,6 +648,7 @@ export class ComputerManager {
               timestampMs: frame.timestampMs,
               keyframe: frame.keyframe,
               codecConfig: frame.codecConfig,
+              ...(frame.mimeType !== undefined ? { mimeType: frame.mimeType } : {}),
             },
             payload: frame.data,
           }),
@@ -658,6 +684,10 @@ export class ComputerManager {
         this.backendHealth = event.health;
         this.republishAllThreads();
       } else if (event.type === "capabilities-changed") {
+        // Verdicts cached about the backend are about the one that was there:
+        // a slot swap and a reconnect to a newer plugin both land here, and
+        // either may answer what the last one could not.
+        this.observerSettle = "unknown";
         this.republishAllThreads();
       } else if (event.type === "desktop-interrupted") {
         // Locked-use resume policy: consent granted before a lock/sleep/session
@@ -693,6 +723,11 @@ export class ComputerManager {
    */
   get agentDialect(): ComputerAgentDialect {
     return this.backend.agentDialect ?? "linux";
+  }
+
+  /** What the session-start guidance says about this desktop. */
+  get guidanceProfile(): ComputerGuidanceProfile {
+    return computerGuidanceProfile(this.backend);
   }
 
   get supportsFocusNeutralSemanticText(): boolean {
@@ -1269,6 +1304,46 @@ export class ComputerManager {
   }
 
   /**
+   * Replaces the desktop under the manager: `swap` (a slot's occupant change)
+   * runs as one exclusive desktop operation, after every live agent operation
+   * has been aborted with a retryable "the desktop changed" reason.
+   *
+   * The slot resolves each backend member against its occupant at the moment
+   * of the call, so a swap landing between an action's targeting and its input
+   * would send the rest of that action to the new desktop. The exclusive
+   * transaction waits for aborted and queued-ahead work to finish, so no
+   * operation straddles the two desktops. A queue that is closed or full
+   * cannot take the swap; it then runs directly, since a desktop that is gone
+   * has to be replaced regardless.
+   */
+  replaceDesktop<E>(swap: Effect.Effect<void, E>): Effect.Effect<void, E> {
+    return Effect.suspend(() => {
+      if (this.disposed) return swap;
+      const reason = new ComputerBackendError({
+        message:
+          "The desktop changed while this operation ran; nothing more was sent to it. Observe the new desktop before retrying.",
+        retryable: true,
+      });
+      for (const live of this.activeAuthorities.values()) {
+        for (const abort of live) Deferred.doneUnsafe(abort, Effect.fail(reason));
+      }
+      let ran = false;
+      const exclusive = Effect.suspend(() => {
+        ran = true;
+        return Effect.result(withoutDesktopCancellation(swap));
+      });
+      return this.operations.run(exclusive).pipe(
+        Effect.matchEffect({
+          // Only a queue that never ran the swap fails here.
+          onFailure: () => (ran ? Effect.void : swap),
+          onSuccess: (result) =>
+            result._tag === "Success" ? Effect.void : Effect.fail(result.failure),
+        }),
+      );
+    });
+  }
+
+  /**
    * The manager side of the physical Escape interrupt.
    *
    * Momentary by contract: the press aborts every in-flight operation signal
@@ -1347,10 +1422,16 @@ export class ComputerManager {
    */
   getStatus(): Effect.Effect<ComputerStatusResult> {
     return Effect.gen({ self: this }, function* () {
+      // A backend with its own passive status read boots its desktop on
+      // demand, so polling the establishing read would respawn the desktop the
+      // human just closed. Such a backend answers every status read passively.
+      const statusAvailability = this.backend.statusAvailability?.bind(this.backend);
       const availability = yield* (
-        this.backendEngaged
-          ? this.backend.availability({ refresh: true })
-          : this.backend.probeAvailability()
+        statusAvailability
+          ? statusAvailability()
+          : this.backendEngaged
+            ? this.backend.availability({ refresh: true })
+            : this.backend.probeAvailability()
       ).pipe(
         Effect.catch((error) =>
           Effect.succeed<ComputerAvailability>({
@@ -1491,15 +1572,24 @@ export class ComputerManager {
       if (request.kind === "window") {
         yield* this.assertWindowContentAllowed(request.windowId);
       } else {
-        // A region is refused only where a visible denied window's bounds
-        // actually intersect it.
-        const denied = (yield* this.deniedVisibleWindows()).find(
-          (entry) =>
-            entry.window.bounds !== undefined && rectsOverlap(entry.window.bounds, request.region),
-        );
-        if (denied) return yield* new ComputerDenylistError(denied.match.app, denied.match.matched);
+        yield* this.assertRegionContentAllowed(request.region);
       }
       return yield* this.backend.captureScreenshot(request);
+    });
+  }
+
+  /**
+   * A region photographs whatever its rect covers: it is refused only where a
+   * visible denied window's bounds actually intersect it.
+   */
+  private assertRegionContentAllowed(
+    region: ComputerRect,
+  ): Effect.Effect<void, ComputerOperationError> {
+    return Effect.gen({ self: this }, function* () {
+      const denied = (yield* this.deniedVisibleWindows()).find(
+        (entry) => entry.window.bounds !== undefined && rectsOverlap(entry.window.bounds, region),
+      );
+      if (denied) return yield* new ComputerDenylistError(denied.match.app, denied.match.matched);
     });
   }
 
@@ -1570,6 +1660,10 @@ export class ComputerManager {
    * Zoomed capture of the window that holds input focus, falling back to the
    * whole workspace when no visible window with known bounds has it: "show me
    * where input is going", at window resolution.
+   *
+   * A backend that names a `defaultObservationRegion` narrows the fallback to
+   * it: a multi-monitor workspace downscaled into one picture is too small to
+   * read.
    */
   captureFocusedWindow(
     maxDimension?: number,
@@ -1589,6 +1683,19 @@ export class ComputerManager {
             ...limit,
           }),
           windowId: window.id,
+        };
+      }
+      const scoped = this.backend.defaultObservationRegion
+        ? yield* this.backend.defaultObservationRegion().pipe(Effect.orElseSucceed(() => undefined))
+        : undefined;
+      if (scoped !== undefined) {
+        yield* this.assertRegionContentAllowed(scoped);
+        return {
+          screenshot: yield* this.backend.captureScreenshot({
+            kind: "region",
+            region: scoped,
+            ...limit,
+          }),
         };
       }
       // The whole-workspace fallback photographs every visible window, so a
@@ -1681,11 +1788,16 @@ export class ComputerManager {
         this.observerSettle !== "unsupported" &&
         waitForSettle !== undefined
       ) {
+        const policy = this.backend.actionSettle;
         const outcome = yield* Effect.result(
           waitForSettle({
             windowId,
-            timeoutMs: COMPUTER_ACTION_OBSERVER_SETTLE_TIMEOUT_MS,
-            quietMs: this.actionSettleMs,
+            timeoutMs: policy?.timeoutMs ?? COMPUTER_ACTION_OBSERVER_SETTLE_TIMEOUT_MS,
+            quietMs: Math.min(this.actionSettleMs, policy?.quietMs ?? this.actionSettleMs),
+            ...(policy?.quietWithinMs === undefined ? {} : { quietWithinMs: policy.quietWithinMs }),
+            ...(policy?.changeWithinMs === undefined
+              ? {}
+              : { changeWithinMs: policy.changeWithinMs }),
           }),
         );
         const timing = (yield* currentComputerCall)?.timing;
@@ -1942,11 +2054,14 @@ export class ComputerManager {
         }
         this.emitAction(threadId, "computer_launch_app");
         if (!result.window && result.windowStatus !== "no_usable_window" && waitForWindowMs > 0) {
+          // Read once: on a slot, a member re-read after the wait may be
+          // another desktop's, or gone. The wait checks readiness where it started.
           const checkInputReady = this.backend.checkInputReady?.bind(this.backend);
           // Stop interrupts the wait; a failed or hung probe already reads as
           // `input_unavailable` inside `waitForWindow`.
           const readiness = yield* waitForWindow(this.readWindows(), app, waitForWindowMs, {
             ...(result.pid !== undefined ? { pid: result.pid } : {}),
+            ...(result.appId !== undefined ? { appId: result.appId } : {}),
             ...(checkInputReady ? { checkInputReady } : {}),
           });
           yield* assertDesktopOperationActive;
@@ -3096,7 +3211,7 @@ export class ComputerManager {
           (yield* this.agentFocusWindowId());
         const before = !options.observe
           ? undefined
-          : yield* this.captureForMeasurement(observedWindowId);
+          : yield* this.captureScrollBaseline(observedWindowId);
 
         // Gearing keys are route-scoped: an AX scroll-bar press and a wheel
         // gesture move the same window different distances for one request, so
@@ -3195,7 +3310,7 @@ export class ComputerManager {
             if (after) {
               const remainderLeg = yield* this.settleAndMeasure(
                 observedWindowId,
-                after,
+                { kind: "capture", capture: after },
                 remainderResult?.scrollDelta?.deltaY ?? legY,
                 windowKey(remainderRoute),
                 durableKey(remainderRoute),
@@ -3358,7 +3473,7 @@ export class ComputerManager {
    */
   private settleAndMeasure(
     windowId: string | undefined,
-    from: ComputerCapturedWindow,
+    from: ScrollBaseline,
     injectedY: number,
     windowKey?: string,
     appKey?: string,
@@ -3372,11 +3487,7 @@ export class ComputerManager {
           const expectedY = injectedY * predictedGearing;
           const early = yield* this.captureForMeasurement(windowId);
           if (early) {
-            const traveled = yield* this.measureLegTravel(
-              from.screenshot,
-              early.screenshot,
-              injectedY,
-            );
+            const traveled = yield* this.measureLegTravel(from, early.screenshot, injectedY);
             if (
               traveled !== undefined &&
               Math.abs(traveled - expectedY) <=
@@ -3397,7 +3508,7 @@ export class ComputerManager {
       }
       const capture = yield* this.captureForMeasurement(windowId);
       if (!capture) return {};
-      const traveled = yield* this.measureLegTravel(from.screenshot, capture.screenshot, injectedY);
+      const traveled = yield* this.measureLegTravel(from, capture.screenshot, injectedY);
       this.learnLegTravel(windowKey ?? windowId, appKey, injectedY, traveled);
       return { capture, ...(traveled === undefined ? {} : { traveled }) };
     });
@@ -3410,7 +3521,7 @@ export class ComputerManager {
    * that scrolled backwards.
    */
   private measureLegTravel(
-    from: ComputerScreenshot,
+    from: ScrollBaseline,
     to: ComputerScreenshot,
     injectedY: number,
   ): Effect.Effect<number | undefined> {
@@ -3447,6 +3558,43 @@ export class ComputerManager {
       Effect.map((window) => window?.id),
       Effect.orElseSucceed(() => undefined),
     );
+  }
+
+  /**
+   * The picture a scroll is measured from. It is never shown to anyone, so a
+   * backend that can hand back raw luma (`captureLuma`) skips the PNG encode,
+   * the base64 round trip and the decode; any other backend, a scroll with no
+   * window to name, and a luma capture that fails or comes back malformed all
+   * take the ordinary measurement capture instead.
+   */
+  private captureScrollBaseline(
+    windowId: string | undefined,
+  ): Effect.Effect<ScrollBaseline | undefined> {
+    return Effect.gen({ self: this }, function* () {
+      const captureLuma = this.backend.captureLuma?.bind(this.backend);
+      if (windowId !== undefined && captureLuma && this.backendCapabilities.capture) {
+        this.engageBackend();
+        const luma = yield* timedComputerLeg(
+          "observe",
+          captureLuma({
+            kind: "window",
+            windowId,
+            maxDimension: COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION,
+          }),
+        ).pipe(Effect.option);
+        if (
+          Option.isSome(luma) &&
+          luma.value.width > 0 &&
+          luma.value.height > 0 &&
+          luma.value.data.byteLength === luma.value.width * luma.value.height &&
+          luma.value.scale > 0
+        ) {
+          return { kind: "luma", luma: luma.value } as const;
+        }
+      }
+      const capture = yield* this.captureForMeasurement(windowId);
+      return capture ? ({ kind: "capture", capture } as const) : undefined;
+    });
   }
 
   /**
@@ -3497,20 +3645,37 @@ export class ComputerManager {
    * change did not move, which is what the end of a page looks like.
    */
   private measureTravel(
-    before: ComputerScreenshot,
+    before: ScrollBaseline,
     after: ComputerScreenshot,
   ): Effect.Effect<number | undefined> {
     return Effect.suspend(() => {
-      if (before.bytesBase64 === after.bytesBase64) return Effect.succeed(0);
+      if (
+        before.kind === "capture" &&
+        before.capture.screenshot.bytesBase64 === after.bytesBase64
+      ) {
+        return Effect.succeed(0);
+      }
       // Without a scale on both captures there is no conversion from capture
       // pixels to logical pixels, and two different scales are two different
       // pictures of the window.
-      const scale = before.scale;
+      const scale = before.kind === "capture" ? before.capture.screenshot.scale : before.luma.scale;
       if (scale === undefined || scale !== after.scale || scale <= 0) {
         return Effect.succeed(undefined);
       }
       return Effect.map(
-        this.measureScrollTravel(this.measurementBytes(before), this.measurementBytes(after)),
+        this.measureScrollTravel(
+          before.kind === "capture"
+            ? { kind: "png", bytes: this.measurementBytes(before.capture.screenshot) }
+            : {
+                kind: "luma",
+                image: {
+                  width: before.luma.width,
+                  height: before.luma.height,
+                  luma: before.luma.data,
+                },
+              },
+          { kind: "png", bytes: this.measurementBytes(after) },
+        ),
         (traveled) => (traveled === undefined ? undefined : traveled / scale),
       );
     });
@@ -3772,11 +3937,24 @@ export class ComputerManager {
         const read = this.backend.readClipboard?.bind(this.backend);
         const write = this.backend.writeClipboard?.bind(this.backend);
         if (!read || !write) return yield* clipboardUnsupportedError();
+        const writeForPaste = this.backend.writeClipboardForPaste?.bind(this.backend);
         const previous = yield* timedComputerLeg(
           "dispatch",
           read().pipe(Effect.orElseSucceed(() => undefined)),
         );
-        yield* timedComputerLeg("dispatch", write(text));
+        const offer = yield* timedComputerLeg(
+          "dispatch",
+          writeForPaste
+            ? Effect.map(
+                writeForPaste(text),
+                (value): ComputerClipboardPasteOffer | undefined => value,
+              )
+            : Effect.as(write(text), undefined),
+        );
+        // Whether the offer was read before the shortcut was even dispatched:
+        // that reader was not the target but a clipboard watcher (Klipper, a
+        // `wl-paste --watch` history daemon), so it says nothing about the paste.
+        let consumedBeforeShortcut = false;
         let restored = false;
         // The restore runs whether or not the shortcut dispatched: the payload
         // is already on the clipboard either way, and leaving it there leaks
@@ -3784,7 +3962,7 @@ export class ComputerManager {
         const restore = Effect.suspend(() => {
           if (previous === undefined) return Effect.void;
           return Effect.andThen(
-            timedComputerLeg("settle", Effect.sleep(COMPUTER_PASTE_RESTORE_MS)),
+            timedComputerLeg("settle", pasteConsumed(offer, consumedBeforeShortcut)),
             write(previous).pipe(
               Effect.match({
                 onFailure: () => {
@@ -3800,10 +3978,13 @@ export class ComputerManager {
         const result = yield* this.runKeyboardDispatch(
           threadId,
           windowId,
-          this.backend.hotkey(
-            this.agentDialect === "macos" ? ["meta", "v"] : ["ctrl", "v"],
-            windowId,
-          ),
+          Effect.suspend(() => {
+            if (offer) consumedBeforeShortcut = Deferred.isDoneUnsafe(offer.consumed);
+            return this.backend.hotkey(
+              this.agentDialect === "macos" ? ["meta", "v"] : ["ctrl", "v"],
+              windowId,
+            );
+          }),
         ).pipe(Effect.ensuring(restore));
         return {
           ...(yield* this.actionResult(threadId, "computer_paste", undefined, result, windowId)),
@@ -3879,6 +4060,19 @@ export class ComputerManager {
     target: ComputerTarget,
     range: ComputerTextRange,
   ): Effect.Effect<ComputerActionResult, ComputerOperationError> {
+    // Refused before the lease is claimed and the window restacked and aimed: a
+    // backend that cannot select a range would refuse the dispatch anyway.
+    if (this.backend.textRangeSelection === false) {
+      return Effect.fail(
+        new ComputerBackendError({
+          message:
+            "Selecting a text range is not supported on this desktop: the accessibility layer " +
+            "exposes no selection to set. Use set_value to replace the field, or click and " +
+            "keyboard navigation to place the caret.",
+          rejectedOperation: "selectText",
+        }),
+      );
+    }
     return this.withSemanticControl(
       threadId,
       target.windowId,
@@ -4513,7 +4707,7 @@ export class ComputerManager {
       const changed = held?.threadId !== owner;
       yield* assertDesktopOperationActive;
       if (changed) {
-        if (this.backend.clearFocusWindow) yield* this.backend.clearFocusWindow();
+        yield* this.resetInputDelivery();
         yield* assertDesktopOperationActive;
       }
       // Stamp the claiming caller's own turn when it carries one; the map only
@@ -4683,7 +4877,7 @@ export class ComputerManager {
           // The queue can admit a newer turn before this release gets its slot.
           // Even a thread-level teardown belongs to the turn observed above.
           if (current.turnId !== releasedTurnId) return;
-          if (this.backend.clearFocusWindow) yield* this.backend.clearFocusWindow();
+          yield* this.resetInputDelivery();
           yield* this.recordLeaseLifecycle("released", current);
           this.lease = null;
           // The released turn is no longer this thread's authority: a later
@@ -5731,6 +5925,18 @@ export class ComputerManager {
   }
 
   /**
+   * The seat as the next owner must find it: nothing aimed, nothing held,
+   * nothing remembered about the previous owner's targets. A backend without
+   * the full reset still has focus to clear, which matters most: the next
+   * owner's unscoped keystroke otherwise lands where the previous one aimed.
+   */
+  private resetInputDelivery(): Effect.Effect<void, ComputerOperationError> {
+    return Effect.suspend(
+      () => this.backend.resetInputDelivery?.() ?? this.backend.clearFocusWindow?.() ?? Effect.void,
+    );
+  }
+
+  /**
    * The last availability read, corrected by live backend health. The cached
    * value is whatever the last successful query said, so without this a panel
    * keeps being told the desktop is available while the supervision loop is
@@ -5742,6 +5948,12 @@ export class ComputerManager {
     // and health says "unavailable" for both.
     if (!this.backendEngaged) return availability;
     if (this.backendHealth.status === "connected" || availability.kind !== "available") {
+      return availability;
+    }
+    // Dormant is the same idle, reached later: the backend let its desktop go
+    // on purpose and the next use brings it back. Only its explicit marker
+    // counts; a backend that never sets it (Cua) is corrected as before.
+    if (this.backendHealth.status === "unavailable" && this.backendHealth.dormant === true) {
       return availability;
     }
     return {
@@ -5802,17 +6014,41 @@ export class ComputerManager {
  * capture in a format this does not decode costs the measurement, not the
  * scroll.
  */
-function measureScrollTravelFromPng(
-  before: Uint8Array,
-  after: Uint8Array,
+function measureScrollTravelFromFrames(
+  before: ScrollMeasurementFrame,
+  after: ScrollMeasurementFrame,
 ): Effect.Effect<number | undefined> {
   return Effect.map(
-    Effect.all([decodePngLuma(before), decodePngLuma(after)], { concurrency: 2 }),
+    Effect.all([measurementFrameLuma(before), measurementFrameLuma(after)], { concurrency: 2 }),
     ([decodedBefore, decodedAfter]) =>
       decodedBefore && decodedAfter
         ? estimateVerticalTravel(decodedBefore, decodedAfter)
         : undefined,
   );
+}
+
+/**
+ * The wait between a paste shortcut and putting the human's clipboard back. A
+ * backend that can observe the paste ends it once the target has read the
+ * payload, bounded for a paste that never reads; every other backend keeps the
+ * fixed settle. Never shorter than that settle: a read reported the instant the
+ * keys went out can still be a watcher's. An offer read before the shortcut
+ * went out counts as never read.
+ */
+function pasteConsumed(
+  offer: ComputerClipboardPasteOffer | undefined,
+  consumedBeforeShortcut: boolean,
+): Effect.Effect<void> {
+  const floor = Effect.sleep(COMPUTER_PASTE_RESTORE_MS);
+  if (!offer) return floor;
+  const bound = Effect.sleep(COMPUTER_PASTE_CONSUME_TIMEOUT_MS);
+  // A failed offer is "not observed": the race falls back to the bound.
+  const read = consumedBeforeShortcut
+    ? bound
+    : Effect.race(Deferred.await(offer.consumed), bound).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+  return Effect.all([floor, read], { concurrency: 2, discard: true });
 }
 
 /** Scroll telemetry is a reading, not a measurement instrument: two decimals is all it means. */
