@@ -1365,7 +1365,9 @@ export class ComputerManager {
       let ran = false;
       const exclusive = Effect.suspend(() => {
         ran = true;
-        return Effect.result(withoutDesktopCancellation(swap));
+        return Effect.tap(Effect.result(withoutDesktopCancellation(swap)), (result) =>
+          result._tag === "Success" ? this.retireDesktop() : Effect.void,
+        );
       });
       return this.operations.runBarrier(exclusive).pipe(
         Effect.matchEffect({
@@ -1379,9 +1381,28 @@ export class ComputerManager {
   }
 
   /**
-   * Drops what threads were shown about the previous occupant (the selection
-   * placeholder's "checking", or a desktop that is gone) and pushes the new
-   * one's availability to every seeded thread. Health and capability events
+   * Forgets the previous occupant inside the swap's barrier, before anything
+   * waiting behind it runs: its reads land nowhere, its pushes stop, and a
+   * window republish armed for it is cancelled rather than reading the new one.
+   */
+  private retireDesktop(): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      this.physicalGeneration += 1;
+      this.physicalRead = undefined;
+      // A fresh revision: every read that started before the swap is older
+      // than this empty cache, so it lands nowhere.
+      this.physical = { revision: ++this.readRevision };
+      this.windowsPublishPending = false;
+      const timer = this.windowsPublishTimer;
+      this.windowsPublishTimer = undefined;
+      return timer ? Fiber.interrupt(timer) : Effect.void;
+    });
+  }
+
+  /**
+   * Replaces what threads were shown about the previous occupant (the
+   * selection placeholder's "checking", or a desktop that is gone) with the
+   * new one's availability, pushed to every seeded thread. Health and capability events
    * republish cached state only, so without this a thread seeded before the
    * swap keeps its old availability until it asks again. The probe is the
    * passive one, because nothing has asked to use the new desktop yet. Any
@@ -1392,11 +1413,6 @@ export class ComputerManager {
   private refreshReplacedDesktop(): Effect.Effect<void> {
     return Effect.suspend(() => {
       if (this.disposed) return Effect.void;
-      this.physicalGeneration += 1;
-      this.physicalRead = undefined;
-      // A fresh revision: every read that started before the swap is older
-      // than this empty cache, so it lands nowhere.
-      this.physical = { revision: ++this.readRevision };
       const generation = this.physicalGeneration;
       const revision = ++this.readRevision;
       return this.backend.probeAvailability().pipe(
@@ -5978,10 +5994,15 @@ export class ComputerManager {
       return;
     }
     if (this.windowsPublishTimer !== undefined) return;
+    // Armed for this desktop: a swap cancels it, and one that fires anyway
+    // after a swap does not read the new desktop.
+    const generation = this.physicalGeneration;
     this.windowsPublishTimer = this.runFork(
       Effect.sleep(this.windowsPublishDebounceMs).pipe(
         Effect.andThen(
           Effect.suspend(() => {
+            // After a swap, the timer slot belongs to the new desktop.
+            if (generation !== this.physicalGeneration) return Effect.void;
             this.windowsPublishTimer = undefined;
             return this.disposed ? Effect.void : this.publishAllThreads();
           }),
