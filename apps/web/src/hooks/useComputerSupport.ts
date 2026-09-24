@@ -23,6 +23,17 @@ export function useComputerSupport(environmentId: EnvironmentId | null): boolean
 }
 
 /**
+ * Whether the environment's server serves Computer events: it advertises
+ * Computer (the `computer:operate` scope arrived with its RPCs), and
+ * `useComputerSupport` holds.
+ */
+export function useComputerEventsServed(environmentId: EnvironmentId | null): boolean {
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const supported = useComputerSupport(environmentId);
+  return supported && serverConfig?.environment.capabilities.computerOperateScope === true;
+}
+
+/**
  * Whether the environment's server platform has a computer backend at all.
  * False until the environment resolves, so nothing flickers in.
  */

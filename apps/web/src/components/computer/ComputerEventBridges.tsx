@@ -4,7 +4,7 @@ import {
   useComputerEnvironmentEvents,
   useComputerEventBridge,
 } from "~/hooks/useComputerEventBridge";
-import { useComputerCapablePlatform } from "~/hooks/useComputerSupport";
+import { useComputerEventsServed } from "~/hooks/useComputerSupport";
 import { useEnvironments } from "~/state/environments";
 
 function ComputerEnvironmentEventBridge({ environmentId }: { environmentId: EnvironmentId }) {
@@ -12,9 +12,9 @@ function ComputerEnvironmentEventBridge({ environmentId }: { environmentId: Envi
   return null;
 }
 
-/** Subscribes only once the environment's server platform could drive a desktop. */
+/** Subscribes only once the environment's server is known to serve Computer events. */
 function ComputerEnvironmentEventGate({ environmentId }: { environmentId: EnvironmentId }) {
-  return useComputerCapablePlatform(environmentId) ? (
+  return useComputerEventsServed(environmentId) ? (
     <ComputerEnvironmentEventBridge environmentId={environmentId} />
   ) : null;
 }
