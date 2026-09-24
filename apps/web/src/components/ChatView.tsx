@@ -1,5 +1,4 @@
 import { useUsageRecovery } from "./chat/useUsageRecovery";
-import { useQuestionDismissal } from "./chat/useQuestionDismissal";
 import { ScrollToEndButton } from "./chat/ScrollToEndButton";
 import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
 import { ThreadQueueStatus } from "./chat/ThreadQueueStatus";
@@ -8697,8 +8696,6 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThreadId, environmentId, canIgnoreQuestions, respondToThreadApproval, setThreadError],
   );
 
-  const questionDismissal = useQuestionDismissal(onIgnoreQuestion, canIgnoreQuestions);
-
   const onChangeActivePendingUserInputCustomAnswer = useCallback(
     (
       questionId: string,
@@ -9389,16 +9386,13 @@ function ChatViewContent(props: ChatViewProps) {
     },
     pendingQuestions: {
       prompts: allPendingUserInputs,
-      respondingRequestIds: [
-        ...respondingUserInputRequestIds,
-        ...questionDismissal.queuedRequestIds,
-      ],
+      respondingRequestIds: respondingUserInputRequestIds,
       canIgnore: canIgnoreQuestions,
       onOpen: (requestId) => {
         closeThreadPanelPopover();
         timelineAsyncQuestions.onOpen(requestId);
       },
-      onIgnore: questionDismissal.scheduleDismissal,
+      onIgnore: (requestId) => void onIgnoreQuestion(requestId),
     },
     ...(!isServerThread && activeProject
       ? {
