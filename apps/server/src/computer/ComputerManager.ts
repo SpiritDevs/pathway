@@ -597,6 +597,12 @@ export class ComputerManager {
   private physicalFailure: string | undefined;
   /** Bumped when the desktop is replaced; a read of the previous occupant lands nowhere. */
   private physicalGeneration = 0;
+  /**
+   * Set while threads hold, or are about to be pushed, the passive probe of a
+   * replacement desktop. The first establishing read of that desktop replaces
+   * the verdict; see `establishedAvailability`.
+   */
+  private passiveReplacementVerdict = false;
   private readonly activeAuthorities = new Map<string, Set<DesktopAbort>>();
   /** Pane input carries no agent authority; a desktop replacement aborts it here. */
   private readonly livePaneInput = new Set<DesktopAbort>();
@@ -776,7 +782,7 @@ export class ComputerManager {
           this.physicalFailure = undefined;
           if (this.backendEngaged) {
             const [availability, windows, screenSize] = yield* Effect.all(
-              [this.backend.availability(), this.readWindows(), this.backend.getScreenSize()],
+              [this.establishedAvailability(), this.readWindows(), this.backend.getScreenSize()],
               { concurrency: "unbounded" },
             );
             if (current()) this.physicalState = { availability, windows, screenSize };
@@ -1361,8 +1367,9 @@ export class ComputerManager {
    * one's availability to every seeded thread. Health and capability events
    * republish cached state only, so without this a thread seeded before the
    * swap keeps its old availability until it asks again. The probe is the
-   * passive one, because nothing has asked to use the new desktop yet. It runs
-   * after the swap's queue barrier, so it never holds input back.
+   * passive one, because nothing has asked to use the new desktop yet. A read
+   * that does use it supersedes the probe, even one still in flight. The probe
+   * runs after the swap's queue barrier, so it never holds input back.
    */
   private refreshReplacedDesktop(): Effect.Effect<void> {
     return Effect.suspend(() => {
@@ -1371,6 +1378,7 @@ export class ComputerManager {
       this.physicalRead = undefined;
       this.physicalState = undefined;
       this.physicalFailure = undefined;
+      this.passiveReplacementVerdict = true;
       const generation = this.physicalGeneration;
       return this.backend.probeAvailability().pipe(
         Effect.catch((error) =>
@@ -1380,7 +1388,13 @@ export class ComputerManager {
           }),
         ),
         Effect.flatMap((availability) => {
-          if (this.disposed || generation !== this.physicalGeneration) return Effect.void;
+          if (
+            this.disposed ||
+            generation !== this.physicalGeneration ||
+            !this.passiveReplacementVerdict
+          ) {
+            return Effect.void;
+          }
           this.physicalState ??= { availability };
           return Effect.forEach([...this.threads.keys()], (threadId) => this.publish(threadId), {
             discard: true,
@@ -1436,10 +1450,43 @@ export class ComputerManager {
     this.runFork(Effect.ignore(this.publishAllThreads()));
   }
 
+  /**
+   * The backend's establishing availability read, for every path that uses the
+   * desktop for a real reason. After a replacement, the first one to succeed
+   * becomes the verdict threads are shown and is pushed to all of them, so a
+   * slower passive probe of the same desktop cannot land over it. Otherwise
+   * it only reads.
+   */
+  private establishedAvailability(options?: {
+    readonly refresh?: boolean;
+  }): Effect.Effect<ComputerAvailability, ComputerOperationError> {
+    return Effect.suspend(() => {
+      const generation = this.physicalGeneration;
+      return Effect.tap(this.backend.availability(options), (availability) =>
+        Effect.sync(() => {
+          if (
+            this.disposed ||
+            !this.passiveReplacementVerdict ||
+            generation !== this.physicalGeneration
+          ) {
+            return;
+          }
+          this.passiveReplacementVerdict = false;
+          this.physicalState = { ...this.physicalState, availability };
+          this.runFork(
+            Effect.forEach([...this.threads.keys()], (threadId) => this.publish(threadId), {
+              discard: true,
+            }),
+          );
+        }),
+      );
+    });
+  }
+
   availability(): Effect.Effect<ComputerAvailability, ComputerOperationError> {
     return Effect.suspend(() => {
       this.engageBackend();
-      return this.backend.availability();
+      return this.establishedAvailability();
     });
   }
 
@@ -1477,7 +1524,7 @@ export class ComputerManager {
         statusAvailability
           ? statusAvailability()
           : this.backendEngaged
-            ? this.backend.availability({ refresh: true })
+            ? this.establishedAvailability({ refresh: true })
             : this.backend.probeAvailability()
       ).pipe(
         Effect.catch((error) =>
@@ -1538,7 +1585,7 @@ export class ComputerManager {
     return Effect.gen({ self: this }, function* () {
       this.engageBackend();
       const [availability, windows] = yield* Effect.all(
-        [this.backend.availability(), this.readWindows()],
+        [this.establishedAvailability(), this.readWindows()],
         { concurrency: "unbounded" },
       );
       return { computerId: this.computerId, windows, availability };
@@ -1586,7 +1633,7 @@ export class ComputerManager {
             includeTree: options.includeTree ?? options.includeText === true,
             ...(options.windowId ? { windowId: options.windowId } : {}),
           }),
-          this.backend.availability(),
+          this.establishedAvailability(),
         ],
         { concurrency: "unbounded" },
       );
@@ -2050,7 +2097,7 @@ export class ComputerManager {
     return Effect.gen({ self: this }, function* () {
       this.engageBackend();
       const [availability, screenSize] = yield* Effect.all(
-        [this.backend.availability(), this.backend.getScreenSize()],
+        [this.establishedAvailability(), this.backend.getScreenSize()],
         { concurrency: "unbounded" },
       );
       return { computerId: this.computerId, screenSize, availability };
@@ -2131,7 +2178,7 @@ export class ComputerManager {
           message: "This backend cannot enumerate applications.",
         });
       }
-      const [availability, apps] = yield* Effect.all([this.backend.availability(), listApps()], {
+      const [availability, apps] = yield* Effect.all([this.establishedAvailability(), listApps()], {
         concurrency: "unbounded",
       });
       return { computerId: this.computerId, apps, availability };
@@ -2503,7 +2550,7 @@ export class ComputerManager {
       }
       if (windowId !== undefined) yield* this.assertScopedWindowReadable(windowId);
       const [availability, snapshot] = yield* Effect.all(
-        [this.backend.availability(), read(windowId)],
+        [this.establishedAvailability(), read(windowId)],
         { concurrency: "unbounded" },
       );
       return {
@@ -2534,7 +2581,7 @@ export class ComputerManager {
       }
       if (windowId !== undefined) yield* this.assertScopedWindowReadable(windowId);
       const [availability, point] = yield* Effect.all(
-        [this.backend.availability(), read(windowId)],
+        [this.establishedAvailability(), read(windowId)],
         { concurrency: "unbounded" },
       );
       return { computerId: this.computerId, ...point, availability };
