@@ -8942,6 +8942,8 @@ function ChatViewContent(props: ChatViewProps) {
       selectedModelSelection: ctxSelectedModelSelection,
     } = sendCtx;
 
+    // Claim before the generation read so a second click cannot pass the guard.
+    sendInFlightRef.current = true;
     const threadIdForSend = activeThread.id;
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
@@ -8963,7 +8965,6 @@ function ChatViewContent(props: ChatViewProps) {
       text: trimmed,
     });
 
-    sendInFlightRef.current = true;
     beginLocalDispatch({ preparingWorktree: false });
     setThreadError(threadIdForSend, null);
 
