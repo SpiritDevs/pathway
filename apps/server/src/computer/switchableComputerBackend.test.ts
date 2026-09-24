@@ -7,6 +7,7 @@ import * as Stream from "effect/Stream";
 
 import type { ComputerBackendEvent } from "./ComputerBackend.ts";
 import { ComputerManager } from "./ComputerManager.ts";
+import { DESKTOP_OPERATION_QUEUE_LIMIT } from "./DesktopOperationQueue.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import {
   CheckingComputerBackend,
@@ -148,6 +149,49 @@ it.layer(NodeServices.layer)("replacing the desktop under the manager", (it) => 
         // The next operation runs on the new desktop.
         yield* manager.withAgentActivity("thread-1", manager.click("thread-1", { x: 10, y: 10 }));
         expect(second.callsFor("click")).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("keeps pane input off the new desktop even when the queue is full", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const first = new FakeComputerBackend();
+        const second = new FakeComputerBackend();
+        const slot = yield* makeSwitchableComputerBackend(first);
+        const manager = yield* ComputerManager.make({ backend: slot.backend, actionSettleMs: 0 });
+        const targeting = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        const readWindows = first.listWindows.bind(first);
+        // A pane click paused while it reads the old desktop's windows.
+        first.listWindows = () =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(targeting, undefined);
+            yield* Deferred.await(resume);
+            return yield* readWindows();
+          });
+        const pane = yield* manager
+          .click(undefined, { x: 100, y: 100 })
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Deferred.await(targeting);
+        // The pane click and the calls queued behind it reach the admission limit.
+        yield* Effect.forEach(
+          Array.from({ length: DESKTOP_OPERATION_QUEUE_LIMIT - 1 }),
+          (_, index) =>
+            manager
+              .withAgentActivity(`queued-${index}`, Effect.void)
+              .pipe(Effect.forkScoped({ startImmediately: true })),
+        );
+
+        const replacing = yield* manager
+          .replaceDesktop(slot.swap(second))
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Deferred.succeed(resume, undefined);
+        yield* Fiber.join(replacing);
+        expect(slot.current()).toBe(second);
+        expect(yield* Effect.flip(Fiber.join(pane))).toMatchObject({ retryable: true });
+        expect(first.callsFor("click")).toHaveLength(0);
+        expect(second.callsFor("click")).toHaveLength(0);
       }),
     ),
   );

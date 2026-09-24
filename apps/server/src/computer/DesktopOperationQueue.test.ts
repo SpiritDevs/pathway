@@ -295,6 +295,38 @@ describe("DesktopOperationQueue", () => {
   );
 });
 
+it.effect("admits a barrier past the backlog limit, behind the work already queued", () =>
+  Effect.gen(function* () {
+    const queue = new DesktopOperationQueue();
+    const release = yield* Deferred.make<void>();
+    const events: string[] = [];
+    const running = yield* Effect.forkChild(
+      queue.run(
+        Effect.andThen(
+          Deferred.await(release),
+          Effect.sync(() => events.push("running")),
+        ),
+      ),
+    );
+    const waiting = yield* Effect.forEach(
+      Array.from({ length: DESKTOP_OPERATION_QUEUE_LIMIT - 1 }),
+      () => Effect.forkChild(queue.run(Effect.sync(() => events.push("queued")))),
+    );
+    yield* Effect.yieldNow;
+    expect(failureMessage(yield* Effect.exit(queue.run(Effect.void)))).toContain("Too many");
+
+    const barrier = yield* Effect.forkChild(
+      queue.runBarrier(Effect.sync(() => events.push("barrier"))),
+    );
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.joinAll([running, ...waiting, barrier]);
+    expect(events).toHaveLength(DESKTOP_OPERATION_QUEUE_LIMIT + 1);
+    expect(events.at(0)).toBe("running");
+    expect(events.at(-1)).toBe("barrier");
+    yield* queue.close;
+  }),
+);
+
 it.effect("cancels running native work before completing shutdown", () =>
   Effect.gen(function* () {
     const queue = new DesktopOperationQueue();
