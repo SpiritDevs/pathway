@@ -258,7 +258,7 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - A thread's first message goes through `launchThread`, so `initialMessage` carries the same two optional fields and the launch service passes them to its `message.dispatch`. Synara had one dispatch path.
 - An edit-and-resend resolves its mode from the edited text; Synara used the composer's current state.
 - The permission guide opened by an explicit mode change reads `state.supported` rather than the platform, and runs only when the thread's environment is this desktop's primary environment.
-- The effort hint is a Pathway-styled strip in the composer header rather than Synara's stacked panel. For drafts, availability falls back to the environment's cached Computer status, because a draft has no server thread state. Explicitly picking "High" counts as the default, so the hint still shows.
+- The effort hint is a Pathway-styled strip in the composer header. As in Synara, it stacks under whichever panel is showing (approval, question or plan follow-up), and explicitly picking the default effort ("High") still shows it. For drafts, availability falls back to the environment's cached Computer status, because a draft has no server thread state.
 - Not ported: the editor slash chip (Pathway has no chip system), the legacy `enableComputerControl` draft boolean (superseded by the mode field), client-side queued-turn revoke (the server queue freezes intent when a turn is queued) and the optional send-time permission preflight.
 
 ### Chat
