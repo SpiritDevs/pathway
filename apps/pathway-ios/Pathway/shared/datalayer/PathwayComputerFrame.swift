@@ -104,6 +104,8 @@ final class PathwayComputerFrameStream {
     @ObservationIgnored private let resolveURL: ResolveURL
     @ObservationIgnored private let session: URLSession
     @ObservationIgnored private var task: Task<Void, Never>?
+    /// The open socket. A quiet `receive()` ignores task cancellation, so stopping closes this.
+    @ObservationIgnored private var socket: URLSessionWebSocketTask?
     @ObservationIgnored private(set) var computerID: String?
 
     init(session: URLSession = .shared, resolveURL: @escaping ResolveURL) {
@@ -111,13 +113,18 @@ final class PathwayComputerFrameStream {
         self.resolveURL = resolveURL
     }
 
-    isolated deinit { task?.cancel() }
+    isolated deinit {
+        task?.cancel()
+        socket?.cancel(with: .goingAway, reason: nil)
+    }
 
     /// Starts streaming `computerID`, or stops when nil. Asking for the same computer again is a
     /// no-op, even after the stream gave up: only a stop or another computer starts over.
+    /// The last image stays either way, so a paused card keeps showing it.
     func stream(_ computerID: String?) {
         guard computerID != self.computerID else { return }
         task?.cancel(); task = nil
+        socket?.cancel(with: .goingAway, reason: nil); socket = nil
         self.computerID = computerID
         errorMessage = nil
         isConnecting = false
@@ -134,9 +141,14 @@ final class PathwayComputerFrameStream {
             do {
                 let target: URL
                 if let url { target = url } else { target = try await resolveURL(computerID); url = target }
+                try Task.checkCancellation()
                 let socket = session.webSocketTask(with: target)
+                self.socket = socket
                 socket.resume()
-                defer { socket.cancel(with: .goingAway, reason: nil) }
+                defer {
+                    socket.cancel(with: .goingAway, reason: nil)
+                    if self.socket === socket { self.socket = nil }
+                }
                 try await receive(from: socket, computerID: computerID) {
                     deliveredFrame = true
                     reconnect.frameReceived()
