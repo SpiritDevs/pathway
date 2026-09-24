@@ -48,6 +48,7 @@ import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceR
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { ComputerDispatchAccess } from "./ComputerDispatchAccess.ts";
 import { OrchestratorDispatchError, OrchestratorV2 } from "./Orchestrator.ts";
 import { OrchestrationEffectWorkerV2 } from "./EffectWorker.ts";
 import { EffectOutboxV2, layer as effectOutboxLayer } from "./EffectOutbox.ts";
@@ -3371,7 +3372,13 @@ it.layer(ConversationTestLayer)("Conversations and temporary retention", (it) =>
 // Port of Synara's decider.computerControl.test.ts: Computer intent is frozen
 // onto the run at send time and never re-derived from stored text. These sends
 // come from the server itself, which clears every access policy.
-it.layer(TestLayer)("decider computer-control pass-through", (it) => {
+// These dispatches request Computer as the server itself (ADR 0041).
+const ServerSenderLayer = Layer.merge(
+  TestLayer,
+  Layer.succeed(ComputerDispatchAccess, ComputerDispatchAccess.server),
+);
+
+it.layer(ServerSenderLayer)("decider computer-control pass-through", (it) => {
   type DispatchCommand = Extract<
     Parameters<OrchestratorV2["Service"]["dispatch"]>[0],
     { readonly type: "message.dispatch" }

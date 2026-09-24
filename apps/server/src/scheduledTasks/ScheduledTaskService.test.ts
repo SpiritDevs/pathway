@@ -4,6 +4,7 @@ import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@spiritd
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { ComputerDispatchAccess } from "../orchestration-v2/ComputerDispatchAccess.ts";
 import {
   ThreadLaunchService,
   type ThreadLaunchInput,
@@ -25,6 +26,7 @@ it.effect(
       const environment = EnvironmentId.make("studio");
       const bindings = new Set<string>();
       const launched: ThreadLaunchInput[] = [];
+      const clearances: Array<string> = [];
       let available = true;
       const dependencies = Layer.mergeAll(
         SqlitePersistenceMemory,
@@ -46,9 +48,10 @@ it.effect(
         Layer.mock(ThreadManagementService)({}),
         Layer.mock(ThreadLaunchService)({
           launch: (input) =>
-            Effect.sync(() => {
+            Effect.gen(function* () {
               assert.isTrue(bindings.has(input.threadId!));
               launched.push(input);
+              clearances.push(yield* (yield* ComputerDispatchAccess).clearance.pipe(Effect.orDie));
               return { threadId: input.threadId! } as ThreadLaunchResult;
             }),
         }),
@@ -74,6 +77,8 @@ it.effect(
         assert.equal(listed[0]?.allowanceParentThreadId, parent);
         yield* service.runNow({ id: task.id });
         assert.equal(launched.length, 1);
+        // The schedule sends as the server, so a scheduled `/computer-use` is admitted.
+        assert.deepEqual(clearances, ["admins-only"]);
         available = false;
         yield* service.runNow({ id: task.id }).pipe(Effect.result);
         assert.equal(launched.length, 1);
