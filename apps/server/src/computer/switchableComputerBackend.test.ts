@@ -1,9 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import type { ComputerEvent } from "@spiritdevs/contracts";
 import { decodeComputerFrame } from "@spiritdevs/shared/computerFrame";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
@@ -27,6 +29,18 @@ const takeEvents = (events: Stream.Stream<ComputerBackendEvent> | undefined, cou
     Stream.take(count),
     Stream.runCollect,
     Effect.forkScoped({ startImmediately: true }),
+  );
+
+/** The availability the manager last pushed for `threadId`, from what `events` holds now. */
+const lastPushedAvailability = (events: PubSub.Subscription<ComputerEvent>, threadId: string) =>
+  Effect.map(PubSub.takeAll(events), (taken) =>
+    taken
+      .flatMap((event) =>
+        event.type === "computer.thread-state" && event.state.threadId === threadId
+          ? [event.state.availability]
+          : [],
+      )
+      .at(-1),
   );
 
 describe("SwitchableComputerBackend", () => {
@@ -232,6 +246,52 @@ it.layer(NodeServices.layer)("replacing the desktop under the manager", (it) => 
         expect([yield* nextSequence, yield* nextSequence]).toEqual([11, 12]);
         yield* second.emitFrame(true, false, Uint8Array.of(0xff, 0xd8, 0xff), "image/jpeg");
         expect(yield* nextSequence).toBe(13);
+      }),
+    ),
+  );
+
+  it.effect("pushes a thread seeded during selection the selected desktop's availability", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const slot = yield* makeSwitchableComputerBackend(
+          new CheckingComputerBackend("Detecting."),
+        );
+        const manager = yield* ComputerManager.make({ backend: slot.backend });
+        expect((yield* manager.getThreadState("thread-1")).availability.kind).toBe("checking");
+        const events = yield* manager.subscribeEvents;
+
+        const selected = new FakeComputerBackend();
+        yield* manager.replaceDesktop(slot.swap(selected));
+        // Pushed with the swap: the thread never asks again.
+        expect(yield* lastPushedAvailability(events, "thread-1")).toEqual({
+          kind: "available",
+          backend: "fake",
+        });
+        // Passive: finding the desktop does not set it up.
+        expect(selected.callsFor("availability")).toHaveLength(0);
+      }),
+    ),
+  );
+
+  it.effect("pushes a replacement desktop's availability over the one that was gone", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const gone = new FakeComputerBackend();
+        gone.setAvailability({ kind: "backend-unavailable", message: "Instance exited." });
+        const slot = yield* makeSwitchableComputerBackend(gone);
+        const manager = yield* ComputerManager.make({ backend: slot.backend });
+        expect((yield* manager.getThreadState("thread-1")).availability.kind).toBe(
+          "backend-unavailable",
+        );
+        const events = yield* manager.subscribeEvents;
+
+        const replacement = new FakeComputerBackend();
+        yield* manager.replaceDesktop(slot.swap(replacement, { desktopChanged: true }));
+        expect(yield* lastPushedAvailability(events, "thread-1")).toEqual({
+          kind: "available",
+          backend: "fake",
+        });
+        expect(replacement.callsFor("availability")).toHaveLength(0);
       }),
     ),
   );
