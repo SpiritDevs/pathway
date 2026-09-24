@@ -2,7 +2,8 @@ import Foundation
 import ImageIO
 
 /// One still from `/ws/computer-frames`: a 17-byte little-endian header, the
-/// UTF-8 computer id, then a PNG payload (`@spiritdevs/shared/computerFrame`).
+/// UTF-8 computer id, then a PNG payload (`@spiritdevs/shared/computerFrame`;
+/// magic and version mirror `packages/contracts/src/computer.ts`).
 struct PathwayComputerFrame: Equatable, Sendable {
     enum DecodeError: Error, Equatable { case tooShort, badMagic, unsupportedVersion, truncatedComputerID, invalidComputerID }
 
@@ -84,6 +85,15 @@ struct PathwayComputerFrameReconnect: Equatable {
     }
 }
 
+/// The frame socket route. Mirrors `COMPUTER_FRAME_WS_PATH`,
+/// `COMPUTER_FRAME_WS_COMPUTER_ID_PARAM` and `COMPUTER_FRAME_RESYNC_MESSAGE` in
+/// `packages/contracts/src/computer.ts`; change them together.
+enum PathwayComputerFrameSocket {
+    static let path = "/ws/computer-frames"
+    static let computerIDParam = "computerId"
+    static let resyncMessage = #"{"type":"computer.frame.resync"}"#
+}
+
 /// The frame route beside the RPC socket, keeping its ticket: tickets last minutes and
 /// are not consumed, so the prepared `/ws?wsTicket=` URL authorizes the frame socket too.
 func pathwayComputerFrameSocketURL(rpcSocketURL: URL, computerID: String) -> URL? {
@@ -91,10 +101,10 @@ func pathwayComputerFrameSocketURL(rpcSocketURL: URL, computerID: String) -> URL
     var path = components.path
     while path.hasSuffix("/") { path.removeLast() }
     if path.hasSuffix("/ws") { path.removeLast(3) }
-    components.path = path + "/ws/computer-frames"
+    components.path = path + PathwayComputerFrameSocket.path
     components.fragment = nil
     var query = (components.queryItems ?? []).filter { $0.name == "wsTicket" }
-    query.append(URLQueryItem(name: "computerId", value: computerID))
+    query.append(URLQueryItem(name: PathwayComputerFrameSocket.computerIDParam, value: computerID))
     components.queryItems = query
     return components.url
 }
@@ -211,7 +221,7 @@ final class PathwayComputerFrameStream {
         func resync() {
             guard ContinuousClock.now - lastResync >= .seconds(1) else { return }
             lastResync = .now
-            socket.send(.string(#"{"type":"computer.frame.resync"}"#)) { _ in }
+            socket.send(.string(PathwayComputerFrameSocket.resyncMessage)) { _ in }
         }
         defer { if lifetime == self.lifetime { decoding?.cancel(); decoding = nil } }
         while !Task.isCancelled {
