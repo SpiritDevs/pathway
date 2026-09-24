@@ -252,6 +252,7 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 ### Composer
 
 - There is no per-chat Computer switch, as in Synara (its `BranchToolbar` test pins "no persistent Computer switch"). The **Computer control** setting enables every chat; a leading `/computer-use` enables one request.
+- The **Computer control** setting is device-wide but applies per environment (`useComputerControlSetting`). A send carries it only when the thread's environment can drive a desktop and its access policy admits this session (`canUseComputer`, shared with the server). Elsewhere, messages go out without Computer intent instead of every one being refused. An explicit `/computer-use` is sent unchanged, so the server's refusal answers it. Synara had one environment.
 - `/computer-use` is offered only when the thread's environment reports a supported platform (`useComputerSupport`), and a provider's own `computer-use` command is hidden beside it.
 - The wire carries no mode. `enableComputerControl: true` is sent only when the setting is on, because sending it in request mode would widen the request into chat mode; the server reads request mode from the text (P5). `computerControlGeneration` is sent only when the resolved mode is not off: the thread's generation, else the draft's, else 0 for a new thread.
 - A thread's first message goes through `launchThread`, so `initialMessage` carries the same two optional fields and the launch service passes them to its `message.dispatch`. Synara had one dispatch path.
