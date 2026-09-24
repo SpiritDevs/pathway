@@ -53,7 +53,8 @@ a separate target icon also opens the picker; choosing All threads hides that sh
 Edit, reorder, or delete Focuses in **Settings → Agent Threads → Focus Views**.
 Focus icons match desktop in the picker, selected Focus shortcut, and settings list.
 The selected shortcut uses the Focus color. The Focus editor offers the same icon choices as desktop.
-The project icon appears beside its name when it can be loaded from the environment. Missing,
+The project icon appears beside its name. An icon chosen for the project shows on every device;
+otherwise the icon is loaded from the environment. Missing,
 unreachable, or unsupported images use a folder icon. Icons are shared across threads in the same
 project and cached to avoid repeated downloads.
 Pinned threads have a pin beside their last activity time. Working, attention, and error indicators

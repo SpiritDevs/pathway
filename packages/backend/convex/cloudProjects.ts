@@ -810,6 +810,52 @@ export const setPreferredEnvironmentBinding = mutation({
   },
 });
 
+/** Uploaded project icons are small pictures, not arbitrary files. */
+export const PROJECT_ICON_IMAGE_MAX_BYTES = 1024 * 1024;
+
+async function requireManagedProject(ctx: MutationCtx, companyId: string, cloudProjectId: string) {
+  const actor = await requireCompanyActor(ctx, companyId);
+  requirePermission(actor, "projects.manage");
+  const project = await ctx.db
+    .query("cloudProjects")
+    .withIndex("by_company_and_domain_id", (q) =>
+      q.eq("companyId", actor.company._id).eq("id", cloudProjectId),
+    )
+    .unique();
+  if (project === null || project.deletedAt !== null) {
+    throw backendError("entity-not-found", "The project is no longer available.");
+  }
+  return { actor, project };
+}
+
+/** A project shows one icon everywhere, so setting either kind replaces the other. */
+async function replaceProjectIcon(
+  ctx: MutationCtx,
+  target: Awaited<ReturnType<typeof requireManagedProject>>,
+  next: Pick<Doc<"cloudProjects">, "icon" | "iconImage">,
+) {
+  const { actor, project } = target;
+  if (project.iconImage && project.iconImage.storageId !== next.iconImage?.storageId) {
+    await ctx.storage.delete(project.iconImage.storageId);
+  }
+  await ctx.db.patch(project._id, { ...next, updatedAt: Date.now() });
+  const changedProject = await ctx.db.get(project._id);
+  if (changedProject === null) throw backendError("entity-not-found", "The project vanished.");
+  await appendCompanyChanges(ctx, {
+    companyId: actor.company._id,
+    actor: actorRecord(actor),
+    changes: [
+      {
+        entityKind: "cloudProject",
+        entityId: changedProject.id,
+        changeKind: "upsert",
+        versionDocId: changedProject._id,
+        payload: encodeCloudProject(changedProject),
+      },
+    ],
+  });
+}
+
 /** Built-in icon (Focus icon library name plus accent color) shown instead of detected favicons. */
 export const setCompanyProjectIcon = mutation({
   args: {
@@ -819,17 +865,7 @@ export const setCompanyProjectIcon = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const actor = await requireCompanyActor(ctx, args.companyId);
-    requirePermission(actor, "projects.manage");
-    const project = await ctx.db
-      .query("cloudProjects")
-      .withIndex("by_company_and_domain_id", (q) =>
-        q.eq("companyId", actor.company._id).eq("id", args.cloudProjectId),
-      )
-      .unique();
-    if (project === null || project.deletedAt !== null) {
-      throw backendError("entity-not-found", "The project is no longer available.");
-    }
+    const target = await requireManagedProject(ctx, args.companyId, args.cloudProjectId);
     const icon =
       args.icon === null
         ? null
@@ -843,23 +879,51 @@ export const setCompanyProjectIcon = mutation({
         "A project icon needs a name and a six-digit hex color.",
       );
     }
-    await ctx.db.patch(project._id, { icon, updatedAt: Date.now() });
-    const changedProject = await ctx.db.get(project._id);
-    if (changedProject === null) throw backendError("entity-not-found", "The project vanished.");
-    await appendCompanyChanges(ctx, {
-      companyId: actor.company._id,
-      actor: actorRecord(actor),
-      changes: [
-        {
-          entityKind: "cloudProject",
-          entityId: changedProject.id,
-          changeKind: "upsert",
-          versionDocId: changedProject._id,
-          payload: encodeCloudProject(changedProject),
-        },
-      ],
-    });
+    await replaceProjectIcon(ctx, target, { icon, iconImage: null });
     return null;
+  },
+});
+
+/** First step of an icon upload: the client POSTs the image here, then commits the storage id. */
+export const generateProjectIconUploadUrl = mutation({
+  args: { companyId: domainIdArg, cloudProjectId: domainIdArg },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    await requireManagedProject(ctx, args.companyId, args.cloudProjectId);
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+/**
+ * Uploaded image shown instead of detected favicons on every device. Resolves false, after deleting
+ * the upload, when it is not an acceptable image; throwing would roll that deletion back.
+ */
+export const setCompanyProjectIconImage = mutation({
+  args: {
+    companyId: domainIdArg,
+    cloudProjectId: domainIdArg,
+    storageId: v.id("_storage"),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const target = await requireManagedProject(ctx, args.companyId, args.cloudProjectId);
+    const file = await ctx.db.system.get(args.storageId);
+    if (file === null) return false;
+    const url = await ctx.storage.getUrl(args.storageId);
+    if (
+      url === null ||
+      file.size > PROJECT_ICON_IMAGE_MAX_BYTES ||
+      // Storage keeps the uploader's Content-Type header; absent means octet-stream, never markup.
+      (file.contentType !== undefined && !file.contentType.startsWith("image/"))
+    ) {
+      await ctx.storage.delete(args.storageId);
+      return false;
+    }
+    await replaceProjectIcon(ctx, target, {
+      icon: null,
+      iconImage: { storageId: args.storageId, url },
+    });
+    return true;
   },
 });
 
@@ -1529,7 +1593,13 @@ export const mergeCompanyProjects = mutation({
       payload: encodeCloudProject(updatedTarget),
     });
 
-    await ctx.db.patch(source._id, { preferredBindingId: null, deletedAt: now, updatedAt: now });
+    if (source.iconImage) await ctx.storage.delete(source.iconImage.storageId);
+    await ctx.db.patch(source._id, {
+      preferredBindingId: null,
+      iconImage: null,
+      deletedAt: now,
+      updatedAt: now,
+    });
     changes.push({
       entityKind: "cloudProject",
       entityId: source.id,
@@ -1916,8 +1986,10 @@ export const deleteCompanyProject = mutation({
       });
     }
 
+    if (project.iconImage) await ctx.storage.delete(project.iconImage.storageId);
     await ctx.db.patch(project._id, {
       preferredBindingId: null,
+      iconImage: null,
       deletedAt: now,
       updatedAt: now,
     });

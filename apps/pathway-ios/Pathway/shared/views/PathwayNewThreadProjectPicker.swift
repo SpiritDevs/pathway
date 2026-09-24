@@ -129,12 +129,20 @@ private struct PathwayNewThreadProjectIcon: View {
         return appModel.cloud.projectIcon(companyId: option.environment.companyId, projectId: option.projectID)
     }
 
+    private var syncedImageURL: URL? {
+        guard !project.isConversation, let option = project.bindings.first else { return nil }
+        return appModel.cloud.projectIconImageURL(companyId: option.environment.companyId, projectId: option.projectID)
+    }
+
     var body: some View {
         let candidates = contexts
-        let icon = syncedIcon
+        let imageURL = syncedImageURL
+        let icon = imageURL == nil ? syncedIcon : nil
         let cachedImage = candidates.lazy.compactMap { appModel.projectIcons.images[$0.key] }.first
         Group {
-            if let icon {
+            if let imageURL {
+                AsyncImage(url: imageURL) { $0.resizable().scaledToFit() } placeholder: { Color.clear }
+            } else if let icon {
                 PathwayFocusIcon(name: icon.name, size: 24)
                     .foregroundStyle(PathwayFocusIcon.color(icon.color))
             } else if let cachedImage {
@@ -147,8 +155,8 @@ private struct PathwayNewThreadProjectIcon: View {
         .frame(width: 28, height: 28)
         .clipShape(.rect(cornerRadius: 4))
         .accessibilityHidden(true)
-        .task(id: icon == nil ? candidates.map(\.key) : []) {
-            guard icon == nil, cachedImage == nil, let connect = appModel.connect else { return }
+        .task(id: icon == nil && imageURL == nil ? candidates.map(\.key) : []) {
+            guard icon == nil, imageURL == nil, cachedImage == nil, let connect = appModel.connect else { return }
             for context in candidates {
                 guard !Task.isCancelled else { return }
                 await appModel.projectIcons.load(context, using: connect)

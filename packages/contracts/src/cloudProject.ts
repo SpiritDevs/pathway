@@ -93,6 +93,8 @@ export const CloudProject = Schema.Struct({
   /** Present only when a merge explicitly made the repository authoritative for every checkout. */
   repositoryIdentityAuthority: Schema.optional(Schema.Literal("merge")),
   icon: Schema.optional(Schema.NullOr(ProjectIcon)),
+  /** Uploaded image replacing detected favicons on every device; exclusive with `icon`. */
+  iconImageUrl: Schema.optional(Schema.NullOr(Schema.String)),
   archivedAt: Schema.NullOr(CloudTimestamp),
   createdAt: CloudTimestamp,
   updatedAt: CloudTimestamp,

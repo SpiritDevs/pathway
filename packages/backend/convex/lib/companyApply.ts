@@ -287,6 +287,7 @@ export function encodeCloudProject(doc: Doc<"cloudProjects">): unknown {
       ? {}
       : { repositoryIdentityAuthority: doc.repositoryIdentityAuthority }),
     ...(doc.icon === undefined ? {} : { icon: doc.icon }),
+    ...(doc.iconImage == null ? {} : { iconImageUrl: doc.iconImage.url }),
     archivedAt: doc.archivedAt,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
