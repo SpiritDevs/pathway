@@ -1,8 +1,5 @@
-import {
-  COMPUTER_FRAME_RESYNC_MESSAGE,
-  decodeComputerFrame,
-  type ComputerFrame,
-} from "@spiritdevs/shared/computerFrame";
+import { COMPUTER_FRAME_RESYNC_MESSAGE } from "@spiritdevs/contracts";
+import { decodeComputerFrame, type ComputerFrame } from "@spiritdevs/shared/computerFrame";
 
 import {
   createBinaryFrameSource,

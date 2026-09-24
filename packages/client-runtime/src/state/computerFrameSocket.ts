@@ -4,7 +4,12 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { HttpClient } from "effect/unstable/http";
 import type { Atom } from "effect/unstable/reactivity";
 
-import type { AuthWebSocketTicketResult, ComputerId } from "@spiritdevs/contracts";
+import {
+  COMPUTER_FRAME_WS_COMPUTER_ID_PARAM,
+  COMPUTER_FRAME_WS_PATH,
+  type AuthWebSocketTicketResult,
+  type ComputerId,
+} from "@spiritdevs/contracts";
 import {
   issueRemoteDpopWebSocketTicket,
   issueRemoteWebSocketTicket,
@@ -17,11 +22,6 @@ import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { RemoteEnvironmentAuthFetchError } from "../rpc/http.ts";
 import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
 import { createEnvironmentCommand } from "./runtime.ts";
-
-// Mirrors `@spiritdevs/shared/computerFrame`, whose codec pulls in Node-only
-// transport code that this browser/React Native package must not type against.
-const COMPUTER_FRAME_WS_PATH = "/ws/computer-frames";
-const COMPUTER_FRAME_WS_COMPUTER_ID_PARAM = "computerId";
 
 /**
  * The frame route beside the connection's RPC socket. The prepared socket URL

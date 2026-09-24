@@ -1298,6 +1298,16 @@ export type ComputerEvent = typeof ComputerEvent.Type;
 
 // ── Frame channel envelope (type-level contract only) ────────────────
 
+/**
+ * The frame socket route, served beside the RPC socket (under the same proxy
+ * prefix) and authorized by the same `wsTicket`. iOS mirrors these in
+ * `PathwayComputerFrame.swift`.
+ */
+export const COMPUTER_FRAME_WS_PATH = "/ws/computer-frames";
+export const COMPUTER_FRAME_WS_COMPUTER_ID_PARAM = "computerId";
+/** The text message a client sends on the frame socket to ask for a fresh keyframe. */
+export const COMPUTER_FRAME_RESYNC_MESSAGE = "computer.frame.resync";
+
 export const COMPUTER_FRAME_MAGIC = 0x5343;
 export const COMPUTER_FRAME_VERSION = 1;
 export const COMPUTER_FRAME_MAX_COMPUTER_ID_BYTES = 255;

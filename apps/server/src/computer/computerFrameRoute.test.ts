@@ -4,12 +4,13 @@ import * as NodeHttp from "node:http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import type { AuthEnvironmentScope, ComputerId } from "@spiritdevs/contracts";
 import {
   COMPUTER_FRAME_RESYNC_MESSAGE,
   COMPUTER_FRAME_WS_COMPUTER_ID_PARAM,
   COMPUTER_FRAME_WS_PATH,
-} from "@spiritdevs/shared/computerFrame";
+  type AuthEnvironmentScope,
+  type ComputerId,
+} from "@spiritdevs/contracts";
 import type { FrameSink } from "@spiritdevs/shared/frameTransport";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
