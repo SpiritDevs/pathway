@@ -221,6 +221,7 @@ function launchInput(input: {
   readonly thread: string;
   readonly message?: string;
   readonly enableComputerControl?: boolean;
+  readonly computerControlGeneration?: number;
   readonly workspace?: ThreadLaunch.ThreadLaunchWorkspaceStrategy;
 }) {
   return {
@@ -242,6 +243,9 @@ function launchInput(input: {
             ...(input.enableComputerControl === undefined
               ? {}
               : { enableComputerControl: input.enableComputerControl }),
+            ...(input.computerControlGeneration === undefined
+              ? {}
+              : { computerControlGeneration: input.computerControlGeneration }),
           },
         }),
     createdBy: "user" as const,
@@ -328,29 +332,33 @@ it.effect("refuses a launch that asks for Computer when the caller fails the acc
 
 it.effect("arms chat-mode Computer for a first message sent with the chat setting on", () =>
   Effect.gen(function* () {
+    const dispatched: Array<import("@spiritdevs/contracts").OrchestrationV2Command> = [];
     const harness = makeHarness({
-      serverSettings: {
-        computer: { ...DEFAULT_SERVER_SETTINGS.computer, accessPolicy: "admins-only" },
-      },
+      onDispatch: (command) => Effect.sync(() => void dispatched.push(command)),
     });
     yield* Effect.gen(function* () {
       const launches = yield* ThreadLaunch.ThreadLaunchService;
-      const refused = yield* launches
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches
         .launch(
           launchInput({
             command: "command:launch:computer-chat",
             thread: "thread:launch:computer-chat",
             message: "Open Calculator",
             enableComputerControl: true,
+            computerControlGeneration: 4,
           }),
         )
         .pipe(
           Effect.provideService(ComputerDispatchAccess, {
-            clearance: computerClearance("admins-only", ["orchestration:operate"]),
+            clearance: computerClearance("scoped", ["orchestration:operate", "computer:operate"]),
           }),
-          Effect.exit,
         );
-      assert.isTrue(Exit.isFailure(refused));
+
+      const message = dispatched.find((command) => command.type === "message.dispatch");
+      assert.deepInclude(message, { enableComputerControl: true, computerControlGeneration: 4 });
+      const [run] = (yield* threads.getThreadProjection(launched.threadId)).runs;
+      assert.strictEqual(run?.computerControl?.mode, "chat");
     }).pipe(Effect.provide(harness.layer));
   }),
 );
