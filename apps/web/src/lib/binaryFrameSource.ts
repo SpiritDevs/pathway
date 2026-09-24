@@ -22,7 +22,7 @@ export interface WebSocketLike {
 interface BinaryFrameSourceOptions<Frame> {
   /**
    * Fully resolved socket URL: route, stream id, and (for remote connections)
-   * a single-use ticket. Frames are lossy, high-rate, and useless the moment
+   * a short-lived ticket. Frames are lossy, high-rate, and useless the moment
    * they are late, so they ride this dedicated socket rather than the RPC
    * socket: a frame burst can never delay an RPC response or a domain-event
    * push, and a slow consumer drops frames instead of stalling the control

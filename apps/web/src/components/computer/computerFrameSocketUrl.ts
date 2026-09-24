@@ -10,7 +10,7 @@ const computerFrameSocket = createComputerFrameSocketAtoms(connectionAtomRuntime
 /**
  * A freshly authorized frame socket URL for one computer on one environment,
  * or null while the environment cannot mint one (offline, ticket refused).
- * Remote URLs carry a single-use ticket, so call this once per (re)connect.
+ * Remote URLs carry a short-lived ticket, so a URL is good for a few minutes.
  */
 export async function resolveComputerFrameSocketUrl(
   registry: AtomRegistry.AtomRegistry,

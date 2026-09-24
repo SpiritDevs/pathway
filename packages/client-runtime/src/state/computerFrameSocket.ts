@@ -47,10 +47,11 @@ function withComputerId(socketUrl: string, computerId: ComputerId): string {
  * Resolve the binary frame socket URL for one computer on a prepared
  * connection, authenticated the same way as the RPC socket:
  * - primary/local connections are same-origin and ride the session cookie,
- * - bearer connections mint a single-use `wsTicket`,
+ * - bearer connections mint a `wsTicket`,
  * - relay connections mint the ticket with a DPoP proof.
  *
- * Tickets are single-use, so call this once per (re)connect.
+ * Tickets are signed and expire after a few minutes; they are not consumed,
+ * so one URL serves reconnects until the server refuses it.
  */
 export const resolveComputerFrameSocketUrl = Effect.fn(
   "clientRuntime.state.resolveComputerFrameSocketUrl",
