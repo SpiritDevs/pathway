@@ -23,9 +23,18 @@ function loadPlanFollowUp(deps: Record<string, unknown>) {
   }) => Promise<void>;
 }
 
+/** A promise the test settles by hand. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 describe("ChatView plan follow-up", () => {
   it("submits once when clicked twice while the generation read is pending", async () => {
-    const generation = Promise.withResolvers<number>();
+    const generation = deferred<number>();
     const read = vi.fn(() => generation.promise);
     const start = vi.fn(async () => ({ _tag: "Success" }));
     let sequence = 0;
