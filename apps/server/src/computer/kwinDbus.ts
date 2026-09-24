@@ -339,7 +339,7 @@ const AUTH_THROTTLE_MAX_ATTEMPTS = 3;
  * Loads `dbus-next` on first use, so a host that never reaches the Linux path
  * never loads it.
  */
-const loadDbusModule = (options: { readonly dbusModule?: DbusModule | undefined }) =>
+export const loadDbusModule = (options: { readonly dbusModule?: DbusModule | undefined }) =>
   options.dbusModule !== undefined
     ? Effect.succeed(options.dbusModule)
     : Effect.promise(async () => {
