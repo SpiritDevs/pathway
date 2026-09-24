@@ -359,3 +359,11 @@ Synara has no mobile client, so each entry reads: the web behaviour (P6) → the
 ### Tooling
 
 - Swift-only commits skip the pre-commit hook (`--no-verify`), because `vp staged` runs `vp fmt`, which fails with no JavaScript staged.
+
+## P8 — Linux
+
+These three fix defects that Pathway copied from Synara. The desktop slot can be replaced while the server runs, and Synara's swap path mishandled a full queue, the preview sequence, and threads seeded while a backend was being chosen.
+
+- A desktop replacement always waits behind the queue through a barrier that ignores the 64-entry limit. It also aborts every pane input already queued, as it already did for agent calls. Synara swapped straight away when the queue was full, so queued pane input could still land on the new desktop (`pr-1294:apps/server/src/computer/ComputerManager.ts:1084-1104`).
+- `ComputerManager` numbers preview frames itself, so the sequence keeps rising when a replacement desktop's publisher starts again at 1. Synara passed through each publisher's own counter, so web and iOS clients whose sockets stayed open dropped the new desktop's frames as stale and froze (`pr-1294:apps/server/src/computer/switchableComputerBackend.ts:187-193`, `stillFramePublisher.ts:195,300`). The wire format and the client gates are unchanged.
+- When a desktop is adopted, the manager drops its cached snapshot and pushes a passive availability probe to every thread. The probe does not start or provision the desktop. A snapshot read that started before the swap cannot overwrite the new result. Synara republished the cached snapshot, so a thread seeded while a backend was being chosen stayed on `checking`, and a thread that had seen the old desktop disappear stayed unavailable (`pr-1294:apps/server/src/computer/switchableComputerBackend.ts:181-186`, `ComputerManager.ts:1223-1231`).
