@@ -371,4 +371,22 @@ describe("parseStandaloneComposerSlashCommand", () => {
   it("ignores slash commands with extra message text", () => {
     expect(parseStandaloneComposerSlashCommand("/plan explain this")).toBeNull();
   });
+
+  it("never reads /computer-use as a mode switch, with or without a task", () => {
+    expect(parseStandaloneComposerSlashCommand("/computer-use")).toBeNull();
+    expect(parseStandaloneComposerSlashCommand("/computer-use open Calculator")).toBeNull();
+  });
+});
+
+describe("/computer-use in the composer", () => {
+  it.each([
+    ["/comp", { kind: "slash-command", query: "comp", rangeStart: 0, rangeEnd: 5 }],
+    [
+      "/computer-use",
+      { kind: "slash-command", query: "computer-use", rangeStart: 0, rangeEnd: 13 },
+    ],
+    ["/computer-use open Calculator", null],
+  ])("detects %s", (text, trigger) => {
+    expect(detectComposerTrigger(text, text.length)).toEqual(trigger);
+  });
 });
