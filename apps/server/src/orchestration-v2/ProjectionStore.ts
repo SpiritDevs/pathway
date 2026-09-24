@@ -9,6 +9,7 @@ import type {
   OrchestrationV2ShellThreadStatus,
   OrchestrationV2ThreadShell,
   OrchestrationV2ThreadProjection,
+  OrchestrationV2ThreadUsedModel,
   OrchestrationV2ThreadDetailSnapshot,
   OrchestrationV2ThreadHistoryRequest,
   OrchestrationV2TurnItem,
@@ -31,6 +32,7 @@ import {
   OrchestrationV2RuntimeRequestJson as OrchestrationV2RuntimeRequestJsonSchema,
   OrchestrationV2SubagentJson as OrchestrationV2SubagentJsonSchema,
   OrchestrationV2TurnItemJson as OrchestrationV2TurnItemJsonSchema,
+  ProviderInstanceId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -508,6 +510,9 @@ type ShellRunRow = {
   readonly thread_id: string;
   readonly run_id: string;
   readonly ordinal: number;
+  readonly status: string;
+  readonly provider_instance_id: string;
+  readonly model: string | null;
 };
 
 type ShellRunItemCountRow = {
@@ -866,6 +871,25 @@ function buildVisibleTurnItems(input: {
   ]);
 }
 
+/** Distinct provider/model pairs across runs, latest use last; rolled-back runs don't count. */
+export function usedModelsFromRuns(
+  runs: ReadonlyArray<{
+    readonly ordinal: number;
+    readonly status: string;
+    readonly instanceId: ProviderInstanceId;
+    readonly model: string;
+  }>,
+): Array<OrchestrationV2ThreadUsedModel> {
+  const byKey = new Map<string, OrchestrationV2ThreadUsedModel>();
+  for (const run of runs.toSorted((left, right) => left.ordinal - right.ordinal)) {
+    if (run.status === "rolled_back") continue;
+    const key = `${run.instanceId}\u0000${run.model}`;
+    byKey.delete(key);
+    byKey.set(key, { instanceId: run.instanceId, model: run.model });
+  }
+  return [...byKey.values()];
+}
+
 export function threadShellFromProjection(
   projection: OrchestrationV2ThreadProjection,
 ): OrchestrationV2ThreadShell {
@@ -934,6 +958,14 @@ export function threadShellFromProjection(
     title: projection.thread.title,
     providerInstanceId: projection.thread.providerInstanceId,
     modelSelection: projection.thread.modelSelection,
+    usedModels: usedModelsFromRuns(
+      projection.runs.map((run) => ({
+        ordinal: run.ordinal,
+        status: run.status,
+        instanceId: run.providerInstanceId,
+        model: run.modelSelection.model,
+      })),
+    ),
     runtimeMode: projection.thread.runtimeMode,
     interactionMode: projection.thread.interactionMode,
     branch: projection.thread.branch,
@@ -1036,6 +1068,7 @@ type ShellThreadState = {
   readonly updatedAt: OrchestrationV2ThreadProjection["updatedAt"];
   readonly runOrdinalById: ReadonlyMap<RunId, number>;
   readonly itemCountByRunId: ReadonlyMap<RunId, number>;
+  readonly usedModels: ReadonlyArray<OrchestrationV2ThreadUsedModel>;
 };
 
 function shellStatusFromStoredRunStatus(status: string | null): OrchestrationV2ShellThreadStatus {
@@ -1141,6 +1174,7 @@ function shellFromState(input: {
     title: input.state.thread.title,
     providerInstanceId: input.state.thread.providerInstanceId,
     modelSelection: input.state.thread.modelSelection,
+    usedModels: input.state.usedModels,
     runtimeMode: input.state.thread.runtimeMode,
     interactionMode: input.state.thread.interactionMode,
     branch: input.state.thread.branch,
@@ -2657,11 +2691,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const selectShellRunRows = (threadIds?: ReadonlyArray<ThreadId>) =>
       threadIds === undefined
         ? sql<ShellRunRow>`
-            SELECT thread_id, run_id, ordinal
+            SELECT thread_id, run_id, ordinal, status,
+              COALESCE(json_extract(payload_json, '$.providerInstanceId'), provider)
+                AS provider_instance_id,
+              json_extract(payload_json, '$.modelSelection.model') AS model
             FROM orchestration_v2_projection_runs
           `
         : sql<ShellRunRow>`
-            SELECT thread_id, run_id, ordinal
+            SELECT thread_id, run_id, ordinal, status,
+              COALESCE(json_extract(payload_json, '$.providerInstanceId'), provider)
+                AS provider_instance_id,
+              json_extract(payload_json, '$.modelSelection.model') AS model
             FROM orchestration_v2_projection_runs
             WHERE thread_id IN ${sql.in(threadIds)}
           `;
@@ -2764,7 +2804,29 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         existing.set(runId, row.item_count);
         itemCountsByThreadId.set(threadId, existing);
       }
-      return { runOrdinalsByThreadId, itemCountsByThreadId };
+      const usedModelRunsByThreadId = new Map<
+        ThreadId,
+        Array<Parameters<typeof usedModelsFromRuns>[0][number]>
+      >();
+      for (const row of input.runRows) {
+        if (row.model === null) continue;
+        const threadId = ThreadId.make(row.thread_id);
+        const existing = usedModelRunsByThreadId.get(threadId) ?? [];
+        existing.push({
+          ordinal: row.ordinal,
+          status: row.status,
+          instanceId: ProviderInstanceId.make(row.provider_instance_id),
+          model: row.model,
+        });
+        usedModelRunsByThreadId.set(threadId, existing);
+      }
+      const usedModelsByThreadId = new Map(
+        [...usedModelRunsByThreadId].map(([threadId, runs]) => [
+          threadId,
+          usedModelsFromRuns(runs),
+        ]),
+      );
+      return { runOrdinalsByThreadId, itemCountsByThreadId, usedModelsByThreadId };
     };
 
     const pendingBackgroundDataByThreadId = (input: {
@@ -2818,6 +2880,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       readonly row: ShellThreadRow;
       readonly runOrdinalsByThreadId: ReadonlyMap<ThreadId, Map<RunId, number>>;
       readonly itemCountsByThreadId: ReadonlyMap<ThreadId, Map<RunId, number>>;
+      readonly usedModelsByThreadId: ReadonlyMap<
+        ThreadId,
+        ReadonlyArray<OrchestrationV2ThreadUsedModel>
+      >;
       readonly providerThreadsByThreadId: ReadonlyMap<
         ThreadId,
         ReadonlyArray<OrchestrationV2ThreadProjection["providerThreads"][number]>
@@ -2836,6 +2902,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           row,
           runOrdinalsByThreadId,
           itemCountsByThreadId,
+          usedModelsByThreadId,
           providerThreadsByThreadId,
           pendingTurnItemsByThreadId,
           pullRequestAttachmentItemsByThreadId,
@@ -2913,6 +2980,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           updatedAt: thread.updatedAt,
           runOrdinalById: runOrdinalsByThreadId.get(ThreadId.make(row.thread_id)) ?? new Map(),
           itemCountByRunId: itemCountsByThreadId.get(ThreadId.make(row.thread_id)) ?? new Map(),
+          usedModels: usedModelsByThreadId.get(thread.id) ?? [],
         } satisfies ShellThreadState;
       });
 
@@ -2997,10 +3065,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               selectShellPullRequestAttachmentRows(),
             ]);
 
-            const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
-              runRows,
-              itemCountRows,
-            });
+            const { runOrdinalsByThreadId, itemCountsByThreadId, usedModelsByThreadId } =
+              runMapsByThreadId({
+                runRows,
+                itemCountRows,
+              });
             const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
               yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
             const attachmentItemsByThreadId =
@@ -3010,6 +3079,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 row,
                 runOrdinalsByThreadId,
                 itemCountsByThreadId,
+                usedModelsByThreadId,
                 providerThreadsByThreadId,
                 pendingTurnItemsByThreadId,
                 pullRequestAttachmentItemsByThreadId: attachmentItemsByThreadId,
@@ -3087,10 +3157,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               selectShellPendingTurnItemRows(threadIds),
               selectShellPullRequestAttachmentRows(threadIds),
             ]);
-            const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
-              runRows,
-              itemCountRows,
-            });
+            const { runOrdinalsByThreadId, itemCountsByThreadId, usedModelsByThreadId } =
+              runMapsByThreadId({
+                runRows,
+                itemCountRows,
+              });
             const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
               yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
             const attachmentItemsByThreadId =
@@ -3101,6 +3172,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 row,
                 runOrdinalsByThreadId,
                 itemCountsByThreadId,
+                usedModelsByThreadId,
                 providerThreadsByThreadId,
                 pendingTurnItemsByThreadId,
                 pullRequestAttachmentItemsByThreadId: attachmentItemsByThreadId,

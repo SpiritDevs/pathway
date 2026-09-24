@@ -1494,6 +1494,13 @@ export const OrchestrationV2PendingRuntimeRequestSummary = Schema.Struct({
 export type OrchestrationV2PendingRuntimeRequestSummary =
   typeof OrchestrationV2PendingRuntimeRequestSummary.Type;
 
+/** One provider/model pair a thread's runs have used. */
+export const OrchestrationV2ThreadUsedModel = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  model: Schema.String,
+});
+export type OrchestrationV2ThreadUsedModel = typeof OrchestrationV2ThreadUsedModel.Type;
+
 /** Latest visible message metadata; producers truncate `text` to a preview. */
 export const OrchestrationV2LatestVisibleMessageSummary = Schema.Struct({
   id: MessageId,
@@ -1520,6 +1527,11 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   title: Schema.String,
   providerInstanceId: ProviderInstanceId,
   modelSelection: ModelSelection,
+  /**
+   * Distinct models the thread's runs used, ordered by most recent use (latest
+   * last). Omitted by servers that predate model history.
+   */
+  usedModels: Schema.optional(Schema.Array(OrchestrationV2ThreadUsedModel)),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),

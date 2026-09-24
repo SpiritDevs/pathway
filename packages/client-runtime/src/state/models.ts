@@ -79,6 +79,8 @@ export interface EnvironmentThreadShell {
   readonly title: string;
   readonly providerInstanceId: ProviderInstanceId;
   readonly modelSelection: OrchestrationV2ThreadShell["modelSelection"];
+  /** Models the thread's runs used, latest use last; empty before the first run. */
+  readonly usedModels: NonNullable<OrchestrationV2ThreadShell["usedModels"]>;
   readonly runtimeMode: OrchestrationV2ThreadShell["runtimeMode"];
   readonly interactionMode: OrchestrationV2ThreadShell["interactionMode"];
   readonly branch: string | null;
@@ -206,6 +208,7 @@ export function presentThreadShell(
     title: thread.title,
     providerInstanceId: thread.providerInstanceId,
     modelSelection: thread.modelSelection,
+    usedModels: thread.usedModels ?? [],
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
     branch: thread.branch,

@@ -691,6 +691,109 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect("lists the models a thread's runs used, latest use last", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:projection-shell-used-models");
+      const claudeSelection = {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-5-5",
+      } satisfies ModelSelection;
+      const discardedSelection = {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-sonnet-5",
+      } satisfies ModelSelection;
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-shell-used-models:thread"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId: ProjectId.make("project:projection-shell-used-models"),
+          title: "Model history",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: {
+            parentThreadId: null,
+            relationshipToParent: null,
+            rootThreadId: threadId,
+          },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      const runs = [
+        { selection: modelSelection, status: "completed" as const },
+        { selection: claudeSelection, status: "completed" as const },
+        { selection: modelSelection, status: "completed" as const },
+        { selection: claudeSelection, status: "completed" as const },
+        { selection: discardedSelection, status: "rolled_back" as const },
+      ];
+      for (const [index, { selection, status }] of runs.entries()) {
+        const ordinal = index + 1;
+        const runId = RunId.make(`run:projection-shell-used-models:${ordinal}`);
+        const rootNodeId = NodeId.make(`node:projection-shell-used-models:${ordinal}`);
+        yield* projectionStore.apply({
+          id: EventId.make(`event:projection-shell-used-models:run:${ordinal}`),
+          type: "run.created",
+          threadId,
+          runId,
+          nodeId: rootNodeId,
+          driver,
+          occurredAt: now,
+          payload: {
+            id: runId,
+            threadId,
+            ordinal,
+            providerInstanceId: selection.instanceId,
+            modelSelection: selection,
+            providerThreadId: null,
+            userMessageId: MessageId.make(`message:projection-shell-used-models:${ordinal}`),
+            rootNodeId,
+            activeAttemptId: null,
+            status,
+            requestedAt: now,
+            startedAt: now,
+            completedAt: now,
+            checkpointId: null,
+            contextHandoffId: null,
+          },
+        });
+      }
+
+      const expected = [
+        { instanceId: modelSelection.instanceId, model: modelSelection.model },
+        { instanceId: claudeSelection.instanceId, model: claudeSelection.model },
+      ];
+      const shells = [
+        threadShellFromProjection(yield* projectionStore.getThreadProjection(threadId)),
+        (yield* projectionStore.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        ),
+        yield* projectionStore.getThreadShell(threadId),
+      ];
+      for (const shell of shells) {
+        assert.deepEqual(shell?.usedModels, expected);
+      }
+    }),
+  );
+
   it.effect("projects one shared provider session into multiple thread bindings", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStoreV2;
