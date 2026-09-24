@@ -233,8 +233,8 @@ export type ComputerScopeAccess = "granted" | "denied" | "pending";
  * Mirrors the provider panel's operate gating for any scope. The desktop app
  * owns its primary server outright. A browser on the primary must be granted
  * the scope explicitly (that server always reports scopes). A remote server
- * that predates scope reporting stays optimistic, as does a failed session
- * read: the RPC layer is authoritative either way.
+ * that predates scope reporting stays optimistic. A failed session read stays
+ * pending, so the policy controls never unlock on a guess.
  */
 export function resolveComputerScopeAccess(input: {
   readonly scope: typeof AuthAccessReadScope | typeof AuthAccessWriteScope;
@@ -247,7 +247,7 @@ export function resolveComputerScopeAccess(input: {
   if (input.isPrimary && input.isElectron) return "granted";
   if (input.session === null) {
     if (input.isPending) return "pending";
-    return input.hasError ? "granted" : "denied";
+    return input.hasError ? "pending" : "denied";
   }
   if (!input.session.authenticated) return "denied";
   if (input.session.scopes === undefined) return input.isPrimary ? "denied" : "granted";
