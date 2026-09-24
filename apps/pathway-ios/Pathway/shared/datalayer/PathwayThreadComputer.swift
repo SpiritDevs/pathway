@@ -110,8 +110,8 @@ struct PathwayThreadComputerSession: Equatable, Sendable {
     /// The control epoch a send may pin to: only one the current connection confirmed.
     var confirmedControlGeneration: Int? { isConfirmed ? state?.controlGeneration : nil }
 
-    /// The computer whose stills the open card streams.
-    var streamingComputerID: String? { isOpen && state?.availability == "available" ? state?.computerID : nil }
+    /// The computer whose stills the open card streams: only once the current connection confirmed it.
+    var streamingComputerID: String? { isOpen && isConfirmed && state?.availability == "available" ? state?.computerID : nil }
 
     /// What the agent is doing while it drives, "Live" before its first action, or the last action after.
     var statusLabel: String? {
@@ -192,10 +192,11 @@ final class PathwayThreadComputerModel {
         } catch {}
     }
 
-    /// A lost or new socket: what shows stays, but nothing from before it is trusted.
+    /// A lost or new socket: what shows stays, but nothing from before it is trusted,
+    /// and stills pause until this connection's seed confirms the computer again.
     func connectionChanged() {
         connection += 1
-        session.rebase()
+        update { $0.rebase() }
     }
 
     /// Lands one seed read, unless it was cancelled or its connection has since changed.
