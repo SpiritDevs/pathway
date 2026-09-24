@@ -8,6 +8,7 @@ import * as Fiber from "effect/Fiber";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import type { ComputerBackendEvent } from "./ComputerBackend.ts";
 import { ComputerManager } from "./ComputerManager.ts";
@@ -546,6 +547,50 @@ it.layer(NodeServices.layer)("replacing the desktop under the manager", (it) => 
         yield* Fiber.join(replacing);
         // Nothing has asked to use the next desktop, so nothing started it.
         expect(next.callsFor("availability")).toHaveLength(0);
+      }),
+    ),
+  );
+
+  it.effect("drops a window republish armed for the desktop that was replaced", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const first = new FakeComputerBackend();
+        const slot = yield* makeSwitchableComputerBackend(first);
+        const manager = yield* ComputerManager.make({
+          backend: slot.backend,
+          windowsPublishDebounceMs: 1_000,
+        });
+        yield* manager.getThreadState("thread-1");
+        yield* manager.listWindows();
+        const internals = manager as unknown as {
+          runFork: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
+        };
+        const runFork = internals.runFork;
+        const forked: Fiber.Fiber<unknown, unknown>[] = [];
+        internals.runFork = (effect) => {
+          const fiber = runFork(effect);
+          forked.push(fiber);
+          return fiber;
+        };
+        const events = yield* manager.subscribeEvents;
+        // Arms the debounced republish, which reads the desktop when it fires.
+        first.emitWindowsChanged([]);
+        while ((yield* PubSub.take(events)).type !== "computer.windows-changed");
+
+        const next = new FakeComputerBackend();
+        yield* manager.replaceDesktop(slot.swap(next));
+        yield* TestClock.adjust(1_000);
+        yield* Fiber.awaitAll(forked);
+        // Nothing has asked to use the next desktop, so nothing started it.
+        expect(next.callsFor("availability")).toHaveLength(0);
+        expect(next.callsFor("listWindows")).toHaveLength(0);
+
+        // The next desktop's own window change still republishes.
+        next.emitWindowsChanged([]);
+        while ((yield* PubSub.take(events)).type !== "computer.windows-changed");
+        yield* TestClock.adjust(1_000);
+        yield* Fiber.awaitAll(forked);
+        expect(next.callsFor("listWindows")).toHaveLength(1);
       }),
     ),
   );
