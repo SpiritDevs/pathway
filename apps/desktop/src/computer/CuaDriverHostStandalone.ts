@@ -12,9 +12,9 @@
  *
  * This is not a port of the macOS safety layer. `nativeRevision: null` permits
  * upstream artifacts, whose transport cancellation cannot acknowledge native
- * input drain. This host has no global Escape adapter, so Linux browser
- * mutations stay closed; browser observation and passive endpoint detection
- * remain available. There is no pathway-helper, masked-activation shield,
+ * input drain. On Linux the host applies the Linux admission rules, and it
+ * has no global Escape adapter, so Linux browser mutations stay closed;
+ * browser observation and passive endpoint detection remain available. There is no pathway-helper, masked-activation shield,
  * frame tap or permission setup path; `check_permissions` uses the driver's
  * own platform report.
  */
@@ -32,6 +32,7 @@ import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 
 import { makeCuaDriverHost, sweepOrphanedCuaDrivers } from "./CuaDriverHost.ts";
 import { clearStaleCuaHostSocket } from "./CuaHostSocket.ts";
+import { linuxCuaAdmission } from "./LinuxCuaAdmission.ts";
 
 class StandaloneUsageError extends Schema.TaggedErrorClass<StandaloneUsageError>()(
   "StandaloneUsageError",
@@ -113,6 +114,7 @@ const program = Effect.gen(function* () {
     nativeRevision: null,
     ...(platform === "linux"
       ? {
+          linuxAdmission: linuxCuaAdmission,
           inputMonitorState: Effect.succeed({
             ready: false,
             error: "linux_global_escape_unavailable",

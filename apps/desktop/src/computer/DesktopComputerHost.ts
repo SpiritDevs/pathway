@@ -28,7 +28,7 @@ import {
   agentCursorPreferencePath,
   readAgentCursorPreference,
 } from "./AgentCursorPreference.ts";
-import { resolveComputerBinary } from "./ComputerBinaries.ts";
+import { computerBinaryCandidates, resolveComputerBinary } from "./ComputerBinaries.ts";
 import * as ComputerDesktopLifecycle from "./ComputerDesktopLifecycle.ts";
 import * as ComputerFrameTap from "./ComputerFrameTap.ts";
 import * as ComputerHelper from "./ComputerHelper.ts";
@@ -36,19 +36,26 @@ import * as ComputerShield from "./ComputerShield.ts";
 import { type CuaDriverHost, makeCuaDriverHost, sweepOrphanedCuaDrivers } from "./CuaDriverHost.ts";
 import {
   DesktopComputer,
+  type DesktopComputerService,
   makeInertDesktopComputer,
   unsupportedComputerHelperState,
 } from "./DesktopComputer.ts";
 import * as EscapeKillSwitchMonitor from "./EscapeKillSwitchMonitor.ts";
+import { makeLinuxCuaDriverHost } from "./LinuxCuaDriverHost.ts";
+import * as LinuxEscapeKillSwitchMonitor from "./LinuxEscapeKillSwitchMonitor.ts";
 
 // Unset or unparseable reads as off.
 const flag = (name: string) =>
   Config.boolean(name).pipe(Config.orElse(() => Config.succeed(false)));
 
-/** Computer use runs only on macOS, and only when `PATHWAY_COMPUTER_USE` opts in. */
+/** Computer use runs on macOS and Linux, and only when `PATHWAY_COMPUTER_USE` opts in. */
 export const computerUseEnabled = Effect.gen(function* () {
-  return (yield* HostProcessPlatform) === "darwin" && (yield* flag("PATHWAY_COMPUTER_USE"));
+  const platform = yield* HostProcessPlatform;
+  return (platform === "darwin" || platform === "linux") && (yield* flag("PATHWAY_COMPUTER_USE"));
 });
+
+// Unset reads as empty.
+const envValue = (name: string) => Config.string(name).pipe(Config.withDefault(""));
 
 const warn = (message: string, error?: { readonly message: string }) =>
   Effect.logWarning(`[desktop-computer] ${message}${error ? `: ${error.message}` : ""}`);
@@ -57,6 +64,8 @@ const COMPUTER_DISABLED_MESSAGE = "Computer use is not enabled in this desktop b
 const COMPUTER_BINARIES_MISSING_MESSAGE =
   "This desktop build lacks the native Computer helpers, so Computer use is unavailable.";
 const COMPUTER_HOST_UNAVAILABLE_MESSAGE = "The Computer host could not start.";
+const LINUX_PERMISSIONS_MESSAGE =
+  "Linux has no permission grants to set up. Computer uses the display and accessibility bus of the desktop session Pathway runs in.";
 
 // The helper omits Accessibility until asked; the contract's key is exact-optional.
 const toBridgeState = (state: ComputerHelper.ComputerHelperState): DesktopComputerHelperState => {
@@ -152,12 +161,14 @@ const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const inert = (message: string) =>
     makeInertDesktopComputer(unsupportedComputerHelperState(message, environment.displayName));
+  const platform = yield* HostProcessPlatform;
   if (!(yield* computerUseEnabled))
     return inert(
-      (yield* HostProcessPlatform) === "darwin"
+      platform === "darwin" || platform === "linux"
         ? COMPUTER_DISABLED_MESSAGE
         : ComputerHelper.COMPUTER_HELPER_UNSUPPORTED_MESSAGE,
     );
+  if (platform === "linux") return yield* makeLinux;
 
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const electronApp = yield* ElectronApp.ElectronApp;
@@ -367,6 +378,110 @@ const make = Effect.gen(function* () {
       }),
     setPreviewWatched: frameTap.setWatched,
   };
+});
+
+/**
+ * The Linux Computer host: the Cua driver host with the Linux admission rules
+ * and a task-scoped X11 Escape shortcut. There is no pathway-helper, so there
+ * are no grants, shield or frame tap. A missing driver still serves the
+ * authenticated host, which answers with the provisioning remedy.
+ */
+const makeLinux = Effect.gen(function* () {
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const electronApp = yield* ElectronApp.ElectronApp;
+  const powerMonitor = yield* ElectronPowerMonitor.ElectronPowerMonitor;
+  const runFork = yield* FiberSet.makeRuntime<never>();
+  const inert = (message: string) =>
+    makeInertDesktopComputer(unsupportedComputerHelperState(message, environment.displayName));
+  const state = unsupportedComputerHelperState(LINUX_PERMISSIONS_MESSAGE, environment.displayName);
+
+  const driverPath = Option.getOrElse(
+    yield* resolveComputerBinary("cua-driver"),
+    () => computerBinaryCandidates(environment, "cua-driver")[0]!,
+  );
+
+  let host: CuaDriverHost | undefined;
+  let emergencyStopNotice: Effect.Effect<void> = Effect.void;
+  let cursorStyle: AgentCursorStylePreference | null = yield* readAgentCursorPreference(
+    yield* agentCursorPreferencePath,
+  );
+
+  const commandLine = Electron.app.commandLine;
+  const escapeMonitor = yield* LinuxEscapeKillSwitchMonitor.make({
+    shortcutRegistry: Electron.globalShortcut,
+    sessionType: LinuxEscapeKillSwitchMonitor.linuxEscapeSession(
+      commandLine.getSwitchValue("ozone-platform") ||
+        commandLine.getSwitchValue("ozone-platform-hint") ||
+        (yield* envValue("ELECTRON_OZONE_PLATFORM_HINT")),
+      {
+        DISPLAY: yield* envValue("DISPLAY"),
+        WAYLAND_DISPLAY: yield* envValue("WAYLAND_DISPLAY"),
+        XDG_SESSION_TYPE: yield* envValue("XDG_SESSION_TYPE"),
+      },
+    ),
+    onEscape: () =>
+      host
+        ? host.emergencyStopInput.pipe(
+            Effect.flatMap((stopped) =>
+              stopped ? Effect.sync(() => runFork(emergencyStopNotice)) : Effect.void,
+            ),
+            Effect.asVoid,
+          )
+        : Effect.void,
+    onStateChange: (next) => host?.inputMonitorStateChanged(next) ?? Effect.void,
+    onError: (message) => warn(`Escape shortcut: ${message}`),
+  });
+
+  yield* sweepOrphanedCuaDrivers();
+  const capability = NodeCrypto.randomBytes(32).toString("base64url");
+  host = yield* makeLinuxCuaDriverHost({
+    binaryPath: driverPath,
+    bundleId: environment.appUserModelId,
+    capability,
+    inputMonitor: escapeMonitor,
+    cursorStyle: () => cursorStyle,
+    // Computer use must never target the app hosting it.
+    ownPids: () =>
+      new Set([process.pid, ...Electron.app.getAppMetrics().map((metric) => metric.pid)]),
+  });
+  const running = host;
+  yield* Effect.addFinalizer(() =>
+    running.dispose.pipe(Effect.catch((error) => warn("host dispose failed", error))),
+  );
+  const listening = yield* Effect.result(running.listen);
+  if (Result.isFailure(listening)) {
+    yield* warn("Computer host could not listen", listening.failure);
+    yield* running.dispose.pipe(Effect.catch((error) => warn("host dispose failed", error)));
+    return inert(COMPUTER_HOST_UNAVAILABLE_MESSAGE);
+  }
+
+  yield* electronApp.whenReady.pipe(
+    Effect.andThen(
+      ComputerDesktopLifecycle.make({
+        monitor: powerMonitor,
+        host: running,
+        onError: (error) => warn("computer input pause failed", error),
+      }),
+    ),
+    Effect.catch((error) => warn("desktop lifecycle unavailable", error)),
+    Effect.forkScoped,
+  );
+
+  return {
+    ...makeInertDesktopComputer(state),
+    handoff: Option.some({ endpoint: listening.success, capability }),
+    suspend: running.suspend.pipe(Effect.catch((error) => warn("host suspend failed", error))),
+    resume: running.resume,
+    setEmergencyStopNotice: (notice) =>
+      Effect.sync(() => {
+        emergencyStopNotice = notice;
+      }),
+    setCursorStyle: (style) =>
+      Effect.suspend(() => {
+        cursorStyle = style;
+        return running.setCursorStyle(style);
+      }),
+  } satisfies DesktopComputerService;
 });
 
 export const layer = Layer.effect(DesktopComputer, make);

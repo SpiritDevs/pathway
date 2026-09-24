@@ -32,6 +32,12 @@ vi.mock("electron", () => ({
   app: {
     getPath: () => "/Applications/Pathway.app/Contents/MacOS/Pathway",
     getAppMetrics: () => [],
+    commandLine: { getSwitchValue: () => "" },
+  },
+  globalShortcut: {
+    register: () => true,
+    unregister: () => undefined,
+    isRegistered: () => false,
   },
   shell: { openExternal: () => Promise.resolve() },
 }));
@@ -77,9 +83,10 @@ describe("computerUseEnabled", () => {
     }),
   );
 
-  it.effect("stays off outside macOS even when opted in", () =>
+  it.effect("runs on Linux only when opted in, and never on Windows", () =>
     Effect.gen(function* () {
-      expect(yield* enabledFor("linux", { PATHWAY_COMPUTER_USE: "1" })).toBe(false);
+      expect(yield* enabledFor("linux", {})).toBe(false);
+      expect(yield* enabledFor("linux", { PATHWAY_COMPUTER_USE: "1" })).toBe(true);
       expect(yield* enabledFor("win32", { PATHWAY_COMPUTER_USE: "1" })).toBe(false);
     }),
   );
@@ -87,7 +94,11 @@ describe("computerUseEnabled", () => {
 
 describe("DesktopComputerHost.layer", () => {
   /** Builds the layer over a checkout in `rootDir`, with every process spawn faked. */
-  const build = (rootDir: string, env: Record<string, string>) =>
+  const build = (
+    rootDir: string,
+    env: Record<string, string>,
+    platform: "darwin" | "linux" = "darwin",
+  ) =>
     Effect.gen(function* () {
       const fake = yield* makeFakeHelperSpawner;
       const path = yield* Path.Path;
@@ -98,10 +109,10 @@ describe("DesktopComputerHost.layer", () => {
       }).pipe(
         Effect.provide(layer),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.layer),
-        Effect.provideService(HostProcessPlatform, "darwin"),
+        Effect.provideService(HostProcessPlatform, platform),
         Effect.provideService(DesktopEnvironment.DesktopEnvironment, {
           path,
-          platform: "darwin",
+          platform,
           isDevelopment: true,
           isPackaged: false,
           rootDir,
@@ -199,6 +210,33 @@ describe("DesktopComputerHost.layer", () => {
         message: "The Computer host could not start.",
       });
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "builds the Linux host without pathway-helper, even before the driver is provisioned",
+    () =>
+      Effect.gen(function* () {
+        const rootDir = yield* checkout;
+        const { service, spawned } = yield* build(rootDir, { PATHWAY_COMPUTER_USE: "1" }, "linux");
+        const options = hostMock.options as CuaDriverHostOptions;
+        expect(spawned).toBe(0);
+        expect(hostMock.made).toBe(1);
+        expect(options.binaryPath).toBe(
+          NodePath.join(rootDir, "apps/desktop/.electron-runtime/cua-driver/cua-driver"),
+        );
+        expect(options.nativeRevision).toBeNull();
+        expect(options.linuxAdmission).toBeDefined();
+        expect(options.shield).toBeUndefined();
+        expect(options.frameTap).toBeUndefined();
+        // The Escape shortcut backs input only while a task arms it.
+        expect(yield* options.inputMonitorState!).toMatchObject({ ready: false });
+        // This mock host cannot bind, so the service degrades like macOS does.
+        expect(Option.isNone(service.handoff)).toBe(true);
+        expect(yield* service.getState()).toMatchObject({
+          supported: false,
+          message: "The Computer host could not start.",
+        });
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
 
