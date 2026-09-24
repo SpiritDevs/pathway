@@ -18,7 +18,7 @@ import {
   type EnvironmentId,
 } from "@spiritdevs/contracts";
 import { ChevronDownIcon, CloudIcon, LaptopIcon, MonitorIcon, TerminalIcon } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import { useComputerStateStore, useCachedComputerStatus } from "../../computerStateStore";
@@ -77,9 +77,7 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
-
-/** Health can flip (reconnecting, recovered) while the panel is open. */
-const COMPUTER_STATUS_VISIBLE_REFRESH_INTERVAL_MS = 10_000;
+import { useComputerStatusRefresh } from "./useComputerStatusRefresh";
 
 const selectStatusByEnvironment = (state: {
   readonly statusByEnvironment: Readonly<Record<string, ComputerStatusResult>>;
@@ -286,28 +284,6 @@ function RemoteSessionGatedComputerSettings({
 
 // ── One environment ─────────────────────────────────────────────────────
 
-/**
- * Refresh on an interval while the document is visible, and again when the
- * user returns to the window (for example from System Settings).
- */
-function useComputerStatusRefresh(refresh: () => void): void {
-  const refreshRef = useRef(refresh);
-  refreshRef.current = refresh;
-  useEffect(() => {
-    const refreshIfVisible = () => {
-      if (document.visibilityState !== "hidden") refreshRef.current();
-    };
-    const interval = setInterval(refreshIfVisible, COMPUTER_STATUS_VISIBLE_REFRESH_INTERVAL_MS);
-    window.addEventListener("focus", refreshIfVisible);
-    document.addEventListener("visibilitychange", refreshIfVisible);
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener("focus", refreshIfVisible);
-      document.removeEventListener("visibilitychange", refreshIfVisible);
-    };
-  }, []);
-}
-
 function ComputerEnvironmentSettings({
   environment,
   isPrimary,
@@ -377,12 +353,11 @@ function ComputerEnvironmentSettings({
   // Returning from System Settings must re-read both the server status and the
   // native grant snapshot; the toggle the user just flipped lives in the second.
   const refreshStatus = statusQuery.refresh;
-  useComputerStatusRefresh(
-    useCallback(() => {
-      refreshStatus();
-      refreshNativeState();
-    }, [refreshNativeState, refreshStatus]),
-  );
+  useComputerStatusRefresh({
+    refreshStatus,
+    refreshNativeState,
+    paused: statusQuery.error !== null,
+  });
 
   const attention = resolveComputerSettingsAttention({
     status,
