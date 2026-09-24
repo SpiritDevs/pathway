@@ -395,7 +395,6 @@ function ComputerEnvironmentSettings({
   // environment, reported inline here instead of as toasts.
   const setup = useProvisionComputer(environmentId, {
     missing: attention.missingPermissions,
-    nativePermissionSetup: hasNativePermissionSetup,
   });
 
   const platform = environment.descriptor?.platform.os;
