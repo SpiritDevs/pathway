@@ -83,3 +83,27 @@ In **Settings** > **Computer** you can also:
 - Turn off opening the preview automatically, and choose **Compact** or **Large** for its size.
 - Colour the agent's cursor so you can tell it apart from yours. New Computer sessions use the new
   colours.
+
+## On iPhone and iPad
+
+The Pathway app for iPhone and iPad can ask for Computer tasks, follow them and stop them. The
+agent still works on the host Mac; nothing runs on your phone.
+
+- **Asking.** In a chat on a Mac environment, type `/` and choose **/computer-use**, then add your
+  task. To use Computer in every chat you send from this device, turn on **Let the agent use the
+  desktop in any chat** in **Settings** > **Computer**. The setting applies only to environments
+  that can run Computer and that this device may use.
+- **Following along.** While the agent drives the desktop, a live preview sits above the composer.
+  It shows still images of the host's screen and the agent's latest action. It streams only while
+  the chat is on screen and the app is open. Hide it with the close button; it comes back on the
+  next task. You can't click through the preview from a phone. If the stream drops and cannot
+  recover, the preview reads **Live view unavailable**.
+- **Approving and stopping.** Approval, setup and control-off cards work as they do on the desktop.
+  Grant macOS permissions on the host Mac itself. To stop the agent, tap **Stop** in the chat;
+  Escape works only on the host's keyboard.
+- **Settings.** **Settings** > **Computer** lists your environments. Each shows whether its desktop
+  is ready and its access and autonomy settings. Only an admin connection can change those
+  settings. The agent cursor, preview size and action history are set on the host.
+- **Access.** When an environment offers Computer access, the app asks for it as it connects. If
+  the environment's access policy is **Scoped** and this device was connected without Computer
+  access, reconnect it to grant access.
