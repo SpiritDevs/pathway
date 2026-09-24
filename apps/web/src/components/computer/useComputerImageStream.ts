@@ -11,6 +11,7 @@ import {
 import {
   createComputerFrameSource,
   type ComputerFrameSource,
+  type ComputerFrameSourceClose,
   type ComputerFrameSourceResetReason,
 } from "~/lib/computerFrameSource";
 import { useConnectedGeneration } from "~/hooks/useComputerEventBridge";
@@ -24,6 +25,8 @@ const FRAME_RECONNECT_MAX_DELAY_MS = 5_000;
  * so instead of spinning on "connecting".
  */
 const FRAME_RECONNECT_MAX_ATTEMPTS = 5;
+/** A policy close is a refusal a retry cannot change. */
+const POLICY_VIOLATION_CLOSE_CODE = 1008;
 export const COMPUTER_LIVE_VIEW_UNAVAILABLE = "Live view unavailable";
 
 export interface ComputerImageDimensions {
@@ -111,11 +114,10 @@ export function useComputerImageStream(input: {
     let gate: ComputerFrameGateState = createComputerFrameGateState();
     let source: ComputerFrameSource | null = null;
     let reconnectAttempts = 0;
-    // The resolved URL is reused until a socket closes without a frame: a
-    // ticket stays valid for minutes, and minting one is an HTTP round trip
-    // (with a DPoP proof on relay).
+    // The resolved URL is reused until an upgrade is refused: a ticket stays
+    // valid for minutes, and minting one is an HTTP round trip (with a DPoP
+    // proof on relay).
     let url: string | null = null;
-    let sourceDeliveredFrame = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let decoding = false;
     let pendingFrame: ComputerFrame | null = null;
@@ -171,7 +173,6 @@ export function useComputerImageStream(input: {
 
     const handleFrame = (frame: ComputerFrame) => {
       reconnectAttempts = 0;
-      sourceDeliveredFrame = true;
       if (!isCurrent() || disposed) return;
       const step = stepComputerFrameGate(gate, frame.header, computerId);
       gate = step.state;
@@ -185,7 +186,6 @@ export function useComputerImageStream(input: {
     };
 
     const connect = (resolved: string) => {
-      sourceDeliveredFrame = false;
       source = createComputerFrameSource({
         url: resolved,
         handlers: { onFrame: handleFrame, onReset: handleReset },
@@ -208,18 +208,29 @@ export function useComputerImageStream(input: {
       });
     };
 
-    const handleReset = (reason: ComputerFrameSourceResetReason) => {
+    const giveUp = () => {
+      source?.close();
+      source = null;
+      setCurrentStatus({ kind: "error", message: COMPUTER_LIVE_VIEW_UNAVAILABLE });
+    };
+
+    const handleReset = (
+      reason: ComputerFrameSourceResetReason,
+      close?: ComputerFrameSourceClose,
+    ) => {
       if (!isCurrent() || disposed) return;
       gate = createComputerFrameGateState();
       pendingFrame = null;
       if (reason === "closed") {
+        if (close?.code === POLICY_VIOLATION_CLOSE_CODE) {
+          giveUp();
+          return;
+        }
         reconnectAttempts += 1;
-        // Closed before any frame: the ticket may be what was refused.
-        if (!sourceDeliveredFrame) url = null;
+        // A refused upgrade may be a refused ticket; any other close reuses the URL.
+        if (close !== undefined && !close.opened) url = null;
         if (reconnectAttempts > FRAME_RECONNECT_MAX_ATTEMPTS) {
-          source?.close();
-          source = null;
-          setCurrentStatus({ kind: "error", message: COMPUTER_LIVE_VIEW_UNAVAILABLE });
+          giveUp();
           return;
         }
         setCurrentStatus({ kind: "connecting" });
