@@ -98,6 +98,7 @@ import { useThreadComputerControlGeneration } from "../computerStateStore";
 import { useComputerControlModeChange } from "../hooks/useComputerControlModeChange";
 import { useComputerControlSetting } from "../hooks/useComputerAccess";
 import {
+  computerControlFieldsForTurn,
   draftRequestsComputerControl,
   resolveComputerControlForSend,
 } from "../hooks/useComputerControlModeChange.logic";
@@ -356,6 +357,7 @@ import {
   useThreadTitlesByKey,
   useThreadVisibleTurnItems,
   useAllEnvironmentShellsBootstrapped,
+  readEnvironmentSupportsComputerPolicy,
   waitForThreadShell,
 } from "../state/entities";
 import { useEnvironmentShellBootstrapped } from "../state/shell";
@@ -8006,7 +8008,14 @@ function ChatViewContent(props: ChatViewProps) {
           runtimeMode,
           interactionMode,
           dispatchMode: sendsToCurrentThread ? dispatchMode : "auto",
-          ...computerControlForSend.fields,
+          ...computerControlFieldsForTurn({
+            fields: computerControlForSend.fields,
+            // startThreadTurn launches whenever it creates or prepares the thread.
+            launchesThread:
+              bootstrap !== undefined &&
+              ("createThread" in bootstrap || "prepareWorktree" in bootstrap),
+            serverTakesLaunchIntent: readEnvironmentSupportsComputerPolicy(environmentId),
+          }),
           ...(bootstrap ? { bootstrap } : {}),
           createdAt: messageCreatedAt,
         },

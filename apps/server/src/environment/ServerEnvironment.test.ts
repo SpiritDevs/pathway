@@ -72,6 +72,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.pullRequests).toBe(true);
       expect(second.capabilities.threadTitleRegeneration).toBe(true);
       expect(second.capabilities.threadSettleAfterCompletion).toBe(true);
+      expect(second.capabilities.computerPolicy).toBe(true);
       expect(second.capabilities.pushAutoSettlement).toBeUndefined();
       expect(second.runtime?.mode).toBe("server");
       expect(second.device?.hostname).toBeTruthy();
