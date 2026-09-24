@@ -1,3 +1,5 @@
+import * as NodeEvents from "node:events";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import type {
@@ -11,6 +13,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
 import { vi } from "vite-plus/test";
 
 vi.mock("electron", () => ({}));
@@ -74,9 +77,12 @@ const unusedLifecycleRuntimeLayer = Layer.mergeAll(
   Layer.succeed(ElectronTheme.ElectronTheme, {} as ElectronTheme.ElectronTheme["Service"]),
 );
 
+// The main window's renderer, with the lifecycle events Electron emits on it.
+const renderer = Object.assign(new NodeEvents.EventEmitter(), { id: 7 });
+
 const trustedWindowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
-  main: Effect.succeed(Option.some({ webContents: { id: 7 } })),
-} as ElectronWindow.ElectronWindow["Service"]);
+  main: Effect.succeed(Option.some({ webContents: renderer })),
+} as unknown as ElectronWindow.ElectronWindow["Service"]);
 
 // Each harness gets its own temp state directory for the cursor preference file.
 const stateDirLayer = Layer.effect(
@@ -261,6 +267,45 @@ describe("computer IPC", () => {
         yield* setComputerPreviewWatched.handler("true", trusted);
         yield* setComputerPreviewWatched.handler(false, trusted);
         assert.deepStrictEqual(calls.previewWatched, [true, false, false]);
+      }),
+    ),
+  );
+
+  it.effect.each([
+    ["crashes", ["render-process-gone", {}, { reason: "crashed" }]],
+    ["navigates away", ["did-start-navigation", {}, "https://app/", false, true]],
+    ["is destroyed", ["destroyed"]],
+  ] as const)("ends preview demand when its renderer %s", ([, [name, ...args]]) =>
+    Effect.gen(function* () {
+      const watched = yield* Queue.unbounded<boolean>();
+      const setWatched = (next: unknown) =>
+        setComputerPreviewWatched.handler(next, trusted).pipe(
+          Effect.provide(trustedWindowLayer),
+          Effect.provideService(DesktopComputer, {
+            ...makeInertDesktopComputer(readyState),
+            setPreviewWatched: (value) => Queue.offer(watched, value).pipe(Effect.asVoid),
+          }),
+        );
+      yield* setWatched(true);
+      assert.strictEqual(yield* Queue.take(watched), true);
+      renderer.emit(name, ...args);
+      assert.strictEqual(yield* Queue.take(watched), false);
+      assert.strictEqual(renderer.listenerCount("render-process-gone"), 0);
+      assert.strictEqual(renderer.listenerCount("destroyed"), 0);
+    }),
+  );
+
+  it.effect("stops watching the renderer once it withdraws demand itself", () =>
+    withHarness(({ calls }) =>
+      Effect.gen(function* () {
+        yield* setComputerPreviewWatched.handler(true, trusted);
+        yield* setComputerPreviewWatched.handler(true, trusted);
+        assert.strictEqual(renderer.listenerCount("render-process-gone"), 1);
+        renderer.emit("did-start-navigation", {}, "https://app/#thread", true, true);
+        yield* setComputerPreviewWatched.handler(false, trusted);
+        renderer.emit("render-process-gone", {}, { reason: "crashed" });
+        assert.deepStrictEqual(calls.previewWatched, [true, true, false]);
+        assert.strictEqual(renderer.listenerCount("render-process-gone"), 0);
       }),
     ),
   );
