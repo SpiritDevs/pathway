@@ -133,19 +133,23 @@ enum PathwayComputerInvocation: String, Equatable, Sendable {
     /// The Computer fields one send carries. `enableComputerControl` goes only with the
     /// setting, because sending it with a `/computer-use` request would widen it to the chat.
     /// The generation pins the intent to the control epoch it was made in.
-    static func fields(text: String, controlEnabled: Bool, generation: Int?) -> [String: JSONValue] {
+    static func fields(text: String, controlEnabled: Bool, generation: Int) -> [String: JSONValue] {
         guard Self(text: text, controlEnabled: controlEnabled) != .off else { return [:] }
-        var fields: [String: JSONValue] = ["computerControlGeneration": .number(Double(generation ?? 0))]
+        var fields: [String: JSONValue] = ["computerControlGeneration": .number(Double(generation))]
         if controlEnabled { fields["enableComputerControl"] = .bool(true) }
         return fields
     }
 
-    /// A new chat's first message: no control epoch applies yet. A launch carries the intent only
-    /// where the server takes it (`computerPolicy`); elsewhere it is dropped and the turn runs without.
+    /// A new or newly forked chat's first message: its control record does not exist yet, so the
+    /// epoch is 0. A launch carries the intent only where the server takes it (`computerPolicy`);
+    /// elsewhere it is dropped and the turn runs without.
     static func newChatFields(text: String, controlEnabled: Bool, launches: Bool, serverConfig: [String: JSONValue]) -> [String: JSONValue] {
         guard !launches || PathwayComputerAccess.capability("computerPolicy", in: serverConfig) else { return [:] }
-        return fields(text: text, controlEnabled: controlEnabled, generation: nil)
+        return fields(text: text, controlEnabled: controlEnabled, generation: 0)
     }
+
+    static let unconfirmedGenerationMessage = "Couldn't confirm this chat's Computer state. Reconnect, then send again."
+    static let supersededReadMessage = "The connection changed before this message was sent. Send it again."
 }
 
 /// Environment-level Computer rules shared by the composer, transcript and Settings.
@@ -256,19 +260,38 @@ extension PathwayAgentThreadModel {
         draft = "/\(PathwayComputerInvocation.slashCommand) " + draft
     }
 
-    /// The Computer fields a send of `text` to this chat carries. The control epoch comes from the
-    /// watched thread state, or is read once when unknown; offline it falls back to 0, which the
-    /// server treats as stale rather than re-arming control after a Stop.
+    /// The Computer fields a send of `text` to this chat carries. The control epoch must be one the
+    /// current connection confirmed: the watched thread state, or a read on this connection. A read
+    /// the connection outlived aborts the send. Without an epoch, the setting's implicit intent is
+    /// dropped and a `/computer-use` request throws, keeping the draft; 0 would pin an existing chat
+    /// to an epoch a Stop may already have passed.
     func computerFields(for text: String, queued: Bool = false,
-                        setting: Bool = UserDefaults.standard.bool(forKey: PathwayAgentThreadModel.computerControlDefaultsKey)) async -> [String: JSONValue] {
+                        setting: Bool = UserDefaults.standard.bool(forKey: PathwayAgentThreadModel.computerControlDefaultsKey)) async throws -> [String: JSONValue] {
         let enabled = computerControlApplies(setting: setting, queued: queued)
         guard PathwayComputerInvocation(text: text, controlEnabled: enabled) != .off else { return [:] }
         var generation = computerControlGeneration
-        if generation == nil, isSubscriptionReady,
-           let state = try? await request("computer.getThreadState", payload: .object(["threadId": .string(threadID)]), reportsErrors: false) {
-            generation = state.objectValue?["controlGeneration"]?.intValue
+        if generation == nil, isSubscriptionReady {
+            let connection = computerConnection
+            let state = try? await request("computer.getThreadState", payload: .object(["threadId": .string(threadID)]), reportsErrors: false)
+            try Task.checkCancellation()
+            guard connection == computerConnection else {
+                throw PathwayThreadConversationError.message(PathwayComputerInvocation.supersededReadMessage)
+            }
+            generation = state?.objectValue?["controlGeneration"]?.intValue
+        }
+        guard let generation else {
+            if PathwayComputerInvocation.prompt(in: text) != nil {
+                throw PathwayThreadConversationError.message(PathwayComputerInvocation.unconfirmedGenerationMessage)
+            }
+            return [:]
         }
         return PathwayComputerInvocation.fields(text: text, controlEnabled: enabled, generation: generation)
+    }
+
+    /// A connection ended or was replaced: its confirmed epoch, and any read still in flight on it, no longer count.
+    func invalidateComputerConnection() {
+        computerControlGeneration = nil
+        computerConnection += 1
     }
 
     /// The Computer fields of a new chat started from this one.
