@@ -278,8 +278,10 @@ final class PathwayAgentThreadModel {
     /// The environment's Computer access policy and this device's scopes there; nil while unknown.
     var computerAccessPolicy: String?
     var computerSessionScopes: Set<String>?
-    /// The thread's Computer control epoch from its latest snapshot, while the chat watches it.
+    /// The thread's Computer control epoch, only while a watch has it confirmed on a live connection.
     @ObservationIgnored var computerControlGeneration: Int?
+    /// Advances whenever this chat's connection ends or is replaced; fences Computer reads.
+    @ObservationIgnored var computerConnection = 0
     private(set) var browserTakeover: [String: JSONValue]?
     private(set) var checkpoints: [JSONValue] = []
     private(set) var plans: [JSONValue] = []
@@ -424,6 +426,7 @@ final class PathwayAgentThreadModel {
     func stop() async {
         streamTask?.cancel(); streamTask = nil; configTask?.cancel(); configTask = nil
         isSubscriptionReady = false
+        invalidateComputerConnection()
         connectionState = items.isEmpty ? .idle : .cached
         await persistDraftNow()
         let previousRPC = rpc; rpc = nil
@@ -530,7 +533,7 @@ final class PathwayAgentThreadModel {
                 await persistDraftNow()
             }
             guard let prepared = preparedSend else { return }
-            let computer = await computerFields(for: prepared.text)
+            let computer = try await computerFields(for: prepared.text)
             try await dispatch("message.dispatch", fields: ["commandId": .string(prepared.messageID), "createdBy": .string("user"), "creationSource": .string("mobile"),
                 "messageId": .string(prepared.messageID), "text": .string(prepared.text), "attachments": .array(prepared.attachments), "dispatchMode": prepared.dispatchMode,
                 "modelSelection": try Self.json(currentModelSelection), "runtimeMode": .string(runtimeMode), "interactionMode": .string(interactionMode)].merging(computer) { $1 })
@@ -561,7 +564,7 @@ final class PathwayAgentThreadModel {
             var command = PathwayAgentThreadCommands.dispatchMessage(threadID: threadID, text: text,
                 hasActiveRun: true, identifier: preparedSend.messageID).objectValue ?? [:]
             command["modelSelection"] = try Self.json(currentModelSelection)
-            command.merge(await computerFields(for: text, queued: true)) { $1 }
+            command.merge(try await computerFields(for: text, queued: true)) { $1 }
             if mode == "steer", let activeRunID {
                 command["dispatchMode"] = .object(["type": .string("steer_active"), "targetRunId": .string(activeRunID)])
             }
@@ -611,7 +614,7 @@ final class PathwayAgentThreadModel {
         guard activeRunID == nil, canEdit(item), let messageID = item.messageID, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw PathwayThreadConversationError.message("Only the latest message can be edited after the agent stops.")
         }
-        let computer = await computerFields(for: text)
+        let computer = try await computerFields(for: text)
         try await dispatch("message.edit-and-restart", fields: ["createdBy": .string("user"), "creationSource": .string("mobile"),
             "messageId": .string(messageID), "replacementMessageId": .string(UUID().uuidString),
             "text": .string(Self.preservingMessageContext(original: item.text ?? "", edited: text))].merging(computer) { $1 })
@@ -872,6 +875,7 @@ final class PathwayAgentThreadModel {
         guard let object = value.objectValue else { return }
         if object["_pathwayTransport"] != nil {
             isSubscriptionReady = false
+            invalidateComputerConnection()
             connectionState = items.isEmpty ? .connecting : .cached
             return
         }

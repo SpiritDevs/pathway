@@ -78,7 +78,7 @@ struct PathwayComputerTests {
         #expect(PathwayComputerInvocation.fields(text: "hello", controlEnabled: false, generation: 4).isEmpty)
         #expect(PathwayComputerInvocation.fields(text: "/computer-use open Notes", controlEnabled: false, generation: 4)
             == ["computerControlGeneration": .number(4)])
-        #expect(PathwayComputerInvocation.fields(text: "hello", controlEnabled: true, generation: nil)
+        #expect(PathwayComputerInvocation.fields(text: "hello", controlEnabled: true, generation: 0)
             == ["computerControlGeneration": .number(0), "enableComputerControl": .bool(true)])
         #expect(PathwayComputerInvocation(text: "/computer-use", controlEnabled: true) == .chat)
     }
@@ -154,20 +154,20 @@ struct PathwayComputerTests {
         #expect(!model.computerAccessDenied)
     }
 
-    @Test func everySendCarriesTheComputerRule() async {
-        let model = makeModel { _, _ in .object([:]) }
+    @Test func everySendCarriesTheComputerRule() async throws {
+        let model = makeModel { _, _ in .object(["controlGeneration": .number(0)]) }
         model.serverConfig = ["environment": .object(["platform": .object(["os": .string("darwin")])])]
-        #expect(await model.computerFields(for: "hello", setting: false).isEmpty)
-        #expect(await model.computerFields(for: "/computer-use open Notes", setting: false) == ["computerControlGeneration": .number(0)])
+        #expect(try await model.computerFields(for: "hello", setting: false).isEmpty)
+        #expect(try await model.computerFields(for: "/computer-use open Notes", setting: false) == ["computerControlGeneration": .number(0)])
         model.computerControlGeneration = 5
-        #expect(await model.computerFields(for: "hello", setting: true).isEmpty)
+        #expect(try await model.computerFields(for: "hello", setting: true).isEmpty)
         model.computerAccessPolicy = "scoped"
         model.computerSessionScopes = ["orchestration:operate", "computer:operate"]
-        #expect(await model.computerFields(for: "hello", setting: true)
+        #expect(try await model.computerFields(for: "hello", setting: true)
             == ["computerControlGeneration": .number(5), "enableComputerControl": .bool(true)])
         model.computerAccessPolicy = "admins-only"
         model.computerSessionScopes = ["orchestration:operate"]
-        #expect(await model.computerFields(for: "hello", setting: true).isEmpty)
+        #expect(try await model.computerFields(for: "hello", setting: true).isEmpty)
     }
 
     @Test func aNewChatCarriesIntentOnlyToServersThatReadIt() {

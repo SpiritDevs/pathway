@@ -92,7 +92,7 @@ struct AgentThreadComputerWatch: ViewModifier {
             .onChange(of: computer?.session.phase, initial: true) { _, phase in
                 if phase == .armed { computer?.viewed() }
             }
-            .onChange(of: computer?.session.state?.controlGeneration, initial: true) { _, generation in
+            .onChange(of: computer?.session.confirmedControlGeneration, initial: true) { _, generation in
                 model.computerControlGeneration = generation
             }
     }

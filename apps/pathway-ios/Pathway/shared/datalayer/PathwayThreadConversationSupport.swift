@@ -354,7 +354,7 @@ extension PathwayAgentThreadModel {
         isSending = true
         defer { isSending = false }
         let text = "PLEASE IMPLEMENT THIS PLAN:\n" + markdown.trimmingCharacters(in: .whitespacesAndNewlines)
-        let computer = await computerFields(for: text, queued: threadQueue != nil)
+        let computer = try await computerFields(for: text, queued: threadQueue != nil)
         if let threadQueue {
             // A plan has one implementation command, including after navigation or restart.
             let identity = try JSONEncoder().encode([thread.companyId, threadID, planID])
