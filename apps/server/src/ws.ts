@@ -580,7 +580,7 @@ const environmentAuthorizationError = (requiredScope: AuthEnvironmentScope) =>
  * Applies a settings patch for a session holding `scopes`. The RPC's own scope is
  * checked by the caller; a patch touching Computer policy also needs `access:write`.
  */
-export const updateServerSettingsForSession = (
+const updateServerSettingsForSession = (
   serverSettings: ServerSettings.ServerSettingsService["Service"],
   scopes: ReadonlyArray<AuthEnvironmentScope>,
   patch: ServerSettingsPatch,
@@ -592,6 +592,35 @@ export const updateServerSettingsForSession = (
     }
     return yield* serverSettings.updateSettings(patch);
   });
+
+/**
+ * The settings RPCs for a session holding `scopes`. `observe` applies the RPC's
+ * own scope and tracing, as it does for every other method.
+ */
+export const serverSettingsRpcHandlers = (
+  serverSettings: ServerSettings.ServerSettingsService["Service"],
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+  observe: <A, E>(
+    method: string,
+    effect: Effect.Effect<A, E>,
+    traceAttributes: Readonly<Record<string, unknown>>,
+  ) => Effect.Effect<A, E | EnvironmentAuthorizationError>,
+) => ({
+  [WS_METHODS.serverGetSettings]: (_input: unknown) =>
+    observe(
+      WS_METHODS.serverGetSettings,
+      serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
+      { "rpc.aggregate": "server" },
+    ),
+  [WS_METHODS.serverUpdateSettings]: ({ patch }: { readonly patch: ServerSettingsPatch }) =>
+    observe(
+      WS_METHODS.serverUpdateSettings,
+      updateServerSettingsForSession(serverSettings, scopes, patch).pipe(
+        Effect.map(ServerSettings.redactServerSettingsForClient),
+      ),
+      { "rpc.aggregate": "server" },
+    ),
+});
 
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
@@ -1855,26 +1884,7 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "server" },
           ),
-        [WS_METHODS.serverGetSettings]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.serverGetSettings,
-            serverSettings.getSettings.pipe(
-              Effect.map(ServerSettings.redactServerSettingsForClient),
-            ),
-            {
-              "rpc.aggregate": "server",
-            },
-          ),
-        [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
-          observeRpcEffect(
-            WS_METHODS.serverUpdateSettings,
-            updateServerSettingsForSession(serverSettings, currentSession.scopes, patch).pipe(
-              Effect.map(ServerSettings.redactServerSettingsForClient),
-            ),
-            {
-              "rpc.aggregate": "server",
-            },
-          ),
+        ...serverSettingsRpcHandlers(serverSettings, currentSession.scopes, observeRpcEffect),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverDiscoverSourceControl,
