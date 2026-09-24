@@ -271,7 +271,7 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - Declined and cancelled approvals both read "declined", because the item stores only a status.
 - The denied card has an `accessDenied` state for clients whose known scopes the environment's access policy does not admit (`canUseComputer`, as the server checks it): it shows the server's re-pair message and hides Enable. The desktop's own primary environment always counts as allowed, and unknown scopes read as allowed.
 - Enable is hidden on inherited or synthetic notice rows. Enable arms `/computer-use` on the draft and leaves the send to the user.
-- Status refreshes through `useLiveRefresh` instead of Synara's 10-second poll, and is read once on mount only when nothing is cached.
+- The setup card refreshes status every 10 seconds while the page is visible, as Synara did, through the same hook as Settings → Computer. It stops once the desktop is ready and pauses after a failed read until Recheck succeeds. Status is read once on mount only when nothing is cached.
 
 ### Live state and preview
 

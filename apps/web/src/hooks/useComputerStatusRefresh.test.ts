@@ -1,6 +1,7 @@
-// Settings → Computer refreshes the server status on an interval and the
-// native grant snapshot only when the user returns to the window. The hook
-// runs for real under a slot-tracked React harness with fake timers.
+// Settings → Computer and the chat setup card refresh the server status on an
+// interval, and the native grant snapshot only when the user returns to the
+// window. The hook runs for real under a slot-tracked React harness with fake
+// timers.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -88,6 +89,14 @@ describe("useComputerStatusRefresh", () => {
     window.dispatchEvent(new Event("focus"));
     expect(refreshStatus).toHaveBeenCalledOnce();
     expect(refreshNativeState).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes only the status on return for a view without a native snapshot", () => {
+    harness.beginRender();
+    useComputerStatusRefresh({ refreshStatus, paused: false });
+    document.dispatchEvent(new Event("visibilitychange"));
+    vi.advanceTimersByTime(COMPUTER_STATUS_VISIBLE_REFRESH_INTERVAL_MS);
+    expect(refreshStatus).toHaveBeenCalledTimes(2);
   });
 
   it("pauses the interval while the status read fails, and resumes after it recovers", () => {
