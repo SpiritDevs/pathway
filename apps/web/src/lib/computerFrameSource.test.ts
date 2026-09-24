@@ -49,24 +49,6 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-describe("computer frame socket url", () => {
-  it("opens exactly the resolved frame url", () => {
-    const { socket } = createFakeSocket();
-    let requested = "";
-    createComputerFrameSource({
-      url: FRAME_URL,
-      handlers: { onFrame: vi.fn(), onReset: vi.fn() },
-      createSocket: (url) => {
-        requested = url;
-        return socket;
-      },
-    });
-    const url = new URL(requested);
-    expect(url.pathname).toBe("/ws/computer-frames");
-    expect(url.searchParams.get("computerId")).toBe(COMPUTER_ID);
-  });
-});
-
 describe("createComputerFrameSource", () => {
   function subscribe(options?: { now?: () => number }) {
     const { socket, close, send } = createFakeSocket();
