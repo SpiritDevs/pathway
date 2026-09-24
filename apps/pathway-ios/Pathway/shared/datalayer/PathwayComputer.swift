@@ -155,6 +155,9 @@ enum PathwayComputerAccess {
     static let accessPolicies = ["any-operator", "scoped", "admins-only"]
     static let autonomyLevels = ["supervised", "per-task", "auto", "full-access"]
 
+    /// The only scope the cloud queue delivers with, whichever device queued the message.
+    static let cloudQueueScopes: Set<String> = ["orchestration:operate"]
+
     /// ADR 0041, as the server checks it.
     static func canUse(policy: String, scopes: Set<String>) -> Bool {
         switch policy {
@@ -162,6 +165,13 @@ enum PathwayComputerAccess {
         case "admins-only": scopes.contains("access:write")
         default: scopes.contains("computer:operate") || scopes.contains("access:write")
         }
+    }
+
+    /// Whether implicit Computer intent may ride on a send. Unknown policy or scopes is not
+    /// access: the server would refuse the whole send, not just the intent.
+    static func admits(policy: String?, scopes: Set<String>?) -> Bool {
+        guard let policy, let scopes else { return false }
+        return canUse(policy: policy, scopes: scopes)
     }
 
     /// Whether a server config names a host that can drive a desktop.
@@ -233,8 +243,12 @@ extension PathwayAgentThreadModel {
     }
 
     /// The device-wide Computer control setting as it applies here: on only where the host can
-    /// drive a desktop and this device may use it, so no environment refuses ordinary messages.
-    func computerControlApplies(setting: Bool) -> Bool { setting && supportsComputer && !computerAccessDenied }
+    /// drive a desktop and the path that delivers the send is known to be allowed to use it, so no
+    /// environment refuses ordinary messages. `queued` judges the cloud queue's delivery instead of this pairing.
+    func computerControlApplies(setting: Bool, queued: Bool = false) -> Bool {
+        setting && supportsComputer && PathwayComputerAccess.admits(
+            policy: computerAccessPolicy, scopes: queued ? PathwayComputerAccess.cloudQueueScopes : computerSessionScopes)
+    }
 
     /// Starts the draft with `/computer-use` unless it already asks for Computer.
     func armComputerUse() {
@@ -245,8 +259,9 @@ extension PathwayAgentThreadModel {
     /// The Computer fields a send of `text` to this chat carries. The control epoch comes from the
     /// watched thread state, or is read once when unknown; offline it falls back to 0, which the
     /// server treats as stale rather than re-arming control after a Stop.
-    func computerFields(for text: String, setting: Bool = UserDefaults.standard.bool(forKey: PathwayAgentThreadModel.computerControlDefaultsKey)) async -> [String: JSONValue] {
-        let enabled = computerControlApplies(setting: setting)
+    func computerFields(for text: String, queued: Bool = false,
+                        setting: Bool = UserDefaults.standard.bool(forKey: PathwayAgentThreadModel.computerControlDefaultsKey)) async -> [String: JSONValue] {
+        let enabled = computerControlApplies(setting: setting, queued: queued)
         guard PathwayComputerInvocation(text: text, controlEnabled: enabled) != .off else { return [:] }
         var generation = computerControlGeneration
         if generation == nil, isSubscriptionReady,
@@ -257,9 +272,10 @@ extension PathwayAgentThreadModel {
     }
 
     /// The Computer fields of a new chat started from this one.
-    func computerNewChatFields(for text: String, launches: Bool,
+    func computerNewChatFields(for text: String, launches: Bool, queued: Bool = false,
                                setting: Bool = UserDefaults.standard.bool(forKey: PathwayAgentThreadModel.computerControlDefaultsKey)) -> [String: JSONValue] {
-        PathwayComputerInvocation.newChatFields(text: text, controlEnabled: computerControlApplies(setting: setting), launches: launches, serverConfig: serverConfig)
+        PathwayComputerInvocation.newChatFields(text: text, controlEnabled: computerControlApplies(setting: setting, queued: queued),
+                                                launches: launches, serverConfig: serverConfig)
     }
 
     func setComputerSessionScopes(_ scopes: Set<String>) { computerSessionScopes = scopes }

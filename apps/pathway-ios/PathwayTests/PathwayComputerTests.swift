@@ -160,6 +160,9 @@ struct PathwayComputerTests {
         #expect(await model.computerFields(for: "hello", setting: false).isEmpty)
         #expect(await model.computerFields(for: "/computer-use open Notes", setting: false) == ["computerControlGeneration": .number(0)])
         model.computerControlGeneration = 5
+        #expect(await model.computerFields(for: "hello", setting: true).isEmpty)
+        model.computerAccessPolicy = "scoped"
+        model.computerSessionScopes = ["orchestration:operate", "computer:operate"]
         #expect(await model.computerFields(for: "hello", setting: true)
             == ["computerControlGeneration": .number(5), "enableComputerControl": .bool(true)])
         model.computerAccessPolicy = "admins-only"
