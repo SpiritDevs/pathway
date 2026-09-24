@@ -112,6 +112,15 @@ struct PathwayComputerTests {
         #expect(!PathwayComputerAccess.supportsComputer(serverConfig: [:]))
     }
 
+    @Test func onlyAServerAdvertisingComputerPolicyServesComputer() {
+        func config(_ os: String, _ capabilities: [String: JSONValue]) -> [String: JSONValue] {
+            ["environment": .object(["platform": .object(["os": .string(os)]), "capabilities": .object(capabilities)])]
+        }
+        #expect(PathwayComputerAccess.servesComputer(serverConfig: config("darwin", ["computerPolicy": .bool(true)])))
+        #expect(!PathwayComputerAccess.servesComputer(serverConfig: config("darwin", ["computerOperateScope": .bool(true)])))
+        #expect(!PathwayComputerAccess.servesComputer(serverConfig: config("win32", ["computerPolicy": .bool(true)])))
+    }
+
     @Test func anApprovalIsAnsweredOncePerResponseAttempt() async throws {
         var failing = true
         var sent: [JSONValue] = []
