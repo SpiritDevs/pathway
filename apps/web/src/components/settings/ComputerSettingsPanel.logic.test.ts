@@ -5,6 +5,9 @@ import {
   type ComputerStatusResult,
   type DesktopComputerHelperState,
 } from "@spiritdevs/contracts";
+import * as Cause from "effect/Cause";
+import * as Option from "effect/Option";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -201,6 +204,23 @@ describe("resolveComputerScopeAccess", () => {
     expect(resolveComputerScopeAccess({ ...base, isPending: true })).toBe("pending");
     expect(resolveComputerScopeAccess({ ...base, hasError: true })).toBe("pending");
     expect(resolveComputerScopeAccess(base)).toBe("denied");
+  });
+
+  it("keeps waiting when a failed read still holds an earlier session", () => {
+    // What the session hooks report after a refresh fails over a granted answer.
+    const result = AsyncResult.failureWithPrevious(Cause.fail("session read failed"), {
+      previous: Option.some(
+        AsyncResult.success({ authenticated: true, scopes: [AuthAccessWriteScope] }),
+      ),
+    });
+    expect(
+      resolveComputerScopeAccess({
+        ...base,
+        session: Option.getOrNull(AsyncResult.value(result)),
+        isPending: result.waiting,
+        hasError: result._tag === "Failure",
+      }),
+    ).toBe("pending");
   });
 
   it("reads the scope from an authenticated session", () => {
