@@ -25,7 +25,7 @@ struct PathwayComputerDeliveryTests {
     }
 
     @Test func aNewChatAsksForComputerOnlyWithKnownAccess() {
-        let model = PathwayAgentThreadCreationModel(environment: environment(), request: { _, _ in .object([:]) })
+        let model = PathwayAgentThreadCreationModel(environment: computerTestEnvironment(), request: { _, _ in .object([:]) })
         model.applySubscriptionValue(.object(["type": .string("snapshot"), "config": .object(config)]))
         #expect(model.computerLaunchFields(for: "Explain this function", setting: true).isEmpty)
         #expect(model.computerLaunchFields(for: "/computer-use open Notes", setting: false) == ["computerControlGeneration": .number(0)])
@@ -127,6 +127,22 @@ struct PathwayComputerDeliveryTests {
         #expect(try await model.computerFields(for: "Explain this function", queued: true, setting: true).isEmpty)
     }
 
+    @Test func aLateConfigReadNeverLandsAfterStop() async throws {
+        let gate = ComputerReadGate()
+        let model = makeModel { _, _ in await gate.read() }
+        var withPolicy = config
+        withPolicy["settings"] = .object(["computer": .object(["accessPolicy": .string("any-operator")])])
+        let load = Task { await model.refreshServerConfig() }
+        await gate.started(1)
+        await model.stop()
+        load.cancel()
+        gate.finish(.object(withPolicy))
+        await load.value
+        #expect(model.computerAccessPolicy == nil)
+        model.installServerConfig(.object(withPolicy))
+        #expect(model.computerAccessPolicy == "any-operator")
+    }
+
     @Test func onlyTheCurrentConnectionConfirmsAGeneration() throws {
         var session = PathwayThreadComputerSession(threadID: "thread")
         func state(version: Int, generation: Int) throws -> PathwayThreadComputerState {
@@ -142,15 +158,8 @@ struct PathwayComputerDeliveryTests {
         #expect(session.confirmedControlGeneration == 6)
     }
 
-    private func environment() -> PathwayCompanyEnvironment {
-        let thread = makeAgentThread()
-        return PathwayCompanyEnvironment(companyId: thread.companyId, environment: PathwayEnvironment(id: "environment", environmentId: thread.environmentId,
-            descriptor: PathwayEnvironmentDescriptor(environmentId: thread.environmentId, label: "Mac", serverVersion: "test"),
-            relayLinkState: "connected", managedEndpointAvailable: true, lastSeenAt: nil, state: "active"))
-    }
-
     private func makeModel(request: @escaping PathwayAgentThreadModel.Request) -> PathwayAgentThreadModel {
-        let model = PathwayAgentThreadModel(thread: makeAgentThread(), environment: environment(), request: request)
+        let model = PathwayAgentThreadModel(thread: makeAgentThread(), environment: computerTestEnvironment(), request: request)
         model.serverConfig = config
         return model
     }
@@ -162,6 +171,13 @@ struct PathwayComputerDeliveryTests {
         UserDefaults.standard.set(true, forKey: key)
         return { if let previous { UserDefaults.standard.set(previous, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) } }
     }
+}
+
+func computerTestEnvironment() -> PathwayCompanyEnvironment {
+    let thread = makeAgentThread()
+    return PathwayCompanyEnvironment(companyId: thread.companyId, environment: PathwayEnvironment(id: "environment", environmentId: thread.environmentId,
+        descriptor: PathwayEnvironmentDescriptor(environmentId: thread.environmentId, label: "Mac", serverVersion: "test"),
+        relayLinkState: "connected", managedEndpointAvailable: true, lastSeenAt: nil, state: "active"))
 }
 
 /// Holds `request` calls until the test releases them, and lets the test wait for them to start.

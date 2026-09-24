@@ -407,10 +407,7 @@ final class PathwayAgentThreadModel {
             }
             self.rpc = rpc
             configTask = Task { [weak self] in
-                if let value = try? await rpc.request("server.getConfig", payload: .object([:])) {
-                    self?.installServerConfig(value)
-                    await self?.loadComputerAccessPolicy()
-                }
+                await self?.refreshServerConfig()
                 await self?.refreshParentRoster()
             }
             do {

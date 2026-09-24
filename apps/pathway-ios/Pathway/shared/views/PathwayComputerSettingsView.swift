@@ -33,6 +33,8 @@ struct PathwayComputerSettingsView: View {
     @State private var autonomy = "per-task"
     @State private var error: String?
     @State private var busy = false
+    /// The newest load or save; an older load's reads never land over it.
+    @State private var loadID = 0
 
     var body: some View {
         Form {
@@ -86,20 +88,30 @@ struct PathwayComputerSettingsView: View {
     }
 
     private func load() async {
-        busy = true; defer { busy = false }
+        loadID += 1
+        let id = loadID
+        busy = true; defer { if id == loadID { busy = false } }
         do {
             let config = try await client.run("server.getConfig").objectValue ?? [:]
-            supported = PathwayComputerAccess.supportsComputer(serverConfig: config)
+            let supports = PathwayComputerAccess.supportsComputer(serverConfig: config)
+            var settings: JSONValue?, status: String?, canWrite = false
+            if supports {
+                settings = try await client.run("server.getSettings")
+                status = (try? await client.run("computer.getStatus")).map(PathwayComputerPolicy.summary)
+                canWrite = (try? await appModel.connect?.prepare(environment: client.environment))?.scopes.contains("access:write") == true
+            }
+            guard id == loadID, !Task.isCancelled else { return }
+            supported = supports
             policyReadable = PathwayComputerAccess.capability("computerPolicy", in: config)
-            guard supported == true else { return }
-            apply(try await client.run("server.getSettings"))
-            status = (try? await client.run("computer.getStatus")).map(PathwayComputerPolicy.summary)
-            canWrite = (try? await appModel.connect?.prepare(environment: client.environment))?.scopes.contains("access:write") == true
+            if let settings { apply(settings) }
+            self.status = status
+            self.canWrite = canWrite
             error = nil
-        } catch is CancellationError {} catch { self.error = error.localizedDescription }
+        } catch is CancellationError {} catch { if id == loadID { self.error = error.localizedDescription } }
     }
 
     private func save(_ key: String, _ value: String, revert: () -> Void) async {
+        loadID += 1
         busy = true; defer { busy = false }
         do {
             apply(try await client.run("server.updateSettings", ["patch": .object(["computer": .object([key: .string(value)])])]))
