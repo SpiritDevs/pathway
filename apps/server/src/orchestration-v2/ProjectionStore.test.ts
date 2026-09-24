@@ -28,6 +28,7 @@ import {
   isTurnItemAtOrBeforeRun,
   ProjectionStoreV2,
   layer as projectionStoreLayer,
+  layerMemory as projectionStoreMemoryLayer,
   threadShellFromProjection,
 } from "./ProjectionStore.ts";
 
@@ -1839,3 +1840,85 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
     }),
   );
 });
+
+/** Parent → subagent → nested subagent, plus a fork, a deleted and an archived child. */
+const findSubagentDescendants = Effect.gen(function* () {
+  const store = yield* ProjectionStoreV2;
+  const now = yield* DateTime.now;
+  const create = (
+    id: string,
+    parent: string | null,
+    relationshipToParent: "fork" | "subagent" | null,
+    state: "active" | "archived" | "deleted" = "active",
+  ) =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make(id);
+      const payload = {
+        createdBy: "user" as const,
+        creationSource: "web" as const,
+        id: threadId,
+        projectId: null,
+        title: id,
+        providerInstanceId,
+        modelSelection,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: {
+          parentThreadId: parent === null ? null : ThreadId.make(parent),
+          relationshipToParent,
+          rootThreadId: ThreadId.make("thread:lineage-root"),
+        },
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: state === "archived" ? now : null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      };
+      yield* store.apply({
+        id: EventId.make(`event:${id}`),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload,
+      });
+      if (state === "deleted")
+        yield* store.apply({
+          id: EventId.make(`event:${id}:deleted`),
+          type: "thread.deleted",
+          threadId,
+          occurredAt: now,
+          payload: { ...payload, deletedAt: now },
+        });
+    });
+  yield* create("thread:lineage-root", null, null);
+  yield* create("thread:lineage-subagent", "thread:lineage-root", "subagent");
+  yield* create("thread:lineage-nested", "thread:lineage-subagent", "subagent");
+  yield* create("thread:lineage-archived", "thread:lineage-root", "subagent", "archived");
+  yield* create("thread:lineage-fork", "thread:lineage-root", "fork");
+  yield* create("thread:lineage-fork-subagent", "thread:lineage-fork", "subagent");
+  yield* create("thread:lineage-deleted", "thread:lineage-root", "subagent", "deleted");
+
+  assert.deepEqual(yield* store.getSubagentDescendantIds(ThreadId.make("thread:lineage-root")), [
+    ThreadId.make("thread:lineage-archived"),
+    ThreadId.make("thread:lineage-nested"),
+    ThreadId.make("thread:lineage-subagent"),
+  ]);
+  assert.deepEqual(
+    yield* store.getSubagentDescendantIds(ThreadId.make("thread:lineage-nested")),
+    [],
+  );
+});
+
+it.effect("finds subagent descendants through lineage alone in SQL", () =>
+  findSubagentDescendants.pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("finds the same subagent descendants in the memory store", () =>
+  findSubagentDescendants.pipe(Effect.provide(projectionStoreMemoryLayer)),
+);

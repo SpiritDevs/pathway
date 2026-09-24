@@ -158,6 +158,13 @@ export interface ProjectionStoreV2Shape {
     ReadonlyArray<OrchestrationV2AppThread>,
     ProjectionStoreV2Error
   >;
+  /**
+   * Non-deleted subagent descendants of a thread, archived included, sorted by id. Reads only
+   * thread lineage, so settle and delete can lock descendants without loading every shell.
+   */
+  readonly getSubagentDescendantIds: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionStoreV2Error>;
   /** Candidates include archived threads; recovery checks current state under the thread lock. */
   readonly getDelegatedCompletionRecoveryThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
@@ -177,6 +184,41 @@ export class ProjectionStoreV2 extends Context.Service<ProjectionStoreV2, Projec
 ) {}
 
 export const ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION = 2;
+
+/** Walks subagent lineage in memory; the SQL store answers the same question with one query. */
+export function subagentDescendantIds(
+  threads: ReadonlyArray<
+    Pick<OrchestrationV2AppThread, "id" | "deletedAt"> & {
+      readonly lineage: Pick<
+        OrchestrationV2AppThread["lineage"],
+        "parentThreadId" | "relationshipToParent"
+      >;
+    }
+  >,
+  parentThreadId: ThreadId,
+): ReadonlyArray<ThreadId> {
+  const children = new Map<ThreadId, Array<ThreadId>>();
+  for (const thread of threads) {
+    if (
+      thread.deletedAt !== null ||
+      thread.lineage.relationshipToParent !== "subagent" ||
+      thread.lineage.parentThreadId === null
+    )
+      continue;
+    const siblings = children.get(thread.lineage.parentThreadId) ?? [];
+    siblings.push(thread.id);
+    children.set(thread.lineage.parentThreadId, siblings);
+  }
+  const descendants = new Set<ThreadId>();
+  const pending = [...(children.get(parentThreadId) ?? [])];
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    if (id === parentThreadId || descendants.has(id)) continue;
+    descendants.add(id);
+    pending.push(...(children.get(id) ?? []));
+  }
+  return [...descendants].sort();
+}
 const LATEST_VISIBLE_MESSAGE_PREVIEW_MAX_CHARS = 200;
 
 function upsertById<T extends { readonly id: string }>(items: ReadonlyArray<T>, next: T): Array<T> {
@@ -3267,6 +3309,26 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       Effect.mapError((cause) => new ProjectionStoreRecoveryReadError({ cause })),
     );
 
+    const getSubagentDescendantIds: ProjectionStoreV2Shape["getSubagentDescendantIds"] = (
+      threadId,
+    ) =>
+      sql<{ readonly thread_id: string }>`
+        WITH RECURSIVE descendants(thread_id) AS (
+          SELECT ${threadId}
+          UNION
+          SELECT child.thread_id
+          FROM orchestration_v2_projection_threads child
+          JOIN descendants parent
+            ON json_extract(child.payload_json, '$.lineage.parentThreadId') = parent.thread_id
+          WHERE child.deleted_at IS NULL
+            AND json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+        )
+        SELECT thread_id FROM descendants WHERE thread_id <> ${threadId} ORDER BY thread_id ASC
+      `.pipe(
+        Effect.map((rows) => rows.map((row) => ThreadId.make(row.thread_id))),
+        Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })),
+      );
+
     const getDelegatedCompletionRecoveryThreadIds = Effect.fn(
       "ProjectionStoreV2.getDelegatedCompletionRecoveryThreadIds",
     )(
@@ -3311,6 +3373,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getQueuedRunThreadIds,
       getAllowanceHeldThreadIds,
       getPendingSubagentCompletionThreads,
+      getSubagentDescendantIds,
       getDelegatedCompletionRecoveryThreadIds,
       getThreadSnapshot,
     } satisfies ProjectionStoreV2Shape;
@@ -3452,6 +3515,10 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             );
           });
         }),
+      getSubagentDescendantIds: (threadId) =>
+        service
+          .getThreadMetadata()
+          .pipe(Effect.map((threads) => subagentDescendantIds(threads, threadId))),
       getDelegatedCompletionRecoveryThreadIds: () =>
         Ref.get(replayState).pipe(
           Effect.map((state) =>

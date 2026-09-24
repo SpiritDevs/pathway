@@ -245,33 +245,6 @@ function nextRunOrdinal(projection: OrchestrationV2ThreadProjection): number {
   return projection.runs.length + 1;
 }
 
-function subagentDescendantIds(
-  threads: ReadonlyArray<OrchestrationV2ThreadShell>,
-  parentThreadId: ThreadId,
-): ReadonlyArray<ThreadId> {
-  const children = new Map<ThreadId, Array<ThreadId>>();
-  for (const thread of threads) {
-    if (
-      thread.deletedAt !== null ||
-      thread.lineage.relationshipToParent !== "subagent" ||
-      thread.lineage.parentThreadId === null
-    )
-      continue;
-    const siblings = children.get(thread.lineage.parentThreadId) ?? [];
-    siblings.push(thread.id);
-    children.set(thread.lineage.parentThreadId, siblings);
-  }
-  const descendants = new Set<ThreadId>();
-  const pending = [...(children.get(parentThreadId) ?? [])];
-  while (pending.length > 0) {
-    const id = pending.pop()!;
-    if (id === parentThreadId || descendants.has(id)) continue;
-    descendants.add(id);
-    pending.push(...(children.get(id) ?? []));
-  }
-  return [...descendants].sort();
-}
-
 function commandThreadId(command: OrchestrationV2Command): ThreadId {
   switch (command.type) {
     case "thread.create":
@@ -1824,11 +1797,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       deletingTemporary ||
       (command.type === "thread.delete" && thread.lineage.relationshipToParent !== "subagent")
     ) {
-      const shell = yield* projectionStore.getShellSnapshot().pipe(mapDispatchError(command));
-      subagentsToDelete = subagentDescendantIds(
-        [...shell.threads, ...shell.archivedThreads],
-        thread.id,
-      );
+      subagentsToDelete = yield* projectionStore
+        .getSubagentDescendantIds(thread.id)
+        .pipe(mapDispatchError(command));
       for (const childId of subagentsToDelete) {
         const child = yield* projectionStore
           .getThreadProjection(childId)
@@ -8948,13 +8919,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   const withSubagentLocks = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
     Effect.gen(function* () {
-      const shell = yield* projectionStore
-        .getShellSnapshot()
+      const descendants = yield* projectionStore
+        .getSubagentDescendantIds(threadId)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
-      const descendants = subagentDescendantIds(
-        [...shell.threads, ...shell.archivedThreads],
-        threadId,
-      );
       let locked = effect;
       for (const childId of descendants.toReversed())
         locked = threadDispatch.withLock(childId, locked);

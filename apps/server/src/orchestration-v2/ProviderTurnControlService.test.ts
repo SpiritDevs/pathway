@@ -231,6 +231,7 @@ it.effect(
           getAllowanceHeldThreadIds: () => Effect.die("unused getAllowanceHeldThreadIds"),
           getPendingSubagentCompletionThreads: () =>
             Effect.die("unused getPendingSubagentCompletionThreads"),
+          getSubagentDescendantIds: () => Effect.die("unused getSubagentDescendantIds"),
           getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
         }),
       );
