@@ -184,6 +184,13 @@ enum PathwayComputerAccess {
         return os.map(platforms.contains) ?? false
     }
 
+    /// Whether the server serves the Computer RPCs and events: it advertises `computerPolicy`,
+    /// which shipped with them. The `computerOperateScope` capability predates them, so it only
+    /// says whether to request `computer:operate` at pairing.
+    static func servesComputer(serverConfig: [String: JSONValue]) -> Bool {
+        supportsComputer(serverConfig: serverConfig) && capability("computerPolicy", in: serverConfig)
+    }
+
     static func capability(_ name: String, in serverConfig: [String: JSONValue]) -> Bool {
         serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue?[name]?.boolValue == true
     }
@@ -238,6 +245,9 @@ extension PathwayAgentThreadModel {
 
     /// Whether this thread's host can drive a desktop.
     var supportsComputer: Bool { PathwayComputerAccess.supportsComputer(serverConfig: serverConfig) }
+
+    /// Whether this thread's server serves the Computer state and events a watch subscribes to.
+    var servesComputer: Bool { PathwayComputerAccess.servesComputer(serverConfig: serverConfig) }
 
     /// This device's pairing is known to fall outside the access policy. Unknown reads as
     /// allowed: the server is authoritative, and a guess must not blame the pairing.
