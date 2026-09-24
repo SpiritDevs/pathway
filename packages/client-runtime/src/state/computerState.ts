@@ -116,6 +116,45 @@ export function removeComputerThreadState(
 }
 
 /**
+ * Carries one environment's thread states across a reconnect. The connection
+ * may now reach a restarted server whose versions start over, so each state
+ * is kept for display but marked to be replaced by its next snapshot,
+ * whatever version that carries. Dropping the states would end every open
+ * preview on a relay blip. Actions and the Escape latch are dropped, since the
+ * server republishes both.
+ */
+export function rebaseComputerEnvironment(
+  current: ComputerClientState,
+  environmentId: EnvironmentId,
+): ComputerClientState {
+  let threadStates: Record<string, ThreadComputerState> | null = null;
+  for (const [key, state] of Object.entries(current.threadStates)) {
+    if (!belongsTo(key, environmentId) || state.version === REBASED_VERSION) continue;
+    threadStates ??= { ...current.threadStates };
+    threadStates[key] = { ...state, version: REBASED_VERSION };
+  }
+  const { lastActions, inputStoppedByEnvironment } = clearComputerEnvironment(
+    { ...current, threadStates: {} },
+    environmentId,
+  );
+  if (
+    threadStates === null &&
+    lastActions === current.lastActions &&
+    inputStoppedByEnvironment === current.inputStoppedByEnvironment
+  ) {
+    return current;
+  }
+  return {
+    threadStates: threadStates ?? current.threadStates,
+    lastActions,
+    inputStoppedByEnvironment,
+  };
+}
+
+/** Below every server version, so any snapshot replaces a rebased state. */
+const REBASED_VERSION = -1;
+
+/**
  * Forgets one environment wholesale, e.g. after its server restarted. The old
  * latch is dropped too: the new server's own `computer.input-stopped` is the truth.
  */

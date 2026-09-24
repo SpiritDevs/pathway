@@ -30,20 +30,21 @@ import { environmentCatalog } from "~/connection/catalog";
 import { computerEnvironment } from "~/state/computer";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { useComputerPreviewStore } from "../computerPreviewStore";
-import { useComputerStateStore } from "../computerStateStore";
+import { computerEnvironmentFence, useComputerStateStore } from "../computerStateStore";
 
 /** Re-pull one environment's status into the cached copy every surface reads. */
 export function refreshComputerStatus(
   registry: AtomRegistry.AtomRegistry,
   environmentId: EnvironmentId,
 ): void {
+  const isCurrent = computerEnvironmentFence(environmentId);
   void runAtomCommand(
     registry,
     computerEnvironment.refreshStatus,
     { environmentId, input: {} },
     { reportFailure: false },
   ).then((result) => {
-    if (AsyncResult.isSuccess(result)) {
+    if (AsyncResult.isSuccess(result) && isCurrent()) {
       useComputerStateStore.getState().setStatus(environmentId, result.value);
     }
   });
@@ -194,8 +195,9 @@ export function useConnectedGeneration(environmentId: EnvironmentId | null): num
 /**
  * One environment's event pipe. A new connection generation may be a
  * restarted server whose thread-state versions start over, which the
- * version gate would reject as stragglers; the environment's cache is
- * dropped and the seeds refill it.
+ * version gate would reject as stragglers, so the environment's thread
+ * states are rebased for the seeds and pushes to replace. Previews, their
+ * Hide, float and layout survive a reconnect; leaving the catalog clears all.
  */
 export function useComputerEnvironmentEvents(environmentId: EnvironmentId): void {
   const registry = useContext(RegistryContext);
@@ -205,8 +207,7 @@ export function useComputerEnvironmentEvents(environmentId: EnvironmentId): void
   useEffect(() => {
     if (generation === null) return;
     if (seenGeneration.current !== null && seenGeneration.current !== generation) {
-      useComputerStateStore.getState().clearEnvironment(environmentId);
-      useComputerPreviewStore.getState().clearEnvironment(environmentId);
+      useComputerStateStore.getState().rebaseEnvironment(environmentId);
     }
     seenGeneration.current = generation;
   }, [environmentId, generation]);

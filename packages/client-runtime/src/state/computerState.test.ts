@@ -11,6 +11,7 @@ import {
   EMPTY_COMPUTER_CLIENT_STATE,
   applyComputerWindowsChanged,
   clearComputerEnvironment,
+  rebaseComputerEnvironment,
   recordComputerAction,
   removeComputerThreadState,
   setComputerInputStopped,
@@ -157,5 +158,24 @@ describe("computerState", () => {
     expect(Object.keys(state.threadStates)).toEqual([key(OTHER_ENV, THREAD_1)]);
     expect(state.inputStoppedByEnvironment[ENV]).toBeUndefined();
     expect(clearComputerEnvironment(state, ENV)).toBe(state);
+  });
+
+  it("keeps a rebased environment's states until any snapshot replaces them", () => {
+    let state = upsertComputerThreadState(EMPTY_COMPUTER_CLIENT_STATE, ENV, baseState);
+    state = upsertComputerThreadState(state, OTHER_ENV, baseState);
+    state = setComputerInputStopped(state, ENV, true);
+    const other = state.threadStates[key(OTHER_ENV, THREAD_1)];
+
+    state = rebaseComputerEnvironment(state, ENV);
+    expect(state.threadStates[key(ENV, THREAD_1)]?.agentActive).toBe(false);
+    expect(state.threadStates[key(OTHER_ENV, THREAD_1)]).toBe(other);
+    expect(state.inputStoppedByEnvironment[ENV]).toBeUndefined();
+    expect(rebaseComputerEnvironment(state, ENV)).toBe(state);
+
+    // A restarted server's first snapshot carries a lower version.
+    state = upsertComputerThreadState(state, ENV, { ...baseState, version: 0, agentActive: true });
+    expect(state.threadStates[key(ENV, THREAD_1)]?.agentActive).toBe(true);
+    // The other environment's version gate is untouched.
+    expect(upsertComputerThreadState(state, OTHER_ENV, { ...baseState, version: 0 })).toBe(state);
   });
 });
