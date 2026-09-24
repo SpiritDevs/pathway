@@ -9,8 +9,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import { RpcGroup, RpcTest } from "effect/unstable/rpc";
 import {
   AuthAdministrativeScopes,
+  type AuthEnvironmentScope,
   AuthStandardClientScopes,
   ChatAttachment,
   ChatAttachmentId,
@@ -19,6 +21,9 @@ import {
   ProjectId,
   type SnapShotSource,
   ThreadId,
+  WS_METHODS,
+  WsServerGetSettingsRpc,
+  WsServerUpdateSettingsRpc,
 } from "@spiritdevs/contracts";
 import * as ServerConfig from "./config.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
@@ -38,7 +43,7 @@ import {
   refreshLocalGitStatusAfterMutation,
   requireThreadResumeTarget,
   resolveIssueConnectionActor,
-  updateServerSettingsForSession,
+  serverSettingsRpcHandlers,
   wsProjectUpdateInputFromMutation,
 } from "./ws.ts";
 
@@ -61,27 +66,40 @@ it.effect("allows a cached thread resume when the owning environment still has t
   ),
 );
 
+// Drives the settings handlers the WebSocket handler map spreads in, through an
+// RPC client, so a handler that skips the session's policy check fails here.
 it.effect("keeps Computer policy out of reach of a standard session's settings patch", () =>
   Effect.gen(function* () {
     const settings = yield* ServerSettings.ServerSettingsService;
+    const group = RpcGroup.make(WsServerGetSettingsRpc, WsServerUpdateSettingsRpc);
+    const clientFor = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
+      RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          group.toLayer(serverSettingsRpcHandlers(settings, scopes, (_method, effect) => effect)),
+        ),
+      );
+    const standard = yield* clientFor(AuthStandardClientScopes);
+    const administrative = yield* clientFor(AuthAdministrativeScopes);
+
     const refused = yield* Effect.flip(
-      updateServerSettingsForSession(settings, AuthStandardClientScopes, {
-        computer: { accessPolicy: "any-operator" },
+      standard[WS_METHODS.serverUpdateSettings]({
+        patch: { computer: { accessPolicy: "any-operator" } },
       }),
     );
     assert.strictEqual(refused._tag, "EnvironmentAuthorizationError");
-    assert.strictEqual((yield* settings.getSettings).computer.accessPolicy, "scoped");
+    const unchanged = yield* standard[WS_METHODS.serverGetSettings]({});
+    assert.strictEqual(unchanged.computer.accessPolicy, "scoped");
 
-    const renamed = yield* updateServerSettingsForSession(settings, AuthStandardClientScopes, {
-      environmentName: "Studio",
+    const renamed = yield* standard[WS_METHODS.serverUpdateSettings]({
+      patch: { environmentName: "Studio" },
     });
     assert.strictEqual(renamed.environmentName, "Studio");
 
-    const opened = yield* updateServerSettingsForSession(settings, AuthAdministrativeScopes, {
-      computer: { accessPolicy: "any-operator" },
+    const opened = yield* administrative[WS_METHODS.serverUpdateSettings]({
+      patch: { computer: { accessPolicy: "any-operator" } },
     });
     assert.strictEqual(opened.computer.accessPolicy, "any-operator");
-  }).pipe(Effect.provide(ServerSettings.layerTest())),
+  }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest())),
 );
 
 it.effect("waits for local Git status before completing a ref mutation", () =>
