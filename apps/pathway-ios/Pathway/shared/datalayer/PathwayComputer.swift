@@ -302,11 +302,6 @@ extension PathwayAgentThreadModel {
     }
 
     func setComputerSessionScopes(_ scopes: Set<String>) { computerSessionScopes = scopes }
-
-    func loadComputerAccessPolicy() async {
-        guard supportsComputer, let settings = try? await request("server.getSettings", payload: .object([:]), reportsErrors: false) else { return }
-        computerAccessPolicy = settings.objectValue?["computer"]?.objectValue?["accessPolicy"]?.stringValue
-    }
 }
 
 /// The composer's one-time tip for Claude chats that drive the desktop: Medium effort is faster.
