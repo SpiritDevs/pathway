@@ -27,7 +27,10 @@ vi.mock("@effect/atom-react", () => ({
       : {
           environment: {
             platform: { os: server.os },
-            capabilities: server.computer ? { computerOperateScope: true } : {},
+            // `computerOperateScope` alone predates the Computer RPCs.
+            capabilities: server.computer
+              ? { computerOperateScope: true, computerPolicy: true }
+              : { computerOperateScope: true },
           },
         };
   },
@@ -56,7 +59,7 @@ const { ComputerEventBridges } = await import("./ComputerEventBridges");
 it("subscribes to Computer events only where the server is known to serve them", () => {
   hooks.servers = {
     [MAC]: { os: "darwin", computer: true },
-    // A server from before Computer runs on a capable platform but has no events.
+    // A server from before the Computer RPCs runs on a capable platform but has no events.
     [OLD_MAC]: { os: "darwin", computer: false },
     [UNSUPPORTED_LINUX]: { os: "linux", computer: true },
     [WINDOWS]: { os: "win32", computer: true },
