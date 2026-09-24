@@ -334,6 +334,7 @@ const make = Effect.gen(function* () {
         cursorStyle = style;
         return running.setCursorStyle(style);
       }),
+    setPreviewWatched: frameTap.setWatched,
   };
 });
 
