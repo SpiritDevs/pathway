@@ -54,21 +54,33 @@ struct PathwayComputerFrameGate: Equatable {
     }
 }
 
-/// When to reopen the frame socket. Five consecutive closes without a frame end
-/// the stream: a refused upgrade, a missing route and a gone computer all look
-/// alike from here. A close before any frame also re-mints the ticket.
+/// When to reopen the frame socket. The ticket URL is reused until the upgrade itself
+/// says it was refused (401). A refusal a retry cannot change (a missing scope, no such
+/// route or computer, a policy close) ends the stream at once. Anything else retries
+/// with backoff: five retries in a row without a usable frame, and the sixth failure gives up.
 struct PathwayComputerFrameReconnect: Equatable {
+    enum Close: Equatable { case refusedTicket, refused, dropped }
     enum Decision: Equatable { case retry(after: Duration, remint: Bool), giveUp }
-    static let maxAttempts = 5
-    private(set) var attempts = 0
+    static let maxRetries = 5
+    private(set) var failures = 0
 
-    mutating func frameReceived() { attempts = 0 }
+    /// Reads the upgrade's HTTP status (when it was refused) and the close code.
+    static func close(status: Int?, closeCode: Int) -> Close {
+        switch status {
+        case 401: .refusedTicket
+        case 400, 403, 404: .refused
+        default: closeCode == URLSessionWebSocketTask.CloseCode.policyViolation.rawValue ? .refused : .dropped
+        }
+    }
 
-    mutating func closed(deliveredFrame: Bool) -> Decision {
-        attempts += 1
-        guard attempts <= Self.maxAttempts else { return .giveUp }
-        let delay = min(500 * (1 << (attempts - 1)), 5_000)
-        return .retry(after: .milliseconds(delay), remint: !deliveredFrame)
+    /// A frame for this computer decoded into an image: the stream works again.
+    mutating func usableFrame() { failures = 0 }
+
+    mutating func closed(_ close: Close) -> Decision {
+        guard close != .refused else { return .giveUp }
+        failures += 1
+        guard failures <= Self.maxRetries else { return .giveUp }
+        return .retry(after: .milliseconds(min(500 * (1 << (failures - 1)), 5_000)), remint: close == .refusedTicket)
     }
 }
 
@@ -93,6 +105,7 @@ func pathwayComputerFrameSocketURL(rpcSocketURL: URL, computerID: String) -> URL
 @Observable
 final class PathwayComputerFrameStream {
     typealias ResolveURL = @Sendable (_ computerID: String) async throws -> URL
+    typealias Sleep = @Sendable (Duration) async throws -> Void
     static let unavailableMessage = "Live view unavailable"
     static let unreadableMessage = "The computer stream sent a frame Pathway could not read."
     nonisolated static let maxPixelSize = 1_600
@@ -103,13 +116,16 @@ final class PathwayComputerFrameStream {
 
     @ObservationIgnored private let resolveURL: ResolveURL
     @ObservationIgnored private let session: URLSession
+    @ObservationIgnored private let sleep: Sleep
+    @ObservationIgnored private(set) var reconnect = PathwayComputerFrameReconnect()
     @ObservationIgnored private var task: Task<Void, Never>?
     /// The open socket. A quiet `receive()` ignores task cancellation, so stopping closes this.
     @ObservationIgnored private var socket: URLSessionWebSocketTask?
     @ObservationIgnored private(set) var computerID: String?
 
-    init(session: URLSession = .shared, resolveURL: @escaping ResolveURL) {
+    init(session: URLSession = .shared, sleep: @escaping Sleep = { try await Task.sleep(for: $0) }, resolveURL: @escaping ResolveURL) {
         self.session = session
+        self.sleep = sleep
         self.resolveURL = resolveURL
     }
 
@@ -126,6 +142,7 @@ final class PathwayComputerFrameStream {
         task?.cancel(); task = nil
         socket?.cancel(with: .goingAway, reason: nil); socket = nil
         self.computerID = computerID
+        reconnect = PathwayComputerFrameReconnect()
         errorMessage = nil
         isConnecting = false
         guard let computerID else { return }
@@ -133,29 +150,18 @@ final class PathwayComputerFrameStream {
     }
 
     private func run(_ computerID: String) async {
-        var reconnect = PathwayComputerFrameReconnect()
         var url: URL?
         while !Task.isCancelled {
             isConnecting = image == nil
-            var deliveredFrame = false
+            var close = PathwayComputerFrameReconnect.Close.dropped
             do {
                 let target: URL
                 if let url { target = url } else { target = try await resolveURL(computerID); url = target }
                 try Task.checkCancellation()
-                let socket = session.webSocketTask(with: target)
-                self.socket = socket
-                socket.resume()
-                defer {
-                    socket.cancel(with: .goingAway, reason: nil)
-                    if self.socket === socket { self.socket = nil }
-                }
-                try await receive(from: socket, computerID: computerID) {
-                    deliveredFrame = true
-                    reconnect.frameReceived()
-                }
+                close = await connect(to: target, computerID: computerID)
             } catch is CancellationError { return } catch {}
             guard !Task.isCancelled else { return }
-            switch reconnect.closed(deliveredFrame: deliveredFrame) {
+            switch reconnect.closed(close) {
             case .giveUp:
                 isConnecting = false
                 errorMessage = Self.unavailableMessage
@@ -163,12 +169,25 @@ final class PathwayComputerFrameStream {
                 return
             case let .retry(delay, remint):
                 if remint { url = nil }
-                do { try await Task.sleep(for: delay) } catch { return }
+                do { try await sleep(delay) } catch { return }
             }
         }
     }
 
-    private func receive(from socket: URLSessionWebSocketTask, computerID: String, onFrame: () -> Void) async throws {
+    /// Runs one socket until it ends, and says how it ended.
+    private func connect(to url: URL, computerID: String) async -> PathwayComputerFrameReconnect.Close {
+        let socket = session.webSocketTask(with: url)
+        self.socket = socket
+        socket.resume()
+        defer {
+            socket.cancel(with: .goingAway, reason: nil)
+            if self.socket === socket { self.socket = nil }
+        }
+        try? await receive(from: socket, computerID: computerID)
+        return PathwayComputerFrameReconnect.close(status: (socket.response as? HTTPURLResponse)?.statusCode, closeCode: socket.closeCode.rawValue)
+    }
+
+    private func receive(from socket: URLSessionWebSocketTask, computerID: String) async throws {
         var gate = PathwayComputerFrameGate()
         var lastResync = ContinuousClock.now - .seconds(1)
         var decoding: Task<Void, Never>?
@@ -181,7 +200,6 @@ final class PathwayComputerFrameStream {
         defer { decoding?.cancel() }
         while !Task.isCancelled {
             guard case let .data(data) = try await socket.receive() else { continue }
-            onFrame()
             let frame: PathwayComputerFrame
             do { frame = try PathwayComputerFrame(data: data) } catch {
                 errorMessage = Self.unreadableMessage
@@ -196,8 +214,11 @@ final class PathwayComputerFrameStream {
             decoding = Task { [weak self] in
                 while let payload = next {
                     let decoded = await Task.detached(priority: .userInitiated) { Self.decode(payload) }.value
-                    guard let self, !Task.isCancelled else { return }
-                    if let decoded { self.image = decoded; self.errorMessage = nil; self.isConnecting = false }
+                    guard let self, !Task.isCancelled, self.computerID == computerID else { return }
+                    if let decoded {
+                        self.image = decoded; self.errorMessage = nil; self.isConnecting = false
+                        self.reconnect.usableFrame()
+                    }
                     else { self.errorMessage = Self.unreadableMessage; resync() }
                     next = pending; pending = nil
                 }
