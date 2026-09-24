@@ -501,11 +501,14 @@ it.layer(NodeServices.layer)("replacing the desktop under the manager", (it) => 
         yield* manager.replaceDesktop(slot.swap(first));
 
         const next = new FakeComputerBackend();
+        const events = yield* manager.subscribeEvents;
         const probing = yield* Deferred.make<void>();
         const answer = yield* Deferred.make<void>();
         const probe = next.probeAvailability.bind(next);
+        // Probed right after the swap: what was pushed before this is history.
         next.probeAvailability = () =>
           Effect.gen(function* () {
+            yield* PubSub.takeAll(events);
             yield* Deferred.succeed(probing, undefined);
             yield* Deferred.await(answer);
             return yield* probe();
@@ -537,6 +540,8 @@ it.layer(NodeServices.layer)("replacing the desktop under the manager", (it) => 
         expect((yield* manager.availability()).kind).toBe("available");
         yield* Deferred.await(probing);
         yield* Fiber.awaitAll(forked);
+        // The first desktop's push stopped when it was replaced.
+        expect(yield* lastPushedAvailability(events, "thread-255")).toBeUndefined();
         yield* Deferred.succeed(answer, undefined);
         yield* Fiber.join(replacing);
         // Nothing has asked to use the next desktop, so nothing started it.
