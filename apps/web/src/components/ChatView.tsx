@@ -8544,8 +8544,19 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onSubmitUserMessageEdit = useCallback(
     async (messageId: MessageId, text: string): Promise<boolean> => {
-      if (queuedChat.controls.get(messageId)?.editable)
+      if (queuedChat.controls.get(messageId)?.editable) {
+        // The edit keeps the queued message's attachments, so those still count as the task.
+        if (
+          isBareComputerUseInvocation(text) &&
+          !queuedChat.chatMessages.some(
+            (message) => message.id === messageId && (message.attachments?.length ?? 0) > 0,
+          )
+        ) {
+          toastBareComputerUseInvocation();
+          return false;
+        }
         return queuedChat.mutateMessage(messageId, "edit", text);
+      }
       if (
         !activeThread ||
         !isServerThread ||
@@ -8616,6 +8627,7 @@ function ChatViewContent(props: ChatViewProps) {
       return false;
     },
     [
+      queuedChat.chatMessages,
       queuedChat.controls,
       queuedChat.mutateMessage,
       activeThread,
