@@ -1,0 +1,101 @@
+# Linux Computer Use checks. Mirrors Synara's Cua Linux workflow: the Linux
+# host regressions, then the pinned driver built from source with both Pathway
+# patches, then the driver's Linux browser and cursor tests.
+#
+# Synara ends with an Electron smoke that drives a real browser through the
+# host on a disposable Xvfb display. That script is not ported yet; see
+# docs/internals/computer-use-ci.md.
+name: Cua Linux
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/cua-linux-check.yml"
+      - "native/cua-driver/patches/**"
+      - "apps/desktop/src/computer/CuaDriverHost*"
+      - "apps/desktop/src/computer/LinuxCua*"
+      - "apps/desktop/src/computer/LinuxEscapeKillSwitchMonitor*"
+      - "packages/shared/src/cuaDriver*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cua-linux-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  linux:
+    name: Linux host and native driver
+    if: ${{ vars.FLEET_ENABLE_LINUX_CHECKS == 'true' }}
+    runs-on: ${{ fromJSON(vars.FLEET_LINUX_RUNNER || '["self-hosted","fleet-linux-x64"]') }}
+    timeout-minutes: 35
+    env:
+      CUA_DRIVER_RS_TELEMETRY_ENABLED: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @spiritdevs/desktop ensure:electron
+
+      - name: Run Linux admission, host and protocol regressions
+        run: |
+          set -euo pipefail
+          (cd apps/desktop && vp test run src/computer/CuaDriverHost.linux.test.ts src/computer/LinuxCuaDriverHost.test.ts src/computer/LinuxCuaAdmission.test.ts src/computer/LinuxEscapeKillSwitchMonitor.test.ts)
+          (cd packages/shared && vp test run src/cuaDriverProtocol.test.ts src/cuaActionDiagnostics.test.ts)
+          (cd apps/server && vp test run src/computer/ComputerManager.test.ts src/computer/CuaComputerBackend.test.ts)
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev
+
+      - name: Prepare pinned Linux driver source
+        shell: bash
+        run: |
+          set -euo pipefail
+          release=packages/shared/src/cuaDriverRelease.json
+          pin() { node -p "require('./$release').$1"; }
+          source_commit=$(pin source)
+          rust_version=$(pin rustVersion)
+          native_patch="$GITHUB_WORKSPACE/native/cua-driver/patches/0001-pathway-native.patch"
+          linux_patch="$GITHUB_WORKSPACE/native/cua-driver/patches/0002-pathway-linux-browser.patch"
+          test "$(sha256sum "$native_patch" | cut -d ' ' -f 1)" = "$(pin patchSha256)"
+          test "$(sha256sum "$linux_patch" | cut -d ' ' -f 1)" = "$(pin linuxBrowserPatchSha256)"
+          rustup toolchain install "$rust_version" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$rust_version" >> "$GITHUB_ENV"
+          native_source="$RUNNER_TEMP/cua-linux-source"
+          rm -rf "$native_source"
+          git init "$native_source"
+          git -C "$native_source" fetch --depth=1 https://github.com/trycua/cua.git "$source_commit"
+          git -C "$native_source" checkout --detach FETCH_HEAD
+          test "$(git -C "$native_source" rev-parse HEAD)" = "$source_commit"
+          git -C "$native_source" apply --check "$native_patch"
+          git -C "$native_source" apply "$native_patch"
+          git -C "$native_source" apply --check "$linux_patch"
+          git -C "$native_source" apply "$linux_patch"
+          echo "CUA_NATIVE_SOURCE=$native_source" >> "$GITHUB_ENV"
+
+      - name: Compile the embedded Linux driver and cursor helper
+        run: cargo build --manifest-path "$CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p cua-driver -p cursor-theme-cli
+
+      - name: Test Linux browser cancellation, binding and cursor logic
+        run: |
+          cargo test --manifest-path "$CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p cua-driver-core --lib browser::
+          cargo test --manifest-path "$CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p cursor-overlay --lib compact
