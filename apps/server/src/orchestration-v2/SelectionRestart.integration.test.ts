@@ -21,6 +21,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { ComputerDispatchAccess } from "./ComputerDispatchAccess.ts";
 import { OrchestratorV2 } from "./Orchestrator.ts";
 import {
   ProviderAdapterOpenSessionError,
@@ -726,6 +727,7 @@ it.live("restarts a live run so a Computer steer reaches the provider", () =>
         yield* Queue.take(runningTurns);
         return yield* orchestrator.getThreadProjection(threadId);
       }).pipe(
+        Effect.provideService(ComputerDispatchAccess, ComputerDispatchAccess.server),
         Effect.provide(
           makeOrchestratorV2ReplayLayerWithRegistry({ name: "selection-computer-steer" }, registry),
         ),
