@@ -7,14 +7,21 @@ struct AgentTranscriptApproval: View {
     let item: PathwayTimelineItem
     let model: PathwayAgentThreadModel
     @State private var responding = false
-    @State private var submitted = false
     @State private var errorMessage: String?
+
+    private var computer: PathwayComputerApprovalPrompt? { PathwayComputerApprovalPrompt(item) }
+    private var submitted: Bool { model.hasAnsweredApproval(item) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label(item.requiresResponse && !submitted ? "Approval needed" : "Approval", systemImage: "checkmark.shield")
+            Label(item.requiresResponse && !submitted ? (computer?.title ?? "Approval needed") : (computer == nil ? "Approval" : "Computer approval"),
+                  systemImage: computer == nil ? "checkmark.shield" : "desktopcomputer")
                 .font(.headline)
-            if let text = item.text, !text.isEmpty { AgentTranscriptMarkdown(markdown: text).equatable() }
+            if let computer {
+                AgentComputerApprovalDetail(prompt: computer)
+            } else if let text = item.text, !text.isEmpty {
+                AgentTranscriptMarkdown(markdown: text).equatable()
+            }
             if let errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.red) }
             if item.requiresResponse && !submitted {
                 if let reason = model.responseUnavailableReason(for: item) {
@@ -24,10 +31,11 @@ struct AgentTranscriptApproval: View {
                     Button("Decline", role: .destructive) { respond("decline") }.buttonStyle(.bordered)
                     Spacer()
                     Menu {
-                        Button("Allow for this session") { respond("acceptForSession") }
+                        // Session-wide consent would bypass Computer's per-task consent; the server declines it.
+                        if computer == nil { Button("Allow for this session") { respond("acceptForSession") } }
                         Button("Cancel turn", role: .destructive) { respond("cancel") }
                     } label: { Image(systemName: "ellipsis").padding(10) }
-                    Button("Allow") { respond("accept") }.buttonStyle(.borderedProminent)
+                    Button(computer?.acceptLabel ?? "Allow") { respond("accept") }.buttonStyle(.borderedProminent)
                         .accessibilityIdentifier("thread-approval-allow-\(item.id)")
                 }.disabled(responding || !model.canRespond(to: item))
             } else {
@@ -49,7 +57,6 @@ struct AgentTranscriptApproval: View {
             await model.respondToApproval(requestID: requestID, decision: decision)
             responding = false
             errorMessage = model.actionError
-            submitted = errorMessage == nil
         }
     }
 }
