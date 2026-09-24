@@ -198,6 +198,7 @@ const cloudProjectSyncEntityFields = {
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   repositoryIdentityAuthority: Schema.optional(Schema.Literal("merge")),
   icon: Schema.optional(Schema.NullOr(ProjectIcon)),
+  iconImageUrl: Schema.optional(Schema.NullOr(Schema.String)),
   archivedAt: Schema.NullOr(CloudTimestamp),
   createdAt: CloudTimestamp,
   updatedAt: CloudTimestamp,

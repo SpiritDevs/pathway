@@ -8,7 +8,10 @@ const testState = vi.hoisted(() => ({
   sharedSources: null as
     | { environmentId: EnvironmentId; cwd: string; faviconPath: string }[]
     | null,
-  libraryIcon: null as { name: string; color: string } | null,
+  libraryIcon: null as
+    | { _tag: "Library"; icon: { name: string; color: string } }
+    | { _tag: "Image"; url: string }
+    | null,
   assetStatus: "Success" as "Success" | "Failure" | "Loading",
   sourcePath: undefined as string | undefined,
   refresh: vi.fn(),
@@ -142,13 +145,26 @@ describe("ProjectFavicon", () => {
 
   it("shows a company project's library icon instead of any detected favicon", () => {
     testState.lastResource = null;
-    testState.libraryIcon = { name: "Rocket", color: "#ef4444" };
+    testState.libraryIcon = { _tag: "Library", icon: { name: "Rocket", color: "#ef4444" } };
     const element = ProjectFavicon({
       environmentId: "environment-test" as EnvironmentId,
       cwd: "/workspace-test",
     }) as ReactElement<{ readonly iconName: string; readonly color: string }>;
 
     expect(element.props).toMatchObject({ iconName: "Rocket", color: "#ef4444" });
+    expect(testState.lastResource).toBeNull();
+  });
+
+  it("shows a company project's uploaded image without asking any environment", () => {
+    testState.lastResource = null;
+    testState.libraryIcon = { _tag: "Image", url: "https://files.test/icon.png" };
+    const element = ProjectFavicon({
+      environmentId: "environment-test" as EnvironmentId,
+      cwd: "/workspace-test",
+    }) as ReactElement<{ readonly src: string }>;
+
+    expect(element.type).toBe("img");
+    expect(element.props.src).toBe("https://files.test/icon.png");
     expect(testState.lastResource).toBeNull();
   });
 

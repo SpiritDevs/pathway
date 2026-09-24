@@ -724,6 +724,10 @@ export default defineSchema({
     repositoryIdentityAuthority: v.optional(v.literal("merge")),
     /** Built-in icon replacing detected favicons on every device; absent/null uses the favicon. */
     icon: v.optional(v.union(v.object({ name: v.string(), color: v.string() }), v.null())),
+    /** Uploaded image replacing detected favicons on every device; exclusive with `icon`. */
+    iconImage: v.optional(
+      v.union(v.object({ storageId: v.id("_storage"), url: v.string() }), v.null()),
+    ),
     archivedAt: v.union(v.number(), v.null()),
     createdAt: v.number(),
     updatedAt: v.number(),

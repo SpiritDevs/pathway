@@ -30,6 +30,11 @@ export const AssetResource = Schema.Union([
     // project projection before it issues the signed URL.
     path: Schema.optional(ProjectFaviconPath),
   }),
+  /** One image inside a project, read once so it can be uploaded as the synced project icon. */
+  Schema.TaggedStruct("project-image", {
+    cwd: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
+    path: ProjectFaviconPath,
+  }),
 ]);
 export type AssetResource = typeof AssetResource.Type;
 

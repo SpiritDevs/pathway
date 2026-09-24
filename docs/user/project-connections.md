@@ -41,8 +41,10 @@ field. The name applies to all of the project's connections, including when you 
 name as its folder or Git repository.
 
 To change a project's icon later, use **Choose icon** beside **Project icon** for a built-in icon,
-or **Choose file** for an image in the project's folder. Selecting a file replaces any built-in
-icon after the file setting is saved.
+or **Choose file** for an image in the project's folder. A chosen file is uploaded once (up to 1 MB)
+and replaces any built-in icon. Either choice is saved with the project, so every device and every
+connection shows the same icon, even when the computer holding the file is offline. The reset
+button beside **Project icon** returns to the detected icon.
 
 On iPhone and iPad, choose **New Project** from the Focus menu in **Thread options**, or from the
 **Projects** screen. The sheet offers name, icon, Focus, company, source, and environment
@@ -54,10 +56,10 @@ automatically when their Git repository matches.
 The project picker lists each project once across its connected environments. Selecting a project
 shows its threads from every environment, including checkouts with different folder names or no Git repository.
 
-In web and desktop, threads belonging to the same project share an icon from an available
-connection. A built-in icon chosen for the project takes priority, then a configured custom icon
-file, followed by the preferred connection.
-If that computer disconnects or cannot load the image, Pathway tries another available connection.
+Threads belonging to the same project share one icon. A built-in icon or uploaded image chosen for
+the project always takes priority. Without one, web and desktop use the icon detected in an
+available connection, starting with the preferred connection. If that computer disconnects or cannot
+load the image, Pathway tries another available connection.
 
 To choose an available machine automatically for new threads, enable [load balancing](load-balancing.md).
 

@@ -51,7 +51,9 @@ const cloudState = vi.hoisted(() => ({
   deleteCompanyProject: vi.fn(),
   setPreferredEnvironmentBinding: vi.fn(),
   setCompanyProjectIcon: vi.fn(),
-  libraryIcon: null as { name: string; color: string } | null,
+  setCompanyProjectIconImage: vi.fn(),
+  readProjectImage: vi.fn(),
+  libraryIcon: null as { _tag: "Library"; icon: { name: string; color: string } } | null,
 }));
 const companyState = vi.hoisted(() => ({
   companies: [] as Array<{
@@ -101,6 +103,7 @@ vi.mock("./company/useCompanySettings", () => ({
   useCompanySettings: () => ({ companyId: null, replica: null, registryReplicas: new Map() }),
 }));
 vi.mock("./company/useEnvironmentControl", () => ({ useEnvironmentControl: () => null }));
+vi.mock("../../assets/readProjectImage", () => ({ readProjectImage: cloudState.readProjectImage }));
 vi.mock("../projects/ProjectLibraryIconPicker", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../projects/ProjectLibraryIconPicker")>()),
   useCompanyProjectIcon: () => cloudState.libraryIcon,
@@ -292,6 +295,8 @@ describe("Project settings favicon selection", () => {
     cloudState.deleteCompanyProject.mockReset().mockResolvedValue({ deleted: true });
     cloudState.setPreferredEnvironmentBinding.mockReset().mockResolvedValue(undefined);
     cloudState.setCompanyProjectIcon.mockReset().mockResolvedValue(undefined);
+    cloudState.setCompanyProjectIconImage.mockReset().mockResolvedValue(undefined);
+    cloudState.readProjectImage.mockReset().mockResolvedValue(new Blob(["icon"]));
     cloudState.libraryIcon = null;
     companyState.companies = [];
     projectState.groups = [];
@@ -501,19 +506,15 @@ describe("Project settings favicon selection", () => {
   });
 
   it.each([true, false])(
-    "switches from a built-in icon only after the file save succeeds (%s)",
+    "uploads a chosen file as the company icon and clears per-connection paths on success (%s)",
     async (succeeds) => {
       const companyId = CompanyId.make("company-a");
       companyState.companies = [
         { id: companyId, name: "Company", workspaceKind: "organization", issueKeyPrefix: "CO" },
       ];
-      cloudState.libraryIcon = { name: "Folder", color: "#ffffff" };
-      if (!succeeds)
-        commands.updateProject.mockResolvedValueOnce({
-          _tag: "Failure",
-          cause: Cause.fail(new Error("Save failed")),
-        });
-      const group = makeGroup(null);
+      cloudState.libraryIcon = { _tag: "Library", icon: { name: "Folder", color: "#ffffff" } };
+      if (!succeeds) cloudState.setCompanyProjectIconImage.mockRejectedValueOnce(new Error("No"));
+      const group = makeGroup("legacy/icon.png");
       hooks.beginRender();
       const tree = ProjectDetail({
         group,
@@ -528,14 +529,28 @@ describe("Project settings favicon selection", () => {
         companyContext: {
           companyId,
           replica: null,
-          environmentControl: { setCompanyProjectIcon: cloudState.setCompanyProjectIcon } as never,
+          environmentControl: {
+            setCompanyProjectIcon: cloudState.setCompanyProjectIcon,
+            setCompanyProjectIconImage: cloudState.setCompanyProjectIconImage,
+          } as never,
         },
       }) as ReactElement<Record<string, unknown>>;
       const picker = visitElements(tree, (element) => element.type === ProjectFaviconPickerDialog);
       if (!picker) throw new Error("Expected project icon picker");
       await (picker.props.onSelect as (path: string) => Promise<void>)(selectedPath);
-      expect(cloudState.setCompanyProjectIcon.mock.calls).toEqual(
-        succeeds ? [[{ companyId, cloudProjectId: "cloud-pathway", icon: null }]] : [],
+
+      expect(cloudState.readProjectImage).toHaveBeenCalledWith({
+        environmentId: group.environmentId,
+        cwd: "/workspace/pathway",
+        path: selectedPath,
+      });
+      expect(cloudState.setCompanyProjectIconImage).toHaveBeenCalledWith({
+        companyId,
+        cloudProjectId: "cloud-pathway",
+        image: expect.any(Blob),
+      });
+      expect(commands.updateProject.mock.calls.map(([call]) => call.input.faviconPath)).toEqual(
+        succeeds ? [null, null] : [],
       );
     },
   );

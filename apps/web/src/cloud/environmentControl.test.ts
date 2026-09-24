@@ -79,6 +79,8 @@ describe("environment control function references", () => {
       createCompanyProject: "cloudProjects:createCompanyProject",
       ensureEnvironmentProject: "cloudProjects:ensureEnvironmentProject",
       setCompanyProjectIcon: "cloudProjects:setCompanyProjectIcon",
+      generateProjectIconUploadUrl: "cloudProjects:generateProjectIconUploadUrl",
+      setCompanyProjectIconImage: "cloudProjects:setCompanyProjectIconImage",
       setPreferredEnvironmentBinding: "cloudProjects:setPreferredEnvironmentBinding",
       releaseEnvironmentProject: "cloudProjects:releaseEnvironmentProject",
       deleteCompanyProject: "cloudProjects:deleteCompanyProject",

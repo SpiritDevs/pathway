@@ -32,16 +32,25 @@ export function ProjectFavicon(input: {
   className?: string | undefined;
   fallbackIcon?: ComponentType<{ className?: string }>;
 }) {
-  // A library icon chosen for the company project wins over anything detected in the checkout.
-  const libraryIcon = useAtomValue(
+  // An icon chosen for the company project wins over anything detected in the checkout.
+  const syncedIcon = useAtomValue(
     projectIconAtom(input.cwd ? projectIconCheckoutKey(input.environmentId, input.cwd) : ""),
   );
-  if (libraryIcon !== null) {
+  if (syncedIcon?._tag === "Library") {
     return (
       <FocusIcon
-        iconName={libraryIcon.name}
-        color={libraryIcon.color}
+        iconName={syncedIcon.icon.name}
+        color={syncedIcon.icon.color}
         className={cn("size-3.5 shrink-0", input.className)}
+      />
+    );
+  }
+  if (syncedIcon?._tag === "Image") {
+    return (
+      <img
+        src={syncedIcon.url}
+        alt=""
+        className={cn("size-3.5 shrink-0 rounded-sm object-contain", input.className)}
       />
     );
   }

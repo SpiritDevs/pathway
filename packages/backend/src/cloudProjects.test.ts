@@ -445,6 +445,70 @@ describe("company project icon", () => {
     });
     expect((await t.run((ctx) => ctx.db.get(ids.projectId)))?.icon).toBeNull();
   });
+
+  it("publishes an uploaded image in place of the built-in icon and deletes replaced uploads", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const owner = asOwner(t);
+    const store = (bytes: string, type: string) =>
+      t.run((ctx) => ctx.storage.store(new Blob([bytes], { type })));
+    await owner.mutation(api.cloudProjects.setCompanyProjectIcon, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PROJECT_ID,
+      icon: { name: "Rocket", color: "#ef4444" },
+    });
+
+    const first = await store("first", "image/png");
+    await owner.mutation(api.cloudProjects.setCompanyProjectIconImage, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PROJECT_ID,
+      storageId: first,
+    });
+    const published = await t.run(async (ctx) => ({
+      project: await ctx.db.get(ids.projectId),
+      change: (await ctx.db.query("syncChanges").collect()).findLast(
+        (row) => row.entityKind === "cloudProject" && row.entityId === PROJECT_ID,
+      ),
+    }));
+    expect(published.project?.icon).toBeNull();
+    expect(published.project?.iconImage?.storageId).toBe(first);
+    expect(published.change?.payload).toMatchObject({
+      iconImageUrl: published.project?.iconImage?.url,
+    });
+
+    const second = await store("second", "image/vnd.microsoft.icon");
+    await owner.mutation(api.cloudProjects.setCompanyProjectIconImage, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PROJECT_ID,
+      storageId: second,
+    });
+    expect(await t.run((ctx) => ctx.storage.getUrl(first))).toBeNull();
+
+    const oversized = await store("x".repeat(1024 * 1024 + 1), "image/png");
+    expect(
+      await owner.mutation(api.cloudProjects.setCompanyProjectIconImage, {
+        companyId: COMPANY_ID,
+        cloudProjectId: PROJECT_ID,
+        storageId: oversized,
+      }),
+    ).toBe(false);
+    expect(await t.run((ctx) => ctx.storage.getUrl(oversized))).toBeNull();
+
+    await owner.mutation(api.cloudProjects.setCompanyProjectIcon, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PROJECT_ID,
+      icon: null,
+    });
+    const cleared = await t.run(async (ctx) => ({
+      project: await ctx.db.get(ids.projectId),
+      change: (await ctx.db.query("syncChanges").collect()).findLast(
+        (row) => row.entityKind === "cloudProject" && row.entityId === PROJECT_ID,
+      ),
+    }));
+    expect(cleared.project?.iconImage).toBeNull();
+    expect(cleared.change?.payload).not.toHaveProperty("iconImageUrl");
+    expect(await t.run((ctx) => ctx.storage.getUrl(second))).toBeNull();
+  });
 });
 
 describe("company project merge", () => {

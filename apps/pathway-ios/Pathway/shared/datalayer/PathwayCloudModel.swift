@@ -537,6 +537,10 @@ final class PathwayCloudModel {
         projects.first { $0.companyId == companyId && $0.project.id == projectId }?.project.icon
     }
 
+    func projectIconImageURL(companyId: String, projectId: String?) -> URL? {
+        projects.first { $0.companyId == companyId && $0.project.id == projectId }?.project.iconImageURL
+    }
+
     func refreshLifecycleMetadata(using connect: PathwayConnectClient) async {
         // A new attachment must supersede an in-flight lookup for the old snapshot.
         guard !activeThreads.isEmpty, lifecycleMetadataThreads != activeThreads else { return }

@@ -239,7 +239,8 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       };
       break;
     }
-    case "workspace-file": {
+    case "workspace-file":
+    case "project-image": {
       if (!input.workspaceRoot) {
         return yield* new AssetWorkspaceContextNotFoundError({
           resource: input.resource,

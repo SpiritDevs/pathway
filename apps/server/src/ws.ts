@@ -2219,7 +2219,10 @@ const makeWsRpcLayer = (
               if (input.resource._tag === "attachment") {
                 return yield* issueAssetUrl({ resource: input.resource });
               }
-              if (input.resource._tag === "project-favicon") {
+              if (
+                input.resource._tag === "project-favicon" ||
+                input.resource._tag === "project-image"
+              ) {
                 const project = yield* projectionSnapshotQuery
                   .getActiveProjectByWorkspaceRoot(input.resource.cwd)
                   .pipe(
@@ -2234,6 +2237,14 @@ const makeWsRpcLayer = (
                 if (Option.isNone(project)) {
                   return yield* new AssetWorkspaceContextNotFoundError({
                     resource: input.resource,
+                  });
+                }
+                if (input.resource._tag === "project-image") {
+                  return yield* issueAssetUrl({
+                    resource: input.resource,
+                    ...(project.value.workspaceRoot === null
+                      ? {}
+                      : { workspaceRoot: project.value.workspaceRoot }),
                   });
                 }
                 return yield* issueAssetUrl({

@@ -609,6 +609,34 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
+  it.effect("serves one chosen project image and nothing else", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "pathway-asset-project-image-",
+      });
+      yield* fileSystem.makeDirectory(path.join(root, "apps", "web"), { recursive: true });
+      yield* fileSystem.writeFileString(path.join(root, "apps", "web", "favicon.ico"), "ico");
+      yield* fileSystem.writeFileString(path.join(root, "apps", "web", "notes.html"), "<p />");
+
+      const result = yield* issueAssetUrl({
+        resource: { _tag: "project-image", cwd: root, path: "apps/web/favicon.ico" },
+        workspaceRoot: root,
+      });
+      const suffix = result.relativeUrl.slice("/api/assets/".length);
+      const separatorIndex = suffix.indexOf("/");
+      expect(
+        yield* resolveAsset(suffix.slice(0, separatorIndex), suffix.slice(separatorIndex + 1)),
+      ).toEqual({
+        kind: "file",
+        path: yield* fileSystem.realPath(path.join(root, "apps", "web", "favicon.ico")),
+      });
+      // The URL grants that one file, not its neighbours.
+      expect(yield* resolveAsset(suffix.slice(0, separatorIndex), "notes.html")).toBeNull();
+    }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect("buckets project favicon expiry after content hashing", () =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;

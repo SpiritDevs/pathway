@@ -62,6 +62,7 @@ import { shortcutLabelForCommand } from "../../keybindings";
 import { keybindingValueForCommand } from "../../lib/projectScriptKeybindings";
 import { readLocalApi } from "../../localApi";
 import { companyListAtom } from "../../cloud/activeCompany";
+import { readProjectImage } from "../../assets/readProjectImage";
 import type { EnvironmentControlClient } from "../../cloud/environmentControl";
 import {
   buildProjectScript,
@@ -467,7 +468,7 @@ export function ProjectDetail({
         ) ??
         companies.find((company) => workspaceProject.companyIds.includes(String(company.id))) ??
         null);
-  const libraryIcon = useCompanyProjectIcon(workspaceProject?.cloudProjectId ?? null);
+  const syncedIcon = useCompanyProjectIcon(workspaceProject?.cloudProjectId ?? null);
   const mergeTarget =
     workspaceProject === null
       ? null
@@ -670,38 +671,84 @@ export function ProjectDetail({
   const [faviconPickerOpen, setFaviconPickerOpen] = useState(false);
   const [isSavingFavicon, setIsSavingFavicon] = useState(false);
   const savingFaviconRef = useRef(false);
-  const setFaviconPath = useCallback(
-    async (faviconPath: string | null) => {
-      if (savingFaviconRef.current) return;
-      savingFaviconRef.current = true;
-      setIsSavingFavicon(true);
-      try {
-        const result = await updateAllMembers({ faviconPath }, "Failed to update project icon");
-        if (
-          result._tag === "Success" &&
-          faviconPath !== null &&
-          libraryIcon !== null &&
-          owningCompany !== null &&
-          workspaceProject?.cloudProjectId &&
-          companyContext?.environmentControl
-        ) {
-          const clearIconResult = await settlePromise(() =>
-            companyContext.environmentControl!.setCompanyProjectIcon({
-              companyId: owningCompany.id as CompanyId,
-              cloudProjectId: workspaceProject.cloudProjectId!,
-              icon: null,
+  const companyIconTarget =
+    owningCompany !== null && workspaceProject?.cloudProjectId && companyContext?.environmentControl
+      ? {
+          companyId: owningCompany.id as CompanyId,
+          cloudProjectId: workspaceProject.cloudProjectId,
+          control: companyContext.environmentControl,
+        }
+      : null;
+  const hasFaviconPath = group.memberProjects.some((member) => member.faviconPath != null);
+  const saveFavicon = useCallback(async (save: () => Promise<void>) => {
+    if (savingFaviconRef.current) return;
+    savingFaviconRef.current = true;
+    setIsSavingFavicon(true);
+    try {
+      await save();
+    } finally {
+      savingFaviconRef.current = false;
+      setIsSavingFavicon(false);
+    }
+  }, []);
+  // A company project uploads the chosen file once so every device shows the same picture. Only a
+  // project outside any company keeps the older per-connection file path.
+  const chooseFaviconFile = useCallback(
+    (path: string) =>
+      saveFavicon(async () => {
+        const cwd = representative.workspaceRoot;
+        if (companyIconTarget === null || cwd === null) {
+          await updateAllMembers({ faviconPath: path }, "Failed to update project icon");
+          return;
+        }
+        const { control, ...target } = companyIconTarget;
+        const result = await settlePromise(async () =>
+          control.setCompanyProjectIconImage({
+            ...target,
+            image: await readProjectImage({
+              environmentId: representative.environmentId,
+              cwd,
+              path,
             }),
+          }),
+        );
+        if (result._tag === "Failure") {
+          reportFailure("Failed to update project icon", result);
+        } else if (hasFaviconPath) {
+          await updateAllMembers(
+            { faviconPath: null },
+            "Failed to clear the old project icon file",
           );
-          if (clearIconResult._tag === "Failure") {
-            reportFailure("Failed to switch to the project icon file", clearIconResult);
+        }
+      }),
+    [
+      companyIconTarget,
+      hasFaviconPath,
+      reportFailure,
+      representative.environmentId,
+      representative.workspaceRoot,
+      saveFavicon,
+      updateAllMembers,
+    ],
+  );
+  const resetFavicon = useCallback(
+    () =>
+      saveFavicon(async () => {
+        if (syncedIcon !== null && companyIconTarget !== null) {
+          const { control, ...target } = companyIconTarget;
+          const result = await settlePromise(() =>
+            control.setCompanyProjectIcon({ ...target, icon: null }),
+          );
+          if (result._tag === "Failure") {
+            reportFailure("Failed to reset project icon", result);
+            return;
           }
         }
-      } finally {
-        savingFaviconRef.current = false;
-        setIsSavingFavicon(false);
-      }
-    },
-    [companyContext, libraryIcon, owningCompany, reportFailure, updateAllMembers, workspaceProject],
+        if (hasFaviconPath) {
+          await updateAllMembers({ faviconPath: null }, "Failed to reset project icon");
+        }
+      }),
+    [companyIconTarget, hasFaviconPath, reportFailure, saveFavicon, syncedIcon, updateAllMembers],
   );
 
   // ----- connection selection and scripts -----
@@ -1267,28 +1314,19 @@ export function ProjectDetail({
             />
             <SettingsRow
               title="Project icon"
-              description={libraryIcon !== null ? "Built-in icon" : (faviconPath ?? "Automatic")}
+              description={
+                syncedIcon?._tag === "Library"
+                  ? "Built-in icon"
+                  : syncedIcon?._tag === "Image"
+                    ? "Uploaded image"
+                    : (faviconPath ?? "Automatic")
+              }
               resetAction={
-                libraryIcon !== null &&
-                owningCompany !== null &&
-                workspaceProject?.cloudProjectId ? (
-                  <SettingResetButton
-                    label="project icon"
-                    onClick={() =>
-                      void companyContext?.environmentControl
-                        ?.setCompanyProjectIcon({
-                          companyId: owningCompany.id as CompanyId,
-                          cloudProjectId: workspaceProject.cloudProjectId!,
-                          icon: null,
-                        })
-                        .catch(() => undefined)
-                    }
-                  />
-                ) : faviconPath !== null ? (
+                syncedIcon !== null || hasFaviconPath ? (
                   <SettingResetButton
                     label="project icon"
                     disabled={isSavingFavicon}
-                    onClick={() => void setFaviconPath(null)}
+                    onClick={() => void resetFavicon()}
                   />
                 ) : null
               }
@@ -1304,7 +1342,7 @@ export function ProjectDetail({
                     <ProjectLibraryIconPicker
                       companyId={owningCompany.id as CompanyId}
                       cloudProjectId={workspaceProject.cloudProjectId}
-                      icon={libraryIcon}
+                      icon={syncedIcon?._tag === "Library" ? syncedIcon.icon : null}
                     />
                   ) : null}
                   <Button
@@ -1931,7 +1969,7 @@ export function ProjectDetail({
           cwd={representative.workspaceRoot}
           environmentId={representative.environmentId}
           onOpenChange={setFaviconPickerOpen}
-          onSelect={setFaviconPath}
+          onSelect={chooseFaviconFile}
           open={faviconPickerOpen}
           projectName={group.displayName}
         />

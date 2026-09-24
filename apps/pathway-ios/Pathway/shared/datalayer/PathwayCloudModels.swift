@@ -54,11 +54,13 @@ struct PathwayCloudProject: Decodable, Equatable, Identifiable, Sendable {
     var defaultWorkflowOwner: JSONValue? = nil
     /// Replaces the detected favicon on every device; nil uses the favicon.
     var icon: PathwayProjectIcon? = nil
+    /// An uploaded image shown on every device instead of `icon` or the favicon.
+    var iconImageURL: URL? = nil
 }
 
 extension PathwayCloudProject {
     private enum CodingKeys: String, CodingKey {
-        case id, name, description, archivedAt, teamIds, defaultWorkflowOwner, icon
+        case id, name, description, archivedAt, teamIds, defaultWorkflowOwner, icon, iconImageUrl
     }
 
     init(from decoder: any Decoder) throws {
@@ -71,6 +73,8 @@ extension PathwayCloudProject {
         defaultWorkflowOwner = try container.decodeIfPresent(JSONValue.self, forKey: .defaultWorkflowOwner)
         // An icon this build cannot read falls back to the favicon instead of hiding the project.
         icon = try? container.decodeIfPresent(PathwayProjectIcon.self, forKey: .icon)
+        iconImageURL = (try? container.decodeIfPresent(String.self, forKey: .iconImageUrl))
+            .flatMap { $0 }.flatMap(URL.init(string:))
     }
 }
 

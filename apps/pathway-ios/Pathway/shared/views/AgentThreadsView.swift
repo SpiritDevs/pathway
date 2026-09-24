@@ -862,8 +862,9 @@ private struct AgentThreadRow: View {
         .accessibilityHint("Open thread")
         .accessibilityCustomContent("Model", thread.shell.modelSelection.model)
         .accessibilityCustomContent("Company", companyName ?? "Unknown")
-        .task(id: syncedProjectIcon == nil ? projectIconContext?.key : nil) {
-            guard syncedProjectIcon == nil, let context = projectIconContext, let connect = appModel.connect else { return }
+        .task(id: syncedProjectIcon == nil && syncedProjectImageURL == nil ? projectIconContext?.key : nil) {
+            guard syncedProjectIcon == nil, syncedProjectImageURL == nil,
+                  let context = projectIconContext, let connect = appModel.connect else { return }
             await appModel.projectIcons.load(context, using: connect)
         }
     }
@@ -872,9 +873,15 @@ private struct AgentThreadRow: View {
         thread.shell.isConversation ? nil : appModel.cloud.projectIcon(companyId: thread.companyId, projectId: thread.cloudProjectId)
     }
 
+    private var syncedProjectImageURL: URL? {
+        thread.shell.isConversation ? nil : appModel.cloud.projectIconImageURL(companyId: thread.companyId, projectId: thread.cloudProjectId)
+    }
+
     private var projectIcon: some View {
         Group {
-            if let icon = syncedProjectIcon {
+            if let url = syncedProjectImageURL {
+                AsyncImage(url: url) { $0.resizable().scaledToFit() } placeholder: { Color.clear }
+            } else if let icon = syncedProjectIcon {
                 PathwayFocusIcon(name: icon.name, size: 14)
                     .foregroundStyle(PathwayFocusIcon.color(icon.color))
             } else if let context = projectIconContext, let image = appModel.projectIcons.images[context.key] {

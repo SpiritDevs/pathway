@@ -202,6 +202,14 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
     },
     null
   >("cloudProjects:setCompanyProjectIcon"),
+  generateProjectIconUploadUrl: mutationReference<
+    { readonly companyId: CompanyId; readonly cloudProjectId: string },
+    string
+  >("cloudProjects:generateProjectIconUploadUrl"),
+  setCompanyProjectIconImage: mutationReference<
+    { readonly companyId: CompanyId; readonly cloudProjectId: string; readonly storageId: string },
+    boolean
+  >("cloudProjects:setCompanyProjectIconImage"),
   setPreferredEnvironmentBinding: mutationReference<
     {
       readonly companyId: CompanyId;
@@ -371,6 +379,12 @@ export interface EnvironmentControlClient {
     readonly companyId: CompanyId;
     readonly cloudProjectId: string;
     readonly icon: ProjectIcon | null;
+  }) => Promise<void>;
+  /** Uploads an image shown on every device in place of detected favicons and library icons. */
+  readonly setCompanyProjectIconImage: (args: {
+    readonly companyId: CompanyId;
+    readonly cloudProjectId: string;
+    readonly image: Blob;
   }) => Promise<void>;
   readonly setPreferredEnvironmentBinding: (args: {
     readonly companyId: CompanyId;
@@ -567,6 +581,34 @@ export function makeEnvironmentControlClient(options: {
     },
     setCompanyProjectIcon: (args) =>
       cloudProjectMutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.setCompanyProjectIcon, args),
+    setCompanyProjectIconImage: async ({ image, ...target }) => {
+      const uploadUrl = await cloudProjectMutationResult<string>(
+        ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.generateProjectIconUploadUrl,
+        target,
+      );
+      const upload = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": image.type || "application/octet-stream" },
+        body: image,
+      });
+      if (!upload.ok) {
+        throw new EnvironmentControlError({
+          code: null,
+          message: "The project icon could not be uploaded.",
+        });
+      }
+      const { storageId } = (await upload.json()) as { storageId: string };
+      const accepted = await cloudProjectMutationResult<boolean>(
+        ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.setCompanyProjectIconImage,
+        { ...target, storageId },
+      );
+      if (!accepted) {
+        throw new EnvironmentControlError({
+          code: "invalid-arguments",
+          message: "A project icon must be an image of at most 1 MB.",
+        });
+      }
+    },
     setPreferredEnvironmentBinding: (args) =>
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.setPreferredEnvironmentBinding, args),
     releaseEnvironmentProject: (args) =>

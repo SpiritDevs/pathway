@@ -5,17 +5,19 @@ import { useState } from "react";
 
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
 import { cloudProjectsAtom } from "~/cloud/issueDomainReadModel";
+import type { SyncedProjectIcon } from "~/state/projectIcons";
 import { IconColorPicker, LIBRARY_ICON_COLORS } from "../focus/IconColorPicker";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 
-/** The company project's synced library icon, or null when it uses detected favicons. */
-export function useCompanyProjectIcon(cloudProjectId: string | null): ProjectIcon | null {
+/** The company project's synced icon, or null when it uses detected favicons. */
+export function useCompanyProjectIcon(cloudProjectId: string | null): SyncedProjectIcon | null {
   const cloudProjects = useAtomValue(cloudProjectsAtom) ?? [];
-  return cloudProjectId === null
-    ? null
-    : (cloudProjects.find((project) => project.id === cloudProjectId)?.icon ?? null);
+  const project =
+    cloudProjectId === null ? undefined : cloudProjects.find(({ id }) => id === cloudProjectId);
+  if (project?.iconImageUrl) return { _tag: "Image", url: project.iconImageUrl };
+  return project?.icon ? { _tag: "Library", icon: project.icon } : null;
 }
 
 /** Chooses a library icon for every checkout of a company project; applies on each pick. */
