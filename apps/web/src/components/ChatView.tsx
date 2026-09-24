@@ -97,7 +97,10 @@ import { parseComputerInvocation } from "@spiritdevs/shared/computerInvocation";
 import { useThreadComputerControlGeneration } from "../computerStateStore";
 import { useComputerControlModeChange } from "../hooks/useComputerControlModeChange";
 import { useComputerControlSetting } from "../hooks/useComputerAccess";
-import { resolveComputerControlForSend } from "../hooks/useComputerControlModeChange.logic";
+import {
+  draftRequestsComputerControl,
+  resolveComputerControlForSend,
+} from "../hooks/useComputerControlModeChange.logic";
 import { readComputerControlGenerationForSend } from "../hooks/useThreadComputerStateSeed";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@spiritdevs/shared/chatList";
 import { AddProjectConnectionDialog } from "./projects/AddProjectConnectionDialog";
@@ -1667,9 +1670,12 @@ function ChatViewContent(props: ChatViewProps) {
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
   );
-  const composerComputerControlOn = useComposerDraftStore(
-    (store) =>
-      (store.getComposerDraft(composerDraftTarget)?.computerControlMode ?? "off") !== "off",
+  // A boolean off the draft text, so typing re-renders only when it flips.
+  const composerComputerControlOn = useComposerDraftStore((store) =>
+    draftRequestsComputerControl({
+      prompt: store.getComposerDraft(composerDraftTarget)?.prompt,
+      computerControlEnabled: computerControlSetting,
+    }),
   );
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
@@ -9907,9 +9913,7 @@ function ChatViewContent(props: ChatViewProps) {
                 onRemoveMissingThread={handleRemoveMissingThread}
                 removingMissingThread={isRemovingMissingThread}
                 onControlWorkspacePreparation={onControlWorkspacePreparation}
-                computerControlEnabled={
-                  settings.computerControlEnabled || composerComputerControlOn
-                }
+                computerControlEnabled={composerComputerControlOn}
                 onEnableComputerControl={handleEnableComputerControlFromDenial}
                 onOpenThread={onOpenRelatedThread}
                 parentThreadLink={parentThreadLink}
