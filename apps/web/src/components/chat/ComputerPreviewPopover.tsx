@@ -30,6 +30,7 @@ import {
   useComputerInputStopped,
   useComputerStateStore,
 } from "../../computerStateStore";
+import { useComputerSupport } from "../../hooks/useComputerSupport";
 import { useClientSettings } from "../../hooks/useSettings";
 import { useThreadComputerStateSeed } from "../../hooks/useThreadComputerStateSeed";
 import { cn } from "../../lib/utils";
@@ -82,6 +83,11 @@ const selectComputerPreviewSize = (settings: ClientSettings): ComputerPreviewCar
  * floats over the transcript's right edge, sized from the column's width.
  */
 export function ComputerPreviewRail(props: { readonly threadRef: ScopedThreadRef }) {
+  // The rail mounts for the open thread whether or not a preview shows, so it
+  // seeds that thread's state: the preview arms from it and a send pins its
+  // Computer intent to the generation it carries.
+  const supported = useComputerSupport(props.threadRef.environmentId);
+  useThreadComputerStateSeed(supported ? props.threadRef : null);
   const session = useComputerPreviewStore(selectThreadComputerPreviewSession(props.threadRef));
   const autoOpenComputerPane = useClientSettings(selectAutoOpenComputerPane);
   if (!autoOpenComputerPane || session === undefined) {
@@ -177,8 +183,6 @@ function ComputerPreviewPopoverCard(props: {
   // container height; width comes from the rail budget prop instead, because
   // the shrink-fit wrapper cannot measure what the freed gutter will be.
   const slotSize = useObservedSize(cardRef, { offsetParent: true });
-
-  useThreadComputerStateSeed(threadRef);
 
   // Mounting means the owning thread is on screen: an armed session goes live
   // here, which is also what animates the card in from its closed state.
