@@ -1248,6 +1248,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerCatalog =
     selectedProvider === "claudeAgent" ? scopedCatalog.data : selectedProviderStatus;
 
+  const hasComposerHeaderPanel =
+    activePendingApproval !== null ||
+    pendingUserInputs.length > 0 ||
+    (showPlanFollowUpPrompt && activeProposedPlan !== null);
   const computerUseAvailable = useComputerSupport(environmentId);
   const computerControlSetting = useComputerControlSetting(environmentId);
   const computerControlEffortHint = useComputerControlEffortHint({
@@ -3183,8 +3187,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
               />
             </div>
-          ) : computerControlEffortHint.show ? (
-            <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
+          ) : null}
+          {/* Stacks under whichever panel shows, as Synara's stacked panels do. */}
+          {computerControlEffortHint.show ? (
+            <div
+              className={cn(
+                "border-b border-border/65 bg-muted/20",
+                hasComposerHeaderPanel ? null : "rounded-t-[19px]",
+              )}
+            >
               <ComposerComputerControlEffortHint
                 onApply={computerControlEffortHint.apply}
                 onDismiss={computerControlEffortHint.dismiss}
