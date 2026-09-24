@@ -163,7 +163,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       which reject the whole request with invalid_scope when it is named. */
   computerOperateScope: Schema.optionalKey(Schema.Boolean),
   /** Server accepts the `computer` settings patch (access policy, autonomy) and Computer intent on
-      `launchThread.initialMessage`. Absent on older servers, which silently strip both. */
+      `launchThread.initialMessage`, and serves the Computer RPCs. Absent on older servers, which
+      silently strip both and may lack the RPCs. */
   computerPolicy: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
