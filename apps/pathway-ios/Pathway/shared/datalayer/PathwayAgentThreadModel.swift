@@ -286,6 +286,8 @@ final class PathwayAgentThreadModel {
     private(set) var checkpoints: [JSONValue] = []
     private(set) var plans: [JSONValue] = []
     var isSending = false
+    /// An edit-and-restart is between its checks and its dispatch; Retry and Save wait for it.
+    private(set) var isRestartingMessage = false
     var activity: PathwayThreadActivity? {
         let run = runs.first { $0.id == activeRunID }
             ?? runs.first { $0.status == "queued" }
@@ -608,10 +610,15 @@ final class PathwayAgentThreadModel {
         }
     }
     func editLatestUserMessage(_ item: PathwayTimelineItem, text: String) async throws {
+        let notEditable = PathwayThreadConversationError.message("Only the latest message can be edited after the agent stops.")
+        guard !isRestartingMessage else { throw PathwayThreadConversationError.message("This message is already restarting.") }
         guard activeRunID == nil, canEdit(item), let messageID = item.messageID, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw PathwayThreadConversationError.message("Only the latest message can be edited after the agent stops.")
+            throw notEditable
         }
+        isRestartingMessage = true
+        defer { isRestartingMessage = false }
         let computer = try await computerFields(for: text)
+        guard activeRunID == nil, canEdit(item) else { throw notEditable }
         try await dispatch("message.edit-and-restart", fields: ["createdBy": .string("user"), "creationSource": .string("mobile"),
             "messageId": .string(messageID), "replacementMessageId": .string(UUID().uuidString),
             "text": .string(Self.preservingMessageContext(original: item.text ?? "", edited: text))].merging(computer) { $1 })
