@@ -10,6 +10,8 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import {
+  AuthAdministrativeScopes,
+  AuthStandardClientScopes,
   ChatAttachment,
   ChatAttachmentId,
   CommandId,
@@ -20,6 +22,7 @@ import {
 } from "@spiritdevs/contracts";
 import * as ServerConfig from "./config.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as ServerSettings from "./serverSettings.ts";
 import { resolveAttachmentPath } from "./attachmentStore.ts";
 import {
   ATTACHMENT_UPLOAD_ROUTE_PREFIX,
@@ -35,6 +38,7 @@ import {
   refreshLocalGitStatusAfterMutation,
   requireThreadResumeTarget,
   resolveIssueConnectionActor,
+  updateServerSettingsForSession,
   wsProjectUpdateInputFromMutation,
 } from "./ws.ts";
 
@@ -55,6 +59,29 @@ it.effect("allows a cached thread resume when the owning environment still has t
     ThreadId.make("thread:existing-cached-resume"),
     Effect.succeed({ exists: true }),
   ),
+);
+
+it.effect("keeps Computer policy out of reach of a standard session's settings patch", () =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const refused = yield* Effect.flip(
+      updateServerSettingsForSession(settings, AuthStandardClientScopes, {
+        computer: { accessPolicy: "any-operator" },
+      }),
+    );
+    assert.strictEqual(refused._tag, "EnvironmentAuthorizationError");
+    assert.strictEqual((yield* settings.getSettings).computer.accessPolicy, "scoped");
+
+    const renamed = yield* updateServerSettingsForSession(settings, AuthStandardClientScopes, {
+      environmentName: "Studio",
+    });
+    assert.strictEqual(renamed.environmentName, "Studio");
+
+    const opened = yield* updateServerSettingsForSession(settings, AuthAdministrativeScopes, {
+      computer: { accessPolicy: "any-operator" },
+    });
+    assert.strictEqual(opened.computer.accessPolicy, "any-operator");
+  }).pipe(Effect.provide(ServerSettings.layerTest())),
 );
 
 it.effect("waits for local Git status before completing a ref mutation", () =>

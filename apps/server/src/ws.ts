@@ -58,6 +58,7 @@ import {
   type RelayClientInstallProgressEvent,
   type ServerSelfUpdateError,
   type ServerSelfUpdateProgressEvent,
+  type ServerSettingsPatch,
   ServerProviderAuthenticationError,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
@@ -569,6 +570,29 @@ export const refreshLocalGitStatusAfterMutation = Effect.fn(
   return result;
 });
 
+const environmentAuthorizationError = (requiredScope: AuthEnvironmentScope) =>
+  new EnvironmentAuthorizationError({
+    message: `The authenticated token is missing required scope: ${requiredScope}.`,
+    requiredScope,
+  });
+
+/**
+ * Applies a settings patch for a session holding `scopes`. The RPC's own scope is
+ * checked by the caller; a patch touching Computer policy also needs `access:write`.
+ */
+export const updateServerSettingsForSession = (
+  serverSettings: ServerSettings.ServerSettingsService["Service"],
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+  patch: ServerSettingsPatch,
+) =>
+  Effect.gen(function* () {
+    const extraScope = extraScopeForServerSettingsPatch(patch);
+    if (extraScope !== null && !scopes.includes(extraScope)) {
+      return yield* environmentAuthorizationError(extraScope);
+    }
+    return yield* serverSettings.updateSettings(patch);
+  });
+
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
@@ -700,18 +724,13 @@ const makeWsRpcLayer = (
       const emailCapture = yield* EmailCapture.EmailCaptureService;
       const emailTriggers = yield* EmailTrigger.EmailTriggerService;
       const issueActor = yield* resolveIssueConnectionActor(currentSession, issueTracker);
-      const authorizationError = (requiredScope: AuthEnvironmentScope) =>
-        new EnvironmentAuthorizationError({
-          message: `The authenticated token is missing required scope: ${requiredScope}.`,
-          requiredScope,
-        });
       const authorizeEffect = <A, E, R>(
         requiredScope: AuthEnvironmentScope,
         effect: Effect.Effect<A, E, R>,
       ): Effect.Effect<A, E | EnvironmentAuthorizationError, R> =>
         currentSession.scopes.includes(requiredScope)
           ? effect
-          : Effect.fail(authorizationError(requiredScope));
+          : Effect.fail(environmentAuthorizationError(requiredScope));
       // ADR 0041: every message this session sends that asks for Computer is
       // checked against the access policy where the orchestrator admits it.
       const computerDispatchAccess = {
@@ -728,7 +747,7 @@ const makeWsRpcLayer = (
       ): Stream.Stream<A, E | EnvironmentAuthorizationError, R> =>
         currentSession.scopes.includes(requiredScope)
           ? stream
-          : Stream.fail(authorizationError(requiredScope));
+          : Stream.fail(environmentAuthorizationError(requiredScope));
       const observeRpcEffect = <A, E, R>(
         method: string,
         effect: Effect.Effect<A, E, R>,
@@ -1849,11 +1868,9 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateSettings,
-            Effect.suspend(() => {
-              const extraScope = extraScopeForServerSettingsPatch(patch);
-              const update = serverSettings.updateSettings(patch);
-              return extraScope === null ? update : authorizeEffect(extraScope, update);
-            }).pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
+            updateServerSettingsForSession(serverSettings, currentSession.scopes, patch).pipe(
+              Effect.map(ServerSettings.redactServerSettingsForClient),
+            ),
             {
               "rpc.aggregate": "server",
             },
