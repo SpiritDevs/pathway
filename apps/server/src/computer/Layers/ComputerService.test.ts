@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import { types } from "node:util";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessEnvironment, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
@@ -11,7 +12,8 @@ import * as Layer from "effect/Layer";
 
 import * as ComputerApprovalGate from "../ComputerApprovalGate.ts";
 import { FakeComputerBackend } from "../FakeComputerBackend.ts";
-import { ComputerService } from "../Services/ComputerService.ts";
+import { ComputerService, type ComputerServiceShape } from "../Services/ComputerService.ts";
+import { UnavailableComputerBackend } from "../UnavailableComputerBackend.ts";
 import {
   COMPUTER_HOST_CAPABILITY_ENV,
   COMPUTER_HOST_CAPABILITY_FD_ENV,
@@ -39,6 +41,12 @@ const onHost = (platform: NodeJS.Platform, env: NodeJS.ProcessEnv = {}) =>
     Layer.succeed(HostProcessPlatform, platform),
     Layer.succeed(HostProcessEnvironment, env),
   );
+
+/** The backend the layer chose; a private field, read only to name it in assertions. */
+const backendOf = (service: ComputerServiceShape): unknown =>
+  (service.manager as unknown as { readonly backend: unknown }).backend;
+
+const CUA_SOCKET = { PATHWAY_CUA_HOST_SOCKET: "/tmp/pathway-cua-test.sock" };
 
 describe("ComputerServiceLive", () => {
   /**
@@ -146,6 +154,92 @@ describe("ComputerServiceLive", () => {
         ),
       ),
     ),
+  );
+
+  /**
+   * The Electron app configures the Cua host socket on every platform, Linux
+   * included, so socket presence cannot be what routes a Linux desktop: the
+   * Linux tiers decide first, and Cua is what remains when none claims the
+   * host. Naming it explicitly reaches it on any platform.
+   */
+  it.effect("keeps Cua as the Linux fallback", () =>
+    Effect.gen(function* () {
+      const service = yield* ComputerService;
+      expect(service.supported).toBe(true);
+      expect(service.availability).not.toMatchObject({ kind: "unsupported-platform" });
+      // The Cua host, observing a Linux desktop it does not drive.
+      expect(backendOf(service)).not.toBeInstanceOf(UnavailableComputerBackend);
+      expect(service.manager.guidanceProfile).toEqual({ dialect: "linux", dedicatedSeat: false });
+    }).pipe(Effect.provide(serviceLayer({}).pipe(Layer.provide(onHost("linux", CUA_SOCKET))))),
+  );
+
+  it.effect("keeps Cua as the explicit choice on any platform", () =>
+    Effect.gen(function* () {
+      const service = yield* ComputerService;
+      expect(service.supported).toBe(true);
+      expect(service.availability).not.toMatchObject({ kind: "unsupported-platform" });
+      expect(backendOf(service)).not.toBeInstanceOf(UnavailableComputerBackend);
+    }).pipe(
+      Effect.provide(
+        serviceLayer({}).pipe(
+          Layer.provide(onHost("win32", { ...CUA_SOCKET, PATHWAY_COMPUTER_BACKEND: "cua" })),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("refuses a Linux host with no tier and no host endpoint rather than faking one", () =>
+    Effect.gen(function* () {
+      const service = yield* ComputerService;
+      expect(service.supported).toBe(false);
+      expect(service.availability).toEqual({
+        kind: "backend-unavailable",
+        message: "No computer backend is available on this server.",
+      });
+    }).pipe(Effect.provide(serviceLayer({}).pipe(Layer.provide(onHost("linux"))))),
+  );
+
+  /**
+   * An override is honored or refused, never bypassed. A typo that fell through
+   * to auto-detection would boot a different backend and look like the variable
+   * does nothing; the unavailable backend carries the reason and the names that
+   * do exist instead.
+   */
+  it.effect("turns a malformed override into an availability card, not another backend", () =>
+    Effect.gen(function* () {
+      const service = yield* ComputerService;
+      expect(service.supported).toBe(false);
+      expect(service.availability).toMatchObject({ kind: "backend-unavailable" });
+      expect(
+        service.availability.kind === "backend-unavailable" ? service.availability.message : "",
+      ).toContain('PATHWAY_COMPUTER_BACKEND="protal"');
+    }).pipe(
+      Effect.provide(
+        serviceLayer({}).pipe(
+          Layer.provide(onHost("darwin", { PATHWAY_COMPUTER_BACKEND: "protal" })),
+        ),
+      ),
+    ),
+  );
+});
+
+describe("ComputerServiceLive startup selection", () => {
+  it.effect("hands the macOS host its Cua backend directly, probed before startup continues", () =>
+    Effect.gen(function* () {
+      const service = yield* ComputerService;
+      const backend = backendOf(service);
+      expect(types.isProxy(backend)).toBe(false);
+      expect(backend).not.toBeInstanceOf(UnavailableComputerBackend);
+      expect(service.availability.kind).not.toBe("checking");
+    }).pipe(Effect.provide(serviceLayer({}).pipe(Layer.provide(onHost("darwin"))))),
+  );
+
+  it.effect("starts a Linux host on the slot and never reports a settled pick as checking", () =>
+    Effect.gen(function* () {
+      const service = yield* ComputerService;
+      expect(types.isProxy(backendOf(service))).toBe(true);
+      expect(service.availability.kind).not.toBe("checking");
+    }).pipe(Effect.provide(serviceLayer({}).pipe(Layer.provide(onHost("linux", CUA_SOCKET))))),
   );
 });
 

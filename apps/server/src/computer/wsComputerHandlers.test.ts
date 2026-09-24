@@ -19,6 +19,7 @@ import {
 } from "./DesktopOperationQueue.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import type { ComputerOperationError } from "./computerErrors.ts";
+import { isPaneInput } from "./paneInput.ts";
 import {
   makeWsComputerHandlers,
   wrapWsComputerHandlers,
@@ -192,6 +193,42 @@ it.layer(NodeServices.layer)("computer WebSocket handlers", (it) => {
           (method) => method !== COMPUTER_WS_METHODS.subscribeEvents,
         );
         expect(Object.keys(handlers).toSorted()).toEqual(expected.toSorted());
+      }),
+    ),
+  );
+
+  it.effect("marks every input route from the pane as the human's pane input", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, handlers } = yield* setup();
+        const marked: Record<string, boolean> = {};
+        for (const method of ["typeText", "pressKey", "hotkey", "click", "scroll"] as const) {
+          const original = backend[method].bind(backend) as (
+            ...args: never[]
+          ) => Effect.Effect<unknown, ComputerOperationError>;
+          Object.assign(backend, {
+            [method]: (...args: never[]) =>
+              Effect.flatMap(isPaneInput, (pane) => {
+                marked[method] = pane;
+                return original(...args);
+              }),
+          });
+        }
+
+        yield* handlers[COMPUTER_WS_METHODS.typeText]({ text: "hi" });
+        yield* handlers[COMPUTER_WS_METHODS.pressKey]({ key: "enter" });
+        yield* handlers[COMPUTER_WS_METHODS.inputKey]({ key: "a", modifiers: ["ctrl"] });
+        yield* handlers[COMPUTER_WS_METHODS.inputClick]({ x: 10, y: 20 });
+        yield* handlers[COMPUTER_WS_METHODS.inputScroll]({ x: 10, y: 20, deltaX: 0, deltaY: 80 });
+
+        expect(marked).toEqual({
+          typeText: true,
+          pressKey: true,
+          hotkey: true,
+          click: true,
+          scroll: true,
+        });
+        expect(yield* isPaneInput).toBe(false);
       }),
     ),
   );

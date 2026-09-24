@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -6,7 +7,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import type { ComputerStreamFrame } from "./ComputerBackend.ts";
 import { ComputerBackendError, type ComputerOperationError } from "./computerErrors.ts";
-import { makeStillFramePublisher } from "./stillFramePublisher.ts";
+import { makeStillFramePublisher, type StillFrameCapture } from "./stillFramePublisher.ts";
 
 const FRAME_A = new Uint8Array([1, 2, 3]);
 const FRAME_B = new Uint8Array([4, 5, 6, 7]);
@@ -14,7 +15,9 @@ const INTERVAL = "100 millis";
 
 const captureFailed = () => new ComputerBackendError({ message: "capture failed" });
 
-type Capture = (force: boolean) => Effect.Effect<Uint8Array | undefined, ComputerOperationError>;
+type Capture = (
+  force: boolean,
+) => Effect.Effect<Uint8Array | StillFrameCapture | undefined, ComputerOperationError>;
 
 /**
  * A publisher whose frames land in `frames`. Pathway backends have no attached
@@ -61,6 +64,26 @@ const gatedPrepare = Effect.gen(function* () {
 });
 
 describe("StillFramePublisher", () => {
+  it.effect("tags a non-PNG still with its image type and leaves a PNG still untagged", () =>
+    Effect.gen(function* () {
+      const stills: Array<Uint8Array | StillFrameCapture> = [
+        { data: FRAME_A, mimeType: "image/jpeg" },
+        FRAME_B,
+        { data: FRAME_A, mimeType: "image/png" },
+      ];
+      const harness = yield* makeHarness(() => Effect.sync(() => stills.shift()));
+      yield* harness.publisher.attach;
+      yield* harness.publisher.publish();
+      yield* harness.publisher.publish();
+      expect(harness.frames.map((frame) => [Array.from(frame.data), frame.mimeType])).toEqual([
+        [Array.from(FRAME_A), "image/jpeg"],
+        [Array.from(FRAME_B), undefined],
+        [Array.from(FRAME_A), undefined],
+      ]);
+      yield* harness.publisher.detach;
+    }),
+  );
+
   it.effect("does not start capturing when detached during preparation", () =>
     Effect.gen(function* () {
       const gate = yield* gatedPrepare;
@@ -418,6 +441,93 @@ describe("StillFramePublisher", () => {
       // One interval, not two: an orphaned loop nothing can stop would keep
       // capturing for the life of the process.
       expect(harness.counts.captures).toBe(settled + 1);
+    }),
+  );
+});
+
+describe("StillFramePublisher adaptive cadence", () => {
+  const adaptive = (options: {
+    readonly capture: () => Uint8Array;
+    readonly paused?: () => boolean;
+  }) =>
+    Effect.gen(function* () {
+      const captureTimes: number[] = [];
+      const publisher = yield* makeStillFramePublisher({
+        capture: () =>
+          Effect.flatMap(Clock.currentTimeMillis, (now) =>
+            Effect.sync(() => {
+              captureTimes.push(now);
+              return options.capture();
+            }),
+          ),
+        isCaptureAvailable: () => true,
+        emit: () => Effect.void,
+        intervalMs: 100,
+        idleIntervalMs: 1_000,
+        idleAfterUnchanged: 2,
+        ...(options.paused ? { paused: options.paused } : {}),
+      });
+      return { publisher, captureTimes };
+    });
+
+  it.effect("backs off after a run of identical stills and snaps back when one differs", () =>
+    Effect.gen(function* () {
+      let frame = FRAME_A;
+      const { publisher, captureTimes } = yield* adaptive({ capture: () => frame });
+      yield* publisher.attach;
+      yield* TestClock.adjust("250 millis");
+      // Attach, then two identical ticks at 100 and 200.
+      expect(captureTimes).toEqual([0, 100, 200]);
+      yield* TestClock.adjust("1000 millis");
+      // The second unchanged still moved the next tick out to the idle interval.
+      expect(captureTimes).toEqual([0, 100, 200, 1_200]);
+      frame = FRAME_B;
+      yield* TestClock.adjust("1000 millis");
+      expect(captureTimes.at(-1)).toBe(2_200);
+      yield* TestClock.adjust(INTERVAL);
+      // A changed still restores the fast cadence.
+      expect(captureTimes.at(-1)).toBe(2_300);
+    }),
+  );
+
+  it.effect("wake pulls a backed-off tick forward to the fast cadence", () =>
+    Effect.gen(function* () {
+      const { publisher, captureTimes } = yield* adaptive({ capture: () => FRAME_A });
+      yield* publisher.attach;
+      yield* TestClock.adjust("350 millis");
+      expect(captureTimes).toEqual([0, 100, 200]);
+      yield* publisher.wake;
+      yield* TestClock.adjust(INTERVAL);
+      expect(captureTimes).toEqual([0, 100, 200, 450]);
+    }),
+  );
+
+  it.effect("holds stills while paused and takes one right after", () =>
+    Effect.gen(function* () {
+      let paused = false;
+      let frame = FRAME_A;
+      const { publisher, captureTimes } = yield* adaptive({
+        capture: () => frame,
+        paused: () => paused,
+      });
+      yield* publisher.attach;
+      paused = true;
+      yield* TestClock.adjust("2000 millis");
+      expect(captureTimes).toEqual([0]);
+      frame = FRAME_B;
+      paused = false;
+      yield* TestClock.adjust("50 millis");
+      expect(captureTimes).toEqual([0, 2_050]);
+    }),
+  );
+
+  it.effect("stops the adaptive loop on detach", () =>
+    Effect.gen(function* () {
+      const { publisher, captureTimes } = yield* adaptive({ capture: () => FRAME_A });
+      yield* publisher.attach;
+      yield* publisher.detach;
+      yield* TestClock.adjust("5000 millis");
+      expect(captureTimes).toEqual([0]);
     }),
   );
 });

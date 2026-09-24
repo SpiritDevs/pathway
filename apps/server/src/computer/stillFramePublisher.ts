@@ -39,6 +39,7 @@
  * @module computer/stillFramePublisher
  */
 import * as NodeCrypto from "node:crypto";
+import type { ComputerFrameMimeType } from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -71,6 +72,13 @@ export const DEFAULT_STILL_INTERVAL_MS = 500;
  * queues work it cannot do.
  */
 export const MIN_STILL_INTERVAL_MS = 100;
+
+/**
+ * How often a paused publisher looks again. Only a flag is read per look; the
+ * point is that the still after a desktop operation lands right after it, not
+ * a whole interval later.
+ */
+const PAUSE_POLL_MS = 50;
 
 /** The one clamp both Tier-1 backends apply to their configured interval. */
 export function resolveStillIntervalMs(intervalMs: number | undefined): number {
@@ -141,10 +149,21 @@ export class StillFrameDedupe {
   }
 }
 
+/**
+ * One encoded still with its image type, for a backend whose preview stills
+ * are not PNG (a JPEG preview encodes an order of magnitude faster). A bare
+ * byte array is a PNG.
+ */
+export interface StillFrameCapture {
+  readonly data: Uint8Array;
+  readonly mimeType: ComputerFrameMimeType;
+}
+
 export interface StillFramePublisherOptions {
   /**
    * Captures one still of the current target — the exact window the task is
-   * using, or one browser tab — as raw PNG bytes.
+   * using, or one browser tab — as raw PNG bytes, or as a `StillFrameCapture`
+   * naming another image type.
    *
    * `undefined` means "skip this frame without treating it as a failure": there
    * is no target to capture, or the backend noticed mid-capture that publishing
@@ -153,7 +172,7 @@ export interface StillFramePublisherOptions {
    */
   readonly capture: (
     force: boolean,
-  ) => Effect.Effect<Uint8Array | undefined, ComputerOperationError>;
+  ) => Effect.Effect<Uint8Array | StillFrameCapture | undefined, ComputerOperationError>;
   /**
    * Whether a capture could succeed at all right now. Checked before every
    * publish so a backend whose capture grant is missing never spends a round
@@ -165,6 +184,22 @@ export interface StillFramePublisherOptions {
   /** Broadcasts one frame to the backend's event observers (its `events` stream). */
   readonly emit: (frame: ComputerStreamFrame) => Effect.Effect<void>;
   readonly intervalMs: number;
+  /**
+   * The slower cadence a still target that stopped changing drops to: after
+   * `idleAfterUnchanged` consecutive captures identical to the one the pane
+   * already has, ticks come every `idleIntervalMs` instead of every
+   * `intervalMs`, until a capture differs or `wake` runs. Both unset keeps one
+   * fixed cadence.
+   */
+  readonly idleIntervalMs?: number;
+  readonly idleAfterUnchanged?: number;
+  /**
+   * Whether stills should wait right now, typically because a desktop
+   * operation is running and a still would only queue in front of its own
+   * capture. Checked on every tick; the first tick after it clears publishes
+   * at once and returns to the fast cadence.
+   */
+  readonly paused?: () => boolean;
 }
 
 export interface StillFramePublisher {
@@ -177,6 +212,11 @@ export interface StillFramePublisher {
   readonly detach: Effect.Effect<void>;
   /** Publishes a still even when it is byte-identical to the last one. No-op when detached. */
   readonly requestKeyframe: Effect.Effect<void>;
+  /**
+   * Something on the desktop changed (an action ran, a window moved): back to
+   * the fast cadence, with the next tick no further away than one interval.
+   */
+  readonly wake: Effect.Effect<void>;
   /** One publish attempt; what each interval tick runs. Never fails. */
   readonly publish: (options?: { readonly force?: boolean }) => Effect.Effect<void>;
 }
@@ -204,19 +244,29 @@ export const makeStillFramePublisher = (
       inFlight: undefined as InFlight | undefined,
       nextSequence: 1,
       forceRetries: 0,
+      /** Consecutive captures identical to the published still; see `idleIntervalMs`. */
+      unchangedCaptures: 0,
+      /** Whether the last tick found the publisher paused; see `paused`. */
+      wasPaused: false,
+      /** When the loop's next tick is due, and the signal that pulls it forward. */
+      dueAt: 0,
+      wakeUp: undefined as Deferred.Deferred<void> | undefined,
     };
 
-    const emitFrame = (bytes: Uint8Array) =>
+    const emitFrame = (captured: Uint8Array | StillFrameCapture) =>
       Effect.flatMap(Clock.currentTimeMillis, (timestampMs) => {
         state.forceRetries = 0;
+        const data = captured instanceof Uint8Array ? captured : captured.data;
+        const mimeType = captured instanceof Uint8Array ? undefined : captured.mimeType;
         return options.emit({
           sequence: state.nextSequence++,
           timestampMs,
-          // Every frame is a complete PNG still. There is no H.264 codec config
-          // or delta frame in Tier 1, so the envelope stays keyframe-only.
+          // Every frame is a complete still. There is no H.264 codec config or
+          // delta frame in Tier 1, so the envelope stays keyframe-only.
           keyframe: true,
           codecConfig: false,
-          data: bytes,
+          data,
+          ...(mimeType !== undefined && mimeType !== "image/png" ? { mimeType } : {}),
         });
       });
 
@@ -245,15 +295,18 @@ export const makeStillFramePublisher = (
         return options.capture(force).pipe(
           // A detach cancels the capture and the tick publishes nothing.
           Effect.raceFirst(Effect.as(Deferred.await(inFlight.cancel), undefined)),
-          Effect.flatMap((bytes) =>
+          Effect.flatMap((captured) => {
+            if (captured === undefined || state.generation !== generation) return Effect.void;
             // An idle target encodes the same bytes every tick; republishing
             // them spends about a megabyte of socket to convey nothing.
-            bytes === undefined ||
-            state.generation !== generation ||
-            !dedupe.shouldPublish(bytes, force)
-              ? Effect.void
-              : emitFrame(bytes),
-          ),
+            const bytes = captured instanceof Uint8Array ? captured : captured.data;
+            if (!dedupe.shouldPublish(bytes, force)) {
+              state.unchangedCaptures += 1;
+              return Effect.void;
+            }
+            state.unchangedCaptures = 0;
+            return emitFrame(captured);
+          }),
           Effect.catchCause((cause) => {
             if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
             // A transient capture failure must not tear down a subscribed
@@ -285,9 +338,53 @@ export const makeStillFramePublisher = (
         );
       });
 
-    const loop: Effect.Effect<never> = Effect.forever(
-      Effect.andThen(Effect.sleep(Duration.millis(options.intervalMs)), publish()),
-    );
+    /** Sleeps `delayMs` unless `wake` pulls the tick forward; true when it did. */
+    const sleepUnlessWoken = (delayMs: number) =>
+      Effect.gen(function* () {
+        const wakeUp = yield* Deferred.make<void>();
+        state.dueAt = (yield* Clock.currentTimeMillis) + delayMs;
+        state.wakeUp = wakeUp;
+        return yield* Effect.raceFirst(
+          Effect.as(Effect.sleep(Duration.millis(delayMs)), false),
+          Effect.as(Deferred.await(wakeUp), true),
+        );
+      });
+
+    const idleIntervalMs = options.idleIntervalMs;
+    const idleAfterUnchanged = options.idleAfterUnchanged;
+
+    /**
+     * One tick per interval, measured start to start. A paused publisher looks
+     * again every `PAUSE_POLL_MS`; a run of unchanged stills moves the next
+     * tick out to the idle interval, measured from the tick that noticed.
+     */
+    const loop: Effect.Effect<never> = Effect.gen(function* () {
+      let delayMs = options.intervalMs;
+      while (true) {
+        if (yield* sleepUnlessWoken(delayMs)) {
+          delayMs = options.intervalMs;
+          continue;
+        }
+        if (options.paused?.() === true) {
+          state.wasPaused = true;
+          delayMs = PAUSE_POLL_MS;
+          continue;
+        }
+        if (state.wasPaused) {
+          // The still right after an operation is the one worth having.
+          state.wasPaused = false;
+          state.unchangedCaptures = 0;
+        }
+        const startedAt = yield* Clock.currentTimeMillis;
+        yield* publish();
+        const idle =
+          idleIntervalMs !== undefined &&
+          idleAfterUnchanged !== undefined &&
+          state.unchangedCaptures >= idleAfterUnchanged;
+        const cadenceMs = idle ? idleIntervalMs : options.intervalMs;
+        delayMs = Math.max(0, startedAt + cadenceMs - (yield* Clock.currentTimeMillis));
+      }
+    });
 
     const stopLoop = (fiber: Fiber.Fiber<never> | undefined) =>
       fiber === undefined ? Effect.void : Fiber.interrupt(fiber);
@@ -321,6 +418,8 @@ export const makeStillFramePublisher = (
         // preparations finish out of order.
         if (state.generation !== generation) return;
         state.attached = true;
+        state.unchangedCaptures = 0;
+        state.wasPaused = false;
         yield* restore(publish({ force: true })).pipe(
           Effect.onInterrupt(() =>
             Effect.sync(() => {
@@ -353,6 +452,14 @@ export const makeStillFramePublisher = (
       // it publishes even when the target is byte-identical to the last frame.
       requestKeyframe: Effect.suspend(() =>
         state.attached ? publish({ force: true }) : Effect.void,
+      ),
+      wake: Effect.flatMap(Clock.currentTimeMillis, (now) =>
+        Effect.sync(() => {
+          state.unchangedCaptures = 0;
+          const wakeUp = state.wakeUp;
+          if (state.loop === undefined || wakeUp === undefined) return;
+          if (state.dueAt - now > options.intervalMs) Deferred.doneUnsafe(wakeUp, Effect.void);
+        }),
       ),
       publish,
     } satisfies StillFramePublisher;

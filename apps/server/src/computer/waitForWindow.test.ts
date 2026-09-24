@@ -197,6 +197,65 @@ describe("launch window readiness", () => {
     }),
   );
 
+  it.effect("keeps the exact pid rule when the launch names no app identity", () =>
+    Effect.gen(function* () {
+      // The macOS (Cua) launch reports a pid and no appId: a same-name window
+      // of another process is never adopted, even when the pid has no window.
+      expect(
+        yield* waitForWindow(windows([{ ...window, pid: 10 }]), "Helium", 0, { pid: 20 }),
+      ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "no_window" });
+    }),
+  );
+
+  it.effect("adopts a window of the launched app identity when a wrapper's pid owns none", () =>
+    Effect.gen(function* () {
+      // `flatpak run` / `gio launch`: the reported pid exits, the app's own
+      // process owns the window, and its appName is the desktop id.
+      const kate = { ...window, appName: "org.kde.kate", pid: 4242 };
+      expect(
+        yield* waitForWindow(windows([kate]), "kate", 0, {
+          pid: 1111,
+          appId: "org.kde.kate.desktop",
+        }),
+      ).toEqual({ window: kate, windowStatus: "ready" });
+    }),
+  );
+
+  it.effect(
+    "still matches the launch name when an identity-reporting launch names another id",
+    () =>
+      Effect.gen(function* () {
+        const kate = { ...window, appName: "kate", pid: 4242 };
+        expect(
+          yield* waitForWindow(windows([kate]), "kate", 0, { pid: 1111, appId: "org.kde.kate" }),
+        ).toEqual({ window: kate, windowStatus: "ready" });
+      }),
+  );
+
+  it.effect("prefers the launched pid over same-identity siblings", () =>
+    Effect.gen(function* () {
+      const launched = { ...window, appName: "org.kde.kate", pid: 20 };
+      expect(
+        yield* waitForWindow(windows([{ ...launched, id: "8", pid: 10 }, launched]), "kate", 0, {
+          pid: 20,
+          appId: "org.kde.kate",
+        }),
+      ).toEqual({ window: launched, windowStatus: "ready" });
+    }),
+  );
+
+  it.effect("keeps identity matches across processes ambiguous", () =>
+    Effect.gen(function* () {
+      const kate = { ...window, appName: "org.kde.kate", pid: 10 };
+      expect(
+        yield* waitForWindow(windows([kate, { ...kate, id: "8", pid: 11 }]), "kate", 0, {
+          pid: 1111,
+          appId: "org.kde.kate",
+        }),
+      ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "ambiguous" });
+    }),
+  );
+
   it.effect.each([
     [{ visible: false }, "hidden"],
     [{ minimized: true }, "hidden"],
