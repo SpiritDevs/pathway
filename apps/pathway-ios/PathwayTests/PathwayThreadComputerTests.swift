@@ -38,14 +38,69 @@ struct PathwayThreadComputerTests {
         #expect(wrapping.step(sequence: 0, computerID: "mac", expected: "mac") == (.decode, false))
     }
 
-    @Test func reconnectBacksOffThenGivesUp() {
+    @Test func reconnectReusesTheTicketBacksOffThenGivesUp() {
         var reconnect = PathwayComputerFrameReconnect()
-        #expect(reconnect.closed(deliveredFrame: false) == .retry(after: .milliseconds(500), remint: true))
-        #expect(reconnect.closed(deliveredFrame: false) == .retry(after: .milliseconds(1_000), remint: true))
-        reconnect.frameReceived()
-        #expect(reconnect.closed(deliveredFrame: true) == .retry(after: .milliseconds(500), remint: false))
-        for _ in 2...PathwayComputerFrameReconnect.maxAttempts { _ = reconnect.closed(deliveredFrame: false) }
-        #expect(reconnect.closed(deliveredFrame: false) == .giveUp)
+        for delay in [500, 1_000, 2_000, 4_000, 5_000] {
+            #expect(reconnect.closed(.dropped) == .retry(after: .milliseconds(delay), remint: false))
+        }
+        #expect(reconnect.closed(.dropped) == .giveUp)
+        reconnect.usableFrame()
+        #expect(reconnect.closed(.refusedTicket) == .retry(after: .milliseconds(500), remint: true))
+        #expect(reconnect.closed(.refused) == .giveUp)
+    }
+
+    @Test func aCloseSaysWhetherTheTicketTheRouteOrTheConnectionFailed() {
+        let policy = URLSessionWebSocketTask.CloseCode.policyViolation.rawValue
+        #expect(PathwayComputerFrameReconnect.close(status: 401, closeCode: 0) == .refusedTicket)
+        for status in [400, 403, 404] { #expect(PathwayComputerFrameReconnect.close(status: status, closeCode: 0) == .refused) }
+        #expect(PathwayComputerFrameReconnect.close(status: nil, closeCode: policy) == .refused)
+        #expect(PathwayComputerFrameReconnect.close(status: 101, closeCode: policy) == .refused)
+        for status in [nil, 101, 502] as [Int?] { #expect(PathwayComputerFrameReconnect.close(status: status, closeCode: 1006) == .dropped) }
+        #expect(PathwayComputerFrameReconnect.close(status: nil, closeCode: 0) == .dropped)
+    }
+
+    @Test func theStreamRetriesByHowItsSocketEnded() async throws {
+        let session = try #require((NSClassFromString("PathwayFakeFrameSession") as? NSObject.Type)?.init() as? URLSession)
+        var resolves = 0, delays: [Duration] = []
+        let frames = PathwayComputerFrameStream(session: session, sleep: { delay in await MainActor.run { delays.append(delay) } }) { _ in
+            await MainActor.run { resolves += 1 }
+            return URL(string: "wss://unused.invalid/ws/computer-frames?wsTicket=t")!
+        }
+        func waitForReceive(_ start: () -> Void, on socket: NSObject? = nil) async throws -> NSObject {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let ready: @convention(block) () -> Void = { continuation.resume() }
+                (socket ?? session).setValue(ready, forKey: "onReceive")
+                start()
+            }
+            return try #require((session.value(forKey: "sockets") as? [NSObject])?.last)
+        }
+        func fail(_ socket: NSObject, status: Int = 0, closeCode: Int = 1006) {
+            socket.setValue(status, forKey: "status"); socket.setValue(closeCode, forKey: "fakeCloseCode")
+            _ = socket.perform(NSSelectorFromString("fail"))
+        }
+        let first = try await waitForReceive { frames.stream("mac") }
+        // A dropped connection keeps its ticket.
+        let second = try await waitForReceive { fail(first) }
+        #expect(resolves == 1)
+        // Binary that is not a usable frame for this computer is no recovery.
+        _ = try await waitForReceive({ _ = second.perform(NSSelectorFromString("deliver:"), with: Data([1, 2, 3]) as NSData) }, on: second)
+        #expect(frames.errorMessage == PathwayComputerFrameStream.unreadableMessage)
+        // A refused ticket is the one close that mints another.
+        let third = try await waitForReceive { fail(second, status: 401) }
+        #expect(resolves == 2)
+        #expect(frames.reconnect.failures == 2)
+        #expect(delays == [.milliseconds(500), .milliseconds(1_000)])
+        // A refusal a retry cannot change ends the stream without another socket.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let once = ResumeOnce(continuation)
+            let retried: @convention(block) () -> Void = { once.resume() }
+            session.setValue(retried, forKey: "onReceive")
+            withObservationTracking { _ = frames.errorMessage } onChange: { once.resume() }
+            fail(third, status: 403)
+        }
+        #expect(frames.errorMessage == PathwayComputerFrameStream.unavailableMessage)
+        #expect((session.value(forKey: "sockets") as? [NSObject])?.count == 3)
+        frames.stream(nil)
     }
 
     @Test func frameSocketSitsBesideTheRPCSocketWithItsTicket() throws {
@@ -210,5 +265,16 @@ struct PathwayThreadComputerTests {
         let id = Array(computerID.utf8)
         bytes.append(UInt8(id.count))
         return Data(bytes + id + payload)
+    }
+}
+
+/// Resumes a continuation for whichever of several callbacks fires first.
+final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    init(_ continuation: CheckedContinuation<Void, Never>) { self.continuation = continuation }
+    func resume() {
+        lock.lock(); let pending = continuation; continuation = nil; lock.unlock()
+        pending?.resume()
     }
 }
