@@ -313,3 +313,45 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - Tests await the promise the code chains on, never sleeps or microtask counts. The input queue gains `settled()`, which resolves once everything queued so far has run, so its tests have something to await. Decode tests await the fake bitmap's `close`, which the hook's `finally` always calls.
 - Synara's `ChatView.logic` queued-turn tests become server tests, because Pathway's queue lives on the server. The queue worker test checks that a queued message is dispatched with the Computer intent it was queued with. Two existing tests cover the rest: the activation test (a frozen mode is never promoted) and the control-state test (a queued generation is refused after Stop). "Forces queued intent off when the live switch is off" has no counterpart: see the client-side queued-turn revoke above.
 - `ComputerSettingsPanel`'s "renders nothing while inactive" has no counterpart. Pathway's panel is a settings route with no `active` prop, so it is mounted only while shown.
+
+## P7 — iOS client
+
+Synara has no mobile client, so each entry reads: the web behaviour (P6) → the iOS behaviour → why.
+
+### Composer
+
+- Leading `/computer-use`, offered only where the host supports Computer and this pairing is not known to be refused → the same, as a built-in slash suggestion that hides a provider's own `computer-use` → one suggestion list, no chip system, as on web.
+- The **Computer control** setting (per-client unified setting) → a device `UserDefaults` flag (`pathway.computerControlEnabled`) with the web's label, gated per thread on platform and access policy as `canUseComputer` does → iOS keeps client settings on the device.
+- The send rule on dispatch, queue, edit-and-restart and `launchThread.initialMessage` → the same fields on every iOS send path, including side chats and plan hand-off. Launch fields are sent only to servers advertising `computerPolicy` → the same version skew as web.
+- An unknown generation is read with `getThreadState` before sending → the same, but only while the thread subscription is live. Otherwise 0, which the server treats as stale. New chats and side chats send 0 → a new thread has no generation yet.
+- The creation screen knows the host's platform but not this pairing's scopes → a launch trusts the server to refuse → the creation model never opens the session read the thread model uses.
+- A bare `/computer-use` shows a toast and keeps the draft → the thread and creation screens show their action error and keep the draft → iOS has no toast system.
+- The effort hint → shown above the composer of an open chat, with the same rule and a device-local dismissal (`pathway.computerEffortHintDismissed`). It is not shown on the new-thread screen → availability comes from the watched thread state, and a draft has none.
+
+### Chat
+
+- Approval, setup-required, denied and action cards → read from the same timeline items. Call arguments show as key/value rows. "Always allow this session" stays hidden → as on web.
+- The setup card links to Settings → Computer → the card tells the user to grant permissions on the host → iOS can grant nothing.
+- The denied card's Enable is gated on its row's thread id rather than an inherited or synthetic flag → iOS timeline items carry no such flag.
+- Stop → the existing `run.interrupt` Stop covers Computer turns, and Escape is host-only (ADR 0040) → no new control.
+
+### Live state and preview
+
+- `computer.subscribeEvents` per environment, seeded by `ComputerPreviewRail` → one watch per open chat (`PathwayThreadComputerModel`), on its own RPC socket, running only while the chat is on screen and the app is in the foreground. It rebases and re-seeds `getThreadState` on every (re)connect, on the same socket → `getThreadState` registers per-socket interest, and a closed chat should cost nothing.
+- The frame socket with a resolved ticket, five closes without a frame before "Live view unavailable", and a fresh ticket only after a close with no frame → the same, with the ticket from the prepared RPC URL. A stream that gave up restarts only when the preview closes and reopens or the computer changes → state pushes must not revive a dead stream.
+- A floating, draggable, clickable popover with a desktop frame tap → a card docked above the composer, showing stills only (PNG, downsampled to 1,600 px, one decode at a time), with Hide → no pointer input or window management on a phone, and stills keep memory and GPU flat.
+- The armed → live → hidden-for-task → ended phases and the action label → ported as they are (`PathwayThreadComputerSession`).
+
+### Settings → Computer
+
+- A panel with the grant guide, cursor, preview, audit history and policy → the device toggle, plus one screen per environment with status (`computer.getStatus`), access policy and autonomy, and a note that the rest lives on the host → none of those host items can act from a phone.
+- Policy pickers unlock with `access:write` → the same check, read from the prepared connection's scopes. Relay pairings never carry `access:write`, so only direct admin pairings can edit → the server remains the authority.
+- Status refreshes every 10 seconds → it loads on open and on pull to refresh → no polling while the screen sits open.
+
+### Scopes
+
+- `computer:operate` is requested only when the server advertises `computerOperateScope`, and a grant that leaves it out is still accepted → older servers refuse unknown scopes, and a Scoped policy then reports the missing access on the denied card.
+
+### Tooling
+
+- Swift-only commits skip the pre-commit hook (`--no-verify`), because `vp staged` runs `vp fmt`, which fails with no JavaScript staged.
