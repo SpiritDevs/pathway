@@ -164,6 +164,12 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+// Every capability the validator accepts, so a new one changes the key without
+// a second list to update.
+const DESCRIPTOR_CAPABILITIES = Object.keys(
+  executionEnvironmentDescriptor.fields.capabilities.fields,
+);
+
 /** Stable projection of every descriptor field, independent of object key insertion order. */
 function descriptorKey(value: Descriptor): string {
   const capabilities = value.capabilities;
@@ -179,34 +185,12 @@ function descriptorKey(value: Descriptor): string {
     value.device?.modelIdentifier,
     value.runtime?.mode,
     value.serverVersion,
-    capabilities["durableThreadQueue"],
-    capabilities["repositoryIdentity"],
-    capabilities["projectDirectoryInspection"],
-    capabilities["connectionProbe"],
-    capabilities["attachmentUploads"],
-    capabilities["questionAttachments"],
-    capabilities["userInputDismissal"],
-    capabilities["storageManagement"],
-    (capabilities["fileAttachments"] as { maxUploadBytes?: number } | undefined)?.maxUploadBytes,
-    capabilities["pullRequests"],
-    capabilities["threadPullRequestAttachments"],
-    capabilities["pushAutoSettlement"],
-    capabilities["threadSettlement"],
-    capabilities["threadForceSettlement"],
-    capabilities["threadSettleAfterCompletion"],
-    capabilities["threadConversations"],
-    capabilities["threadSnooze"],
-    capabilities["threadPinning"],
-    capabilities["threadPinReorder"],
-    capabilities["threadTitleRegeneration"],
-    capabilities["threadVisitedTracking"],
-    capabilities["serverSelfUpdate"],
-    capabilities["serverSelfUpdateProgress"],
-    capabilities["desktopAppUpdate"],
+    ...DESCRIPTOR_CAPABILITIES.map((key) => capabilities[key]),
   ]);
 }
 
-function sameDescriptor(left: unknown, right: Descriptor): boolean {
+/** Whether a registration carries nothing the stored descriptor lacks, so it publishes no change. */
+export function sameDescriptor(left: unknown, right: Descriptor): boolean {
   if (typeof left !== "object" || left === null) return false;
   const candidate = left as Partial<Descriptor>;
   if (
