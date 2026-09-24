@@ -268,7 +268,7 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 - Call approvals show the action summary and its parameters instead of the raw call. The panel keeps Pathway's split layout, and an approval is answered at most once per request id.
 - Every setup-required and control-denied notice is shown as its own never-folded row; the server already dedups them per run and reason. Synara showed the latest of each kind.
 - Declined and cancelled approvals both read "declined", because the item stores only a status.
-- The denied card has an `accessDenied` state for clients whose known scopes include neither `computer:operate` nor `access:write`: it shows the server's re-pair message and hides Enable. The desktop's own primary environment always counts as allowed. Under the Any operator policy a device paired without `computer:operate` still sees the re-pair message.
+- The denied card has an `accessDenied` state for clients whose known scopes the environment's access policy does not admit (`canUseComputer`, as the server checks it): it shows the server's re-pair message and hides Enable. The desktop's own primary environment always counts as allowed, and unknown scopes read as allowed.
 - Enable is hidden on inherited or synthetic notice rows. Enable arms `/computer-use` on the draft and leaves the send to the user.
 - Status refreshes through `useLiveRefresh` instead of Synara's 10-second poll, and is read once on mount only when nothing is cached.
 

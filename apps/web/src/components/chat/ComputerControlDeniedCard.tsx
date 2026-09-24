@@ -6,15 +6,9 @@
 
 import type { EnvironmentId } from "@spiritdevs/contracts";
 
-import { isElectron } from "~/env";
-import { usePrimarySessionState } from "~/environments/primary";
-import { useEnvironmentSessionState } from "~/state/session";
-import { usePrimaryEnvironmentId } from "~/state/environments";
+import { useCanUseComputer } from "~/hooks/useComputerAccess";
 import { ComputerActionCard } from "./ComputerActionCard";
-import {
-  COMPUTER_ACCESS_DENIED_HINT,
-  sessionLacksComputerAccess,
-} from "./ComputerControlDeniedCard.logic";
+import { COMPUTER_ACCESS_DENIED_HINT } from "./ComputerControlDeniedCard.logic";
 
 export function ComputerControlDeniedCard({
   computerControlEnabled,
@@ -55,27 +49,8 @@ type ConnectedProps = Omit<Parameters<typeof ComputerControlDeniedCard>[0], "acc
   readonly environmentId: EnvironmentId;
 };
 
-/** Reads this client's session scopes on the thread's environment. */
+/** Reads whether this client may use Computer on the thread's environment. */
 export function ConnectedComputerControlDeniedCard({ environmentId, ...props }: ConnectedProps) {
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
-  if (environmentId === primaryEnvironmentId) {
-    // The desktop app owns its primary server outright.
-    if (isElectron) return <ComputerControlDeniedCard {...props} />;
-    return <PrimarySessionDeniedCard {...props} />;
-  }
-  return <RemoteSessionDeniedCard environmentId={environmentId} {...props} />;
-}
-
-function PrimarySessionDeniedCard(props: Omit<ConnectedProps, "environmentId">) {
-  const session = usePrimarySessionState().data;
-  return (
-    <ComputerControlDeniedCard {...props} accessDenied={sessionLacksComputerAccess(session)} />
-  );
-}
-
-function RemoteSessionDeniedCard({ environmentId, ...props }: ConnectedProps) {
-  const session = useEnvironmentSessionState(environmentId).data;
-  return (
-    <ComputerControlDeniedCard {...props} accessDenied={sessionLacksComputerAccess(session)} />
-  );
+  const allowed = useCanUseComputer(environmentId);
+  return <ComputerControlDeniedCard {...props} accessDenied={!allowed} />;
 }
