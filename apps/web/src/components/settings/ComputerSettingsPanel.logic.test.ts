@@ -13,6 +13,7 @@ import {
   computerCapabilitiesDescription,
   computerCapabilitySummary,
   environmentSupportsComputer,
+  resolveComputerPermissionsView,
   resolveComputerScopeAccess,
   resolveComputerSettingsAttention,
 } from "./ComputerSettingsPanel.logic";
@@ -150,6 +151,33 @@ describe("resolveComputerSettingsAttention", () => {
       hasNativeBridge: true,
     });
     expect(result.action).toBeNull();
+  });
+});
+
+describe("resolveComputerPermissionsView", () => {
+  it("shows the desktop host's reason when it cannot run Computer", () => {
+    const off = nativeState({ supported: false, message: "Computer is not enabled." });
+    expect(
+      resolveComputerPermissionsView({
+        hasNativeBridge: true,
+        nativeState: off,
+        platform: "darwin",
+      }),
+    ).toEqual({ kind: "unavailable", message: "Computer is not enabled." });
+    expect(
+      resolveComputerPermissionsView({
+        hasNativeBridge: true,
+        nativeState: nativeState(),
+        platform: "darwin",
+      }),
+    ).toMatchObject({ kind: "grants" });
+  });
+
+  it("points a client without the desktop bridge at a Mac host", () => {
+    const view = (platform: string) =>
+      resolveComputerPermissionsView({ hasNativeBridge: false, nativeState: null, platform });
+    expect(view("darwin")).toEqual({ kind: "host-note" });
+    expect(view("linux")).toBeNull();
   });
 });
 
