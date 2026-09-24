@@ -7,16 +7,46 @@ import {
   ClientSettingsSchema,
   ComputerId,
   DEFAULT_CLIENT_SETTINGS,
-  normalizeCursorHexColor,
   resolveAgentCursorColors,
   type ComputerStatusResult,
 } from "@spiritdevs/contracts";
 import * as Schema from "effect/Schema";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
+
+// The panel's own change callbacks, keyed by the control's accessible label, so
+// a test can act the way a user editing the control would.
+const controls = vi.hoisted(() => new Map<string, (value: unknown) => void>());
+vi.mock("../ui/input", async (importOriginal) => {
+  const { Input } = await importOriginal<typeof import("../ui/input")>();
+  return {
+    Input: (props: ComponentProps<typeof Input>) => {
+      const onChange = props.onChange;
+      if (props["aria-label"] && onChange) {
+        controls.set(props["aria-label"], (value) =>
+          onChange({ target: { value } } as Parameters<typeof onChange>[0]),
+        );
+      }
+      return <Input {...props} />;
+    },
+  };
+});
+vi.mock("../ui/toggle-group", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../ui/toggle-group")>();
+  return {
+    ...real,
+    ToggleGroup: (props: ComponentProps<typeof real.ToggleGroup>) => {
+      const onValueChange = props.onValueChange;
+      if (props["aria-label"] && onValueChange) {
+        controls.set(props["aria-label"], (value) => onValueChange([value] as never, {} as never));
+      }
+      return <real.ToggleGroup {...props} />;
+    },
+  };
+});
 
 import { ComputerHostPermissionNote } from "./ComputerPermissionSection";
 import { ComputerSettingsView, type ComputerSettingsViewSettings } from "./ComputerSettingsPanel";
@@ -288,33 +318,56 @@ describe("ComputerSettingsView", () => {
       expect(markup).toContain("background-color:#112233");
     });
 
-    it("round-trips custom colors through the stored client settings", () => {
+    it("round-trips custom colors through the controls and the stored client settings", () => {
       const decode = Schema.decodeUnknownSync(ClientSettingsSchema);
-      const defaults = decode({});
-      // The default is stock with no overrides stored.
-      expect(defaults.agentCursorColorMode).toBe("stock");
-      expect(defaults.agentCursorFillColor).toBe("");
-      expect(defaults.agentCursorRimColor).toBe("");
-      expect(resolveAgentCursorColors(defaults)).toBeNull();
+      let stored = decode({});
+      // Each edit goes through the panel's callback and back through storage.
+      const renderStored = () =>
+        renderToStaticMarkup(
+          <ComputerSettingsView
+            settings={{ ...stored, computerControlEnabled: true }}
+            updateSettings={(patch) => {
+              stored = decode(Schema.encodeSync(ClientSettingsSchema)({ ...stored, ...patch }));
+            }}
+            status={status()}
+            attention={resolveComputerSettingsAttention({
+              status: status(),
+              statusError: null,
+              nativeState: null,
+              hasNativeBridge: false,
+            })}
+            setup={{ provision: () => undefined, isPending: false, note: undefined }}
+            retry={{ isChecking: false, onRetry: () => undefined }}
+            permissions={null}
+          />,
+        );
+      const edit = (label: string, value: string) => {
+        controls.clear();
+        renderStored();
+        const onChange = controls.get(label);
+        expect(onChange, label).toBeDefined();
+        onChange?.(value);
+      };
 
-      // The color field commits only a complete hex color, lowercased.
-      expect(normalizeCursorHexColor("#AABBCC")).toBe("#aabbcc");
-      expect(normalizeCursorHexColor("not-a-color")).toBe("");
-      const stored = decode(
-        Schema.encodeSync(ClientSettingsSchema)({
-          ...defaults,
-          agentCursorColorMode: "custom",
-          agentCursorFillColor: "#aabbcc",
-        }),
-      );
+      // The default is stock with no overrides stored.
+      expect(resolveAgentCursorColors(stored)).toBeNull();
+
+      edit("Agent cursor colors", "custom");
       expect(stored.agentCursorColorMode).toBe("custom");
-      expect(resolveAgentCursorColors(stored)).toEqual({ fill: "#aabbcc" });
+      // The color field commits only a complete hex color, lowercased.
+      edit("Fill color", "#AABBCC");
+      edit("Rim color", "#112233");
+      edit("Rim color", "not-a-color");
+      expect(stored.agentCursorFillColor).toBe("#aabbcc");
+      expect(stored.agentCursorRimColor).toBe("#112233");
+      expect(resolveAgentCursorColors(stored)).toEqual({ fill: "#aabbcc", rim: "#112233" });
+      expect(renderStored()).toContain("background-color:#aabbcc");
 
       // Stock means zero overrides even when colors are still remembered for
       // a later switch back to custom.
-      const backToStock = decode({ ...stored, agentCursorColorMode: "stock" });
-      expect(backToStock.agentCursorFillColor).toBe("#aabbcc");
-      expect(resolveAgentCursorColors(backToStock)).toBeNull();
+      edit("Agent cursor colors", "stock");
+      expect(stored.agentCursorFillColor).toBe("#aabbcc");
+      expect(resolveAgentCursorColors(stored)).toBeNull();
     });
   });
 });
