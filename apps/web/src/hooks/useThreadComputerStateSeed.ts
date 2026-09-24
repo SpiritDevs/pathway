@@ -42,7 +42,9 @@ export function seedThreadComputerState(
  * (another device's Stop advances it), so the thread's server is asked
  * instead. Sends with no Computer intent ask nothing; a draft with no server
  * thread uses the generation it recorded. Undefined when the server cannot
- * answer, or the connection that answered is gone.
+ * answer. `"superseded"` when the environment left or its connection changed
+ * while the read was pending: the send's target is gone, so the caller drops
+ * the send and releases its claim instead of dispatching.
  */
 export async function readComputerControlGenerationForSend(
   registry: AtomRegistry.AtomRegistry,
@@ -54,7 +56,7 @@ export async function readComputerControlGenerationForSend(
     /** The generation the draft recorded, used only while there is no server thread. */
     readonly draftGeneration: number | undefined;
   },
-): Promise<number | undefined> {
+): Promise<number | undefined | "superseded"> {
   if (input.ref === null) return input.draftGeneration;
   const mode = resolveComputerInvocationMode({
     messageText: input.messageText,
@@ -71,7 +73,8 @@ export async function readComputerControlGenerationForSend(
     { environmentId: ref.environmentId, input: { threadId: ref.threadId } },
     { reportFailure: false },
   );
-  if (!AsyncResult.isSuccess(result) || !isCurrent()) return undefined;
+  if (!isCurrent()) return "superseded";
+  if (!AsyncResult.isSuccess(result)) return undefined;
   useComputerStateStore.getState().upsertThreadState(ref.environmentId, result.value);
   return result.value.controlGeneration;
 }

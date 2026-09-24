@@ -163,7 +163,7 @@ describe("readComputerControlGenerationForSend", () => {
       resolveComputerControlForSend({
         messageText: "/computer-use open Calculator",
         computerControlEnabled: false,
-        generation,
+        generation: generation === "superseded" ? undefined : generation,
       }).fields,
     ).toEqual({ computerControlGeneration: 1 });
     expect(
@@ -208,19 +208,22 @@ describe("readComputerControlGenerationForSend", () => {
   it.each([
     ["removed", () => useComputerStateStore.getState().clearEnvironment(ENV)],
     ["disconnected", () => useComputerStateStore.getState().rebaseEnvironment(ENV)],
-  ])("stores nothing when the environment was %s while the read was pending", async (_, leave) => {
-    const answer = deferred<unknown>();
-    harness.runAtomCommand.mockReturnValue(answer.promise);
-    const generation = read();
-    leave();
-    answer.resolve(
-      AsyncResult.success(
-        threadComputerState({ threadId: THREAD, version: 9, controlGeneration: 1 }),
-      ),
-    );
-    expect(await generation).toBeUndefined();
-    expect(useComputerStateStore.getState().threadStates[scopedThreadKey(REF)]).toBeUndefined();
-  });
+  ])(
+    "reports a superseded read and stores nothing when the environment was %s",
+    async (_, leave) => {
+      const answer = deferred<unknown>();
+      harness.runAtomCommand.mockReturnValue(answer.promise);
+      const generation = read();
+      leave();
+      answer.resolve(
+        AsyncResult.success(
+          threadComputerState({ threadId: THREAD, version: 9, controlGeneration: 1 }),
+        ),
+      );
+      expect(await generation).toBe("superseded");
+      expect(useComputerStateStore.getState().threadStates[scopedThreadKey(REF)]).toBeUndefined();
+    },
+  );
 
   it("leaves the generation unknown when the server cannot answer", async () => {
     harness.runAtomCommand.mockResolvedValue(AsyncResult.failure(Cause.fail("offline")));
