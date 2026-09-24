@@ -264,10 +264,10 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 ### Chat
 
 - The approval scope (whole task, one app, one call) is parsed from the prompt text by `parseComputerApprovalPrompt`, because the approval item has no structured scope. The parser is coupled to the server's `computerApprovalCardText`.
-- "Always allow this session" is hidden for every Computer scope: session-wide consent would bypass per-task consent. The one-app consent copy is Pathway's own; Synara has none.
+- As in Synara, "Always allow this session" is hidden for every Computer scope: session-wide consent would bypass per-task consent. The one-app consent copy is Pathway's own; Synara has none.
 - Call approvals show the action summary and its parameters instead of the raw call. The panel keeps Pathway's split layout.
 - An approval is answered at most once per response attempt: its request id plus the live provider session the answer goes to. Pathway has no lifecycle generation or durable attempt key, so a request re-posted to a new session counts as Synara's newer attempt. Only a sent response keeps the claim. A failed send, or one a local guard refused before sending (conversation storage), releases it. Synara kept the claim whenever its callback resolved, because its guards threw.
-- Every setup-required and control-denied notice is shown as its own never-folded row; the server already dedups them per run and reason. Synara showed the latest of each kind.
+- Every setup-required and control-denied notice is shown as its own never-folded row, in transcript order; the server already dedups them per run and reason. Synara showed the latest of each kind.
 - Declined and cancelled approvals both read "declined", because the item stores only a status.
 - The denied card has an `accessDenied` state for clients whose known scopes the environment's access policy does not admit (`canUseComputer`, as the server checks it): it shows the server's re-pair message and hides Enable. The desktop's own primary environment always counts as allowed, and unknown scopes read as allowed.
 - Enable is hidden on inherited or synthetic notice rows. Enable arms `/computer-use` on the draft and leaves the send to the user.
