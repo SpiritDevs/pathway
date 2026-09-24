@@ -94,7 +94,6 @@ import {
 } from "@spiritdevs/client-runtime/environment";
 import { createModelSelection, resolvePromptInjectedEffort } from "@spiritdevs/shared/model";
 import { parseComputerInvocation } from "@spiritdevs/shared/computerInvocation";
-import { useThreadComputerControlGeneration } from "../computerStateStore";
 import { useComputerControlModeChange } from "../hooks/useComputerControlModeChange";
 import { useComputerControlSetting } from "../hooks/useComputerAccess";
 import {
@@ -2115,7 +2114,6 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   // Pins each Computer send to the control epoch it was made in.
-  const threadComputerControlGeneration = useThreadComputerControlGeneration(activeThreadRef);
   const setComposerComputerControlMode = useComposerDraftStore(
     (store) => store.setComputerControlMode,
   );
@@ -7721,10 +7719,8 @@ function ChatViewContent(props: ChatViewProps) {
             ref: isServerThread ? activeThreadRef : null,
             messageText: promptForSend,
             computerControlEnabled: computerControlSetting,
-            known:
-              threadComputerControlGeneration ??
-              useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
-                ?.computerControlGeneration,
+            draftGeneration: useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+              ?.computerControlGeneration,
           })
         : undefined,
     });
@@ -8526,10 +8522,7 @@ function ChatViewContent(props: ChatViewProps) {
           ref: activeThreadRef,
           messageText: text,
           computerControlEnabled: computerControlSetting,
-          known:
-            threadComputerControlGeneration ??
-            useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
-              ?.computerControlGeneration,
+          draftGeneration: undefined,
         }),
       });
       const result = await editAndRestartMessage({
@@ -8575,7 +8568,6 @@ function ChatViewContent(props: ChatViewProps) {
       setThreadError,
       computerControlChangeSequence,
       computerControlSetting,
-      threadComputerControlGeneration,
       activeThreadRef,
       composerDraftTarget,
       setComposerComputerControlMode,
@@ -8921,7 +8913,7 @@ function ChatViewContent(props: ChatViewProps) {
         ref: isServerThread ? activeThreadRef : null,
         messageText: trimmed,
         computerControlEnabled: computerControlSetting,
-        known: threadComputerControlGeneration,
+        draftGeneration: undefined,
       }),
     });
     const outgoingMessageText = formatOutgoingPrompt({
