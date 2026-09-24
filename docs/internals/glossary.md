@@ -315,7 +315,13 @@ _Avoid_: Cua build (that is the driver build).
 The client setting that lets the agent use the controlled computer in any chat. With it off, a message that starts with `/computer-use` opts in for that one request. Sends carry it as `enableComputerControl` plus the control generation the client last saw.
 
 **Computer preview**:
-The floating live view of the controlled computer over a chat (`ComputerPreviewPopover`). It streams only while it is visible, and a tap on it clicks the controlled computer.
+The floating live view of the controlled computer over a chat (`ComputerPreviewPopover`). It streams only while it is visible, and a tap on it clicks the controlled computer. On iOS it is a card docked above the composer (`AgentThreadComputerPreview`), showing stills without pointer input.
+
+**Computer watch**:
+An iOS chat's own `computer.subscribeEvents` socket (`PathwayThreadComputerModel`), open only while the chat is on screen and the app is in the foreground. It re-seeds the thread's state on every connect and feeds the preview and the send's control generation.
+
+**Effort hint**:
+The composer tip "Desktop actions are faster at Medium effort", shown once for Claude chats that will drive the desktop while effort sits at a default other than Medium. Using or dismissing it hides it for good on that client.
 
 **Frame socket**:
 The binary WebSocket at `/ws/computer-frames` that carries preview stills, separate from the orchestration socket. It needs `orchestration:read` and a one-time ticket on remote connections.
