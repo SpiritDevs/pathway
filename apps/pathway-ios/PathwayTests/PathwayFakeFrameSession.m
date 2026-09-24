@@ -8,6 +8,10 @@
 @property(nonatomic, copy) void (^onReceive)(void);
 @property(nonatomic, copy) void (^pendingReceive)(NSURLSessionWebSocketMessage *, NSError *);
 @property(nonatomic) NSInteger cancelCount;
+/// Called on each cancel, after it is counted.
+@property(nonatomic, copy) void (^onCancel)(void);
+/// A cancel leaves the pending receive for the test to finish, like a message already in flight.
+@property(nonatomic) BOOL holdsReceiveOnCancel;
 /// The refused upgrade's HTTP status, or 0 once upgraded.
 @property(nonatomic) NSInteger status;
 @property(nonatomic) NSInteger fakeCloseCode;
@@ -40,7 +44,12 @@
 }
 - (void)cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)code reason:(NSData *)reason {
     self.cancelCount += 1;
-    [self complete:nil error:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]];
+    if (!self.holdsReceiveOnCancel) {
+        [self complete:nil error:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]];
+    }
+    void (^cancelled)(void) = self.onCancel;
+    self.onCancel = nil;
+    if (cancelled) cancelled();
 }
 @end
 
