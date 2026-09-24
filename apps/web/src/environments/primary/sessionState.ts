@@ -8,7 +8,7 @@ import { useCallback } from "react";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { fetchSessionState } from "./auth";
 
-const primarySessionStateAtom = Atom.make(Effect.promise(fetchSessionState)).pipe(
+export const primarySessionStateAtom = Atom.make(Effect.promise(fetchSessionState)).pipe(
   Atom.swr({ staleTime: 5_000, revalidateOnMount: true }),
   Atom.setIdleTTL(5 * 60_000),
   Atom.withLabel("primary-environment:session"),

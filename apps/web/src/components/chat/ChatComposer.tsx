@@ -140,6 +140,7 @@ import {
   buildBuiltInSlashCommandItems,
   shouldHideProviderNativeSlashCommand,
 } from "./composerSlashCommands.logic";
+import { useComputerControlSetting } from "../../hooks/useComputerAccess";
 import { useComputerSupport } from "../../hooks/useComputerSupport";
 import { useComputerControlEffortHint } from "../../hooks/useComputerControlEffortHint";
 import { ComposerComputerControlEffortHint } from "./ComposerComputerControlEffortHint";
@@ -1248,12 +1249,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProvider === "claudeAgent" ? scopedCatalog.data : selectedProviderStatus;
 
   const computerUseAvailable = useComputerSupport(environmentId);
+  const computerControlSetting = useComputerControlSetting(environmentId);
   const computerControlEffortHint = useComputerControlEffortHint({
     draftTarget: composerDraftTarget,
     threadRef: routeThreadRef,
     environmentId,
     computerSupported: computerUseAvailable,
-    computerControlEnabled: settings.computerControlEnabled,
+    computerControlEnabled: computerControlSetting,
     dismissed: settings.dismissedComputerControlEffortHint,
     prompt,
     provider: selectedProvider,

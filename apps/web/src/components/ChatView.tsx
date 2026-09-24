@@ -96,6 +96,7 @@ import { createModelSelection, resolvePromptInjectedEffort } from "@spiritdevs/s
 import { parseComputerInvocation } from "@spiritdevs/shared/computerInvocation";
 import { useThreadComputerControlGeneration } from "../computerStateStore";
 import { useComputerControlModeChange } from "../hooks/useComputerControlModeChange";
+import { useComputerControlSetting } from "../hooks/useComputerAccess";
 import { resolveComputerControlForSend } from "../hooks/useComputerControlModeChange.logic";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@spiritdevs/shared/chatList";
 import { AddProjectConnectionDialog } from "./projects/AddProjectConnectionDialog";
@@ -1636,6 +1637,7 @@ function ChatViewContent(props: ChatViewProps) {
   const lastDispatchedVisitRef = useRef<string | null>(null);
   const lastVisitDispatchAtRef = useRef(0);
   const settings = useEnvironmentSettings(environmentId);
+  const computerControlSetting = useComputerControlSetting(environmentId);
   // New-thread defaults live in the primary environment's settings.json (the
   // settings UI never writes to remote environments), so read them from the
   // primary server rather than the thread's environment.
@@ -7736,7 +7738,7 @@ function ChatViewContent(props: ChatViewProps) {
     const computerControlSequenceForSend = computerControlChangeSequence.current;
     const computerControlForSend = resolveComputerControlForSend({
       messageText: promptForSend,
-      computerControlEnabled: settings.computerControlEnabled,
+      computerControlEnabled: computerControlSetting,
       // Another thread's control epoch never applies to a new chat.
       generation: sendsToCurrentThread
         ? (threadComputerControlGeneration ??
@@ -8530,7 +8532,7 @@ function ChatViewContent(props: ChatViewProps) {
       const computerControlSequenceForEdit = computerControlChangeSequence.current;
       const computerControlForEdit = resolveComputerControlForSend({
         messageText: text,
-        computerControlEnabled: settings.computerControlEnabled,
+        computerControlEnabled: computerControlSetting,
         generation:
           threadComputerControlGeneration ??
           useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
@@ -8578,7 +8580,7 @@ function ChatViewContent(props: ChatViewProps) {
       latestRunSettled,
       setThreadError,
       computerControlChangeSequence,
-      settings.computerControlEnabled,
+      computerControlSetting,
       threadComputerControlGeneration,
       composerDraftTarget,
       setComposerComputerControlMode,
@@ -8917,7 +8919,7 @@ function ChatViewContent(props: ChatViewProps) {
     const messageCreatedAt = new Date().toISOString();
     const computerControlForFollowUp = resolveComputerControlForSend({
       messageText: trimmed,
-      computerControlEnabled: settings.computerControlEnabled,
+      computerControlEnabled: computerControlSetting,
       generation: threadComputerControlGeneration,
     });
     const outgoingMessageText = formatOutgoingPrompt({
@@ -9111,7 +9113,7 @@ function ChatViewContent(props: ChatViewProps) {
           // The setting carries to the new thread; its control epoch starts at 0.
           ...resolveComputerControlForSend({
             messageText: implementationPrompt,
-            computerControlEnabled: settings.computerControlEnabled,
+            computerControlEnabled: computerControlSetting,
             generation: undefined,
           }).fields,
           sourceProposedPlan: {
@@ -9191,7 +9193,7 @@ function ChatViewContent(props: ChatViewProps) {
     startThreadTurn,
     environmentId,
     composerRef,
-    settings.computerControlEnabled,
+    computerControlSetting,
   ]);
 
   const getModelDisabledReason = useCallback(

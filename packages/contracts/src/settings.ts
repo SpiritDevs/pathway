@@ -1,3 +1,9 @@
+import {
+  AuthAccessWriteScope,
+  AuthComputerOperateScope,
+  AuthOrchestrationOperateScope,
+  type AuthEnvironmentScope,
+} from "./auth.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
@@ -928,6 +934,25 @@ export const DEFAULT_ISSUE_AUTOMATION_SETTINGS: IssueAutomationSettings = {
 export const ComputerAccessPolicy = Schema.Literals(["any-operator", "scoped", "admins-only"]);
 export type ComputerAccessPolicy = typeof ComputerAccessPolicy.Type;
 export const DEFAULT_COMPUTER_ACCESS_POLICY: ComputerAccessPolicy = "scoped";
+
+/**
+ * Whether a session holding `scopes` may use Computer under `policy`. Admin
+ * sessions paired before `computer:operate` existed still pass `scoped`. The
+ * server enforces it; clients read it to avoid sending intent it would refuse.
+ */
+export function canUseComputer(
+  policy: ComputerAccessPolicy,
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+): boolean {
+  switch (policy) {
+    case "any-operator":
+      return scopes.includes(AuthOrchestrationOperateScope);
+    case "scoped":
+      return scopes.includes(AuthComputerOperateScope) || scopes.includes(AuthAccessWriteScope);
+    case "admins-only":
+      return scopes.includes(AuthAccessWriteScope);
+  }
+}
 
 /** The environment's ceiling on Computer oversight, strictest first. */
 export const ComputerAutonomy = Schema.Literals(["supervised", "per-task", "auto", "full-access"]);

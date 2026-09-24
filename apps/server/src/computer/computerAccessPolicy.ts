@@ -11,6 +11,7 @@ import {
   AuthComputerOperateScope,
   AuthOrchestrationOperateScope,
   type AuthEnvironmentScope,
+  canUseComputer,
   type ComputerAccessPolicy,
   EnvironmentAuthorizationError,
 } from "@spiritdevs/contracts";
@@ -29,24 +30,6 @@ export function computerAccessRequiredScope(policy: ComputerAccessPolicy): AuthE
       return AuthComputerOperateScope;
     case "admins-only":
       return AuthAccessWriteScope;
-  }
-}
-
-/**
- * Whether a session holding `scopes` may use Computer under `policy`. Admin
- * sessions paired before `computer:operate` existed still pass `scoped`.
- */
-export function canUseComputer(
-  policy: ComputerAccessPolicy,
-  scopes: ReadonlyArray<AuthEnvironmentScope>,
-): boolean {
-  switch (policy) {
-    case "any-operator":
-      return scopes.includes(AuthOrchestrationOperateScope);
-    case "scoped":
-      return scopes.includes(AuthComputerOperateScope) || scopes.includes(AuthAccessWriteScope);
-    case "admins-only":
-      return scopes.includes(AuthAccessWriteScope);
   }
 }
 
