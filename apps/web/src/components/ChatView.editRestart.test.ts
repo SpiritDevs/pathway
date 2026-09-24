@@ -81,3 +81,49 @@ describe("ChatView edit and restart", () => {
     expect(deps.editAndRestartMessage).toHaveBeenCalledTimes(1);
   });
 });
+
+/** A still-queued message: editing it rewrites the queue entry instead of restarting. */
+function queuedChat(attachments: ReadonlyArray<{ id: string }> = []) {
+  return {
+    controls: new Map([["queued", { editable: true }]]),
+    chatMessages: [{ id: "queued", attachments }],
+    mutateMessage: vi.fn(async () => true),
+  };
+}
+
+describe("ChatView queued message edit", () => {
+  it("keeps a bare /computer-use edit and explains that it needs a task", async () => {
+    const queued = queuedChat();
+    const deps = editRestartDeps({ queuedChat: queued });
+    const submit = loadEditRestart(deps);
+
+    await expect(submit("queued", " /computer-use  ")).resolves.toBe(false);
+
+    expect(queued.mutateMessage).not.toHaveBeenCalled();
+    expect(deps.toastBareComputerUseInvocation).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves a bare /computer-use edit when the queued message's attachments are the task", async () => {
+    const queued = queuedChat([{ id: "image" }]);
+    const deps = editRestartDeps({ queuedChat: queued });
+    const submit = loadEditRestart(deps);
+
+    await expect(submit("queued", "/computer-use")).resolves.toBe(true);
+
+    expect(queued.mutateMessage).toHaveBeenCalledWith("queued", "edit", "/computer-use");
+    expect(deps.toastBareComputerUseInvocation).not.toHaveBeenCalled();
+  });
+
+  it("saves a /computer-use edit that names its task", async () => {
+    const queued = queuedChat();
+    const submit = loadEditRestart(editRestartDeps({ queuedChat: queued }));
+
+    await expect(submit("queued", "/computer-use open Calculator")).resolves.toBe(true);
+
+    expect(queued.mutateMessage).toHaveBeenCalledWith(
+      "queued",
+      "edit",
+      "/computer-use open Calculator",
+    );
+  });
+});
