@@ -1,13 +1,13 @@
-import type { ComputerId } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { HttpClient } from "effect/unstable/http";
 import type { Atom } from "effect/unstable/reactivity";
 
+import type { AuthWebSocketTicketResult, ComputerId } from "@spiritdevs/contracts";
 import {
-  resolveRemoteDpopWebSocketConnectionUrl,
-  resolveRemoteWebSocketConnectionUrl,
+  issueRemoteDpopWebSocketTicket,
+  issueRemoteWebSocketTicket,
 } from "../authorization/remote.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -37,10 +37,21 @@ export function computerFrameSocketBaseUrl(socketUrl: string): string {
   return url.toString();
 }
 
-function withComputerId(socketUrl: string, computerId: ComputerId): string {
-  const url = new URL(socketUrl);
+/** A frame socket URL, and when its ticket expires (epoch ms); null when it carries none. */
+export interface ComputerFrameSocketUrl {
+  readonly url: string;
+  readonly expiresAt: number | null;
+}
+
+function frameSocketUrl(
+  wsBaseUrl: string,
+  computerId: ComputerId,
+  ticket: AuthWebSocketTicketResult | null,
+): ComputerFrameSocketUrl {
+  const url = new URL(wsBaseUrl);
   url.searchParams.set(COMPUTER_FRAME_WS_COMPUTER_ID_PARAM, computerId);
-  return url.toString();
+  if (ticket !== null) url.searchParams.set("wsTicket", ticket.ticket);
+  return { url: url.toString(), expiresAt: ticket?.expiresAt.epochMilliseconds ?? null };
 }
 
 /**
@@ -51,7 +62,7 @@ function withComputerId(socketUrl: string, computerId: ComputerId): string {
  * - relay connections mint the ticket with a DPoP proof.
  *
  * Tickets are signed and expire after a few minutes; they are not consumed,
- * so one URL serves reconnects until the server refuses it.
+ * so one URL serves reconnects until its `expiresAt`.
  */
 export const resolveComputerFrameSocketUrl = Effect.fn(
   "clientRuntime.state.resolveComputerFrameSocketUrl",
@@ -66,16 +77,15 @@ export const resolveComputerFrameSocketUrl = Effect.fn(
   const timeout = input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs };
   const authorization = prepared.httpAuthorization;
   if (authorization === null) {
-    return withComputerId(wsBaseUrl, input.computerId);
+    return frameSocketUrl(wsBaseUrl, input.computerId, null);
   }
   if (authorization._tag === "Bearer") {
-    const url = yield* resolveRemoteWebSocketConnectionUrl({
-      wsBaseUrl,
+    const ticket = yield* issueRemoteWebSocketTicket({
       httpBaseUrl: prepared.httpBaseUrl,
       bearerToken: authorization.token,
       ...timeout,
     });
-    return withComputerId(url, input.computerId);
+    return frameSocketUrl(wsBaseUrl, input.computerId, ticket);
   }
   if (Option.isNone(input.signer)) {
     return yield* new RemoteEnvironmentAuthFetchError({
@@ -98,19 +108,18 @@ export const resolveComputerFrameSocketUrl = Effect.fn(
           }),
       ),
     );
-  const url = yield* resolveRemoteDpopWebSocketConnectionUrl({
-    wsBaseUrl,
+  const ticket = yield* issueRemoteDpopWebSocketTicket({
     httpBaseUrl: prepared.httpBaseUrl,
     accessToken: authorization.accessToken,
     dpopProof,
     ...timeout,
   });
-  return withComputerId(url, input.computerId);
+  return frameSocketUrl(wsBaseUrl, input.computerId, ticket);
 });
 
 /**
- * `resolveUrl` mints a fresh frame socket URL for the environment's current
- * prepared connection. The binary socket itself stays in the client.
+ * `resolveUrl` mints a fresh frame socket URL, with its ticket's expiry, for
+ * the environment's current prepared connection. The binary socket itself stays in the client.
  */
 export function createComputerFrameSocketAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,

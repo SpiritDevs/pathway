@@ -12,11 +12,6 @@ export interface FrameSourceClose {
   /** The close code; 1006 when the connection ended without a close frame. */
   readonly code: number;
   readonly reason: string;
-  /**
-   * False when the upgrade itself never completed. A browser hides a refused
-   * upgrade's HTTP status, so this is the only sign a ticket was refused.
-   */
-  readonly opened: boolean;
 }
 
 /** The narrow slice of WebSocket the frame path uses, so tests need no DOM. */
@@ -142,7 +137,6 @@ export function createBinaryFrameSource<Frame>(
     reset("closed", {
       code: event.code ?? 1006,
       reason: event.reason ?? "",
-      opened: open,
     })) as (event: never) => void);
   socket.addEventListener("error", (() => reset("error")) as (event: never) => void);
 
