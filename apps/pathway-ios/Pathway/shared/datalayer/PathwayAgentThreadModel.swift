@@ -561,7 +561,7 @@ final class PathwayAgentThreadModel {
             var command = PathwayAgentThreadCommands.dispatchMessage(threadID: threadID, text: text,
                 hasActiveRun: true, identifier: preparedSend.messageID).objectValue ?? [:]
             command["modelSelection"] = try Self.json(currentModelSelection)
-            command.merge(await computerFields(for: text)) { $1 }
+            command.merge(await computerFields(for: text, queued: true)) { $1 }
             if mode == "steer", let activeRunID {
                 command["dispatchMode"] = .object(["type": .string("steer_active"), "targetRunId": .string(activeRunID)])
             }
