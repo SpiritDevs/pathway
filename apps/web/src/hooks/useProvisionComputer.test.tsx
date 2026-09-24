@@ -1,7 +1,8 @@
 // Pins the one "Set up computer control" command both surfaces share: the
 // status-store write that repaints them, the ready callback, who gets toasts,
 // and the single-flight guard across surfaces. Observed from outside React
-// (the store, the toast manager, the RPC), so server rendering is enough.
+// (the store, the toast manager, the RPC), so server rendering is enough;
+// each test awaits the settling promise `provision` hands back.
 
 import {
   ComputerId,
@@ -12,11 +13,21 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const provisionCommand = vi.hoisted(() => vi.fn());
 const refreshCommand = vi.hoisted(() => vi.fn());
 const toastAdd = vi.hoisted(() => vi.fn());
+const host = vi.hoisted(() => ({ isElectron: false, primaryEnvironmentId: null as string | null }));
+
+vi.mock("../env", () => ({
+  get isElectron() {
+    return host.isElectron;
+  },
+}));
+vi.mock("../state/environments", () => ({
+  usePrimaryEnvironmentId: () => host.primaryEnvironmentId,
+}));
 
 vi.mock("../state/computer", () => ({
   computerEnvironment: { provision: "provision", refreshStatus: "refreshStatus" },
@@ -92,25 +103,88 @@ beforeEach(() => {
   useComputerStateStore.getState().clearEnvironment(ENVIRONMENT_ID);
 });
 
+afterEach(() => {
+  host.isElectron = false;
+  host.primaryEnvironmentId = null;
+  vi.unstubAllGlobals();
+});
+
+/** Runs as the desktop app whose own server is the environment under test. */
+function onHostDesktop() {
+  host.isElectron = true;
+  host.primaryEnvironmentId = ENVIRONMENT_ID;
+  vi.stubGlobal("window", { desktopBridge: { computer: {} } });
+}
+
 describe("useProvisionComputer", () => {
   it("re-reads status under native setup instead of trusting the RPC's older snapshot", async () => {
+    onHostDesktop();
     const newer = status();
     provisionCommand.mockResolvedValue(
       succeed({ summary: "Still missing.", status: blockedStatus() }),
     );
     refreshCommand.mockResolvedValue(succeed(newer));
-    mountProvisionHook({ notify: true, nativePermissionSetup: true }).provision();
-    await vi.waitFor(() => expect(storedStatus()).toBe(newer));
+    await mountProvisionHook({ notify: true }).provision();
+    expect(storedStatus()).toBe(newer);
     expect(refreshCommand).toHaveBeenCalledOnce();
     // The native guide carries on; an incomplete RPC result raises no second toast.
     expect(toastAdd).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a native grant pushed while the chat card's setup was in flight", async () => {
+    onHostDesktop();
+    let finish!: (value: unknown) => void;
+    provisionCommand.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const granted = status();
+    refreshCommand.mockResolvedValue(succeed(granted));
+    // The chat card's options: it never says whether native setup applies.
+    const settled = mountProvisionHook({ notify: true, missing: ["accessibility"] }).provision();
+    useComputerStateStore.getState().setStatus(ENVIRONMENT_ID, granted);
+    finish(succeed({ summary: "Still missing.", status: blockedStatus() }));
+    await settled;
+    expect(storedStatus()).toBe(granted);
+    expect(refreshCommand).toHaveBeenCalledOnce();
+    expect(toastAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it("trusts the RPC's status on an environment the desktop does not host", async () => {
+    onHostDesktop();
+    host.primaryEnvironmentId = "environment-other";
+    const result: ComputerProvisionResult = { summary: "Still missing.", status: blockedStatus() };
+    provisionCommand.mockResolvedValue(succeed(result));
+    await mountProvisionHook({ notify: true }).provision();
+    expect(storedStatus()).toBe(result.status);
+    expect(refreshCommand).not.toHaveBeenCalled();
+    expect(toastAdd).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops the answer when the environment was cleared while setup ran", async () => {
+    onHostDesktop();
+    let finish!: (value: unknown) => void;
+    provisionCommand.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    refreshCommand.mockResolvedValue(succeed(status()));
+    const settled = mountProvisionHook().provision();
+    useComputerStateStore.getState().clearEnvironment(ENVIRONMENT_ID);
+    finish(succeed({ summary: "Granted.", status: status() }));
+    await settled;
+    expect(storedStatus()).toBeUndefined();
+  });
+
   it("writes the status the call returned straight into the store", async () => {
     const result: ComputerProvisionResult = { summary: "Granted.", status: status() };
     provisionCommand.mockResolvedValue(succeed(result));
-    mountProvisionHook().provision();
-    await vi.waitFor(() => expect(storedStatus()).toBe(result.status));
+    await mountProvisionHook().provision();
+    expect(storedStatus()).toBe(result.status);
     expect(provisionCommand).toHaveBeenCalledExactlyOnceWith({
       environmentId: ENVIRONMENT_ID,
       input: {},
@@ -121,39 +195,40 @@ describe("useProvisionComputer", () => {
   it("runs onReady when the desktop came back with nothing left to set up", async () => {
     provisionCommand.mockResolvedValue(succeed({ summary: "Granted.", status: status() }));
     const onReady = vi.fn();
-    mountProvisionHook({ onReady }).provision();
-    await vi.waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
+    await mountProvisionHook({ onReady }).provision();
+    expect(onReady).toHaveBeenCalledTimes(1);
   });
 
   it("leaves onReady alone when a grant is still missing", async () => {
     const result: ComputerProvisionResult = { summary: "Still missing.", status: blockedStatus() };
     provisionCommand.mockResolvedValue(succeed(result));
     const onReady = vi.fn();
-    mountProvisionHook({ onReady }).provision();
-    await vi.waitFor(() => expect(storedStatus()).toBe(result.status));
+    await mountProvisionHook({ onReady }).provision();
+    expect(storedStatus()).toBe(result.status);
     expect(onReady).not.toHaveBeenCalled();
   });
 
   it("stays silent unless the surface asked to be notified", async () => {
     provisionCommand.mockResolvedValue(succeed({ summary: "Granted.", status: status() }));
-    mountProvisionHook().provision();
-    await vi.waitFor(() => expect(storedStatus()).toBeDefined());
+    await mountProvisionHook().provision();
+    expect(storedStatus()).toBeDefined();
     expect(toastAdd).not.toHaveBeenCalled();
   });
 
   it("raises the opening toast before the call, then one for the outcome", async () => {
     provisionCommand.mockResolvedValue(succeed({ summary: "Granted.", status: status() }));
-    mountProvisionHook({ notify: true, missing: ["accessibility"] }).provision();
+    const settled = mountProvisionHook({ notify: true, missing: ["accessibility"] }).provision();
     // Synchronously: the call's visible effect is a macOS dialog over Pathway.
     expect(toastAdd).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(toastAdd).toHaveBeenCalledTimes(2));
+    await settled;
+    expect(toastAdd).toHaveBeenCalledTimes(2);
     expect(toastAdd.mock.calls[1]?.[0]).toMatchObject({ type: "success" });
   });
 
   it("reports a failed provision and writes nothing to the store", async () => {
     provisionCommand.mockResolvedValue(fail(new Error("no toolchain")));
-    mountProvisionHook({ notify: true }).provision();
-    await vi.waitFor(() => expect(toastAdd).toHaveBeenCalledTimes(2));
+    await mountProvisionHook({ notify: true }).provision();
+    expect(toastAdd).toHaveBeenCalledTimes(2);
     expect(toastAdd.mock.calls[1]?.[0]).toMatchObject({
       type: "error",
       description: "no toolchain",
@@ -171,18 +246,16 @@ describe("useProvisionComputer", () => {
     );
     const card = mountProvisionHook({ notify: true });
     const settings = mountProvisionHook({ notify: true });
-    card.provision();
-    settings.provision();
-    card.provision();
+    const settled = card.provision();
+    await settings.provision();
+    await card.provision();
     expect(provisionCommand).toHaveBeenCalledOnce();
     expect(toastAdd).toHaveBeenCalledOnce();
     finish(succeed({ summary: "Ready.", status: status() }));
-    await vi.waitFor(() => expect(storedStatus()).toBeDefined());
+    await settled;
     // Once settled, the next press starts a fresh attempt.
     provisionCommand.mockResolvedValue(succeed({ summary: "Ready.", status: status() }));
-    await vi.waitFor(() => {
-      card.provision();
-      expect(provisionCommand).toHaveBeenCalledTimes(2);
-    });
+    await card.provision();
+    expect(provisionCommand).toHaveBeenCalledTimes(2);
   });
 });

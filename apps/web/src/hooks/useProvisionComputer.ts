@@ -15,15 +15,18 @@ import {
 import { useCallback, useState, useSyncExternalStore } from "react";
 
 import { toastManager } from "../components/ui/toast";
-import { useComputerStateStore } from "../computerStateStore";
+import { computerEnvironmentFence, useComputerStateStore } from "../computerStateStore";
+import { isElectron } from "../env";
 import {
   computerProvisionErrorToast,
   computerProvisionNote,
   computerProvisionOutcome,
   computerProvisionResultToast,
   computerProvisionStartToast,
+  readLocalComputerPermissionBridge,
 } from "../lib/computerProvisioning";
 import { computerEnvironment } from "../state/computer";
+import { usePrimaryEnvironmentId } from "../state/environments";
 import { useAtomCommand } from "../state/use-atom-command";
 
 /**
@@ -49,8 +52,11 @@ export function isComputerProvisionPending(environmentId: string): boolean {
 }
 
 export interface UseProvisionComputerResult {
-  /** Starts a provision, or does nothing while one is already running. */
-  readonly provision: () => void;
+  /**
+   * Starts a provision, or does nothing while one is already running. Settles
+   * once the attempt is accounted for.
+   */
+  readonly provision: () => Promise<void>;
   readonly isPending: boolean;
   /** The settings panel's inline account of the attempt; undefined when there is nothing to say. */
   readonly note: string | undefined;
@@ -73,12 +79,6 @@ export function useProvisionComputer(
      * same words inline instead and would otherwise say everything twice.
      */
     readonly notify?: boolean;
-    /**
-     * Whether the desktop app's native grant guide speaks for this environment.
-     * Native setup can push later grants while the RPC returns, so its status
-     * snapshot is re-read instead of trusted.
-     */
-    readonly nativePermissionSetup?: boolean;
     /** Ran once, after a provision that left nothing to set up. */
     readonly onReady?: (result: ComputerProvisionResult) => void;
   },
@@ -86,7 +86,15 @@ export function useProvisionComputer(
   const notify = options?.notify ?? false;
   const missing = options?.missing;
   const onReady = options?.onReady;
-  const nativePermissionSetup = options?.nativePermissionSetup ?? false;
+  // The desktop app's native grant guide speaks for its own primary environment
+  // whichever surface started setup. It can push later grants while the RPC
+  // returns, so the RPC's status snapshot is re-read instead of trusted.
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const nativePermissionSetup =
+    readLocalComputerPermissionBridge({
+      environmentIsDesktopPrimary:
+        isElectron && environmentId !== null && environmentId === primaryEnvironmentId,
+    }) !== null;
   const provisionCommand = useAtomCommand(computerEnvironment.provision, { reportFailure: false });
   const refreshStatus = useAtomCommand(computerEnvironment.refreshStatus, {
     reportFailure: false,
@@ -101,11 +109,12 @@ export function useProvisionComputer(
   const provision = useCallback(() => {
     // A second provision would re-enter the installer and re-arm the permission
     // prompt behind the dialog the user is already looking at.
-    if (environmentId === null || pendingProvisions.has(environmentId)) return;
+    if (environmentId === null || pendingProvisions.has(environmentId)) return Promise.resolve();
     if (notify) toastManager.add(computerProvisionStartToast(missing));
     setProvisionPending(environmentId, true);
     setAttempt(IDLE_ATTEMPT);
-    void provisionCommand({ environmentId, input: {} })
+    const isCurrent = computerEnvironmentFence(environmentId);
+    return provisionCommand({ environmentId, input: {} })
       .then(async (outcome) => {
         if (outcome._tag === "Success") {
           const result = outcome.value;
@@ -113,8 +122,10 @@ export function useProvisionComputer(
           if (nativePermissionSetup) {
             // Do not overwrite a newer grant push with the RPC's earlier snapshot.
             const refreshed = await refreshStatus({ environmentId, input: {} });
-            if (refreshed._tag === "Success") setStatus(environmentId, refreshed.value);
-          } else {
+            if (refreshed._tag === "Success" && isCurrent()) {
+              setStatus(environmentId, refreshed.value);
+            }
+          } else if (isCurrent()) {
             setStatus(environmentId, result.status);
           }
           setAttempt({ kind: "success", result });
