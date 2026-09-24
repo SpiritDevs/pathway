@@ -436,6 +436,11 @@ it("preserves explicit steering and restart targets while ordering ordinary mess
 
 const makeQueuedFollowUp = Effect.fnUntraced(function* (
   dispatch: (command: OrchestrationV2Command) => Effect.Effect<void>,
+  overrides: {
+    readonly text?: string;
+    readonly enableComputerControl?: boolean;
+    readonly computerControlGeneration?: number;
+  } = {},
 ) {
   const selection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" };
   const submission: ThreadQueueAcceptance = {
@@ -454,6 +459,7 @@ const makeQueuedFollowUp = Effect.fnUntraced(function* (
         creationSource: "web",
         modelSelection: selection,
         dispatchMode: { type: "queue_after_active" },
+        ...overrides,
       },
     },
   };
@@ -510,6 +516,30 @@ it.effect("dispatches queued checkout metadata atomically with the follow-up", (
       branch: "release-review",
       commandId: "queued-command",
     });
+  }),
+);
+
+it.effect("replays a queued message's frozen Computer intent, not the live composer's", () =>
+  Effect.gen(function* () {
+    const commands: OrchestrationV2Command[] = [];
+    const frozen = {
+      text: "/computer-use open Calculator",
+      enableComputerControl: false,
+      computerControlGeneration: 5,
+    };
+    const { executor, submission } = yield* makeQueuedFollowUp(
+      (command) =>
+        Effect.sync(() => {
+          commands.push(command);
+        }),
+      frozen,
+    ).pipe(Effect.provide(ServerSettings.layerTest()));
+    const dispatch = yield* executor.prepare(submission);
+    if (dispatch) yield* dispatch;
+    // The dispatch carries what the user queued; the decider reads the request
+    // from the text and admission checks the generation against any later Stop.
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ type: "message.dispatch", ...frozen });
   }),
 );
 
