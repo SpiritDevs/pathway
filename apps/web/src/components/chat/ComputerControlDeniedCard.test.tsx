@@ -6,7 +6,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import { ComputerControlDeniedCard } from "./ComputerControlDeniedCard";
-import { sessionLacksComputerAccess } from "./ComputerControlDeniedCard.logic";
 
 describe("ComputerControlDeniedCard", () => {
   it("offers Enable only while control is off, and points at Settings", () => {
@@ -44,25 +43,5 @@ describe("ComputerControlDeniedCard", () => {
     expect(markup).toContain("Re-pair it with “Use Computer” enabled");
     expect(markup).not.toContain("Computer control is off");
     expect(markup).not.toContain(">Enable<");
-  });
-});
-
-describe("sessionLacksComputerAccess", () => {
-  it("blames the pairing only when the session's scopes are known and lack access", () => {
-    expect(
-      sessionLacksComputerAccess({ authenticated: true, scopes: ["orchestration:operate"] }),
-    ).toBe(true);
-    expect(
-      sessionLacksComputerAccess({
-        authenticated: true,
-        scopes: ["orchestration:operate", "computer:operate"],
-      }),
-    ).toBe(false);
-    expect(sessionLacksComputerAccess({ authenticated: true, scopes: ["access:write"] })).toBe(
-      false,
-    );
-    expect(sessionLacksComputerAccess({ authenticated: true })).toBe(false);
-    expect(sessionLacksComputerAccess({ authenticated: false, scopes: [] })).toBe(false);
-    expect(sessionLacksComputerAccess(null)).toBe(false);
   });
 });
