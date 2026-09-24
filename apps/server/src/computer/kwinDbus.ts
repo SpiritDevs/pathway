@@ -600,12 +600,10 @@ export const createSessionKWinComputerDbus = Effect.fn("createSessionKWinCompute
     // KWin exposes the loaded plugin list as the LoadedPlugins property (KWin 6
     // has no loadedPlugins method); keep the method as a fallback for variants
     // that only offer it.
-    let properties: unknown;
-    try {
-      properties = pluginsObject.getInterface(DBUS_PROPERTIES_INTERFACE);
-    } catch {
-      properties = undefined;
-    }
+    const properties = yield* Effect.orElseSucceed(
+      Effect.try(() => pluginsObject.getInterface(DBUS_PROPERTIES_INTERFACE)),
+      () => undefined,
+    );
     const dbus: KWinComputerDbus = {
       nameOwner: session.nameOwner,
       listLoadedPluginIds: () =>

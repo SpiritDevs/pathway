@@ -42,7 +42,6 @@ const scratchWitness = Effect.gen(function* () {
  * witness and runs until it is killed.
  */
 function forkingSource(reportScript: string): string {
-  // @effect-diagnostics-next-line preferSchemaOverJson:off - quotes source into generated source.
   const quoted = JSON.stringify(reportScript);
   return [
     "require('node:child_process').spawn(process.execPath,",
