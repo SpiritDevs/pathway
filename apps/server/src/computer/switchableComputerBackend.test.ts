@@ -296,6 +296,70 @@ it.layer(NodeServices.layer)("replacing the desktop under the manager", (it) => 
     ),
   );
 
+  it.effect("keeps a use of the selected desktop over its slower passive probe", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const slot = yield* makeSwitchableComputerBackend(
+          new CheckingComputerBackend("Detecting."),
+        );
+        const manager = yield* ComputerManager.make({ backend: slot.backend });
+        expect((yield* manager.getThreadState("thread-1")).availability.kind).toBe("checking");
+        // Asked for during detection: the placeholder refuses, but the
+        // manager is engaged from here on.
+        yield* Effect.ignore(manager.listWindows());
+        const events = yield* manager.subscribeEvents;
+
+        const selected = new FakeComputerBackend();
+        selected.setAvailability({ kind: "backend-unavailable", message: "Not started." });
+        const probing = yield* Deferred.make<void>();
+        const answer = yield* Deferred.make<void>();
+        const probe = selected.probeAvailability.bind(selected);
+        // The passive probe sees the desktop before anything starts it, and
+        // answers late.
+        selected.probeAvailability = () =>
+          Effect.gen(function* () {
+            const verdict = yield* probe();
+            yield* Deferred.succeed(probing, undefined);
+            yield* Deferred.await(answer);
+            return verdict;
+          });
+        const establish = selected.availability.bind(selected);
+        selected.availability = () =>
+          Effect.suspend(() => {
+            selected.setAvailability({ kind: "available", backend: "fake" });
+            return establish();
+          });
+        const replacing = yield* manager
+          .replaceDesktop(slot.swap(selected))
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Deferred.await(probing);
+        expect((yield* manager.listWindows()).availability.kind).toBe("available");
+        yield* Deferred.succeed(answer, undefined);
+        yield* Fiber.join(replacing);
+
+        const nextPushed = PubSub.take(events).pipe(
+          Effect.repeat({
+            until: (event) =>
+              event.type === "computer.thread-state" &&
+              event.state.threadId === "thread-1" &&
+              event.state.availability.kind !== "checking",
+          }),
+        );
+        const settled = yield* nextPushed;
+        expect(settled.type === "computer.thread-state" && settled.state.availability).toEqual({
+          kind: "available",
+          backend: "fake",
+        });
+        // A health event republishes the cached verdict, not the probe's.
+        selected.emitHealthChanged(selected.health());
+        const republished = yield* nextPushed;
+        expect(
+          republished.type === "computer.thread-state" && republished.state.availability,
+        ).toEqual({ kind: "available", backend: "fake" });
+      }),
+    ),
+  );
+
   it.effect("swaps at once when nothing runs", () =>
     Effect.scoped(
       Effect.gen(function* () {
