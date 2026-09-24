@@ -11,10 +11,13 @@
 /// The refused upgrade's HTTP status, or 0 once upgraded.
 @property(nonatomic) NSInteger status;
 @property(nonatomic) NSInteger fakeCloseCode;
+@property NSInteger maximumMessageSize;
+@property(nonatomic) NSInteger maximumMessageSizeAtResume;
 @end
 
 @implementation PathwayFakeFrameSocket
-- (void)resume {}
+@synthesize maximumMessageSize = _fakeMaximumMessageSize;
+- (void)resume { self.maximumMessageSizeAtResume = self.maximumMessageSize; }
 - (NSURLResponse *)response {
     if (self.status == 0) return nil;
     return [[NSHTTPURLResponse alloc] initWithURL:[NSURL URLWithString:@"wss://unused.invalid"] statusCode:self.status HTTPVersion:nil headerFields:nil];

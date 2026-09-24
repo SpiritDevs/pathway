@@ -57,6 +57,8 @@ struct PathwayThreadComputerTests {
         #expect(PathwayComputerFrameReconnect.close(status: 101, closeCode: policy) == .refused)
         for status in [nil, 101, 502] as [Int?] { #expect(PathwayComputerFrameReconnect.close(status: status, closeCode: 1006) == .dropped) }
         #expect(PathwayComputerFrameReconnect.close(status: nil, closeCode: 0) == .dropped)
+        // An oversized still is not a refused ticket.
+        #expect(PathwayComputerFrameReconnect.close(status: 101, closeCode: URLSessionWebSocketTask.CloseCode.messageTooBig.rawValue) == .dropped)
     }
 
     @Test func theStreamRetriesByHowItsSocketEnded() async throws {
@@ -79,6 +81,7 @@ struct PathwayThreadComputerTests {
             _ = socket.perform(NSSelectorFromString("fail"))
         }
         let first = try await waitForReceive { frames.stream("mac") }
+        #expect(first.value(forKey: "maximumMessageSizeAtResume") as? Int == 16 * 1024 * 1024)
         // A dropped connection keeps its ticket.
         let second = try await waitForReceive { fail(first) }
         #expect(resolves == 1)

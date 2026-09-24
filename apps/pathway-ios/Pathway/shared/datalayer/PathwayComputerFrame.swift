@@ -109,6 +109,10 @@ final class PathwayComputerFrameStream {
     static let unavailableMessage = "Live view unavailable"
     static let unreadableMessage = "The computer stream sent a frame Pathway could not read."
     nonisolated static let maxPixelSize = 1_600
+    /// The largest still the socket buffers. The host sends each PNG whole with no cap of its own,
+    /// and a detailed 1080p still already passes Foundation's 1 MiB default. Anything larger
+    /// closes the socket like a dropped connection, never as a refused ticket.
+    static let maxMessageBytes = 16 * 1024 * 1024
 
     private(set) var image: CGImage?
     private(set) var errorMessage: String?
@@ -177,6 +181,7 @@ final class PathwayComputerFrameStream {
     /// Runs one socket until it ends, and says how it ended.
     private func connect(to url: URL, computerID: String) async -> PathwayComputerFrameReconnect.Close {
         let socket = session.webSocketTask(with: url)
+        socket.maximumMessageSize = Self.maxMessageBytes
         self.socket = socket
         socket.resume()
         defer {
