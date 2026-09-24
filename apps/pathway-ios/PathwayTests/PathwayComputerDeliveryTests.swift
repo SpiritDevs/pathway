@@ -143,6 +143,33 @@ struct PathwayComputerDeliveryTests {
         #expect(model.computerAccessPolicy == "any-operator")
     }
 
+    @Test func aConfigReadFromAnEndedConnectionNeverLands() async throws {
+        let gate = ComputerReadGate()
+        let model = makeModel { _, _ in await gate.read() }
+        model.computerSessionScopes = ["orchestration:operate"]
+        let load = Task { await model.refreshServerConfig() }
+        await gate.started(1)
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("disconnected")]))
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("connecting")]))
+        model.installServerConfig(.object(configWithPolicy("scoped")))
+        gate.finish(.object(configWithPolicy("any-operator")))
+        await load.value
+        #expect(model.computerAccessPolicy == "scoped")
+        #expect(!model.computerControlApplies(setting: true))
+    }
+
+    @Test func theStartupConfigReadLandsOnceTheFirstSocketConnects() async throws {
+        let gate = ComputerReadGate()
+        let model = makeModel { _, _ in await gate.read() }
+        let load = Task { await model.refreshServerConfig() }
+        await gate.started(1)
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("connecting")]))
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("connecting")]))
+        gate.finish(.object(configWithPolicy("scoped")))
+        await load.value
+        #expect(model.computerAccessPolicy == "scoped")
+    }
+
     @Test func aRestartIsReservedUntilItIsSent() async throws {
         let gate = ComputerReadGate()
         var dispatches = 0
@@ -233,6 +260,12 @@ struct PathwayComputerDeliveryTests {
             "checkpointScopes": .array([.object(["id": .string("scope"), "runId": .string("run"), "kind": .string("root_run")])]),
             "checkpoints": .array([.object(["id": .string("checkpoint"), "scopeId": .string("scope"), "status": .string("ready"), "ordinalWithinScope": .number(0)])]),
             "visibleTurnItems": .array([message("message")] + (laterMessage ? [message("message-2")] : []))]))
+    }
+
+    private func configWithPolicy(_ policy: String) -> [String: JSONValue] {
+        var value = config
+        value["settings"] = .object(["computer": .object(["accessPolicy": .string(policy)])])
+        return value
     }
 
     private func failure(_ body: () async throws -> Void) async -> String? {

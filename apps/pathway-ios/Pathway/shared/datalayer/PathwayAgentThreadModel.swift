@@ -282,6 +282,9 @@ final class PathwayAgentThreadModel {
     @ObservationIgnored var computerControlGeneration: Int?
     /// Advances whenever this chat's connection ends or is replaced; fences Computer reads.
     @ObservationIgnored var computerConnection = 0
+    /// Advances whenever this chat's connection ends; fences config reads. The first socket
+    /// connecting doesn't count, since the startup read begins before it.
+    @ObservationIgnored var configConnection = 0
     private(set) var browserTakeover: [String: JSONValue]?
     private(set) var checkpoints: [JSONValue] = []
     private(set) var plans: [JSONValue] = []
@@ -426,6 +429,7 @@ final class PathwayAgentThreadModel {
         streamTask?.cancel(); streamTask = nil; configTask?.cancel(); configTask = nil
         isSubscriptionReady = false
         invalidateComputerConnection()
+        configConnection += 1
         connectionState = items.isEmpty ? .idle : .cached
         await persistDraftNow()
         let previousRPC = rpc; rpc = nil
@@ -881,7 +885,9 @@ final class PathwayAgentThreadModel {
     }
     func applySubscriptionValue(_ value: JSONValue) {
         guard let object = value.objectValue else { return }
-        if object["_pathwayTransport"] != nil {
+        if let transport = object["_pathwayTransport"] {
+            // Every pending request fails when a socket drops, so a success still in flight came from the old one.
+            if transport.stringValue == "disconnected" { configConnection += 1 }
             isSubscriptionReady = false
             invalidateComputerConnection()
             connectionState = items.isEmpty ? .connecting : .cached

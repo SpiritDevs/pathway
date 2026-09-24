@@ -534,9 +534,10 @@ extension PathwayAgentThreadModel {
 
 extension PathwayAgentThreadModel {
     func refreshServerConfig() async {
-        // A read that outlives its caller (a stopped chat, a closed sheet) must not land.
+        // A read that outlives its caller (a stopped chat, a closed sheet) or the connection that answered it must not land.
+        let connection = configConnection
         guard let value = try? await request("server.getConfig", payload: .object([:]), reportsErrors: false),
-              !Task.isCancelled else { return } // Keep the last usable provider list while temporarily disconnected.
+              !Task.isCancelled, connection == configConnection else { return } // Keep the last usable provider list while temporarily disconnected.
         installServerConfig(value)
     }
     func refreshParentRoster() async {
