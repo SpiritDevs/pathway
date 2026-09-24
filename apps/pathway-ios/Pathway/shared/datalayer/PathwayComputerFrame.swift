@@ -106,6 +106,7 @@ func pathwayComputerFrameSocketURL(rpcSocketURL: URL, computerID: String) -> URL
 final class PathwayComputerFrameStream {
     typealias ResolveURL = @Sendable (_ computerID: String) async throws -> URL
     typealias Sleep = @Sendable (Duration) async throws -> Void
+    typealias Decode = @Sendable (Data) async -> CGImage?
     static let unavailableMessage = "Live view unavailable"
     static let unreadableMessage = "The computer stream sent a frame Pathway could not read."
     nonisolated static let maxPixelSize = 1_600
@@ -121,20 +122,29 @@ final class PathwayComputerFrameStream {
     @ObservationIgnored private let resolveURL: ResolveURL
     @ObservationIgnored private let session: URLSession
     @ObservationIgnored private let sleep: Sleep
+    @ObservationIgnored private let decodeFrame: Decode
     @ObservationIgnored private(set) var reconnect = PathwayComputerFrameReconnect()
     @ObservationIgnored private var task: Task<Void, Never>?
+    /// Advances on every stop or switch. A receive or decode from an earlier lifetime never
+    /// publishes, even into a quick reopen of the same computer.
+    @ObservationIgnored private var lifetime = 0
+    /// The current socket's decode loop. It outlives a cancelled `task`, so stopping cancels it too.
+    @ObservationIgnored private(set) var decoding: Task<Void, Never>?
     /// The open socket. A quiet `receive()` ignores task cancellation, so stopping closes this.
     @ObservationIgnored private var socket: URLSessionWebSocketTask?
     @ObservationIgnored private(set) var computerID: String?
 
-    init(session: URLSession = .shared, sleep: @escaping Sleep = { try await Task.sleep(for: $0) }, resolveURL: @escaping ResolveURL) {
+    init(session: URLSession = .shared, sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
+         decode: @escaping Decode = { PathwayComputerFrameStream.decode($0) }, resolveURL: @escaping ResolveURL) {
         self.session = session
         self.sleep = sleep
+        self.decodeFrame = decode
         self.resolveURL = resolveURL
     }
 
     isolated deinit {
         task?.cancel()
+        decoding?.cancel()
         socket?.cancel(with: .goingAway, reason: nil)
     }
 
@@ -143,17 +153,19 @@ final class PathwayComputerFrameStream {
     /// The last image stays either way, so a paused card keeps showing it.
     func stream(_ computerID: String?) {
         guard computerID != self.computerID else { return }
+        lifetime += 1
         task?.cancel(); task = nil
+        decoding?.cancel(); decoding = nil
         socket?.cancel(with: .goingAway, reason: nil); socket = nil
         self.computerID = computerID
         reconnect = PathwayComputerFrameReconnect()
         errorMessage = nil
         isConnecting = false
         guard let computerID else { return }
-        task = Task { [weak self] in await self?.run(computerID) }
+        task = Task { [weak self, lifetime] in await self?.run(computerID, lifetime: lifetime) }
     }
 
-    private func run(_ computerID: String) async {
+    private func run(_ computerID: String, lifetime: Int) async {
         var url: URL?
         while !Task.isCancelled {
             isConnecting = image == nil
@@ -162,7 +174,7 @@ final class PathwayComputerFrameStream {
                 let target: URL
                 if let url { target = url } else { target = try await resolveURL(computerID); url = target }
                 try Task.checkCancellation()
-                close = await connect(to: target, computerID: computerID)
+                close = await connect(to: target, computerID: computerID, lifetime: lifetime)
             } catch is CancellationError { return } catch {}
             guard !Task.isCancelled else { return }
             switch reconnect.closed(close) {
@@ -179,7 +191,7 @@ final class PathwayComputerFrameStream {
     }
 
     /// Runs one socket until it ends, and says how it ended.
-    private func connect(to url: URL, computerID: String) async -> PathwayComputerFrameReconnect.Close {
+    private func connect(to url: URL, computerID: String, lifetime: Int) async -> PathwayComputerFrameReconnect.Close {
         let socket = session.webSocketTask(with: url)
         socket.maximumMessageSize = Self.maxMessageBytes
         self.socket = socket
@@ -188,23 +200,23 @@ final class PathwayComputerFrameStream {
             socket.cancel(with: .goingAway, reason: nil)
             if self.socket === socket { self.socket = nil }
         }
-        try? await receive(from: socket, computerID: computerID)
+        try? await receive(from: socket, computerID: computerID, lifetime: lifetime)
         return PathwayComputerFrameReconnect.close(status: (socket.response as? HTTPURLResponse)?.statusCode, closeCode: socket.closeCode.rawValue)
     }
 
-    private func receive(from socket: URLSessionWebSocketTask, computerID: String) async throws {
+    private func receive(from socket: URLSessionWebSocketTask, computerID: String, lifetime: Int) async throws {
         var gate = PathwayComputerFrameGate()
         var lastResync = ContinuousClock.now - .seconds(1)
-        var decoding: Task<Void, Never>?
         var pending: Data?
         func resync() {
             guard ContinuousClock.now - lastResync >= .seconds(1) else { return }
             lastResync = .now
             socket.send(.string(#"{"type":"computer.frame.resync"}"#)) { _ in }
         }
-        defer { decoding?.cancel() }
+        defer { if lifetime == self.lifetime { decoding?.cancel(); decoding = nil } }
         while !Task.isCancelled {
             guard case let .data(data) = try await socket.receive() else { continue }
+            guard lifetime == self.lifetime else { return }
             let frame: PathwayComputerFrame
             do { frame = try PathwayComputerFrame(data: data) } catch {
                 errorMessage = Self.unreadableMessage
@@ -216,10 +228,11 @@ final class PathwayComputerFrameStream {
             guard step.action == .decode else { continue }
             if decoding != nil { pending = frame.payload; continue }
             var next: Data? = frame.payload
+            let decodeFrame = decodeFrame
             decoding = Task { [weak self] in
                 while let payload = next {
-                    let decoded = await Task.detached(priority: .userInitiated) { Self.decode(payload) }.value
-                    guard let self, !Task.isCancelled, self.computerID == computerID else { return }
+                    let decoded = await Task.detached(priority: .userInitiated) { await decodeFrame(payload) }.value
+                    guard let self, !Task.isCancelled, self.lifetime == lifetime else { return }
                     if let decoded {
                         self.image = decoded; self.errorMessage = nil; self.isConnecting = false
                         self.reconnect.usableFrame()
@@ -227,7 +240,7 @@ final class PathwayComputerFrameStream {
                     else { self.errorMessage = Self.unreadableMessage; resync() }
                     next = pending; pending = nil
                 }
-                decoding = nil
+                self?.decoding = nil
             }
         }
     }
