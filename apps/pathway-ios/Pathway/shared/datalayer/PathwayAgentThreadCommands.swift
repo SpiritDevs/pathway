@@ -13,6 +13,8 @@ struct PathwayThreadLaunchDraft: Sendable {
     var attachments: [JSONValue] = []
     var temporary = false
     var conversationCompanyID: String? = nil
+    /// Computer intent for the first message (`PathwayComputerInvocation.newChatFields`).
+    var computer: [String: JSONValue] = [:]
 }
 
 enum PathwayAgentThreadCommands {
@@ -64,7 +66,7 @@ enum PathwayAgentThreadCommands {
                 "messageId": .string(identifier),
                 "text": .string(draft.prompt),
                 "attachments": .array(draft.attachments)
-            ])
+            ].merging(draft.computer) { current, _ in current })
         ]
         if draft.temporary { payload["temporary"] = .bool(true) }
         if draft.projectID == nil, let companyID = draft.conversationCompanyID {
