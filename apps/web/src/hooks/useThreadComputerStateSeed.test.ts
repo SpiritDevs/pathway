@@ -2,7 +2,7 @@ import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
 import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import * as Cause from "effect/Cause";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { threadComputerState } from "~/components/computer/computerTestFixtures";
 
@@ -45,7 +45,9 @@ vi.mock("./useComputerEventBridge", () => ({
 }));
 
 const { useComputerStateStore } = await import("../computerStateStore");
-const { useThreadComputerStateSeed } = await import("./useThreadComputerStateSeed");
+const { readComputerControlGenerationForSend, useThreadComputerStateSeed } =
+  await import("./useThreadComputerStateSeed");
+const { resolveComputerControlForSend } = await import("./useComputerControlModeChange.logic");
 
 const ENV = EnvironmentId.make("environment-1");
 const THREAD = ThreadId.make("reconnect-thread");
@@ -124,4 +126,71 @@ it("keeps the cache on a failed seed and asks nothing without a thread", async (
   harness.reset();
   render(null);
   expect(harness.runAtomCommand).toHaveBeenCalledTimes(1);
+});
+
+describe("readComputerControlGenerationForSend", () => {
+  // A stopped thread sits at generation 1 and refuses intent pinned to 0.
+  const stopped = threadComputerState({ threadId: THREAD, controlGeneration: 1 });
+
+  it("asks the server for an unseeded thread's generation before a Computer send", async () => {
+    harness.runAtomCommand.mockResolvedValue(AsyncResult.success(stopped));
+    const generation = await readComputerControlGenerationForSend(harness.registry as never, {
+      ref: REF,
+      messageText: "/computer-use open Calculator",
+      computerControlEnabled: false,
+      known: undefined,
+    });
+    expect(generation).toBe(1);
+    expect(
+      resolveComputerControlForSend({
+        messageText: "/computer-use open Calculator",
+        computerControlEnabled: false,
+        generation,
+      }).fields,
+    ).toEqual({ computerControlGeneration: 1 });
+    expect(
+      useComputerStateStore.getState().threadStates[scopedThreadKey(REF)]?.controlGeneration,
+    ).toBe(1);
+  });
+
+  it("asks nothing when the generation is known, the send has no intent, or the thread is new", async () => {
+    const input = {
+      ref: REF,
+      messageText: "/computer-use open Calculator",
+      computerControlEnabled: false,
+    };
+    expect(
+      await readComputerControlGenerationForSend(harness.registry as never, {
+        ...input,
+        known: 2,
+      }),
+    ).toBe(2);
+    expect(
+      await readComputerControlGenerationForSend(harness.registry as never, {
+        ...input,
+        messageText: "summarise the README",
+        known: undefined,
+      }),
+    ).toBeUndefined();
+    expect(
+      await readComputerControlGenerationForSend(harness.registry as never, {
+        ...input,
+        ref: null,
+        known: undefined,
+      }),
+    ).toBeUndefined();
+    expect(harness.runAtomCommand).not.toHaveBeenCalled();
+  });
+
+  it("leaves the generation unknown when the server cannot answer", async () => {
+    harness.runAtomCommand.mockResolvedValue(AsyncResult.failure(Cause.fail("offline")));
+    expect(
+      await readComputerControlGenerationForSend(harness.registry as never, {
+        ref: REF,
+        messageText: "open Calculator",
+        computerControlEnabled: true,
+        known: undefined,
+      }),
+    ).toBeUndefined();
+  });
 });

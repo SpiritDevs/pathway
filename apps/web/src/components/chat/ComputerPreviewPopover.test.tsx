@@ -35,6 +35,7 @@ const current: {
   streamStatus: ComputerImageStreamStatus | undefined;
   floating: { x: number; y: number } | undefined;
   primaryEnvironmentId: string | null;
+  supported: boolean;
 } = vi.hoisted(() => ({
   session: undefined,
   state: undefined,
@@ -46,7 +47,9 @@ const current: {
   streamStatus: undefined,
   floating: undefined,
   primaryEnvironmentId: "environment-local",
+  supported: true,
 }));
+const seedThreadState = vi.hoisted(() => vi.fn());
 
 const keyOf = (threadId: string) =>
   scopedThreadKey({
@@ -107,7 +110,11 @@ vi.mock("../computer/useComputerImageStream", () => ({
 }));
 
 vi.mock("../../hooks/useThreadComputerStateSeed", () => ({
-  useThreadComputerStateSeed: () => undefined,
+  useThreadComputerStateSeed: seedThreadState,
+}));
+
+vi.mock("../../hooks/useComputerSupport", () => ({
+  useComputerSupport: () => current.supported,
 }));
 
 vi.mock("../../hooks/useSettings", () => ({
@@ -181,6 +188,8 @@ afterEach(() => {
   current.floating = undefined;
   current.tapEnabled = undefined;
   current.primaryEnvironmentId = "environment-local";
+  current.supported = true;
+  seedThreadState.mockClear();
 });
 
 describe("ComputerPreviewPopover", () => {
@@ -362,6 +371,26 @@ describe("ComputerPreviewRail", () => {
     const markup = renderToStaticMarkup(<ComputerPreviewRail threadRef={THREAD_REF} />);
     expect(markup).toContain("pointer-events-none absolute inset-y-0 right-0 z-20");
     expect(markup).toContain('aria-label="Computer preview"');
+  });
+
+  // After a reload or reconnect there is no preview session yet; the seed is
+  // what brings one back and what gives a send the thread's generation.
+  it("seeds the open thread's state before any preview exists", () => {
+    renderToStaticMarkup(<ComputerPreviewRail threadRef={THREAD_REF} />);
+    expect(seedThreadState).toHaveBeenCalledWith(THREAD_REF);
+  });
+
+  it("seeds the open thread's state with the automatic preview disabled", () => {
+    current.session = session("live");
+    current.autoOpenComputerPane = false;
+    renderToStaticMarkup(<ComputerPreviewRail threadRef={THREAD_REF} />);
+    expect(seedThreadState).toHaveBeenCalledWith(THREAD_REF);
+  });
+
+  it("asks nothing of an environment that cannot drive a desktop", () => {
+    current.supported = false;
+    renderToStaticMarkup(<ComputerPreviewRail threadRef={THREAD_REF} />);
+    expect(seedThreadState).not.toHaveBeenCalledWith(THREAD_REF);
   });
 });
 
