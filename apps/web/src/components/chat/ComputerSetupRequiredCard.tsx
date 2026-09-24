@@ -20,7 +20,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
 import { useCachedComputerStatus, useComputerStateStore } from "~/computerStateStore";
-import { useLiveRefresh } from "~/hooks/useLiveRefresh";
+import { useComputerStatusRefresh } from "~/hooks/useComputerStatusRefresh";
 import { useProvisionComputer } from "~/hooks/useProvisionComputer";
 import {
   computerStatusNeedsSetup,
@@ -188,7 +188,7 @@ export function ConnectedComputerSetupRequiredCard({ environmentId, ...props }: 
     });
   }, [environmentId, refreshStatus]);
   const hasStatus = status !== undefined;
-  // Read once when no other surface has asked yet; after that the bounded live
+  // Read once when no other surface has asked yet; after that the 10-second
   // refresh and pushed status events keep it current.
   useEffect(() => {
     if (!hasStatus) recheck();
@@ -198,7 +198,10 @@ export function ConnectedComputerSetupRequiredCard({ environmentId, ...props }: 
     status.availability.kind === "available" &&
     status.health.status === "connected" &&
     !computerStatusNeedsSetup(status);
-  useLiveRefresh(recheck, { enabled: !ready, key: `computer-status:${environmentId}` });
+  useComputerStatusRefresh({
+    refreshStatus: recheck,
+    paused: ready || statusError !== undefined,
+  });
   const missing = status
     ? status.availability.kind === "permission-required"
       ? status.availability.missing

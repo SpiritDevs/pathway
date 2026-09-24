@@ -79,7 +79,7 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
-import { useComputerStatusRefresh } from "./useComputerStatusRefresh";
+import { useComputerStatusRefresh } from "~/hooks/useComputerStatusRefresh";
 
 const selectStatusByEnvironment = (state: {
   readonly statusByEnvironment: Readonly<Record<string, ComputerStatusResult>>;
