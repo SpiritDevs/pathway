@@ -43,7 +43,11 @@ export function computerApprovalCardText(prompt: ComputerApprovalPrompt): string
     case "task":
       return "Allow Computer for this task";
     case "app":
-      return `Allow Computer to use ${prompt.app ?? "another app"} in this task`;
+      // Without a named app the answer is task consent; the card must not
+      // read "another app" as an app's name.
+      return prompt.app === undefined
+        ? "Allow Computer for this task"
+        : `Allow Computer to use ${prompt.app} in this task`;
     case "call":
       return prompt.detail === undefined
         ? `Computer action needs approval: ${prompt.toolName}`
