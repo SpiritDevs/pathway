@@ -263,7 +263,7 @@ records one intentional deviation: the Synara behaviour or test, what Pathway do
 
 ### Chat
 
-- The approval scope (whole task, one app, one call) is parsed from the prompt text by `parseComputerApprovalPrompt`, because the approval item has no structured scope. The parser is coupled to the server's `computerApprovalCardText`.
+- The approval scope (whole task, one app, one call) is parsed from the prompt text by `parseComputerApprovalPrompt`, because the approval item has no structured scope. The parser is coupled to the server's `computerApprovalCardText`. See `computer-use-approval-text.md` for every approval-text dependency and the tests that pin it.
 - As in Synara, "Always allow this session" is hidden for every Computer scope: session-wide consent would bypass per-task consent. The one-app consent copy is Pathway's own; Synara has none.
 - Call approvals show the action summary and its parameters instead of the raw call. The panel keeps Pathway's split layout.
 - An approval is answered at most once per response attempt: its request id plus the live provider session the answer goes to. Pathway has no lifecycle generation or durable attempt key, so a request re-posted to a new session counts as Synara's newer attempt. Only a sent response keeps the claim. A failed send, or one a local guard refused before sending (conversation storage), releases it. Synara kept the claim whenever its callback resolved, because its guards threw.

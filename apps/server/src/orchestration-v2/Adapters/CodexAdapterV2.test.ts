@@ -5402,6 +5402,27 @@ describe("codexMcpElicitationAction", () => {
     decline({ ...toolCall({ tool: "computer_click" }), _meta: { codex_approval_kind: "other" } });
     decline({ ...toolCall({ tool: "computer_click" }), message: "Run computer_click?" });
   });
+
+  // Codex omits `tool_name`, so these literals pin the exact prompt wording it
+  // generates (docs/internals/computer-use-approval-text.md).
+  it.each([
+    ['Allow the pathway MCP server to run tool "computer_click"?', "accept"],
+    ['Allow the pathway MCP server to run tool "computer_type_text"?', "accept"],
+    ['Allow the pathway MCP server to run tool "shell"?', "decline"],
+    ['Allow the other MCP server to run tool "computer_click"?', "decline"],
+    ["Please approve computer_click", "decline"],
+    ['Allow the pathway MCP server to run tool "computer_click"? Extra text', "decline"],
+    ['Allow the Pathway MCP server to run tool "computer_click"?', "decline"],
+  ] as const)("reads the tool from Codex's generated prompt: %s", (message, action) => {
+    assert.equal(
+      codexMcpElicitationAction({
+        params: { ...toolCall({ tool: "unused" }), message },
+        runtimePolicy: admitted,
+        activeTurn: true,
+      }),
+      action,
+    );
+  });
 });
 
 describe("CodexAdapterV2 Computer elicitation stop guard", () => {
