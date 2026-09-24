@@ -21,6 +21,8 @@ export interface ComputerInputQueue {
    * desktop finishes; nothing queued behind it runs.
    */
   readonly clear: () => void;
+  /** Resolves once every send queued so far has finished or been skipped. */
+  readonly settled: () => Promise<void>;
 }
 
 export const COMPUTER_INPUT_QUEUE_LIMIT = 24;
@@ -67,5 +69,6 @@ export function createComputerInputQueue(
       generation += 1;
       pending = inFlight ? 1 : 0;
     },
+    settled: () => chain.then(() => undefined),
   };
 }

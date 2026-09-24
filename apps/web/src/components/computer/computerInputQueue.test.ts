@@ -15,27 +15,29 @@ describe("computer input queue", () => {
     const started: number[] = [];
     const finished: number[] = [];
     const gates = [deferred(), deferred()];
+    const starts = [deferred(), deferred()];
     const queue = createComputerInputQueue();
 
     for (const [index, gate] of gates.entries()) {
       queue.push(async () => {
         started.push(index);
+        starts[index]?.resolve();
         await gate.promise;
         finished.push(index);
       });
     }
 
-    await Promise.resolve();
+    await starts[0]?.promise;
     expect(started).toEqual([0]);
     expect(queue.pending()).toBe(2);
 
     gates[0]?.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await starts[1]?.promise;
     expect(started).toEqual([0, 1]);
     expect(finished).toEqual([0]);
 
     gates[1]?.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await queue.settled();
     expect(finished).toEqual([0, 1]);
     expect(queue.pending()).toBe(0);
   });
@@ -51,7 +53,7 @@ describe("computer input queue", () => {
     expect(dropped).toHaveLength(1);
 
     gate.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await queue.settled();
     expect(queue.pending()).toBe(0);
     expect(queue.push(async () => {})).toBe(true);
   });
@@ -68,19 +70,21 @@ describe("computer input queue", () => {
       ranAfterFailure = true;
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await queue.settled();
     expect(errors).toHaveLength(1);
     expect(ranAfterFailure).toBe(true);
   });
 
   it("clear() drops what has not started and lets the in-flight send finish", async () => {
     const gate = deferred();
+    const started = deferred();
     const ran: number[] = [];
     const errors: unknown[] = [];
     const queue = createComputerInputQueue({ onError: (error) => errors.push(error) });
 
     queue.push(async () => {
       ran.push(0);
+      started.resolve();
       await gate.promise;
     });
     queue.push(async () => {
@@ -89,14 +93,14 @@ describe("computer input queue", () => {
     queue.push(async () => {
       ran.push(2);
     });
-    await Promise.resolve();
+    await started.promise;
     expect(queue.pending()).toBe(3);
 
     queue.clear();
     expect(queue.pending()).toBe(1);
 
     gate.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await queue.settled();
     expect(ran).toEqual([0]);
     expect(errors).toEqual([]);
     expect(queue.pending()).toBe(0);
@@ -105,7 +109,7 @@ describe("computer input queue", () => {
     queue.push(async () => {
       ran.push(3);
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await queue.settled();
     expect(ran).toEqual([0, 3]);
   });
 });

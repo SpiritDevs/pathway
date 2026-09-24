@@ -164,9 +164,21 @@ function feed(bridge: BridgeHarness, seq: number): void {
   bridge.listener?.({ windowId: 7, seq, jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]) });
 }
 
-/** The JPEG decode awaits a mocked createImageBitmap; a few microtask turns settle it. */
-async function flushDecode(): Promise<void> {
-  for (let index = 0; index < 10; index += 1) await Promise.resolve();
+/** A fake bitmap whose `closed` settles when the hook's decode `finally` releases it. */
+function fakeBitmap(size = { width: 320, height: 200 }) {
+  let release!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { ...size, close: vi.fn(() => release()), closed };
+}
+
+/** Resolves once the hook is done with the newest decode. */
+async function decoded(): Promise<void> {
+  const bitmap = (await createImageBitmapMock.mock.results.at(-1)?.value) as ReturnType<
+    typeof fakeBitmap
+  >;
+  await bitmap.closed;
 }
 
 function render(input: {
@@ -202,11 +214,7 @@ beforeEach(() => {
   tapOwnership.state = undefined;
   vi.unstubAllGlobals();
   createImageBitmapMock.mockReset();
-  createImageBitmapMock.mockImplementation(async () => ({
-    width: 320,
-    height: 200,
-    close: vi.fn(),
-  }));
+  createImageBitmapMock.mockImplementation(async () => fakeBitmap());
   vi.stubGlobal("createImageBitmap", createImageBitmapMock);
   stubVisibleDocument();
 });
@@ -237,7 +245,7 @@ describe("useComputerPreviewTap", () => {
 
     expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).active).toBe(false);
     feed(bridge, 1);
-    await flushDecode();
+    await decoded();
 
     expect(createImageBitmapMock).toHaveBeenCalledOnce();
     expect(canvas.width).toBe(320);
@@ -253,13 +261,13 @@ describe("useComputerPreviewTap", () => {
 
     render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await flushDecode();
+    await decoded();
     feed(bridge, 3);
-    await flushDecode();
+    await decoded();
     feed(bridge, 2); // stale: behind the last decoded seq
     feed(bridge, 3); // repeat: never decode the same frame twice
     feed(bridge, 4);
-    await flushDecode();
+    await decoded();
 
     expect(createImageBitmapMock).toHaveBeenCalledTimes(3);
     expect(context.drawImage).toHaveBeenCalledTimes(3);
@@ -283,10 +291,11 @@ describe("useComputerPreviewTap", () => {
     // Frames arriving mid-decode must be dropped, never queued for later.
     feed(bridge, 2);
     feed(bridge, 3);
-    deferred.resolve({ width: 320, height: 200, close: vi.fn() });
-    await flushDecode();
+    const first = fakeBitmap();
+    deferred.resolve(first);
+    await first.closed;
     feed(bridge, 4);
-    await flushDecode();
+    await decoded();
 
     // Only seq 1 and seq 4 ever decoded; 2 and 3 were dropped while busy.
     expect(createImageBitmapMock).toHaveBeenCalledTimes(2);
@@ -301,16 +310,14 @@ describe("useComputerPreviewTap", () => {
 
     render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await vi.advanceTimersByTimeAsync(0);
-    await flushDecode();
+    await decoded();
     expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).active).toBe(true);
 
     vi.advanceTimersByTime(COMPUTER_PREVIEW_TAP_QUIET_MS + 1);
     expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).active).toBe(false);
 
     feed(bridge, 2);
-    await vi.advanceTimersByTimeAsync(0);
-    await flushDecode();
+    await decoded();
     expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).active).toBe(true);
   });
 
@@ -321,7 +328,7 @@ describe("useComputerPreviewTap", () => {
 
     render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await flushDecode();
+    await decoded();
 
     render({ enabled: false, canvasRef, threadRef: THREAD_REF });
     expect(bridge.unsubscribe).toHaveBeenCalledOnce();
@@ -365,7 +372,7 @@ describe("useComputerPreviewTap", () => {
     render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     expect(bridge.onFrame).toHaveBeenCalledTimes(2);
     feed(bridge, 1);
-    await flushDecode();
+    await decoded();
     expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).active).toBe(true);
   });
 
@@ -376,19 +383,17 @@ describe("useComputerPreviewTap", () => {
 
     expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).frameSize).toBeNull();
     feed(bridge, 1);
-    await flushDecode();
+    await decoded();
     expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).frameSize).toEqual({
       width: 320,
       height: 200,
     });
 
-    createImageBitmapMock.mockImplementationOnce(async () => ({
-      width: 640,
-      height: 400,
-      close: vi.fn(),
-    }));
+    createImageBitmapMock.mockImplementationOnce(async () =>
+      fakeBitmap({ width: 640, height: 400 }),
+    );
     feed(bridge, 2);
-    await flushDecode();
+    await decoded();
     expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).frameSize).toEqual({
       width: 640,
       height: 400,
@@ -403,8 +408,7 @@ describe("useComputerPreviewTap", () => {
 
     render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await vi.advanceTimersByTimeAsync(0);
-    await flushDecode();
+    await decoded();
     expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).frameSize).toEqual({
       width: 320,
       height: 200,
@@ -426,7 +430,7 @@ describe("useComputerPreviewTap", () => {
 
     render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await flushDecode();
+    await decoded();
     expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).frameSize).toEqual({
       width: 320,
       height: 200,
@@ -445,7 +449,7 @@ describe("useComputerPreviewTap", () => {
     expect(disabled.frameSize).toEqual({ width: 320, height: 200 });
   });
 
-  it("stays inactive and draws nothing when another thread drives the desktop", async () => {
+  it("stays inactive and draws nothing when another thread drives the desktop", () => {
     // A refused call: agent mid-turn, but another thread owns the lease.
     tapOwnership.state = ownedThreadState({
       controlOwnerThreadId: ThreadId.make("other-thread"),
@@ -464,7 +468,6 @@ describe("useComputerPreviewTap", () => {
     expect(bridge.onFrame).not.toHaveBeenCalled();
 
     feed(bridge, 1);
-    await flushDecode();
     expect(createImageBitmapMock).not.toHaveBeenCalled();
     expect(context.drawImage).not.toHaveBeenCalled();
     const still = render({ enabled: true, canvasRef, threadRef: THREAD_REF });
@@ -484,7 +487,7 @@ describe("useComputerPreviewTap", () => {
 
     render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await flushDecode();
+    await decoded();
 
     expect(createImageBitmapMock).toHaveBeenCalledOnce();
     expect(context.drawImage).toHaveBeenCalledOnce();
@@ -493,7 +496,7 @@ describe("useComputerPreviewTap", () => {
     expect(output.frameSize).toEqual({ width: 320, height: 200 });
   });
 
-  it("leaves untagged frames to the stills fallback while background tasks share the host", async () => {
+  it("leaves untagged frames to the stills fallback while background tasks share the host", () => {
     tapOwnership.state = ownedThreadState({
       controlOwnerThreadId: THREAD_ID,
       agentActive: true,
@@ -506,7 +509,7 @@ describe("useComputerPreviewTap", () => {
     expect(output.active).toBe(false);
     expect(bridge.onFrame).not.toHaveBeenCalled();
     feed(bridge, 1);
-    await flushDecode();
+    expect(createImageBitmapMock).not.toHaveBeenCalled();
     expect(context.drawImage).not.toHaveBeenCalled();
   });
 
@@ -522,7 +525,7 @@ describe("useComputerPreviewTap", () => {
 
     render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await flushDecode();
+    await decoded();
 
     expect(context.drawImage).toHaveBeenCalledOnce();
     expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).active).toBe(true);
