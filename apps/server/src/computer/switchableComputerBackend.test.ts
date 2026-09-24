@@ -11,6 +11,7 @@ import * as Stream from "effect/Stream";
 
 import type { ComputerBackendEvent } from "./ComputerBackend.ts";
 import { ComputerManager } from "./ComputerManager.ts";
+import { ComputerBackendError } from "./computerErrors.ts";
 import { DESKTOP_OPERATION_QUEUE_LIMIT } from "./DesktopOperationQueue.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import {
@@ -41,6 +42,18 @@ const lastPushedAvailability = (events: PubSub.Subscription<ComputerEvent>, thre
           : [],
       )
       .at(-1),
+  );
+
+/** The next state the manager pushes for `threadId` that is past the selection placeholder. */
+const nextPushedState = (events: PubSub.Subscription<ComputerEvent>, threadId: string) =>
+  PubSub.take(events).pipe(
+    Effect.repeat({
+      until: (event) =>
+        event.type === "computer.thread-state" &&
+        event.state.threadId === threadId &&
+        event.state.availability.kind !== "checking",
+    }),
+    Effect.map((event) => (event.type === "computer.thread-state" ? event.state : undefined)),
   );
 
 describe("SwitchableComputerBackend", () => {
@@ -337,25 +350,197 @@ it.layer(NodeServices.layer)("replacing the desktop under the manager", (it) => 
         yield* Deferred.succeed(answer, undefined);
         yield* Fiber.join(replacing);
 
-        const nextPushed = PubSub.take(events).pipe(
-          Effect.repeat({
-            until: (event) =>
-              event.type === "computer.thread-state" &&
-              event.state.threadId === "thread-1" &&
-              event.state.availability.kind !== "checking",
-          }),
-        );
-        const settled = yield* nextPushed;
-        expect(settled.type === "computer.thread-state" && settled.state.availability).toEqual({
+        expect((yield* nextPushedState(events, "thread-1"))?.availability).toEqual({
           kind: "available",
           backend: "fake",
         });
         // A health event republishes the cached verdict, not the probe's.
         selected.emitHealthChanged(selected.health());
-        const republished = yield* nextPushed;
-        expect(
-          republished.type === "computer.thread-state" && republished.state.availability,
-        ).toEqual({ kind: "available", backend: "fake" });
+        expect((yield* nextPushedState(events, "thread-1"))?.availability).toEqual({
+          kind: "available",
+          backend: "fake",
+        });
+      }),
+    ),
+  );
+
+  it.effect("shows a use that succeeds after a failed read of the selected desktop", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const slot = yield* makeSwitchableComputerBackend(
+          new CheckingComputerBackend("Detecting."),
+        );
+        const manager = yield* ComputerManager.make({ backend: slot.backend });
+        yield* manager.getThreadState("thread-1");
+        yield* Effect.ignore(manager.listWindows());
+        const selected = new FakeComputerBackend();
+        selected.setAvailability({ kind: "backend-unavailable", message: "Not started." });
+        yield* manager.replaceDesktop(slot.swap(selected));
+        const events = yield* manager.subscribeEvents;
+
+        selected.failNext(
+          "availability",
+          new ComputerBackendError({ message: "Temporary establishing failure." }),
+        );
+        expect((yield* manager.getThreadState("thread-1")).lastError).toBe(
+          "Temporary establishing failure.",
+        );
+        yield* PubSub.takeAll(events);
+        selected.setAvailability({ kind: "available", backend: "fake" });
+        expect((yield* manager.listWindows()).availability.kind).toBe("available");
+
+        const recovered = yield* nextPushedState(events, "thread-1");
+        expect(recovered?.availability).toEqual({ kind: "available", backend: "fake" });
+        expect(recovered?.lastError).toBeNull();
+        selected.emitHealthChanged(selected.health());
+        expect((yield* nextPushedState(events, "thread-1"))?.availability.kind).toBe("available");
+      }),
+    ),
+  );
+
+  it.effect("keeps a use of the selected desktop over an older passive read", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const slot = yield* makeSwitchableComputerBackend(
+          new CheckingComputerBackend("Detecting."),
+        );
+        const manager = yield* ComputerManager.make({ backend: slot.backend });
+        yield* manager.getThreadState("thread-1");
+        const selected = new FakeComputerBackend();
+        selected.setAvailability({ kind: "backend-unavailable", message: "Not started." });
+        yield* manager.replaceDesktop(slot.swap(selected));
+        const events = yield* manager.subscribeEvents;
+
+        const probing = yield* Deferred.make<void>();
+        const answer = yield* Deferred.make<void>();
+        const probe = selected.probeAvailability.bind(selected);
+        // The thread's own read sees the desktop before anything starts it,
+        // and answers after a use has.
+        selected.probeAvailability = () =>
+          Effect.gen(function* () {
+            const verdict = yield* probe();
+            yield* Deferred.succeed(probing, undefined);
+            yield* Deferred.await(answer);
+            return verdict;
+          });
+        const reading = yield* manager
+          .getThreadState("thread-1")
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Deferred.await(probing);
+        selected.setAvailability({ kind: "available", backend: "fake" });
+        expect((yield* manager.listWindows()).availability.kind).toBe("available");
+        yield* Deferred.succeed(answer, undefined);
+
+        expect((yield* Fiber.join(reading)).availability.kind).toBe("available");
+        expect((yield* lastPushedAvailability(events, "thread-1"))?.kind).toBe("available");
+        selected.emitHealthChanged(selected.health());
+        expect((yield* nextPushedState(events, "thread-1"))?.availability.kind).toBe("available");
+      }),
+    ),
+  );
+
+  it.effect("keeps a newer use of the selected desktop over an older establishing read", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const slot = yield* makeSwitchableComputerBackend(
+          new CheckingComputerBackend("Detecting."),
+        );
+        const manager = yield* ComputerManager.make({ backend: slot.backend });
+        yield* manager.getThreadState("thread-1");
+        yield* Effect.ignore(manager.listWindows());
+        const selected = new FakeComputerBackend();
+        selected.setAvailability({ kind: "backend-unavailable", message: "Not started." });
+        yield* manager.replaceDesktop(slot.swap(selected));
+        const events = yield* manager.subscribeEvents;
+
+        const reading = yield* Deferred.make<void>();
+        const answer = yield* Deferred.make<void>();
+        const establish = selected.availability.bind(selected);
+        let first = true;
+        // The thread's own read answers "not started" after a later use has
+        // found the desktop running.
+        selected.availability = () =>
+          Effect.gen(function* () {
+            const verdict = yield* establish();
+            if (first) {
+              first = false;
+              yield* Deferred.succeed(reading, undefined);
+              yield* Deferred.await(answer);
+            }
+            return verdict;
+          });
+        const threadRead = yield* manager
+          .getThreadState("thread-1")
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Deferred.await(reading);
+        selected.setAvailability({ kind: "available", backend: "fake" });
+        expect((yield* manager.listWindows()).availability.kind).toBe("available");
+        yield* Deferred.succeed(answer, undefined);
+
+        const state = yield* Fiber.join(threadRead);
+        expect(state.availability.kind).toBe("available");
+        // The older read still supplies the windows it saw.
+        expect(state.windows.length).toBeGreaterThan(0);
+        expect((yield* lastPushedAvailability(events, "thread-1"))?.kind).toBe("available");
+      }),
+    ),
+  );
+
+  it.effect("never lets a push about one desktop start the next one", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const slot = yield* makeSwitchableComputerBackend(
+          new CheckingComputerBackend("Detecting."),
+        );
+        const manager = yield* ComputerManager.make({ backend: slot.backend });
+        // Enough threads that pushing to them yields to the scheduler midway.
+        for (let n = 0; n < 256; n++) yield* manager.getThreadState(`thread-${n}`);
+        yield* Effect.ignore(manager.listWindows());
+        const first = new FakeComputerBackend();
+        first.setAvailability({ kind: "backend-unavailable", message: "Not started." });
+        yield* manager.replaceDesktop(slot.swap(first));
+
+        const next = new FakeComputerBackend();
+        const probing = yield* Deferred.make<void>();
+        const answer = yield* Deferred.make<void>();
+        const probe = next.probeAvailability.bind(next);
+        next.probeAvailability = () =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(probing, undefined);
+            yield* Deferred.await(answer);
+            return yield* probe();
+          });
+        // The next desktop arrives while the first one's verdict is being
+        // pushed: the push reads capabilities for each thread it visits.
+        const pushing = yield* Deferred.make<void>();
+        const replacing = yield* Deferred.await(pushing).pipe(
+          Effect.andThen(manager.replaceDesktop(slot.swap(next))),
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        const capabilities = first.capabilities.bind(first);
+        first.capabilities = () => {
+          Deferred.doneUnsafe(pushing, Effect.void);
+          return capabilities();
+        };
+        const internals = manager as unknown as {
+          runFork: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
+        };
+        const runFork = internals.runFork;
+        const forked: Fiber.Fiber<unknown, unknown>[] = [];
+        internals.runFork = (effect) => {
+          const fiber = runFork(effect);
+          forked.push(fiber);
+          return fiber;
+        };
+
+        first.setAvailability({ kind: "available", backend: "fake" });
+        expect((yield* manager.availability()).kind).toBe("available");
+        yield* Deferred.await(probing);
+        yield* Fiber.awaitAll(forked);
+        yield* Deferred.succeed(answer, undefined);
+        yield* Fiber.join(replacing);
+        // Nothing has asked to use the next desktop, so nothing started it.
+        expect(next.callsFor("availability")).toHaveLength(0);
       }),
     ),
   );

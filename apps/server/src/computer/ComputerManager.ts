@@ -57,6 +57,7 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FiberSet from "effect/FiberSet";
@@ -65,6 +66,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Random from "effect/Random";
+import * as Result from "effect/Result";
 import type * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -586,23 +588,24 @@ export class ComputerManager {
   private readonly authorityRevocations = new Map<string, DesktopAbort>();
   private readonly controlRequests = new Map<string, symbol>();
   private readonly pendingStops = new Map<string, Fiber.Fiber<void, ComputerOperationError>>();
-  private physicalState:
-    | {
-        availability: ComputerAvailability;
-        windows?: readonly ComputerWindow[];
-        screenSize?: ComputerScreenSize;
-      }
-    | undefined;
-  private physicalRead: Fiber.Fiber<void> | undefined;
-  private physicalFailure: string | undefined;
-  /** Bumped when the desktop is replaced; a read of the previous occupant lands nowhere. */
-  private physicalGeneration = 0;
   /**
-   * Set while threads hold, or are about to be pushed, the passive probe of a
-   * replacement desktop. The first establishing read of that desktop replaces
-   * the verdict; see `establishedAvailability`.
+   * What threads are shown about the desktop. `revision` is the read that last
+   * set `availability` or `failure` (see `acceptAvailability`); windows, screen
+   * size and `readFailure` come from the last physical read and never hide it.
    */
-  private passiveReplacementVerdict = false;
+  private physical: {
+    revision: number;
+    availability?: ComputerAvailability;
+    failure?: string | undefined;
+    windows?: readonly ComputerWindow[];
+    screenSize?: ComputerScreenSize;
+    readFailure?: string | undefined;
+  } = { revision: 0 };
+  private physicalRead: Fiber.Fiber<void> | undefined;
+  /** Bumped when the desktop is replaced; a publication about the previous occupant stops. */
+  private physicalGeneration = 0;
+  /** Handed out as each availability read starts; see `acceptAvailability`. */
+  private readRevision = 0;
   private readonly activeAuthorities = new Map<string, Set<DesktopAbort>>();
   /** Pane input carries no agent authority; a desktop replacement aborts it here. */
   private readonly livePaneInput = new Set<DesktopAbort>();
@@ -772,34 +775,48 @@ export class ComputerManager {
     return this.backend.capabilities();
   }
 
-  /** Single-flight physical read shared by every thread publish. */
+  /**
+   * Single-flight physical read shared by every thread publish. Passive until
+   * the backend is engaged; then it also reads windows and screen size, which
+   * land for the current desktop even when a newer read owns the verdict.
+   */
   private refreshPhysicalState(): Effect.Effect<void> {
     return Effect.suspend(() => {
       if (!this.physicalRead) {
         const generation = this.physicalGeneration;
         const current = () => generation === this.physicalGeneration;
+        const revision = ++this.readRevision;
         const read = Effect.gen({ self: this }, function* () {
-          this.physicalFailure = undefined;
-          if (this.backendEngaged) {
-            const [availability, windows, screenSize] = yield* Effect.all(
-              [this.establishedAvailability(), this.readWindows(), this.backend.getScreenSize()],
-              { concurrency: "unbounded" },
+          if (!this.backendEngaged) {
+            this.acceptAvailability(
+              revision,
+              yield* Effect.result(this.backend.probeAvailability()),
             );
-            if (current()) this.physicalState = { availability, windows, screenSize };
-          } else {
-            const availability = yield* this.backend.probeAvailability();
-            if (current()) this.physicalState = { availability };
+            return;
           }
+          const [availability, layout] = yield* Effect.all(
+            [
+              Effect.result(this.backend.availability()),
+              Effect.result(
+                Effect.all([this.readWindows(), this.backend.getScreenSize()], {
+                  concurrency: "unbounded",
+                }),
+              ),
+            ],
+            { concurrency: "unbounded" },
+          );
+          this.acceptAvailability(revision, availability);
+          if (!current()) return;
+          this.physical =
+            layout._tag === "Success"
+              ? {
+                  ...this.physical,
+                  windows: layout.success[0],
+                  screenSize: layout.success[1],
+                  readFailure: undefined,
+                }
+              : { ...this.physical, readFailure: physicalFailureMessage(layout.failure) };
         }).pipe(
-          Effect.catch((error) =>
-            Effect.sync(() => {
-              if (!current()) return;
-              this.physicalFailure = clampComputerMessage(
-                errorMessage(error),
-                "Computer state is unavailable.",
-              );
-            }),
-          ),
           Effect.ensuring(
             Effect.sync(() => {
               if (current()) this.physicalRead = undefined;
@@ -1367,19 +1384,21 @@ export class ComputerManager {
    * one's availability to every seeded thread. Health and capability events
    * republish cached state only, so without this a thread seeded before the
    * swap keeps its old availability until it asks again. The probe is the
-   * passive one, because nothing has asked to use the new desktop yet. A read
-   * that does use it supersedes the probe, even one still in flight. The probe
-   * runs after the swap's queue barrier, so it never holds input back.
+   * passive one, because nothing has asked to use the new desktop yet. Any
+   * read that starts later is newer, so a use of the desktop supersedes the
+   * probe even while it is in flight. The probe runs after the swap's queue
+   * barrier, so it never holds input back.
    */
   private refreshReplacedDesktop(): Effect.Effect<void> {
     return Effect.suspend(() => {
       if (this.disposed) return Effect.void;
       this.physicalGeneration += 1;
       this.physicalRead = undefined;
-      this.physicalState = undefined;
-      this.physicalFailure = undefined;
-      this.passiveReplacementVerdict = true;
+      // A fresh revision: every read that started before the swap is older
+      // than this empty cache, so it lands nowhere.
+      this.physical = { revision: ++this.readRevision };
       const generation = this.physicalGeneration;
+      const revision = ++this.readRevision;
       return this.backend.probeAvailability().pipe(
         Effect.catch((error) =>
           Effect.succeed<ComputerAvailability>({
@@ -1387,19 +1406,11 @@ export class ComputerManager {
             message: clampComputerMessage(errorMessage(error), "The computer backend failed."),
           }),
         ),
-        Effect.flatMap((availability) => {
-          if (
-            this.disposed ||
-            generation !== this.physicalGeneration ||
-            !this.passiveReplacementVerdict
-          ) {
-            return Effect.void;
-          }
-          this.physicalState ??= { availability };
-          return Effect.forEach([...this.threads.keys()], (threadId) => this.publish(threadId), {
-            discard: true,
-          });
-        }),
+        Effect.flatMap((availability) =>
+          this.acceptAvailability(revision, Result.succeed(availability))
+            ? this.publishVerdict(generation)
+            : Effect.void,
+        ),
       );
     });
   }
@@ -1452,35 +1463,54 @@ export class ComputerManager {
 
   /**
    * The backend's establishing availability read, for every path that uses the
-   * desktop for a real reason. After a replacement, the first one to succeed
-   * becomes the verdict threads are shown and is pushed to all of them, so a
-   * slower passive probe of the same desktop cannot land over it. Otherwise
-   * it only reads.
+   * desktop for a real reason. A verdict that changes what threads are shown
+   * is pushed to all of them; a failed read is only its caller's to report.
    */
   private establishedAvailability(options?: {
     readonly refresh?: boolean;
   }): Effect.Effect<ComputerAvailability, ComputerOperationError> {
     return Effect.suspend(() => {
       const generation = this.physicalGeneration;
+      const revision = ++this.readRevision;
       return Effect.tap(this.backend.availability(options), (availability) =>
         Effect.sync(() => {
-          if (
-            this.disposed ||
-            !this.passiveReplacementVerdict ||
-            generation !== this.physicalGeneration
-          ) {
-            return;
+          if (this.acceptAvailability(revision, Result.succeed(availability))) {
+            this.runFork(this.publishVerdict(generation));
           }
-          this.passiveReplacementVerdict = false;
-          this.physicalState = { ...this.physicalState, availability };
-          this.runFork(
-            Effect.forEach([...this.threads.keys()], (threadId) => this.publish(threadId), {
-              discard: true,
-            }),
-          );
         }),
       );
     });
+  }
+
+  /**
+   * Offers the cache the outcome of the availability read that started at
+   * `revision`. Only a read newer than the one that last landed is accepted, so
+   * a slow read never overwrites what a later one found, and a success clears
+   * an older failure. Answers whether that changed what threads are shown.
+   */
+  private acceptAvailability(
+    revision: number,
+    outcome: Result.Result<ComputerAvailability, unknown>,
+  ): boolean {
+    const before = this.physical;
+    if (revision <= before.revision) return false;
+    this.physical =
+      outcome._tag === "Success"
+        ? { ...before, revision, availability: outcome.success, failure: undefined }
+        : { ...before, revision, failure: physicalFailureMessage(outcome.failure) };
+    return (
+      !Equal.equals(before.availability, this.physical.availability) ||
+      before.failure !== this.physical.failure
+    );
+  }
+
+  /**
+   * Pushes the cached verdict to every thread. Bound to the desktop it was
+   * accepted for: once that desktop is replaced, the rest of the push stops.
+   */
+  private publishVerdict(generation: number): Effect.Effect<void> {
+    const publish = (threadId: string) => this.publish(threadId, generation);
+    return Effect.forEach([...this.threads.keys()], publish, { discard: true });
   }
 
   availability(): Effect.Effect<ComputerAvailability, ComputerOperationError> {
@@ -5857,9 +5887,14 @@ export class ComputerManager {
    * state, each bump `version`, and both emit — the second overwriting the
    * first with a *newer* version number but identical or older content, which
    * is how duplicate versions leaked to the pane. Serializing makes each
-   * publish see its predecessor's state.
+   * publish see its predecessor's state. A publish bound to a desktop
+   * `generation` does nothing once, holding the lock, it finds that desktop
+   * replaced.
    */
-  private publish(threadId: string): Effect.Effect<ThreadComputerState | undefined> {
+  private publish(
+    threadId: string,
+    generation?: number,
+  ): Effect.Effect<ThreadComputerState | undefined> {
     return Effect.suspend(() => {
       let lock = this.publishChains.get(threadId);
       if (!lock) {
@@ -5869,7 +5904,7 @@ export class ComputerManager {
       const held = lock;
       this.publishWaiters.set(threadId, (this.publishWaiters.get(threadId) ?? 0) + 1);
       return held
-        .withPermits(1)(this.publishNow(threadId))
+        .withPermits(1)(this.publishNow(threadId, generation))
         .pipe(
           Effect.ensuring(
             Effect.sync(() => {
@@ -5886,28 +5921,20 @@ export class ComputerManager {
     });
   }
 
-  private publishNow(threadId: string): Effect.Effect<ThreadComputerState | undefined> {
-    return Effect.gen({ self: this }, function* () {
+  /** Publishes the cached physical state; never reads the backend. */
+  private publishNow(
+    threadId: string,
+    generation: number | undefined,
+  ): Effect.Effect<ThreadComputerState | undefined> {
+    return Effect.sync(() => {
       const state = this.threads.get(threadId);
-      if (!state) return undefined;
-      if (!this.physicalState && !this.physicalFailure) yield* this.refreshPhysicalState();
-      if (this.physicalFailure) {
-        // Error text the backend does not control, so it meets the contract's
-        // bound here rather than failing the state payload that carries it.
-        state.lastError = clampComputerMessage(
-          this.physicalFailure,
-          "The computer backend reported an error without a message.",
-        );
-      } else {
-        const physical = this.physicalState;
-        if (physical) {
-          state.availability = physical.availability;
-          if (physical.windows) state.windows = physical.windows;
-          if (physical.screenSize) state.screenSize = physical.screenSize;
-        }
-        state.lastError = null;
-      }
-      if (this.disposed || this.threads.get(threadId) !== state) return undefined;
+      const replaced = generation !== undefined && generation !== this.physicalGeneration;
+      if (!state || this.disposed || replaced) return undefined;
+      const physical = this.physical;
+      if (physical.availability) state.availability = physical.availability;
+      if (physical.windows) state.windows = physical.windows;
+      if (physical.screenSize) state.screenSize = physical.screenSize;
+      state.lastError = physical.failure ?? physical.readFailure ?? null;
       state.version = ++this.nextStateVersion;
       const snapshot = this.threadSnapshot(threadId, state);
       // A reported error lands in exactly one publish — the panel keeps it
@@ -6231,6 +6258,11 @@ function byStackingIndex(first: ComputerWindow, second: ComputerWindow): number 
 function agentThreadId(threadId: string | undefined): string | undefined {
   const trimmed = threadId?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+/** A physical read's failure as threads are shown it, within the contract's bound. */
+function physicalFailureMessage(error: unknown): string {
+  return clampComputerMessage(errorMessage(error), "Computer state is unavailable.");
 }
 
 /**
