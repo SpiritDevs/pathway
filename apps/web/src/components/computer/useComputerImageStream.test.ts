@@ -2,7 +2,11 @@ import { ComputerId, EnvironmentId } from "@spiritdevs/contracts";
 import type { ComputerFrame } from "@spiritdevs/shared/computerFrame";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { mergeComputerImageStreamStatus, useComputerImageStream } from "./useComputerImageStream";
+import {
+  COMPUTER_LIVE_VIEW_UNAVAILABLE,
+  mergeComputerImageStreamStatus,
+  useComputerImageStream,
+} from "./useComputerImageStream";
 
 describe("mergeComputerImageStreamStatus", () => {
   it("keeps the previous object when a frame reports streaming again", () => {
@@ -111,6 +115,12 @@ const frameSourceHarness = vi.hoisted(() => ({
   resolveUrl: vi.fn(),
 }));
 
+const connection = vi.hoisted(() => ({ generation: 1 as number | null }));
+
+vi.mock("~/hooks/useComputerEventBridge", () => ({
+  useConnectedGeneration: () => connection.generation,
+}));
+
 vi.mock("./computerFrameSocketUrl", () => ({
   resolveComputerFrameSocketUrl: frameSourceHarness.resolveUrl,
 }));
@@ -209,8 +219,14 @@ function setVisibility(value: "visible" | "hidden", canvasRef: { current: unknow
 
 const createImageBitmapMock = vi.hoisted(() => vi.fn());
 
+/** Settles the hook's URL resolution: its `.then` runs before this await resumes. */
+async function urlResolved(call = frameSourceHarness.resolveUrl.mock.results.length - 1) {
+  await frameSourceHarness.resolveUrl.mock.results[call]?.value;
+}
+
 beforeEach(() => {
   reactHarness.reset();
+  connection.generation = 1;
   frameSourceHarness.handlers = null;
   frameSourceHarness.opened = 0;
   frameSourceHarness.urls = [];
@@ -418,5 +434,76 @@ describe("useComputerImageStream frame socket authorization", () => {
     resolveUrl("wss://remote.example.com/ws/computer-frames?computerId=desktop");
     await flushDecode();
     expect(frameSourceHarness.opened).toBe(0);
+  });
+});
+
+describe("useComputerImageStream connection lifecycle", () => {
+  it("closes the stream when the environment disconnects and retries nothing", async () => {
+    vi.useFakeTimers();
+    try {
+      const { canvasRef } = createCanvas();
+      renderStream({ enabled: true, canvasRef });
+      await urlResolved();
+      expect(frameSourceHarness.opened).toBe(1);
+
+      connection.generation = null;
+      renderStream({ enabled: true, canvasRef });
+      expect(renderStream({ enabled: true, canvasRef }).status.kind).toBe("idle");
+      expect(frameSourceHarness.close).toHaveBeenCalledOnce();
+      // A late close from the dead socket schedules nothing.
+      frameSourceHarness.handlers?.onReset("closed");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(frameSourceHarness.resolveUrl).toHaveBeenCalledOnce();
+
+      connection.generation = 2;
+      renderStream({ enabled: true, canvasRef });
+      await urlResolved();
+      expect(frameSourceHarness.opened).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reuses the socket URL after a stream that delivered frames closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { canvasRef } = createCanvas();
+      renderStream({ enabled: true, canvasRef });
+      await urlResolved();
+      feedSequence(1);
+      frameSourceHarness.handlers?.onReset("closed");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(frameSourceHarness.resolveUrl).toHaveBeenCalledOnce();
+      expect(frameSourceHarness.urls).toEqual([
+        frameSourceHarness.urls[0],
+        frameSourceHarness.urls[0],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up with Live view unavailable when sockets keep closing without a frame", async () => {
+    vi.useFakeTimers();
+    try {
+      const { canvasRef } = createCanvas();
+      renderStream({ enabled: true, canvasRef });
+      await urlResolved();
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        frameSourceHarness.handlers?.onReset("closed");
+        await vi.advanceTimersByTimeAsync(5_000);
+      }
+      expect(frameSourceHarness.opened).toBe(6);
+      frameSourceHarness.handlers?.onReset("closed");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(frameSourceHarness.opened).toBe(6);
+      expect(frameSourceHarness.resolveUrl).toHaveBeenCalledTimes(6);
+      expect(renderStream({ enabled: true, canvasRef }).status).toEqual({
+        kind: "error",
+        message: COMPUTER_LIVE_VIEW_UNAVAILABLE,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
