@@ -1,3 +1,7 @@
+import type { Code, Nodes, Parents } from "mdast";
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
 import {
   $isLineBreakNode,
   $isParagraphNode,
@@ -13,6 +17,8 @@ import {
   type LexicalEditor,
 } from "lexical";
 
+import { INLINE_PARSE_PREFIX, isSameLineOverIndentedCode } from "~/markdown-list-indentation";
+
 /** Markdown punctuation such as `**`, `#`, or a code fence, rendered muted. */
 export const MARKDOWN_SYNTAX = 1 << 8;
 /** Every line of a fenced code block, rendered monospace. */
@@ -20,42 +26,33 @@ export const MARKDOWN_CODE_BLOCK = 1 << 9;
 
 const TEXT_FORMAT_MASK = IS_BOLD | IS_ITALIC | IS_STRIKETHROUGH | IS_CODE;
 
-// Emphasis matching is quadratic on text full of unmatched delimiters. A
-// paragraph longer than this is parsed line by line, and a line this long is
-// pasted data, not prose, so it stays plain.
-const MAX_INLINE_LENGTH = 2_000;
-// Styling splits text into a node per formatted run, and the composer's cursor
-// math walks every node on each keystroke. A prompt past either limit is mostly
-// pasted material, so it stays plain rather than slowing down typing.
-const MAX_STYLED_PROMPT_LENGTH = 20_000;
+// Parsing runs on every keystroke and styling splits text into a node per
+// formatted run, which the composer's cursor math walks each keystroke too. A
+// prompt past either limit is mostly pasted material, so it stays plain rather
+// than slowing down typing.
+const MAX_STYLED_PROMPT_LENGTH = 5_000;
 const MAX_STYLED_RUNS = 2_000;
 
-const FENCE_OPEN_PATTERN = /^ {0,3}(`{3,}|~{3,})/;
-const FENCE_CLOSE_PATTERN = /^ {0,3}(`{3,}|~{3,})\s*$/;
-const HEADING_PATTERN = /^ {0,3}#{1,6}[ \t]+/;
-// A list item or quote starts a new block, so emphasis cannot span into it.
-const BLOCK_START_PATTERN = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]|^ {0,3}>/;
-const ESCAPABLE_PATTERN = /[!-/:-@[-`{-~]/;
-const MARKDOWN_CHARACTER_PATTERN = /[*_~`#]/;
-// Placeholder for text the editor may not restyle, such as masked delimiters.
-const MASK = "\u0001";
+const MARKDOWN_CHARACTER_PATTERN = /[*_~`#>=-]/;
+const ESCAPE_PATTERN = /\\[!-/:-@[-`{-~]/g;
+// Four columns of indentation, where a tab after up to three spaces reaches the next stop.
+const INDENTED_CODE_PATTERN = /^(?: {4}| {0,3}\t)/;
+const FENCE_PATTERN = /^(?:`{3}|~{3})/;
+const QUOTE_PREFIX_PATTERN = /^[ \t]*(?:>[ \t]?)+/;
 
-// Ordered so `**` claims its delimiters before `*` can.
-const EMPHASIS_RULES: ReadonlyArray<{ pattern: RegExp; delimiter: number; mark: number }> = [
-  { pattern: /~~(?=[^\s~])(.*?[^\s~])~~/gs, delimiter: 2, mark: IS_STRIKETHROUGH },
-  { pattern: /\*\*(?=[^\s*])(.*?[^\s*])\*\*/gs, delimiter: 2, mark: IS_BOLD },
-  {
-    pattern: /(?<![\p{L}\p{N}_])__(?=[^\s_])(.*?[^\s_])__(?![\p{L}\p{N}_])/gsu,
-    delimiter: 2,
-    mark: IS_BOLD,
-  },
-  { pattern: /\*(?=[^\s*])(.*?[^\s*])\*/gs, delimiter: 1, mark: IS_ITALIC },
-  {
-    pattern: /(?<![\p{L}\p{N}_])_(?=[^\s_])(.*?[^\s_])_(?![\p{L}\p{N}_])/gsu,
-    delimiter: 1,
-    mark: IS_ITALIC,
-  },
-];
+// The same micromark parser and GFM extensions the chat renderer uses
+// (react-markdown with remark-gfm), so the preview agrees with the sent message.
+const PARSE_OPTIONS = {
+  extensions: [gfm()],
+  mdastExtensions: [gfmFromMarkdown()],
+};
+
+const INLINE_FORMATS = {
+  delete: IS_STRIKETHROUGH,
+  emphasis: IS_ITALIC,
+  heading: IS_BOLD,
+  strong: IS_BOLD,
+} as const;
 
 export const COMPOSER_MARKDOWN_THEME: EditorThemeClasses = {
   text: {
@@ -72,78 +69,121 @@ function addMark(marks: Uint16Array, from: number, to: number, mark: number): vo
   }
 }
 
-/** Marks code spans and backslash escapes, masking both from emphasis. */
-function markCodeSpansAndEscapes(text: string, marks: Uint16Array, chars: string[]): void {
-  const runLength = (from: number) => {
-    let end = from;
-    while (text[end] === "`") end += 1;
-    return end - from;
-  };
-  let index = 0;
-  while (index < text.length) {
-    if (text[index] === "\\" && ESCAPABLE_PATTERN.test(text[index + 1] ?? "")) {
-      // The rendered message hides the backslash and shows the next character literally.
-      addMark(marks, index, index + 1, MARKDOWN_SYNTAX);
-      chars[index + 1] = MASK;
-      index += 2;
-      continue;
+function lineEnd(text: string, from: number, limit: number): number {
+  const end = text.indexOf("\n", from);
+  return end === -1 || end > limit ? limit : end;
+}
+
+/**
+ * Marks over-indented list text the way the chat renders it: the code node's
+ * value reparsed as inline content, behind the same prefix the renderer uses to
+ * keep it inline, with each character mapped back to its source offset.
+ */
+function markListItemText(node: Code, text: string, start: number, marks: Uint16Array): void {
+  // Each value line is the tail of its source line once indentation is removed.
+  const sourceLines = text.slice(start).split("\n");
+  const sourceOffsets: number[] = [];
+  let lineStart = start;
+  node.value.split("\n").forEach((valueLine, index) => {
+    const sourceLine = sourceLines[index] ?? "";
+    const offset = sourceLine.endsWith(valueLine)
+      ? lineStart + sourceLine.length - valueLine.length
+      : -1;
+    for (let column = 0; column < valueLine.length; column += 1) {
+      sourceOffsets.push(offset < 0 ? -1 : offset + column);
     }
-    if (text[index] !== "`") {
-      index += 1;
-      continue;
+    sourceOffsets.push(-1);
+    lineStart += sourceLine.length + 1;
+  });
+
+  const leading = node.value.length - node.value.trimStart().length;
+  const content = node.value.trim();
+  const prefixed = `${INLINE_PARSE_PREFIX}${content}`;
+  const prefixedMarks = new Uint16Array(prefixed.length);
+  markNode(fromMarkdown(prefixed, PARSE_OPTIONS), undefined, prefixed, prefixedMarks);
+  for (let index = 0; index < content.length; index += 1) {
+    const offset = sourceOffsets[leading + index] ?? -1;
+    if (offset >= 0) marks[offset] = prefixedMarks[INLINE_PARSE_PREFIX.length + index] ?? 0;
+  }
+}
+
+function markNode(
+  node: Nodes,
+  parent: Parents | undefined,
+  text: string,
+  marks: Uint16Array,
+): void {
+  const start = node.position?.start.offset;
+  const end = node.position?.end.offset;
+  if (start === undefined || end === undefined) return;
+
+  switch (node.type) {
+    case "delete":
+    case "emphasis":
+    case "heading":
+    case "strong": {
+      // Whatever sits outside the children is the delimiter, including a
+      // heading's `#` prefix, closing hashes, or setext underline.
+      const contentStart = node.children[0]?.position?.start.offset ?? end;
+      const contentEnd = node.children.at(-1)?.position?.end.offset ?? end;
+      addMark(marks, start, contentStart, MARKDOWN_SYNTAX);
+      addMark(marks, contentStart, contentEnd, INLINE_FORMATS[node.type]);
+      addMark(marks, contentEnd, end, MARKDOWN_SYNTAX);
+      break;
     }
-    // Escapes do not apply inside a code span, so the closer is found verbatim.
-    const openLength = runLength(index);
-    let close = index + openLength;
-    while (close < text.length) {
-      if (text[close] !== "`") {
-        close += 1;
-        continue;
+    case "inlineCode": {
+      let ticks = 0;
+      while (text[start + ticks] === "`") ticks += 1;
+      addMark(marks, start, start + ticks, MARKDOWN_SYNTAX);
+      addMark(marks, start + ticks, end - ticks, IS_CODE);
+      addMark(marks, end - ticks, end, MARKDOWN_SYNTAX);
+      return;
+    }
+    case "code": {
+      if (parent && isSameLineOverIndentedCode(node, parent, text)) {
+        markListItemText(node, text, start, marks);
+        return;
       }
-      const closeLength = runLength(close);
-      if (closeLength === openLength) break;
-      close += closeLength;
+      addMark(marks, start, end, MARKDOWN_CODE_BLOCK);
+      // Indented code has no fence lines to mute.
+      if (!FENCE_PATTERN.test(text.slice(start, start + 3))) return;
+      addMark(marks, start, lineEnd(text, start, end), MARKDOWN_SYNTAX);
+      // The parser already decided whether a closing fence ended the block: a
+      // source line beyond the opener and the value is that fence, whatever
+      // container prefix or indentation it carries.
+      const sourceLines = text.slice(start, end).split("\n").length;
+      const valueLines = node.value === "" ? 0 : node.value.split("\n").length;
+      if (sourceLines - 1 > valueLines) {
+        addMark(marks, text.lastIndexOf("\n", end - 1) + 1, end, MARKDOWN_SYNTAX);
+      }
+      return;
     }
-    if (close >= text.length) {
-      index += openLength;
-      continue;
-    }
-    const end = close + openLength;
-    addMark(marks, index, index + openLength, MARKDOWN_SYNTAX);
-    addMark(marks, index + openLength, close, IS_CODE);
-    addMark(marks, close, end, MARKDOWN_SYNTAX);
-    chars.fill(MASK, index, end);
-    index = end;
+    case "thematicBreak":
+      addMark(marks, start, end, MARKDOWN_SYNTAX);
+      return;
+    case "text":
+      // The rendered message hides an escaping backslash.
+      for (const match of text.slice(start, end).matchAll(ESCAPE_PATTERN)) {
+        addMark(marks, start + match.index, start + match.index + 1, MARKDOWN_SYNTAX);
+      }
+      return;
   }
-}
 
-function inlineMarks(text: string): Uint16Array {
-  const marks = new Uint16Array(text.length);
-  if (text.length > MAX_INLINE_LENGTH) return marks;
-  const chars = text.split("");
-  markCodeSpansAndEscapes(text, marks, chars);
-  for (const rule of EMPHASIS_RULES) {
-    const matches = [...chars.join("").matchAll(rule.pattern)];
-    for (const match of matches) {
-      const from = match.index;
-      const to = from + match[0].length;
-      addMark(marks, from, from + rule.delimiter, MARKDOWN_SYNTAX);
-      addMark(marks, from + rule.delimiter, to - rule.delimiter, rule.mark);
-      addMark(marks, to - rule.delimiter, to, MARKDOWN_SYNTAX);
-      chars.fill(MASK, from, from + rule.delimiter);
-      chars.fill(MASK, to - rule.delimiter, to);
+  if ("children" in node) {
+    for (const child of node.children) markNode(child, node, text, marks);
+  }
+
+  if (node.type === "blockquote") {
+    // Emphasis spanning quoted lines also covers the next line's `>` prefix;
+    // those prefixes are plain syntax.
+    let from = start;
+    while (from < end) {
+      const to = lineEnd(text, from, end);
+      const prefix = QUOTE_PREFIX_PATTERN.exec(text.slice(from, to))?.[0].length ?? 0;
+      marks.fill(MARKDOWN_SYNTAX, from, from + prefix);
+      from = to + 1;
     }
   }
-  return marks;
-}
-
-function openingFence(line: string): { char: string; length: number } | null {
-  const match = FENCE_OPEN_PATTERN.exec(line);
-  const marker = match?.[1];
-  if (!match || !marker) return null;
-  // A backtick in the info string makes the line inline code, not a fence.
-  if (marker[0] === "`" && line.slice(match[0].length).includes("`")) return null;
-  return { char: marker[0] ?? "`", length: marker.length };
 }
 
 /**
@@ -152,56 +192,15 @@ function openingFence(line: string): { char: string; length: number } | null {
  * the text itself is never changed, so the prompt stays plain markdown.
  */
 export function parseComposerMarkdown(lines: ReadonlyArray<string>): Uint16Array[] {
-  const marks = lines.map((line) => new Uint16Array(line.length));
-  let fence: { char: string; length: number } | null = null;
-  // Consecutive prose lines form one block, so emphasis can span soft line breaks.
-  let block: number[] = [];
-  const flushBlock = () => {
-    const text = block.map((index) => lines[index] ?? "").join("\n");
-    // Past the inline limit, fall back to parsing each line on its own.
-    const blockMarks = text.length <= MAX_INLINE_LENGTH ? inlineMarks(text) : null;
-    let offset = 0;
-    for (const index of block) {
-      const line = lines[index] ?? "";
-      marks[index]?.set(blockMarks?.subarray(offset, offset + line.length) ?? inlineMarks(line));
-      offset += line.length + 1;
-    }
-    block = [];
-  };
-
-  lines.forEach((line, index) => {
-    const lineMarks = marks[index];
-    if (!lineMarks) return;
-    if (fence) {
-      const close = FENCE_CLOSE_PATTERN.exec(line)?.[1];
-      if (close && close[0] === fence.char && close.length >= fence.length) {
-        fence = null;
-        lineMarks.fill(MARKDOWN_SYNTAX | MARKDOWN_CODE_BLOCK);
-      } else {
-        lineMarks.fill(MARKDOWN_CODE_BLOCK);
-      }
-      return;
-    }
-    const open = openingFence(line);
-    const heading = HEADING_PATTERN.exec(line)?.[0].length ?? 0;
-    if (open || heading > 0 || line.trim() === "" || BLOCK_START_PATTERN.test(line)) {
-      flushBlock();
-    }
-    if (open) {
-      fence = open;
-      lineMarks.fill(MARKDOWN_SYNTAX | MARKDOWN_CODE_BLOCK);
-    } else if (heading > 0) {
-      lineMarks.fill(MARKDOWN_SYNTAX, 0, heading);
-      lineMarks.fill(IS_BOLD, heading);
-      inlineMarks(line.slice(heading)).forEach((mark, offset) => {
-        lineMarks[heading + offset] = (lineMarks[heading + offset] ?? 0) | mark;
-      });
-    } else if (line.trim() !== "") {
-      block.push(index);
-    }
+  const text = lines.join("\n");
+  const marks = new Uint16Array(text.length);
+  markNode(fromMarkdown(text, PARSE_OPTIONS), undefined, text, marks);
+  let offset = 0;
+  return lines.map((line) => {
+    const lineMarks = marks.slice(offset, offset + line.length);
+    offset += line.length + 1;
+    return lineMarks;
   });
-  flushBlock();
-  return marks;
 }
 
 function countRuns(marks: ReadonlyArray<Uint16Array>): number {
@@ -259,11 +258,15 @@ function $styleParagraphMarkdown(paragraph: ParagraphNode): void {
     }
   }
   lines.push(line);
-  const tooLong =
-    lines.reduce((total, value) => total + value.length, 0) > MAX_STYLED_PROMPT_LENGTH;
+  // Lines are joined by newlines, which count toward the prompt's length.
+  const length = lines.reduce((total, value) => total + value.length + 1, -1);
+  const tooLong = length > MAX_STYLED_PROMPT_LENGTH;
   if (
     !hasStyledText &&
-    (tooLong || !lines.some((value) => MARKDOWN_CHARACTER_PATTERN.test(value)))
+    (tooLong ||
+      !lines.some(
+        (value) => MARKDOWN_CHARACTER_PATTERN.test(value) || INDENTED_CODE_PATTERN.test(value),
+      ))
   ) {
     return;
   }

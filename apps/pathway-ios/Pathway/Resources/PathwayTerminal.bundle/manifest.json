@@ -37,7 +37,7 @@
     "apps/web/src/types.ts": "a6cca6e3a074efaf2482ac0332cf6c9f8a365bcf250ec5995539572c561fed46",
     "native/libghostty-vt/LICENSE": "386211873e5b7a02f663ae4d7adf96285999f91608f8f9f31fecfd0f4095e6f1",
     "native/libghostty-vt/VERSION": "3fc03e29c86b5100e6738d20cb1c97c3969ab1044debbe8a4cd7d49cdc9cf321",
-    "pnpm-lock.yaml": "08581261d55d5a041d43e46c7e4900bfc4800fbba8151f84e681835ceece05b0",
+    "pnpm-lock.yaml": "c16d58998324865cc5189bf498952c83136c6cafa6d863764bb9b08fa4f05efc",
     "scripts/ios/build-terminal.mjs": "d4a99861ed93a4ed2a8041f1d8610b8e6cf13eef305eb094836c47faa75fd197"
   },
   "outputs": {

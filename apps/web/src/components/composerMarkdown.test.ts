@@ -127,6 +127,71 @@ describe("parseComposerMarkdown", () => {
     ]);
   });
 
+  it("follows markdown's flanking rules for emphasis delimiters", () => {
+    expect(runs("2*(3+4)*5")).toEqual([["2*(3+4)*5"]]);
+  });
+
+  it("carries emphasis across quoted lines and mutes every quote prefix", () => {
+    expect(runs("> *first\n> second*")).toEqual([
+      ["> *:syntax", "first:italic"],
+      ["> :syntax", "second:italic", "*:syntax"],
+    ]);
+  });
+
+  it("mutes a heading's closing hashes", () => {
+    expect(runs("## Next steps ##")).toEqual([["## :syntax", "Next steps:bold", " ##:syntax"]]);
+  });
+
+  it("stops emphasis at a thematic break", () => {
+    expect(runs("*first\n***\nsecond*")).toEqual([["*first"], ["***:syntax"], ["second*"]]);
+  });
+
+  it("recognizes a fenced block that starts after a list marker", () => {
+    expect(runs("- ```ts\n  const v = 1;\n  ```")).toEqual([
+      ["- ", "```ts:block+syntax"],
+      ["  const v = 1;:block"],
+      ["  ```:block+syntax"],
+    ]);
+  });
+
+  it("reads over-indented list text as list text, like the chat renderer", () => {
+    expect(runs("-       **important**")).toEqual([
+      ["-       ", "**:syntax", "important:bold", "**:syntax"],
+    ]);
+  });
+
+  it("recovers each block of over-indented list text as the renderer does", () => {
+    expect(runs("-       **first**\n\n        **second**")).toEqual([
+      ["-       ", "**:syntax", "first:bold", "**:syntax"],
+      [],
+      ["        ", "**:syntax", "second:bold", "**:syntax"],
+    ]);
+  });
+
+  it("mutes a closing fence inside a quote but not an over-indented one", () => {
+    expect(runs("> ```\n> code\n> ```")).toEqual([
+      ["> :syntax", "```:block+syntax"],
+      ["> :syntax", "code:block"],
+      ["> :syntax", "```:block+syntax"],
+    ]);
+    expect(runs("```\ncode\n    ```")).toEqual([
+      ["```:block+syntax"],
+      ["code:block"],
+      ["    ```:block"],
+    ]);
+  });
+
+  it("mutes only a closing fence that matches the opener", () => {
+    expect(runs("````\ncode\n```")).toEqual([["````:block+syntax"], ["code:block"], ["```:block"]]);
+    expect(runs("```\ncode\n~~~")).toEqual([["```:block+syntax"], ["code:block"], ["~~~:block"]]);
+  });
+
+  it("keeps markdown delimiters inside a GFM autolink literal", () => {
+    expect(runs("see https://example.com/*foo*/bar")).toEqual([
+      ["see https://example.com/*foo*/bar"],
+    ]);
+  });
+
   it("renders fenced code blocks monospace without inline emphasis", () => {
     expect(runs("```ts\nconst a = *b*;\n```\n*after*")).toEqual([
       ["```ts:block+syntax"],
@@ -220,21 +285,35 @@ describe("registerComposerMarkdown", () => {
     expect(touched[0]).toHaveLength(1);
   });
 
-  it("leaves very long prompts plain, clearing styling once they grow past the limit", () => {
-    const editor = createComposer(["**Bold** plain"]);
+  it("styles prompts up to 5,000 characters, newlines included, and clears styling past that", () => {
+    const head = "**Bold** plain";
+    const editor = createComposer([head, "x".repeat(5_000 - head.length - 1)]);
+    expect(readTextNodes(editor).nodes[1]).toEqual(["Bold", IS_BOLD, false]);
 
     editor.update(
       () => {
-        const plain = $getRoot().getAllTextNodes().at(-1);
-        plain?.setTextContent(`${plain.getTextContent()}${"x".repeat(20_000)}`);
+        const last = $getRoot().getAllTextNodes().at(-1);
+        last?.setTextContent(`${last.getTextContent()}x`);
       },
       { discrete: true },
     );
 
     const { text, nodes } = readTextNodes(editor);
-    expect(text).toBe(`**Bold** plain${"x".repeat(20_000)}`);
-    expect(nodes).toEqual([[text, 0, false]]);
+    expect(text).toHaveLength(5_001);
+    expect(nodes).toEqual([
+      [head, 0, false],
+      ["x".repeat(5_000 - head.length), 0, false],
+    ]);
   });
+
+  it.each(["    hello", "\thello", "  \thello"])(
+    "styles indented code %j even without markdown punctuation",
+    (line) => {
+      const editor = createComposer([line]);
+
+      expect(readTextNodes(editor).nodes).toEqual([[line, 0, true]]);
+    },
+  );
 
   it("leaves delimiter-dense prompts plain even under the length limit", () => {
     const prompt = "**a** ".repeat(1_000);
