@@ -386,39 +386,69 @@ it.effect(
   },
 );
 
-it.effect("completes when a failed child was resumed in its existing thread", () => {
+for (const childStatus of ["completed", "running"] as const) {
+  it.effect(
+    `completes when a failed child was resumed in its existing thread (${childStatus})`,
+    () => {
+      const f = fixture();
+      const childId = ThreadId.make("delegated-child");
+      f.projections.set(rootId, {
+        ...f.projections.get(rootId)!,
+        subagents: [{ ...child("builder"), origin: "app_owned", childThreadId: childId }],
+      });
+      const spawnRun = { ...run("child-spawn"), threadId: childId };
+      f.projections.set(childId, { ...projection(childId), runs: [spawnRun] });
+      return Effect.gen(function* () {
+        const service = yield* UsageRecoveryService;
+        yield* service.schedule(f.schedule);
+        yield* TestClock.adjust("2 minutes");
+        yield* service.reconcile();
+        // The parent's task node keeps reporting its spawn run's quota failure.
+        const at = yield* DateTime.now;
+        f.projections.set(childId, {
+          ...f.projections.get(childId)!,
+          runs: [
+            spawnRun,
+            { ...run("child-resume", 2, childStatus), threadId: childId, requestedAt: at },
+          ],
+        });
+        const p = f.projections.get(rootId)!;
+        f.projections.set(rootId, {
+          ...p,
+          runs: p.runs.map((item) => ({ ...item, status: "completed" })),
+        });
+        yield* service.reconcile();
+        const result = yield* service.get(rootId);
+        assert.equal(result.recovery?.status, "completed");
+        assert.isNull(result.eligibility);
+        yield* TestClock.adjust("1 day");
+        yield* service.reconcile();
+        assert.lengthOf(f.commands, 1);
+      }).pipe(Effect.provide(f.serviceLayer));
+    },
+  );
+}
+
+it.effect("completes without retrying a child the parent stopped on purpose", () => {
   const f = fixture();
-  const childId = ThreadId.make("delegated-child");
   f.projections.set(rootId, {
     ...f.projections.get(rootId)!,
-    subagents: [{ ...child("builder"), origin: "app_owned", childThreadId: childId }],
+    subagents: [{ ...child("duplicate", "interrupted"), result: "Read the design doc." }],
   });
-  const spawnRun = { ...run("child-spawn"), threadId: childId };
-  f.projections.set(childId, { ...projection(childId), runs: [spawnRun] });
   return Effect.gen(function* () {
     const service = yield* UsageRecoveryService;
     yield* service.schedule(f.schedule);
     yield* TestClock.adjust("2 minutes");
     yield* service.reconcile();
-    // The parent's task node keeps reporting its spawn run's quota failure.
-    const at = yield* DateTime.now;
-    f.projections.set(childId, {
-      ...f.projections.get(childId)!,
-      runs: [
-        spawnRun,
-        { ...run("child-resume", 2, "completed"), threadId: childId, requestedAt: at },
-      ],
-    });
+    assert.include(f.commands[0]!.text, '"title": "duplicate"');
     const p = f.projections.get(rootId)!;
     f.projections.set(rootId, {
       ...p,
       runs: p.runs.map((item) => ({ ...item, status: "completed" })),
     });
     yield* service.reconcile();
-    const result = yield* service.get(rootId);
-    assert.equal(result.recovery?.status, "completed");
-    assert.isNull(result.eligibility);
-    yield* TestClock.adjust("1 day");
+    assert.equal((yield* service.get(rootId)).recovery?.status, "completed");
+    yield* TestClock.adjust("1 hour");
     yield* service.reconcile();
     assert.lengthOf(f.commands, 1);
   }).pipe(Effect.provide(f.serviceLayer));
