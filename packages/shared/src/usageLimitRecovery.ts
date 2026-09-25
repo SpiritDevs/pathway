@@ -1,5 +1,6 @@
 import type {
   OrchestrationV2ProviderFailure,
+  ServerProviderUsageLimit,
   ServerProviderUsageSnapshot,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
@@ -158,6 +159,58 @@ export function parseUsageLimitResetAt(message: string, nowMs: number): string |
   return clock === null ? null : DateTime.formatIso(DateTime.makeUnsafe(clock));
 }
 
+/**
+ * Unscoped windows apply to every model. Scope labels are provider supplied, so only known
+ * model families match; an unknown scope cannot safely be attributed to a model.
+ */
+function limitAppliesToModel(limit: ServerProviderUsageLimit, model: string | undefined) {
+  if (!limit.scope) return true;
+  const scope = limit.scope.toLowerCase();
+  const family = model?.toLowerCase();
+  return (
+    family !== undefined &&
+    ["spark", "sonnet", "opus", "haiku", "fable"].some(
+      (name) => scope.includes(name) && family.includes(name),
+    )
+  );
+}
+
+/** Below this share of a window left, clients offer to pause work until the window resets. */
+export const LOW_USAGE_REMAINING_PERCENT = 10;
+
+/** The window with the least allowance left for this model, while it has a reset to wait for. */
+export function findTightestUsageLimit(input: {
+  readonly model?: string;
+  readonly snapshot?: ServerProviderUsageSnapshot | null;
+  readonly nowMs: number;
+}): {
+  readonly limit: ServerProviderUsageLimit;
+  readonly remainingPercent: number;
+  readonly resetsAt: string;
+} | null {
+  const snapshot = input.snapshot;
+  if (snapshot?.status !== "ok" || snapshot.stale) return null;
+  let tightest: {
+    limit: ServerProviderUsageLimit;
+    remainingPercent: number;
+    resetsAt: string;
+  } | null = null;
+  for (const limit of snapshot.limits) {
+    const resetsAt = limit.resetsAt;
+    if (
+      limit.usedPercent === undefined ||
+      resetsAt === undefined ||
+      !(Date.parse(resetsAt) > input.nowMs) ||
+      !limitAppliesToModel(limit, input.model)
+    )
+      continue;
+    const remainingPercent = Math.max(0, 100 - limit.usedPercent);
+    if (tightest === null || remainingPercent < tightest.remainingPercent)
+      tightest = { limit, remainingPercent, resetsAt };
+  }
+  return tightest;
+}
+
 export function resolveUsageLimitResetAt(input: {
   readonly failureMessage: string;
   readonly model?: string;
@@ -168,21 +221,10 @@ export function resolveUsageLimitResetAt(input: {
   if (explicit !== null) return explicit;
   const snapshot = input.snapshot;
   if (snapshot?.status !== "ok" || snapshot.stale) return null;
-  const model = input.model?.toLowerCase();
-  const blocking = snapshot.limits.filter((limit) => {
+  const blocking = snapshot.limits.filter(
     // Providers can round an exhausted quota just below 100%.
-    if ((limit.usedPercent ?? 0) < 99) return false;
-    if (!limit.scope) return true;
-    // Scope labels are provider supplied. Only match known model families;
-    // an unknown scope cannot safely schedule automatic recovery.
-    const scope = limit.scope.toLowerCase();
-    return (
-      model !== undefined &&
-      ["spark", "sonnet", "opus", "haiku", "fable"].some(
-        (family) => scope.includes(family) && model.includes(family),
-      )
-    );
-  });
+    (limit) => (limit.usedPercent ?? 0) >= 99 && limitAppliesToModel(limit, input.model),
+  );
   if (blocking.length === 0) return null;
   const resets = blocking.map((limit) => Date.parse(limit.resetsAt ?? ""));
   if (resets.some((timestamp) => !Number.isFinite(timestamp) || timestamp <= input.nowMs))

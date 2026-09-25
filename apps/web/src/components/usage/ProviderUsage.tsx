@@ -14,8 +14,8 @@ import {
 } from "@spiritdevs/contracts";
 import * as Option from "effect/Option";
 import { Atom } from "effect/unstable/reactivity";
-import { ChevronDownIcon, RefreshCwIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { ChevronDownIcon, MoreHorizontalIcon, PauseIcon, RefreshCwIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { useEnvironments } from "~/state/environments";
@@ -25,9 +25,10 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { SettingsSection } from "../settings/settingsLayout";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel } from "../ui/collapsible";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import type { UsageThreadAction } from "../chat/useUsageRecovery";
 import {
   deriveProviderInstanceEntries,
   shouldShowProviderInstanceBadge,
@@ -128,53 +129,71 @@ function usageSectionHeading({
   refreshDisabled,
   refreshing,
   onRefresh,
+  threadAction = null,
 }: {
   readonly id?: string;
   readonly refreshDisabled: boolean;
   readonly refreshing: boolean;
   readonly onRefresh: () => Promise<void>;
+  readonly threadAction?: UsageThreadAction | null;
 }) {
-  const handleRefreshClick = (event: MouseEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    void onRefresh();
-  };
-
   return (
     <div className="flex min-h-6 items-center justify-between gap-2 px-3.5 pb-1 pt-3">
       <h3 id={id} className="text-[11px] font-medium text-muted-foreground">
         Usage
       </h3>
-      <Tooltip>
-        <TooltipTrigger
+      <Menu>
+        <MenuTrigger
           render={
             <Button
               type="button"
               size="icon-xs"
               variant="ghost"
               data-keep-action-card-open
-              aria-label="Refresh usage"
+              aria-label="Usage actions"
               aria-busy={refreshing}
-              disabled={refreshDisabled || refreshing}
-              onClick={handleRefreshClick}
               className={cn(
-                "pointer-events-none -my-1 -mr-1 size-6 opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/usage:pointer-events-auto group-hover/usage:opacity-100 group-focus-within/usage:pointer-events-auto group-focus-within/usage:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none",
+                "pointer-events-none -my-1 -mr-1 size-6 opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/usage:pointer-events-auto group-hover/usage:opacity-100 group-focus-within/usage:pointer-events-auto group-focus-within/usage:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 data-popup-open:pointer-events-auto data-popup-open:opacity-100 motion-reduce:transition-none",
                 refreshing && "pointer-events-auto opacity-100",
               )}
-            >
-              <RefreshCwIcon
-                className={cn(
-                  "size-3.5",
-                  refreshing && "text-foreground",
-                  refreshing && SLOW_REFRESH_SPIN_CLASS,
-                )}
-                aria-hidden="true"
-              />
-            </Button>
+            />
           }
-        />
-        <TooltipPopup side="top">Refresh usage</TooltipPopup>
-      </Tooltip>
+        >
+          {refreshing ? (
+            <RefreshCwIcon
+              className={cn("size-3.5 text-foreground", SLOW_REFRESH_SPIN_CLASS)}
+              aria-hidden="true"
+            />
+          ) : (
+            <MoreHorizontalIcon className="size-3.5" aria-hidden="true" />
+          )}
+        </MenuTrigger>
+        <MenuPopup align="end" className="w-56">
+          <MenuItem disabled={refreshDisabled || refreshing} onClick={() => void onRefresh()}>
+            <RefreshCwIcon />
+            Refresh
+          </MenuItem>
+          {threadAction ? (
+            <>
+              <MenuSeparator />
+              <MenuItem
+                disabled={threadAction.disabledReason !== null}
+                onClick={threadAction.onSelect}
+              >
+                <PauseIcon />
+                <span className="flex min-w-0 flex-col">
+                  {threadAction.label}
+                  {threadAction.disabledReason ? (
+                    <span className="text-[11px] text-muted-foreground">
+                      {threadAction.disabledReason}
+                    </span>
+                  ) : null}
+                </span>
+              </MenuItem>
+            </>
+          ) : null}
+        </MenuPopup>
+      </Menu>
     </div>
   );
 }
@@ -341,6 +360,7 @@ export function EnvironmentProviderUsage({
   showSpark = false,
   iconDisplayName,
   showIconBadge = false,
+  threadAction = null,
 }: {
   environmentId: EnvironmentId;
   provider: ServerProvider;
@@ -351,6 +371,7 @@ export function EnvironmentProviderUsage({
   showSpark?: boolean;
   iconDisplayName?: string;
   showIconBadge?: boolean;
+  threadAction?: UsageThreadAction | null;
 }) {
   const isPanel = displayMode === "panel";
   const [open, setOpen] = useState(false);
@@ -394,6 +415,7 @@ export function EnvironmentProviderUsage({
           refreshDisabled: !enabled,
           refreshing,
           onRefresh: singleRefresh.refresh,
+          threadAction,
         })
       : null;
 

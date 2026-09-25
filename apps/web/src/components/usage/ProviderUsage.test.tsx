@@ -191,8 +191,16 @@ function renderList(): ReactElement<Record<string, unknown>> {
   >;
 }
 
+function findUsageMenuTrigger(tree: ReactElement<Record<string, unknown>>) {
+  return visitElements(tree, (element) => element.props["aria-label"] === "Usage actions");
+}
+
 function findRefreshButton(tree: ReactElement<Record<string, unknown>>) {
-  return visitElements(tree, (element) => element.props["aria-label"] === "Refresh usage");
+  return visitElements(
+    tree,
+    (element) =>
+      Array.isArray(element.props.children) && element.props.children.includes("Refresh"),
+  );
 }
 
 function findSpinningRefreshIcon(tree: ReactElement<Record<string, unknown>>) {
@@ -204,10 +212,6 @@ function findSpinningRefreshIcon(tree: ReactElement<Record<string, unknown>>) {
       element.props.className.split(/\s+/).includes("[animation-duration:2s]") &&
       element.props.className.split(/\s+/).includes("motion-reduce:animate-none"),
   );
-}
-
-function clickEvent() {
-  return { preventDefault: vi.fn(), stopPropagation: vi.fn() };
 }
 
 async function flushPromises(): Promise<void> {
@@ -229,25 +233,21 @@ describe("provider usage panel refresh", () => {
     testState.toast.mockReset();
   });
 
-  it("reveals an accessible, calm refresh action on hover or focus", () => {
+  it("reveals an accessible, calm usage menu on hover or focus", () => {
     testState.queries.set(String(codexId), snapshot(codexId, "codex", 20));
 
     const panel = renderSingle();
-    const button = findRefreshButton(panel);
-    const tooltip = visitElements(
-      panel,
-      (element) => element.props.children === "Refresh usage" && element.props.side === "top",
-    );
+    const trigger = findUsageMenuTrigger(panel);
 
-    expect(button?.props.className).toContain("opacity-0");
-    expect(button?.props.className).toContain("group-hover/usage:opacity-100");
-    expect(button?.props.className).toContain("group-focus-within/usage:opacity-100");
-    expect(button?.props.className).toContain("focus-visible:opacity-100");
-    expect(button?.props.className).toContain("motion-reduce:transition-none");
-    expect(button?.props.className).not.toContain("animate-spin");
-    expect(button?.props["aria-busy"]).toBe(false);
-    expect(button?.props.disabled).toBe(false);
-    expect(tooltip).not.toBeNull();
+    expect(trigger?.props.className).toContain("opacity-0");
+    expect(trigger?.props.className).toContain("group-hover/usage:opacity-100");
+    expect(trigger?.props.className).toContain("group-focus-within/usage:opacity-100");
+    expect(trigger?.props.className).toContain("focus-visible:opacity-100");
+    expect(trigger?.props.className).toContain("data-popup-open:opacity-100");
+    expect(trigger?.props.className).toContain("motion-reduce:transition-none");
+    expect(trigger?.props.className).not.toContain("animate-spin");
+    expect(trigger?.props["aria-busy"]).toBe(false);
+    expect(findRefreshButton(panel)?.props.disabled).toBe(false);
   });
 
   it("keeps the refresh action calm while the first usage list loads", () => {
@@ -255,7 +255,7 @@ describe("provider usage panel refresh", () => {
     testState.pendingQueries.add(String(codexId));
 
     const panel = renderSingle();
-    const button = findRefreshButton(panel);
+    const button = findUsageMenuTrigger(panel);
     const pendingContent = visitElements(
       panel,
       (element) => element.props["data-provider-usage-pending"] === true,
@@ -283,7 +283,7 @@ describe("provider usage panel refresh", () => {
       );
 
       expect(pendingContent).toBeNull();
-      expect(findRefreshButton(panel)?.props["aria-busy"]).toBe(false);
+      expect(findUsageMenuTrigger(panel)?.props["aria-busy"]).toBe(false);
       expect(findSpinningRefreshIcon(panel)).toBeNull();
     },
   );
@@ -307,16 +307,10 @@ describe("provider usage panel refresh", () => {
     const disclosure = visitElements(panel, (element) => element.props["aria-expanded"] === false);
     (disclosure?.props.onClick as (() => void) | undefined)?.();
 
-    const refreshButton = findRefreshButton(panel);
-    const event = clickEvent();
-    const onClick = refreshButton?.props.onClick as
-      | ((event: ReturnType<typeof clickEvent>) => void)
-      | undefined;
-    onClick?.(event);
-    onClick?.(event);
+    const onClick = findRefreshButton(panel)?.props.onClick as (() => void) | undefined;
+    onClick?.();
+    onClick?.();
 
-    expect(event.preventDefault).toHaveBeenCalledTimes(2);
-    expect(event.stopPropagation).toHaveBeenCalledTimes(2);
     expect(testState.refresh).toHaveBeenCalledTimes(1);
     expect(testState.refresh).toHaveBeenCalledWith({
       environmentId,
@@ -325,7 +319,7 @@ describe("provider usage panel refresh", () => {
 
     const pendingPanel = renderSingle();
     expect(findRefreshButton(pendingPanel)?.props.disabled).toBe(true);
-    expect(findRefreshButton(pendingPanel)?.props["aria-busy"]).toBe(true);
+    expect(findUsageMenuTrigger(pendingPanel)?.props["aria-busy"]).toBe(true);
     expect(findSpinningRefreshIcon(pendingPanel)).not.toBeNull();
     expect(visitElements(pendingPanel, (element) => element.props.open === true)).not.toBeNull();
     expect(
@@ -348,12 +342,7 @@ describe("provider usage panel refresh", () => {
     testState.refresh.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("Offline"))));
 
     const panel = renderSingle();
-    const event = clickEvent();
-    (
-      findRefreshButton(panel)?.props.onClick as
-        | ((event: ReturnType<typeof clickEvent>) => void)
-        | undefined
-    )?.(event);
+    (findRefreshButton(panel)?.props.onClick as (() => void) | undefined)?.();
     await flushPromises();
 
     const settledPanel = renderSingle();
@@ -382,12 +371,7 @@ describe("provider usage panel refresh", () => {
     );
 
     const list = renderList();
-    const event = clickEvent();
-    (
-      findRefreshButton(list)?.props.onClick as
-        | ((event: ReturnType<typeof clickEvent>) => void)
-        | undefined
-    )?.(event);
+    (findRefreshButton(list)?.props.onClick as (() => void) | undefined)?.();
     await flushPromises();
 
     expect(testState.refresh).toHaveBeenCalledTimes(2);

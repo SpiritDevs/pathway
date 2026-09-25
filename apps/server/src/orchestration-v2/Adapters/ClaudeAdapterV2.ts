@@ -1,3 +1,4 @@
+import { USAGE_RECOVERY_MESSAGE_PREFIX } from "../../providerUsage/usageRecoveryPolicy.ts";
 import {
   BUNDLED_MODEL_MANIFEST,
   ModelManifest,
@@ -4988,7 +4989,11 @@ export function makeClaudeAdapterV2(
           if (context === null) {
             return { behavior: "cancelled" as const };
           }
-          if (context.input.message.text.trim() === "/compact") {
+          // Nobody is present to answer for a usage-recovery turn, and its cache has expired.
+          if (
+            context.input.message.text.trim() === "/compact" ||
+            context.input.message.messageId.startsWith(USAGE_RECOVERY_MESSAGE_PREFIX)
+          ) {
             return { behavior: "completed" as const, result: "compact" as const };
           }
           const question = formatClaudeResumeCompactionQuestion({

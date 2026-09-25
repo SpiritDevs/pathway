@@ -454,6 +454,8 @@ export const ServerConfig = Schema.Struct({
   orchestrationV2ThreadHistory: Schema.optionalKey(Schema.Boolean),
   /** Whether this connected environment supports persisted usage recovery timers. */
   usageRecovery: Schema.optionalKey(Schema.Boolean),
+  /** Whether usage recovery can also pause running work until an allowance reset. */
+  usagePause: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 

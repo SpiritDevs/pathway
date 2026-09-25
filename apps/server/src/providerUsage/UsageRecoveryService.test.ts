@@ -12,6 +12,7 @@ import {
   ThreadId,
   TurnItemId,
   type OrchestrationV2Command,
+  type OrchestrationV2TurnItem,
   type OrchestrationV2Run,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
@@ -168,7 +169,7 @@ function withFailure(
   };
 }
 
-function fixture(dispatchFailure?: "before" | "after") {
+function fixture(dispatchFailure?: "before" | "after" | "compact") {
   const initial = withFailure(projection(), run("initial"));
   const projections = new Map<ThreadId, OrchestrationV2ThreadProjection>([
     [
@@ -202,6 +203,7 @@ function fixture(dispatchFailure?: "before" | "after") {
     ],
   ]);
   const commands: Extract<OrchestrationV2Command, { type: "message.dispatch" }>[] = [];
+  const interrupts: RunId[] = [];
   const deps = Layer.mergeAll(
     SqlitePersistenceMemory,
     Layer.succeed(ServerActivation, Effect.never),
@@ -210,13 +212,27 @@ function fixture(dispatchFailure?: "before" | "after") {
       streamDomainEvents: Stream.never,
       dispatch: (command) =>
         Effect.gen(function* () {
+          if (command.type === "run.interrupt") {
+            const p = projections.get(command.threadId)!;
+            interrupts.push(command.runId);
+            projections.set(command.threadId, {
+              ...p,
+              runs: p.runs.map((item) =>
+                item.id === command.runId ? { ...item, status: "interrupted" } : item,
+              ),
+            });
+            return { sequence: 0, storedEvents: [] };
+          }
           assert.equal(command.type, "message.dispatch");
           if (command.type !== "message.dispatch") return { sequence: 0, storedEvents: [] };
           const p = projections.get(command.threadId)!;
           if (p.messages.some((message) => message.id === command.messageId))
             return { sequence: 0, storedEvents: [] };
           assert.isTrue(canResumeUsageRecovery(p, command.usageRecoveryOfRunId!));
-          if (dispatchFailure === "before")
+          if (
+            dispatchFailure === "before" ||
+            (dispatchFailure === "compact" && command.text === "/compact")
+          )
             return yield* new OrchestratorDispatchError({
               commandId: command.commandId,
               commandType: command.type,
@@ -262,6 +278,7 @@ function fixture(dispatchFailure?: "before" | "after") {
   return {
     projections,
     commands,
+    interrupts,
     deps,
     serviceLayer: layer.pipe(Layer.provide(deps)),
     schedule: {
@@ -664,3 +681,308 @@ for (const failure of ["before", "after"] as const) {
     },
   );
 }
+
+function working(f: ReturnType<typeof fixture>, toolStatus: OrchestrationV2TurnItem["status"]) {
+  const p = f.projections.get(rootId)!;
+  const tool: OrchestrationV2TurnItem = {
+    id: TurnItemId.make("tool"),
+    type: "command_execution",
+    threadId: rootId,
+    runId: RunId.make("working"),
+    nodeId: null,
+    providerThreadId,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 1,
+    status: toolStatus,
+    title: null,
+    startedAt: now,
+    completedAt: null,
+    updatedAt: now,
+    input: "vp test run",
+  };
+  f.projections.set(rootId, {
+    ...p,
+    runs: [{ ...run("working", 1, "running"), completedAt: null }],
+    turnItems: [tool],
+  });
+}
+const pauseInput = {
+  commandId: CommandId.make("pause-job"),
+  threadId: rootId,
+  resumeAt: "1970-01-01T00:02:00.000Z",
+};
+
+it.effect("pauses at the next step boundary and continues after the reset", () => {
+  const f = fixture();
+  working(f, "running");
+  return Effect.gen(function* () {
+    const service = yield* UsageRecoveryService;
+    assert.isNull((yield* service.pause(pauseInput)).recovery?.pausedAt);
+    yield* service.reconcile();
+    assert.lengthOf(f.interrupts, 0, "a running tool call finishes first");
+    working(f, "completed");
+    yield* service.reconcile();
+    assert.deepEqual(f.interrupts, [RunId.make("working")]);
+    yield* service.reconcile();
+    const paused = (yield* service.get(rootId)).recovery!;
+    assert.equal(paused.status, "scheduled");
+    assert.isString(paused.pausedAt);
+    assert.lengthOf(f.commands, 0);
+    yield* TestClock.adjust("2 minutes");
+    yield* service.reconcile();
+    assert.lengthOf(f.commands, 1);
+    assert.include(f.commands[0]!.text, "paused this thread");
+    assert.equal(f.commands[0]!.usageRecoveryOfRunId, RunId.make("working"));
+  }).pipe(Effect.provide(f.serviceLayer));
+});
+
+it.effect("has nothing to resume when the turn finishes before the pause takes effect", () => {
+  const f = fixture();
+  working(f, "running");
+  return Effect.gen(function* () {
+    const service = yield* UsageRecoveryService;
+    yield* service.pause(pauseInput);
+    const p = f.projections.get(rootId)!;
+    f.projections.set(rootId, { ...p, runs: [{ ...p.runs[0]!, status: "completed" }] });
+    yield* service.reconcile();
+    assert.equal((yield* service.get(rootId)).recovery?.status, "completed");
+    yield* TestClock.adjust("2 minutes");
+    yield* service.reconcile();
+    assert.lengthOf(f.commands, 0);
+    assert.lengthOf(f.interrupts, 0);
+  }).pipe(Effect.provide(f.serviceLayer));
+});
+
+it.effect("compacts a large Claude session whose cache expired before resuming", () => {
+  const f = fixture();
+  working(f, "completed");
+  const p = f.projections.get(rootId)!;
+  f.projections.set(rootId, {
+    ...p,
+    providerThreads: p.providerThreads.map((thread) => ({
+      ...thread,
+      tokenUsage: { usedTokens: 150_000 },
+    })),
+  });
+  return Effect.gen(function* () {
+    const service = yield* UsageRecoveryService;
+    yield* service.pause({ ...pauseInput, resumeAt: "1970-01-01T02:00:00.000Z" });
+    yield* service.reconcile();
+    yield* TestClock.adjust("2 hours");
+    yield* service.reconcile();
+    assert.lengthOf(f.commands, 1);
+    assert.equal(f.commands[0]!.text, "/compact");
+    yield* service.reconcile();
+    assert.lengthOf(f.commands, 1, "waits for the compaction to finish");
+    const compacting = f.projections.get(rootId)!;
+    f.projections.set(rootId, {
+      ...compacting,
+      runs: compacting.runs.map((item) =>
+        item.userMessageId === f.commands[0]!.messageId ? { ...item, status: "completed" } : item,
+      ),
+    });
+    yield* service.reconcile();
+    assert.lengthOf(f.commands, 2);
+    assert.include(f.commands[1]!.text, "paused this thread");
+    assert.equal((yield* service.get(rootId)).recovery?.status, "monitoring");
+  }).pipe(Effect.provide(f.serviceLayer));
+});
+
+function withLargeClaudeContext(f: ReturnType<typeof fixture>) {
+  const p = f.projections.get(rootId)!;
+  f.projections.set(rootId, {
+    ...p,
+    providerThreads: p.providerThreads.map((thread) => ({
+      ...thread,
+      tokenUsage: { usedTokens: 150_000 },
+    })),
+  });
+}
+
+for (const failure of ["run", "error-item", "dispatch"] as const) {
+  it.effect(`stops instead of resuming uncompacted when compaction fails (${failure})`, () => {
+    const f = fixture(failure === "dispatch" ? "compact" : undefined);
+    working(f, "completed");
+    withLargeClaudeContext(f);
+    return Effect.gen(function* () {
+      const service = yield* UsageRecoveryService;
+      yield* service.pause({ ...pauseInput, resumeAt: "1970-01-01T02:00:00.000Z" });
+      yield* service.reconcile();
+      yield* TestClock.adjust("2 hours");
+      yield* service.reconcile();
+      if (failure !== "dispatch") {
+        assert.equal(f.commands[0]?.text, "/compact");
+        const p = f.projections.get(rootId)!;
+        const compactRun = p.runs.find((item) => item.userMessageId === f.commands[0]!.messageId)!;
+        const settled = {
+          ...p,
+          runs: p.runs.map((item) =>
+            item.id === compactRun.id
+              ? {
+                  ...item,
+                  status: failure === "run" ? ("failed" as const) : ("completed" as const),
+                }
+              : item,
+          ),
+        };
+        f.projections.set(
+          rootId,
+          failure === "run"
+            ? settled
+            : withFailure(settled, compactRun, yield* DateTime.now, "Compaction failed"),
+        );
+        // withFailure marks the run failed; an error item on a completed run must also stop.
+        if (failure === "error-item")
+          f.projections.set(rootId, {
+            ...f.projections.get(rootId)!,
+            runs: f.projections
+              .get(rootId)!
+              .runs.map((item) =>
+                item.id === compactRun.id ? { ...item, status: "completed" as const } : item,
+              ),
+          });
+      }
+      yield* service.reconcile();
+      yield* TestClock.adjust("1 hour");
+      yield* service.reconcile();
+      assert.isFalse(
+        f.commands.some((command) => command.text !== "/compact"),
+        "no continuation after a failed compaction",
+      );
+      const recovery = (yield* service.get(rootId)).recovery!;
+      assert.equal(recovery.status, "failed");
+      assert.include(recovery.message, "did not continue");
+    }).pipe(Effect.provide(f.serviceLayer));
+  });
+}
+
+it.effect("keeps a pause and its reset time across restarts", () => {
+  const f = fixture();
+  working(f, "running");
+  const withService = <A, E>(
+    body: (service: UsageRecoveryService["Service"]) => Effect.Effect<A, E>,
+  ) => Effect.flatMap(UsageRecoveryService, body).pipe(Effect.provide(layer));
+  return Effect.gen(function* () {
+    yield* withService((service) => service.pause(pauseInput));
+    working(f, "completed");
+    yield* withService((service) => service.reconcile());
+    assert.deepEqual(f.interrupts, [RunId.make("working")]);
+    const paused = yield* withService((service) =>
+      Effect.andThen(service.reconcile(), service.get(rootId)),
+    );
+    assert.isString(paused.recovery?.pausedAt);
+    assert.equal(paused.recovery?.resumeAt, pauseInput.resumeAt);
+    yield* withService((service) => service.reconcile());
+    assert.lengthOf(f.commands, 0, "still paused before the reset");
+    yield* TestClock.adjust("2 minutes");
+    yield* withService((service) => Effect.andThen(service.reconcile(), service.reconcile()));
+    yield* withService((service) => service.reconcile());
+    assert.lengthOf(f.commands, 1);
+    assert.include(f.commands[0]!.text, "paused this thread");
+  }).pipe(Effect.provide(f.deps));
+});
+
+function paused(f: ReturnType<typeof fixture>) {
+  working(f, "completed");
+  return Effect.gen(function* () {
+    const service = yield* UsageRecoveryService;
+    yield* service.pause(pauseInput);
+    yield* service.reconcile();
+    yield* service.reconcile();
+    assert.isString((yield* service.get(rootId)).recovery?.pausedAt);
+    return service;
+  });
+}
+
+it.effect("cancelling while the step finishes leaves the running turn alone", () => {
+  const f = fixture();
+  working(f, "running");
+  return Effect.gen(function* () {
+    const service = yield* UsageRecoveryService;
+    yield* service.pause(pauseInput);
+    yield* service.cancel(rootId);
+    working(f, "completed");
+    yield* service.reconcile();
+    yield* TestClock.adjust("3 minutes");
+    yield* service.reconcile();
+    assert.lengthOf(f.interrupts, 0);
+    assert.lengthOf(f.commands, 0);
+    assert.equal(f.projections.get(rootId)!.runs[0]!.status, "running");
+    assert.equal((yield* service.get(rootId)).recovery?.status, "cancelled");
+  }).pipe(Effect.provide(f.serviceLayer));
+});
+
+it.effect("a new message while paused ends the pause without a continuation", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const service = yield* paused(f);
+    yield* TestClock.adjust("1 minute");
+    const p = f.projections.get(rootId)!;
+    const at = yield* DateTime.now;
+    const next = { ...run("user-follow-up", 2, "running"), requestedAt: at };
+    f.projections.set(rootId, {
+      ...p,
+      runs: [...p.runs, next],
+      messages: [
+        ...p.messages,
+        {
+          id: next.userMessageId,
+          threadId: rootId,
+          runId: next.id,
+          nodeId: null,
+          role: "user",
+          text: "Actually, do this instead",
+          attachments: [],
+          streaming: false,
+          createdAt: at,
+          updatedAt: at,
+          createdBy: "user",
+          creationSource: "web",
+        },
+      ],
+    });
+    yield* TestClock.adjust("2 minutes");
+    yield* service.reconcile();
+    yield* service.reconcile();
+    assert.lengthOf(f.commands, 0);
+    assert.lengthOf(f.interrupts, 1, "the newer turn is never interrupted");
+    assert.equal((yield* service.get(rootId)).recovery?.status, "cancelled");
+  }).pipe(Effect.provide(f.serviceLayer));
+});
+
+it.effect("repeated resume-now requests and ticks send one continuation", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const service = yield* paused(f);
+    const resumeNow = (id: string) =>
+      service.schedule({
+        ...f.schedule,
+        commandId: CommandId.make(id),
+        resumeAt: "1970-01-01T00:00:00.000Z",
+      });
+    yield* Effect.all([resumeNow("resume-a"), resumeNow("resume-b"), service.reconcile()], {
+      concurrency: "unbounded",
+    });
+    yield* Effect.all([service.reconcile(), service.reconcile()], { concurrency: "unbounded" });
+    yield* TestClock.adjust("1 hour");
+    yield* service.reconcile();
+    assert.lengthOf(f.commands, 1);
+    assert.equal((yield* service.get(rootId)).recovery?.status, "monitoring");
+  }).pipe(Effect.provide(f.serviceLayer));
+});
+
+it.effect("cancelling after resume-now but before the tick sends nothing", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const service = yield* paused(f);
+    yield* service.schedule({ ...f.schedule, resumeAt: "1970-01-01T00:00:00.000Z" });
+    yield* service.cancel(rootId);
+    yield* service.reconcile();
+    yield* TestClock.adjust("1 hour");
+    yield* service.reconcile();
+    assert.lengthOf(f.commands, 0);
+    assert.equal((yield* service.get(rootId)).recovery?.status, "cancelled");
+  }).pipe(Effect.provide(f.serviceLayer));
+});

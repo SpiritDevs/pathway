@@ -3,8 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   formatContextWindowCompactionMessage,
   resolveContextWindowModelDisplayName,
-  shouldOfferResumeCompaction,
 } from "./ContextWindowMeter.logic";
+import { shouldOfferResumeCompaction } from "@spiritdevs/shared/claudeCompaction";
 
 describe("resolveContextWindowModelDisplayName", () => {
   it("uses the selected model from the exact provider instance", () => {

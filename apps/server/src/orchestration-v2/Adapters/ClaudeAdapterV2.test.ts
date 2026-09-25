@@ -1,3 +1,4 @@
+import { USAGE_RECOVERY_MESSAGE_PREFIX } from "../../providerUsage/usageRecoveryPolicy.ts";
 import { BUNDLED_MODEL_MANIFEST } from "../../provider/ModelManifest.ts";
 import type {
   Query as ClaudeQuery,
@@ -29,6 +30,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -1317,6 +1319,107 @@ describe("ClaudeAdapterV2 native fork", () => {
         ),
     );
   }
+});
+
+describe("ClaudeAdapterV2 resume compaction dialog", () => {
+  // Opens a turn whose provider stream stays live, then answers Claude's resume_return dialog.
+  const answerResumeDialog = (messageId: string) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const idAllocator = yield* IdAllocatorV2;
+        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "pathway-claude-v2-resume-dialog-",
+        });
+        const openedQueries: Array<ClaudeAgentSdkQueryOpenInput> = [];
+        const adapter = makeClaudeAdapterV2({
+          instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CLAUDE_SETTINGS,
+          environment: {},
+          attachmentsDir,
+          fileSystem,
+          idAllocator,
+          queryRunner: {
+            allocateSessionId: Effect.succeed("native-session-resume-dialog"),
+            open: (input) =>
+              Effect.sync(() => {
+                openedQueries.push(input);
+                return {
+                  messages: Stream.never,
+                  offer: () => Effect.void,
+                  setModel: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Effect.void,
+                };
+              }),
+            forkSession: () => Effect.die("unused forkSession"),
+            assertComplete: Effect.void,
+          },
+        });
+        const threadId = ThreadId.make("thread-claude-resume-dialog");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-resume-dialog"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const turn = makeClaudeTestTurnInput({
+          threadId,
+          providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("run-attempt-claude-resume-dialog"),
+          text: "Continue the previous work.",
+          attachments: [],
+          providerTurnOrdinal: 2,
+          messageCreatedBy: "system",
+          messageCreationSource: "server",
+        });
+        yield* runtime.startTurn({
+          ...turn,
+          message: { ...turn.message, messageId: MessageId.make(messageId) },
+        });
+        const onUserDialog = openedQueries[0]?.options.onUserDialog;
+        assert.isDefined(onUserDialog);
+        // An aborted signal stands in for "nobody answered": a turn that asks the user
+        // resolves as cancelled, one that answers itself never asks.
+        const controller = new AbortController();
+        const answer = Effect.promise(() =>
+          onUserDialog!(
+            {
+              dialogKind: "resume_return",
+              payload: { sessionAgeMinutes: 180, estimatedTokens: 240_000 },
+            } as Parameters<typeof onUserDialog>[0],
+            { signal: controller.signal } as Parameters<typeof onUserDialog>[1],
+          ),
+        );
+        const fiber = yield* Effect.forkChild(answer);
+        yield* Effect.yieldNow;
+        controller.abort();
+        return yield* Fiber.join(fiber);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    );
+
+  it.effect("compacts without asking when an unattended usage recovery resumes", () =>
+    Effect.gen(function* () {
+      assert.deepEqual(yield* answerResumeDialog(`${USAGE_RECOVERY_MESSAGE_PREFIX}job:1`), {
+        behavior: "completed",
+        result: "compact",
+      });
+    }),
+  );
+
+  it.effect("still asks the user for other resumed turns", () =>
+    Effect.gen(function* () {
+      assert.deepEqual(yield* answerResumeDialog("message-from-user"), {
+        behavior: "cancelled",
+      });
+    }),
+  );
 });
 
 describe("ClaudeAdapterV2 native session identity", () => {

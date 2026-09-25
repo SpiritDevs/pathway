@@ -403,7 +403,6 @@ import {
 } from "../state/threadPullRequest";
 import { resolveThreadPr, resolveThreadPrBadges } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
-import { shouldOfferResumeCompaction } from "./chat/ContextWindowMeter.logic";
 import {
   contextWindowSnapshotFromUsage,
   deriveLatestContextWindowSnapshot,
@@ -411,6 +410,7 @@ import {
 } from "../lib/contextWindow";
 import {
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
+  shouldOfferResumeCompaction,
   isClaudeResumeCompactionQuestion,
 } from "@spiritdevs/shared/claudeCompaction";
 import {
@@ -5634,6 +5634,7 @@ function ChatViewContent(props: ChatViewProps) {
     projection: serverProjection,
     providerStatuses,
     supported: isServerThread && serverConfig?.usageRecovery === true,
+    pauseSupported: serverConfig?.usagePause === true,
   });
   const [usageLimitWaitPending, setUsageLimitWaitPending] = useState(false);
   const onWaitUntilUsageReset = useCallback(
@@ -6279,6 +6280,7 @@ function ChatViewContent(props: ChatViewProps) {
         ...(storageBannerItem ? [storageBannerItem] : []),
         ...systemComposerBannerItems,
         ...(usageRecovery.banner ? [usageRecovery.banner] : []),
+        ...(usageRecovery.lowUsageBanner ? [usageRecovery.lowUsageBanner] : []),
         ...browserTakeoverItems,
         ...resumeCompactionItems,
         ...parkedThreadItems,
@@ -6288,6 +6290,7 @@ function ChatViewContent(props: ChatViewProps) {
       ...(storageBannerItem ? [storageBannerItem] : []),
       ...systemComposerBannerItems,
       ...(usageRecovery.banner ? [usageRecovery.banner] : []),
+      ...(usageRecovery.lowUsageBanner ? [usageRecovery.lowUsageBanner] : []),
       ...browserTakeoverItems,
       {
         id: `branch-mismatch:${activeBranchMismatchKey}`,
@@ -6342,6 +6345,7 @@ function ChatViewContent(props: ChatViewProps) {
     showBranchMismatchBanner,
     systemComposerBannerItems,
     usageRecovery.banner,
+    usageRecovery.lowUsageBanner,
     storageBannerItem,
   ]);
 
@@ -9397,6 +9401,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeProviderIconBadge: usageProviderEntry
       ? shouldShowProviderInstanceBadge(usageProviderEntry, continuationProviderEntries)
       : false,
+    usageThreadAction: usageRecovery.menuAction,
     resourcesEnabled: threadPanelOpen,
     preferredScriptId: activeProject
       ? (lastInvokedScriptByProjectId[activeProject.id] ?? null)

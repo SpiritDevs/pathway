@@ -5,9 +5,12 @@ import type {
   RunId,
   ThreadId,
 } from "@spiritdevs/contracts";
+import { shouldOfferResumeCompaction } from "@spiritdevs/shared/claudeCompaction";
 import { isUsageLimitFailure, parseUsageLimitResetAt } from "@spiritdevs/shared/usageLimitRecovery";
 import * as DateTime from "effect/DateTime";
 
+/** Every message recovery sends starts with this, so adapters can tell nobody is there to answer. */
+export const USAGE_RECOVERY_MESSAGE_PREFIX = "usage-recovery:";
 export const RECOVERY_DELAY_MS = 60_000;
 export const RECOVERY_MAX_ATTEMPTS = 3;
 export const recoveryLatestRun = (projection: OrchestrationV2ThreadProjection) =>
@@ -23,7 +26,10 @@ export function isUsageLimitText(message: string) {
   return isUsageLimitFailure({ class: "provider_error", code: null, message, retryable: null });
 }
 
-/** Checked inside the thread's dispatch lock as well as by the scheduler. */
+/**
+ * Checked inside the thread's dispatch lock as well as by the scheduler. Interrupted runs are
+ * resumable because a pause stops its run; the scheduler cancels recoveries a user stopped.
+ */
 export function canResumeUsageRecovery(projection: OrchestrationV2ThreadProjection, runId: RunId) {
   const latest = recoveryLatestRun(projection);
   return (
@@ -31,7 +37,9 @@ export function canResumeUsageRecovery(projection: OrchestrationV2ThreadProjecti
     projection.thread.archivedAt === null &&
     projection.thread.snoozedUntil == null &&
     latest?.id === runId &&
-    (latest.status === "failed" || latest.status === "completed") &&
+    (latest.status === "failed" ||
+      latest.status === "completed" ||
+      latest.status === "interrupted") &&
     !projection.runs.some((run) =>
       ["queued", "preparing", "starting", "running", "waiting"].includes(run.status),
     )
@@ -106,10 +114,53 @@ export function recoveryMarker(recoveryId: string, taskId: string) {
   return `[usage-recovery:${recoveryId}:${taskId}]`;
 }
 
+const TOOL_ITEM_TYPES = new Set([
+  "command_execution",
+  "dynamic_tool",
+  "file_change",
+  "file_search",
+  "source_control",
+  "subagent",
+  "web_search",
+]);
+
+/** A pause stops the run between steps, never halfway through a tool call or subagent. */
+export function atPauseBoundary(projection: OrchestrationV2ThreadProjection, runId: RunId) {
+  return !projection.turnItems.some(
+    (item) =>
+      item.runId === runId &&
+      TOOL_ITEM_TYPES.has(item.type) &&
+      (item.status === "pending" || item.status === "running"),
+  );
+}
+
+/**
+ * Claude's prompt cache is long gone after a pause this old, so resuming a large session would
+ * re-read all of it. Recovery compacts first, like the composer's resume offer.
+ */
+export function shouldCompactBeforeResume(
+  projection: OrchestrationV2ThreadProjection,
+  runId: RunId,
+  nowMs: number,
+) {
+  const run = projection.runs.find((candidate) => candidate.id === runId);
+  const provider = projection.providerThreads.find((thread) => thread.id === run?.providerThreadId);
+  return (
+    run !== undefined &&
+    shouldOfferResumeCompaction({
+      provider: provider?.driver,
+      usedTokens: provider?.tokenUsage?.usedTokens,
+      updatedAt: DateTime.formatIso(run.completedAt ?? run.requestedAt),
+      now: DateTime.formatIso(DateTime.makeUnsafe(nowMs)),
+    })
+  );
+}
+
 export function recoveryPrompt(input: {
   readonly recoveryId: string;
   readonly attempt: number;
   readonly children: ReadonlyArray<RecoveryChild>;
+  readonly paused?: boolean;
 }) {
   const manifest = input.children.map(({ ownerThreadId, task, nativeThreadId }) => ({
     parentThreadId: ownerThreadId,
@@ -126,7 +177,9 @@ export function recoveryPrompt(input: {
   }));
   return [
     `[Usage allowance recovery: attempt ${input.attempt} of ${RECOVERY_MAX_ATTEMPTS}]`,
-    "The user scheduled this thread and its unfinished children to continue after the provider allowance reset.",
+    input.paused
+      ? "The user paused this thread before its provider allowance ran out. The allowance has reset, so continue from where the previous turn stopped."
+      : "The user scheduled this thread and its unfinished children to continue after the provider allowance reset.",
     "Continue the previous work, preserve completed changes, and avoid repeating completed steps.",
     "Recover ALL unfinished children listed below, including nested children. These are observed statuses, not a claim that the children have already restarted.",
     "Use the provider's resume or send-message tools to reactivate failed or interrupted children with their original task and context. Leave running/waiting children running and completed children complete. For nested children, instruct their immediate parent to resume them.",

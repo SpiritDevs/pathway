@@ -23,6 +23,9 @@ struct AgentThreadUsageRecovery: View {
     private var inherited: Bool { recovery["threadId"]?.stringValue.map { $0 != model.threadID } ?? false }
     private var scheduled: Bool { status == "scheduled" }
     private var monitoring: Bool { status == "monitoring" }
+    private var paused: Bool { recovery["reason"]?.stringValue == "pause" && !inherited }
+    /// A pause still waiting for its run to finish the current step.
+    private var pausing: Bool { paused && scheduled && recovery["pausedAt"]?.stringValue == nil }
     private var resumeDate: Date? { recovery["resumeAt"]?.stringValue.flatMap(pathwayDate(from:)) }
     private var resetDate: Date? { eligibility?["resetAt"]?.stringValue.flatMap(pathwayDate(from:)) }
 
@@ -58,10 +61,15 @@ struct AgentThreadUsageRecovery: View {
 
     private func content(resumeNow: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(resumeNow ? "Usage allowance reset" : title, systemImage: "alarm").font(.subheadline.weight(.medium))
+            Label(resumeNow ? "Usage allowance reset" : title, systemImage: paused ? "pause.circle" : "alarm").font(.subheadline.weight(.medium))
             Text(error ?? (resumeNow ? "Resume this thread and its unfinished children now, with their context." : recovery["message"]?.stringValue ?? "Resume this thread and its unfinished children after the allowance resets."))
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
+                if paused && scheduled && !pausing, let sourceRunID = recovery["sourceRunId"]?.stringValue {
+                    Button(isBusy ? "Resuming…" : "Resume now") {
+                        Task { await schedule(sourceRunID: sourceRunID) }
+                    }
+                }
                 if !monitoring && !inherited, let sourceRunID = eligibility?["sourceRunId"]?.stringValue {
                     if resumeNow {
                         Button(isBusy ? "Resuming…" : "Resume now") {
@@ -75,7 +83,7 @@ struct AgentThreadUsageRecovery: View {
                     }
                 }
                 if (scheduled || monitoring) && !inherited {
-                    Button("Cancel recovery", role: .cancel) {
+                    Button(paused ? "Cancel pause" : "Cancel recovery", role: .cancel) {
                         Task { await cancel() }
                     }
                 }
@@ -90,6 +98,9 @@ struct AgentThreadUsageRecovery: View {
 
     private var title: String {
         if inherited { return "Included in the parent thread’s recovery" }
+        if pausing { return "Pausing after the current step" }
+        if paused && scheduled, let resumeDate { return "Paused until \(resumeDate.formatted(date: .abbreviated, time: .shortened))" }
+        if paused && monitoring { return "Resuming paused work · attempt \(recovery["attempts"]?.intValue ?? 1) of 3" }
         if scheduled, let resumeDate { return "Resume thread + children \(resumeDate.formatted(date: .abbreviated, time: .shortened))" }
         if monitoring { return "Resuming thread + children · attempt \(recovery["attempts"]?.intValue ?? 1) of 3" }
         if status == "failed" { return "Automatic recovery needs attention" }
