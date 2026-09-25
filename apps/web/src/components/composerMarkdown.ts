@@ -209,8 +209,9 @@ function $styleParagraphMarkdown(paragraph: ParagraphNode): void {
     }
   }
   lines.push(line);
-  const tooLong =
-    lines.reduce((total, value) => total + value.length, 0) > MAX_STYLED_PROMPT_LENGTH;
+  // Lines are joined by newlines, which count toward the prompt's length.
+  const length = lines.reduce((total, value) => total + value.length + 1, -1);
+  const tooLong = length > MAX_STYLED_PROMPT_LENGTH;
   if (
     !hasStyledText &&
     (tooLong || !lines.some((value) => MARKDOWN_CHARACTER_PATTERN.test(value)))

@@ -247,20 +247,25 @@ describe("registerComposerMarkdown", () => {
     expect(touched[0]).toHaveLength(1);
   });
 
-  it("leaves very long prompts plain, clearing styling once they grow past the limit", () => {
-    const editor = createComposer(["**Bold** plain"]);
+  it("styles prompts up to 10,000 characters, newlines included, and clears styling past that", () => {
+    const head = "**Bold** plain";
+    const editor = createComposer([head, "x".repeat(10_000 - head.length - 1)]);
+    expect(readTextNodes(editor).nodes[1]).toEqual(["Bold", IS_BOLD, false]);
 
     editor.update(
       () => {
-        const plain = $getRoot().getAllTextNodes().at(-1);
-        plain?.setTextContent(`${plain.getTextContent()}${"x".repeat(20_000)}`);
+        const last = $getRoot().getAllTextNodes().at(-1);
+        last?.setTextContent(`${last.getTextContent()}x`);
       },
       { discrete: true },
     );
 
     const { text, nodes } = readTextNodes(editor);
-    expect(text).toBe(`**Bold** plain${"x".repeat(20_000)}`);
-    expect(nodes).toEqual([[text, 0, false]]);
+    expect(text).toHaveLength(10_001);
+    expect(nodes).toEqual([
+      [head, 0, false],
+      ["x".repeat(10_000 - head.length), 0, false],
+    ]);
   });
 
   it("leaves delimiter-dense prompts plain even under the length limit", () => {
