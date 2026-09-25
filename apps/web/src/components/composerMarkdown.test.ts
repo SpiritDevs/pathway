@@ -127,6 +127,33 @@ describe("parseComposerMarkdown", () => {
     ]);
   });
 
+  it("follows markdown's flanking rules for emphasis delimiters", () => {
+    expect(runs("2*(3+4)*5")).toEqual([["2*(3+4)*5"]]);
+  });
+
+  it("carries emphasis across quoted lines and mutes every quote prefix", () => {
+    expect(runs("> *first\n> second*")).toEqual([
+      ["> *:syntax", "first:italic"],
+      ["> :syntax", "second:italic", "*:syntax"],
+    ]);
+  });
+
+  it("mutes a heading's closing hashes", () => {
+    expect(runs("## Next steps ##")).toEqual([["## :syntax", "Next steps:bold", " ##:syntax"]]);
+  });
+
+  it("stops emphasis at a thematic break", () => {
+    expect(runs("*first\n***\nsecond*")).toEqual([["*first"], ["***:syntax"], ["second*"]]);
+  });
+
+  it("recognizes a fenced block that starts after a list marker", () => {
+    expect(runs("- ```ts\n  const v = 1;\n  ```")).toEqual([
+      ["- ", "```ts:block+syntax"],
+      ["  const v = 1;:block"],
+      ["  ```:block+syntax"],
+    ]);
+  });
+
   it("renders fenced code blocks monospace without inline emphasis", () => {
     expect(runs("```ts\nconst a = *b*;\n```\n*after*")).toEqual([
       ["```ts:block+syntax"],
