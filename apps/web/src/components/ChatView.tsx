@@ -445,6 +445,7 @@ import {
   createLocalDispatchSnapshot,
   deriveAcknowledgedOptimisticUserMessageIds,
   deriveCommittedServerUserMessageIds,
+  deriveRolledBackServerUserMessageIds,
   deriveComposerSendState,
   dismissBranchMismatchForSession,
   hasServerAcknowledgedLocalDispatch,
@@ -1737,6 +1738,40 @@ function ChatViewContent(props: ChatViewProps) {
   ]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
+  const rolledBackServerMessageIds = useMemo(
+    () =>
+      deriveRolledBackServerUserMessageIds({
+        messages: serverProjection?.messages ?? [],
+        runs: serverProjection?.runs ?? [],
+      }),
+    [serverProjection?.messages, serverProjection?.runs],
+  );
+  const acknowledgedOptimisticUserMessageIds = useMemo(
+    () =>
+      deriveAcknowledgedOptimisticUserMessageIds({
+        optimisticMessages: optimisticUserMessages,
+        committedServerMessageIds,
+        projectedServerMessageIds,
+        rolledBackServerMessageIds,
+      }),
+    [
+      committedServerMessageIds,
+      optimisticUserMessages,
+      projectedServerMessageIds,
+      rolledBackServerMessageIds,
+    ],
+  );
+  // Acknowledged rows are pruned by an effect; hide them now so a rolled-back
+  // message never flashes back in at the end of the timeline.
+  const pendingOptimisticUserMessages = useMemo(
+    () =>
+      acknowledgedOptimisticUserMessageIds.size === 0
+        ? optimisticUserMessages
+        : optimisticUserMessages.filter(
+            (message) => !acknowledgedOptimisticUserMessageIds.has(message.id),
+          ),
+    [acknowledgedOptimisticUserMessageIds, optimisticUserMessages],
+  );
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
     Record<string, LocalThreadErrorEntry>
   >({});
@@ -3524,7 +3559,7 @@ function ChatViewContent(props: ChatViewProps) {
     () =>
       deriveTimelineEntriesFromVisibleTurnItems({
         visibleTurnItems: presentedServerVisibleTurnItems,
-        optimisticMessages: optimisticUserMessages,
+        optimisticMessages: pendingOptimisticUserMessages,
         attachmentUrlById: timelineAttachmentUrlById,
         ...(serverProjection === null
           ? {}
@@ -3535,7 +3570,7 @@ function ChatViewContent(props: ChatViewProps) {
             }),
       }),
     [
-      optimisticUserMessages,
+      pendingOptimisticUserMessages,
       presentedServerVisibleTurnItems,
       serverProjection,
       timelineAttachmentUrlById,
@@ -5480,20 +5515,15 @@ function ChatViewContent(props: ChatViewProps) {
     if (activeMessageCount === 0) {
       return;
     }
-    const acknowledgedMessageIds = deriveAcknowledgedOptimisticUserMessageIds({
-      optimisticMessages: optimisticUserMessages,
-      committedServerMessageIds,
-      projectedServerMessageIds,
-    });
     const removedMessages = optimisticUserMessages.filter((message) =>
-      acknowledgedMessageIds.has(message.id),
+      acknowledgedOptimisticUserMessageIds.has(message.id),
     );
     if (removedMessages.length === 0) {
       return;
     }
     const timer = window.setTimeout(() => {
       setOptimisticUserMessages((existing) =>
-        existing.filter((message) => !acknowledgedMessageIds.has(message.id)),
+        existing.filter((message) => !acknowledgedOptimisticUserMessageIds.has(message.id)),
       );
     }, 0);
     for (const removedMessage of removedMessages) {
@@ -5508,12 +5538,11 @@ function ChatViewContent(props: ChatViewProps) {
       window.clearTimeout(timer);
     };
   }, [
+    acknowledgedOptimisticUserMessageIds,
     activeMessageCount,
     activeThread?.id,
-    committedServerMessageIds,
     handoffAttachmentPreviews,
     optimisticUserMessages,
-    projectedServerMessageIds,
   ]);
 
   useEffect(() => {

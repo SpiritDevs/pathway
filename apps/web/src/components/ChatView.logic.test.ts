@@ -28,6 +28,7 @@ import {
   createLocalDispatchSnapshot,
   deriveAcknowledgedOptimisticUserMessageIds,
   deriveCommittedServerUserMessageIds,
+  deriveRolledBackServerUserMessageIds,
   deriveComposerSendState,
   deriveLockedProvider,
   dismissBranchMismatchForSession,
@@ -1307,8 +1308,49 @@ describe("deriveAcknowledgedOptimisticUserMessageIds", () => {
         ],
         committedServerMessageIds: new Set(),
         projectedServerMessageIds: new Set([queuedId, steerId]),
+        rolledBackServerMessageIds: new Set(),
       }),
     ).toEqual(new Set([queuedId]));
+  });
+
+  it("acknowledges input whose run was rolled back by an edit-and-restart", () => {
+    const editedId = MessageId.make("message-edited");
+    const replacementId = MessageId.make("message-replacement");
+
+    expect(
+      deriveAcknowledgedOptimisticUserMessageIds({
+        optimisticMessages: [{ id: editedId }],
+        committedServerMessageIds: new Set([replacementId]),
+        projectedServerMessageIds: new Set([editedId, replacementId]),
+        rolledBackServerMessageIds: new Set([editedId]),
+      }),
+    ).toEqual(new Set([editedId]));
+  });
+});
+
+describe("deriveRolledBackServerUserMessageIds", () => {
+  it("collects user messages owned by rolled-back runs", () => {
+    const rolledBackRunId = RunId.make("run-rolled-back");
+    const liveRunId = RunId.make("run-live");
+    const message = (id: string, runId: RunId, role: "user" | "assistant") => ({
+      id: MessageId.make(id),
+      runId,
+      role,
+    });
+
+    expect(
+      deriveRolledBackServerUserMessageIds({
+        runs: [
+          { id: rolledBackRunId, status: "rolled_back" },
+          { id: liveRunId, status: "running" },
+        ],
+        messages: [
+          message("old-user", rolledBackRunId, "user"),
+          message("old-assistant", rolledBackRunId, "assistant"),
+          message("new-user", liveRunId, "user"),
+        ],
+      }),
+    ).toEqual(new Set([MessageId.make("old-user")]));
   });
 });
 
