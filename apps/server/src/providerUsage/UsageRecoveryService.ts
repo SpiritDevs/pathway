@@ -463,6 +463,18 @@ export const layer = Layer.effect(
           });
           return;
         }
+        // A parent whose previous turn finished cleanly already chose which children stay stopped,
+        // so they are not sent back. A turn the limit cut short or a pause interrupted gets them all.
+        const previous = projection.runs.find((run) => run.id === job.expectedRunId);
+        const decided =
+          previous?.status === "completed" && !usageFailureForRun(projection, previous.id);
+        const manifest = decided
+          ? children.filter(
+              ({ task }) =>
+                (task.status !== "failed" && task.status !== "interrupted") ||
+                isUsageLimitText(task.result ?? ""),
+            )
+          : children;
         const messageId = MessageId.make(`${USAGE_RECOVERY_MESSAGE_PREFIX}${job.id}:${attempt}`);
         const sending = {
           ...job,
@@ -481,7 +493,7 @@ export const layer = Layer.effect(
             text: recoveryPrompt({
               recoveryId: job.id,
               attempt,
-              children,
+              children: manifest,
               paused: job.reason === "pause",
             }),
             attachments: [],

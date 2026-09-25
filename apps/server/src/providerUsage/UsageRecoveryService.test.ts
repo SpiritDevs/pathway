@@ -454,6 +454,36 @@ it.effect("completes without retrying a child the parent stopped on purpose", ()
   }).pipe(Effect.provide(f.serviceLayer));
 });
 
+it.effect("does not send a child the parent left stopped back with a blocked sibling", () => {
+  const f = fixture();
+  const duplicate = { ...child("duplicate", "interrupted"), result: "Read the design doc." };
+  f.projections.set(rootId, {
+    ...f.projections.get(rootId)!,
+    subagents: [child("builder"), duplicate],
+  });
+  return Effect.gen(function* () {
+    const service = yield* UsageRecoveryService;
+    yield* service.schedule(f.schedule);
+    yield* TestClock.adjust("2 minutes");
+    yield* service.reconcile();
+    assert.include(f.commands[0]!.text, '"title": "duplicate"');
+    const p = f.projections.get(rootId)!;
+    const at = yield* DateTime.now;
+    f.projections.set(rootId, {
+      ...p,
+      runs: p.runs.map((item) => ({ ...item, status: "completed" })),
+      subagents: [{ ...child("builder"), updatedAt: at }, duplicate],
+    });
+    yield* service.reconcile();
+    assert.equal((yield* service.get(rootId)).recovery?.status, "scheduled");
+    yield* TestClock.adjust("2 minutes");
+    yield* service.reconcile();
+    assert.lengthOf(f.commands, 2);
+    assert.include(f.commands[1]!.text, '"title": "builder"');
+    assert.notInclude(f.commands[1]!.text, '"title": "duplicate"');
+  }).pipe(Effect.provide(f.serviceLayer));
+});
+
 it.effect("tracks a replacement and does not repeat successful work", () => {
   const f = fixture();
   f.projections.set(rootId, { ...f.projections.get(rootId)!, subagents: [child("builder")] });
