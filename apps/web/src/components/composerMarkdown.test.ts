@@ -154,6 +154,23 @@ describe("parseComposerMarkdown", () => {
     ]);
   });
 
+  it("reads over-indented list text as list text, like the chat renderer", () => {
+    expect(runs("-       **important**")).toEqual([
+      ["-       ", "**:syntax", "important:bold", "**:syntax"],
+    ]);
+  });
+
+  it("mutes only a closing fence that matches the opener", () => {
+    expect(runs("````\ncode\n```")).toEqual([["````:block+syntax"], ["code:block"], ["```:block"]]);
+    expect(runs("```\ncode\n~~~")).toEqual([["```:block+syntax"], ["code:block"], ["~~~:block"]]);
+  });
+
+  it("keeps markdown delimiters inside a GFM autolink literal", () => {
+    expect(runs("see https://example.com/*foo*/bar")).toEqual([
+      ["see https://example.com/*foo*/bar"],
+    ]);
+  });
+
   it("renders fenced code blocks monospace without inline emphasis", () => {
     expect(runs("```ts\nconst a = *b*;\n```\n*after*")).toEqual([
       ["```ts:block+syntax"],
@@ -247,9 +264,9 @@ describe("registerComposerMarkdown", () => {
     expect(touched[0]).toHaveLength(1);
   });
 
-  it("styles prompts up to 10,000 characters, newlines included, and clears styling past that", () => {
+  it("styles prompts up to 5,000 characters, newlines included, and clears styling past that", () => {
     const head = "**Bold** plain";
-    const editor = createComposer([head, "x".repeat(10_000 - head.length - 1)]);
+    const editor = createComposer([head, "x".repeat(5_000 - head.length - 1)]);
     expect(readTextNodes(editor).nodes[1]).toEqual(["Bold", IS_BOLD, false]);
 
     editor.update(
@@ -261,11 +278,17 @@ describe("registerComposerMarkdown", () => {
     );
 
     const { text, nodes } = readTextNodes(editor);
-    expect(text).toHaveLength(10_001);
+    expect(text).toHaveLength(5_001);
     expect(nodes).toEqual([
       [head, 0, false],
-      ["x".repeat(10_000 - head.length), 0, false],
+      ["x".repeat(5_000 - head.length), 0, false],
     ]);
+  });
+
+  it("styles indented code even without markdown punctuation", () => {
+    const editor = createComposer(["    hello"]);
+
+    expect(readTextNodes(editor).nodes).toEqual([["    hello", 0, true]]);
   });
 
   it("leaves delimiter-dense prompts plain even under the length limit", () => {

@@ -1,14 +1,14 @@
 interface MarkdownPosition {
   readonly start?: {
-    readonly line?: number;
-    readonly offset?: number;
+    readonly line?: number | undefined;
+    readonly offset?: number | undefined;
   };
 }
 
 interface MarkdownAstNode {
   readonly type: string;
   readonly value?: unknown;
-  readonly position?: MarkdownPosition;
+  readonly position?: MarkdownPosition | undefined;
   children?: MarkdownAstNode[];
 }
 
@@ -25,9 +25,10 @@ interface RecoveredMarkdown {
   readonly source: string;
 }
 
-const INLINE_PARSE_PREFIX = "pathway-markdown-inline-prefix:";
+export const INLINE_PARSE_PREFIX = "pathway-markdown-inline-prefix:";
 
-function isSameLineOverIndentedCode(
+/** A list item's accidental over-indentation, which the chat renders as list text. */
+export function isSameLineOverIndentedCode(
   node: MarkdownAstNode,
   parent: MarkdownAstNode | undefined,
   markdown: string,

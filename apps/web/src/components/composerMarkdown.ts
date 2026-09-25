@@ -1,7 +1,7 @@
-import type { Nodes } from "mdast";
+import type { Nodes, Parents } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
-import { gfmStrikethroughFromMarkdown } from "mdast-util-gfm-strikethrough";
-import { gfmStrikethrough } from "micromark-extension-gfm-strikethrough";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
 import {
   $isLineBreakNode,
   $isParagraphNode,
@@ -17,6 +17,8 @@ import {
   type LexicalEditor,
 } from "lexical";
 
+import { INLINE_PARSE_PREFIX, isSameLineOverIndentedCode } from "~/markdown-list-indentation";
+
 /** Markdown punctuation such as `**`, `#`, or a code fence, rendered muted. */
 export const MARKDOWN_SYNTAX = 1 << 8;
 /** Every line of a fenced code block, rendered monospace. */
@@ -28,20 +30,20 @@ const TEXT_FORMAT_MASK = IS_BOLD | IS_ITALIC | IS_STRIKETHROUGH | IS_CODE;
 // formatted run, which the composer's cursor math walks each keystroke too. A
 // prompt past either limit is mostly pasted material, so it stays plain rather
 // than slowing down typing.
-const MAX_STYLED_PROMPT_LENGTH = 10_000;
+const MAX_STYLED_PROMPT_LENGTH = 5_000;
 const MAX_STYLED_RUNS = 2_000;
 
 const MARKDOWN_CHARACTER_PATTERN = /[*_~`#>=-]/;
 const ESCAPE_PATTERN = /\\[!-/:-@[-`{-~]/g;
-const FENCE_OPEN_PATTERN = /^[`~]{3}/;
-const FENCE_CLOSE_PATTERN = /^\s*[`~]{3,}\s*$/;
+const INDENTED_CODE_PATTERN = /^(?: {4}|\t)/;
+const FENCE_PATTERN = /^(?:`{3,}|~{3,})/;
 const QUOTE_PREFIX_PATTERN = /^[ \t]*(?:>[ \t]?)+/;
 
-// The same micromark parser and strikethrough extension the chat renderer uses
+// The same micromark parser and GFM extensions the chat renderer uses
 // (react-markdown with remark-gfm), so the preview agrees with the sent message.
 const PARSE_OPTIONS = {
-  extensions: [gfmStrikethrough()],
-  mdastExtensions: [gfmStrikethroughFromMarkdown()],
+  extensions: [gfm()],
+  mdastExtensions: [gfmFromMarkdown()],
 };
 
 const INLINE_FORMATS = {
@@ -71,7 +73,25 @@ function lineEnd(text: string, from: number, limit: number): number {
   return end === -1 || end > limit ? limit : end;
 }
 
-function markNode(node: Nodes, text: string, marks: Uint16Array): void {
+/**
+ * Marks over-indented list text the way the chat renders it: reparsed as
+ * inline content, behind the same prefix the renderer uses to keep it inline.
+ */
+function markListItemText(text: string, start: number, end: number, marks: Uint16Array): void {
+  const source = text.slice(start, end);
+  const contentStart = start + source.length - source.trimStart().length;
+  const prefixed = `${INLINE_PARSE_PREFIX}${source.trim()}`;
+  const prefixedMarks = new Uint16Array(prefixed.length);
+  markNode(fromMarkdown(prefixed, PARSE_OPTIONS), undefined, prefixed, prefixedMarks);
+  marks.set(prefixedMarks.subarray(INLINE_PARSE_PREFIX.length), contentStart);
+}
+
+function markNode(
+  node: Nodes,
+  parent: Parents | undefined,
+  text: string,
+  marks: Uint16Array,
+): void {
   const start = node.position?.start.offset;
   const end = node.position?.end.offset;
   if (start === undefined || end === undefined) return;
@@ -99,12 +119,23 @@ function markNode(node: Nodes, text: string, marks: Uint16Array): void {
       return;
     }
     case "code": {
+      if (parent && isSameLineOverIndentedCode(node, parent, text)) {
+        markListItemText(text, start, end, marks);
+        return;
+      }
       addMark(marks, start, end, MARKDOWN_CODE_BLOCK);
       // Indented code has no fence lines to mute.
-      if (!FENCE_OPEN_PATTERN.test(text.slice(start, start + 3))) return;
+      const opener = FENCE_PATTERN.exec(text.slice(start, lineEnd(text, start, end)))?.[0];
+      if (!opener) return;
       addMark(marks, start, lineEnd(text, start, end), MARKDOWN_SYNTAX);
+      // Only a run of the opener's character, at least as long, closes the block.
       const lastLineStart = text.lastIndexOf("\n", end - 1) + 1;
-      if (lastLineStart > start && FENCE_CLOSE_PATTERN.test(text.slice(lastLineStart, end))) {
+      const closer = text.slice(lastLineStart, end).trim();
+      if (
+        lastLineStart > start &&
+        closer.length >= opener.length &&
+        closer === (opener[0] ?? "").repeat(closer.length)
+      ) {
         addMark(marks, lastLineStart, end, MARKDOWN_SYNTAX);
       }
       return;
@@ -121,7 +152,7 @@ function markNode(node: Nodes, text: string, marks: Uint16Array): void {
   }
 
   if ("children" in node) {
-    for (const child of node.children) markNode(child, text, marks);
+    for (const child of node.children) markNode(child, node, text, marks);
   }
 
   if (node.type === "blockquote") {
@@ -145,7 +176,7 @@ function markNode(node: Nodes, text: string, marks: Uint16Array): void {
 export function parseComposerMarkdown(lines: ReadonlyArray<string>): Uint16Array[] {
   const text = lines.join("\n");
   const marks = new Uint16Array(text.length);
-  markNode(fromMarkdown(text, PARSE_OPTIONS), text, marks);
+  markNode(fromMarkdown(text, PARSE_OPTIONS), undefined, text, marks);
   let offset = 0;
   return lines.map((line) => {
     const lineMarks = marks.slice(offset, offset + line.length);
@@ -214,7 +245,10 @@ function $styleParagraphMarkdown(paragraph: ParagraphNode): void {
   const tooLong = length > MAX_STYLED_PROMPT_LENGTH;
   if (
     !hasStyledText &&
-    (tooLong || !lines.some((value) => MARKDOWN_CHARACTER_PATTERN.test(value)))
+    (tooLong ||
+      !lines.some(
+        (value) => MARKDOWN_CHARACTER_PATTERN.test(value) || INDENTED_CODE_PATTERN.test(value),
+      ))
   ) {
     return;
   }
