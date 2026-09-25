@@ -91,6 +91,42 @@ describe("parseComposerMarkdown", () => {
     expect(runs("## Next steps")).toEqual([["## :syntax", "Next steps:bold"]]);
   });
 
+  it("treats backslash-escaped delimiters as literal text", () => {
+    expect(runs("\\*lit\\* and \\`x\\` but \\\\*em*")).toEqual([
+      [
+        "\\:syntax",
+        "*lit",
+        "\\:syntax",
+        "* and ",
+        "\\:syntax",
+        "`x",
+        "\\:syntax",
+        "` but ",
+        "\\:syntax",
+        "\\",
+        "*:syntax",
+        "em:italic",
+        "*:syntax",
+      ],
+    ]);
+  });
+
+  it("carries emphasis across soft line breaks but not into a new block", () => {
+    expect(runs("*first\nsecond*")).toEqual([
+      ["*:syntax", "first:italic"],
+      ["second:italic", "*:syntax"],
+    ]);
+    expect(runs("*a\n\nb*")).toEqual([["*a"], [], ["b*"]]);
+    expect(runs("- *a\n- b*")).toEqual([["- *a"], ["- b*"]]);
+  });
+
+  it("reads a backtick line with backticks after the marker as inline code, not a fence", () => {
+    expect(runs("```code```\nnext *em*")).toEqual([
+      ["```:syntax", "code:code", "```:syntax"],
+      ["next ", "*:syntax", "em:italic", "*:syntax"],
+    ]);
+  });
+
   it("renders fenced code blocks monospace without inline emphasis", () => {
     expect(runs("```ts\nconst a = *b*;\n```\n*after*")).toEqual([
       ["```ts:block+syntax"],
@@ -198,6 +234,13 @@ describe("registerComposerMarkdown", () => {
     const { text, nodes } = readTextNodes(editor);
     expect(text).toBe(`**Bold** plain${"x".repeat(20_000)}`);
     expect(nodes).toEqual([[text, 0, false]]);
+  });
+
+  it("leaves delimiter-dense prompts plain even under the length limit", () => {
+    const prompt = "**a** ".repeat(1_000);
+    const editor = createComposer([prompt]);
+
+    expect(readTextNodes(editor).nodes).toEqual([[prompt, 0, false]]);
   });
 
   it("clears the formatting once a delimiter is deleted", () => {
