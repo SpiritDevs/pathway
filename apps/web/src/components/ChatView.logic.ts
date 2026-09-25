@@ -815,18 +815,48 @@ export function deriveCommittedServerUserMessageIds(
 }
 
 /**
+ * User messages whose run was rolled back (edit-and-restart, checkpoint
+ * revert). The server has withdrawn them from the transcript, so no
+ * optimistic copy of them may resurface.
+ */
+export function deriveRolledBackServerUserMessageIds(projection: {
+  readonly messages: ReadonlyArray<
+    Pick<OrchestrationV2ThreadProjection["messages"][number], "id" | "role" | "runId">
+  >;
+  readonly runs: ReadonlyArray<
+    Pick<OrchestrationV2ThreadProjection["runs"][number], "id" | "status">
+  >;
+}): ReadonlySet<ChatMessage["id"]> {
+  const rolledBackRunIds = new Set(
+    projection.runs.flatMap((run) => (run.status === "rolled_back" ? [run.id] : [])),
+  );
+  if (rolledBackRunIds.size === 0) return new Set();
+  return new Set(
+    projection.messages.flatMap((message) =>
+      message.role === "user" && message.runId !== null && rolledBackRunIds.has(message.runId)
+        ? [message.id]
+        : [],
+    ),
+  );
+}
+
+/**
  * Queued input is server-owned before it has a visible turn item. Treat its
  * projected conversation message as acknowledgement, while keeping ordinary
- * and steer input behind the visible-item guard above.
+ * and steer input behind the visible-item guard above. Rolled-back input is
+ * acknowledged too: its committed row is gone for good, and an optimistic copy
+ * would otherwise reappear at the end of the timeline.
  */
 export function deriveAcknowledgedOptimisticUserMessageIds(input: {
   readonly optimisticMessages: ReadonlyArray<Pick<ChatMessage, "id" | "inputIntent">>;
   readonly committedServerMessageIds: ReadonlySet<ChatMessage["id"]>;
   readonly projectedServerMessageIds: ReadonlySet<ChatMessage["id"]>;
+  readonly rolledBackServerMessageIds: ReadonlySet<ChatMessage["id"]>;
 }): ReadonlySet<ChatMessage["id"]> {
   return new Set(
     input.optimisticMessages.flatMap((message) =>
       input.committedServerMessageIds.has(message.id) ||
+      input.rolledBackServerMessageIds.has(message.id) ||
       (message.inputIntent === "queued_turn" && input.projectedServerMessageIds.has(message.id))
         ? [message.id]
         : [],
