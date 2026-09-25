@@ -527,8 +527,12 @@ export const layer = Layer.effect(
         });
         return;
       }
+      // Only a usage limit earns another attempt. A child the parent stopped on purpose, or one
+      // that failed for another reason, is the parent's to handle.
       const blocked = children.filter(
-        ({ task }) => task.status === "failed" || task.status === "interrupted",
+        ({ task }) =>
+          (task.status === "failed" || task.status === "interrupted") &&
+          isUsageLimitText(task.result ?? ""),
       );
       const working = children.some(({ task }) =>
         ["pending", "running", "waiting"].includes(task.status),
@@ -550,38 +554,41 @@ export const layer = Layer.effect(
           ...(failure?.type === "error"
             ? [{ text: failure.failure.message, at: DateTime.toEpochMillis(failure.updatedAt) }]
             : []),
-          ...blocked
-            .filter(({ task }) => isUsageLimitText(task.result ?? ""))
-            .map(({ task }) => ({
-              text: task.result!,
-              at: childFailedAt(task),
-            })),
+          ...blocked.map(({ task }) => ({ text: task.result!, at: childFailedAt(task) })),
         ];
+        const ref = ({ ownerThreadId, task }: RecoveryChild) => ({
+          ownerThreadId,
+          taskId: task.id,
+        });
+        const added = children.filter(
+          ({ task }) => !selected.some((selectedChild) => selectedChild.task.id === task.id),
+        );
+        // A clean parent turn settled every other child, so later attempts carry only the ones the
+        // limit still blocks and count new children from the next attempt. A turn the limit cut
+        // short never got to decide, so it keeps them all.
+        const pending =
+          failure?.type === "error"
+            ? { children: [...job.children, ...added.map(ref)] }
+            : { children: blocked.map(ref), startedAt: null };
         yield* save({
           ...job,
+          ...pending,
           status: "scheduled",
           expectedRunId: latest.id,
           attemptMessageId: null,
           compactMessageId: null,
           resumeAt: recoveryRetryAt(errors, nowMs),
-          children: [
-            ...job.children,
-            ...children
-              .filter(
-                ({ task }) => !selected.some((selectedChild) => selectedChild.task.id === task.id),
-              )
-              .map(({ ownerThreadId, task }) => ({ ownerThreadId, taskId: task.id })),
-          ],
           message: `${blocked.length ? `${blocked.length} child task(s) still need recovery. ` : ""}Waiting to retry; ${job.attempts} of 3 attempts used.`,
         });
         return;
       }
-      if (working) return;
+      // A blocked child retries once its siblings stop, so they share one attempt. Otherwise the
+      // resumed turn finished cleanly; restarted children keep working without holding the timer.
+      if (blocked.length) return;
       yield* save({
         ...job,
         status: "completed",
-        message:
-          "The recovery turn and its children finished. Results are available in the conversation.",
+        message: "The recovery turn finished. Results are available in the conversation.",
       });
     });
 
