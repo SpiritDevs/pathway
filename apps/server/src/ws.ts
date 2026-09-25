@@ -832,6 +832,7 @@ const makeWsRpcLayer = (
           threadSnapshotPagination: true,
           orchestrationV2ThreadHistory: true,
           usageRecovery: true,
+          usagePause: true,
         };
       });
 
@@ -1606,6 +1607,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.usageRecoverySubscribe]: (input) => usageRecovery.subscribe(input.threadId),
         [WS_METHODS.usageRecoverySchedule]: (input) => usageRecovery.schedule(input),
         [WS_METHODS.usageRecoveryCancel]: (input) => usageRecovery.cancel(input.threadId),
+        [WS_METHODS.usageRecoveryPause]: (input) => usageRecovery.pause(input),
         [WS_METHODS.scheduledTasksList]: (_input) =>
           observeRpcEffect(WS_METHODS.scheduledTasksList, scheduledTasks.list(), {
             "rpc.aggregate": "scheduledTasks",

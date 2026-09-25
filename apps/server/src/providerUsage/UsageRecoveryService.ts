@@ -6,6 +6,7 @@ import {
   ThreadId,
   UsageRecovery,
   UsageRecoveryError,
+  type UsageRecoveryPauseInput,
   type UsageRecoveryResult,
   type UsageRecoveryScheduleInput,
 } from "@spiritdevs/contracts";
@@ -22,6 +23,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { forkParked } from "../serverActivation.ts";
 import {
+  atPauseBoundary,
   canResumeUsageRecovery,
   childFailedAt,
   isUsageLimitText,
@@ -33,7 +35,9 @@ import {
   reportedResetAt,
   resumedChildTask,
   runIsWorking,
+  shouldCompactBeforeResume,
   usageFailureForRun,
+  USAGE_RECOVERY_MESSAGE_PREFIX,
   type RecoveryChild,
 } from "./usageRecoveryPolicy.ts";
 
@@ -45,12 +49,17 @@ const StoredRecovery = Schema.Struct({
   children: Schema.Array(Schema.Struct({ ownerThreadId: ThreadId, taskId: NodeId })),
   /** First attempt time, used to distinguish a stale failure from a restarted child. */
   startedAt: Schema.NullOr(Schema.String),
+  /** Native compaction sent before this attempt's continuation. */
+  compactMessageId: Schema.optional(Schema.NullOr(MessageId)),
 });
 type StoredRecovery = typeof StoredRecovery.Type;
 const encode = Schema.encodeEffect(Schema.fromJsonString(StoredRecovery));
 const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(StoredRecovery));
 const recoveryError = (message: string) => new UsageRecoveryError({ message });
 const active = (job: StoredRecovery) => job.status === "scheduled" || job.status === "monitoring";
+/** A pause whose run is still working polls for the next step boundary on every tick. */
+const pausing = (job: StoredRecovery) =>
+  job.reason === "pause" && job.status === "scheduled" && !job.pausedAt;
 
 export class UsageRecoveryService extends Context.Service<
   UsageRecoveryService,
@@ -61,6 +70,7 @@ export class UsageRecoveryService extends Context.Service<
       input: UsageRecoveryScheduleInput,
     ): Effect.Effect<UsageRecoveryResult, UsageRecoveryError>;
     cancel(threadId: ThreadId): Effect.Effect<UsageRecoveryResult, UsageRecoveryError>;
+    pause(input: UsageRecoveryPauseInput): Effect.Effect<UsageRecoveryResult, UsageRecoveryError>;
     reconcile(): Effect.Effect<void, UsageRecoveryError>;
   }
 >()("@spiritdevs/pathway/providerUsage/UsageRecoveryService") {}
@@ -129,20 +139,17 @@ export const layer = Layer.effect(
             )
               recovery = null;
           }
-          let ancestor = projection.thread.lineage.parentThreadId;
-          const visited = new Set<ThreadId>();
-          while (ancestor !== null && !visited.has(ancestor)) {
-            visited.add(ancestor);
-            const parentJob = yield* read(ancestor);
-            if (parentJob && active(parentJob)) return { recovery: parentJob, eligibility: null };
-            ancestor = (yield* threads.getThreadProjection(ancestor)).thread.lineage.parentThreadId;
-          }
+          const parentJob = yield* activeAncestorJob(projection.thread.lineage.parentThreadId);
+          if (parentJob) return { recovery: parentJob, eligibility: null };
+          if (recovery?.reason === "pause" && active(recovery))
+            return { recovery, eligibility: null };
           const run = recoveryLatestRun(projection);
           const provider = projection.providerThreads.find(
             (thread) => thread.id === run?.providerThreadId,
           );
           if (
             !run ||
+            run.status === "interrupted" ||
             !canResumeUsageRecovery(projection, run.id) ||
             (provider?.driver !== "codex" && provider?.driver !== "claudeAgent")
           )
@@ -176,6 +183,20 @@ export const layer = Layer.effect(
           };
         }),
       );
+
+    const activeAncestorJob = Effect.fn("UsageRecovery.activeAncestorJob")(function* (
+      parentThreadId: ThreadId | null,
+    ) {
+      let ancestor = parentThreadId;
+      const visited = new Set<ThreadId>();
+      while (ancestor !== null && !visited.has(ancestor)) {
+        visited.add(ancestor);
+        const parentJob = yield* read(ancestor);
+        if (parentJob && active(parentJob)) return parentJob;
+        ancestor = (yield* threads.getThreadProjection(ancestor)).thread.lineage.parentThreadId;
+      }
+      return null;
+    });
 
     /** Only traverse this thread's descendants; never scan all conversations for a timer tick. */
     const family = Effect.fn("UsageRecovery.family")(function* (root: ThreadId) {
@@ -235,7 +256,16 @@ export const layer = Layer.effect(
         job.attemptMessageId === null
           ? undefined
           : projection.runs.find((run) => run.userMessageId === job.attemptMessageId);
-      let expected = attemptRun?.id ?? job.expectedRunId;
+      const compactRun =
+        job.compactMessageId == null
+          ? undefined
+          : projection.runs.find((run) => run.userMessageId === job.compactMessageId);
+      let expected = attemptRun?.id ?? compactRun?.id ?? job.expectedRunId;
+      const paused =
+        job.reason === "pause" &&
+        job.status === "scheduled" &&
+        attemptRun === undefined &&
+        compactRun === undefined;
       const newerMessage = projection.messages.find(
         (message) => message.id === latest.userMessageId,
       );
@@ -254,7 +284,9 @@ export const layer = Layer.effect(
         (newerMessage.creationSource === "server" || newerMessage.creationSource === "provider")
       ) {
         expected = latest.id;
-        if (job.status === "scheduled")
+        // Work that continues a paused turn is paused at its next step too.
+        if (paused) job = yield* save({ ...job, expectedRunId: latest.id, pausedAt: null });
+        else if (job.status === "scheduled")
           job = yield* save({
             ...job,
             expectedRunId: latest.id,
@@ -265,12 +297,74 @@ export const layer = Layer.effect(
       if (
         userIntervened ||
         latest.id !== expected ||
-        ["interrupted", "cancelled", "rolled_back"].includes(latest.status)
+        (!(paused && latest.status === "interrupted") &&
+          ["interrupted", "cancelled", "rolled_back"].includes(latest.status))
       ) {
         yield* save({
           ...job,
           status: "cancelled",
-          message: "Recovery cancelled because newer work or a manual stop superseded it.",
+          message:
+            job.reason === "pause"
+              ? "Pause ended because a newer message or a manual stop superseded it."
+              : "Recovery cancelled because newer work or a manual stop superseded it.",
+        });
+        return;
+      }
+      if (paused && !job.pausedAt) {
+        if (runIsWorking(latest)) {
+          if (atPauseBoundary(projection, latest.id))
+            // Retried every tick until the run stops, so a rejection is not worth a warning.
+            yield* threads
+              .dispatch({
+                type: "run.interrupt",
+                commandId: CommandId.make(`usage-pause:${job.id}:${latest.id}`),
+                threadId: job.threadId,
+                runId: latest.id,
+                reason: "Paused until the usage allowance resets.",
+              })
+              .pipe(
+                Effect.catch((cause) =>
+                  Effect.logDebug("Usage pause interrupt deferred", {
+                    threadId: job.threadId,
+                    cause,
+                  }),
+                ),
+              );
+          return;
+        }
+        const failure = usageFailureForRun(projection, latest.id);
+        if (latest.status !== "interrupted" && failure === undefined) {
+          yield* save({
+            ...job,
+            status: latest.status === "completed" ? "completed" : "failed",
+            message:
+              latest.status === "completed"
+                ? "The turn finished before the pause took effect, so there is nothing to resume."
+                : "The paused turn stopped on a different error. Review the thread before continuing.",
+          });
+          return;
+        }
+        job = yield* save({
+          ...job,
+          pausedAt: DateTime.formatIso(yield* DateTime.now),
+          message: "Paused after the current step. Work continues when the allowance resets.",
+        });
+      }
+      // A failed compaction leaves the expired cache in place; continuing would re-read it all.
+      if (
+        compactRun !== undefined &&
+        attemptRun === undefined &&
+        !runIsWorking(compactRun) &&
+        (compactRun.status !== "completed" ||
+          projection.turnItems.some(
+            (item) => item.type === "error" && item.runId === compactRun.id,
+          ))
+      ) {
+        yield* save({
+          ...job,
+          status: "failed",
+          message:
+            "Compacting before resuming failed, so work did not continue. Compact the thread or send a message to continue.",
         });
         return;
       }
@@ -323,7 +417,53 @@ export const layer = Layer.effect(
         if (Date.parse(job.resumeAt) > nowMs || !canResumeUsageRecovery(projection, expected))
           return;
         const attempt = job.attempts + 1;
-        const messageId = MessageId.make(`usage-recovery:${job.id}:${attempt}`);
+        if (compactRun === undefined && shouldCompactBeforeResume(projection, expected, nowMs)) {
+          const compactMessageId = MessageId.make(
+            `${USAGE_RECOVERY_MESSAGE_PREFIX}${job.id}:${attempt}:compact`,
+          );
+          const compacting = yield* save({ ...job, compactMessageId });
+          const dispatched = yield* threads
+            .dispatch({
+              type: "message.dispatch",
+              threadId: job.threadId,
+              commandId: CommandId.make(compactMessageId),
+              messageId: compactMessageId,
+              usageRecoveryOfRunId: expected,
+              dispatchMode: { type: "start_immediately" },
+              text: "/compact",
+              attachments: [],
+              createdBy: "system",
+              creationSource: "server",
+            })
+            .pipe(Effect.result);
+          if (
+            dispatched._tag === "Success" ||
+            (yield* threads.getThreadProjection(job.threadId)).messages.some(
+              (message) => message.id === compactMessageId,
+            )
+          ) {
+            yield* save({
+              ...compacting,
+              message: "Compacting context before resuming, because the prompt cache has expired.",
+            });
+            return;
+          }
+          // Never fall back to re-reading the whole uncompacted conversation unattended.
+          const superseded = !canResumeUsageRecovery(
+            yield* threads.getThreadProjection(job.threadId),
+            expected,
+          );
+          yield* save({
+            ...job,
+            compactMessageId: null,
+            status: superseded ? "cancelled" : "failed",
+            message: superseded
+              ? "Recovery was superseded by newer work or a user action."
+              : `Could not compact before resuming, so work did not continue: ${dispatched.failure.message}`,
+          });
+          return;
+        }
+        const messageId = MessageId.make(`${USAGE_RECOVERY_MESSAGE_PREFIX}${job.id}:${attempt}`);
         const sending = {
           ...job,
           attemptMessageId: messageId,
@@ -338,7 +478,12 @@ export const layer = Layer.effect(
             messageId,
             usageRecoveryOfRunId: expected,
             dispatchMode: { type: "start_immediately" },
-            text: recoveryPrompt({ recoveryId: job.id, attempt, children }),
+            text: recoveryPrompt({
+              recoveryId: job.id,
+              attempt,
+              children,
+              paused: job.reason === "pause",
+            }),
             attachments: [],
             createdBy: "system",
             creationSource: "server",
@@ -417,6 +562,7 @@ export const layer = Layer.effect(
           status: "scheduled",
           expectedRunId: latest.id,
           attemptMessageId: null,
+          compactMessageId: null,
           resumeAt: recoveryRetryAt(errors, nowMs),
           children: [
             ...job.children,
@@ -462,6 +608,7 @@ export const layer = Layer.effect(
                 background &&
                 bootstrapped &&
                 !dirty.has(job.threadId) &&
+                !pausing(job) &&
                 (job.status === "monitoring" || Date.parse(job.resumeAt) > now)
               )
                 continue;
@@ -490,23 +637,25 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             const previous = yield* read(input.threadId);
             if (previous?.id === input.commandId) return { recovery: previous };
+            const now = yield* DateTime.now;
+            // A time that has already passed means "resume now"; the next reconcile tick starts it.
+            const resumeAt =
+              Date.parse(input.resumeAt) <= DateTime.toEpochMillis(now)
+                ? DateTime.formatIso(now)
+                : input.resumeAt;
+            // Retiming a pause keeps its phase; it may still be waiting for the step boundary.
+            if (previous?.reason === "pause" && previous.status === "scheduled")
+              return { recovery: yield* save({ ...previous, resumeAt }) };
             const projection = yield* threads.getThreadProjection(input.threadId);
-            let ancestor = projection.thread.lineage.parentThreadId;
-            const ancestors = new Set<ThreadId>();
-            while (ancestor !== null && !ancestors.has(ancestor)) {
-              ancestors.add(ancestor);
-              const parentJob = yield* read(ancestor);
-              if (parentJob && active(parentJob))
-                return yield* recoveryError(
-                  "This child is included in its parent's recovery. Manage the timer from the parent thread.",
-                );
-              ancestor = (yield* threads.getThreadProjection(ancestor)).thread.lineage
-                .parentThreadId;
-            }
+            if (yield* activeAncestorJob(projection.thread.lineage.parentThreadId))
+              return yield* recoveryError(
+                "This child is included in its parent's recovery. Manage the timer from the parent thread.",
+              );
             const run = recoveryLatestRun(projection);
             if (
               !run ||
               run.id !== input.sourceRunId ||
+              run.status === "interrupted" ||
               !canResumeUsageRecovery(projection, run.id)
             ) {
               return yield* recoveryError(
@@ -532,12 +681,6 @@ export const layer = Layer.effect(
                 "No usage-limit failure was found in this thread or its children.",
               );
             }
-            const now = yield* DateTime.now;
-            // A time that has already passed means "resume now"; the next reconcile tick starts it.
-            const resumeAt =
-              Date.parse(input.resumeAt) <= DateTime.toEpochMillis(now)
-                ? DateTime.formatIso(now)
-                : input.resumeAt;
             if (previous?.status === "monitoring")
               return yield* recoveryError(
                 "Recovery is already running. Cancel it before scheduling another timer.",
@@ -558,6 +701,7 @@ export const layer = Layer.effect(
               sourceRunId: input.sourceRunId,
               expectedRunId: run.id,
               attemptMessageId: null,
+              compactMessageId: null,
               startedAt: null,
               authorizedAt: DateTime.formatIso(now),
               status: "scheduled",
@@ -568,6 +712,70 @@ export const layer = Layer.effect(
                 taskId: task.id,
               })),
               message: `Scheduled to continue this thread and ${children.length} unfinished child task(s).`,
+            });
+            return { recovery };
+          }),
+        ),
+      );
+    const pause = (input: UsageRecoveryPauseInput) =>
+      lock.withPermit(
+        protect(
+          Effect.gen(function* () {
+            const previous = yield* read(input.threadId);
+            if (previous?.id === input.commandId) return { recovery: previous };
+            if (previous && active(previous))
+              return yield* recoveryError(
+                "This thread already has a recovery timer. Change or cancel it instead.",
+              );
+            const projection = yield* threads.getThreadProjection(input.threadId);
+            if (yield* activeAncestorJob(projection.thread.lineage.parentThreadId))
+              return yield* recoveryError(
+                "This child is included in its parent's recovery. Manage the timer from the parent thread.",
+              );
+            const run = recoveryLatestRun(projection);
+            if (
+              !run ||
+              !runIsWorking(run) ||
+              projection.thread.archivedAt !== null ||
+              projection.thread.deletedAt !== null
+            )
+              return yield* recoveryError("Pause is available while the agent is working.");
+            // The newest run would be the queued message, not the work that is running.
+            if (run.status === "queued")
+              return yield* recoveryError("Send or remove queued messages before pausing.");
+            const provider = projection.providerThreads.find(
+              (thread) => thread.id === run.providerThreadId,
+            );
+            if (provider?.driver !== "codex" && provider?.driver !== "claudeAgent")
+              return yield* recoveryError(
+                "Pausing until reset currently supports Claude and Codex.",
+              );
+            const now = yield* DateTime.now;
+            const children = (yield* family(input.threadId)).filter(
+              ({ task }) => task.status !== "completed" && task.status !== "cancelled",
+            );
+            const recovery = yield* save({
+              id: input.commandId,
+              threadId: input.threadId,
+              sourceRunId: run.id,
+              expectedRunId: run.id,
+              attemptMessageId: null,
+              compactMessageId: null,
+              startedAt: null,
+              authorizedAt: DateTime.formatIso(now),
+              status: "scheduled",
+              reason: "pause",
+              pausedAt: null,
+              resumeAt:
+                Date.parse(input.resumeAt) <= DateTime.toEpochMillis(now)
+                  ? DateTime.formatIso(now)
+                  : input.resumeAt,
+              attempts: 0,
+              children: children.map(({ ownerThreadId, task }) => ({
+                ownerThreadId,
+                taskId: task.id,
+              })),
+              message: "Pausing after the current step. Work continues when the allowance resets.",
             });
             return { recovery };
           }),
@@ -585,7 +793,9 @@ export const layer = Layer.effect(
                       ...job,
                       status: "cancelled",
                       message:
-                        "Recovery timer cancelled. Work already running can be stopped with the thread's Stop control.",
+                        job.reason === "pause"
+                          ? "Pause cancelled. Send a message to continue the thread."
+                          : "Recovery timer cancelled. Work already running can be stopped with the thread's Stop control.",
                     })
                   : job,
             };
@@ -656,6 +866,6 @@ export const layer = Layer.effect(
         Effect.repeat(Schedule.spaced("5 seconds")),
       ),
     );
-    return UsageRecoveryService.of({ get, subscribe, schedule, cancel, reconcile });
+    return UsageRecoveryService.of({ get, subscribe, schedule, cancel, pause, reconcile });
   }),
 );

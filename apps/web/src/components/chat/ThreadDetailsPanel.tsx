@@ -44,6 +44,7 @@ import {
   EnvironmentProviderUsageList,
   supportsProviderUsage,
 } from "../usage/ProviderUsage";
+import type { UsageThreadAction } from "./useUsageRecovery";
 import { useClientSettings } from "../../hooks/useSettings";
 import { resolveActionPaletteSections, type ActionPaletteSectionId } from "./actionPaletteSections";
 
@@ -64,6 +65,8 @@ export interface ThreadDetailsPanelProps {
   selectedModel?: string;
   activeProviderEntry?: ProviderInstanceEntry | null;
   activeProviderIconBadge?: boolean;
+  /** Pause or resume this thread from the usage menu. */
+  usageThreadAction?: UsageThreadAction | null;
   resourcesEnabled: boolean;
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
@@ -322,6 +325,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               {...(props.activeProviderIconBadge === undefined
                 ? {}
                 : { showIconBadge: props.activeProviderIconBadge })}
+              {...(props.usageThreadAction ? { threadAction: props.usageThreadAction } : {})}
             />
           </div>
         ) : null;

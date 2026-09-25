@@ -1,6 +1,7 @@
 import {
   UsageRecoveryThreadInput,
   UsageRecoveryScheduleInput,
+  UsageRecoveryPauseInput,
   UsageRecoveryResult,
   UsageRecoveryError,
 } from "./usageRecovery.ts";
@@ -502,6 +503,7 @@ export const WS_METHODS = {
   usageRecoverySubscribe: "usageRecovery.subscribe",
   usageRecoverySchedule: "usageRecovery.schedule",
   usageRecoveryCancel: "usageRecovery.cancel",
+  usageRecoveryPause: "usageRecovery.pause",
   scheduledTasksList: "scheduledTasks.list",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
@@ -1447,6 +1449,11 @@ export const WsUsageRecoveryCancelRpc = Rpc.make(WS_METHODS.usageRecoveryCancel,
   success: UsageRecoveryResult,
   error: Schema.Union([UsageRecoveryError, EnvironmentAuthorizationError]),
 });
+export const WsUsageRecoveryPauseRpc = Rpc.make(WS_METHODS.usageRecoveryPause, {
+  payload: UsageRecoveryPauseInput,
+  success: UsageRecoveryResult,
+  error: Schema.Union([UsageRecoveryError, EnvironmentAuthorizationError]),
+});
 
 export const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
   payload: ScheduledTaskListInput,
@@ -2083,6 +2090,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsUsageRecoverySubscribeRpc,
   WsUsageRecoveryScheduleRpc,
   WsUsageRecoveryCancelRpc,
+  WsUsageRecoveryPauseRpc,
   WsScheduledTasksListRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,
