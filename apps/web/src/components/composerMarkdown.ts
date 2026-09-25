@@ -35,7 +35,8 @@ const MAX_STYLED_RUNS = 2_000;
 
 const MARKDOWN_CHARACTER_PATTERN = /[*_~`#>=-]/;
 const ESCAPE_PATTERN = /\\[!-/:-@[-`{-~]/g;
-const INDENTED_CODE_PATTERN = /^(?: {4}|\t)/;
+// Four columns of indentation, where a tab after up to three spaces reaches the next stop.
+const INDENTED_CODE_PATTERN = /^(?: {4}| {0,3}\t)/;
 const FENCE_PATTERN = /^(?:`{3}|~{3})/;
 const QUOTE_PREFIX_PATTERN = /^[ \t]*(?:>[ \t]?)+/;
 

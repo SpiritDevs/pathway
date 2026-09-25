@@ -306,11 +306,14 @@ describe("registerComposerMarkdown", () => {
     ]);
   });
 
-  it("styles indented code even without markdown punctuation", () => {
-    const editor = createComposer(["    hello"]);
+  it.each(["    hello", "\thello", "  \thello"])(
+    "styles indented code %j even without markdown punctuation",
+    (line) => {
+      const editor = createComposer([line]);
 
-    expect(readTextNodes(editor).nodes).toEqual([["    hello", 0, true]]);
-  });
+      expect(readTextNodes(editor).nodes).toEqual([[line, 0, true]]);
+    },
+  );
 
   it("leaves delimiter-dense prompts plain even under the length limit", () => {
     const prompt = "**a** ".repeat(1_000);
