@@ -160,6 +160,27 @@ describe("parseComposerMarkdown", () => {
     ]);
   });
 
+  it("recovers each block of over-indented list text as the renderer does", () => {
+    expect(runs("-       **first**\n\n        **second**")).toEqual([
+      ["-       ", "**:syntax", "first:bold", "**:syntax"],
+      [],
+      ["        ", "**:syntax", "second:bold", "**:syntax"],
+    ]);
+  });
+
+  it("mutes a closing fence inside a quote but not an over-indented one", () => {
+    expect(runs("> ```\n> code\n> ```")).toEqual([
+      ["> :syntax", "```:block+syntax"],
+      ["> :syntax", "code:block"],
+      ["> :syntax", "```:block+syntax"],
+    ]);
+    expect(runs("```\ncode\n    ```")).toEqual([
+      ["```:block+syntax"],
+      ["code:block"],
+      ["    ```:block"],
+    ]);
+  });
+
   it("mutes only a closing fence that matches the opener", () => {
     expect(runs("````\ncode\n```")).toEqual([["````:block+syntax"], ["code:block"], ["```:block"]]);
     expect(runs("```\ncode\n~~~")).toEqual([["```:block+syntax"], ["code:block"], ["~~~:block"]]);

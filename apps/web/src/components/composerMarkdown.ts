@@ -1,4 +1,4 @@
-import type { Nodes, Parents } from "mdast";
+import type { Code, Nodes, Parents } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
@@ -36,7 +36,7 @@ const MAX_STYLED_RUNS = 2_000;
 const MARKDOWN_CHARACTER_PATTERN = /[*_~`#>=-]/;
 const ESCAPE_PATTERN = /\\[!-/:-@[-`{-~]/g;
 const INDENTED_CODE_PATTERN = /^(?: {4}|\t)/;
-const FENCE_PATTERN = /^(?:`{3,}|~{3,})/;
+const FENCE_PATTERN = /^(?:`{3}|~{3})/;
 const QUOTE_PREFIX_PATTERN = /^[ \t]*(?:>[ \t]?)+/;
 
 // The same micromark parser and GFM extensions the chat renderer uses
@@ -74,16 +74,36 @@ function lineEnd(text: string, from: number, limit: number): number {
 }
 
 /**
- * Marks over-indented list text the way the chat renders it: reparsed as
- * inline content, behind the same prefix the renderer uses to keep it inline.
+ * Marks over-indented list text the way the chat renders it: the code node's
+ * value reparsed as inline content, behind the same prefix the renderer uses to
+ * keep it inline, with each character mapped back to its source offset.
  */
-function markListItemText(text: string, start: number, end: number, marks: Uint16Array): void {
-  const source = text.slice(start, end);
-  const contentStart = start + source.length - source.trimStart().length;
-  const prefixed = `${INLINE_PARSE_PREFIX}${source.trim()}`;
+function markListItemText(node: Code, text: string, start: number, marks: Uint16Array): void {
+  // Each value line is the tail of its source line once indentation is removed.
+  const sourceLines = text.slice(start).split("\n");
+  const sourceOffsets: number[] = [];
+  let lineStart = start;
+  node.value.split("\n").forEach((valueLine, index) => {
+    const sourceLine = sourceLines[index] ?? "";
+    const offset = sourceLine.endsWith(valueLine)
+      ? lineStart + sourceLine.length - valueLine.length
+      : -1;
+    for (let column = 0; column < valueLine.length; column += 1) {
+      sourceOffsets.push(offset < 0 ? -1 : offset + column);
+    }
+    sourceOffsets.push(-1);
+    lineStart += sourceLine.length + 1;
+  });
+
+  const leading = node.value.length - node.value.trimStart().length;
+  const content = node.value.trim();
+  const prefixed = `${INLINE_PARSE_PREFIX}${content}`;
   const prefixedMarks = new Uint16Array(prefixed.length);
   markNode(fromMarkdown(prefixed, PARSE_OPTIONS), undefined, prefixed, prefixedMarks);
-  marks.set(prefixedMarks.subarray(INLINE_PARSE_PREFIX.length), contentStart);
+  for (let index = 0; index < content.length; index += 1) {
+    const offset = sourceOffsets[leading + index] ?? -1;
+    if (offset >= 0) marks[offset] = prefixedMarks[INLINE_PARSE_PREFIX.length + index] ?? 0;
+  }
 }
 
 function markNode(
@@ -120,23 +140,20 @@ function markNode(
     }
     case "code": {
       if (parent && isSameLineOverIndentedCode(node, parent, text)) {
-        markListItemText(text, start, end, marks);
+        markListItemText(node, text, start, marks);
         return;
       }
       addMark(marks, start, end, MARKDOWN_CODE_BLOCK);
       // Indented code has no fence lines to mute.
-      const opener = FENCE_PATTERN.exec(text.slice(start, lineEnd(text, start, end)))?.[0];
-      if (!opener) return;
+      if (!FENCE_PATTERN.test(text.slice(start, start + 3))) return;
       addMark(marks, start, lineEnd(text, start, end), MARKDOWN_SYNTAX);
-      // Only a run of the opener's character, at least as long, closes the block.
-      const lastLineStart = text.lastIndexOf("\n", end - 1) + 1;
-      const closer = text.slice(lastLineStart, end).trim();
-      if (
-        lastLineStart > start &&
-        closer.length >= opener.length &&
-        closer === (opener[0] ?? "").repeat(closer.length)
-      ) {
-        addMark(marks, lastLineStart, end, MARKDOWN_SYNTAX);
+      // The parser already decided whether a closing fence ended the block: a
+      // source line beyond the opener and the value is that fence, whatever
+      // container prefix or indentation it carries.
+      const sourceLines = text.slice(start, end).split("\n").length;
+      const valueLines = node.value === "" ? 0 : node.value.split("\n").length;
+      if (sourceLines - 1 > valueLines) {
+        addMark(marks, text.lastIndexOf("\n", end - 1) + 1, end, MARKDOWN_SYNTAX);
       }
       return;
     }
