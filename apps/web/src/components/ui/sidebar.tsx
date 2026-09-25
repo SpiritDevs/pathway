@@ -29,6 +29,19 @@ const SIDEBAR_WIDTH_MOBILE = "100vw";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
 const SIDEBAR_HOVER_REVEAL_CLOSE_DELAY_MS = 100;
+const SIDEBAR_HOVER_REVEAL_TARGETS = [
+  '[data-slot="sidebar-container"]',
+  '[data-slot="sidebar-hover-target"]',
+  '[data-sidebar="trigger"]',
+];
+const SIDEBAR_HOVER_REVEAL_TARGET_HOVER_SELECTOR = SIDEBAR_HOVER_REVEAL_TARGETS.map(
+  (selector) => `${selector}:hover`,
+).join(",");
+// Base UI popups opened from the previewed panel keep it open while in use.
+const SIDEBAR_HOVER_REVEAL_KEEP_SELECTOR = [
+  ...SIDEBAR_HOVER_REVEAL_TARGETS,
+  "[data-base-ui-portal]",
+].join(",");
 
 type SidebarContextProps = {
   state: ResponsiveSidebarState;
@@ -116,7 +129,6 @@ function SidebarProvider({
   // Previewing is deliberately separate from `open`: it must neither persist
   // nor expand the sidebar gap while the panel floats over the workspace.
   const [hoverRevealed, setHoverRevealed] = React.useState(false);
-  const hoverTargetCountRef = React.useRef(0);
   const hoverRevealCloseTimerRef = React.useRef<number | null>(null);
 
   // This is the internal state of the sidebar.
@@ -158,9 +170,16 @@ function SidebarProvider({
     hoverRevealCloseTimerRef.current = null;
   }, []);
 
+  const scheduleHoverRevealClose = React.useCallback(() => {
+    if (hoverRevealCloseTimerRef.current !== null) return;
+    hoverRevealCloseTimerRef.current = window.setTimeout(() => {
+      hoverRevealCloseTimerRef.current = null;
+      setHoverRevealed(false);
+    }, SIDEBAR_HOVER_REVEAL_CLOSE_DELAY_MS);
+  }, []);
+
   const startHoverReveal = React.useCallback(() => {
     if (!hoverReveal || isMobile) return;
-    hoverTargetCountRef.current += 1;
     clearHoverRevealCloseTimer();
     if (!open) {
       setHoverRevealed(true);
@@ -169,30 +188,40 @@ function SidebarProvider({
 
   const stopHoverReveal = React.useCallback(() => {
     if (!hoverReveal || isMobile) return;
-    hoverTargetCountRef.current = Math.max(0, hoverTargetCountRef.current - 1);
-    if (hoverTargetCountRef.current > 0) return;
-
-    clearHoverRevealCloseTimer();
-    hoverRevealCloseTimerRef.current = window.setTimeout(() => {
-      hoverRevealCloseTimerRef.current = null;
-      setHoverRevealed(false);
-    }, SIDEBAR_HOVER_REVEAL_CLOSE_DELAY_MS);
-  }, [clearHoverRevealCloseTimer, hoverReveal, isMobile]);
+    scheduleHoverRevealClose();
+  }, [hoverReveal, isMobile, scheduleHoverRevealClose]);
 
   React.useEffect(() => {
-    if (!hoverReveal || isMobile) {
-      hoverTargetCountRef.current = 0;
+    if (!hoverReveal || isMobile || open) {
       clearHoverRevealCloseTimer();
       setHoverRevealed(false);
       return;
     }
-    if (open) {
-      clearHoverRevealCloseTimer();
-      setHoverRevealed(false);
-    } else if (hoverTargetCountRef.current > 0) {
+    // Collapsing while the pointer rests on a target keeps the panel previewed.
+    if (document.querySelector(SIDEBAR_HOVER_REVEAL_TARGET_HOVER_SELECTOR)) {
       setHoverRevealed(true);
     }
   }, [clearHoverRevealCloseTimer, hoverReveal, isMobile, open]);
+
+  // React's enter/leave treats portaled popups (menus, tooltips) as part of the
+  // panel, so a popup that unmounts under the pointer never delivers the leave.
+  // While previewing, follow where the pointer actually lands instead.
+  React.useEffect(() => {
+    if (!hoverRevealed) return;
+    const onPointerOver = (event: PointerEvent) => {
+      if (event.pointerType === "touch") return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest(SIDEBAR_HOVER_REVEAL_KEEP_SELECTOR)
+      ) {
+        clearHoverRevealCloseTimer();
+      } else {
+        scheduleHoverRevealClose();
+      }
+    };
+    document.addEventListener("pointerover", onPointerOver, true);
+    return () => document.removeEventListener("pointerover", onPointerOver, true);
+  }, [clearHoverRevealCloseTimer, hoverRevealed, scheduleHoverRevealClose]);
 
   React.useEffect(
     () => () => {
@@ -400,7 +429,7 @@ function Sidebar({
         />
         <div
           className={cn(
-            "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[translate,width] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none md:flex group-data-[state=expanded]:duration-200 group-data-[hover-revealed=true]:z-40 group-data-[hover-revealed=true]:translate-x-0! group-data-[hover-revealed=true]:duration-[220ms] group-data-[hover-revealed=true]:shadow-xl",
+            "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[translate,width] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none md:flex group-data-[state=expanded]:duration-200 group-data-[hover-revealed=true]:z-50 group-data-[hover-revealed=true]:translate-x-0! group-data-[hover-revealed=true]:duration-[220ms] group-data-[hover-revealed=true]:shadow-xl",
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:-translate-x-full"
               : "right-0 group-data-[collapsible=offcanvas]:translate-x-full",
