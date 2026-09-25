@@ -81,6 +81,7 @@ import { ComposerPendingTerminalContextChip } from "./chat/ComposerPendingTermin
 import { formatProviderSkillDisplayName } from "~/providerSkillPresentation";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { registerComposerInlineTokenPaste } from "./composerInlineTokenPaste";
+import { COMPOSER_MARKDOWN_THEME, registerComposerMarkdown } from "./composerMarkdown";
 
 const COMPOSER_EDITOR_HMR_KEY = `composer-editor-${Math.random().toString(36).slice(2)}`;
 const SURROUND_SYMBOLS: [string, string][] = [
@@ -1260,6 +1261,14 @@ function ComposerInlineTokenPastePlugin() {
   return null;
 }
 
+function ComposerMarkdownPlugin() {
+  const [editor] = useLexicalComposerContext();
+
+  useEffect(() => registerComposerMarkdown(editor), [editor]);
+
+  return null;
+}
+
 function ComposerSurroundSelectionPlugin(props: {
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   skills: ReadonlyArray<ServerProviderSkill>;
@@ -1791,6 +1800,7 @@ function ComposerPromptEditorInner({
         <ComposerInlineTokenBackspacePlugin />
         <ComposerInlineTokenPastePlugin />
         <ComposerChipSelectionPlugin />
+        <ComposerMarkdownPlugin />
         <HistoryPlugin />
       </div>
     </ComposerTerminalContextActionsContext>
@@ -1818,6 +1828,7 @@ export function ComposerPromptEditor({
     () => ({
       namespace: "spiritdevs-composer-editor",
       editable: true,
+      theme: COMPOSER_MARKDOWN_THEME,
       nodes: [ComposerMentionNode, ComposerSkillNode, ComposerTerminalContextNode],
       editorState: () => {
         $setComposerEditorPrompt(

@@ -5,6 +5,11 @@ or scrolling the conversation keeps its size unchanged. Text grows the input as 
 up to six lines, then scrolls inside it. Short windows use a smaller limit so the conversation
 stays visible. Deleting text or sending a message shrinks the input to fit the remaining draft.
 
+Markdown formats as you type on web and desktop. Bold, italic, strikethrough, inline code,
+headings, and fenced code blocks appear formatted, and their markers stay visible in a muted
+color so you can still edit them. The agent receives exactly the markdown you typed. Very long
+messages, such as large pastes, stay unformatted so typing remains fast.
+
 Use the paperclip beside Send to add attachments. Their previews appear above the input in a
 separate scrollable area, so a long draft or several attachments cannot fill the conversation.
 You can still preview and remove attachments, inspect upload status, and retry failed uploads.
