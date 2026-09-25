@@ -454,7 +454,7 @@ it.effect("completes without retrying a child the parent stopped on purpose", ()
   }).pipe(Effect.provide(f.serviceLayer));
 });
 
-it.effect("does not send a child the parent left stopped back with a blocked sibling", () => {
+it.effect("never sends a child the parent left stopped back on a later attempt", () => {
   const f = fixture();
   const duplicate = { ...child("duplicate", "interrupted"), result: "Read the design doc." };
   f.projections.set(rootId, {
@@ -481,6 +481,18 @@ it.effect("does not send a child the parent left stopped back with a blocked sib
     assert.lengthOf(f.commands, 2);
     assert.include(f.commands[1]!.text, '"title": "builder"');
     assert.notInclude(f.commands[1]!.text, '"title": "duplicate"');
+    // The parent's decision holds even when a later turn is cut short by the limit.
+    const retried = f.projections.get(rootId)!;
+    f.projections.set(
+      rootId,
+      withFailure(retried, recoveryLatestRun(retried)!, yield* DateTime.now),
+    );
+    yield* service.reconcile();
+    yield* TestClock.adjust("2 minutes");
+    yield* service.reconcile();
+    assert.lengthOf(f.commands, 3);
+    assert.include(f.commands[2]!.text, '"title": "builder"');
+    assert.notInclude(f.commands[2]!.text, '"title": "duplicate"');
   }).pipe(Effect.provide(f.serviceLayer));
 });
 
