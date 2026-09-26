@@ -7576,6 +7576,12 @@ function ChatViewContent(props: ChatViewProps) {
         draftText: trimmed,
         planMarkdown: activeProposedPlan.planMarkdown,
       });
+      // Plan follow-ups send only text; other composer attachments are not part of this payload.
+      if (isBareComputerUseInvocation(followUp.text)) {
+        toastBareComputerUseInvocation();
+        scheduleComposerFocus();
+        return;
+      }
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();

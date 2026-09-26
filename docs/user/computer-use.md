@@ -26,7 +26,8 @@ grant them on the host instead.
 
 Type `/computer-use` followed by your task, for example `/computer-use open Calculator and calculate
 123 × 45`. This enables Computer for that one request. Sending `/computer-use` with no task and
-nothing attached keeps your draft and asks you to add a task.
+nothing attached keeps your draft and asks you to add a task. Plan follow-ups send only text, so
+a bare `/computer-use` keeps your draft even when the composer has attachments.
 
 To let the agent use the computer in every chat without the command, turn on **Let the agent use the
 desktop in any chat** in **Settings** > **Computer**.
