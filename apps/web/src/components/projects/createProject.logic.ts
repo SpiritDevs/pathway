@@ -1,6 +1,6 @@
 /**
  * Planning for New project: one folder per environment and one shared Git repository.
- * Folder inspection decides whether repository creation is available.
+ * Folder inspection decides whether creating or linking a repository is available.
  *
  * @module components/projects/createProject.logic
  */
@@ -34,11 +34,16 @@ export interface NewRepositoryDraft {
   readonly visibility: SourceControlRepositoryVisibility;
 }
 
+/** Where the project's Git repository comes from when no attached folder has one. */
+export type RepositoryMode = "none" | "create" | "link";
+
 export interface CreateProjectDraft {
   readonly name: string;
-  readonly createRepository: boolean;
+  readonly repositoryMode: RepositoryMode;
   readonly folders: ReadonlyArray<ProjectFolderDraft>;
   readonly newRepository: NewRepositoryDraft;
+  /** Remote URL cloned into every folder when linking. */
+  readonly linkUrl: string;
 }
 
 export interface PlannedFolder {
@@ -60,7 +65,8 @@ export type CreateProjectPlan =
             readonly kind: "new_repo";
             readonly repository: string;
             readonly visibility: SourceControlRepositoryVisibility;
-          };
+          }
+        | { readonly kind: "link_repo"; readonly remoteUrl: string };
     };
 
 const OWNER_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\/[A-Za-z0-9._-]+$/;
@@ -135,7 +141,7 @@ export function planCreateProject(input: {
   const title = createProjectTitle(draft);
   const repositoryError = projectFolderRepositoryError(draft.folders);
   if (repositoryError) return { kind: "invalid", message: repositoryError };
-  const createRepository = draft.createRepository && canCreateProjectRepository(draft.folders);
+  const repositoryMode = canCreateProjectRepository(draft.folders) ? draft.repositoryMode : "none";
   const folders: PlannedFolder[] = [];
   const environments = new Set<EnvironmentId>();
   for (const folder of draft.folders) {
@@ -155,12 +161,22 @@ export function planCreateProject(input: {
     folders.push({
       environmentId: folder.environmentId,
       workspaceRoot: attach.workspaceRoot,
-      // Creating or cloning the new repository makes the folder itself.
-      createIfMissing: createRepository ? false : attach.createWorkspaceRootIfMissing,
+      // Creating or cloning the repository makes the folder itself.
+      createIfMissing: repositoryMode === "none" ? attach.createWorkspaceRootIfMissing : false,
     });
   }
   if (title.length === 0) return { kind: "incomplete" };
-  if (!createRepository) return { kind: "create", title, folders, source: { kind: "folders" } };
+  if (repositoryMode === "none") {
+    return { kind: "create", title, folders, source: { kind: "folders" } };
+  }
+  if (repositoryMode === "link") {
+    const remoteUrl = draft.linkUrl.trim();
+    if (remoteUrl.length === 0) return { kind: "incomplete" };
+    if (/\s/.test(remoteUrl)) {
+      return { kind: "invalid", message: "Paste a single Git URL without spaces." };
+    }
+    return { kind: "create", title, folders, source: { kind: "link_repo", remoteUrl } };
+  }
 
   const owner = draft.newRepository.owner.trim();
   const name = draft.newRepository.name.trim() || repositoryNameFromProjectName(title);
