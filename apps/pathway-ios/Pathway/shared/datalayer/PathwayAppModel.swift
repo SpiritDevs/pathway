@@ -48,6 +48,7 @@ final class PathwayAppModel {
     @ObservationIgnored private let authProvider: any PathwayAuthenticating
     @ObservationIgnored private var hasRestoredSession = false
     @ObservationIgnored private var authenticationGeneration = 0
+    @ObservationIgnored private var isSigningOut = false
     @ObservationIgnored private var storagePreparation: Task<Void, Never>?
 
     init(
@@ -129,11 +130,15 @@ final class PathwayAppModel {
             authenticationState = .signedOut
             let issue = PathwayAuthenticationIssue(signInError: error)
             authenticationIssue = issue
-            loginReportState = .sending
-            let reported = await loginErrorReporter.report(issue)
-            guard authenticationIssue?.id == issue.id else { return }
-            loginReportState = reported ? .received : .pending
+            await reportLoginIssue(issue)
         }
+    }
+
+    private func reportLoginIssue(_ issue: PathwayAuthenticationIssue) async {
+        loginReportState = .sending
+        let reported = await loginErrorReporter.report(issue)
+        guard authenticationIssue?.id == issue.id else { return }
+        loginReportState = reported ? .received : .pending
     }
 
     func retryLoginReport() async {
@@ -147,6 +152,8 @@ final class PathwayAppModel {
 
     func signOut() async {
         do {
+            isSigningOut = true
+            defer { isSigningOut = false }
             await PathwayNotifications.shared.stop()
             try await authProvider.signOut()
             authenticationGeneration += 1
@@ -193,11 +200,11 @@ final class PathwayAppModel {
         PathwaySystemEntry.shared.request = nil
             PathwayKeyboardPreferences.shared.pendingAction = nil
         projectIcons.clear()
-        authenticationIssue = PathwayAuthenticationIssue(
-            title: "Sign in again",
-            message: "Your Pathway session ended. Sign in again to continue."
-        )
+        let issue = PathwayAuthenticationIssue(sessionEndReason: authProvider.sessionEndReason)
+        authenticationIssue = issue
         authenticationState = .signedOut
+        // The user's own sign-out also ends the session; only unexpected endings reach support.
+        if !isSigningOut { Task { await reportLoginIssue(issue) } }
     }
 
     private func sessionDidChange(hasActiveSession: Bool) {

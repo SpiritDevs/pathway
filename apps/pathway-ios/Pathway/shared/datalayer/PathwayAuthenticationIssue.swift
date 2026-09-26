@@ -23,6 +23,15 @@ struct PathwayAuthenticationIssue: Identifiable {
         errorCode = error.map { ($0 as NSError).code }
     }
 
+    /// A signed-in session stopped being active without the user signing out.
+    init(sessionEndReason reason: String) {
+        title = "Sign in again"
+        message = "Your Pathway session ended. Sign in again to continue."
+        isCancellation = false
+        errorDomain = "ClerkSession.\(reason)"
+        errorCode = 0
+    }
+
     init(signInError error: any Error) {
         let nsError = error as NSError
         isCancellation = error is CancellationError || (

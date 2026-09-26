@@ -4,11 +4,17 @@ import Foundation
 @MainActor
 protocol PathwayAuthenticating: AnyObject {
     var hasActiveSession: Bool { get }
+    /// Why no session is active, as a fixed diagnostic word safe to send in a support report.
+    var sessionEndReason: String { get }
     var onSessionChanged: ((Bool) -> Void)? { get set }
 
     func startHostedSignIn() async throws
     func signOut() async throws
     func token(template: String?) async throws -> String
+}
+
+extension PathwayAuthenticating {
+    var sessionEndReason: String { "none" }
 }
 
 enum PathwayAuthError: LocalizedError {
@@ -39,6 +45,14 @@ final class PathwayAuthProvider: PathwayAuthenticating {
 
     var hasActiveSession: Bool {
         Clerk.shared.session?.status == .active
+    }
+
+    var sessionEndReason: String {
+        guard let status = Clerk.shared.session?.status else { return "none" }
+        switch status {
+        case .abandoned, .active, .pending, .ended, .expired, .removed, .replaced, .revoked: return status.rawValue
+        case .unknown: return "unknown"
+        }
     }
 
     init() {
