@@ -1,3 +1,9 @@
+import {
+  AuthAccessWriteScope,
+  AuthComputerOperateScope,
+  AuthOrchestrationOperateScope,
+  type AuthEnvironmentScope,
+} from "./auth.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
@@ -13,6 +19,7 @@ import {
 } from "./model.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
+import type { RuntimeMode } from "./providerPolicy.ts";
 import { AlertDeliverySettings, DEFAULT_ALERT_DELIVERY_SETTINGS } from "./threadAlerts.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
@@ -218,6 +225,37 @@ const DEFAULT_SNAP_SHOT_SHORTCUT: SnapShotShortcut = {
   kind: "both-shift-keys",
 };
 
+export const ComputerPreviewSize = Schema.Literals(["compact", "large"]);
+export type ComputerPreviewSize = typeof ComputerPreviewSize.Type;
+export const DEFAULT_COMPUTER_PREVIEW_SIZE: ComputerPreviewSize = "compact";
+export const AgentCursorColorMode = Schema.Literals(["stock", "custom"]);
+export type AgentCursorColorMode = typeof AgentCursorColorMode.Type;
+export const DEFAULT_AGENT_CURSOR_COLOR_MODE: AgentCursorColorMode = "stock";
+
+/** A lowercase `#rrggbb` string, or "" when the value is not a color. */
+export function normalizeCursorHexColor(value: string | null | undefined): string {
+  const candidate = (value ?? "").trim().toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(candidate) ? candidate : "";
+}
+
+/**
+ * The custom agent-cursor colors to push to the desktop cursor host, or null
+ * for the stock monochrome cursor. Stock mode resolves to null whatever colors
+ * are stored, so switching back never leaves a stale override. A channel with
+ * no valid color is omitted, because the driver treats an omitted channel as stock.
+ */
+export function resolveAgentCursorColors(settings: {
+  readonly agentCursorColorMode?: AgentCursorColorMode | undefined;
+  readonly agentCursorFillColor?: string | undefined;
+  readonly agentCursorRimColor?: string | undefined;
+}): { fill?: string; rim?: string } | null {
+  if ((settings.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE) !== "custom") return null;
+  const fill = normalizeCursorHexColor(settings.agentCursorFillColor);
+  const rim = normalizeCursorHexColor(settings.agentCursorRimColor);
+  if (!fill && !rim) return null;
+  return { ...(fill ? { fill } : {}), ...(rim ? { rim } : {}) };
+}
+
 export const ClientSettingsSchema = Schema.Struct({
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   loadBalancingAvoidCriticalStorage: Schema.Boolean.pipe(
@@ -364,6 +402,31 @@ export const ClientSettingsSchema = Schema.Struct({
   snapShotFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Show the in-chat Computer preview when an agent starts driving the desktop.
+  autoOpenComputerPane: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // In-chat Computer preview footprint. Compact is a small glanceable card;
+  // large is the wide card for users who want the detail inline.
+  computerPreviewSize: ComputerPreviewSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_COMPUTER_PREVIEW_SIZE)),
+  ),
+  // Computer control is off by default. When on, the agent may use the desktop
+  // in any chat; `/computer-use` covers one request. Approval gates and Stop still apply.
+  computerControlEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // The agent cursor's colors. Stock stores no overrides; "custom" opts into a
+  // fill and rim, stored as lowercase `#rrggbb` and pushed to the desktop host.
+  agentCursorColorMode: AgentCursorColorMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AGENT_CURSOR_COLOR_MODE)),
+  ),
+  agentCursorFillColor: Schema.String.check(Schema.isMaxLength(7)).pipe(
+    Schema.withDecodingDefault(Effect.succeed("")),
+  ),
+  agentCursorRimColor: Schema.String.check(Schema.isMaxLength(7)).pipe(
+    Schema.withDecodingDefault(Effect.succeed("")),
+  ),
+  // One-shot composer hint suggesting Medium effort for faster desktop actions.
+  dismissedComputerControlEffortHint: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
@@ -861,6 +924,78 @@ export const DEFAULT_ISSUE_AUTOMATION_SETTINGS: IssueAutomationSettings = {
   maxRemediationCycles: 3,
 };
 
+// ── Computer Use (environment-local) ───────────────────────────
+
+/**
+ * Which paired clients may start Computer tasks and turn on Computer control:
+ * any client with `orchestration:operate`, clients holding `computer:operate`,
+ * or admin clients only. Watching, approving and Stop are never restricted by it.
+ */
+export const ComputerAccessPolicy = Schema.Literals(["any-operator", "scoped", "admins-only"]);
+export type ComputerAccessPolicy = typeof ComputerAccessPolicy.Type;
+export const DEFAULT_COMPUTER_ACCESS_POLICY: ComputerAccessPolicy = "scoped";
+
+/**
+ * Whether a session holding `scopes` may use Computer under `policy`. Admin
+ * sessions paired before `computer:operate` existed still pass `scoped`. The
+ * server enforces it; clients read it to avoid sending intent it would refuse.
+ */
+export function canUseComputer(
+  policy: ComputerAccessPolicy,
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+): boolean {
+  switch (policy) {
+    case "any-operator":
+      return scopes.includes(AuthOrchestrationOperateScope);
+    case "scoped":
+      return scopes.includes(AuthComputerOperateScope) || scopes.includes(AuthAccessWriteScope);
+    case "admins-only":
+      return scopes.includes(AuthAccessWriteScope);
+  }
+}
+
+/** The environment's ceiling on Computer oversight, strictest first. */
+export const ComputerAutonomy = Schema.Literals(["supervised", "per-task", "auto", "full-access"]);
+export type ComputerAutonomy = typeof ComputerAutonomy.Type;
+export const DEFAULT_COMPUTER_AUTONOMY: ComputerAutonomy = "per-task";
+
+/** The Computer level each composer runtime mode stands for. */
+export const COMPUTER_AUTONOMY_BY_RUNTIME_MODE: Readonly<Record<RuntimeMode, ComputerAutonomy>> = {
+  "approval-required": "supervised",
+  "auto-accept-edits": "per-task",
+  auto: "auto",
+  "full-access": "full-access",
+};
+
+/**
+ * The autonomy a Computer task runs with: the stricter of the environment
+ * ceiling and the thread's runtime mode. Scheduled tasks and subagents have no
+ * composer mode, so they pass `null` and the ceiling applies alone.
+ */
+export function resolveComputerAutonomy(
+  ceiling: ComputerAutonomy,
+  runtimeMode: RuntimeMode | null,
+): ComputerAutonomy {
+  if (runtimeMode === null) return ceiling;
+  const threadLevel = COMPUTER_AUTONOMY_BY_RUNTIME_MODE[runtimeMode];
+  const levels = ComputerAutonomy.literals;
+  return levels.indexOf(threadLevel) < levels.indexOf(ceiling) ? threadLevel : ceiling;
+}
+
+/**
+ * Computer Use policy for this environment. Admin-only to change: the server rejects a
+ * `ServerSettingsPatch.computer` from a session without `access:write`.
+ */
+export const ComputerSettings = Schema.Struct({
+  accessPolicy: ComputerAccessPolicy.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_COMPUTER_ACCESS_POLICY)),
+  ),
+  autonomy: ComputerAutonomy.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_COMPUTER_AUTONOMY)),
+  ),
+});
+export type ComputerSettings = typeof ComputerSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   /** A user-chosen environment name. Empty keeps the host-derived automatic name. */
   environmentName: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -947,6 +1082,7 @@ export const ServerSettings = Schema.Struct({
   ),
   emailCapture: EmailCaptureSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  computer: ComputerSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -1094,6 +1230,13 @@ export const ServerSettingsPatch = Schema.Struct({
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
   emailCapture: Schema.optionalKey(EmailCaptureSettings),
+  // Requires `access:write`; the server rejects it from any other session.
+  computer: Schema.optionalKey(
+    Schema.Struct({
+      accessPolicy: Schema.optionalKey(ComputerAccessPolicy),
+      autonomy: Schema.optionalKey(ComputerAutonomy),
+    }),
+  ),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
@@ -1166,5 +1309,12 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
   wordWrap: Schema.optionalKey(Schema.Boolean),
+  autoOpenComputerPane: Schema.optionalKey(Schema.Boolean),
+  computerPreviewSize: Schema.optionalKey(ComputerPreviewSize),
+  computerControlEnabled: Schema.optionalKey(Schema.Boolean),
+  agentCursorColorMode: Schema.optionalKey(AgentCursorColorMode),
+  agentCursorFillColor: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(7))),
+  agentCursorRimColor: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(7))),
+  dismissedComputerControlEffortHint: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

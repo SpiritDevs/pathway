@@ -21,13 +21,16 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
+  CUA_DRIVER_EXTRA_RESOURCES,
   DICTATION_EXTRA_RESOURCES,
+  PATHWAY_HELPER_EXTRA_RESOURCES,
   stageDictation,
   LINUX_CAPTURE_EXTRA_RESOURCES,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
   UnsupportedDesktopBuildArchitectureError,
+  UnsupportedDesktopFlavorError,
   isMacPasskeySigningConfigurationError,
   LinuxIconResizeError,
   MacPasskeySigningConfigurationResolutionError,
@@ -416,6 +419,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "!apps/desktop/gnome-extension",
       "!apps/desktop/gnome-extension/**/*",
       "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
+      "!apps/desktop/prod-resources/cua-driver/**",
+      "!apps/desktop/prod-resources/pathway-helper/**",
     ]);
   });
 
@@ -457,6 +462,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(mac.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
         ...DICTATION_EXTRA_RESOURCES,
+        ...CUA_DRIVER_EXTRA_RESOURCES,
+        ...PATHWAY_HELPER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(win.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
@@ -465,16 +472,38 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(linux.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
         ...LINUX_CAPTURE_EXTRA_RESOURCES,
+        ...CUA_DRIVER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(
         LINUX_CAPTURE_EXTRA_RESOURCES.map((resource) => resource.to),
         ["hyprland-capture", "kde-capture", "gnome-extension"],
       );
+      const macConfig = mac.mac as Record<string, unknown> & {
+        extendInfo: Record<string, unknown>;
+      };
       assert.propertyVal(
-        (mac.mac as { extendInfo: Record<string, unknown> }).extendInfo,
+        macConfig.extendInfo,
         "NSScreenCaptureUsageDescription",
-        "Pathway captures the active window when you use the SnapShots shortcut.",
+        "Pathway captures the active window when you use the SnapShots shortcut, and the windows you authorize for Computer use.",
       );
+      assert.propertyVal(
+        macConfig.extendInfo,
+        "NSAccessibilityUsageDescription",
+        "Pathway controls the windows you authorize for Computer use.",
+      );
+      // Both Computer Use natives are re-signed with the release identity and
+      // survive the universal merge as the fat binaries the build staged.
+      assert.deepStrictEqual(macConfig.binaries, [
+        "Contents/Resources/pathway-helper/pathway-helper",
+        "Contents/Resources/cua-driver/cua-driver",
+      ]);
+      assert.equal(
+        macConfig.x64ArchFiles,
+        "Contents/Resources/{pathway-helper/pathway-helper,cua-driver/cua-driver}",
+      );
+      for (const resource of [...CUA_DRIVER_EXTRA_RESOURCES, ...PATHWAY_HELPER_EXTRA_RESOURCES]) {
+        assert.include(DESKTOP_FILE_EXCLUSIONS, `!${resource.from}/**`);
+      }
       // Linux must register the renderer schemes so the generated .desktop
       // entry advertises MimeType=x-scheme-handler/pathway; for OAuth deep links.
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
@@ -561,6 +590,30 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
     assert.include(entitlements, "<key>keychain-access-groups</key>");
     assert.include(entitlements, "<string>ABC1234567.com.spiritdevs.pathway.webauthn</string>");
+  });
+
+  it("signs the cua flavor as its own App ID with its own provisioning profile", () => {
+    const env = {
+      PATHWAY_APPLE_TEAM_ID: "ABC1234567",
+      PATHWAY_MACOS_PROVISIONING_PROFILE: "/tmp/pathway.provisionprofile",
+      PATHWAY_MACOS_CUA_PROVISIONING_PROFILE: "/tmp/pathway-cua.provisionprofile",
+      PATHWAY_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
+    };
+    const configuration = resolveMacPasskeySigningConfiguration(env, "cua");
+    const entitlements = renderMacPasskeyEntitlements(configuration);
+
+    assert.equal(configuration.appId, "com.spiritdevs.pathway.cua");
+    assert.equal(configuration.provisioningProfilePath, "/tmp/pathway-cua.provisionprofile");
+    assert.include(entitlements, "<string>ABC1234567.com.spiritdevs.pathway.cua</string>");
+    assert.include(entitlements, "<string>ABC1234567.com.spiritdevs.pathway.cua.webauthn</string>");
+    assert.notInclude(entitlements, "com.spiritdevs.pathway.webauthn");
+
+    const { PATHWAY_MACOS_CUA_PROVISIONING_PROFILE: _, ...productionOnly } = env;
+    assert.throws(
+      () => resolveMacPasskeySigningConfiguration(productionOnly, "cua"),
+      MissingMacPasskeyProvisioningProfileError,
+      "PATHWAY_MACOS_CUA_PROVISIONING_PROFILE must point to an Associated Domains provisioning profile.",
+    );
   });
 
   it("rejects incomplete macOS passkey signing configuration", () => {
@@ -664,7 +717,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         NSMicrophoneUsageDescription:
           "Pathway records your voice when you start dictation. Audio is processed on this computer.",
         NSScreenCaptureUsageDescription:
-          "Pathway captures the active window when you use the SnapShots shortcut.",
+          "Pathway captures the active window when you use the SnapShots shortcut, and the windows you authorize for Computer use.",
+        NSAccessibilityUsageDescription:
+          "Pathway controls the windows you authorize for Computer use.",
         NSLocalNetworkUsageDescription:
           "Pathway connects to development servers running on your local network.",
       });
@@ -818,6 +873,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         mockUpdates: Option.none(),
         mockUpdateServerPort: Option.none(),
         wslPrebuild: Option.none(),
+        flavor: Option.none(),
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -841,6 +897,85 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect.each(["mac", "linux", "win"] as const)(
+    "keeps the production identity on %s",
+    (platform) =>
+      Effect.gen(function* () {
+        const config = yield* createBuildConfig(
+          platform,
+          "dir",
+          "1.2.3",
+          false,
+          false,
+          undefined,
+          undefined,
+        );
+        assert.equal(config.appId, "com.spiritdevs.pathway");
+        assert.equal(config.artifactName, "Pathway-Code-${version}-${arch}.${ext}");
+        assert.notStrictEqual(config.publish, null);
+      }),
+  );
+
+  it.effect.each(["mac", "linux"] as const)("isolates the cua identity on %s", (platform) =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        platform,
+        "dir",
+        "1.2.3-nightly.20260923",
+        false,
+        false,
+        undefined,
+        undefined,
+        "cua",
+      );
+      assert.equal(config.appId, "com.spiritdevs.pathway.cua");
+      assert.equal(config.productName, "Pathway Cua");
+      assert.equal(config.artifactName, "Pathway-Cua-${version}-${arch}.${ext}");
+      assert.strictEqual(config.publish, null);
+      const platformConfig = config[platform] as Record<string, unknown>;
+      assert.deepStrictEqual(platformConfig.protocols, [
+        { name: "Pathway", schemes: ["pathway-cua"] },
+      ]);
+      if (platform === "linux") {
+        assert.equal(platformConfig.executableName, "pathway-cua");
+        assert.deepStrictEqual(platformConfig.desktop, {
+          entry: { StartupWMClass: "pathway-cua" },
+        });
+      }
+    }),
+  );
+
+  it.effect("refuses isolated flavors on Windows and stages cua into its own release dir", () =>
+    Effect.gen(function* () {
+      const cliInput = (platform: "mac" | "win") => ({
+        platform: Option.some(platform),
+        target: Option.none(),
+        arch: Option.some("arm64" as const),
+        buildVersion: Option.none(),
+        outputDir: Option.none(),
+        skipBuild: Option.none(),
+        skipBackendDeploy: Option.none(),
+        keepStage: Option.none(),
+        signed: Option.none(),
+        verbose: Option.none(),
+        mockUpdates: Option.some(true),
+        mockUpdateServerPort: Option.none(),
+        wslPrebuild: Option.none(),
+        flavor: Option.some("cua" as const),
+      });
+      const windows = yield* Effect.flip(resolveBuildOptions(cliInput("win")));
+      assert.instanceOf(windows, UnsupportedDesktopFlavorError);
+      const direct = yield* Effect.flip(
+        createBuildConfig("win", "nsis", "1.2.3", false, false, undefined, undefined, "cua"),
+      );
+      assert.instanceOf(direct, UnsupportedDesktopFlavorError);
+
+      const mac = yield* resolveBuildOptions(cliInput("mac"));
+      assert.equal(mac.flavor, "cua");
+      assert.match(mac.outputDir, /\/release-cua$/);
+    }),
+  );
+
   it.effect("rejects universal builds on Linux and Windows before staging binaries", () =>
     Effect.gen(function* () {
       for (const platform of ["linux", "win"] as const) {
@@ -859,6 +994,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             mockUpdates: Option.none(),
             mockUpdateServerPort: Option.none(),
             wslPrebuild: Option.none(),
+            flavor: Option.none(),
           }),
         );
 
@@ -950,6 +1086,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         mockUpdates: Option.some(false),
         mockUpdateServerPort: Option.none(),
         wslPrebuild: Option.none(),
+        flavor: Option.none(),
       }).pipe(
         Effect.provide(
           ConfigProvider.layer(

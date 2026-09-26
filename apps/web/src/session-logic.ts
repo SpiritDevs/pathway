@@ -21,8 +21,10 @@ import type {
   ThreadRunSummary,
   ThreadRuntimeSummary,
 } from "@spiritdevs/client-runtime/state/shell";
+import { computerNoticeOfTurnItem } from "@spiritdevs/client-runtime/state/computer-notice";
 import { turnItemIsWorkspacePreparation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
 
+import { computerToolCallHeading } from "./lib/computerToolPresentation";
 import type { ChatMessage, ProposedPlan, SessionPhase, TurnDiffSummary } from "./types";
 import * as DateTime from "effect/DateTime";
 
@@ -398,7 +400,8 @@ export function timelineEntryIsPersistentResourceCard(entry: TimelineEntry): boo
   return (
     entry.kind === "event" &&
     (PERSISTENT_RESOURCE_V2_ITEM_TYPES.has(entry.projectedItem.item.type) ||
-      turnItemIsWorkspacePreparation(entry.projectedItem.item))
+      turnItemIsWorkspacePreparation(entry.projectedItem.item) ||
+      computerNoticeOfTurnItem(entry.projectedItem.item) !== null)
   );
 }
 
@@ -571,13 +574,15 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
         toolData: item,
       };
     }
-    case "dynamic_tool":
+    case "dynamic_tool": {
+      const computerHeading = computerToolCallHeading(item);
       return {
         ...common,
-        label: title ?? item.toolName ?? "Tool call",
-        toolTitle: title ?? item.toolName ?? "Tool",
+        label: computerHeading ?? title ?? item.toolName ?? "Tool call",
+        toolTitle: computerHeading ?? title ?? item.toolName ?? "Tool",
         toolData: { input: item.input, output: item.output },
       };
+    }
     default:
       return {
         ...common,
@@ -703,7 +708,11 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
       continue;
     }
 
-    if (turnItemIsWorkspacePreparation(item) || STANDALONE_V2_ITEM_TYPES.has(item.type)) {
+    if (
+      turnItemIsWorkspacePreparation(item) ||
+      STANDALONE_V2_ITEM_TYPES.has(item.type) ||
+      computerNoticeOfTurnItem(item) !== null
+    ) {
       entries.push({
         id: item.id,
         kind: "event",

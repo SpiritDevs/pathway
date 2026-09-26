@@ -3,6 +3,11 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./cuaDriverRelease.json": "./src/cuaDriverRelease.json",
+    "./desktopFlavor": {
+      "types": "./src/desktopFlavor.ts",
+      "import": "./src/desktopFlavor.ts"
+    },
     "./browserPasswordAutofill": {
       "types": "./src/browserPasswordAutofill.ts",
       "import": "./src/browserPasswordAutofill.ts"
@@ -207,6 +212,34 @@
       "types": "./src/relayTracing.ts",
       "import": "./src/relayTracing.ts"
     },
+    "./computerFrame": {
+      "types": "./src/computerFrame.ts",
+      "import": "./src/computerFrame.ts"
+    },
+    "./computerGrants": {
+      "types": "./src/computerGrants.ts",
+      "import": "./src/computerGrants.ts"
+    },
+    "./computerInvocation": {
+      "types": "./src/computerInvocation.ts",
+      "import": "./src/computerInvocation.ts"
+    },
+    "./computerKeyNames": {
+      "types": "./src/computerKeyNames.ts",
+      "import": "./src/computerKeyNames.ts"
+    },
+    "./cuaActionDiagnostics": {
+      "types": "./src/cuaActionDiagnostics.ts",
+      "import": "./src/cuaActionDiagnostics.ts"
+    },
+    "./cuaDriverProtocol": {
+      "types": "./src/cuaDriverProtocol.ts",
+      "import": "./src/cuaDriverProtocol.ts"
+    },
+    "./frameTransport": {
+      "types": "./src/frameTransport.ts",
+      "import": "./src/frameTransport.ts"
+    },
     "./preview": {
       "types": "./src/preview.ts",
       "import": "./src/preview.ts"
@@ -258,6 +291,14 @@
     "./mailSlug": {
       "types": "./src/mailSlug.ts",
       "import": "./src/mailSlug.ts"
+    },
+    "./modelImageBudget": {
+      "types": "./src/modelImageBudget.ts",
+      "import": "./src/modelImageBudget.ts"
+    },
+    "./uiTreeTargeting": {
+      "types": "./src/uiTreeTargeting.ts",
+      "import": "./src/uiTreeTargeting.ts"
     }
   },
   "scripts": {

@@ -5,8 +5,13 @@ import * as NodePath from "node:path";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
+import {
+  resolvePackagedDesktopFlavor,
+  type PathwayDesktopFlavor,
+} from "@spiritdevs/shared/desktopFlavor";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 
 import * as DesktopEarlyElectronStartup from "./DesktopEarlyElectronStartup.ts";
@@ -32,6 +37,22 @@ export function readCommandLineSwitchValue(
   return value.length > 0 ? value : null;
 }
 
+const decodePackagedFlavorMetadata = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ pathwayDesktopFlavor: Schema.optional(Schema.Unknown) })),
+);
+
+/** The flavor the build stamped into the packaged package.json; source runs are production. */
+export function readPackagedDesktopFlavor(): PathwayDesktopFlavor {
+  if (!Electron.app.isPackaged) return "production";
+  const packageJson = NodeFS.readFileSync(
+    NodePath.join(Electron.app.getAppPath(), "package.json"),
+    "utf8",
+  );
+  return resolvePackagedDesktopFlavor(
+    decodePackagedFlavorMetadata(packageJson).pathwayDesktopFlavor,
+  );
+}
+
 export const resolveEarlyLinuxElectronOptionsFromProcess =
   (): DesktopEarlyElectronStartup.EarlyLinuxElectronOptions =>
     DesktopEarlyElectronStartup.resolveEarlyLinuxElectronOptions({
@@ -39,6 +60,7 @@ export const resolveEarlyLinuxElectronOptionsFromProcess =
       homeDirectory: NodeOS.homedir(),
       joinPath: NodePath.posix.join,
       readFileString: (path) => NodeFS.readFileSync(path, "utf8"),
+      flavor: readPackagedDesktopFlavor(),
     });
 
 export class DesktopPreReadyElectronOptions extends Context.Service<
@@ -80,7 +102,7 @@ export const make = Effect.gen(function* () {
               appVersion: Electron.app.getVersion(),
             }).displayName,
             execTarget: process.env.APPIMAGE?.trim() || process.execPath,
-            scheme: ElectronProtocol.getDesktopScheme(linux.isDevelopment),
+            scheme: linux.scheme,
           }),
           "utf8",
         );

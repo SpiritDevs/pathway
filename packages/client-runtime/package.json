@@ -67,6 +67,26 @@
       "types": "./src/state/attachments.ts",
       "default": "./src/state/attachments.ts"
     },
+    "./state/computer": {
+      "types": "./src/state/computer.ts",
+      "default": "./src/state/computer.ts"
+    },
+    "./state/computer-approval": {
+      "types": "./src/state/computerApproval.ts",
+      "default": "./src/state/computerApproval.ts"
+    },
+    "./state/computer-notice": {
+      "types": "./src/state/computerNotice.ts",
+      "default": "./src/state/computerNotice.ts"
+    },
+    "./state/computer-state": {
+      "types": "./src/state/computerState.ts",
+      "default": "./src/state/computerState.ts"
+    },
+    "./state/computer-frame-socket": {
+      "types": "./src/state/computerFrameSocket.ts",
+      "default": "./src/state/computerFrameSocket.ts"
+    },
     "./state/connections": {
       "types": "./src/state/connections.ts",
       "default": "./src/state/connections.ts"

@@ -278,6 +278,60 @@ when the thread runs in a remote environment. Pending captures stay on that comp
 draft is saved or the user discards them. See [SnapShots](snap-shot.md) for delivery and provider
 boundaries and [the user guide](../user/snap-shot.md) for setup.
 
+## Computer Use
+
+These terms support the Computer Use design records ([0039](../adr/0039-computer-use-is-a-literal-mirror-of-synara.md), [0040](../adr/0040-computer-use-controls-the-environment-host.md)). They describe the design under discussion, not shipped support.
+
+**Computer Use**:
+An agent observing and driving desktop applications and a driver-owned browser through Pathway's `computer_*` tools. It is ported from Synara.
+_Avoid_: Computer control (that is the name of the Settings toggle, not the feature), CUA (that is the driver).
+
+**Controlled computer**:
+The host machine of the environment running the thread. It is never the device of the client that started the task. Contrast with a SnapShot, which captures the client's computer.
+_Avoid_: Local computer, this Mac.
+
+**Computer Host**:
+The process that owns the Cua driver child process, the native helper and the physical Escape monitor for one controlled computer. On macOS it is the Pathway desktop app. A headless server uses the standalone host, which has no native safety layer.
+
+**Cua driver**:
+The MIT-licensed native automation daemon (Cua AI, Inc.), pinned to one upstream commit and patched for Pathway. It is an implementation detail behind the Computer Host, not a user-facing name.
+_Avoid_: CUA as a name for the feature.
+
+**Computer access policy**:
+The environment setting that decides which paired clients may start Computer tasks: Any operator, Scoped (the `computer:operate` scope, default) or Admins only. Watching, approving and Stop are never restricted by it. See [0041](../adr/0041-computer-access-is-an-environment-policy.md).
+
+**Computer autonomy**:
+The environment's ceiling on Computer oversight: Supervised, Per task (default), Auto or Full access. A thread's composer runtime mode maps onto the same levels, and the stricter of the two applies. The denylist, Stop and Escape, and the audit log hold at every level. See [0043](../adr/0043-computer-autonomy-is-an-environment-ceiling-over-thread-mode.md).
+_Avoid_: Computer permission mode (runtime mode is the thread's setting; autonomy is the environment's).
+
+**Denylist**:
+The applications and system surfaces Computer Use always refuses: password managers, Keychain Access, Passwords, System Settings and SecurityAgent. No autonomy level overrides it.
+
+**Cua flavor**:
+The isolated "Pathway Cua" desktop build (`build-desktop-artifact --flavor cua`, macOS and Linux). It has its own bundle ID, `pathway-cua://` scheme, user-data directory and `~/.pathway-cua` home, so Computer Use testing never touches the installed app's permissions or state. It publishes no update feed.
+_Avoid_: Cua build (that is the driver build).
+
+**Computer control** (setting):
+The client setting that lets the agent use the controlled computer in any chat. With it off, a message that starts with `/computer-use` opts in for that one request. Sends carry it as `enableComputerControl` plus the control generation the client last saw.
+
+**Computer preview**:
+The floating live view of the controlled computer over a chat (`ComputerPreviewPopover`). It streams only while it is visible, and a tap on it clicks the controlled computer. On iOS it is a card docked above the composer (`AgentThreadComputerPreview`), showing stills without pointer input.
+
+**Computer watch**:
+An iOS chat's own `computer.subscribeEvents` socket (`PathwayThreadComputerModel`), open only while the chat is on screen and the app is in the foreground. It re-seeds the thread's state on every connect and feeds the preview and the send's control generation.
+
+**Effort hint**:
+The composer tip "Desktop actions are faster at Medium effort", shown once for Claude chats that will drive the desktop while effort sits at a default other than Medium. Using or dismissing it hides it for good on that client.
+
+**Frame socket**:
+The binary WebSocket at `/ws/computer-frames` that carries preview stills, separate from the orchestration socket. It needs `orchestration:read` and a one-time ticket on remote connections.
+
+**Frame tap**:
+The desktop's in-process preview feed (`ComputerFrameTap`), pushed to the renderer over `desktop:computer-preview-frame`. Only a client whose environment is its own desktop uses it; every other client uses the frame socket.
+
+**Control generation**:
+A per-thread counter the server bumps on Stop and revoke. A send pins the generation it was made in, so an intent from before a Stop cannot re-arm control.
+
 ## Dictation
 
 **Dictation**:

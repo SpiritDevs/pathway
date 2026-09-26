@@ -7,6 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 
 import * as ServerConfig from "./config.ts";
+import { ComputerDispatchAccess } from "./orchestration-v2/ComputerDispatchAccess.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 
 it("uses the canonical Codex model for auto-bootstrap", () => {
@@ -91,6 +92,30 @@ it.effect("queues commands until startup signals readiness", () =>
       assert.equal(yield* Ref.get(count), 0);
       yield* gate.signalCommandReady;
       assert.equal(yield* Fiber.join(queued), 1);
+    }),
+  ),
+);
+
+it.effect("runs a queued command with its caller's Computer clearance", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const gate = yield* ServerRuntimeStartup.makeCommandGate;
+      const queued = yield* gate
+        .enqueueCommand(
+          Effect.gen(function* () {
+            return yield* (yield* ComputerDispatchAccess).clearance;
+          }),
+        )
+        .pipe(
+          Effect.provideService(ComputerDispatchAccess, {
+            clearance: Effect.succeed("scoped" as const),
+          }),
+          Effect.forkScoped,
+        );
+
+      yield* Effect.yieldNow;
+      yield* gate.signalCommandReady;
+      assert.equal(yield* Fiber.join(queued), "scoped");
     }),
   ),
 );

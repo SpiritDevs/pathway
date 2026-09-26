@@ -8,6 +8,7 @@ import type {
 } from "@spiritdevs/contracts";
 import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer } from "electron";
+import { createComputerPreloadBridge } from "./computer/ComputerPreloadBridge.ts";
 import { createDictationPreloadBridge } from "./dictation/preloadBridge.ts";
 
 import * as IpcChannels from "./ipc/channels.ts";
@@ -60,6 +61,8 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 
 contextBridge.exposeInMainWorld("desktopBridge", {
   dictation: createDictationPreloadBridge(),
+  // Always exposed: the renderer feature-detects Computer through `getState().supported`.
+  computer: createComputerPreloadBridge(),
   threadAlerts: {
     getSupport: () => ipcRenderer.invoke(IpcChannels.THREAD_ALERT_SUPPORT_CHANNEL),
     show: (input) => ipcRenderer.invoke(IpcChannels.THREAD_ALERT_SHOW_CHANNEL, input),

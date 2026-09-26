@@ -49,6 +49,7 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { appendFileAttachmentPromptText } from "../../attachmentPrompt.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { shouldAllowPathwayComputerProviderTool } from "../../mcp/toolkits/computer/computerToolPermission.ts";
 import {
   mergeToolCallState,
   parsePermissionRequest,
@@ -844,7 +845,8 @@ function selectAutoApprovedPermissionOption(
   );
 }
 
-export type AcpPermissionDisposition = "allow" | "ask" | "deny";
+/** `allow-once` is a Pathway Computer call: Pathway approves it itself (ADR 0048). */
+export type AcpPermissionDisposition = "allow" | "allow-once" | "ask" | "deny";
 
 function resolveAcpPermissionPath(path: string, cwd: string | null): string | undefined {
   const trimmed = path.trim();
@@ -955,10 +957,33 @@ function acpWorkspaceWriteAllowsMutation(
   return true;
 }
 
+/**
+ * ACP reports MCP tools as kind `other`. Every other kind titles the call with
+ * model-written text (a command, a path, a query or a URL), so only an `other`
+ * call can carry a Pathway Computer identity.
+ */
+const acpMayBeComputerTool = (kind: string | null | undefined) =>
+  kind === undefined || kind === null || kind === "other";
+
 export function acpPermissionDisposition(
   runtimePolicy: ProviderAdapterV2RuntimePolicy,
   request: EffectAcpSchema.RequestPermissionRequest,
 ): AcpPermissionDisposition {
+  if (
+    acpMayBeComputerTool(request.toolCall.kind) &&
+    shouldAllowPathwayComputerProviderTool({
+      computerControlEnabled: runtimePolicy.enableComputerControl === true,
+      activeTurn: true,
+      interactionMode: runtimePolicy.interactionMode,
+      runtimeMode: runtimePolicy.runtimeMode,
+      permission: {
+        title: request.toolCall.title,
+        metadata: request.toolCall._meta,
+      },
+    })
+  ) {
+    return "allow-once";
+  }
   const approvalPolicy = runtimePolicy.approvalPolicy;
   const requiresApproval =
     approvalPolicy === undefined
@@ -4362,6 +4387,16 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 Effect.gen(function* () {
                   const context = yield* activeContext;
                   const disposition = acpPermissionDisposition(context.input.runtimePolicy, params);
+                  const computerOptionId =
+                    disposition === "allow-once"
+                      ? selectPermissionOptionId(params, "accept")
+                      : undefined;
+                  if (computerOptionId !== undefined) {
+                    return {
+                      _tag: "Immediate" as const,
+                      response: { outcome: { outcome: "selected", optionId: computerOptionId } },
+                    } as const;
+                  }
                   if (disposition === "allow") {
                     const optionId = selectAutoApprovedPermissionOption(params);
                     return {

@@ -11,6 +11,8 @@ export interface ThreadPendingApproval {
   readonly createdAt: string;
   readonly detail?: string;
   readonly responseCapability: "live" | "not_resumable";
+  /** The live provider session a response goes to; a re-posted request gets a new one. */
+  readonly responseAttemptKey?: string;
 }
 
 export interface ThreadUserInputQuestion {
@@ -78,6 +80,9 @@ export function derivePendingThreadRequests(
       createdAt: DateTime.formatIso(request.createdAt),
       ...(item?.type === "approval_request" && item.prompt ? { detail: item.prompt } : {}),
       responseCapability: responseCapability === "live" ? "live" : "not_resumable",
+      ...(request.responseCapability.type === "live"
+        ? { responseAttemptKey: request.responseCapability.providerSessionId }
+        : {}),
     });
   }
 

@@ -2549,7 +2549,7 @@ export const layer: Layer.Layer<
     return makeCursorAdapterV2({
       instanceId: CURSOR_DEFAULT_INSTANCE_ID,
       settings: DEFAULT_CURSOR_SETTINGS,
-      environment: hostEnvironment,
+      environment: mergeProviderInstanceEnvironment(undefined, hostEnvironment),
       fileSystem,
       idAllocator,
       runner,

@@ -24,6 +24,7 @@ import {
   findLatestProposedPlan,
   isLatestRunSettled,
   providerErrorPresentation,
+  timelineEntryIsPersistentResourceCard,
   type TimelineEntry,
 } from "./session-logic";
 import {
@@ -885,5 +886,66 @@ describe("subagent thread phase", () => {
         nodes: [],
       }),
     ).toBe("disconnected");
+  });
+});
+
+describe("Computer transcript entries", () => {
+  const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
+  const dynamicTool = (id: string, toolName: string, input: unknown, title: string | null = null) =>
+    ({
+      id: TurnItemId.make(id),
+      threadId: ThreadId.make("thread-computer"),
+      runId: RunId.make("run-computer"),
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "completed" as const,
+      title,
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      type: "dynamic_tool" as const,
+      toolName,
+      input,
+    }) satisfies OrchestrationV2TurnItem;
+  const entriesOf = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
+    deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: items.map((item, position) => ({
+        position,
+        visibility: "local" as const,
+        sourceThreadId: item.threadId,
+        sourceItemId: item.id,
+        item,
+      })),
+      optimisticMessages: [],
+    });
+
+  it("turns setup and denial notices into standalone cards that never fold", () => {
+    const entries = entriesOf([
+      dynamicTool("setup", "computer_setup_required", {
+        toolName: "computer_click",
+        missing: ["accessibility"],
+      }),
+      dynamicTool("denied", "computer_capability_denied", { toolName: "computer_click" }),
+    ]);
+    expect(entries.map((entry) => entry.kind)).toEqual(["event", "event"]);
+    expect(entries.every(timelineEntryIsPersistentResourceCard)).toBe(true);
+  });
+
+  it("heads a Computer tool call with the described action, not the wire name", () => {
+    const [entry] = entriesOf([
+      dynamicTool("shot", "mcp__pathway__computer_screenshot", {}, "Dynamic tool call"),
+    ]);
+    expect(entry).toMatchObject({
+      kind: "work",
+      entry: { toolTitle: "Take a screenshot", label: "Take a screenshot" },
+    });
+    const [titled] = entriesOf([
+      dynamicTool("titled", "mcp__pathway__computer_screenshot", {}, "Capture the login form"),
+    ]);
+    expect(titled).toMatchObject({ kind: "work", entry: { toolTitle: "Capture the login form" } });
   });
 });

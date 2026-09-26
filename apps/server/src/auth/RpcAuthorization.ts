@@ -1,15 +1,18 @@
 import {
   AuthAccessReadScope,
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
   AuthReviewWriteScope,
   AuthTerminalOperateScope,
+  COMPUTER_WS_METHODS,
   EMAIL_WS_METHODS,
   ISSUES_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
   type AuthEnvironmentScope,
+  type ServerSettingsPatch,
   WS_METHODS,
   WsRpcGroup,
 } from "@spiritdevs/contracts";
@@ -254,6 +257,36 @@ export const RPC_REQUIRED_SCOPES = {
   [EMAIL_WS_METHODS.triggerRulesUpsert]: AuthOrchestrationOperateScope,
   [EMAIL_WS_METHODS.triggerRulesDelete]: AuthOrchestrationOperateScope,
   [EMAIL_WS_METHODS.updateSettings]: AuthOrchestrationOperateScope,
+  // Computer: watching is a read and acting is a write. These only admit the call; the
+  // environment's Computer access policy is applied by the handlers, because it reads live
+  // settings and never restricts watching or Stop.
+  [COMPUTER_WS_METHODS.getStatus]: AuthOrchestrationReadScope,
+  // The audit log spans every thread on this desktop, so only admins read it; Synara
+  // limited it to the owner session.
+  [COMPUTER_WS_METHODS.getAuditHistory]: AuthAccessReadScope,
+  [COMPUTER_WS_METHODS.listWindows]: AuthOrchestrationReadScope,
+  [COMPUTER_WS_METHODS.getState]: AuthOrchestrationReadScope,
+  [COMPUTER_WS_METHODS.getScreenSize]: AuthOrchestrationReadScope,
+  [COMPUTER_WS_METHODS.getThreadState]: AuthOrchestrationReadScope,
+  [COMPUTER_WS_METHODS.subscribeEvents]: AuthOrchestrationReadScope,
+  [COMPUTER_WS_METHODS.setControlEnabled]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.provision]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.launchApp]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.click]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.doubleClick]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.rightClick]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.moveCursor]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.drag]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.scroll]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.typeText]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.pressKey]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.hotkey]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.setValue]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.performAction]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.selectText]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.inputClick]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.inputScroll]: AuthOrchestrationOperateScope,
+  [COMPUTER_WS_METHODS.inputKey]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {
@@ -265,4 +298,14 @@ export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope 
     throw new Error(`RPC method ${method} has no declared authorization scope.`);
   }
   return requiredScope;
+}
+
+/**
+ * The scope a settings patch needs beyond the RPC's own. The Computer access policy and
+ * autonomy ceiling are admin-only (ADR 0041), so any patch touching them needs `access:write`.
+ */
+export function extraScopeForServerSettingsPatch(
+  patch: ServerSettingsPatch,
+): AuthEnvironmentScope | null {
+  return patch.computer === undefined ? null : AuthAccessWriteScope;
 }

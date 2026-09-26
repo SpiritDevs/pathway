@@ -10,13 +10,25 @@ function normalizeConfiguredBaseDir(pathwayHome: Option.Option<string>): Option.
   return trimmed.length > 0 ? Option.some(trimmed) : Option.none();
 }
 
+/**
+ * The PATHWAY_HOME a flavor adopts. The isolated cua flavor exists so Computer Use testing never
+ * touches another install's state, so it ignores PATHWAY_HOME and always uses its own home.
+ */
+export function resolveFlavorPathwayHome(input: {
+  readonly pathwayHome: Option.Option<string>;
+  readonly isolated: boolean;
+}): Option.Option<string> {
+  return input.isolated ? Option.none() : normalizeConfiguredBaseDir(input.pathwayHome);
+}
+
 export function resolveDesktopBaseDir(input: {
   readonly homeDirectory: string;
   readonly joinPath: JoinPath;
   readonly pathwayHome: Option.Option<string>;
+  readonly defaultHomeDirName?: string | undefined;
 }): string {
   return Option.getOrElse(normalizeConfiguredBaseDir(input.pathwayHome), () =>
-    input.joinPath(input.homeDirectory, ".pathway"),
+    input.joinPath(input.homeDirectory, input.defaultHomeDirName ?? ".pathway"),
   );
 }
 

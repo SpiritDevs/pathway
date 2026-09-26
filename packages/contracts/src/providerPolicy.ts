@@ -28,7 +28,13 @@ export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
 
-export const ProviderRequestKind = Schema.Literals(["command", "file-read", "file-change"]);
+/** `computer` cards are posted by Pathway itself for Computer use (ADR 0048), never by a provider. */
+export const ProviderRequestKind = Schema.Literals([
+  "command",
+  "file-read",
+  "file-change",
+  "computer",
+]);
 export type ProviderRequestKind = typeof ProviderRequestKind.Type;
 
 export const AssistantDeliveryMode = Schema.Literals(["buffered", "streaming"]);

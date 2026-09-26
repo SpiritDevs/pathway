@@ -81,6 +81,8 @@ export const AuthAccessReadScope = "access:read" as const;
 export const AuthAccessWriteScope = "access:write" as const;
 export const AuthRelayReadScope = "relay:read" as const;
 export const AuthRelayWriteScope = "relay:write" as const;
+/** Start Computer tasks and turn on Computer control, when the access policy is "scoped". */
+export const AuthComputerOperateScope = "computer:operate" as const;
 export const AuthEnvironmentScope = Schema.Literals([
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
@@ -90,6 +92,7 @@ export const AuthEnvironmentScope = Schema.Literals([
   AuthAccessWriteScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
+  AuthComputerOperateScope,
 ]);
 export type AuthEnvironmentScope = typeof AuthEnvironmentScope.Type;
 export const AuthEnvironmentScopes = Schema.Array(AuthEnvironmentScope);
@@ -101,6 +104,7 @@ export const AuthStandardClientScopes = [
   AuthTerminalOperateScope,
   AuthReviewWriteScope,
   AuthRelayReadScope,
+  AuthComputerOperateScope,
 ] as const;
 export const AuthAdministrativeScopes = [
   ...AuthStandardClientScopes,
@@ -108,6 +112,13 @@ export const AuthAdministrativeScopes = [
   AuthAccessWriteScope,
   AuthRelayWriteScope,
 ] as const;
+/**
+ * What a peer environment is issued. A peer never drives this desktop: cross-environment
+ * work runs as an agent on the host, whose Computer calls stay local.
+ */
+export const AuthPeerEnvironmentScopes = AuthStandardClientScopes.filter(
+  (scope) => scope !== AuthComputerOperateScope,
+);
 
 export const AuthTokenExchangeGrantType =
   "urn:ietf:params:oauth:grant-type:token-exchange" as const;

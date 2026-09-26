@@ -92,6 +92,7 @@ extension PathwayAgentThreadModel {
     func installServerConfig(_ value: JSONValue) {
         let object = value.objectValue ?? [:]
         serverConfig = object
+        computerAccessPolicy = object["settings"]?.objectValue?["computer"]?.objectValue?["accessPolicy"]?.stringValue
         let capabilities = object["environment"]?.objectValue?["capabilities"]?.objectValue ?? [:]
         supportsAttachmentUploads = threadQueue != nil || capabilities["attachmentUploads"]?.boolValue == true
         maximumFileAttachmentBytes = threadQueue != nil ? 50 * 1024 * 1024 : (supportsAttachmentUploads ? capabilities["fileAttachments"]?.objectValue?["maxUploadBytes"]?.intValue : nil)
@@ -353,14 +354,16 @@ extension PathwayAgentThreadModel {
         }
         isSending = true
         defer { isSending = false }
+        let text = "PLEASE IMPLEMENT THIS PLAN:\n" + markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        let computer = try await computerFields(for: text, queued: threadQueue != nil)
         if let threadQueue {
             // A plan has one implementation command, including after navigation or restart.
             let identity = try JSONEncoder().encode([thread.companyId, threadID, planID])
             let identifier = "implement-plan-" + SHA256.hash(data: identity).map { String(format: "%02x", $0) }.joined()
             var command = PathwayAgentThreadCommands.dispatchMessage(threadID: threadID,
-                text: "PLEASE IMPLEMENT THIS PLAN:\n" + markdown.trimmingCharacters(in: .whitespacesAndNewlines),
-                hasActiveRun: false, identifier: identifier).objectValue ?? [:]
+                text: text, hasActiveRun: false, identifier: identifier).objectValue ?? [:]
             command["modelSelection"] = try Self.json(currentModelSelection)
+            command.merge(computer) { $1 }
             command["sourcePlanRef"] = .object(["threadId": .string(threadID), "planId": .string(planID)])
             try await threadQueue.enqueue(companyID: thread.companyId, environmentID: environment.environment.environmentId,
                 threadID: threadID, submission: .object(["kind": .string("message"), "input": .object(command),
@@ -369,9 +372,9 @@ extension PathwayAgentThreadModel {
         }
         try await setInteractionMode("default")
         try await dispatch("message.dispatch", fields: ["createdBy": .string("user"), "creationSource": .string("mobile"),
-            "messageId": .string(UUID().uuidString), "text": .string("PLEASE IMPLEMENT THIS PLAN:\n" + markdown.trimmingCharacters(in: .whitespacesAndNewlines)),
+            "messageId": .string(UUID().uuidString), "text": .string(text),
             "attachments": .array([]), "dispatchMode": .object(["type": .string("start_immediately")]),
-            "sourcePlanRef": .object(["threadId": .string(threadID), "planId": .string(planID)])])
+            "sourcePlanRef": .object(["threadId": .string(threadID), "planId": .string(planID)])].merging(computer) { $1 })
     }
     func canRecoverWorkspacePreparation(_ item: PathwayTimelineItem) -> Bool {
         guard item.type == "command_execution", item.status == "failed",
@@ -406,6 +409,9 @@ extension PathwayAgentThreadModel {
             throw PathwayThreadConversationError.message("Keep conversation before starting another chat from this workspace.")
         }
         guard canSend else { throw PathwayThreadConversationError.message("Finish preparing the message before starting a chat.") }
+        if PathwayComputerInvocation.isBare(draft), draftAttachments.isEmpty {
+            throw PathwayThreadConversationError.message(PathwayComputerInvocation.bareCommandMessage)
+        }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let selected = draftAttachments
         isSending = true
@@ -439,6 +445,7 @@ extension PathwayAgentThreadModel {
                 var command = PathwayAgentThreadCommands.dispatchMessage(threadID: transaction.target,
                     text: text, hasActiveRun: false, identifier: transaction.messageID).objectValue ?? [:]
                 command["modelSelection"] = try Self.json(transaction.modelSelection)
+                command.merge(computerNewChatFields(for: text, launches: false, queued: true)) { $1 }
                 submission = .object(["kind": .string("message"), "input": .object(command),
                     "runtimeMode": .string(transaction.runtimeMode), "interactionMode": .string(transaction.interactionMode)])
             } else {
@@ -453,7 +460,7 @@ extension PathwayAgentThreadModel {
                     "modelSelection": try Self.json(transaction.modelSelection), "runtimeMode": .string(transaction.runtimeMode),
                     "interactionMode": .string(transaction.interactionMode), "locations": .array([.string("agents")]),
                     "workspaceStrategy": .object(workspace), "initialMessage": .object(["messageId": .string(transaction.messageID),
-                        "text": .string(text), "attachments": .array([])])])])
+                        "text": .string(text), "attachments": .array([])].merging(computerNewChatFields(for: text, launches: true, queued: true)) { $1 })])])
             }
             try await threadQueue.enqueue(companyID: thread.companyId, environmentID: environment.environment.environmentId,
                 threadID: transaction.target, submission: submission, files: files)
@@ -499,7 +506,8 @@ extension PathwayAgentThreadModel {
             }
             try await dispatch("thread.model-selection.set", fields: ["threadId": .string(target), "modelSelection": try Self.json(currentModelSelection)])
             try await dispatch("message.dispatch", fields: ["commandId": .string(messageID), "threadId": .string(target), "createdBy": .string("user"), "creationSource": .string("mobile"),
-                "messageId": .string(messageID), "text": .string(text), "attachments": .array(attachments), "dispatchMode": .object(["type": .string("start_immediately")])])
+                "messageId": .string(messageID), "text": .string(text), "attachments": .array(attachments),
+                "dispatchMode": .object(["type": .string("start_immediately")])].merging(computerNewChatFields(for: text, launches: false)) { $1 })
         } else {
             var workspace: [String: JSONValue] = ["type": .string("root")]
             if let path = thread.shell.worktreePath { workspace = ["type": .string("existing_worktree"), "worktreePath": .string(path)] }
@@ -510,7 +518,8 @@ extension PathwayAgentThreadModel {
                 "title": .string(String(text.prefix(100)).isEmpty ? "New chat" : String(text.prefix(100))), "generateTitle": .bool(true),
                 "modelSelection": try Self.json(currentModelSelection), "runtimeMode": .string(runtimeMode), "interactionMode": .string(interactionMode),
                 "locations": .array([.string("agents")]), "workspaceStrategy": .object(workspace),
-                "initialMessage": .object(["messageId": .string(messageID), "text": .string(text), "attachments": .array(attachments)])]), requiresSubscription: true)
+                "initialMessage": .object(["messageId": .string(messageID), "text": .string(text), "attachments": .array(attachments)]
+                    .merging(computerNewChatFields(for: text, launches: true)) { $1 })]), requiresSubscription: true)
         }
         if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
         preparedNewSend = nil
@@ -525,8 +534,11 @@ extension PathwayAgentThreadModel {
 
 extension PathwayAgentThreadModel {
     func refreshServerConfig() async {
-        do { installServerConfig(try await request("server.getConfig", payload: .object([:]), reportsErrors: false)) }
-        catch { /* Keep the last usable provider list while temporarily disconnected. */ }
+        // A read that outlives its caller (a stopped chat, a closed sheet) or the connection that answered it must not land.
+        let revision = configRevision
+        guard let value = try? await request("server.getConfig", payload: .object([:]), reportsErrors: false),
+              !Task.isCancelled, revision == configRevision else { return } // Keep the last usable provider list while temporarily disconnected.
+        installServerConfig(value)
     }
     func refreshParentRoster() async {
         guard thread.shell.lineage?.relationshipToParent == "subagent", let parentID = thread.shell.lineage?.parentThreadId else {

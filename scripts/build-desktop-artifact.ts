@@ -3,6 +3,11 @@
 import * as NodeModule from "node:module";
 
 import { fromYaml } from "@spiritdevs/shared/schemaYaml";
+import {
+  PATHWAY_CUA_DESKTOP_IDENTITY,
+  PATHWAY_DESKTOP_FLAVORS,
+  type PathwayDesktopFlavor,
+} from "@spiritdevs/shared/desktopFlavor";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@spiritdevs/shared/relayAuth";
 import { resolveSpawnCommand } from "@spiritdevs/shared/shell";
@@ -12,6 +17,7 @@ import gnomeCaptureBundle from "../apps/desktop/gnome-extension/bundle.json" wit
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
+import { buildPathwayHelper } from "./build-pathway-helper.ts";
 import {
   BRAND_ASSET_PATHS,
   resolveWebAssetBrandForChannel,
@@ -20,6 +26,7 @@ import {
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { provisionCuaDriver } from "./provision-cua-driver.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -41,6 +48,7 @@ const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
+const BuildFlavor = Schema.Literals(PATHWAY_DESKTOP_FLAVORS);
 
 const WorkspaceConfig = Schema.Struct({
   catalog: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -147,6 +155,7 @@ interface BuildCliInput {
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
   readonly wslPrebuild: Option.Option<string>;
+  readonly flavor: Option.Option<PathwayDesktopFlavor>;
 }
 
 function detectHostBuildPlatform(hostPlatform: string): typeof BuildPlatform.Type | undefined {
@@ -208,6 +217,17 @@ export class UnsupportedHostBuildPlatformError extends Schema.TaggedErrorClass<U
 ) {
   override get message(): string {
     return `Unsupported host platform '${this.hostPlatform}'.`;
+  }
+}
+
+// Production's NSIS GUID survives bundle ID changes, so an isolated Windows
+// installer would register itself as the production product.
+export class UnsupportedDesktopFlavorError extends Schema.TaggedErrorClass<UnsupportedDesktopFlavorError>()(
+  "UnsupportedDesktopFlavorError",
+  { platform: BuildPlatform, flavor: BuildFlavor },
+) {
+  override get message(): string {
+    return `The ${this.flavor} desktop flavor is supported on macOS and Linux only.`;
   }
 }
 
@@ -697,10 +717,12 @@ interface ResolvedBuildOptions {
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: number | undefined;
   readonly wslPrebuild: string | undefined;
+  readonly flavor: PathwayDesktopFlavor;
 }
 
 interface StagePackageJson {
   readonly name: string;
+  readonly pathwayDesktopFlavor?: PathwayDesktopFlavor;
   readonly version: string;
   readonly buildVersion: string;
   readonly pathwayCommitHash: string;
@@ -726,6 +748,9 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // so the SDK's optional platform packages (each a ~200MB bundled executable)
   // are dead weight. The trailing dash keeps the SDK's own JS package.
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
+  // Computer Use natives ship as extraResources; keep them out of app.asar.
+  "!apps/desktop/prod-resources/cua-driver/**",
+  "!apps/desktop/prod-resources/pathway-helper/**",
 ] as const;
 // The WSL backend launches the server with plain `wsl.exe -- node`, which
 // cannot read inside an asar archive — and the server bundle externalizes its
@@ -746,6 +771,28 @@ export const DICTATION_EXTRA_RESOURCES = [
     from: "apps/desktop/prod-resources/dictation",
     to: "dictation",
   },
+] as const;
+
+// Computer Use spawns these by path, so they live outside app.asar. The Cua
+// driver ships on macOS and Linux; the Swift helper is macOS-only.
+export const CUA_DRIVER_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/cua-driver",
+    to: "cua-driver",
+  },
+] as const;
+
+export const PATHWAY_HELPER_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/pathway-helper",
+    to: "pathway-helper",
+  },
+] as const;
+
+// Signed explicitly so the release identity replaces their ad-hoc signatures.
+export const MAC_COMPUTER_USE_BINARIES = [
+  "Contents/Resources/pathway-helper/pathway-helper",
+  "Contents/Resources/cua-driver/cua-driver",
 ] as const;
 
 export const LINUX_CAPTURE_EXTRA_RESOURCES = [
@@ -809,10 +856,10 @@ export class InvalidAppleTeamIdError extends Schema.TaggedErrorClass<InvalidAppl
 
 export class MissingMacPasskeyProvisioningProfileError extends Schema.TaggedErrorClass<MissingMacPasskeyProvisioningProfileError>()(
   "MissingMacPasskeyProvisioningProfileError",
-  {},
+  { variable: Schema.String },
 ) {
   override get message(): string {
-    return "PATHWAY_MACOS_PROVISIONING_PROFILE must point to an Associated Domains provisioning profile.";
+    return `${this.variable} must point to an Associated Domains provisioning profile.`;
   }
 }
 
@@ -897,17 +944,31 @@ function normalizePasskeyRpDomain(value: string): string {
   return parsed.hostname;
 }
 
+/**
+ * Each flavor signs as its own App ID, so it needs its own provisioning profile and keychain
+ * group. A cua build never borrows production's profile.
+ */
+const MAC_SIGNING_IDENTITIES = {
+  production: { appId: DESKTOP_APP_ID, profileVariable: "PATHWAY_MACOS_PROVISIONING_PROFILE" },
+  cua: {
+    appId: PATHWAY_CUA_DESKTOP_IDENTITY.bundleId,
+    profileVariable: "PATHWAY_MACOS_CUA_PROVISIONING_PROFILE",
+  },
+} as const satisfies Record<PathwayDesktopFlavor, { appId: string; profileVariable: string }>;
+
 export function resolveMacPasskeySigningConfiguration(
   env: Readonly<Record<string, string | undefined>>,
+  flavor: PathwayDesktopFlavor = "production",
 ): MacPasskeySigningConfiguration {
   const teamId = env.PATHWAY_APPLE_TEAM_ID?.trim().toUpperCase() ?? "";
   if (!APPLE_TEAM_ID_PATTERN.test(teamId)) {
     throw new InvalidAppleTeamIdError({ teamId });
   }
 
-  const provisioningProfilePath = env.PATHWAY_MACOS_PROVISIONING_PROFILE?.trim() ?? "";
+  const { appId, profileVariable } = MAC_SIGNING_IDENTITIES[flavor];
+  const provisioningProfilePath = env[profileVariable]?.trim() ?? "";
   if (provisioningProfilePath.length === 0) {
-    throw new MissingMacPasskeyProvisioningProfileError();
+    throw new MissingMacPasskeyProvisioningProfileError({ variable: profileVariable });
   }
 
   const configuredRpDomains = env.PATHWAY_CLERK_PASSKEY_RP_DOMAINS?.trim();
@@ -934,7 +995,7 @@ export function resolveMacPasskeySigningConfiguration(
   }
 
   return {
-    appId: DESKTOP_APP_ID,
+    appId,
     teamId,
     rpDomains: uniqueRpDomains,
     provisioningProfilePath,
@@ -1167,6 +1228,9 @@ const BuildEnvConfig = Config.all({
   // into the staged node-pty so the WSL backend ships a ready binary and never
   // compiles on the user's machine.
   wslPrebuild: Config.string("PATHWAY_DESKTOP_WSL_PREBUILD").pipe(Config.option),
+  flavor: Config.schema(BuildFlavor, "PATHWAY_DESKTOP_FLAVOR").pipe(
+    Config.withDefault("production"),
+  ),
 });
 
 const MockUpdateServerPortSchema = Schema.NumberFromString.check(
@@ -1233,9 +1297,16 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     });
   }
   const version = mergeOptions(input.buildVersion, env.version, undefined);
-  const releaseDir = resolveBooleanFlag(input.mockUpdates, env.mockUpdates)
-    ? "release-mock"
-    : "release";
+  const flavor = Option.getOrElse(input.flavor, () => env.flavor);
+  if (platform === "win" && flavor !== "production") {
+    return yield* new UnsupportedDesktopFlavorError({ platform, flavor });
+  }
+  const releaseDir =
+    flavor === "cua"
+      ? "release-cua"
+      : resolveBooleanFlag(input.mockUpdates, env.mockUpdates)
+        ? "release-mock"
+        : "release";
   const outputDir = path.resolve(
     repoRoot,
     mergeOptions(input.outputDir, env.outputDir, releaseDir),
@@ -1276,6 +1347,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mockUpdates,
     mockUpdateServerPort,
     wslPrebuild,
+    flavor,
   } satisfies ResolvedBuildOptions;
 });
 
@@ -1484,6 +1556,32 @@ const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input:
   if (input.platform !== "win") {
     yield* fs.chmod(destinationPath, 0o755);
   }
+});
+
+// Cua is verified and re-staged from PATHWAY_CUA_ARTIFACT_DIR when CI provides
+// one, and built from the pinned source otherwise.
+const stageComputerUseNatives = Effect.fn("stageComputerUseNatives")(function* (input: {
+  readonly repoRoot: string;
+  readonly prodResourcesDir: string;
+  readonly platform: typeof BuildPlatform.Type;
+  readonly arch: typeof BuildArch.Type;
+}) {
+  if (input.platform === "win") return;
+  const path = yield* Path.Path;
+  yield* Effect.log("[desktop-artifact] Verifying and staging pinned Cua driver...");
+  yield* provisionCuaDriver({
+    destination: path.join(input.prodResourcesDir, "cua-driver"),
+    platform: input.platform === "mac" ? "darwin" : "linux",
+    arch: input.arch,
+  });
+  if (input.platform !== "mac") return;
+  yield* Effect.log(`[desktop-artifact] Building pathway-helper (${input.arch})...`);
+  yield* buildPathwayHelper({
+    repoRoot: input.repoRoot,
+    arch: input.arch,
+    outputPath: path.join(input.prodResourcesDir, "pathway-helper", "pathway-helper"),
+    release: true,
+  });
 });
 
 function generateMacIconSet(
@@ -1767,11 +1865,21 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         readonly provisioningProfilePath: string;
       }
     | undefined,
+  flavor: PathwayDesktopFlavor = "production",
 ) {
+  if (platform === "win" && flavor !== "production") {
+    return yield* new UnsupportedDesktopFlavorError({ platform, flavor });
+  }
+  const cua = flavor === "cua";
+  const schemes = cua ? [PATHWAY_CUA_DESKTOP_IDENTITY.scheme] : ["pathway", "pathway-dev"];
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
-    productName: resolveDesktopProductName(version),
-    artifactName: "Pathway-Code-${version}-${arch}.${ext}",
+    appId: cua ? PATHWAY_CUA_DESKTOP_IDENTITY.bundleId : DESKTOP_APP_ID,
+    productName: cua
+      ? PATHWAY_CUA_DESKTOP_IDENTITY.displayName
+      : resolveDesktopProductName(version),
+    artifactName: cua
+      ? "Pathway-Cua-${version}-${arch}.${ext}"
+      : "Pathway-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [...DESKTOP_FILE_EXCLUSIONS],
     directories: {
@@ -1784,11 +1892,16 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : DICTATION_EXTRA_RESOURCES),
+      ...(platform === "win" ? [] : CUA_DRIVER_EXTRA_RESOURCES),
+      ...(platform === "mac" ? PATHWAY_HELPER_EXTRA_RESOURCES : []),
     ],
   };
+  // The cua flavor is installed by hand and never joins an update feed.
   const updateChannel = resolveDesktopUpdateChannel(version);
-  const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
-  if (publishConfig) {
+  const publishConfig = cua ? undefined : yield* resolveGitHubPublishConfig(updateChannel);
+  if (cua) {
+    buildConfig.publish = null;
+  } else if (publishConfig) {
     buildConfig.publish = [publishConfig];
   } else if (mockUpdates) {
     buildConfig.publish = [
@@ -1806,6 +1919,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
+      binaries: [...MAC_COMPUTER_USE_BINARIES],
+      // Universal builds stage the helper and driver already lipo'd; this lets
+      // @electron/universal keep those fat binaries instead of merging them.
+      x64ArchFiles: "Contents/Resources/{pathway-helper/pathway-helper,cua-driver/cua-driver}",
       // macOS 15+ gates LAN traffic per app, so without this string Chromium
       // fails dev servers on private IPs with ERR_ADDRESS_UNREACHABLE instead
       // of prompting. The webview and the agent browser both need the grant.
@@ -1813,14 +1930,16 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         NSMicrophoneUsageDescription:
           "Pathway records your voice when you start dictation. Audio is processed on this computer.",
         NSScreenCaptureUsageDescription:
-          "Pathway captures the active window when you use the SnapShots shortcut.",
+          "Pathway captures the active window when you use the SnapShots shortcut, and the windows you authorize for Computer use.",
+        NSAccessibilityUsageDescription:
+          "Pathway controls the windows you authorize for Computer use.",
         NSLocalNetworkUsageDescription:
           "Pathway connects to development servers running on your local network.",
       },
       protocols: [
         {
           name: "Pathway",
-          schemes: ["pathway", "pathway-dev"],
+          schemes,
         },
       ],
       ...(macPasskeySigning
@@ -1835,7 +1954,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
-      executableName: "pathway",
+      executableName: cua ? PATHWAY_CUA_DESKTOP_IDENTITY.linuxExecutableName : "pathway",
       icon: "icons",
       category: "Development",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
@@ -1844,12 +1963,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       protocols: [
         {
           name: "Pathway",
-          schemes: ["pathway", "pathway-dev"],
+          schemes,
         },
       ],
       desktop: {
         entry: {
-          StartupWMClass: "pathway",
+          StartupWMClass: cua ? PATHWAY_CUA_DESKTOP_IDENTITY.linuxExecutableName : "pathway",
         },
       },
     };
@@ -2211,12 +2330,20 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         verbose: options.verbose,
       });
   }
-  yield* fs.copy(stageResourcesDir, path.join(stageAppDir, "apps/desktop/prod-resources"));
+  const prodResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
+  yield* fs.copy(stageResourcesDir, prodResourcesDir);
+  yield* stageComputerUseNatives({
+    repoRoot,
+    prodResourcesDir,
+    platform: options.platform,
+    arch: options.arch,
+  });
 
   const configuredMacPasskeySigning =
     options.platform === "mac" && options.signed
       ? yield* Effect.try({
-          try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
+          try: () =>
+            resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot }), options.flavor),
           catch: MacPasskeySigningConfigurationResolutionError.fromCause,
         })
       : undefined;
@@ -2266,7 +2393,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     stageDependencies,
   );
   const stagePackageJson: StagePackageJson = {
-    name: "pathway",
+    name: options.flavor === "cua" ? PATHWAY_CUA_DESKTOP_IDENTITY.linuxExecutableName : "pathway",
+    ...(options.flavor === "production" ? {} : { pathwayDesktopFlavor: options.flavor }),
     version: appVersion,
     buildVersion: appVersion,
     pathwayCommitHash: commitHash,
@@ -2293,6 +2421,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
           }
         : undefined,
+      options.flavor,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -2500,6 +2629,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   mockUpdateServerPort: Flag.integer("mock-update-server-port").pipe(
     Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
     Flag.withDescription("Mock update server port (env: PATHWAY_DESKTOP_MOCK_UPDATE_SERVER_PORT)."),
+    Flag.optional,
+  ),
+  flavor: Flag.choice("flavor", PATHWAY_DESKTOP_FLAVORS).pipe(
+    Flag.withDescription(
+      "Packaged identity; cua is an isolated side-by-side build (env: PATHWAY_DESKTOP_FLAVOR).",
+    ),
     Flag.optional,
   ),
   wslPrebuild: Flag.string("wsl-prebuild").pipe(

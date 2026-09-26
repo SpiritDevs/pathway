@@ -25,6 +25,7 @@ import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthAdministrativeScopes,
+  AuthComputerOperateScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
@@ -40,6 +41,7 @@ import {
   type DesktopSshEnvironmentTarget,
   type DesktopWslState,
   type EnvironmentId,
+  type ExecutionEnvironmentCapabilities,
   type ExecutionEnvironmentDeviceKind,
 } from "@spiritdevs/contracts";
 import { connectionNoticeText, connectionStatusText } from "@spiritdevs/client-runtime/connection";
@@ -57,6 +59,7 @@ import { resolveRelayClerkTokenOptions } from "../../cloud/publicConfig";
 import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
 import {
   applyWslEnableSelection,
+  delegablePairingScopes,
   excludeRepresentedEnvironmentClientSessions,
   isQrShareableEndpoint,
   partitionClientSessionsByConnection,
@@ -261,6 +264,11 @@ const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
     scope: AuthReviewWriteScope,
     title: "Write reviews",
     description: "Create comments while reviewing changes.",
+  },
+  {
+    scope: AuthComputerOperateScope,
+    title: "Use Computer",
+    description: "Start Computer tasks that control this machine's desktop.",
   },
   {
     scope: AuthAccessReadScope,
@@ -1039,16 +1047,31 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
 
 type AuthorizedClientsHeaderActionProps = {
   readonly disabled?: boolean;
+  readonly capabilities: ExecutionEnvironmentCapabilities | null;
+  readonly sessionScopes: ReadonlyArray<AuthEnvironmentScope> | null;
 };
 
 const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderAction({
   disabled = false,
+  capabilities,
+  sessionScopes,
 }: AuthorizedClientsHeaderActionProps) {
+  const scopeOptions = useMemo(() => {
+    const delegable = delegablePairingScopes(
+      PAIRING_SCOPE_OPTIONS.map((option) => option.scope),
+      capabilities,
+      sessionScopes,
+    );
+    return PAIRING_SCOPE_OPTIONS.filter((option) => delegable.includes(option.scope));
+  }, [capabilities, sessionScopes]);
+  const standardScopes = useMemo(
+    () => delegablePairingScopes(AuthStandardClientScopes, capabilities, sessionScopes),
+    [capabilities, sessionScopes],
+  );
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pairingLabel, setPairingLabel] = useState("");
-  const [pairingScopes, setPairingScopes] = useState<ReadonlyArray<AuthEnvironmentScope>>([
-    ...AuthStandardClientScopes,
-  ]);
+  const [pairingScopes, setPairingScopes] =
+    useState<ReadonlyArray<AuthEnvironmentScope>>(standardScopes);
   const [isCreatingPairingLink, setIsCreatingPairingLink] = useState(false);
 
   const handleCreatePairingLink = useCallback(async () => {
@@ -1056,7 +1079,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
     try {
       await createServerPairingCredential({ label: pairingLabel, scopes: pairingScopes });
       setPairingLabel("");
-      setPairingScopes([...AuthStandardClientScopes]);
+      setPairingScopes(standardScopes);
       setDialogOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to create pairing URL.";
@@ -1070,7 +1093,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
     } finally {
       setIsCreatingPairingLink(false);
     }
-  }, [pairingLabel, pairingScopes]);
+  }, [pairingLabel, pairingScopes, standardScopes]);
 
   const togglePairingScope = useCallback((scope: AuthEnvironmentScope, checked: boolean) => {
     setPairingScopes((current) =>
@@ -1084,9 +1107,11 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
         open={dialogOpen}
         onOpenChange={(open) => {
           setDialogOpen(open);
-          if (!open) {
+          if (open) {
+            // Capabilities and session scopes load after mount; start from the current set.
+            setPairingScopes(standardScopes);
+          } else {
             setPairingLabel("");
-            setPairingScopes([...AuthStandardClientScopes]);
           }
         }}
       >
@@ -1140,14 +1165,14 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
                     size="xs"
                     variant="outline"
                     disabled={isCreatingPairingLink}
-                    onClick={() => setPairingScopes([...AuthStandardClientScopes])}
+                    onClick={() => setPairingScopes(standardScopes)}
                   >
                     Standard
                   </Button>
                 </div>
               </div>
               <div className="divide-y divide-border/60 rounded-lg border border-input bg-muted/25">
-                {PAIRING_SCOPE_OPTIONS.map(({ scope, title, description }) => (
+                {scopeOptions.map(({ scope, title, description }) => (
                   <label
                     key={scope}
                     className="flex cursor-pointer items-start gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
@@ -3589,7 +3614,11 @@ export function EnvironmentConnectionSettings({
             <SettingsSection
               title="Devices with access"
               headerAction={
-                <AuthorizedClientsHeaderAction disabled={isRevokingDisconnectedDesktopClients} />
+                <AuthorizedClientsHeaderAction
+                  disabled={isRevokingDisconnectedDesktopClients}
+                  capabilities={primaryEnvironment?.descriptor?.capabilities ?? null}
+                  sessionScopes={currentSessionScopes}
+                />
               }
             >
               <ScrollArea

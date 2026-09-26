@@ -217,6 +217,10 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
   readonly bootstrap?: StartThreadBootstrap;
   readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: PlanId };
   readonly dispatchMode?: "auto" | "queue" | "steer" | "restart";
+  /** The chat switch; the server also reads a user's `/computer-use` from the text. */
+  readonly enableComputerControl?: boolean;
+  /** The thread's Computer revocation generation the intent was formed against. */
+  readonly computerControlGeneration?: number;
 }
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
@@ -229,6 +233,8 @@ export interface EditAndRestartMessageInput extends ThreadCommandInput {
   readonly messageId: MessageId;
   readonly replacementMessageId?: MessageId;
   readonly text: string;
+  readonly enableComputerControl?: boolean;
+  readonly computerControlGeneration?: number;
 }
 
 export interface RespondToThreadApprovalInput extends ThreadCommandInput {
@@ -758,6 +764,21 @@ export const setThreadInteractionMode = Effect.fn("EnvironmentCommands.setThread
   },
 );
 
+/** The optional Computer intent fields `message.dispatch` and edit-and-restart carry. */
+export function computerControlFields(input: {
+  readonly enableComputerControl?: boolean;
+  readonly computerControlGeneration?: number;
+}): { enableComputerControl?: boolean; computerControlGeneration?: number } {
+  return {
+    ...(input.enableComputerControl === undefined
+      ? {}
+      : { enableComputerControl: input.enableComputerControl }),
+    ...(input.computerControlGeneration === undefined
+      ? {}
+      : { computerControlGeneration: input.computerControlGeneration }),
+  };
+}
+
 export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(function* (
   input: StartThreadTurnInput,
 ) {
@@ -817,6 +838,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
         messageId: input.message.messageId,
         text: input.message.text,
         attachments,
+        ...computerControlFields(input),
       },
     });
   }
@@ -875,6 +897,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       : { titleSeed: input.titleSeed }),
     ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
     ...(input.sourceProposedPlan === undefined ? {} : { sourcePlanRef: input.sourceProposedPlan }),
+    ...computerControlFields(input),
     dispatchMode,
   });
 });
@@ -916,6 +939,7 @@ export const editAndRestartMessage = Effect.fn("EnvironmentCommands.editAndResta
       messageId: input.messageId,
       replacementMessageId,
       text: input.text,
+      ...computerControlFields(input),
     });
   },
 );

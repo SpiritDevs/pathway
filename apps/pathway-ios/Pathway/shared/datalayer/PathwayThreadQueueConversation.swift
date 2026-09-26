@@ -119,6 +119,10 @@ extension PathwayAgentThreadModel {
 
     func mutateCloudQueueMessage(_ item: PathwayTimelineItem, action: String, text: String? = nil,
                                  beforeCommandID: String? = nil, targetRunID: String? = nil) async throws {
+        // The edit keeps the queued message's attachments, so those still count as the task.
+        if action == "edit", let text, PathwayComputerInvocation.isBare(text), item.attachments.isEmpty {
+            throw PathwayThreadConversationError.message(PathwayComputerInvocation.bareCommandMessage)
+        }
         guard let threadQueue, let queued = cloudQueuedThread, let message = cloudQueueMessage(for: item),
               let command = message["commandId"] else { throw PathwayThreadConversationError.message("This message has changed. Refresh the conversation before trying again.") }
         var fields: [String: JSONValue] = ["commandId": command, "revision": message["revision"] ?? .number(0)]

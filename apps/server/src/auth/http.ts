@@ -1,13 +1,8 @@
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
+  AuthEnvironmentScope,
   AuthStandardClientScopes,
-  AuthOrchestrationOperateScope,
-  AuthOrchestrationReadScope,
-  AuthRelayReadScope,
-  AuthRelayWriteScope,
-  AuthReviewWriteScope,
-  AuthTerminalOperateScope,
   EnvironmentAuthInvalidError,
   type EnvironmentAuthInvalidReason,
   EnvironmentHttpApi,
@@ -22,7 +17,6 @@ import {
   EnvironmentAuthenticatedAuth,
   EnvironmentAuthenticatedPrincipal,
 } from "@spiritdevs/contracts";
-import type { AuthEnvironmentScope } from "@spiritdevs/contracts";
 import { parseAllowedOAuthScope } from "@spiritdevs/shared/oauthScope";
 import { causeErrorTag } from "@spiritdevs/shared/observability";
 import * as DateTime from "effect/DateTime";
@@ -264,16 +258,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                 ? undefined
                 : parseAllowedOAuthScope({
                     value: args.payload.scope,
-                    allowedScopes: new Set<AuthEnvironmentScope>([
-                      AuthOrchestrationReadScope,
-                      AuthOrchestrationOperateScope,
-                      AuthTerminalOperateScope,
-                      AuthReviewWriteScope,
-                      AuthAccessReadScope,
-                      AuthAccessWriteScope,
-                      AuthRelayReadScope,
-                      AuthRelayWriteScope,
-                    ]),
+                    allowedScopes: new Set(AuthEnvironmentScope.literals),
                   });
             if (requestedScopes === null) {
               return yield* failEnvironmentInvalidRequest("invalid_scope");

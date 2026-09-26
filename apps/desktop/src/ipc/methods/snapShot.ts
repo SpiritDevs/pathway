@@ -28,6 +28,7 @@ import * as DesktopSnapShot from "../../snapShot/DesktopSnapShot.ts";
 import { showMacPermissionSetup } from "../../snapShot/MacPermissionSetup.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
+import { watchRendererLifetime } from "../watchRendererLifetime.ts";
 
 class SnapShotIpcUnauthorizedSenderError extends Schema.TaggedErrorClass<SnapShotIpcUnauthorizedSenderError>()(
   "SnapShotIpcUnauthorizedSenderError",
@@ -79,34 +80,6 @@ export function snapShotRelativeFrame(
   };
 }
 
-export function watchSnapShotAccountRenderer(
-  webContents: Electron.WebContents,
-  revoke: () => void,
-): () => void {
-  const onNavigation = (
-    _event: Electron.Event,
-    _url: string,
-    isInPlace: boolean,
-    isMainFrame: boolean,
-  ) => {
-    if (isMainFrame && !isInPlace) revoke();
-  };
-  const onGone = () => revoke();
-  const dispose = () => {
-    webContents.removeListener("did-start-navigation", onNavigation);
-    webContents.removeListener("render-process-gone", onGone);
-    webContents.removeListener("destroyed", onDestroyed);
-  };
-  const onDestroyed = () => {
-    revoke();
-    dispose();
-  };
-  webContents.on("did-start-navigation", onNavigation);
-  webContents.on("render-process-gone", onGone);
-  webContents.once("destroyed", onDestroyed);
-  return dispose;
-}
-
 let accountRendererBinding: { webContents: Electron.WebContents; dispose: () => void } | undefined;
 
 export const setSnapShotAccount = DesktopIpc.makeIpcMethod({
@@ -121,7 +94,7 @@ export const setSnapShotAccount = DesktopIpc.makeIpcMethod({
     if (accountRendererBinding?.webContents !== webContents) {
       accountRendererBinding?.dispose();
       const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-      const dispose = watchSnapShotAccountRenderer(webContents, () => {
+      const dispose = watchRendererLifetime(webContents, () => {
         if (accountRendererBinding?.webContents !== webContents) return;
         void runPromise(snapShot.setAccount(null));
       });

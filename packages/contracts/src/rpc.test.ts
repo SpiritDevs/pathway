@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
+import { COMPUTER_WS_METHODS } from "./computer.ts";
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
 import { WS_METHODS, WsRpcGroup, WsServerGetProviderUsageRpc } from "./rpc.ts";
 
@@ -19,6 +20,13 @@ describe("WebSocket RPC contracts", () => {
         WS_METHODS.cloudIssueImportExecute,
       ]),
     );
+  });
+
+  it("registers every computer method, including setup", () => {
+    const methods = [...WsRpcGroup.requests.keys()];
+    for (const method of Object.values(COMPUTER_WS_METHODS)) {
+      expect(methods).toContain(method);
+    }
   });
 
   it("exposes the provider usage subscription", () => {

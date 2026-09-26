@@ -2,6 +2,7 @@ import { useUsageRecovery } from "./chat/useUsageRecovery";
 import { ScrollToEndButton } from "./chat/ScrollToEndButton";
 import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
 import { ThreadQueueStatus } from "./chat/ThreadQueueStatus";
+import { ComputerPreviewRail } from "./chat/ComputerPreviewPopover";
 import { useThreadQueueChat } from "../cloud/useThreadQueueChat";
 import {
   queueDestinationProject,
@@ -91,11 +92,16 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@spiritdevs/client-runtime/environment";
+import { createModelSelection, resolvePromptInjectedEffort } from "@spiritdevs/shared/model";
+import { parseComputerInvocation } from "@spiritdevs/shared/computerInvocation";
+import { useComputerControlModeChange } from "../hooks/useComputerControlModeChange";
+import { useComputerControlSetting } from "../hooks/useComputerAccess";
 import {
-  applyClaudePromptEffortPrefix,
-  createModelSelection,
-  resolvePromptInjectedEffort,
-} from "@spiritdevs/shared/model";
+  computerControlFieldsForTurn,
+  draftRequestsComputerControl,
+  resolveComputerControlForSend,
+} from "../hooks/useComputerControlModeChange.logic";
+import { readComputerControlGenerationForSend } from "../hooks/useThreadComputerStateSeed";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@spiritdevs/shared/chatList";
 import { AddProjectConnectionDialog } from "./projects/AddProjectConnectionDialog";
 import { projectWorkspaceCwd, projectWorkspaceRuntimeEnv } from "./projects/projectWorkspace.logic";
@@ -350,6 +356,7 @@ import {
   useThreadTitlesByKey,
   useThreadVisibleTurnItems,
   useAllEnvironmentShellsBootstrapped,
+  readEnvironmentSupportsComputerPolicy,
   waitForThreadShell,
 } from "../state/entities";
 import { useEnvironmentShellBootstrapped } from "../state/shell";
@@ -403,6 +410,10 @@ import {
 } from "../state/threadPullRequest";
 import { resolveThreadPr, resolveThreadPrBadges } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import {
+  applyPromptEffortKeepingComputerUse,
+  isBareComputerUseInvocation,
+} from "./chat/composerSlashCommands.logic";
 import {
   contextWindowSnapshotFromUsage,
   deriveLatestContextWindowSnapshot,
@@ -667,7 +678,7 @@ function formatOutgoingPrompt(params: {
 }): string {
   const caps = getProviderModelCapabilities(params.models, params.model, params.provider);
   const promptEffort = resolvePromptInjectedEffort(caps, params.effort);
-  return applyClaudePromptEffortPrefix(params.text, promptEffort);
+  return applyPromptEffortKeepingComputerUse(params.text, promptEffort);
 }
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
@@ -1418,6 +1429,17 @@ function chatActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
 }
 
+/** Explains why a bare `/computer-use` stayed put; the caller keeps the text. */
+function toastBareComputerUseInvocation() {
+  toastManager.add(
+    stackedThreadToast({
+      type: "info",
+      title: "Add a task after /computer-use",
+      description: "For example: /computer-use open Calculator and calculate 123 × 45.",
+    }),
+  );
+}
+
 /**
  * Drops the send-time anchored end space. That space is what holds a sent
  * message near the top while its turn streams, and it keeps LegendList's
@@ -1631,6 +1653,7 @@ function ChatViewContent(props: ChatViewProps) {
   const lastDispatchedVisitRef = useRef<string | null>(null);
   const lastVisitDispatchAtRef = useRef(0);
   const settings = useEnvironmentSettings(environmentId);
+  const computerControlSetting = useComputerControlSetting(environmentId);
   // New-thread defaults live in the primary environment's settings.json (the
   // settings UI never writes to remote environments), so read them from the
   // primary server rather than the thread's environment.
@@ -1658,6 +1681,13 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
+  );
+  // A boolean off the draft text, so typing re-renders only when it flips.
+  const composerComputerControlOn = useComposerDraftStore((store) =>
+    draftRequestsComputerControl({
+      prompt: store.getComposerDraft(composerDraftTarget)?.prompt,
+      computerControlEnabled: computerControlSetting,
+    }),
   );
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
@@ -2129,6 +2159,38 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThread],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  // Pins each Computer send to the control epoch it was made in.
+  const setComposerComputerControlMode = useComposerDraftStore(
+    (store) => store.setComputerControlMode,
+  );
+  const { change: changeComputerControlMode, sequence: computerControlChangeSequence } =
+    useComputerControlModeChange({
+      threadRef: activeThreadRef,
+      setMode: setComposerComputerControlMode,
+      focusComposer: scheduleComposerFocus,
+    });
+  // A denied Computer card offers "allow for this request": arm `/computer-use`
+  // on the draft and enable control, leaving the send to the user.
+  const handleEnableComputerControlFromDenial = useCallback(() => {
+    const currentPrompt = promptRef.current;
+    if (!parseComputerInvocation(currentPrompt)) {
+      const nextPrompt = `/computer-use ${currentPrompt}`;
+      promptRef.current = nextPrompt;
+      setComposerDraftPrompt(composerDraftTarget, nextPrompt);
+      composerRef.current?.resetCursorState({
+        cursor: collapseExpandedComposerCursor(nextPrompt, nextPrompt.length),
+        prompt: nextPrompt,
+        detectTrigger: false,
+      });
+    }
+    changeComputerControlMode("request");
+  }, [
+    changeComputerControlMode,
+    composerDraftTarget,
+    composerRef,
+    promptRef,
+    setComposerDraftPrompt,
+  ]);
   const revealPanelThreadAsPage = useCallback(() => {
     if (!isPanelPresentation || !activeThreadRef) return;
     void navigate({
@@ -7514,6 +7576,12 @@ function ChatViewContent(props: ChatViewProps) {
         draftText: trimmed,
         planMarkdown: activeProposedPlan.planMarkdown,
       });
+      // Plan follow-ups send only text; other composer attachments are not part of this payload.
+      if (isBareComputerUseInvocation(followUp.text)) {
+        toastBareComputerUseInvocation();
+        scheduleComposerFocus();
+        return;
+      }
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
@@ -7523,20 +7591,27 @@ function ChatViewContent(props: ChatViewProps) {
       });
       return;
     }
-    const standaloneSlashCommand =
+    const textOnlySend =
       composerImages.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
       composerElementContexts.length === 0 &&
       composerIssueContexts.length === 0 &&
       composerPreviewAnnotations.length === 0 &&
-      composerReviewComments.length === 0
-        ? parseStandaloneComposerSlashCommand(trimmed)
-        : null;
+      composerReviewComments.length === 0;
+    const standaloneSlashCommand = textOnlySend
+      ? parseStandaloneComposerSlashCommand(trimmed)
+      : null;
     if (standaloneSlashCommand) {
       handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
+      return;
+    }
+    if (textOnlySend && isBareComputerUseInvocation(trimmed)) {
+      // Keep the draft: the command still needs its task.
+      toastBareComputerUseInvocation();
+      scheduleComposerFocus();
       return;
     }
     if (!hasSendableContent) {
@@ -7678,6 +7753,28 @@ function ChatViewContent(props: ChatViewProps) {
       composerIssueContextsSnapshot,
     );
     const shouldQueueBehindActiveRun = phase === "running" && dispatchMode === "queue";
+    const computerControlSequenceForSend = computerControlChangeSequence.current;
+    // Another thread's control epoch never applies to a new chat.
+    const generationForSend = sendsToCurrentThread
+      ? await readComputerControlGenerationForSend(appAtomRegistry, {
+          ref: isServerThread ? activeThreadRef : null,
+          messageText: promptForSend,
+          computerControlEnabled: computerControlSetting,
+          draftGeneration: useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+            ?.computerControlGeneration,
+        })
+      : undefined;
+    // The environment left or reconnected mid-read; the composer still holds the message.
+    if (generationForSend === "superseded") {
+      sendInFlightRef.current = false;
+      resetLocalDispatch();
+      return;
+    }
+    const computerControlForSend = resolveComputerControlForSend({
+      messageText: promptForSend,
+      computerControlEnabled: computerControlSetting,
+      generation: generationForSend,
+    });
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
       model: ctxSelectedModel,
@@ -7925,6 +8022,14 @@ function ChatViewContent(props: ChatViewProps) {
           runtimeMode,
           interactionMode,
           dispatchMode: sendsToCurrentThread ? dispatchMode : "auto",
+          ...computerControlFieldsForTurn({
+            fields: computerControlForSend.fields,
+            // startThreadTurn launches whenever it creates or prepares the thread.
+            launchesThread:
+              bootstrap !== undefined &&
+              ("createThread" in bootstrap || "prepareWorktree" in bootstrap),
+            serverTakesLaunchIntent: readEnvironmentSupportsComputerPolicy(environmentId),
+          }),
           ...(bootstrap ? { bootstrap } : {}),
           createdAt: messageCreatedAt,
         },
@@ -7934,6 +8039,15 @@ function ChatViewContent(props: ChatViewProps) {
       } else {
         turnStartSucceeded = true;
         resetLocalDispatch();
+        // A `/computer-use` request covers only the turn it was sent with.
+        if (
+          computerControlForSend.mode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForSend &&
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+            ?.computerControlMode === "request"
+        ) {
+          setComposerComputerControlMode(composerDraftTarget, "off");
+        }
         if (isFirstMessage) {
           const currentFocusId = appAtomRegistry.get(activeFocusIdAtom);
           if (activeThread.projectId === null) {
@@ -8436,8 +8550,19 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onSubmitUserMessageEdit = useCallback(
     async (messageId: MessageId, text: string): Promise<boolean> => {
-      if (queuedChat.controls.get(messageId)?.editable)
+      if (queuedChat.controls.get(messageId)?.editable) {
+        // The edit keeps the queued message's attachments, so those still count as the task.
+        if (
+          isBareComputerUseInvocation(text) &&
+          !queuedChat.chatMessages.some(
+            (message) => message.id === messageId && (message.attachments?.length ?? 0) > 0,
+          )
+        ) {
+          toastBareComputerUseInvocation();
+          return false;
+        }
         return queuedChat.mutateMessage(messageId, "edit", text);
+      }
       if (
         !activeThread ||
         !isServerThread ||
@@ -8448,19 +8573,56 @@ function ChatViewContent(props: ChatViewProps) {
       ) {
         return false;
       }
+      // The restarted message keeps the original's attachments, so those still count as the task.
+      if (
+        isBareComputerUseInvocation(text) &&
+        !serverProjection?.messages.some(
+          (message) => message.id === messageId && message.attachments.length > 0,
+        )
+      ) {
+        toastBareComputerUseInvocation();
+        return false;
+      }
       if (!requireConversationStorage()) return false;
       sendInFlightRef.current = true;
       setThreadError(activeThread.id, null);
+      const computerControlSequenceForEdit = computerControlChangeSequence.current;
+      const generationForEdit = await readComputerControlGenerationForSend(appAtomRegistry, {
+        ref: activeThreadRef,
+        messageText: text,
+        computerControlEnabled: computerControlSetting,
+        draftGeneration: undefined,
+      });
+      if (generationForEdit === "superseded") {
+        sendInFlightRef.current = false;
+        return false;
+      }
+      const computerControlForEdit = resolveComputerControlForSend({
+        messageText: text,
+        computerControlEnabled: computerControlSetting,
+        generation: generationForEdit,
+      });
       const result = await editAndRestartMessage({
         environmentId,
         input: {
           threadId: activeThread.id,
           messageId,
           text,
+          ...computerControlForEdit.fields,
         },
       });
       sendInFlightRef.current = false;
-      if (result._tag === "Success") return true;
+      if (result._tag === "Success") {
+        if (
+          computerControlForEdit.mode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForEdit &&
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+            ?.computerControlMode === "request"
+        ) {
+          setComposerComputerControlMode(composerDraftTarget, "off");
+        }
+        return true;
+      }
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         setThreadError(
@@ -8471,6 +8633,7 @@ function ChatViewContent(props: ChatViewProps) {
       return false;
     },
     [
+      queuedChat.chatMessages,
       queuedChat.controls,
       queuedChat.mutateMessage,
       activeThread,
@@ -8480,7 +8643,13 @@ function ChatViewContent(props: ChatViewProps) {
       environmentId,
       isServerThread,
       latestRunSettled,
+      serverProjection,
       setThreadError,
+      computerControlChangeSequence,
+      computerControlSetting,
+      activeThreadRef,
+      composerDraftTarget,
+      setComposerComputerControlMode,
     ],
   );
 
@@ -8811,9 +8980,26 @@ function ChatViewContent(props: ChatViewProps) {
       selectedModelSelection: ctxSelectedModelSelection,
     } = sendCtx;
 
+    // Claim before the generation read so a second click cannot pass the guard.
+    sendInFlightRef.current = true;
     const threadIdForSend = activeThread.id;
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
+    const generationForFollowUp = await readComputerControlGenerationForSend(appAtomRegistry, {
+      ref: isServerThread ? activeThreadRef : null,
+      messageText: trimmed,
+      computerControlEnabled: computerControlSetting,
+      draftGeneration: undefined,
+    });
+    if (generationForFollowUp === "superseded") {
+      sendInFlightRef.current = false;
+      return;
+    }
+    const computerControlForFollowUp = resolveComputerControlForSend({
+      messageText: trimmed,
+      computerControlEnabled: computerControlSetting,
+      generation: generationForFollowUp,
+    });
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
       model: ctxSelectedModel,
@@ -8822,7 +9008,6 @@ function ChatViewContent(props: ChatViewProps) {
       text: trimmed,
     });
 
-    sendInFlightRef.current = true;
     beginLocalDispatch({ preparingWorktree: false });
     setThreadError(threadIdForSend, null);
 
@@ -8879,6 +9064,7 @@ function ChatViewContent(props: ChatViewProps) {
           titleSeed: activeThread.title,
           runtimeMode,
           interactionMode: nextInteractionMode,
+          ...computerControlForFollowUp.fields,
           ...(nextInteractionMode === "default" && activeProposedPlan
             ? {
                 sourceProposedPlan: {
@@ -9001,6 +9187,12 @@ function ChatViewContent(props: ChatViewProps) {
           titleSeed: nextThreadTitle,
           runtimeMode,
           interactionMode: "default",
+          // The setting carries to the new thread; its control epoch starts at 0.
+          ...resolveComputerControlForSend({
+            messageText: implementationPrompt,
+            computerControlEnabled: computerControlSetting,
+            generation: undefined,
+          }).fields,
           sourceProposedPlan: {
             threadId: activeThread.id,
             planId: activeProposedPlan.id,
@@ -9078,6 +9270,7 @@ function ChatViewContent(props: ChatViewProps) {
     startThreadTurn,
     environmentId,
     composerRef,
+    computerControlSetting,
   ]);
 
   const getModelDisabledReason = useCallback(
@@ -9731,6 +9924,7 @@ function ChatViewContent(props: ChatViewProps) {
             </div>
             {/* Messages Wrapper */}
             <div className="relative flex min-h-0 flex-1 flex-col">
+              {activeThreadRef ? <ComputerPreviewRail threadRef={activeThreadRef} /> : null}
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
                 key={activeThread.id}
@@ -9772,6 +9966,8 @@ function ChatViewContent(props: ChatViewProps) {
                 onRemoveMissingThread={handleRemoveMissingThread}
                 removingMissingThread={isRemovingMissingThread}
                 onControlWorkspacePreparation={onControlWorkspacePreparation}
+                computerControlEnabled={composerComputerControlOn}
+                onEnableComputerControl={handleEnableComputerControlFromDenial}
                 onOpenThread={onOpenRelatedThread}
                 parentThreadLink={parentThreadLink}
                 onContinueFromRun={onContinueFromRun}

@@ -137,6 +137,33 @@ vi.mock("@pierre/diffs/react", () => {
 });
 
 const { copiedMessageTexts } = vi.hoisted(() => ({ copiedMessageTexts: [] as string[] }));
+// The connected Computer cards read live session and desktop status; the rows
+// only need to prove which card a notice becomes and what it is handed.
+vi.mock("./ComputerSetupRequiredCard", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./ComputerSetupRequiredCard")>();
+  return {
+    ...actual,
+    ConnectedComputerSetupRequiredCard: ({
+      environmentId: _environmentId,
+      ...props
+    }: React.ComponentProps<typeof actual.ConnectedComputerSetupRequiredCard>) => (
+      <actual.ComputerSetupRequiredCard {...props} />
+    ),
+  };
+});
+vi.mock("./ComputerControlDeniedCard", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./ComputerControlDeniedCard")>();
+  return {
+    ...actual,
+    ConnectedComputerControlDeniedCard: ({
+      environmentId: _environmentId,
+      ...props
+    }: React.ComponentProps<typeof actual.ConnectedComputerControlDeniedCard>) => (
+      <actual.ComputerControlDeniedCard {...props} />
+    ),
+  };
+});
+
 vi.mock("./MessageCopyButton", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./MessageCopyButton")>();
   return {
@@ -2655,4 +2682,192 @@ it("makes a failed remote history request retryable without clearing the timelin
   expect(markup).toContain("Couldn&#x27;t load messages from remote.");
   expect(markup).toContain("Retry");
   expect(markup).toContain("Load older messages from remote");
+});
+
+describe("MessagesTimeline Computer rows", () => {
+  const computerEvent = (
+    id: string,
+    item: Record<string, unknown>,
+    visibility: "local" | "inherited" = "local",
+  ) => ({
+    id,
+    kind: "event" as const,
+    createdAt: MESSAGE_CREATED_AT,
+    projectedItem: {
+      position: 0,
+      visibility,
+      sourceThreadId: "thread-1",
+      sourceItemId: id,
+      item: {
+        id,
+        threadId: "thread-1",
+        runId: "run-1",
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 0,
+        status: "completed",
+        title: null,
+        startedAt: null,
+        completedAt: null,
+        updatedAt: {},
+        ...item,
+      },
+    } as never,
+  });
+
+  it("renders a setup notice as the setup card, naming the missing grant", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          computerEvent("setup", {
+            type: "dynamic_tool",
+            toolName: "computer_setup_required",
+            input: { toolName: "computer_click", missing: ["accessibility"] },
+          }),
+        ]}
+      />,
+    );
+    expect(markup).toContain("Computer control needs Accessibility");
+    expect(markup).not.toContain("computer_setup_required");
+  });
+
+  it("offers Enable on a local denial, and follows the chat's live control state", () => {
+    const denial = computerEvent("denied", {
+      type: "dynamic_tool",
+      toolName: "computer_capability_denied",
+      input: { toolName: "computer_click" },
+    });
+    const off = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[denial]}
+        onEnableComputerControl={() => undefined}
+      />,
+    );
+    expect(off).toContain("Computer control is off");
+    expect(off).toContain(">Enable<");
+
+    const on = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[denial]}
+        computerControlEnabled
+        onEnableComputerControl={() => undefined}
+      />,
+    );
+    expect(on).toContain("Computer control is on for this chat");
+    expect(on).not.toContain(">Enable<");
+
+    const inherited = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          computerEvent(
+            "denied",
+            {
+              type: "dynamic_tool",
+              toolName: "computer_capability_denied",
+              input: { toolName: "computer_click" },
+            },
+            "inherited",
+          ),
+        ]}
+        onEnableComputerControl={() => undefined}
+      />,
+    );
+    expect(inherited).toContain("Computer control is off");
+    expect(inherited).not.toContain(">Enable<");
+  });
+
+  it("labels a Computer task approval by its outcome", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          computerEvent("approval", {
+            type: "approval_request",
+            requestId: "request-1",
+            requestKind: "computer",
+            prompt: "Allow Computer for this task",
+          }),
+        ]}
+      />,
+    );
+    expect(markup).toContain("Computer task approved");
+    expect(markup).not.toContain("Approval requested");
+  });
+
+  it("tells task consent apart from an approved click", () => {
+    const approval = (status: string, prompt: string) =>
+      renderToStaticMarkup(
+        <MessagesTimeline
+          {...buildProps()}
+          timelineEntries={[
+            computerEvent("approval", {
+              type: "approval_request",
+              requestId: "request-1",
+              requestKind: "computer",
+              prompt,
+              status,
+            }),
+          ]}
+        />,
+      );
+    const task = "Allow Computer for this task";
+    expect(approval("waiting", task)).toContain("Computer task approval requested");
+    expect(approval("cancelled", task)).toContain("Computer task declined");
+
+    const click = approval(
+      "completed",
+      'Computer action needs approval: computer_click {"label":"Search","app":"Safari"}',
+    );
+    expect(click).toContain("Computer approved");
+    expect(click).toContain("Click on “Search” in Safari");
+    expect(click).not.toContain("Computer task approved");
+    expect(click).not.toContain("computer_click");
+  });
+
+  it("marks Computer tool calls, browser ones included, with the cursor icon", () => {
+    const toolRow = (toolName: string) =>
+      renderToStaticMarkup(
+        <MessagesTimeline
+          {...buildProps()}
+          timelineEntries={
+            [
+              {
+                id: "tool",
+                kind: "work",
+                createdAt: MESSAGE_CREATED_AT,
+                entry: {
+                  id: "tool",
+                  createdAt: MESSAGE_CREATED_AT,
+                  label: toolName,
+                  tone: "tool",
+                  itemType: "dynamic_tool",
+                  toolTitle: toolName,
+                  toolLifecycleStatus: "completed",
+                  structuredPayload: { type: "dynamic_tool", toolName, input: {} },
+                },
+              },
+            ] as never
+          }
+        />,
+      );
+    for (const toolName of [
+      "computer_click",
+      "mcp__pathway__computer_click",
+      "computer_browser_click",
+    ]) {
+      const markup = toolRow(toolName);
+      expect(markup).toContain("lucide-mouse-pointer-2");
+      expect(markup).not.toContain("lucide-wrench");
+    }
+    const other = toolRow("mcp__other__browser_open");
+    expect(other).toContain("lucide-wrench");
+    expect(other).not.toContain("lucide-mouse-pointer-2");
+  });
 });

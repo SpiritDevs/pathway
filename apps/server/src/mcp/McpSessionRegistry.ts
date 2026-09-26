@@ -25,6 +25,12 @@ export interface McpCredentialRequest {
    * pass it so a user-named instance still attributes to its driver.
    */
   readonly providerDriverKind?: ProviderDriverKind;
+  /**
+   * Grants the `computer` toolkit to this credential. Set from the thread's
+   * Computer control switch when the provider session starts; turning the
+   * switch changes the next credential, never a live one.
+   */
+  readonly enableComputerControl?: boolean;
 }
 
 export interface McpIssuedCredential {
@@ -144,7 +150,10 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         providerInstanceId,
         providerDriverKind:
           request.providerDriverKind ?? ProviderDriverKind.make(providerInstanceId),
-        capabilities: new Set(McpInvocationContext.ALL_MCP_CAPABILITIES),
+        capabilities: new Set<McpInvocationContext.McpCapability>([
+          ...McpInvocationContext.ALL_MCP_CAPABILITIES,
+          ...(request.enableComputerControl === true ? (["computer"] as const) : []),
+        ]),
         issuedAt,
       };
       yield* SynchronizedRef.update(state, ({ records }) => {
@@ -160,6 +169,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           providerInstanceId: scope.providerInstanceId,
           endpoint,
           authorizationHeader: `Bearer ${rawToken}`,
+          ...(request.enableComputerControl === true ? { computerControl: true } : {}),
         },
       };
     },

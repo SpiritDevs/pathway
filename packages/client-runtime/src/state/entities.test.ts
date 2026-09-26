@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   MessageId,
   NodeId,
+  ProviderSessionId,
   ProviderThreadId,
   RunId,
   RuntimeRequestId,
@@ -521,5 +522,18 @@ describe("V2 client presentation", () => {
       },
     ]);
     expect(derivePendingThreadRequests(projection).userInputs).toEqual([]);
+
+    // A live request names the provider session its answer goes to.
+    const live = derivePendingThreadRequests({
+      ...projection,
+      runtimeRequests: projection.runtimeRequests.map((request) => ({
+        ...request,
+        responseCapability: {
+          type: "live" as const,
+          providerSessionId: ProviderSessionId.make("session-2"),
+        },
+      })),
+    }).approvals[0];
+    expect(live).toMatchObject({ responseCapability: "live", responseAttemptKey: "session-2" });
   });
 });

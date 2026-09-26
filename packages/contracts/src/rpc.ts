@@ -57,6 +57,44 @@ import {
   EmailUpdateSettingsResult,
 } from "./email.ts";
 import {
+  COMPUTER_WS_METHODS,
+  ComputerActionResult,
+  ComputerClickInput,
+  ComputerControlEnabledResult,
+  ComputerDoubleClickInput,
+  ComputerDragInput,
+  ComputerError,
+  ComputerEvent,
+  ComputerGetScreenSizeInput,
+  ComputerGetScreenSizeResult,
+  ComputerGetStateInput,
+  ComputerGetStatusInput,
+  ComputerHotkeyInput,
+  ComputerInputClickInput,
+  ComputerInputKeyInput,
+  ComputerInputScrollInput,
+  ComputerLaunchAppInput,
+  ComputerLaunchAppResult,
+  ComputerListWindowsInput,
+  ComputerListWindowsResult,
+  ComputerMoveCursorInput,
+  ComputerPerformActionInput,
+  ComputerPressKeyInput,
+  ComputerProvisionInput,
+  ComputerProvisionResult,
+  ComputerRightClickInput,
+  ComputerScrollInput,
+  ComputerSelectTextInput,
+  ComputerSetControlEnabledInput,
+  ComputerSetValueInput,
+  ComputerState,
+  ComputerStatusResult,
+  ComputerThreadInput,
+  ComputerTypeTextInput,
+  ThreadComputerState,
+} from "./computer.ts";
+import { ComputerGetAuditHistoryInput, ComputerGetAuditHistoryResult } from "./computerAudit.ts";
+import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
   AuthEnvironmentScopes,
@@ -2050,6 +2088,197 @@ export const EmailRpcs = RpcGroup.make(
   WsEmailStreamRpc,
 );
 
+// ── Computer control ────────────────────────────────────────────────
+// Two callers, two gates. The agent reaches Computer through the Computer MCP
+// toolkit only; the human pane reaches these methods through its own
+// authenticated WebSocket with no turn attached. On the socket, transport scopes
+// admit the call (orchestration read to watch, operate to act) and the server
+// handlers then apply the environment's Computer access policy to everything
+// except watching and Stop. The group is declared on its own so those rules
+// stay next to the contract they guard, and merged into WsRpcGroup below.
+
+const ComputerRpcError = Schema.Union([ComputerError, EnvironmentAuthorizationError]);
+
+export const WsComputerGetStatusRpc = Rpc.make(COMPUTER_WS_METHODS.getStatus, {
+  payload: ComputerGetStatusInput,
+  success: ComputerStatusResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerGetAuditHistoryRpc = Rpc.make(COMPUTER_WS_METHODS.getAuditHistory, {
+  payload: ComputerGetAuditHistoryInput,
+  success: ComputerGetAuditHistoryResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerProvisionRpc = Rpc.make(COMPUTER_WS_METHODS.provision, {
+  payload: ComputerProvisionInput,
+  success: ComputerProvisionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerListWindowsRpc = Rpc.make(COMPUTER_WS_METHODS.listWindows, {
+  payload: ComputerListWindowsInput,
+  success: ComputerListWindowsResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerGetStateRpc = Rpc.make(COMPUTER_WS_METHODS.getState, {
+  payload: ComputerGetStateInput,
+  success: ComputerState,
+  error: ComputerRpcError,
+});
+
+export const WsComputerGetScreenSizeRpc = Rpc.make(COMPUTER_WS_METHODS.getScreenSize, {
+  payload: ComputerGetScreenSizeInput,
+  success: ComputerGetScreenSizeResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerLaunchAppRpc = Rpc.make(COMPUTER_WS_METHODS.launchApp, {
+  payload: ComputerLaunchAppInput,
+  success: ComputerLaunchAppResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerClickRpc = Rpc.make(COMPUTER_WS_METHODS.click, {
+  payload: ComputerClickInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerDoubleClickRpc = Rpc.make(COMPUTER_WS_METHODS.doubleClick, {
+  payload: ComputerDoubleClickInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerRightClickRpc = Rpc.make(COMPUTER_WS_METHODS.rightClick, {
+  payload: ComputerRightClickInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerMoveCursorRpc = Rpc.make(COMPUTER_WS_METHODS.moveCursor, {
+  payload: ComputerMoveCursorInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerDragRpc = Rpc.make(COMPUTER_WS_METHODS.drag, {
+  payload: ComputerDragInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerScrollRpc = Rpc.make(COMPUTER_WS_METHODS.scroll, {
+  payload: ComputerScrollInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerTypeTextRpc = Rpc.make(COMPUTER_WS_METHODS.typeText, {
+  payload: ComputerTypeTextInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerPressKeyRpc = Rpc.make(COMPUTER_WS_METHODS.pressKey, {
+  payload: ComputerPressKeyInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerHotkeyRpc = Rpc.make(COMPUTER_WS_METHODS.hotkey, {
+  payload: ComputerHotkeyInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerSetValueRpc = Rpc.make(COMPUTER_WS_METHODS.setValue, {
+  payload: ComputerSetValueInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerPerformActionRpc = Rpc.make(COMPUTER_WS_METHODS.performAction, {
+  payload: ComputerPerformActionInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerSelectTextRpc = Rpc.make(COMPUTER_WS_METHODS.selectText, {
+  payload: ComputerSelectTextInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerSetControlEnabledRpc = Rpc.make(COMPUTER_WS_METHODS.setControlEnabled, {
+  payload: ComputerSetControlEnabledInput,
+  success: ComputerControlEnabledResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerGetThreadStateRpc = Rpc.make(COMPUTER_WS_METHODS.getThreadState, {
+  payload: ComputerThreadInput,
+  success: ThreadComputerState,
+  error: ComputerRpcError,
+});
+
+export const WsComputerInputClickRpc = Rpc.make(COMPUTER_WS_METHODS.inputClick, {
+  payload: ComputerInputClickInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerInputScrollRpc = Rpc.make(COMPUTER_WS_METHODS.inputScroll, {
+  payload: ComputerInputScrollInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsComputerInputKeyRpc = Rpc.make(COMPUTER_WS_METHODS.inputKey, {
+  payload: ComputerInputKeyInput,
+  success: ComputerActionResult,
+  error: ComputerRpcError,
+});
+
+export const WsSubscribeComputerEventsRpc = Rpc.make(COMPUTER_WS_METHODS.subscribeEvents, {
+  payload: Schema.Struct({}),
+  success: ComputerEvent,
+  error: ComputerRpcError,
+  stream: true,
+});
+
+/** Platform-neutral computer control and perception surface. */
+export const WsComputerRpcGroup = RpcGroup.make(
+  WsComputerGetStatusRpc,
+  WsComputerGetAuditHistoryRpc,
+  WsComputerProvisionRpc,
+  WsComputerListWindowsRpc,
+  WsComputerGetStateRpc,
+  WsComputerGetScreenSizeRpc,
+  WsComputerLaunchAppRpc,
+  WsComputerClickRpc,
+  WsComputerDoubleClickRpc,
+  WsComputerRightClickRpc,
+  WsComputerMoveCursorRpc,
+  WsComputerDragRpc,
+  WsComputerScrollRpc,
+  WsComputerTypeTextRpc,
+  WsComputerPressKeyRpc,
+  WsComputerHotkeyRpc,
+  WsComputerSetValueRpc,
+  WsComputerPerformActionRpc,
+  WsComputerSelectTextRpc,
+  WsComputerGetThreadStateRpc,
+  WsComputerSetControlEnabledRpc,
+  WsComputerInputClickRpc,
+  WsComputerInputScrollRpc,
+  WsComputerInputKeyRpc,
+  WsSubscribeComputerEventsRpc,
+);
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -2195,4 +2424,5 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2RetryWorkspaceCleanupRpc,
 )
   .merge(IssuesRpcs)
-  .merge(EmailRpcs);
+  .merge(EmailRpcs)
+  .merge(WsComputerRpcGroup);

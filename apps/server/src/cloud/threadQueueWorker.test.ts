@@ -21,6 +21,8 @@ import * as Layer from "effect/Layer";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as ServerConfig from "../config.ts";
+import { ComputerDispatchAccess } from "../orchestration-v2/ComputerDispatchAccess.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 
 import {
@@ -432,65 +434,79 @@ it("preserves explicit steering and restart targets while ordering ordinary mess
   });
 });
 
+const makeQueuedFollowUp = Effect.fnUntraced(function* (
+  dispatch: (command: OrchestrationV2Command) => Effect.Effect<void>,
+  overrides: {
+    readonly text?: string;
+    readonly enableComputerControl?: boolean;
+    readonly computerControlGeneration?: number;
+  } = {},
+) {
+  const selection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" };
+  const submission: ThreadQueueAcceptance = {
+    ...accepted,
+    submission: {
+      kind: "message",
+      branch: "release-review",
+      input: {
+        type: "message.dispatch",
+        commandId: CommandId.make(head.commandId),
+        threadId: ThreadId.make(head.threadId),
+        messageId: MessageId.make("follow-up"),
+        text: "Review this checkout",
+        attachments: [],
+        createdBy: "user",
+        creationSource: "web",
+        modelSelection: selection,
+        dispatchMode: { type: "queue_after_active" },
+        ...overrides,
+      },
+    },
+  };
+  const executor = yield* makeLocalThreadQueueExecutor("company" as CompanyId).pipe(
+    Effect.provideService(ThreadManagement.ThreadManagementService, {
+      streamDomainEvents: Stream.empty,
+      getThreadProjection: () =>
+        Effect.succeed({ thread: { modelSelection: selection }, runs: [] }),
+      dispatch,
+    } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+    Effect.provideService(
+      ThreadLaunch.ThreadLaunchService,
+      {} as ThreadLaunch.ThreadLaunchService["Service"],
+    ),
+    Effect.provideService(Receipts.CommandReceiptStoreV2, {
+      getByCommandId: () => Effect.succeed(Option.none()),
+    } as unknown as Receipts.CommandReceiptStoreV2["Service"]),
+    Effect.provideService(
+      ProjectService.ProjectService,
+      {} as ProjectService.ProjectService["Service"],
+    ),
+    Effect.provideService(ProviderRegistry.ProviderRegistry, {
+      getProviders: Effect.succeed([
+        {
+          ...selection,
+          enabled: true,
+          installed: true,
+          availability: "available",
+          auth: { status: "authenticated" },
+        },
+      ]),
+    } as unknown as ProviderRegistry.ProviderRegistry["Service"]),
+    Effect.provideService(FileSystem.FileSystem, {} as FileSystem.FileSystem),
+    Effect.provideService(ServerConfig.ServerConfig, {} as ServerConfig.ServerConfig["Service"]),
+    Effect.provideService(HttpClient.HttpClient, {} as HttpClient.HttpClient),
+  );
+  return { executor, submission };
+});
+
 it.effect("dispatches queued checkout metadata atomically with the follow-up", () =>
   Effect.gen(function* () {
     const commands: OrchestrationV2Command[] = [];
-    const selection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" };
-    const submission: ThreadQueueAcceptance = {
-      ...accepted,
-      submission: {
-        kind: "message",
-        branch: "release-review",
-        input: {
-          type: "message.dispatch",
-          commandId: CommandId.make(head.commandId),
-          threadId: ThreadId.make(head.threadId),
-          messageId: MessageId.make("follow-up"),
-          text: "Review this checkout",
-          attachments: [],
-          createdBy: "user",
-          creationSource: "web",
-          modelSelection: selection,
-          dispatchMode: { type: "queue_after_active" },
-        },
-      },
-    };
-    const executor = yield* makeLocalThreadQueueExecutor("company" as CompanyId).pipe(
-      Effect.provideService(ThreadManagement.ThreadManagementService, {
-        streamDomainEvents: Stream.empty,
-        getThreadProjection: () =>
-          Effect.succeed({ thread: { modelSelection: selection }, runs: [] }),
-        dispatch: (command: OrchestrationV2Command) =>
-          Effect.sync(() => {
-            commands.push(command);
-          }),
-      } as unknown as ThreadManagement.ThreadManagementService["Service"]),
-      Effect.provideService(
-        ThreadLaunch.ThreadLaunchService,
-        {} as ThreadLaunch.ThreadLaunchService["Service"],
-      ),
-      Effect.provideService(Receipts.CommandReceiptStoreV2, {
-        getByCommandId: () => Effect.succeed(Option.none()),
-      } as unknown as Receipts.CommandReceiptStoreV2["Service"]),
-      Effect.provideService(
-        ProjectService.ProjectService,
-        {} as ProjectService.ProjectService["Service"],
-      ),
-      Effect.provideService(ProviderRegistry.ProviderRegistry, {
-        getProviders: Effect.succeed([
-          {
-            ...selection,
-            enabled: true,
-            installed: true,
-            availability: "available",
-            auth: { status: "authenticated" },
-          },
-        ]),
-      } as unknown as ProviderRegistry.ProviderRegistry["Service"]),
-      Effect.provideService(FileSystem.FileSystem, {} as FileSystem.FileSystem),
-      Effect.provideService(ServerConfig.ServerConfig, {} as ServerConfig.ServerConfig["Service"]),
-      Effect.provideService(HttpClient.HttpClient, {} as HttpClient.HttpClient),
-    );
+    const { executor, submission } = yield* makeQueuedFollowUp((command) =>
+      Effect.sync(() => {
+        commands.push(command);
+      }),
+    ).pipe(Effect.provide(ServerSettings.layerTest()));
     const dispatch = yield* executor.prepare(submission);
     expect(commands).toEqual([]);
     expect(dispatch).not.toBeNull();
@@ -500,5 +516,60 @@ it.effect("dispatches queued checkout metadata atomically with the follow-up", (
       branch: "release-review",
       commandId: "queued-command",
     });
+  }),
+);
+
+it.effect("replays a queued message's frozen Computer intent, not the live composer's", () =>
+  Effect.gen(function* () {
+    const commands: OrchestrationV2Command[] = [];
+    const frozen = {
+      text: "/computer-use open Calculator",
+      enableComputerControl: false,
+      computerControlGeneration: 5,
+    };
+    const { executor, submission } = yield* makeQueuedFollowUp(
+      (command) =>
+        Effect.sync(() => {
+          commands.push(command);
+        }),
+      frozen,
+    ).pipe(Effect.provide(ServerSettings.layerTest()));
+    const dispatch = yield* executor.prepare(submission);
+    if (dispatch) yield* dispatch;
+    // The dispatch carries what the user queued; the decider reads the request
+    // from the text and admission checks the generation against any later Stop.
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ type: "message.dispatch", ...frozen });
+  }),
+);
+
+it.effect("dispatches a cloud message with operate-only Computer clearance", () =>
+  Effect.gen(function* () {
+    const clearances: Array<string> = [];
+    const { executor, submission } = yield* makeQueuedFollowUp(() =>
+      Effect.gen(function* () {
+        const access = yield* ComputerDispatchAccess;
+        clearances.push(
+          yield* access.clearance.pipe(
+            Effect.map((clearance) => `admitted as ${clearance}`),
+            Effect.catch(() => Effect.succeed("refused")),
+          ),
+        );
+      }),
+    ).pipe(Effect.provide(ServerSettings.layerTest({ computer: { accessPolicy: "scoped" } })));
+    const dispatch = yield* executor.prepare(submission);
+    if (dispatch) yield* dispatch;
+    expect(clearances).toEqual(["refused"]);
+
+    const open = yield* makeQueuedFollowUp(() =>
+      Effect.gen(function* () {
+        clearances.push(yield* (yield* ComputerDispatchAccess).clearance);
+      }).pipe(Effect.orDie),
+    ).pipe(
+      Effect.provide(ServerSettings.layerTest({ computer: { accessPolicy: "any-operator" } })),
+    );
+    const openDispatch = yield* open.executor.prepare(open.submission);
+    if (openDispatch) yield* openDispatch;
+    expect(clearances).toEqual(["refused", "any-operator"]);
   }),
 );

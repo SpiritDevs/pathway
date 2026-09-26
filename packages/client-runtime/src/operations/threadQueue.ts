@@ -5,7 +5,7 @@ import {
   type RunId,
 } from "@spiritdevs/contracts";
 import type { ThreadQueueSubmission } from "@spiritdevs/contracts/threadQueue";
-import type { StartThreadTurnInput } from "./commands.ts";
+import { computerControlFields, type StartThreadTurnInput } from "./commands.ts";
 
 /** Pure cloud submission construction; callers persist the result before any network work. */
 export function buildThreadQueueSubmission(
@@ -63,6 +63,7 @@ export function buildThreadQueueSubmission(
           messageId: input.message.messageId,
           text: input.message.text,
           attachments,
+          ...computerControlFields(input),
         },
       },
     };
@@ -94,6 +95,7 @@ export function buildThreadQueueSubmission(
       ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
       ...(input.titleSeed ? { titleSeed: input.titleSeed } : {}),
       ...(input.sourceProposedPlan ? { sourcePlanRef: input.sourceProposedPlan } : {}),
+      ...computerControlFields(input),
     },
   };
 }

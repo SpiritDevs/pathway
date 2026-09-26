@@ -22,6 +22,7 @@ const makeEnvironment = (overrides: Record<string, unknown> = {}) =>
     platform: "linux",
     isPackaged: true,
     isDevelopment: false,
+    desktopScheme: "pathway",
     displayName: "Pathway (Alpha)",
     linuxDesktopEntryName: "com.spiritdevs.Pathway.desktop",
     linuxWmClass: "pathway",

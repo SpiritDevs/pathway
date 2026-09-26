@@ -32,6 +32,7 @@ import {
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
   type OrchestrationV2RunAttempt,
+  type OrchestrationV2RunComputerControl,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2ThreadShellSnapshot,
   type OrchestrationV2StoredEvent,
@@ -72,6 +73,9 @@ import {
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import { ProviderContinuationRequests } from "./ProviderContinuationRequests.ts";
+import { ComputerDispatchAccess } from "./ComputerDispatchAccess.ts";
+import { ServerOwnedRuntimeRequests } from "./ServerOwnedRuntimeRequests.ts";
+import { RunStopFence } from "./RunStopFence.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
@@ -82,6 +86,29 @@ import {
   subagentThreadTitle,
 } from "./SubagentProjection.ts";
 import { ThreadForkServiceV2 } from "./ThreadForkService.ts";
+import { computerActivationMetadata } from "../computer/computerActivation.ts";
+
+/**
+ * The Computer intent a dispatch freezes onto its run (ADR 0048): the chat
+ * switch, or a user-authored `/computer-use` for this turn only. Agent and
+ * system messages never infer consent from their text.
+ */
+export function runComputerControl(input: {
+  readonly createdBy: OrchestrationV2ConversationMessage["createdBy"];
+  readonly text: string;
+  readonly enableComputerControl?: boolean | undefined;
+  readonly computerControlGeneration?: number | undefined;
+}): OrchestrationV2RunComputerControl | undefined {
+  const activation = computerActivationMetadata({
+    enableComputerControl: input.enableComputerControl,
+    computerControlGeneration: input.computerControlGeneration,
+    userMessageText: input.text,
+    dispatchOrigin: input.createdBy === "system" ? "automation" : input.createdBy,
+  });
+  return activation.computerControlMode === "off"
+    ? undefined
+    : { mode: activation.computerControlMode, generation: activation.computerControlGeneration };
+}
 
 export class OrchestratorDispatchError extends Schema.TaggedErrorClass<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -665,6 +692,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const projectionStore = yield* ProjectionStoreV2;
   const providerAdapters = yield* ProviderAdapterRegistryV2;
   const continuationRequests = yield* ProviderContinuationRequests;
+  const serverOwnedRequests = yield* ServerOwnedRuntimeRequests;
+  const runStopFence = yield* RunStopFence;
   const questionDelivery = yield* Effect.serviceOption(QuestionAnswerDelivery);
   const providerSessions = yield* ProviderSessionManagerV2;
   const providerSwitchService = yield* ProviderSwitchServiceV2;
@@ -3267,6 +3296,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly createdBy: OrchestrationV2ConversationMessage["createdBy"];
     readonly creationSource: OrchestrationV2ConversationMessage["creationSource"];
     readonly forceRestart: boolean;
+    /** Computer intent of the steering message; installing it needs a new provider turn. */
+    readonly computerControl?: OrchestrationV2RunComputerControl | undefined;
   }) =>
     Effect.gen(function* () {
       const targetRun = input.projection.runs.find(
@@ -3341,6 +3372,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         targetRun.modelSelection,
         input.modelSelection,
       );
+      // A steer can only add Computer; the live turn's tools change only by restarting it.
+      const installsComputer =
+        input.computerControl !== undefined && targetRun.computerControl === undefined;
       const providerInstanceChanged =
         targetRun.providerInstanceId !== input.modelSelection.instanceId;
       const selectionTransition =
@@ -3447,6 +3481,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           forceRestart:
             input.forceRestart ||
             selectionChanged ||
+            installsComputer ||
             targetRun.runtimeMode !== input.projection.thread.runtimeMode ||
             targetRun.interactionMode !== input.projection.thread.interactionMode,
         }),
@@ -3698,6 +3733,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       const restartedRun: OrchestrationV2Run = {
         ...targetRun,
+        ...(installsComputer ? { computerControl: input.computerControl } : {}),
         runtimeMode: input.projection.thread.runtimeMode,
         interactionMode: input.projection.thread.interactionMode,
         providerInstanceId: input.modelSelection.instanceId,
@@ -4115,6 +4151,34 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         delegatedCompletion === undefined
           ? command.text
           : delegatedCompletionWakeDetail(delegatedCompletion.taskIds);
+      const requestedComputer =
+        delegatedCompletion === undefined
+          ? runComputerControl({
+              createdBy: command.createdBy,
+              text: command.text,
+              enableComputerControl: command.enableComputerControl,
+              computerControlGeneration: command.computerControlGeneration,
+            })
+          : undefined;
+      // ADR 0041: the one access-policy check every way in passes — chat,
+      // launch, the cloud queue, and a reply to a question alike. The run keeps
+      // the sender's clearance, so a later, stricter policy stops its calls.
+      const computerControl =
+        requestedComputer === undefined
+          ? undefined
+          : {
+              ...requestedComputer,
+              clearance: yield* (yield* ComputerDispatchAccess).clearance.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestratorDispatchError({
+                      commandId: command.commandId,
+                      commandType: command.type,
+                      cause,
+                    }),
+                ),
+              ),
+            };
       const sourcePlanProjection =
         command.sourcePlanRef === undefined
           ? null
@@ -4178,6 +4242,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           createdBy: command.createdBy,
           creationSource: command.creationSource,
           forceRestart: dispatchMode.type === "restart_active",
+          computerControl,
         });
         return;
       }
@@ -4294,6 +4359,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           checkpointId: null,
           contextHandoffId: null,
           ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+          ...(computerControl === undefined ? {} : { computerControl }),
         };
         const attempt: OrchestrationV2RunAttempt = {
           id: attemptId,
@@ -4528,6 +4594,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           checkpointId: null,
           contextHandoffId: null,
           ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+          ...(computerControl === undefined ? {} : { computerControl }),
         };
         const attempt: OrchestrationV2RunAttempt = {
           id: attemptId,
@@ -5157,6 +5224,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         contextHandoffId:
           portableForkHandoff?.id ?? providerSwitchHandoff?.id ?? mergeBackHandoff?.id ?? null,
         ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+        ...(computerControl === undefined ? {} : { computerControl }),
       };
       const attempt: OrchestrationV2RunAttempt = {
         id: attemptId,
@@ -6103,6 +6171,64 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Runtime request ${command.requestId} is ${runtimeRequest.status}.`,
         });
       }
+      // Pathway posted this card, so no provider is waiting on it: the owner
+      // settles the waiting call, and the answer resolves the card here.
+      if (runtimeRequest.kind === "computer") {
+        const decision = command.decision ?? "decline";
+        const answered = yield* serverOwnedRequests.respond({
+          threadId: command.threadId,
+          requestId: command.requestId,
+          decision,
+        });
+        if (!answered) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "This Computer approval is no longer open.",
+          });
+        }
+        const now = yield* DateTime.now;
+        const emitEvent = emit(events, command);
+        const status = decision === "accept" ? ("completed" as const) : ("cancelled" as const);
+        const requestNode = projection.nodes.find((node) => node.id === runtimeRequest.nodeId);
+        const runId = requestNode?.runId == null ? {} : { runId: requestNode.runId };
+        yield* emitEvent({
+          type: "runtime-request.updated",
+          threadId: command.threadId,
+          ...runId,
+          nodeId: runtimeRequest.nodeId,
+          occurredAt: now,
+          payload: {
+            ...runtimeRequest,
+            status: decision === "cancel" ? "cancelled" : "resolved",
+            resolvedAt: now,
+          },
+        });
+        if (requestNode !== undefined) {
+          yield* emitEvent({
+            type: "node.updated",
+            threadId: command.threadId,
+            ...runId,
+            nodeId: requestNode.id,
+            occurredAt: now,
+            payload: { ...requestNode, status, completedAt: now },
+          });
+        }
+        const card = projection.turnItems.find(
+          (item) => item.type === "approval_request" && item.requestId === command.requestId,
+        );
+        if (card !== undefined) {
+          yield* emitEvent({
+            type: "turn-item.updated",
+            threadId: command.threadId,
+            ...runId,
+            nodeId: runtimeRequest.nodeId,
+            occurredAt: now,
+            payload: { ...card, status, completedAt: now, updatedAt: now },
+          });
+        }
+        return;
+      }
       const questionItem = projection.turnItems.find(
         (item) => item.type === "user_input_request" && item.requestId === command.requestId,
       );
@@ -6656,6 +6782,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         createdBy: queuedMessage.createdBy,
         creationSource: queuedMessage.creationSource,
         forceRestart: false,
+        computerControl: queuedRun.computerControl,
       });
     });
 
@@ -7326,6 +7453,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Run ${command.runId} is not interruptible.`,
         });
       }
+      // Fence the run's work outside the provider before anything reads it
+      // interrupted: no Computer input lands after Stop.
+      yield* runStopFence.stopRun({ threadId: command.threadId, runId: run.id });
       const now = yield* DateTime.now;
       const completionMessage = projection.messages.find(
         (candidate) => candidate.id === run.userMessageId,
@@ -7853,6 +7983,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             attachments: latestUserMessage.attachments,
             modelSelection: targetRun.modelSelection,
             dispatchMode: { type: "start_immediately" },
+            ...(command.enableComputerControl === undefined
+              ? {}
+              : { enableComputerControl: command.enableComputerControl }),
+            ...(command.computerControlGeneration === undefined
+              ? {}
+              : { computerControlGeneration: command.computerControlGeneration }),
           },
           events,
           effects,
@@ -7907,6 +8043,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           attachments: latestUserMessage.attachments,
           modelSelection: targetRun.modelSelection,
           dispatchMode: { type: "start_immediately" },
+          ...(command.enableComputerControl === undefined
+            ? {}
+            : { enableComputerControl: command.enableComputerControl }),
+          ...(command.computerControlGeneration === undefined
+            ? {}
+            : { computerControlGeneration: command.computerControlGeneration }),
         },
         events,
         effects,
@@ -9053,6 +9195,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
           stored.event.payload.status,
         );
+      // No provider closes a server-owned card, so an ended run (Stop
+      // included) withdraws its own before anything reads it still pending,
+      // and its Computer calls end with it.
+      if (isTerminalRunEvent && stored.event.type === "run.updated") {
+        yield* serverOwnedRequests.endRun({ threadId, runId: stored.event.payload.id });
+        yield* runStopFence.stopRun({ threadId, runId: stored.event.payload.id });
+      }
       // finalize writes the parent thread and startNextQueuedRun writes this
       // thread, so each takes its own thread's lock, sequentially and never
       // nested: dispatchDelegatedTaskRequest already writes child events

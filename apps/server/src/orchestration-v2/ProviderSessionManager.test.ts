@@ -1323,6 +1323,143 @@ it.effect("ProviderSessionManagerV2 terminal detach revokes the thread's MCP cre
   }),
 );
 
+const computerRuntimePolicy = {
+  ...runtimePolicy,
+  enableComputerControl: true,
+} satisfies ProviderAdapterV2RuntimePolicy;
+
+it.effect("ProviderSessionManagerV2 forgets a detached thread's Computer request", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const idAllocator = yield* IdAllocatorV2;
+      const manager = yield* ProviderSessionManagerV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread-provider-session-manager-computer-detach");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      const runtime = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy: computerRuntimePolicy,
+      });
+      assert.isTrue(McpProviderSession.readMcpProviderSession(threadId)?.computerControl);
+
+      yield* manager.detach({ providerSessionId, threadId });
+      // Re-attaching without an admitting open must not revive the old grant.
+      yield* runtime.resumeThread({
+        threadId,
+        providerThread: makeProviderThread({ idAllocator, threadId, providerSessionId, now }),
+      });
+      assert.isDefined(McpProviderSession.readMcpProviderSession(threadId));
+      assert.isUndefined(McpProviderSession.readMcpProviderSession(threadId)?.computerControl);
+    });
+
+    yield* effect.pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 1_000 })));
+  }),
+);
+
+it.effect("ProviderSessionManagerV2 forgets a released session's Computer request", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const idAllocator = yield* IdAllocatorV2;
+      const manager = yield* ProviderSessionManagerV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread-provider-session-manager-computer-release");
+      const otherThreadId = ThreadId.make("thread-provider-session-manager-computer-release-b");
+      const releasedSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      const otherSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId: otherThreadId,
+      });
+
+      yield* eventSink.write({
+        events: [
+          yield* makeThreadCreatedEvent({ idAllocator, threadId, now }),
+          yield* makeThreadCreatedEvent({ idAllocator, threadId: otherThreadId, now }),
+        ],
+      });
+      yield* manager.open({
+        threadId,
+        providerSessionId: releasedSessionId,
+        modelSelection,
+        runtimePolicy: computerRuntimePolicy,
+      });
+      const otherRuntime = yield* manager.open({
+        threadId: otherThreadId,
+        providerSessionId: otherSessionId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* manager.close(releasedSessionId);
+      assert.isUndefined(McpProviderSession.readMcpProviderSession(threadId));
+
+      // Attaching through another live session mints a fresh credential from
+      // the thread's request, which left with the released session.
+      yield* otherRuntime.resumeThread({
+        threadId,
+        providerThread: makeProviderThread({
+          idAllocator,
+          threadId,
+          providerSessionId: otherSessionId,
+          now,
+        }),
+      });
+      assert.isDefined(McpProviderSession.readMcpProviderSession(threadId));
+      assert.isUndefined(McpProviderSession.readMcpProviderSession(threadId)?.computerControl);
+    });
+
+    yield* effect.pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 1_000 })));
+  }),
+);
+
+it.effect("ProviderSessionManagerV2 keeps a Computer request across its reprovision release", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const idAllocator = yield* IdAllocatorV2;
+      const manager = yield* ProviderSessionManagerV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread-provider-session-manager-computer-reprovision");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+      assert.isUndefined(McpProviderSession.readMcpProviderSession(threadId)?.computerControl);
+
+      yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy: computerRuntimePolicy,
+      });
+      assert.equal((yield* Ref.get(state)).openCount, 2);
+      assert.isTrue(McpProviderSession.readMcpProviderSession(threadId)?.computerControl);
+    });
+
+    yield* effect.pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 1_000 })));
+  }),
+);
+
 it.effect("ProviderSessionManagerV2 releases idle sessions without sweeping all sessions", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);

@@ -1,8 +1,12 @@
 import {
+  AuthAccessReadScope,
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
+  AuthStandardClientScopes,
+  COMPUTER_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
   WsServerProbeRpc,
@@ -11,7 +15,11 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
-import { RPC_REQUIRED_SCOPES, requiredScopeForRpcMethod } from "./RpcAuthorization.ts";
+import {
+  RPC_REQUIRED_SCOPES,
+  extraScopeForServerSettingsPatch,
+  requiredScopeForRpcMethod,
+} from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
   it("declares exactly one scope for every RPC in the server group", () => {
@@ -92,5 +100,40 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.retryWorkspaceCleanup)).toBe(
       AuthOrchestrationOperateScope,
     );
+  });
+
+  it("lets read access watch Computer and requires operation access to act on it", () => {
+    const watching = new Set<string>([
+      COMPUTER_WS_METHODS.getStatus,
+      COMPUTER_WS_METHODS.listWindows,
+      COMPUTER_WS_METHODS.getState,
+      COMPUTER_WS_METHODS.getScreenSize,
+      COMPUTER_WS_METHODS.getThreadState,
+      COMPUTER_WS_METHODS.subscribeEvents,
+    ]);
+    for (const method of Object.values(COMPUTER_WS_METHODS)) {
+      if (method === COMPUTER_WS_METHODS.getAuditHistory) continue;
+      expect(requiredScopeForRpcMethod(method)).toBe(
+        watching.has(method) ? AuthOrchestrationReadScope : AuthOrchestrationOperateScope,
+      );
+    }
+  });
+
+  it("keeps the desktop-wide Computer audit log to admin clients", () => {
+    expect(requiredScopeForRpcMethod(COMPUTER_WS_METHODS.getAuditHistory)).toBe(
+      AuthAccessReadScope,
+    );
+    expect(AuthStandardClientScopes).not.toContain(AuthAccessReadScope);
+  });
+
+  it("keeps the Computer access policy and autonomy ceiling to admin clients", () => {
+    expect(extraScopeForServerSettingsPatch({ environmentName: "Studio" })).toBeNull();
+    expect(extraScopeForServerSettingsPatch({ computer: { accessPolicy: "admins-only" } })).toBe(
+      AuthAccessWriteScope,
+    );
+    expect(extraScopeForServerSettingsPatch({ computer: { autonomy: "full-access" } })).toBe(
+      AuthAccessWriteScope,
+    );
+    expect(AuthStandardClientScopes).not.toContain(AuthAccessWriteScope);
   });
 });
