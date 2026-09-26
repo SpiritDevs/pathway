@@ -76,6 +76,111 @@ struct PathwayComputerDeliveryTests {
         #expect(anyOperator["computerControlGeneration"] == .number(3))
     }
 
+    @Test(arguments: [("any-operator", "scoped"), ("scoped", "any-operator")])
+    func anOpenChatTracksPolicyChangesFromAnotherClient(initialPolicy: String, changedPolicy: String) async throws {
+        let restore = enableComputerSetting(); defer { restore() }
+        var currentPolicy = initialPolicy
+        var sent: [[String: JSONValue]] = []
+        let model = makeModel { method, payload in
+            if method == "server.getConfig" { return .object(configWithPolicy(currentPolicy)) }
+            if method == "computer.getThreadState" { return .object(["controlGeneration": .number(3)]) }
+            if method == "orchestration.dispatchCommand" {
+                let command = payload.objectValue ?? [:]
+                sent.append(command)
+                if currentPolicy == "scoped", command["enableComputerControl"] == .bool(true) {
+                    throw PathwayRPCError.remote("This device isn't allowed to use Computer on this environment.")
+                }
+            }
+            return .object([:])
+        }
+        model.computerSessionScopes = ["orchestration:read", "orchestration:operate"]
+        await model.refreshServerConfig()
+        #expect(model.computerAccessPolicy == initialPolicy)
+        // Another client changes the host setting; the open chat receives its settings push.
+        currentPolicy = changedPolicy
+        model.applySubscriptionValue(settingsUpdate(changedPolicy))
+        #expect(model.computerAccessPolicy == changedPolicy)
+        model.draft = "Explain this function"
+        await model.send()
+        #expect(sent.count == 1)
+        #expect(sent.last?["enableComputerControl"] == (changedPolicy == "any-operator" ? .bool(true) : nil))
+        #expect(model.actionError == nil)
+        #expect(model.draft.isEmpty)
+        await model.stop()
+        #expect(model.computerAccessPolicy == nil)
+    }
+
+    @Test(arguments: [("any-operator", "scoped"), ("scoped", "any-operator")])
+    func aReconnectRefreshesPolicyBeforeRestoringImplicitIntent(initialPolicy: String, changedPolicy: String) async throws {
+        let restore = enableComputerSetting(); defer { restore() }
+        let gate = ComputerReadGate()
+        var configReads = 0
+        var currentPolicy = initialPolicy
+        var sent: [[String: JSONValue]] = []
+        let model = makeModel { method, payload in
+            if method == "server.getConfig" {
+                configReads += 1
+                if configReads == 1 { return .object(configWithPolicy(currentPolicy)) }
+                return await gate.read()
+            }
+            if method == "computer.getThreadState" { return .object(["controlGeneration": .number(3)]) }
+            if method == "orchestration.dispatchCommand" {
+                let command = payload.objectValue ?? [:]
+                sent.append(command)
+                if currentPolicy == "scoped", command["enableComputerControl"] == .bool(true) {
+                    throw PathwayRPCError.remote("This device isn't allowed to use Computer on this environment.")
+                }
+            }
+            return .object([:])
+        }
+        model.computerSessionScopes = ["orchestration:read", "orchestration:operate"]
+        await model.refreshServerConfig()
+        #expect(configReads == 1)
+        // The host admin changes policy from another client while this one is disconnected.
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("disconnected")]))
+        #expect(model.computerAccessPolicy == nil)
+        currentPolicy = changedPolicy
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("connecting")]))
+        model.applySubscriptionValue(.object(["kind": .string("synchronized")]))
+        let refresh = try #require(model.configTask)
+        await gate.started(1)
+        #expect(model.computerAccessPolicy == nil)
+        model.draft = "Explain this function while policy is loading"
+        await model.send()
+        #expect(sent.count == 1)
+        #expect(sent.last?["enableComputerControl"] == nil)
+        #expect(model.actionError == nil)
+        #expect(model.draft.isEmpty)
+        gate.finish(.object(configWithPolicy(currentPolicy)))
+        await refresh.value
+        #expect(configReads == 2)
+        #expect(model.computerAccessPolicy == changedPolicy)
+        model.draft = "Explain this function"
+        await model.send()
+        #expect(sent.count == 2)
+        #expect(sent.last?["enableComputerControl"] == (changedPolicy == "any-operator" ? .bool(true) : nil))
+        #expect(model.actionError == nil)
+        #expect(model.draft.isEmpty)
+        await model.stop()
+    }
+
+    @Test(arguments: [("any-operator", "scoped"), ("scoped", "any-operator")])
+    func aSettingsPushSupersedesAnOlderConfigRead(initialPolicy: String, changedPolicy: String) async throws {
+        let gate = ComputerReadGate()
+        let model = makeModel { _, _ in await gate.read() }
+        let refresh = Task { await model.refreshServerConfig() }
+        await gate.started(1)
+        model.applySubscriptionValue(settingsUpdate(changedPolicy))
+        gate.finish(.object(configWithPolicy(initialPolicy)))
+        await refresh.value
+        #expect(model.computerAccessPolicy == changedPolicy)
+    }
+
+    private func settingsUpdate(_ policy: String) -> JSONValue {
+        .object(["type": .string("settingsUpdated"), "payload": .object([
+            "settings": .object(["computer": .object(["accessPolicy": .string(policy)])])])])
+    }
+
     @Test func aReconnectForgetsTheConfirmedGeneration() async throws {
         var reads = 0
         let model = makeModel { method, _ in
