@@ -240,48 +240,57 @@ function NavigationRailButton({
   const badgeLabel = badgeCount > 0 ? formatNavigationBadgeCount(badgeCount) : null;
 
   return (
-    <Tooltip disabled={expanded}>
-      <TooltipTrigger
-        render={
-          <Button
-            aria-current={active ? "page" : undefined}
-            aria-label={badgeLabel === null ? label : `${label}, ${badgeCount} unread`}
-            className={cn(
-              "relative h-9! overflow-hidden [-webkit-app-region:no-drag] [--control-icon-color:var(--sidebar-muted-foreground)]",
-              "hover:[--control-icon-color:var(--sidebar-foreground)]",
-              expanded ? "w-full justify-start gap-2 px-2.5" : "w-9 gap-0 px-0",
-              active &&
-                "bg-sidebar-accent text-sidebar-accent-foreground [--control-icon-color:var(--sidebar-accent-foreground)]",
-            )}
-            onClick={onClick}
-            onContextMenu={onContextMenu}
-            size="icon-lg"
-            style={{ width: expanded ? "100%" : "2.25rem" }}
-            variant="ghost"
-          >
-            {avatar ?? <Icon className="size-5" />}
-            {expanded ? (
-              <span className="min-w-0 flex-1 truncate text-left text-sm">{label}</span>
-            ) : null}
-            {badgeLabel === null ? null : expanded ? (
-              <span className="shrink-0 rounded-full bg-sidebar-accent px-1.5 text-[11px] leading-4 font-medium text-sidebar-accent-foreground tabular-nums">
-                {badgeLabel}
-              </span>
-            ) : (
-              // Inside the button's bounds: the rail clips its overflow, so a corner pill has to
-              // sit within it rather than straddle the edge.
-              <span className="absolute top-0.5 right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-[9px] leading-[0.875rem] font-semibold text-primary-foreground tabular-nums">
-                {badgeLabel}
-              </span>
-            )}
-          </Button>
-        }
-      />
-      <TooltipPopup side="right" sideOffset={8}>
-        {badgeLabel === null ? label : `${label} · ${badgeLabel} unread`}
-        {reorderable ? " · Drag to reorder" : null}
-      </TooltipPopup>
-    </Tooltip>
+    <div className="relative flex w-full justify-center">
+      {active ? (
+        // Offsets the nav's px-2 so the marker sits flush against the content frame's edge.
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-1.5 -right-2 w-[3px] rounded-l-full bg-primary"
+        />
+      ) : null}
+      <Tooltip disabled={expanded}>
+        <TooltipTrigger
+          render={
+            <Button
+              aria-current={active ? "page" : undefined}
+              aria-label={badgeLabel === null ? label : `${label}, ${badgeCount} unread`}
+              className={cn(
+                "relative h-9! overflow-hidden [-webkit-app-region:no-drag] [--control-icon-color:var(--sidebar-muted-foreground)]",
+                "hover:[--control-icon-color:var(--sidebar-foreground)]",
+                expanded ? "w-full justify-start gap-2 px-2.5" : "w-9 gap-0 px-0",
+                active &&
+                  "bg-sidebar-accent text-sidebar-accent-foreground [--control-icon-color:var(--sidebar-accent-foreground)]",
+              )}
+              onClick={onClick}
+              onContextMenu={onContextMenu}
+              size="icon-lg"
+              style={{ width: expanded ? "100%" : "2.25rem" }}
+              variant="ghost"
+            >
+              {avatar ?? <Icon className="size-5" />}
+              {expanded ? (
+                <span className="min-w-0 flex-1 truncate text-left text-sm">{label}</span>
+              ) : null}
+              {badgeLabel === null ? null : expanded ? (
+                <span className="shrink-0 rounded-full bg-sidebar-accent px-1.5 text-[11px] leading-4 font-medium text-sidebar-accent-foreground tabular-nums">
+                  {badgeLabel}
+                </span>
+              ) : (
+                // Inside the button's bounds: the rail clips its overflow, so a corner pill has to
+                // sit within it rather than straddle the edge.
+                <span className="absolute top-0.5 right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-[9px] leading-[0.875rem] font-semibold text-primary-foreground tabular-nums">
+                  {badgeLabel}
+                </span>
+              )}
+            </Button>
+          }
+        />
+        <TooltipPopup side="right" sideOffset={8}>
+          {badgeLabel === null ? label : `${label} · ${badgeLabel} unread`}
+          {reorderable ? " · Drag to reorder" : null}
+        </TooltipPopup>
+      </Tooltip>
+    </div>
   );
 }
 
