@@ -27,10 +27,16 @@ project**:
 - **Git.** Pathway checks each attached folder for Git. Checkouts of the same repository can be
   linked across environments, but attaching a different repository shows an error. Folders
   without Git can be attached alongside a repository.
-- **Create Git Repository.** When all attached folders have been checked and none contains Git,
-  enable this switch to show the GitHub owner, name, and visibility options. The repository is
-  created once in the first folder; every other folder clones it and must be empty. Creating a
-  repository uses the GitHub CLI signed in on the first folder's computer.
+- **Create or link a Git repository.** When all attached folders have been checked and none
+  contains Git, two options appear, both off at first. Choose one to use it; choose it again to
+  turn it off.
+  - **Create Git Repository** shows the GitHub owner, name, and visibility options. The repository
+    is created once in the first folder; every other folder clones it and must be empty. Creating
+    a repository uses the GitHub CLI signed in on the first folder's computer.
+  - **Link Git Repository** asks for the URL of an existing repository, such as
+    `https://github.com/owner/repository.git` or `git@github.com:owner/repository.git`. Every folder
+    downloads (clones) it, so each folder must be empty or not exist yet. Private repositories use
+    the Git credentials on each folder's computer.
 
 Creating a project from **Agent Threads** selects it for the current unassigned draft. If setup
 stops partway, the project keeps whatever was created; finish the remaining folders from its

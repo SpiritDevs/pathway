@@ -27,9 +27,10 @@ const repository = (name: string): ProjectInspectDirectoryResult => ({
 });
 const draft = (overrides: Partial<CreateProjectDraft> = {}): CreateProjectDraft => ({
   name: "",
-  createRepository: false,
+  repositoryMode: "none",
   folders: [],
   newRepository: { owner: "", name: "", visibility: "private" },
+  linkUrl: "",
   ...overrides,
 });
 const folder = (
@@ -167,7 +168,7 @@ describe("create project planning", () => {
       folder(LAPTOP, "/plain"),
       folder(STUDIO, "/code/boca", false, repository("boca")),
     ];
-    expect(plan(draft({ folders, createRepository: true }))).toMatchObject({
+    expect(plan(draft({ folders, repositoryMode: "create" }))).toMatchObject({
       kind: "create",
       source: { kind: "folders" },
     });
@@ -178,7 +179,7 @@ describe("create project planning", () => {
     expect(
       plan(
         draft({
-          createRepository: true,
+          repositoryMode: "create",
           name: "Boca Site",
           folders,
           newRepository: { owner: "spiritdevs", name: "", visibility: "public" },
@@ -188,7 +189,26 @@ describe("create project planning", () => {
       source: { kind: "new_repo", repository: "spiritdevs/boca-site", visibility: "public" },
       folders: [{ createIfMissing: false }, { createIfMissing: false }],
     });
-    expect(plan(draft({ createRepository: true, folders }))).toEqual({ kind: "incomplete" });
+    expect(plan(draft({ repositoryMode: "create", folders }))).toEqual({ kind: "incomplete" });
     expect(repositoryNameFromProjectName("  My App (v2)! ")).toBe("my-app-v2");
+  });
+
+  it("links every folder to a pasted remote and lets cloning create the folders", () => {
+    const folders = [folder(LAPTOP, "/code/boca", true), folder(STUDIO, "/work/boca", true)];
+    const linked = (linkUrl: string) => plan(draft({ repositoryMode: "link", folders, linkUrl }));
+    expect(linked("  https://github.com/spiritdevs/boca.git ")).toMatchObject({
+      title: "boca",
+      source: { kind: "link_repo", remoteUrl: "https://github.com/spiritdevs/boca.git" },
+      folders: [{ createIfMissing: false }, { createIfMissing: false }],
+    });
+    expect(linked("  ")).toEqual({ kind: "incomplete" });
+    expect(linked("https://github.com/a b")).toMatchObject({ kind: "invalid" });
+  });
+
+  it("ignores a pasted remote once an attached folder already has Git", () => {
+    const folders = [folder(LAPTOP, "/code/boca", false, repository("boca"))];
+    expect(
+      plan(draft({ repositoryMode: "link", folders, linkUrl: "git@github.com:x/y.git" })),
+    ).toMatchObject({ kind: "create", source: { kind: "folders" } });
   });
 });

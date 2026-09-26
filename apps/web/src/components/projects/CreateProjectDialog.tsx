@@ -1,10 +1,11 @@
 /**
  * New project: a name and icon, a Focus, and one folder per environment.
  *
- * Attached folders determine the Git repository, or can be seeded by a new GitHub repository.
- * A new repository is created once, on the first folder's environment; every
- * other folder clones it, so all checkouts share one history. A project may also have no folder
- * at all, which is what the issue flows that open this dialog rely on.
+ * Attached folders determine the Git repository, or can be seeded by a new GitHub repository or
+ * linked to an existing remote. A new repository is created once, on the first folder's
+ * environment, and every other folder clones it; a linked remote is cloned into every folder.
+ * Either way all checkouts share one history. A project may also have no folder at all, which is
+ * what the issue flows that open this dialog rely on.
  *
  * @module components/projects/CreateProjectDialog
  */
@@ -52,7 +53,6 @@ import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
-import { Switch } from "../ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { environmentBrowsePlatform, ProjectDirectoryField } from "./ProjectDirectoryField";
 import {
@@ -82,6 +82,7 @@ import {
   type CreateProjectPlan,
   type CreateProjectDraft,
   type ProjectFolderDraft,
+  type RepositoryMode,
 } from "./createProject.logic";
 
 const NO_FOCUS = "none";
@@ -98,9 +99,10 @@ const emptyFolder = (environmentId: EnvironmentId | null): ProjectFolderDraft =>
 
 const EMPTY_DRAFT: CreateProjectDraft = {
   name: "",
-  createRepository: false,
+  repositoryMode: "none",
   folders: [],
   newRepository: { owner: "", name: "", visibility: "private" },
+  linkUrl: "",
 };
 
 interface RepositoryChoiceCandidate {
@@ -192,7 +194,8 @@ export function CreateProjectDialog({
 
   const firstFolder = draft.folders[0] ?? null;
   const canCreateRepository = canCreateProjectRepository(draft.folders);
-  const creatingRepository = draft.createRepository && canCreateRepository;
+  const repositoryMode = canCreateRepository ? draft.repositoryMode : "none";
+  const creatingRepository = repositoryMode === "create";
   const availableEnvironments = connectedEnvironments.filter(
     (environment) =>
       !draft.folders.some((folder) => folder.environmentId === environment.environmentId),
@@ -283,7 +286,7 @@ export function CreateProjectDialog({
       if (error) throw new Error(error);
       setDraft((current) => ({
         ...current,
-        createRepository: folderHasRepository(attached) ? false : current.createRepository,
+        repositoryMode: folderHasRepository(attached) ? "none" : current.repositoryMode,
         folders: current.folders.map((candidate) => (candidate.key === key ? attached : candidate)),
       }));
       return true;
@@ -321,7 +324,8 @@ export function CreateProjectDialog({
       let companyId: CompanyId | null = null;
       let cloudProjectId: string | null = existingTarget?.cloudProjectId ?? null;
       // Rows after the first link to the shared repository rather than making their own.
-      let sharedRemoteUrl: string | null = null;
+      let sharedRemoteUrl: string | null =
+        created.source.kind === "link_repo" ? created.source.remoteUrl : null;
       const pendingKeys: string[] = [];
       try {
         companyId =
@@ -507,7 +511,7 @@ export function CreateProjectDialog({
               : "Attach each folder before creating the project.",
           );
         }
-        if (plan.source.kind === "new_repo" && verifiedPlan.source.kind !== "new_repo") {
+        if (plan.source.kind !== "folders" && verifiedPlan.source.kind !== plan.source.kind) {
           throw new Error(
             "A selected folder now contains Git. Review the attached folders before creating the project.",
           );
@@ -680,15 +684,17 @@ export function CreateProjectDialog({
                   key={folder.key}
                   folder={folder}
                   note={
-                    creatingRepository
-                      ? index === 0
-                        ? "The repository is created here."
-                        : "Clones the new repository into this folder. The folder must be empty."
-                      : folder.inspection
-                        ? folderHasRepository(folder)
-                          ? "Git repository detected."
-                          : "No Git repository in this folder."
-                        : null
+                    repositoryMode === "link"
+                      ? "Clones the repository into this folder. The folder must be empty."
+                      : creatingRepository
+                        ? index === 0
+                          ? "The repository is created here."
+                          : "Clones the new repository into this folder. The folder must be empty."
+                        : folder.inspection
+                          ? folderHasRepository(folder)
+                            ? "Git repository detected."
+                            : "No Git repository in this folder."
+                          : null
                   }
                   environments={connectedEnvironments.filter(
                     (candidate) =>
@@ -722,16 +728,27 @@ export function CreateProjectDialog({
 
           {canCreateRepository ? (
             <div className="space-y-3">
-              <label className="flex items-center justify-between gap-3 text-sm font-medium">
-                Create Git Repository
-                <Switch
-                  checked={creatingRepository}
-                  disabled={submitting}
-                  onCheckedChange={(createRepository) =>
-                    setDraft((current) => ({ ...current, createRepository }))
-                  }
-                />
-              </label>
+              {/* Neither option is chosen at first; pressing the active one clears it. */}
+              <ToggleGroup
+                aria-label="Git repository"
+                value={repositoryMode === "none" ? [] : [repositoryMode]}
+                onValueChange={(value) => {
+                  const next = (value[0] as RepositoryMode | undefined) ?? "none";
+                  setWriteError(null);
+                  setDraft((current) => ({ ...current, repositoryMode: next }));
+                }}
+                size="sm"
+                variant="outline"
+                className="w-full"
+                disabled={submitting}
+              >
+                <ToggleGroupItem value="create" className="flex-1">
+                  Create Git Repository
+                </ToggleGroupItem>
+                <ToggleGroupItem value="link" className="flex-1">
+                  Link Git Repository
+                </ToggleGroupItem>
+              </ToggleGroup>
               {creatingRepository ? (
                 <NewRepositoryFields
                   draft={draft}
@@ -742,6 +759,24 @@ export function CreateProjectDialog({
                   onChange={(newRepository) =>
                     setDraft((current) => ({ ...current, newRepository }))
                   }
+                />
+              ) : repositoryMode === "link" ? (
+                <Input
+                  aria-label="Repository URL"
+                  placeholder="https://github.com/owner/repository.git"
+                  spellCheck={false}
+                  autoComplete="off"
+                  disabled={submitting}
+                  value={draft.linkUrl}
+                  onChange={(event) => {
+                    const linkUrl = event.currentTarget.value;
+                    setDraft((current) => ({ ...current, linkUrl }));
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    submit();
+                  }}
                 />
               ) : null}
             </div>
