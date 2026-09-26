@@ -100,7 +100,8 @@ agent still works on the host Mac; nothing runs on your phone.
   the environment can run Computer and its access policy allows this device. Until then, messages
   send without Computer unless you type `/computer-use`. A message saved to send later, while the
   environment is offline or busy, uses Computer from this setting only when the policy is **Any
-  operator**.
+  operator**. Open chats pick up access-policy changes made from another device. After a
+  reconnect, messages send without implicit Computer access until the policy is confirmed again.
 - **Following along.** While the agent drives the desktop, a live preview sits above the composer.
   It shows still images of the host's screen and the agent's latest action. It streams only while
   it is open, the chat is on screen and the app is in the foreground. Hiding it, leaving the chat

@@ -282,9 +282,8 @@ final class PathwayAgentThreadModel {
     @ObservationIgnored var computerControlGeneration: Int?
     /// Advances whenever this chat's connection ends or is replaced; fences Computer reads.
     @ObservationIgnored var computerConnection = 0
-    /// Advances whenever this chat's connection ends; fences config reads. The first socket
-    /// connecting doesn't count, since the startup read begins before it.
-    @ObservationIgnored var configConnection = 0
+    /// Advances when a connection ends or settings change, so an older config read cannot land.
+    @ObservationIgnored var configRevision = 0
     private(set) var browserTakeover: [String: JSONValue]?
     private(set) var checkpoints: [JSONValue] = []
     private(set) var plans: [JSONValue] = []
@@ -349,7 +348,9 @@ final class PathwayAgentThreadModel {
     @ObservationIgnored private var streamTask: Task<Void, Never>?
     @ObservationIgnored private var cacheWriteTask: Task<Void, Never>?
     @ObservationIgnored private var pendingCacheWrite: PathwayThreadCachePendingWrite?
-    @ObservationIgnored private var configTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var configTask: Task<Void, Never>?
+    @ObservationIgnored private var settingsTask: Task<Void, Never>?
+    @ObservationIgnored private var settingsRPC: PathwayRPCClient?
     @ObservationIgnored private var lastSequence = 0
     @ObservationIgnored var childRoster: PathwayThreadSubagent?
     @ObservationIgnored var parentModelSelection: PathwayModelSelection?
@@ -385,13 +386,14 @@ final class PathwayAgentThreadModel {
     }
 
     isolated deinit {
-        streamTask?.cancel(); configTask?.cancel(); cacheWriteTask?.cancel(); draftWriteTask?.cancel()
+        streamTask?.cancel(); configTask?.cancel(); settingsTask?.cancel(); cacheWriteTask?.cancel(); draftWriteTask?.cancel()
         if let pendingDraftWrite, let draftStore { Task { try? await draftStore.save(pendingDraftWrite) } }
         if let pending = pendingCacheWrite {
             let cache = cache; let id = thread.id
             Task { await cache.save(items: pending.items, threadID: id, revision: pending.revision) }
         }
         if let rpc { Task { await rpc.stop() } }
+        if let settingsRPC { Task { await settingsRPC.stop() } }
     }
 
     func start() {
@@ -411,6 +413,21 @@ final class PathwayAgentThreadModel {
                 return connection.webSocketURL
             }
             self.rpc = rpc
+            // Each RPC client owns one subscription; settings must not replace the thread stream.
+            let settingsRPC = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+            self.settingsRPC = settingsRPC
+            settingsTask = Task { @MainActor [weak self] in
+                do {
+                    for try await value in await settingsRPC.subscribe("subscribeServerConfig", payload: .object([:])) {
+                        guard !Task.isCancelled, let self else { return }
+                        if value.objectValue?["_pathwayTransport"] != nil { invalidateServerConfig() }
+                        else { applySubscriptionValue(value) }
+                    }
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    self?.invalidateServerConfig()
+                }
+            }
             configTask = Task { [weak self] in
                 await self?.refreshServerConfig()
                 await self?.refreshParentRoster()
@@ -427,14 +444,17 @@ final class PathwayAgentThreadModel {
 
     func stop() async {
         streamTask?.cancel(); streamTask = nil; configTask?.cancel(); configTask = nil
+        settingsTask?.cancel(); settingsTask = nil
         isSubscriptionReady = false
         invalidateComputerConnection()
-        configConnection += 1
+        invalidateServerConfig()
         connectionState = items.isEmpty ? .idle : .cached
         await persistDraftNow()
         let previousRPC = rpc; rpc = nil
+        let previousSettingsRPC = settingsRPC; settingsRPC = nil
         let cacheWrite = takePendingCacheWrite()
         await previousRPC?.stop()
+        await previousSettingsRPC?.stop()
         if let cacheWrite { await cache.save(items: cacheWrite.items, threadID: thread.id, revision: cacheWrite.revision) }
     }
 
@@ -887,11 +907,25 @@ final class PathwayAgentThreadModel {
         guard let object = value.objectValue else { return }
         if let transport = object["_pathwayTransport"] {
             // Every pending request fails when a socket drops, so a success still in flight came from the old one.
-            if transport.stringValue == "disconnected" { configConnection += 1 }
+            if transport.stringValue == "disconnected" { invalidateServerConfig() }
+            computerAccessPolicy = nil
             isSubscriptionReady = false
             invalidateComputerConnection()
             connectionState = items.isEmpty ? .connecting : .cached
             return
+        }
+        switch object["type"]?.stringValue {
+        case "snapshot":
+            invalidateServerConfig()
+            if let config = object["config"] { installServerConfig(config) }
+            return
+        case "settingsUpdated", "configUpdated":
+            invalidateServerConfig()
+            var config = serverConfig
+            for (key, value) in object["payload"]?.objectValue ?? [:] { config[key] = value }
+            installServerConfig(.object(config))
+            return
+        default: break
         }
         switch object["kind"]?.stringValue {
         case "snapshot": if let projection = object["projection"] { installSnapshot(projection, sequence: object["snapshotSequence"]?.intValue ?? 0) }
@@ -935,9 +969,19 @@ final class PathwayAgentThreadModel {
                 reconcileQuestionAttachments()
             }
             if isSubscriptionReady { connectionState = .live }
-        case "synchronized": isSubscriptionReady = true; connectionState = .live
+        case "synchronized":
+            isSubscriptionReady = true; connectionState = .live
+            configTask?.cancel()
+            configTask = Task { [weak self] in
+                await self?.refreshServerConfig()
+                await self?.refreshParentRoster()
+            }
         default: break
         }
+    }
+    private func invalidateServerConfig() {
+        configRevision += 1
+        computerAccessPolicy = nil
     }
     private func applyThread(_ value: JSONValue?) {
         guard let object = value?.objectValue else { return }
