@@ -45,6 +45,7 @@ export const AGENT_THREAD_SHELL_FIELDS = new Set([
   "title",
   "providerInstanceId",
   "modelSelection",
+  "usedModels",
   "runtimeMode",
   "interactionMode",
   "branch",

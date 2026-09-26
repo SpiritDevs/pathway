@@ -1072,6 +1072,10 @@ describe("environment registry", () => {
       id: "thread-one",
       projectId: PROJECT_ID,
       title: "Cloud-visible thread",
+      usedModels: [
+        { instanceId: "codex", model: "gpt-5.4" },
+        { instanceId: "claudeAgent", model: "claude-sonnet-4-6" },
+      ],
       settleAfterCompletion: false,
       latestVisibleMessage: {
         id: "message-one",
