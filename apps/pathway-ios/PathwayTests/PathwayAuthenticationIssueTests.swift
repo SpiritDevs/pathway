@@ -56,7 +56,7 @@ import Testing
         #expect(!issue.message.contains("secret"))
     }
 
-    @Test func retryReplacesPreviousFailureAndSessionEndClearsDiagnosticCode() async {
+    @Test func retryReplacesPreviousFailureAndSessionEndRecordsItsReason() async {
         let auth = FailingSignInAuth()
         let model = PathwayAppModel(authProvider: auth)
         await model.signIn()
@@ -67,25 +67,60 @@ import Testing
         await model.signIn()
         #expect(model.authenticationIssue?.id != firstID)
         #expect(model.authenticationIssue?.title == "Couldn't connect")
+        auth.sessionEndReason = "expired"
         model.sessionDidEnd()
-        #expect(model.authenticationIssue?.diagnosticCode == nil)
+        #expect(model.authenticationIssue?.diagnosticCode == "ClerkSession.expired (0)")
         #expect(model.authenticationIssue?.title == "Sign in again")
+    }
+
+    @Test func unexpectedSessionEndReportsButSigningOutDoesNot() async throws {
+        let auth = SignedInAuth()
+        let reporter = RecordingLoginReporter(accepted: true)
+        let model = PathwayAppModel(authProvider: auth, loginErrorReporter: reporter)
+        var reports = reporter.reports.makeAsyncIterator()
+        await model.restoreSession()
+        #expect(model.authenticationState == .signedIn)
+        await model.signOut()
+        #expect(model.authenticationState == .signedOut)
+        #expect(model.authenticationIssue == nil)
+        model.sessionDidEnd()
+        let issue = try #require(model.authenticationIssue)
+        let reportedID = await reports.next()
+        #expect(reportedID == issue.id)
+        #expect(reporter.reportIDs == [issue.id])
+        #expect(issue.diagnosticCode == "ClerkSession.removed (0)")
     }
 }
 
 @MainActor private final class RecordingLoginReporter: PathwayLoginErrorReporting {
     let accepted: Bool
     var reportIDs: [UUID] = []
-    init(accepted: Bool) { self.accepted = accepted }
+    let reports: AsyncStream<UUID>
+    private let reported: AsyncStream<UUID>.Continuation
+    init(accepted: Bool) {
+        self.accepted = accepted
+        (reports, reported) = AsyncStream<UUID>.makeStream()
+    }
     func report(_ issue: PathwayAuthenticationIssue) async -> Bool {
         reportIDs.append(issue.id)
+        reported.yield(issue.id)
         return accepted
     }
     func retryPendingReports() async { }
 }
 
+@MainActor private final class SignedInAuth: PathwayAuthenticating {
+    var hasActiveSession = true
+    let sessionEndReason = "removed"
+    var onSessionChanged: ((Bool) -> Void)?
+    func startHostedSignIn() async throws { }
+    func signOut() async throws { hasActiveSession = false; onSessionChanged?(false) }
+    func token(template: String?) async throws -> String { throw PathwayAuthError.missingSession }
+}
+
 @MainActor private final class FailingSignInAuth: PathwayAuthenticating {
     var hasActiveSession = false
+    var sessionEndReason = "none"
     var onSessionChanged: ((Bool) -> Void)?
     var error: any Error = NSError(domain: ASWebAuthenticationSessionErrorDomain, code: 1)
     func startHostedSignIn() async throws { throw error }
