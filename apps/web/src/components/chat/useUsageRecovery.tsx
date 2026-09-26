@@ -72,6 +72,10 @@ export function useUsageRecovery(input: {
   const [dismissedLowUsage, setDismissedLowUsage] = useState<ReadonlyMap<string, number>>(
     new Map(),
   );
+  // Run IDs whose usage-limit prompt was dismissed; a later limited run prompts again.
+  const [dismissedPromptRunIds, setDismissedPromptRunIds] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
   const busy = busyKey === key;
   const nowMinute = useNowMinute();
   const schedule = useAtomCommand(serverEnvironment.scheduleUsageRecovery, {
@@ -299,12 +303,14 @@ export function useUsageRecovery(input: {
             ),
         }
       : null;
+  const urgent = scheduled || monitoring || failed;
+  const promptDismissed = !urgent && latest !== undefined && dismissedPromptRunIds.has(latest.id);
   const banner: ComposerBannerStackItem | null =
-    input.supported && (canSchedule || scheduled || monitoring || failed || error?.key === key)
+    input.supported && !promptDismissed && (canSchedule || urgent || error?.key === key)
       ? {
           id: `usage-recovery:${key}`,
           presentation: "lip",
-          urgent: scheduled || monitoring || failed,
+          urgent,
           variant: failed || visibleError ? "error" : scheduled || monitoring ? "info" : "warning",
           icon: paused ? <PauseIcon /> : <AlarmClockIcon />,
           // Up to three actions; stacking them keeps the status readable on phone widths.
@@ -371,6 +377,13 @@ export function useUsageRecovery(input: {
               )}
             </>
           ),
+          // Active recoveries stay visible; only the offer to schedule one can be dismissed.
+          ...(!urgent && latest !== undefined
+            ? {
+                dismissLabel: "Dismiss usage limit notice",
+                onDismiss: () => setDismissedPromptRunIds((ids) => new Set(ids).add(latest.id)),
+              }
+            : {}),
         }
       : null;
   const dialog = (

@@ -10059,6 +10059,7 @@ function ChatViewContent(props: ChatViewProps) {
                           conversationSelected={activeThread.projectId === null}
                         />
                       </div>
+                      <ThreadQueueStatus queue={queuedChat} />
                       <ComposerBannerStack
                         className="relative z-0"
                         items={composerBannerItems}
@@ -10066,11 +10067,14 @@ function ChatViewContent(props: ChatViewProps) {
                       />
                     </div>
                   ) : (
-                    <ComposerBannerStack
-                      className="relative z-0"
-                      items={composerBannerItems}
-                      behindContextStrip={showComposerContextStrip}
-                    />
+                    <>
+                      <ThreadQueueStatus queue={queuedChat} />
+                      <ComposerBannerStack
+                        className="relative z-0"
+                        items={composerBannerItems}
+                        behindContextStrip={showComposerContextStrip}
+                      />
+                    </>
                   )}
                   {isServerThread && activeThread ? (
                     <QueuedRunsControl
@@ -10081,7 +10085,6 @@ function ChatViewContent(props: ChatViewProps) {
                       threadId={activeThread.id}
                     />
                   ) : null}
-                  <ThreadQueueStatus queue={queuedChat} />
                   <div
                     ref={draftHeroTransition.composerAnchorRef}
                     className="relative z-10"
