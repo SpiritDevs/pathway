@@ -43,7 +43,8 @@ to do. Approve or decline it there.
 When an agent acts on the desktop, a preview appears over the chat. Float it as a window you can
 drag, dock it back, or hide it for the rest of the task; hiding does not stop the agent. Tap the
 preview to click at that spot on the controlled computer. The preview streams only while it is on
-screen.
+screen. Revoking a device in **Settings** > **Connections** disconnects its open preview and
+Computer connection. Other connected devices can keep watching.
 
 To stop the agent, use **Stop** in the chat, or press Escape on the host Mac. After a stop, send a
 new request to continue.

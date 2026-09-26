@@ -11,6 +11,7 @@ import {
   type FrameSink,
 } from "@spiritdevs/shared/frameTransport";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import {
   HttpRouter,
@@ -25,6 +26,7 @@ import {
   failEnvironmentInternal,
   failEnvironmentScopeRequired,
 } from "../auth/http.ts";
+import { withSessionWebSocket } from "../auth/sessionWebSocket.ts";
 import { ComputerService } from "./Services/ComputerService.ts";
 
 const MAX_CLIENT_MESSAGE_BYTES = 1_024;
@@ -84,31 +86,41 @@ export const computerFrameRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Unknown computer", { status: 404 });
     }
 
-    yield* Effect.scoped(
+    yield* withSessionWebSocket(session.sessionId, (socket) =>
       Effect.gen(function* () {
-        const socket = yield* request.upgrade;
         const writer = yield* socket.writer;
         let open = true;
+        const reader = yield* socket
+          .runRaw((message) =>
+            decodeResyncRequest(message) === null
+              ? undefined
+              : Effect.ignore(manager.requestKeyframe()),
+          )
+          .pipe(Effect.forkScoped);
         // Closing this scope removes the sink, and the last one out detaches the stream.
-        yield* manager.subscribeFrames(
-          makeComputerFrameSink({
-            send: (bytes) => Effect.runPromise(writer(bytes)),
-            isOpen: () => open,
-          }),
-        );
-        // Finalizers run in reverse: the sink reports closed before it is removed.
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            open = false;
-          }),
-        );
-        yield* socket.runRaw((message) =>
-          decodeResyncRequest(message) === null
-            ? undefined
-            : Effect.ignore(manager.requestKeyframe()),
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* manager.subscribeFrames(
+              makeComputerFrameSink({
+                send: (bytes) => Effect.runPromise(writer(bytes)),
+                isOpen: () => open,
+              }),
+            );
+            yield* Fiber.join(reader);
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                open = false;
+              }),
+            ),
+          ),
         );
       }),
-    ).pipe(Effect.catchCause((cause) => Effect.logDebug("computer frame socket closed", cause)));
+    ).pipe(
+      Effect.catchTag("SocketError", (error) =>
+        Effect.logDebug("computer frame socket closed", error),
+      ),
+    );
     return HttpServerResponse.empty();
   }).pipe(
     Effect.catchTags({

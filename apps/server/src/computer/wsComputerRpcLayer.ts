@@ -8,6 +8,7 @@
  */
 import {
   type AuthEnvironmentScope,
+  type AuthSessionId,
   COMPUTER_WS_METHODS,
   ComputerError,
   EnvironmentAuthorizationError,
@@ -16,8 +17,10 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { type Rpc, type RpcGroup, RpcServer } from "effect/unstable/rpc";
 
+import { withSessionWebSocket } from "../auth/sessionWebSocket.ts";
 import { requiredScopeForRpcMethod } from "../auth/RpcAuthorization.ts";
 import type * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import {
@@ -45,12 +48,24 @@ const TRACE_ATTRIBUTES = { "rpc.aggregate": "computer" } as const;
 export const serveRpcWebSocket = <Rpcs extends Rpc.Any, ROut, E, RIn>(
   group: RpcGroup.RpcGroup<Rpcs>,
   handlers: Layer.Layer<ROut, E, RIn>,
+  sessionId: AuthSessionId,
 ) =>
   Layer.build(handlers).pipe(
     Effect.flatMap((context) =>
       RpcServer.toHttpEffectWebsocket(group, { disableTracing: true }).pipe(
         Effect.provideContext(context),
       ),
+    ),
+    Effect.map((httpEffect) =>
+      withSessionWebSocket(sessionId, (socket) =>
+        Effect.gen(function* () {
+          const request = (yield* HttpServerRequest.HttpServerRequest).modify({});
+          Object.defineProperty(request, "upgrade", { value: Effect.succeed(socket) });
+          yield* httpEffect.pipe(
+            Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+          );
+        }),
+      ).pipe(Effect.as(HttpServerResponse.empty())),
     ),
   );
 
