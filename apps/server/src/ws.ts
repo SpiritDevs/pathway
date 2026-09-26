@@ -76,11 +76,16 @@ import {
   type TerminalMetadataStreamEvent,
   WS_METHODS,
   WsRpcGroup,
+  WsUsageRecoveryGetRpc,
+  WsUsageRecoverySubscribeRpc,
+  WsUsageRecoveryScheduleRpc,
+  WsUsageRecoveryCancelRpc,
+  WsUsageRecoveryPauseRpc,
   WsComputerRpcGroup,
 } from "@spiritdevs/contracts";
 import { resolveServerBackgroundActivitySettings } from "@spiritdevs/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
-import { type RpcGroup, RpcSerialization } from "effect/unstable/rpc";
+import { RpcGroup, RpcSerialization } from "effect/unstable/rpc";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
@@ -466,8 +471,35 @@ function projectFileFailureContext(
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
+// Keep handler groups small enough for the compiler to retain their service requirements.
+const UsageRecoveryRpcGroup = RpcGroup.make(
+  WsUsageRecoveryGetRpc,
+  WsUsageRecoverySubscribeRpc,
+  WsUsageRecoveryScheduleRpc,
+  WsUsageRecoveryCancelRpc,
+  WsUsageRecoveryPauseRpc,
+);
+
+const usageRecoveryRpcLayer = UsageRecoveryRpcGroup.toLayer(
+  Effect.gen(function* () {
+    const usageRecovery = yield* UsageRecoveryService;
+    return UsageRecoveryRpcGroup.of({
+      [WS_METHODS.usageRecoveryGet]: (input) => usageRecovery.get(input.threadId),
+      [WS_METHODS.usageRecoverySubscribe]: (input) => usageRecovery.subscribe(input.threadId),
+      [WS_METHODS.usageRecoverySchedule]: (input) => usageRecovery.schedule(input),
+      [WS_METHODS.usageRecoveryCancel]: (input) => usageRecovery.cancel(input.threadId),
+      [WS_METHODS.usageRecoveryPause]: (input) => usageRecovery.pause(input),
+    });
+  }),
+);
+
 // Computer RPCs are served by their own handler layer (see makeWsComputerRpcLayer).
 const ServerWsRpcGroup = WsRpcGroup.omit(
+  WS_METHODS.usageRecoveryGet,
+  WS_METHODS.usageRecoverySubscribe,
+  WS_METHODS.usageRecoverySchedule,
+  WS_METHODS.usageRecoveryCancel,
+  WS_METHODS.usageRecoveryPause,
   ...([...WsComputerRpcGroup.requests.keys()] as ReadonlyArray<
     RpcGroup.Rpcs<typeof WsComputerRpcGroup>["_tag"]
   >),
@@ -679,7 +711,6 @@ const makeWsRpcLayer = (
       const continuationLaunch = yield* ContinuationLaunchService.ContinuationLaunchService;
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const threadWorkspaceMove = yield* ThreadWorkspaceMove.ThreadWorkspaceMoveService;
-      const usageRecovery = yield* UsageRecoveryService;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const usage = yield* UsageService.UsageService;
@@ -1678,11 +1709,6 @@ const makeWsRpcLayer = (
               "orchestration_v2.thread_id": input.threadId,
             },
           ),
-        [WS_METHODS.usageRecoveryGet]: (input) => usageRecovery.get(input.threadId),
-        [WS_METHODS.usageRecoverySubscribe]: (input) => usageRecovery.subscribe(input.threadId),
-        [WS_METHODS.usageRecoverySchedule]: (input) => usageRecovery.schedule(input),
-        [WS_METHODS.usageRecoveryCancel]: (input) => usageRecovery.cancel(input.threadId),
-        [WS_METHODS.usageRecoveryPause]: (input) => usageRecovery.pause(input),
         [WS_METHODS.scheduledTasksList]: (_input) =>
           observeRpcEffect(WS_METHODS.scheduledTasksList, scheduledTasks.list(), {
             "rpc.aggregate": "scheduledTasks",
@@ -3184,9 +3210,10 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         );
         const rpcWebSocketHttpEffect = yield* serveRpcWebSocket(
           WsRpcGroup,
-          Layer.merge(
+          Layer.mergeAll(
             makeWsRpcLayer(session, previewAutomationBroker, providerUsageUpdates),
             makeWsComputerRpcLayer(session),
+            usageRecoveryRpcLayer,
           ).pipe(
             Layer.provideMerge(RpcSerialization.layerJson),
             Layer.provide(ProviderMaintenanceRunner.layer),
