@@ -4,7 +4,7 @@ This plan ports Synara's Computer Use feature into Pathway in full. The decision
 
 ## Source
 
-- Synara `main` at `eaa61eded`, vendored read-only at `.repos/synara`. Never edit or import from it.
+- Synara `main` at `eaa61eded`, once vendored read-only at `.repos/synara` (since removed; see ADR 0044).
 - Linux stack, not on `main`, pinned at these heads:
   - #1294 `5f3f50397e`: core hooks
   - #823 `8f8d804828`: KWin

@@ -27,7 +27,7 @@ import {
  * embedded host never grants — `history_status`/`history_query`.
  *
  * The classification of every row lives in Synara's
- * `.repos/synara/docs/computer-use-cua/v2-parity-matrix.md`. The allowlists
+ * `docs/computer-use-cua/v2-parity-matrix.md` (upstream). The allowlists
  * below are the whole server→host boundary: a name absent from both is refused
  * by the desktop host before a daemon even starts, so a new driver tool is
  * unreachable by default and adding one here is the audited act.

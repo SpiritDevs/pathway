@@ -7,3 +7,5 @@ Synara is added to `.repos/synara` as a read-only reference repo alongside `effe
 The port also takes the open Linux stack, pinned at its 2026-09-23 heads: #1294 (`5f3f50397e`, core seams), #823 (`8f8d804828`, KWin backend), #824 (`83e03e49bb`, nested KWin) and #780 (`757001b231`, Hyprland). Without it, Linux would have only the read-only standalone host. The alternative macOS backend (#1010) is excluded. It was last restacked before #1090 merged, sits on the core #1090 replaced, and would compete with the merged macOS backend.
 
 Continuous tracking was rejected because Pathway's plumbing (MCP toolkits, adapters, environment policy and autonomy) diverges from Synara's gateway at the edges. Mechanical syncs would keep reopening those seams.
+
+Update (2026-09-27): the `.repos/synara` reference was removed. Vendoring a whole second product made the repo much heavier than it was worth. Study Synara from its upstream repository instead.

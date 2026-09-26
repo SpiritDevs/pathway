@@ -18,7 +18,6 @@ import {
 const encoder = new TextEncoder();
 const effectSmol = referenceRepos[0]!;
 const alchemyEffect = referenceRepos[1]!;
-const synara = referenceRepos[2]!;
 
 function mockHandle(
   options: {
@@ -89,7 +88,8 @@ it.layer(NodeServices.layer)("sync-reference-repos", (it) => {
         prefix: "sync-reference-repos-unpinned-",
       });
 
-      assert.equal(yield* resolveReferenceRepoRef(synara, rootDir, false), "main");
+      const { version: _version, ...unpinned } = alchemyEffect;
+      assert.equal(yield* resolveReferenceRepoRef(unpinned, rootDir, false), "main");
     }),
   );
 
@@ -263,7 +263,7 @@ it.layer(NodeServices.layer)("sync-reference-repos", (it) => {
         assert.fail(`Unexpected error: ${error._tag}`);
       }
       assert.equal(error.repoId, "missing");
-      assert.deepStrictEqual(error.expectedRepoIds, ["effect-smol", "alchemy-effect", "synara"]);
+      assert.deepStrictEqual(error.expectedRepoIds, ["effect-smol", "alchemy-effect"]);
       assert.ok(!("cause" in error));
     }),
   );
