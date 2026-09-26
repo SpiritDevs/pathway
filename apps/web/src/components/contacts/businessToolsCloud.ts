@@ -1,6 +1,6 @@
 import type { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
-import type { Value } from "convex/values";
+import { ConvexError, type Value } from "convex/values";
 import { useEffect, useState } from "react";
 import { useAuthenticatedConvexClient } from "../../cloud/useAuthenticatedConvexClient";
 
@@ -24,6 +24,12 @@ export function useBusinessToolsCloud() {
             );
           }),
         ]);
+      } catch (error) {
+        // Production Convex hides the thrown text in `message`; the backend's refusal is in `data`.
+        const data: unknown = error instanceof ConvexError ? error.data : undefined;
+        if (typeof data === "object" && data !== null && "message" in data)
+          throw new Error(String(data.message), { cause: error });
+        throw error;
       } finally {
         if (timeout) clearTimeout(timeout);
       }

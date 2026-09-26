@@ -5761,6 +5761,51 @@ it("does not confirm an unclaimed root while a separate delivery is accepted", a
   );
 });
 
+it("does not wait for stop receipts from jobs no worker holds", async () => {
+  const test = await coordinatorHarness();
+  const run = (await test.claim())!;
+  const releaseJob = (patch: Record<string, unknown> = {}) =>
+    test.t.run(async (ctx) => {
+      const job = (await ctx.db
+        .query("aiOrchestratorJobs")
+        .withIndex("by_domain_id", (q) => q.eq("id", run.id))
+        .unique())!;
+      await ctx.db.patch(job._id, { status: "cancelled", leaseExpiresAt: 0, ...patch });
+    });
+  const reopen = () =>
+    test.owner.mutation(api.aiOrchestrators.createChat, {
+      title: "Chief",
+      orchestratorIds: [test.id],
+      leadId: test.id,
+      companyIds: [],
+    });
+
+  // A claimed job cancelled before the archive has no worker left to confirm it.
+  await releaseJob();
+  await test.owner.mutation(api.aiOrchestrators.updateChat, {
+    chatId: test.chatId,
+    archived: true,
+  });
+  expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.lifecycle).toBe(
+    "archived",
+  );
+  expect(await reopen()).toBe(test.chatId);
+
+  // A conversation already stuck on such a job settles when its DM is reopened.
+  await releaseJob({ stopRequested: true, stopConfirmed: false });
+  await test.t.run(async (ctx) => {
+    const chat = (await ctx.db
+      .query("aiOrchestratorChats")
+      .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+      .unique())!;
+    await ctx.db.patch(chat._id, { archived: true, lifecycle: "archiving" });
+  });
+  expect(await reopen()).toBe(test.chatId);
+  expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]).toMatchObject({
+    archived: false,
+  });
+});
+
 describe("bounded cross-conversation discovery", () => {
   it("pages past 100 conversations and retains ambiguous matches without choosing one", async () => {
     const test = await coordinatorHarness();

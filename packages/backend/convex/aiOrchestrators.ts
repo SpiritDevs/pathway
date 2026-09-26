@@ -790,12 +790,17 @@ export const createChat = mutation({
         .query("aiOrchestratorChats")
         .withIndex("by_owner", (q) => q.eq("ownerSubject", user.clerkSubject))
         .take(200);
-      const dm = existing.find(
+      let dm = existing.find(
         (c) => c.kind === "dm" && c.leadId === ids[0] && c.lifecycle !== "deleted",
       );
-      if (dm) {
-        if (dm.lifecycle && dm.lifecycle !== "archived")
+      // A stop may already be settled; settle it before refusing, since nothing else re-checks it.
+      if (dm?.lifecycle === "archiving" || dm?.lifecycle === "deleting") {
+        await reconcileConversationLifecycle(ctx, dm);
+        dm = (await ctx.db.get(dm._id))!;
+        if (dm.lifecycle === "archiving" || dm.lifecycle === "deleting")
           return fail("This conversation is stopping.");
+      }
+      if (dm && dm.lifecycle !== "deleted") {
         await ctx.db.patch(dm._id, {
           archived: false,
           lifecycle: undefined,
@@ -1697,7 +1702,7 @@ export async function beginConversationStop(
     if (job.stopRequested) continue;
     await ctx.db.patch(job._id, {
       stopRequested: true,
-      stopConfirmed: job.environmentId === null && job.generation === 0,
+      stopConfirmed: job.leaseExpiresAt === 0,
       status: "cancelled",
       error: "Conversation stop requested.",
       updatedAt: now,

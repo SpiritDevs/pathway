@@ -30,9 +30,10 @@ export async function reconcileConversationLifecycle(
 ) {
   if (chat.lifecycle !== "archiving" && chat.lifecycle !== "deleting") return;
   const { work, jobs } = await conversationWork(ctx, chat.id);
+  // A job with no live lease was never claimed or was already released, so no worker can confirm it.
   const pending =
     work.filter((row) => row.stopRequested && !row.stopConfirmed).length +
-    jobs.filter((row) => row.stopRequested && !row.stopConfirmed).length;
+    jobs.filter((row) => row.stopRequested && !row.stopConfirmed && row.leaseExpiresAt > 0).length;
   await ctx.db.patch(chat._id, {
     lifecycle: pending ? chat.lifecycle : chat.lifecycle === "deleting" ? "deleted" : "archived",
     lifecycleDetail: pending

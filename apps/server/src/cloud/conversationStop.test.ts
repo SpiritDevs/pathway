@@ -203,6 +203,33 @@ describe("owned conversation stop", () => {
       expect(test.commands).toEqual([]);
     }),
   );
+  it.effect("confirms a completed provider-native subagent without walking its mirror thread", () =>
+    Effect.gen(function* () {
+      const root = withRun("root", "completed");
+      // Native mirror threads carry messages but no Pathway run.
+      const mirror = projection("mirror");
+      const stopped = {
+        ...root,
+        subagents: [
+          {
+            ...childTask(root, null),
+            childThreadId: mirror.thread.id,
+            status: "completed" as const,
+          },
+        ],
+      };
+      const test = services([stopped, mirror]);
+      expect((yield* reconcileOwnedStop(test.threads, stopped, "stop")).confirmed).toBe(true);
+      const running = {
+        ...stopped,
+        subagents: stopped.subagents.map((task) => ({ ...task, status: "running" as const })),
+      };
+      expect(yield* reconcileOwnedStop(test.threads, running, "stop")).toMatchObject({
+        confirmed: false,
+        detail: "Stop requested; waiting for provider-native subagent termination evidence.",
+      });
+    }),
+  );
   it.effect("stops a terminal parent's open completion cohort before confirming it", () =>
     Effect.gen(function* () {
       const root = { ...withRun("root", "completed") };

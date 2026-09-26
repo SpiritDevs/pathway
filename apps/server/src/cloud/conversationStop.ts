@@ -75,7 +75,14 @@ export const reconcileOwnedStop = Effect.fn("cloud.conversation.reconcileStop")(
         pending.push({ thread: next.thread, runId: message.runId });
     }
     for (const task of plan.children) {
-      if (task.childThreadId) {
+      // A provider-native child thread is a runless mirror; its task row is the only evidence.
+      if (task.origin === "provider_native") {
+        // Interrupted task rows may be synthetic cascade projections, not provider receipts.
+        if (task.status !== "completed") {
+          nativePending = true;
+          confirmed = false;
+        }
+      } else if (task.childThreadId) {
         const child = yield* threads.getThreadProjection(task.childThreadId as ThreadId);
         const childRun = child.messages.find((message) => message.role === "user")?.runId;
         if (child.thread.lineage.parentThreadId !== next.thread.thread.id || !childRun) {
@@ -83,10 +90,6 @@ export const reconcileOwnedStop = Effect.fn("cloud.conversation.reconcileStop")(
           continue;
         }
         pending.push({ thread: child, runId: childRun });
-      } else if (task.origin === "provider_native" && task.status !== "completed") {
-        // Interrupted task rows may be synthetic cascade projections, not provider receipts.
-        nativePending = true;
-        confirmed = false;
       } else if (!terminal(task.status)) {
         nativePending = true;
         confirmed = false;
