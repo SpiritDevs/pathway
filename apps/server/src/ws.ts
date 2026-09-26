@@ -3244,6 +3244,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               ),
             ),
           ),
+          session.sessionId,
         );
         return yield* Effect.acquireUseRelease(
           sessions.markConnected(session.sessionId),
