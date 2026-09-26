@@ -7,7 +7,7 @@
 //          overlay that hosts it.
 //
 // View-only: the card follows the driven content, with a compact activity
-// label and a visible error if its first frame cannot arrive. Close
+// label and a visible error if the frame stream fails. Close
 // lives in a hover/focus-reveal cluster (the composer's stop stays the
 // always-visible safety net). It mounts wherever the owning thread's transcript is on
 // screen and self-hides when that thread has no live preview session. Size is
@@ -232,14 +232,14 @@ function ComputerPreviewPopoverCard(props: {
   if (frameSignal && !hasFrame) {
     setHasFrame(true);
   }
-  // A failed first frame must not hide its own recovery message. Connecting
-  // stays quiet, while an explicit error or unsupported decoder opens the card.
+  // Stream failures remain visible over a held frame. A healthy native tap
+  // takes precedence over any error left by the disabled stills stream.
   const hasVisibleStatus =
-    !hasFrame && (streamStatus.kind === "error" || streamStatus.kind === "unsupported");
+    frameSource !== "tap" && (streamStatus.kind === "error" || streamStatus.kind === "unsupported");
   const visuallyOpen = open && (hasFrame || hasVisibleStatus);
 
   // Publish the live footprint for the rail: the chat reserves gutter space
-  // for a frame or a visible first-frame error, at the card's fitted width.
+  // for a frame or a visible stream error, at the card's fitted width.
 
   // Aspect follows the live content: the last decoded frame's own size,
   // latched so a source going quiet (tap silence, stills reconnect, a
@@ -314,8 +314,9 @@ function ComputerPreviewPopoverCard(props: {
         floating={floating !== undefined}
         frameDims={frameDims}
         hasFrame={hasFrame}
+        hasVisibleStatus={hasVisibleStatus}
         streamStatus={streamStatus}
-        statusLabel={statusLabel}
+        statusLabel={hasVisibleStatus ? (hasFrame ? "Stale frame" : null) : statusLabel}
         float={float}
       >
         <canvas
@@ -383,12 +384,22 @@ function ComputerPreviewViewport(props: {
   readonly floating: boolean;
   readonly frameDims: { readonly width: number; readonly height: number } | undefined;
   readonly hasFrame: boolean;
+  readonly hasVisibleStatus: boolean;
   readonly streamStatus: ReturnType<typeof useComputerImageStream>["status"];
   readonly statusLabel: string | null;
   readonly float: ComputerPreviewFloat;
 }) {
-  const { children, threadRef, floating, frameDims, hasFrame, streamStatus, statusLabel, float } =
-    props;
+  const {
+    children,
+    threadRef,
+    floating,
+    frameDims,
+    hasFrame,
+    hasVisibleStatus,
+    streamStatus,
+    statusLabel,
+    float,
+  } = props;
   return (
     <div
       className={cn(
@@ -419,12 +430,14 @@ function ComputerPreviewViewport(props: {
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 top-0 h-[45%] bg-gradient-to-b from-white/[0.09] via-white/[0.02] to-transparent"
       />
-      {/* The empty-state label belongs to a canvas nothing has ever decoded
-          into. Once a frame landed, losing the source just holds that frame —
-          no blank flash, and no label pasted over a live picture. */}
-      {!hasFrame ? (
+      {/* Keep the last image through reconnects, but show terminal failures
+          even after the first frame and dim the stale image for readability. */}
+      {!hasFrame || hasVisibleStatus ? (
         <div
-          className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center"
+          className={cn(
+            "pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center",
+            hasFrame && "bg-black/55",
+          )}
           role="status"
         >
           <ComputerPreviewStreamStatus status={streamStatus} />
