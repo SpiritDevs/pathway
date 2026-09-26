@@ -10,11 +10,15 @@
  * Milestones are the exception: they have pages of their own, so those rows are links, and what
  * lights one up is the path rather than the params.
  *
+ * Each section heading collapses its section, remembered per device so the sidebar looks the same
+ * when you come back. Projects and labels can also be searched by name.
+ *
  * @module components/issues/IssuesSidebar
  */
 import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
 import type { IssueCycleId, IssueMilestoneId, IssueView } from "@spiritdevs/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
+import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
   ArrowDownIcon,
@@ -28,10 +32,13 @@ import {
   MoreHorizontalIcon,
   PencilIcon,
   PlusIcon,
+  SearchIcon,
   Trash2Icon,
   UserIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 
 import { cn } from "~/lib/utils";
 import {
@@ -75,6 +82,7 @@ import {
   SidebarGroup,
   SidebarGroupAction,
   SidebarGroupLabel,
+  SidebarInput,
   SidebarMenu,
   SidebarMenuAction,
   SidebarMenuBadge,
@@ -118,6 +126,15 @@ import { useIssueProjectOptions } from "./useIssueProjectOptions";
 /** A stable empty array: the milestone rows are memo-free, but a fresh `[]` per render is noise. */
 const NO_MILESTONE_IDS: ReadonlyArray<string> = [];
 
+const COLLAPSED_SECTIONS_KEY = "pathway:issues-sidebar:collapsed-sections";
+const NO_COLLAPSED_SECTIONS: ReadonlyArray<string> = [];
+const CollapsedSections = Schema.Array(Schema.String);
+
+type IssuesSidebarSectionId = "cycles" | "projects" | "views" | "labels";
+
+const matchesQuery = (name: string, query: string) =>
+  name.toLowerCase().includes(query.trim().toLowerCase());
+
 export function IssuesSidebar() {
   const memberDirectory = useIssueMemberDirectory();
   const navigate = useNavigate();
@@ -141,6 +158,18 @@ export function IssuesSidebar() {
   const [showEndedCycles, setShowEndedCycles] = useState(false);
   const [renamingView, setRenamingView] = useState<IssueView | null>(null);
   const [pendingDeleteView, setPendingDeleteView] = useState<IssueView | null>(null);
+  const [collapsedSections, setCollapsedSections] = useLocalStorage(
+    COLLAPSED_SECTIONS_KEY,
+    NO_COLLAPSED_SECTIONS,
+    CollapsedSections,
+  );
+  const sectionProps = (id: IssuesSidebarSectionId) => ({
+    collapsed: collapsedSections.includes(id),
+    onToggleCollapsed: () =>
+      setCollapsedSections((current) =>
+        current.includes(id) ? current.filter((section) => section !== id) : [...current, id],
+      ),
+  });
 
   // Today is read when the cycles change rather than tracked: nothing in a sidebar is worth a
   // midnight timer, and a reconnect or any diff re-reads it.
@@ -304,136 +333,159 @@ export function IssuesSidebar() {
           </SidebarMenu>
         </SidebarGroup>
 
-        <SidebarGroup>
-          <SidebarGroupLabel>Cycles</SidebarGroupLabel>
-          <SidebarGroupAction
-            aria-label="New cycle"
-            onClick={() => setNewCycleOpen(true)}
-            title="New cycle"
-          >
-            <PlusIcon />
-          </SidebarGroupAction>
-          <SidebarMenu>
-            {cycles.length === 0 ? (
-              <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">
-                No cycles yet. A cycle is a named date range spanning every project.
-              </p>
-            ) : (
-              <>
-                {byStatus.active.map((cycle) =>
-                  cycleRow(
-                    cycle.id,
-                    cycle.name,
-                    formatIssueDateRange(cycle.startDate, cycle.endDate, today),
-                  ),
-                )}
-                {byStatus.upcoming.map((cycle) =>
-                  cycleRow(
-                    cycle.id,
-                    cycle.name,
-                    formatIssueDateRange(cycle.startDate, cycle.endDate, today),
-                  ),
-                )}
-                {byStatus.ended.length === 0 ? null : showEndedCycles ? (
-                  byStatus.ended.map((cycle) =>
+        <IssuesSidebarSection
+          {...sectionProps("cycles")}
+          action={
+            <SidebarGroupAction
+              aria-label="New cycle"
+              onClick={() => setNewCycleOpen(true)}
+              title="New cycle"
+            >
+              <PlusIcon />
+            </SidebarGroupAction>
+          }
+          title="Cycles"
+        >
+          {() => (
+            <SidebarMenu>
+              {cycles.length === 0 ? (
+                <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">
+                  No cycles yet. A cycle is a named date range spanning every project.
+                </p>
+              ) : (
+                <>
+                  {byStatus.active.map((cycle) =>
                     cycleRow(
                       cycle.id,
                       cycle.name,
                       formatIssueDateRange(cycle.startDate, cycle.endDate, today),
                     ),
-                  )
-                ) : (
-                  <SidebarMenuItem>
-                    <button
-                      className="w-full rounded-md px-2 py-1 text-start text-xs text-sidebar-muted-foreground outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                      onClick={() => setShowEndedCycles(true)}
-                      type="button"
-                    >
-                      Show {byStatus.ended.length} ended
-                    </button>
-                  </SidebarMenuItem>
-                )}
-              </>
-            )}
-          </SidebarMenu>
-        </SidebarGroup>
-
-        <SidebarGroup>
-          <SidebarGroupLabel>Projects</SidebarGroupLabel>
-          <SidebarMenu>
-            {projects.length === 0 ? (
-              <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">
-                No projects yet.
-              </p>
-            ) : (
-              projects.map((project) => (
-                <ProjectRow
-                  isActive={
-                    onIssues &&
-                    project.projectIds.every((projectId) =>
-                      issuesFilterHasValue(filter, "project", projectId),
-                    )
-                  }
-                  key={project.id}
-                  milestones={milestones.filter((milestone) =>
-                    project.projectIds.includes(milestone.projectId),
                   )}
-                  milestoneProgress={milestoneProgress}
-                  onSelectMilestone={navigateToMilestone}
-                  onSelectProject={() => applyProjectFilter(project.projectIds)}
-                  selectedMilestoneIds={openMilestoneIds}
-                  title={project.title}
-                />
-              ))
-            )}
-          </SidebarMenu>
-        </SidebarGroup>
+                  {byStatus.upcoming.map((cycle) =>
+                    cycleRow(
+                      cycle.id,
+                      cycle.name,
+                      formatIssueDateRange(cycle.startDate, cycle.endDate, today),
+                    ),
+                  )}
+                  {byStatus.ended.length === 0 ? null : showEndedCycles ? (
+                    byStatus.ended.map((cycle) =>
+                      cycleRow(
+                        cycle.id,
+                        cycle.name,
+                        formatIssueDateRange(cycle.startDate, cycle.endDate, today),
+                      ),
+                    )
+                  ) : (
+                    <SidebarMenuItem>
+                      <button
+                        className="w-full rounded-md px-2 py-1 text-start text-xs text-sidebar-muted-foreground outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                        onClick={() => setShowEndedCycles(true)}
+                        type="button"
+                      >
+                        Show {byStatus.ended.length} ended
+                      </button>
+                    </SidebarMenuItem>
+                  )}
+                </>
+              )}
+            </SidebarMenu>
+          )}
+        </IssuesSidebarSection>
+
+        <IssuesSidebarSection {...sectionProps("projects")} searchable title="Projects">
+          {(query) => {
+            const shown = projects.filter((project) => matchesQuery(project.title, query));
+            return (
+              <SidebarMenu>
+                {projects.length === 0 ? (
+                  <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">
+                    No projects yet.
+                  </p>
+                ) : shown.length === 0 ? (
+                  <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">
+                    No matching projects.
+                  </p>
+                ) : (
+                  shown.map((project) => (
+                    <ProjectRow
+                      isActive={
+                        onIssues &&
+                        project.projectIds.every((projectId) =>
+                          issuesFilterHasValue(filter, "project", projectId),
+                        )
+                      }
+                      key={project.id}
+                      milestones={milestones.filter((milestone) =>
+                        project.projectIds.includes(milestone.projectId),
+                      )}
+                      milestoneProgress={milestoneProgress}
+                      onSelectMilestone={navigateToMilestone}
+                      onSelectProject={() => applyProjectFilter(project.projectIds)}
+                      selectedMilestoneIds={openMilestoneIds}
+                      title={project.title}
+                    />
+                  ))
+                )}
+              </SidebarMenu>
+            );
+          }}
+        </IssuesSidebarSection>
 
         {/* No empty state: a view is made from the chip bar, so a section here with nothing in it
             would be a heading pointing at a control on another screen. */}
         {views.length === 0 ? null : (
-          <SidebarGroup>
-            <SidebarGroupLabel>Views</SidebarGroupLabel>
-            <SidebarMenu>
-              {views.map((view, index) => (
-                <IssueViewRow
-                  canMoveDown={index < views.length - 1}
-                  canMoveUp={index > 0}
-                  isActive={activeView?.id === view.id}
-                  key={view.id}
-                  onApply={() => navigateWith(issueViewSearchPatch(view.config))}
-                  onDelete={() => setPendingDeleteView(view)}
-                  onMove={(direction) => moveView(view, direction)}
-                  onRename={() => setRenamingView(view)}
-                  view={view}
-                />
-              ))}
-            </SidebarMenu>
-          </SidebarGroup>
+          <IssuesSidebarSection {...sectionProps("views")} title="Views">
+            {() => (
+              <SidebarMenu>
+                {views.map((view, index) => (
+                  <IssueViewRow
+                    canMoveDown={index < views.length - 1}
+                    canMoveUp={index > 0}
+                    isActive={activeView?.id === view.id}
+                    key={view.id}
+                    onApply={() => navigateWith(issueViewSearchPatch(view.config))}
+                    onDelete={() => setPendingDeleteView(view)}
+                    onMove={(direction) => moveView(view, direction)}
+                    onRename={() => setRenamingView(view)}
+                    view={view}
+                  />
+                ))}
+              </SidebarMenu>
+            )}
+          </IssuesSidebarSection>
         )}
 
-        <SidebarGroup>
-          <SidebarGroupLabel>Labels</SidebarGroupLabel>
-          <SidebarMenu>
-            {labels.length === 0 ? (
-              <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">
-                Labels appear here once you create one in Settings.
-              </p>
-            ) : (
-              labels.map((label) => (
-                <SidebarMenuItem key={label.id}>
-                  <SidebarMenuButton
-                    isActive={onIssues && issuesFilterHasValue(filter, "label", label.id)}
-                    onClick={() => applyFilter("label", label.id)}
-                  >
-                    <IssueLabelDot color={label.color} />
-                    <span className="truncate">{label.name}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))
-            )}
-          </SidebarMenu>
-        </SidebarGroup>
+        <IssuesSidebarSection {...sectionProps("labels")} searchable title="Labels">
+          {(query) => {
+            const shown = labels.filter((label) => matchesQuery(label.name, query));
+            return (
+              <SidebarMenu>
+                {labels.length === 0 ? (
+                  <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">
+                    Labels appear here once you create one in Settings.
+                  </p>
+                ) : shown.length === 0 ? (
+                  <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">
+                    No matching labels.
+                  </p>
+                ) : (
+                  shown.map((label) => (
+                    <SidebarMenuItem key={label.id}>
+                      <SidebarMenuButton
+                        isActive={onIssues && issuesFilterHasValue(filter, "label", label.id)}
+                        onClick={() => applyFilter("label", label.id)}
+                      >
+                        <IssueLabelDot color={label.color} />
+                        <span className="truncate">{label.name}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))
+                )}
+              </SidebarMenu>
+            );
+          }}
+        </IssuesSidebarSection>
       </SidebarContent>
 
       <NewCycleDialog onOpenChange={setNewCycleOpen} open={newCycleOpen} />
@@ -478,6 +530,84 @@ export function IssuesSidebar() {
         </AlertDialogPopup>
       </AlertDialog>
     </>
+  );
+}
+
+/**
+ * A sidebar group whose heading collapses it. A searchable section adds a search button on the
+ * right that opens a name filter; the filter is transient, closing it or pressing Escape clears it.
+ * An open search shows the rows even in a collapsed section, since searching is asking to see them.
+ */
+function IssuesSidebarSection({
+  title,
+  collapsed,
+  onToggleCollapsed,
+  searchable = false,
+  action,
+  children,
+}: {
+  title: string;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+  searchable?: boolean;
+  action?: ReactNode;
+  children: (query: string) => ReactNode;
+}) {
+  const [query, setQuery] = useState<string | null>(null);
+  const closeSearch = () => setQuery(null);
+  const open = !collapsed || query !== null;
+  const noun = title.toLowerCase();
+
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel
+        aria-expanded={open}
+        className="w-fit cursor-pointer gap-1 hover:text-sidebar-foreground"
+        onClick={() => {
+          closeSearch();
+          // A collapsed section held open by its search just closes again.
+          if (!(collapsed && query !== null)) onToggleCollapsed();
+        }}
+        render={<button type="button" />}
+      >
+        {title}
+        <ChevronRightIcon
+          className={cn(
+            "size-3 text-sidebar-muted-foreground transition-transform duration-150 motion-reduce:transition-none",
+            open && "rotate-90",
+          )}
+        />
+      </SidebarGroupLabel>
+      {searchable ? (
+        <SidebarGroupAction
+          aria-label={query === null ? `Search ${noun}` : `Close the ${noun} search`}
+          aria-pressed={query !== null}
+          onClick={() => setQuery(query === null ? "" : null)}
+          title={`Search ${noun}`}
+        >
+          <SearchIcon className="size-3.5" />
+        </SidebarGroupAction>
+      ) : (
+        action
+      )}
+      {query === null ? null : (
+        <div className="px-2 pb-1">
+          <SidebarInput
+            aria-label={`Search ${noun}`}
+            autoFocus
+            onChange={(event) => setQuery(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              event.preventDefault();
+              closeSearch();
+            }}
+            placeholder={`Search ${noun}`}
+            value={query}
+          />
+        </div>
+      )}
+      {open ? children(query ?? "") : null}
+    </SidebarGroup>
   );
 }
 
