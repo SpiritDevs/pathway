@@ -45,6 +45,9 @@ drag, dock it back, or hide it for the rest of the task; hiding does not stop th
 preview to click at that spot on the controlled computer. The preview streams only while it is on
 screen.
 
+If the preview stream fails, it shows **Live view unavailable**. Any last image stays visible,
+dimmed and marked **Stale frame** in place of the activity label.
+
 To stop the agent, use **Stop** in the chat, or press Escape on the host Mac. After a stop, send a
 new request to continue.
 

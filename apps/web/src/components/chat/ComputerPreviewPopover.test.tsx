@@ -312,6 +312,48 @@ describe("ComputerPreviewPopover", () => {
     expect(markup).not.toMatch(/animate-(ping|pulse|spin)/);
   });
 
+  it.each([
+    [{ kind: "error", message: "Live view unavailable" }, "Live view unavailable"],
+    [{ kind: "unsupported" }, "This browser cannot decode desktop frames."],
+  ] as const)("marks a held frame stale when the stream reports %s", (streamStatus, message) => {
+    const markup = render({
+      session: session("live"),
+      state: threadState({ agentActive: true }),
+      tapQuiet: true,
+      streamStatus,
+    });
+    expect(isOpen(markup)).toBe(true);
+    expect(markup).toContain("<canvas");
+    expect(markup).toContain("960 / 600");
+    expect(markup).toContain(message);
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain(">Stale frame</span>");
+    expect(markup).not.toContain(">Live</span>");
+    expect(markup).not.toMatch(/animate-(ping|pulse|spin)/);
+  });
+
+  it("replaces the agent activity while the held frame is unavailable", () => {
+    const markup = render({
+      session: session("live"),
+      state: threadState({ agentActive: true, activity: "Reading clipboard" }),
+      tapQuiet: true,
+      streamStatus: { kind: "error", message: "Live view unavailable" },
+    });
+    expect(markup).toContain(">Stale frame</span>");
+    expect(markup).not.toContain("Reading clipboard");
+  });
+
+  it("shows live activity when the native tap takes over from a failed stills stream", () => {
+    const markup = render({
+      session: session("live"),
+      state: threadState({ agentActive: true }),
+      streamStatus: { kind: "error", message: "Live view unavailable" },
+    });
+    expect(markup).toContain(">Live</span>");
+    expect(markup).not.toContain("Live view unavailable");
+    expect(markup).not.toContain("Stale frame");
+  });
+
   it("offers only close: the pane is disabled and stopping lives in the composer", () => {
     const markup = render({
       session: session("live"),
