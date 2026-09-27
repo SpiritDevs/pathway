@@ -1,6 +1,14 @@
 import { Schema } from "effect";
 import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import type { EnvironmentId } from "./baseSchemas.ts";
 import { PreviewTabId, PreviewViewportSize } from "./preview.ts";
+
+/**
+ * Automation host id of an environment's own browser. Thread preview activity and
+ * takeovers carry it, so any client can tell the agent is in the remote browser.
+ */
+export const environmentBrowserHostClientId = (environmentId: EnvironmentId): string =>
+  `environment-browser:${environmentId}`;
 
 const target = { threadId: ThreadId, tabId: PreviewTabId };
 const text = Schema.String.check(Schema.isMaxLength(64_000));

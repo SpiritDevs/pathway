@@ -16,17 +16,24 @@ Blocking questions still pause the agent and use their existing response flow. O
 
 ## Choose a browser
 
-The environment browser runs beside your agent. You can view it from the web app or iOS without keeping Pathway desktop connected. Its tabs and website sessions stay on that environment when your client disconnects.
+Every browser tab is either **remote** or **local**, and its tab says which:
 
-On desktop, the browser panel lets you choose between This desktop and Environment browser. They have separate website sessions. A task keeps its browser host while it works. Wait for an action to finish before switching hosts.
+- **Remote · <environment>** runs beside your agent on the thread's environment. There, `localhost` is the environment, so `localhost:3000` shows the dev server your agent started. You can watch and use it from desktop, the web app and iOS, including over Pathway Connect. Its tabs and website sessions stay on that environment when your client disconnects.
+- **Local · This Mac** is the desktop app's own browser. There, `localhost` is the computer you are using. Only the desktop app has one.
 
-On iOS, choose Environment browser from the thread's top-right menu. It opens as a full navigation screen. Use Back to return to the conversation. Enter a website address or choose New tab to begin. Reconnect browser retries the connection if loading fails.
+When the thread's environment is another machine, the browser opens remote by default. When it is the machine the desktop app runs on, it opens local. The web app and iOS always use the remote browser. On desktop, choose either one from the **+** menu in the panel's tab bar. Both kinds of tab can sit side by side.
 
-Use the tab bar to open, select, and close pages. Websites can open additional tabs for links and sign-in flows. Closing the final environment-browser tab stops its browser process. Opening the browser later reuses the task's saved website profile.
+Servers listed under **Local servers** run on the environment, so they open in the remote browser unless the environment is this computer. If you type a `localhost` address into a local tab while the environment is another machine, Pathway offers to open it in the remote browser instead. You can still open it on this computer. On desktop, right-click a local tab and choose **Open in remote browser** to move its page across.
 
-Take browser control before interacting while the agent is working. Resume the agent when you are finished.
+When an agent browses in the remote browser, a small live preview of its page floats over the conversation on desktop and web. On iOS it appears above the composer. Click the preview, or choose **Open in right panel**, to see the same page in the browser panel. If the connection drops, the preview and the panel reconnect on their own. Choose **Reconnect** if the connection still fails.
 
-The desktop's **Take over to assist agent** offer appears only when that desktop has the browser tab used by the current run. A failed attempt to open a browser without a tab does not offer takeover.
+On iOS, you can also choose Remote browser from the thread's top-right menu. It opens on the page the agent is using, as a full navigation screen. Use Back to return to the conversation. Enter a website address or choose New tab to begin. Reconnect browser retries the connection if loading fails.
+
+Use the tab bar to open, select, and close pages. Websites can open additional tabs for links and sign-in flows. Closing the final remote-browser tab stops its browser process. Opening the browser later reuses the task's saved website profile.
+
+The agent works in whichever browser you are watching. Opening the remote browser routes the agent's browsing there. On desktop, opening a new local tab hands the agent back to this computer's browser.
+
+Take browser control before interacting while the agent is working. Use **Take over to assist agent** in the browser panel or above the composer. Resume the agent when you are finished. Any client watching the remote browser can take control. For a local tab, only the desktop showing that tab can take control. A failed attempt to open a browser without a tab does not offer takeover.
 
 ## Saved logins
 

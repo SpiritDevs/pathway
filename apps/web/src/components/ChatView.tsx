@@ -38,6 +38,7 @@ import { initialAsyncQuestionAnswers } from "./chat/ComposerAsyncQuestions";
 import {
   DEFAULT_MODEL,
   defaultInstanceIdForDriver,
+  environmentBrowserHostClientId,
   type ChatAttachment,
   type CommandId,
   type EnvironmentId,
@@ -209,6 +210,7 @@ import {
   shouldPresentRightPanelAsSheet,
 } from "../rightPanelLayout";
 import {
+  isRemoteBrowserSurface,
   pullRequestSurfaceId,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
@@ -223,6 +225,14 @@ import {
   useThreadPreviewState,
 } from "../previewStateStore";
 import { addBrowserSurface } from "./preview/addBrowserSurface";
+import {
+  type BrowserPlacement,
+  hasLocalBrowser,
+  localMachineLabel,
+  useEnvironmentOnThisMachine,
+} from "../browser/browserPlacement";
+import { openRemoteBrowser, useRemoteBrowserStore } from "../browser/remoteBrowserStore";
+import { useRemoteAgentBrowserReveal } from "./preview/useRemoteAgentBrowserReveal";
 import { closePreviewSession } from "./preview/closePreviewSession";
 import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
 import { subscribePreviewAction } from "./preview/previewActionBus";
@@ -2282,7 +2292,7 @@ function ChatViewContent(props: ChatViewProps) {
     () => [...new Set([...activeKnownTerminalIds, ...panelTerminalIds])],
     [activeKnownTerminalIds, panelTerminalIds],
   );
-  const previewPanelOpen = activeRightPanelKind === "preview" && isPreviewSupportedInRuntime();
+  const previewPanelOpen = activeRightPanelKind === "preview";
   const rightPanelOpen = !isPanelPresentation && rightPanelState.isOpen;
   const canPopOutRightPanel = rightPanelOpen && !shouldUseRightPanelSheet;
   const rightPanelPoppedOut =
@@ -2313,9 +2323,13 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     if (!activeThreadRef) return;
+    // Without a local browser, local tabs cannot render here; only the remote surface stays.
     useRightPanelStore
       .getState()
-      .reconcileBrowserSurfaces(activeThreadRef, Object.keys(activePreviewState.sessions));
+      .reconcileBrowserSurfaces(
+        activeThreadRef,
+        hasLocalBrowser ? Object.keys(activePreviewState.sessions) : [],
+      );
   }, [activePreviewState.sessions, activeThreadRef]);
 
   useEffect(() => {
@@ -2323,19 +2337,31 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().reconcileThreadSurfaces(activeThreadRef, sideChatThreadIds);
   }, [activeThreadRef, allEnvironmentShellsBootstrapped, sideChatThreadIds]);
 
+  const activeRemoteBrowserTabId = useRemoteBrowserStore((state) =>
+    activeThreadRef
+      ? (state.byThreadKey[scopedThreadKey(activeThreadRef)]?.selectedTabId ?? null)
+      : null,
+  );
   useEffect(() => {
     if (!activeThreadRef || !activePreviewMiniPlayer) return;
-    const miniTabStillExists = Boolean(activePreviewState.sessions[activePreviewMiniPlayer.tabId]);
+    const remote = activePreviewMiniPlayer.placement === "remote";
+    // A remote mini-player closes itself when its tab disappears from the environment.
+    const miniTabStillExists =
+      remote || Boolean(activePreviewState.sessions[activePreviewMiniPlayer.tabId]);
     const sameTabOpenInPanel =
       previewPanelOpen &&
-      activeRightPanelSurface?.kind === "preview" &&
-      activeRightPanelSurface.resourceId === activePreviewMiniPlayer.tabId;
+      (remote
+        ? isRemoteBrowserSurface(activeRightPanelSurface) &&
+          activeRemoteBrowserTabId === activePreviewMiniPlayer.tabId
+        : activeRightPanelSurface?.kind === "preview" &&
+          activeRightPanelSurface.resourceId === activePreviewMiniPlayer.tabId);
     if (!miniTabStillExists || sameTabOpenInPanel) {
       usePreviewMiniPlayerStore.getState().close(activeThreadRef);
     }
   }, [
     activePreviewMiniPlayer,
     activePreviewState.sessions,
+    activeRemoteBrowserTabId,
     activeRightPanelSurface,
     activeThreadRef,
     previewPanelOpen,
@@ -4582,10 +4608,59 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
   }, [activeThreadRef]);
-  const createBrowserSurface = useCallback(() => {
-    if (!activeThreadRef) return;
-    void addBrowserSurface({ threadRef: activeThreadRef, openPreview });
-  }, [activeThreadRef, openPreview]);
+  const environmentOnThisMachine = useEnvironmentOnThisMachine(
+    activeThreadRef?.environmentId ?? null,
+  );
+  const defaultBrowserPlacement: BrowserPlacement = environmentOnThisMachine ? "local" : "remote";
+  const remoteBrowserCommand = useAtomCommand(previewEnvironment.remoteCommand, {
+    reportFailure: false,
+  });
+  const createBrowserSurface = useCallback(
+    (placement: BrowserPlacement = defaultBrowserPlacement) => {
+      if (!activeThreadRef) return;
+      if (placement === "remote" || !hasLocalBrowser) {
+        openRemoteBrowser(activeThreadRef);
+        return;
+      }
+      // Choosing this desktop's browser hands the agent back to it too, the way
+      // watching the remote browser routes the agent there.
+      void remoteBrowserCommand({
+        environmentId: activeThreadRef.environmentId,
+        input: { action: "selectHost", threadId: activeThreadRef.threadId, host: "automatic" },
+      });
+      void addBrowserSurface({ threadRef: activeThreadRef, openPreview });
+    },
+    [activeThreadRef, defaultBrowserPlacement, openPreview, remoteBrowserCommand],
+  );
+  const openInRemoteBrowser = useCallback(
+    (surface: RightPanelSurface) => {
+      if (!activeThreadRef || surface.kind !== "preview" || surface.resourceId === null) return;
+      const navStatus = activePreviewState.sessions[surface.resourceId]?.navStatus;
+      openRemoteBrowser(
+        activeThreadRef,
+        navStatus && navStatus._tag !== "Idle" ? { url: navStatus.url } : {},
+      );
+    },
+    [activePreviewState.sessions, activeThreadRef],
+  );
+  const activeEnvironmentLabel = activeEnvironment?.label ?? "Environment";
+  const browserOptions = useMemo(() => {
+    const remote = {
+      placement: "remote" as const,
+      label: `Remote browser · ${activeEnvironmentLabel}`,
+    };
+    if (!hasLocalBrowser) return [remote];
+    const local = { placement: "local" as const, label: `Local browser · ${localMachineLabel()}` };
+    return defaultBrowserPlacement === "local" ? [local, remote] : [remote, local];
+  }, [activeEnvironmentLabel, defaultBrowserPlacement]);
+  const browserLabels = useMemo(
+    () => ({
+      remote: `Remote · ${activeEnvironmentLabel}`,
+      // Local tabs only need a label when their localhost differs from the agent's.
+      local: environmentOnThisMachine ? null : `Local · ${localMachineLabel()}`,
+    }),
+    [activeEnvironmentLabel, environmentOnThisMachine],
+  );
   const addDiffSurface = useCallback(() => {
     if (!activeThreadRef || !isServerThread || !isGitRepo) return;
     useRightPanelStore.getState().open(activeThreadRef, "diff");
@@ -4639,19 +4714,46 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeProject, activeThreadRef, supportsPullRequests, threadRepository],
   );
+  /** Shows the thread's browser: the one already in the panel, else a new tab in the default browser. */
+  const revealBrowserSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    const browserSurfaces = rightPanelState.surfaces.filter(
+      (surface) =>
+        surface.kind === "preview" &&
+        (surface.resourceId !== null || isRemoteBrowserSurface(surface)),
+    );
+    const existing =
+      browserSurfaces.find(
+        (surface) => surface.id === `browser:${activePreviewState.activeTabId}`,
+      ) ?? browserSurfaces[0];
+    if (existing) {
+      useRightPanelStore.getState().activateSurface(activeThreadRef, existing.id);
+      if (existing.kind === "preview" && existing.resourceId !== null) {
+        setActivePreviewTab(activeThreadRef, existing.resourceId);
+      }
+      return;
+    }
+    const activeTabId = hasLocalBrowser ? activePreviewState.activeTabId : null;
+    if (activeTabId && defaultBrowserPlacement === "local") {
+      useRightPanelStore.getState().openBrowser(activeThreadRef, activeTabId);
+      return;
+    }
+    createBrowserSurface();
+  }, [
+    activePreviewState.activeTabId,
+    activeThreadRef,
+    createBrowserSurface,
+    defaultBrowserPlacement,
+    rightPanelState.surfaces,
+  ]);
   const togglePreviewPanel = useCallback(() => {
-    if (!activeThreadRef || !isPreviewSupportedInRuntime()) return;
+    if (!activeThreadRef) return;
     if (previewPanelOpen) {
       useRightPanelStore.getState().close(activeThreadRef);
       return;
     }
-    const activeTabId = activePreviewState.activeTabId;
-    if (activeTabId) {
-      useRightPanelStore.getState().openBrowser(activeThreadRef, activeTabId);
-    } else {
-      createBrowserSurface();
-    }
-  }, [activePreviewState.activeTabId, activeThreadRef, createBrowserSurface, previewPanelOpen]);
+    revealBrowserSurface();
+  }, [activeThreadRef, previewPanelOpen, revealBrowserSurface]);
   const closePreviewPanel = useCallback(() => {
     if (activeThreadRef) {
       setPoppedOutRightPanelThreadKey(null);
@@ -4665,29 +4767,18 @@ function ChatViewContent(props: ChatViewProps) {
    * panel from any tab, so the shortcut always reads as "show/hide my browser".
    */
   const toggleBrowserPanel = useCallback(() => {
-    if (isPanelPresentation || !activeThreadRef || !isPreviewSupportedInRuntime()) return;
+    if (isPanelPresentation || !activeThreadRef) return;
     if (rightPanelOpen) {
       closePreviewPanel();
       return;
     }
-    const existingBrowserTabId =
-      rightPanelState.surfaces.find(
-        (surface): surface is Extract<RightPanelSurface, { kind: "preview" }> =>
-          surface.kind === "preview" && surface.resourceId !== null,
-      )?.resourceId ?? activePreviewState.activeTabId;
-    if (existingBrowserTabId) {
-      useRightPanelStore.getState().openBrowser(activeThreadRef, existingBrowserTabId);
-      return;
-    }
-    createBrowserSurface();
+    revealBrowserSurface();
   }, [
-    activePreviewState.activeTabId,
     activeThreadRef,
     closePreviewPanel,
-    createBrowserSurface,
     isPanelPresentation,
+    revealBrowserSurface,
     rightPanelOpen,
-    rightPanelState.surfaces,
   ]);
   const addTerminalSurface = useCallback(() => {
     if (!activeThreadRef || !activeThreadId || (!activeProject && !gitCwd)) return;
@@ -6147,10 +6238,28 @@ function ChatViewContent(props: ChatViewProps) {
   const activeBrowserTakeoverRunStatus = activeBrowserTakeoverRun?.status ?? null;
   const browserTakeoverPreviewActivity = serverProjection?.thread.previewActivity ?? null;
   const browserTakeoverTabId = browserTakeoverPreviewActivity?.tabId;
+  // Every client can watch and drive the environment's browser, so when the agent
+  // browses there this client counts as its host for takeover purposes.
+  const environmentBrowserHostId = activeThreadRef
+    ? environmentBrowserHostClientId(activeThreadRef.environmentId)
+    : null;
+  const agentBrowsesRemotely =
+    environmentBrowserHostId !== null &&
+    (browserTakeoverPreviewActivity?.hostClientId === environmentBrowserHostId ||
+      projectedBrowserTakeover?.hostClientId === environmentBrowserHostId);
+  const takeoverHostClientId = agentBrowsesRemotely
+    ? environmentBrowserHostId
+    : browserTakeoverHostClientId;
   const browserTakeoverTabAvailable =
     browserTakeoverTabId != null &&
-    activePreviewState.sessions[browserTakeoverTabId] !== undefined &&
-    activePreviewState.desktopByTabId[browserTakeoverTabId]?.hasWebContents === true;
+    (agentBrowsesRemotely ||
+      (activePreviewState.sessions[browserTakeoverTabId] !== undefined &&
+        activePreviewState.desktopByTabId[browserTakeoverTabId]?.hasWebContents === true));
+  // Side chats in the panel never float a mini-player; their owner thread reveals its own browsing.
+  useRemoteAgentBrowserReveal(
+    isPanelPresentation ? null : activeThreadRef,
+    serverProjection ? (serverProjection.thread.previewActivity ?? null) : undefined,
+  );
   // Re-read every render (a cheap map lookup) rather than inside the memo: the
   // answer flips when the first projection lands, which need not move any other
   // dependency of the memo below.
@@ -6164,9 +6273,9 @@ function ChatViewContent(props: ChatViewProps) {
       previewActivity: browserTakeoverPreviewActivity,
       activeRunId: activeBrowserTakeoverRunId,
       activeRunStatus: activeBrowserTakeoverRunStatus,
-      previewSupported: isPreviewSupportedInRuntime(),
+      previewSupported: agentBrowsesRemotely || isPreviewSupportedInRuntime(),
       previewTabAvailable: browserTakeoverTabAvailable,
-      automationHostClientId: browserTakeoverHostClientId,
+      automationHostClientId: takeoverHostClientId,
       requestPending:
         browserTakeoverRequestThreadKey !== null &&
         browserTakeoverRequestThreadKey === activeThreadKey,
@@ -6178,7 +6287,8 @@ function ChatViewContent(props: ChatViewProps) {
     activeBrowserTakeoverRunStatus,
     activeThreadKey,
     activeThreadRef,
-    browserTakeoverHostClientId,
+    agentBrowsesRemotely,
+    takeoverHostClientId,
     browserTakeoverRequestThreadKey,
     projectedBrowserTakeover,
     browserTakeoverPreviewActivity,
@@ -6195,6 +6305,15 @@ function ChatViewContent(props: ChatViewProps) {
     const takeover = projectedBrowserTakeover;
     if (!takeover || !activeThreadRef) return;
     if (focusedBrowserTakeoverIdRef.current === takeover.id) return;
+    if (
+      takeover.status === "active" &&
+      takeover.tabId !== null &&
+      takeover.hostClientId === environmentBrowserHostClientId(activeThreadRef.environmentId)
+    ) {
+      openRemoteBrowser(activeThreadRef, { tabId: takeover.tabId });
+      focusedBrowserTakeoverIdRef.current = takeover.id;
+      return;
+    }
     const tabId = resolveBrowserTakeoverTabToReveal({
       takeover,
       previewSupported: isPreviewSupportedInRuntime(),
@@ -9469,6 +9588,7 @@ function ChatViewContent(props: ChatViewProps) {
         <PreviewPanel
           mode="embedded"
           threadRef={activeThreadRef}
+          placement={isRemoteBrowserSurface(activeRightPanelSurface) ? "remote" : "local"}
           tabId={activeRightPanelSurface.resourceId}
           configuredUrls={configuredPreviewUrls}
           visible
@@ -10478,13 +10598,18 @@ function ChatViewContent(props: ChatViewProps) {
               onCloseAllSurfaces={closeAllRightPanelSurfaces}
               onCopyFilePath={copyRightPanelFilePath}
               onAddBrowser={createBrowserSurface}
+              browserOptions={browserOptions}
+              browserLabels={browserLabels}
+              {...(hasLocalBrowser && !environmentOnThisMachine
+                ? { onOpenInRemoteBrowser: openInRemoteBrowser }
+                : {})}
               onAddTerminal={addTerminalSurface}
               onAddDiff={addDiffSurface}
               onAddFiles={addFilesSurface}
               onAddPullRequest={addPullRequestSurface}
               onAddAgents={addAgentsSurface}
               onAddSideChat={createSideChat}
-              browserAvailable={isPreviewSupportedInRuntime()}
+              browserAvailable
               terminalAvailable={activeWorkspaceRoot !== undefined}
               diffAvailable={isServerThread && isGitRepo}
               filesAvailable={activeWorkspaceRoot !== undefined}
@@ -10534,13 +10659,18 @@ function ChatViewContent(props: ChatViewProps) {
             onCloseAllSurfaces={closeAllRightPanelSurfaces}
             onCopyFilePath={copyRightPanelFilePath}
             onAddBrowser={createBrowserSurface}
+            browserOptions={browserOptions}
+            browserLabels={browserLabels}
+            {...(hasLocalBrowser && !environmentOnThisMachine
+              ? { onOpenInRemoteBrowser: openInRemoteBrowser }
+              : {})}
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddAgents={addAgentsSurface}
             onAddSideChat={createSideChat}
-            browserAvailable={isPreviewSupportedInRuntime()}
+            browserAvailable
             terminalAvailable={activeWorkspaceRoot !== undefined}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeWorkspaceRoot !== undefined}

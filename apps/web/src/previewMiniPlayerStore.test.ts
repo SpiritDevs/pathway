@@ -33,6 +33,7 @@ describe("previewMiniPlayerStore", () => {
       selectThreadPreviewMiniPlayer(usePreviewMiniPlayerStore.getState().byThreadKey, refA),
     ).toEqual({
       tabId: "tab-b",
+      placement: "local",
       position: { x: 24, y: 48 },
       size: null,
     });
@@ -47,6 +48,7 @@ describe("previewMiniPlayerStore", () => {
       selectThreadPreviewMiniPlayer(usePreviewMiniPlayerStore.getState().byThreadKey, refA),
     ).toEqual({
       tabId: "tab-b",
+      placement: "local",
       position: null,
       size: null,
     });
@@ -60,5 +62,14 @@ describe("previewMiniPlayerStore", () => {
     expect(
       selectThreadPreviewMiniPlayer(usePreviewMiniPlayerStore.getState().byThreadKey, refA),
     ).toMatchObject({ tabId: "tab-b", size: { width: 480, height: 320 } });
+  });
+
+  it("moves the same tab id between the local webview and the remote stream", () => {
+    usePreviewMiniPlayerStore.getState().open(refA, "tab-a");
+    usePreviewMiniPlayerStore.getState().open(refA, "tab-a", "remote");
+
+    expect(
+      selectThreadPreviewMiniPlayer(usePreviewMiniPlayerStore.getState().byThreadKey, refA),
+    ).toMatchObject({ tabId: "tab-a", placement: "remote" });
   });
 });

@@ -1,4 +1,5 @@
 import {
+  environmentBrowserHostClientId,
   PREVIEW_AUTOMATION_OPERATIONS,
   PreviewRemoteError,
   type PreviewRemoteCommand,
@@ -118,7 +119,7 @@ export const makeRemoteBrowser = Effect.fn("RemoteBrowser.make")(function* ({
     return projection;
   });
   yield* deletedThreads.pipe(Stream.runForEach(closeThread), Effect.forkScoped);
-  const clientId = `environment-browser:${environmentId}`;
+  const clientId = environmentBrowserHostClientId(environmentId);
   const requests = yield* broker.connect({
     clientId,
     environmentId,

@@ -1,41 +1,66 @@
-import { useAtomValue } from "@effect/atom-react";
 import type {
   PreviewRemoteCommand,
-  PreviewRemoteFrame as RemoteFrame,
   PreviewRemoteResult,
   PreviewRemoteTab,
-  PreviewTabId,
   ScopedThreadRef,
 } from "@spiritdevs/contracts";
+import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AsyncResult } from "effect/unstable/reactivity";
 import { squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runtime";
+import { normalizePreviewUrl } from "@spiritdevs/shared/preview";
+import {
+  BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT,
+  recordVisitForThread,
+  removeUrlForThread,
+  useThreadRecentHistory,
+} from "~/browserHistoryStore";
+import { PreviewEmptyState } from "~/components/preview/PreviewEmptyState";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { useEnvironmentHttpBaseUrl } from "~/state/environments";
+import { useEnvironment, useEnvironmentHttpBaseUrl } from "~/state/environments";
 import { useThreadProjection } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
 import { BrowserSavedLoginPicker } from "./BrowserSavedLoginPicker";
-import { remoteBrowserPoint } from "./remoteBrowserCoordinates";
+import { RemoteBrowserStream } from "./RemoteBrowserStream";
+import { useRemoteBrowserSelectedTabId, useRemoteBrowserStore } from "./remoteBrowserStore";
 
+/**
+ * The thread environment's own browser, streamed to this client. Its `localhost`
+ * is the environment, and the agent's preview tools drive the same tabs, so the
+ * user watches the agent live and can take control from any client.
+ */
 export function RemoteBrowserView({
   threadRef,
   visible,
+  configuredUrls,
 }: {
   threadRef: ScopedThreadRef;
   visible: boolean;
+  configuredUrls?: ReadonlyArray<string> | undefined;
 }) {
+  const environmentLabel = useEnvironment(threadRef.environmentId)?.label ?? "Environment";
+  const recentHistoryEntries = useThreadRecentHistory(
+    threadRef,
+    BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT,
+  );
   const command = useAtomCommand(previewEnvironment.remoteCommand);
   const thread = useThreadProjection(threadRef)?.projection;
   const takeover = thread?.thread.browserTakeover;
   const requestTakeover = useAtomCommand(threadEnvironment.requestBrowserTakeover);
-  const proceedTakeover = useAtomCommand(threadEnvironment.proceedBrowserTakeover);
-  const releaseTakeover = useAtomCommand(threadEnvironment.releaseBrowserTakeover);
-  const canRequestTakeover = thread?.runs.some((run) =>
-    ["preparing", "starting", "running"].includes(run.status),
-  );
+  // Takeover status and its controls live in the thread's takeover banner. This
+  // is only the way in when an interaction is refused because the agent is working.
+  const canRequestTakeover =
+    (!takeover || ["completed", "cancelled"].includes(takeover.status)) &&
+    thread?.runs.some((run) => ["preparing", "starting", "running"].includes(run.status));
   const [state, setState] = useState<PreviewRemoteResult>({ tabs: [], selectedTabId: null });
-  const [selectedId, setSelectedId] = useState<PreviewTabId | null>(null);
+  const selectedId = useRemoteBrowserSelectedTabId(threadRef);
+  const threadKey = scopedThreadKey(threadRef);
+  const setSelectedId = useCallback(
+    (tabId: string | null) => useRemoteBrowserStore.getState().select(threadRef, tabId),
+    // threadKey stands in for threadRef, whose identity churns on every thread update.
+    [threadKey],
+  );
+  const [hostReady, setHostReady] = useState(false);
   const [address, setAddress] = useState("");
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
@@ -71,11 +96,52 @@ export function RemoteBrowserView({
         if (input.action !== "list") setBusy(false);
       }
     },
-    [command, threadRef.environmentId],
+    [command, setSelectedId, threadRef.environmentId],
+  );
+  // Watching the remote browser routes the agent's browsing here too, so the
+  // user and the agent look at the same page. The claim is best effort: a
+  // takeover held elsewhere must not stop anyone from watching.
+  useEffect(() => {
+    if (!visible) return;
+    let disposed = false;
+    void command({
+      environmentId: threadRef.environmentId,
+      input: { action: "selectHost", threadId: threadRef.threadId, host: "environment" },
+    }).then((result) => {
+      if (disposed) return;
+      if (result._tag === "Failure") {
+        const failure = squashAtomCommandFailure(result);
+        setError(
+          failure instanceof Error
+            ? failure.message
+            : "The agent is still browsing elsewhere; you can watch this browser.",
+        );
+      }
+      setHostReady(true);
+      void run({ action: "list", threadId: threadRef.threadId });
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [visible, command, run, threadRef.environmentId, threadRef.threadId]);
+  const pendingUrl = useRemoteBrowserStore(
+    (store) => store.byThreadKey[threadKey]?.pendingUrl ?? null,
+  );
+  const openUrl = useCallback(
+    (url: string) => {
+      void run({ action: "open", threadId: threadRef.threadId, url }).then((opened) => {
+        if (opened) recordVisitForThread(threadRef, url);
+      });
+    },
+    // threadKey stands in for threadRef, whose identity churns on every thread update.
+    [run, threadKey],
   );
   useEffect(() => {
-    if (visible) void run({ action: "list", threadId: threadRef.threadId });
-  }, [visible, run, threadRef.threadId]);
+    if (!visible || !hostReady || pendingUrl === null) return;
+    const url = useRemoteBrowserStore.getState().takePendingUrl(threadRef);
+    if (url !== null) openUrl(url);
+    // threadKey stands in for threadRef, whose identity churns on every thread update.
+  }, [visible, hostReady, pendingUrl, openUrl, threadKey]);
   useEffect(() => {
     setAddress(selected?.url ?? "");
   }, [selected?.tabId, selected?.url]);
@@ -104,66 +170,30 @@ export function RemoteBrowserView({
   } catch {
     /* A pending navigation has no usable origin yet. */
   }
-  const reportTakeover = async (operation: Promise<{ _tag: string }>) => {
-    const result = await operation;
-    if (result._tag === "Failure")
-      setError("Could not change browser control. Check the task status and try again.");
+  const takeControl = async () => {
+    const result = await requestTakeover({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId },
+    });
+    setError(
+      result._tag === "Failure"
+        ? "Could not take control of the browser. Check the task status and try again."
+        : undefined,
+    );
   };
   const artifactUrl = state.artifact && baseUrl ? new URL(state.artifact.url, baseUrl).href : null;
   return (
-    <section className="flex min-h-0 flex-1 flex-col" aria-label="Environment browser">
-      <div className="flex items-center gap-2 border-b px-2 py-1 text-xs">
-        {takeover?.status === "active" ? (
-          <>
-            <span>You control the browser</span>
-            <button
-              className="rounded border px-2 py-1"
-              onClick={() =>
-                void reportTakeover(
-                  proceedTakeover({
-                    environmentId: threadRef.environmentId,
-                    input: { threadId: threadRef.threadId, takeoverId: takeover.id },
-                  }),
-                )
-              }
-            >
-              Resume agent
-            </button>
-            <button
-              className="rounded border px-2 py-1"
-              onClick={() =>
-                void reportTakeover(
-                  releaseTakeover({
-                    environmentId: threadRef.environmentId,
-                    input: { threadId: threadRef.threadId, takeoverId: takeover.id },
-                  }),
-                )
-              }
-            >
-              End takeover
-            </button>
-          </>
-        ) : takeover && ["requested", "pausing", "proceeding"].includes(takeover.status) ? (
-          <span>{takeover.status === "proceeding" ? "Resuming agent…" : "Pausing agent…"}</span>
-        ) : canRequestTakeover ? (
-          <button
-            className="rounded border px-2 py-1"
-            onClick={() =>
-              void reportTakeover(
-                requestTakeover({
-                  environmentId: threadRef.environmentId,
-                  input: { threadId: threadRef.threadId },
-                }),
-              )
-            }
-          >
-            Take control
-          </button>
-        ) : (
-          <span>Browser runs on this environment</span>
-        )}
-      </div>
+    <section
+      className="flex min-h-0 flex-1 flex-col"
+      aria-label={`Remote browser on ${environmentLabel}`}
+    >
       <div className="flex items-center gap-1 overflow-x-auto border-b p-1">
+        <span
+          className="shrink-0 px-1 text-xs font-medium text-muted-foreground"
+          title="Runs on the thread's environment, so localhost is that machine"
+        >
+          Remote · {environmentLabel}
+        </span>
         {state.tabs.map((tab) => (
           <div key={tab.tabId} className="flex shrink-0 items-center rounded border">
             <button
@@ -171,6 +201,7 @@ export function RemoteBrowserView({
               aria-pressed={selected?.tabId === tab.tabId}
               className="max-w-44 truncate px-2 py-1 text-xs aria-pressed:bg-muted"
               onClick={() => setSelectedId(tab.tabId)}
+              title={tab.url}
             >
               {tab.title || tab.url || "New tab"}
               {tab.recording ? " • Recording" : ""}
@@ -206,11 +237,19 @@ export function RemoteBrowserView({
         className="flex gap-1 border-b p-2"
         onSubmit={(event) => {
           event.preventDefault();
-          void run(
-            target
-              ? { action: "navigate", ...target, url: address }
-              : { action: "open", threadId: threadRef.threadId, url: address },
-          );
+          let url = address;
+          try {
+            url = normalizePreviewUrl(address);
+          } catch {
+            // The environment reports malformed addresses through its own error.
+          }
+          if (!target) {
+            openUrl(url);
+            return;
+          }
+          void run({ action: "navigate", ...target, url }).then((navigated) => {
+            if (navigated) recordVisitForThread(threadRef, url);
+          });
         }}
       >
         {(["back", "forward", "reload"] as const).map((action) => (
@@ -237,9 +276,18 @@ export function RemoteBrowserView({
         </button>
       </form>
       {error && (
-        <p role="alert" className="border-b p-2 text-sm text-destructive">
-          {error}
-        </p>
+        <div role="alert" className="flex items-center gap-2 border-b p-2 text-sm text-destructive">
+          <p className="min-w-0 flex-1">{error}</p>
+          {canRequestTakeover ? (
+            <button
+              type="button"
+              className="shrink-0 rounded border px-2 py-1 text-xs text-foreground"
+              onClick={() => void takeControl()}
+            >
+              Take control
+            </button>
+          ) : null}
+        </div>
       )}
       {target && (
         <div className="flex flex-wrap items-center gap-2 border-b p-2 text-xs">
@@ -300,15 +348,29 @@ export function RemoteBrowserView({
         </div>
       )}
       <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-muted/20">
-        {visible ? (
-          <RemoteBrowserFrame
-            key={target?.tabId ?? "metadata"}
+        {!visible ? null : !hostReady ? (
+          <p role="status" className="p-4 text-sm text-muted-foreground">
+            Connecting to the remote browser…
+          </p>
+        ) : (
+          <RemoteBrowserStream
             threadRef={threadRef}
-            {...(target ? { tabId: target.tabId } : {})}
-            run={run}
+            tabId={target?.tabId}
             onTabs={receiveTabs}
+            onInput={run}
+            emptyState={
+              <div className="h-full w-full self-stretch">
+                <PreviewEmptyState
+                  environmentId={threadRef.environmentId}
+                  configuredUrls={configuredUrls}
+                  recentEntries={recentHistoryEntries}
+                  onRemoveRecent={(url) => removeUrlForThread(threadRef, url)}
+                  onOpenUrl={openUrl}
+                />
+              </div>
+            }
           />
-        ) : null}
+        )}
       </div>
       {target && (
         <form
@@ -343,120 +405,5 @@ export function RemoteBrowserView({
         </form>
       )}
     </section>
-  );
-}
-
-function RemoteBrowserFrame({
-  threadRef,
-  tabId,
-  run,
-  onTabs,
-}: {
-  threadRef: ScopedThreadRef;
-  tabId?: PreviewTabId;
-  run: (command: PreviewRemoteCommand) => Promise<boolean>;
-  onTabs: (tabs: ReadonlyArray<PreviewRemoteTab>, metadataRevision?: number) => void;
-}) {
-  const result = useAtomValue(
-    previewEnvironment.remoteFrames({
-      environmentId: threadRef.environmentId,
-      input: { threadId: threadRef.threadId, ...(tabId ? { tabId } : {}) },
-    }),
-  );
-  const [frame, setFrame] = useState<RemoteFrame>();
-  const scroll = useRef({
-    x: 0,
-    y: 0,
-    timer: undefined as ReturnType<typeof setTimeout> | undefined,
-  });
-  useEffect(
-    () => () => {
-      clearTimeout(scroll.current.timer);
-    },
-    [],
-  );
-  const incoming = AsyncResult.isSuccess(result) ? result.value : undefined;
-  useEffect(() => {
-    if (incoming?.data) setFrame(incoming);
-  }, [incoming]);
-  const tabs = incoming?.tabs;
-  const metadataRevision = incoming?.metadataRevision;
-  useEffect(() => {
-    if (tabs) onTabs(tabs, metadataRevision);
-  }, [tabs, metadataRevision, onTabs]);
-  if (!frame || !tabId || AsyncResult.isFailure(result))
-    return (
-      <p className="p-4 text-sm text-muted-foreground">
-        {AsyncResult.isFailure(result)
-          ? "Browser connection interrupted. Reopen the tab to reconnect."
-          : tabId
-            ? "Connecting to the browser…"
-            : "Open a tab to browse on this environment."}
-      </p>
-    );
-  const target = { threadId: threadRef.threadId, tabId };
-  return (
-    <img
-      alt="Remote browser page. Click to interact; use your keyboard after clicking."
-      src={`data:${frame.mimeType};base64,${frame.data}`}
-      className="h-full w-full object-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
-      draggable={false}
-      tabIndex={0}
-      onClick={(event) => {
-        event.currentTarget.focus();
-        const box = event.currentTarget.getBoundingClientRect();
-        const point = remoteBrowserPoint({
-          x: event.clientX - box.left,
-          y: event.clientY - box.top,
-          boxWidth: box.width,
-          boxHeight: box.height,
-          width: frame.width,
-          height: frame.height,
-        });
-        if (point) void run({ action: "click", ...target, ...point });
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.currentTarget.blur();
-          return;
-        }
-        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") return;
-        if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return;
-        event.preventDefault();
-        const modifiers = [
-          event.metaKey ? "Meta" : "",
-          event.ctrlKey ? "Control" : "",
-          event.altKey ? "Alt" : "",
-          event.shiftKey ? "Shift" : "",
-        ].filter(Boolean);
-        if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey)
-          void run({ action: "type", ...target, text: event.key });
-        else
-          void run({
-            action: "press",
-            ...target,
-            key: [...modifiers, event.key === " " ? "Space" : event.key].join("+"),
-          });
-      }}
-      onPaste={(event) => {
-        event.preventDefault();
-        void run({ action: "type", ...target, text: event.clipboardData.getData("text/plain") });
-      }}
-      onWheel={(event) => {
-        const pending = scroll.current;
-        const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? frame.height : 1;
-        pending.x += event.deltaX * multiplier;
-        pending.y += event.deltaY * multiplier;
-        if (pending.timer !== undefined) return;
-        pending.timer = setTimeout(() => {
-          const deltaX = pending.x;
-          const deltaY = pending.y;
-          pending.x = 0;
-          pending.y = 0;
-          pending.timer = undefined;
-          void run({ action: "scroll", ...target, deltaX, deltaY });
-        }, 100);
-      }}
-    />
   );
 }

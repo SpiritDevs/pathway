@@ -176,6 +176,7 @@ export function IssuesAssistantPanel({
       <PreviewPanel
         configuredUrls={EMPTY_CONFIGURED_URLS}
         mode="embedded"
+        placement="local"
         tabId={activeSurface.resourceId}
         threadRef={panelThreadRef}
         visible

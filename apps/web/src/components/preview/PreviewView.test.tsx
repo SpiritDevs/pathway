@@ -30,7 +30,19 @@ const mocks = vi.hoisted(() => ({
   hasDesktopBridge: true,
   remoteCommand: vi.fn(async (_input: unknown) => ({ _tag: "Success" as const, value: {} })),
   remoteRendered: vi.fn(),
+  environmentOnThisMachine: true,
+  openRemoteBrowser: vi.fn(),
+  addToast: vi.fn((_toast: unknown) => "toast-1"),
+  closeToast: vi.fn(),
 }));
+
+interface OfferToast {
+  readonly title: string;
+  readonly actionProps: { readonly children: string; readonly onClick: () => void };
+  readonly data: {
+    readonly secondaryActionProps: { readonly children: string; readonly onClick: () => void };
+  };
+}
 
 const EMPTY_HISTORY: never[] = [];
 
@@ -161,8 +173,17 @@ vi.mock("~/rightPanelStore", () => ({
 }));
 
 vi.mock("~/components/ui/toast", () => ({
-  stackedThreadToast: vi.fn(),
-  toastManager: { add: vi.fn() },
+  stackedThreadToast: (toast: unknown) => toast,
+  toastManager: { add: mocks.addToast, close: mocks.closeToast },
+}));
+
+vi.mock("~/browser/browserPlacement", () => ({
+  useEnvironmentOnThisMachine: () => mocks.environmentOnThisMachine,
+  localMachineLabel: () => "This Mac",
+}));
+
+vi.mock("~/browser/remoteBrowserStore", () => ({
+  openRemoteBrowser: mocks.openRemoteBrowser,
 }));
 
 vi.mock("./previewBridge", () => ({
@@ -339,60 +360,73 @@ describe("PreviewView navigation", () => {
     mocks.hasDesktopBridge = true;
     mocks.remoteCommand.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
     mocks.remoteRendered.mockClear();
+    mocks.environmentOnThisMachine = true;
+    mocks.openRemoteBrowser.mockClear();
+    mocks.addToast.mockClear();
+    mocks.closeToast.mockClear();
   });
 
-  it("selects the environment host before showing a browser without a desktop bridge", async () => {
+  it("streams the environment browser on clients without a local browser", () => {
     mocks.hasDesktopBridge = false;
-    let finish!: (value: { _tag: "Success"; value: object }) => void;
-    mocks.remoteCommand.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
-    );
-    const document = installTestDom();
-    const { createRoot } = await import("react-dom/client");
-    const root = createRoot(document.createElement("div") as unknown as Element);
-    try {
-      await act(() => {
-        root.render(<PreviewView threadRef={TEST_THREAD_REF} visible />);
-      });
-      expect(mocks.remoteCommand).toHaveBeenCalledWith({
-        environmentId: TEST_THREAD_REF.environmentId,
-        input: { action: "selectHost", threadId: TEST_THREAD_REF.threadId, host: "environment" },
-      });
-      expect(mocks.remoteRendered).not.toHaveBeenCalled();
-      await act(async () => {
-        finish({ _tag: "Success", value: {} });
-      });
-      expect(mocks.remoteRendered).toHaveBeenCalledOnce();
-    } finally {
-      await act(() => root.unmount());
-      vi.unstubAllGlobals();
-    }
+    renderToStaticMarkup(<PreviewView threadRef={TEST_THREAD_REF} placement="local" visible />);
+    expect(mocks.remoteRendered).toHaveBeenCalledOnce();
+    expect(mocks.submittedUrl).toBeNull();
   });
 
-  it("shows a refused host switch without displaying or retrying the wrong browser", async () => {
-    mocks.hasDesktopBridge = false;
-    mocks.remoteCommand.mockRejectedValue(
-      new Error("Finish the browser action before switching hosts."),
+  it("renders a remote surface beside local tabs on desktop", () => {
+    renderToStaticMarkup(<PreviewView threadRef={TEST_THREAD_REF} placement="remote" visible />);
+    expect(mocks.remoteRendered).toHaveBeenCalledOnce();
+    expect(mocks.submittedUrl).toBeNull();
+  });
+
+  it("opens discovered servers of a remote environment in its own browser", () => {
+    mocks.environmentOnThisMachine = false;
+    mocks.showEmptyState = true;
+    renderToStaticMarkup(<PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible />);
+
+    mocks.emptyStateUrl?.("http://localhost:3000/");
+
+    expect(mocks.openRemoteBrowser).toHaveBeenCalledWith(TEST_THREAD_REF, {
+      url: "http://localhost:3000/",
+    });
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it("offers the remote browser for localhost typed into a local tab on a remote environment", async () => {
+    mocks.environmentOnThisMachine = false;
+    renderToStaticMarkup(<PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible />);
+
+    mocks.submittedUrl?.("localhost:3000/admin");
+
+    await vi.waitFor(() => expect(mocks.addToast).toHaveBeenCalledOnce());
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    const toast = mocks.addToast.mock.calls[0]?.[0] as OfferToast;
+    expect(toast.title).toBe("localhost:3000 runs on WSL");
+    expect(toast.actionProps.children).toBe("Open in remote browser");
+    toast.actionProps.onClick();
+    expect(mocks.openRemoteBrowser).toHaveBeenCalledWith(TEST_THREAD_REF, {
+      url: "http://localhost:3000/admin",
+    });
+
+    toast.data.secondaryActionProps.onClick();
+    await vi.waitFor(() =>
+      expect(mocks.navigate).toHaveBeenCalledWith(
+        TEST_RUNTIME_TAB_ID,
+        "http://localhost:3000/admin",
+      ),
     );
-    const document = installTestDom();
-    const container = document.createElement("div");
-    const { createRoot } = await import("react-dom/client");
-    const root = createRoot(container as unknown as Element);
-    try {
-      await act(async () => {
-        root.render(<PreviewView threadRef={TEST_THREAD_REF} visible />);
-      });
-      expect(container.textContent).toContain("Finish the browser action before switching hosts.");
-      expect(container.textContent).toContain("Retry browser connection");
-      expect(mocks.remoteRendered).not.toHaveBeenCalled();
-      expect(mocks.remoteCommand).toHaveBeenCalledOnce();
-    } finally {
-      await act(() => root.unmount());
-      vi.unstubAllGlobals();
-    }
+  });
+
+  it("navigates public URLs in a local tab on a remote environment directly", async () => {
+    mocks.environmentOnThisMachine = false;
+    renderToStaticMarkup(<PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible />);
+
+    mocks.submittedUrl?.("https://example.com/");
+
+    await vi.waitFor(() =>
+      expect(mocks.navigate).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID, "https://example.com/"),
+    );
+    expect(mocks.addToast).not.toHaveBeenCalled();
   });
 
   it("does not rerender while loading time passes", async () => {

@@ -2,6 +2,8 @@ import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
 import type { ScopedThreadRef } from "@spiritdevs/contracts";
 import { create } from "zustand";
 
+import type { BrowserPlacement } from "./browser/browserPlacement";
+
 export interface PreviewMiniPlayerPosition {
   readonly x: number;
   readonly y: number;
@@ -14,13 +16,15 @@ export interface PreviewMiniPlayerSize {
 
 export interface PreviewMiniPlayerState {
   readonly tabId: string;
+  /** Local tabs render the desktop webview; remote tabs render the environment's stream. */
+  readonly placement: BrowserPlacement;
   readonly position: PreviewMiniPlayerPosition | null;
   readonly size: PreviewMiniPlayerSize | null;
 }
 
 interface PreviewMiniPlayerStoreState {
   readonly byThreadKey: Record<string, PreviewMiniPlayerState>;
-  readonly open: (ref: ScopedThreadRef, tabId: string) => void;
+  readonly open: (ref: ScopedThreadRef, tabId: string, placement?: BrowserPlacement) => void;
   readonly close: (ref: ScopedThreadRef) => void;
   readonly move: (ref: ScopedThreadRef, tabId: string, position: PreviewMiniPlayerPosition) => void;
   readonly resize: (ref: ScopedThreadRef, tabId: string, size: PreviewMiniPlayerSize) => void;
@@ -29,16 +33,17 @@ interface PreviewMiniPlayerStoreState {
 
 export const usePreviewMiniPlayerStore = create<PreviewMiniPlayerStoreState>()((set) => ({
   byThreadKey: {},
-  open: (ref, tabId) =>
+  open: (ref, tabId, placement = "local") =>
     set((state) => {
       const threadKey = scopedThreadKey(ref);
       const current = state.byThreadKey[threadKey];
-      if (current?.tabId === tabId) return state;
+      if (current?.tabId === tabId && current.placement === placement) return state;
       return {
         byThreadKey: {
           ...state.byThreadKey,
           [threadKey]: {
             tabId,
+            placement,
             position: current?.position ?? null,
             size: current?.size ?? null,
           },

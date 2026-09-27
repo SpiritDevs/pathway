@@ -24,6 +24,15 @@ struct PathwayRemoteBrowserFrame {
     let width: Double
     let height: Double
 
+    /// Decodes one streamed frame for `tabID`; metadata-only updates and other tabs yield nil.
+    static func decode(_ fields: [String: JSONValue], tabID: String) -> PathwayRemoteBrowserFrame? {
+        guard fields["tabId"]?.stringValue == tabID,
+              let encoded = fields["data"]?.stringValue, !encoded.isEmpty,
+              let data = Data(base64Encoded: encoded), let image = UIImage(data: data),
+              case let .number(width)? = fields["width"], case let .number(height)? = fields["height"] else { return nil }
+        return PathwayRemoteBrowserFrame(image: image, width: width, height: height)
+    }
+
     static func point(_ location: CGPoint, in size: CGSize, width: Double, height: Double) -> CGPoint? {
         guard width > 0, height > 0, size.width > 0, size.height > 0 else { return nil }
         let scale = min(size.width / width, size.height / height)
@@ -64,6 +73,8 @@ final class PathwayRemoteBrowserModel {
     init(thread: PathwayAgentThreadModel, request: PathwayAgentThreadModel.Request? = nil) {
         self.thread = thread
         injectedRequest = request
+        // Open on the page the agent is using, so watching it is one tap.
+        selectedID = thread.agentRemoteBrowserTabID
     }
 
     func start() async {
@@ -119,10 +130,22 @@ final class PathwayRemoteBrowserModel {
         catch { self.error = error.localizedDescription; return false }
     }
 
+    /// Streams the selected tab, retrying a dropped stream a few times before asking for Reconnect.
     func watchSelectedTab() async {
         frame = nil
-        guard isHostReady, let connect = thread.connect else { return }
         let id = selected?.id
+        for delay in [1.0, 2.0, 4.0, nil] {
+            guard isHostReady, !Task.isCancelled, selected?.id == id else { return }
+            if await watchTab(id) || Task.isCancelled { return }
+            guard let delay else { return }
+            try? await Task.sleep(for: .seconds(delay))
+            if !Task.isCancelled { error = nil }
+        }
+    }
+
+    /// Returns false when the stream failed rather than ending normally.
+    private func watchTab(_ id: String?) async -> Bool {
+        guard let connect = thread.connect else { return true }
         let environment = thread.environment
         let rpc = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
         defer { Task { await rpc.stop() } }
@@ -130,7 +153,7 @@ final class PathwayRemoteBrowserModel {
             var payload: [String: JSONValue] = ["threadId": .string(thread.threadID)]
             if let id { payload["tabId"] = .string(id) }
             for try await value in await rpc.subscribe("preview.remote.frames", payload: .object(payload), bufferingPolicy: .bufferingNewest(1)) {
-                guard !Task.isCancelled, selected?.id == id else { return }
+                guard !Task.isCancelled, selected?.id == id else { return true }
                 guard let fields = value.objectValue else { continue }
                 let nextRevision: Double?
                 if case let .number(value)? = fields["metadataRevision"] { nextRevision = value } else { nextRevision = nil }
@@ -140,14 +163,12 @@ final class PathwayRemoteBrowserModel {
                     if !tabs.contains(where: { $0.id == selectedID }) { selectedID = tabs.first?.id }
                     _ = await command("list")
                 }
-                guard let id, fields["tabId"]?.stringValue == id,
-                      let encoded = fields["data"]?.stringValue, !encoded.isEmpty,
-                      let data = Data(base64Encoded: encoded), let image = UIImage(data: data),
-                      case let .number(width)? = fields["width"], case let .number(height)? = fields["height"] else { continue }
-                frame = PathwayRemoteBrowserFrame(image: image, width: width, height: height)
+                guard let id, let decoded = PathwayRemoteBrowserFrame.decode(fields, tabID: id) else { continue }
+                frame = decoded
             }
-        } catch is CancellationError { }
-        catch { self.error = error.localizedDescription }
+            return true
+        } catch is CancellationError { return true }
+        catch { self.error = error.localizedDescription; return false }
     }
 }
 
@@ -167,7 +188,7 @@ struct AgentThreadRemoteBrowser: View {
                         Text(error).font(.caption).foregroundStyle(.red)
                         Button("Retry browser connection") { Task { await browser.start() } }
                     } else {
-                        ProgressView("Connecting to the environment browser…")
+                        ProgressView("Connecting to the remote browser…")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 } else {
@@ -242,7 +263,7 @@ struct AgentThreadRemoteBrowser: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .disabled(browser.busy)
-            .navigationTitle("Environment browser")
+            .navigationTitle("Remote browser")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -301,5 +322,83 @@ private struct RemoteBrowserImage: View {
                 .frame(width: geometry.size.width, height: geometry.size.height)
             }
         }.frame(maxHeight: .infinity)
+    }
+}
+
+/// Live strip above the composer while the agent browses in the environment's browser.
+/// Tapping it opens the full remote browser on the same tab, where control can be taken.
+struct AgentThreadRemoteBrowserPreview: View {
+    let model: PathwayAgentThreadModel
+    let open: () -> Void
+    @State private var frame: PathwayRemoteBrowserFrame?
+    @State private var failed = false
+    @State private var attempt = 0
+    @State private var hiddenTabID: String?
+
+    var body: some View {
+        if let tabID = model.agentRemoteBrowserTabID, tabID != hiddenTabID {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("Agent is browsing", systemImage: "globe").font(.caption).lineLimit(1)
+                    Spacer()
+                    Button("Hide", systemImage: "xmark") { hiddenTabID = tabID }
+                        .labelStyle(.iconOnly).font(.caption)
+                        .accessibilityIdentifier("thread-remote-browser-preview-hide")
+                }
+                if let frame {
+                    Button(action: open) {
+                        Image(uiImage: frame.image).resizable().scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: 220)
+                            .clipShape(.rect(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Live view of the agent's browser. Opens the remote browser.")
+                } else if failed {
+                    HStack {
+                        Text("The remote browser disconnected.").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Reconnect") { failed = false; attempt += 1 }.font(.caption.bold())
+                    }
+                } else {
+                    Button("Watch", action: open).font(.caption.bold())
+                }
+            }
+            .padding(12)
+            #if os(visionOS)
+            .background(.regularMaterial, in: .rect(cornerRadius: 22))
+            #else
+            .glassEffect(.regular, in: .rect(cornerRadius: 22))
+            #endif
+            .padding(.horizontal)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("thread-remote-browser-preview")
+            .task(id: "\(tabID):\(attempt)") { await watch(tabID) }
+        }
+    }
+
+    private func watch(_ tabID: String) async {
+        frame = nil
+        guard let connect = model.connect else { return }
+        let environment = model.environment
+        for delay in [1.0, 2.0, 4.0, nil] {
+            let rpc = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+            do {
+                let payload: [String: JSONValue] = ["threadId": .string(model.threadID), "tabId": .string(tabID)]
+                for try await value in await rpc.subscribe("preview.remote.frames", payload: .object(payload), bufferingPolicy: .bufferingNewest(1)) {
+                    if let fields = value.objectValue, let decoded = PathwayRemoteBrowserFrame.decode(fields, tabID: tabID) {
+                        frame = decoded
+                    }
+                }
+                await rpc.stop()
+                return
+            } catch {
+                await rpc.stop()
+                if Task.isCancelled { return }
+            }
+            guard let delay else { break }
+            try? await Task.sleep(for: .seconds(delay))
+            if Task.isCancelled { return }
+        }
+        failed = true
     }
 }

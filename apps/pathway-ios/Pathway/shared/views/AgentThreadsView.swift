@@ -1241,6 +1241,11 @@ struct AgentThreadConversationView: View {
                         AgentThreadComputerPreview(computer: computer)
                         AgentThreadComputerEffortHint(computer: computer, model: model)
                     }
+                    AgentThreadRemoteBrowserPreview(model: model) {
+                        isComposerFocused = false
+                        subscriptionLifetime.retain(.browser)
+                        showsBrowser = true
+                    }
                     if let connect = appModel.connect {
                         PathwayConversationStorageNotice(environment: model.environment, connect: connect, threadID: model.thread.threadId, isStartingConversation: false,
                             chooseEnvironment: { showsAlternateEnvironment = true },
@@ -1525,7 +1530,7 @@ struct AgentThreadConversationView: View {
                     projectRoot: workspaceRoot, connect: connect, storageDirectory: model.storageDirectory)
             } label: { Label("Workspace", systemImage: "folder") }
         }
-        Button("Environment browser", systemImage: "globe") {
+        Button("Remote browser", systemImage: "globe") {
             isComposerFocused = false
             subscriptionLifetime.retain(.browser)
             showsBrowser = true

@@ -3,9 +3,11 @@ import { isAtomCommandInterrupted } from "@spiritdevs/client-runtime/state/runti
 import { isPreviewableUrl } from "@spiritdevs/shared/preview";
 import * as Schema from "effect/Schema";
 
+import { readDefaultBrowserPlacement } from "~/browser/browserPlacement";
 import type { OpenPreviewMutation } from "~/browser/openFileInPreview";
+import { openRemoteBrowser } from "~/browser/remoteBrowserStore";
 import { recordVisitForThread } from "~/browserHistoryStore";
-import { applyPreviewServerSnapshot, isPreviewSupportedInRuntime } from "~/previewStateStore";
+import { applyPreviewServerSnapshot } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 
 const terminalLinkErrorContext = {
@@ -45,10 +47,7 @@ interface OpenTerminalLinkInPreviewInput<E> {
 export async function openTerminalLinkInPreview<E>(
   input: OpenTerminalLinkInPreviewInput<E>,
 ): Promise<void> {
-  const supportsPreview =
-    isPreviewableUrl(input.url) &&
-    isPreviewSupportedInRuntime() &&
-    input.threadRef.threadId.length > 0;
+  const supportsPreview = isPreviewableUrl(input.url) && input.threadRef.threadId.length > 0;
 
   if (!supportsPreview) {
     input.fallbackToBrowser();
@@ -78,6 +77,16 @@ export async function openTerminalLinkInPreview<E>(
       }),
     );
     input.fallbackToBrowser();
+    return;
+  }
+
+  // The terminal runs on the environment, so its links mean the environment's localhost.
+  if (
+    choice === "open-in-preview" &&
+    readDefaultBrowserPlacement(input.threadRef.environmentId) === "remote"
+  ) {
+    recordVisitForThread(input.threadRef, input.url);
+    openRemoteBrowser(input.threadRef, { url: input.url });
     return;
   }
 
