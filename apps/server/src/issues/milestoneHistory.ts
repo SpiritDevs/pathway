@@ -8,9 +8,11 @@
  *
  * Two things the change log cannot tell us, both stated rather than papered over:
  *
- * - It stores display names, not ids. A status renamed or deleted since is unmappable, counts as
- *   unstarted, and sets `approximate` — the chart says the series is a best guess rather than
- *   quietly drawing a number nobody can stand behind. A renamed *milestone* trips the same flag.
+ * - The environment log stores display names, not ids. A status renamed or deleted since is
+ *   unmappable, counts as unstarted, and sets `approximate` — the chart says the series is a best
+ *   guess rather than quietly drawing a number nobody can stand behind. A renamed *milestone* trips
+ *   the same flag. The cloud audit log stores ids, and history imported into it keeps the names, so
+ *   a logged value matches by either.
  * - It only sees the milestone's current members. An issue moved *out* of the milestone is not
  *   among them and so vanishes from its own history. Catching those needs a second, unindexed
  *   scan of `issue_events.before` across the whole table; not worth it until somebody misses it.
@@ -83,7 +85,7 @@ export interface MilestoneHistoryEvent {
   readonly createdAt: string;
 }
 
-/** The live statuses, which are the only thing a logged status name can be matched against. */
+/** The live statuses, which are the only thing a logged status name or id can be matched against. */
 export interface MilestoneHistoryStatus {
   readonly id: string;
   readonly name: string;
@@ -91,7 +93,7 @@ export interface MilestoneHistoryStatus {
 }
 
 export interface MilestoneHistoryInput {
-  readonly milestone: Pick<IssueMilestone, "name" | "startDate" | "targetDate">;
+  readonly milestone: Pick<IssueMilestone, "id" | "name" | "startDate" | "targetDate">;
   /** Already filtered to the rollup set: assigned to this milestone, not deleted, not triage. */
   readonly members: ReadonlyArray<MilestoneHistoryMember>;
   /** The members' `status` and `milestone` rows. Order does not matter; ties keep input order. */
@@ -121,16 +123,19 @@ export function milestoneHistory(input: MilestoneHistoryInput): IssueMilestoneHi
   const { milestone, today, zone } = input;
   let approximate = false;
 
-  const categoryByName = new Map(
-    input.statuses.map((status) => [status.name, status.category] as const),
-  );
-  const categoryById = new Map(
+  const categoryById = new Map<string, IssueStatusCategory>(
     input.statuses.map((status) => [status.id, status.category] as const),
   );
+  const categoryByLogged = new Map<string, IssueStatusCategory>([
+    ...input.statuses.map((status) => [status.name, status.category] as const),
+    ...categoryById,
+  ]);
+  const isThisMilestone = (logged: string | null) =>
+    logged === milestone.id || logged === milestone.name;
 
-  /** An unmatched name is unstarted, and says so through `approximate`. */
-  const categoryOfName = (name: string | null): IssueStatusCategory => {
-    const category = name === null ? undefined : categoryByName.get(name);
+  /** An unmatched status is unstarted, and says so through `approximate`. */
+  const categoryOfLogged = (logged: string | null): IssueStatusCategory => {
+    const category = logged === null ? undefined : categoryByLogged.get(logged);
     if (category === undefined) {
       approximate = true;
       return "unstarted";
@@ -171,14 +176,14 @@ export function milestoneHistory(input: MilestoneHistoryInput): IssueMilestoneHi
     const state = byId.get(event.issueId);
     if (state === undefined) return;
     if (event.field === "status") {
-      state.category = categoryOfName(event.before);
+      state.category = categoryOfLogged(event.before);
       return;
     }
     if (event.field !== "milestone") return;
     // Whatever put the issue where it is now must name this milestone; if it does not, the
     // milestone was renamed and every name comparison below it is unreliable.
-    if (state.inMilestone && event.after !== milestone.name) approximate = true;
-    state.inMilestone = event.before === milestone.name;
+    if (state.inMilestone && !isThisMilestone(event.after)) approximate = true;
+    state.inMilestone = isThisMilestone(event.before);
   };
 
   const points: Array<IssueMilestoneHistoryPoint> = [];

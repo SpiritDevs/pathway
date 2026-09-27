@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { IssueMilestoneId } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 
 import {
@@ -8,6 +9,8 @@ import {
   type MilestoneHistoryInput,
   type MilestoneHistoryMember,
 } from "./milestoneHistory.ts";
+
+const BETA = IssueMilestoneId.make("beta");
 
 const STATUSES = [
   { id: "todo", name: "Todo", category: "unstarted" as const },
@@ -41,7 +44,7 @@ const UTC = DateTime.zoneMakeNamedUnsafe("UTC");
 
 const history = (input: Partial<MilestoneHistoryInput>) =>
   milestoneHistory({
-    milestone: { name: "Beta", startDate: "2026-03-01", targetDate: "2026-03-05" },
+    milestone: { id: BETA, name: "Beta", startDate: "2026-03-01", targetDate: "2026-03-05" },
     members: [],
     events: [],
     statuses: STATUSES,
@@ -102,6 +105,26 @@ describe("milestoneHistory", () => {
       "2026-03-04 1/0/0",
       "2026-03-05 1/0/0",
     ]);
+  });
+
+  it("replays cloud audit rows, which log ids rather than names", () => {
+    const result = history({
+      members: [member("a", "done", "2026-03-01")],
+      events: [
+        event("a", "milestone", null, "beta", "2026-03-02"),
+        event("a", "status", "todo", "doing", "2026-03-03"),
+        event("a", "status", "doing", "done", "2026-03-04"),
+      ],
+    });
+
+    assert.deepStrictEqual(shape(result), [
+      "2026-03-01 0/0/0",
+      "2026-03-02 1/0/0",
+      "2026-03-03 1/1/0",
+      "2026-03-04 1/1/1",
+      "2026-03-05 1/1/1",
+    ]);
+    assert.isFalse(result.approximate);
   });
 
   it("counts review as started but short of completed", () => {
@@ -179,7 +202,9 @@ describe("milestoneHistory", () => {
   });
 
   it("answers with nothing for an empty milestone that has no start date", () => {
-    const result = history({ milestone: { name: "Beta", startDate: null, targetDate: null } });
+    const result = history({
+      milestone: { id: BETA, name: "Beta", startDate: null, targetDate: null },
+    });
 
     assert.deepStrictEqual(result.points, []);
     assert.isFalse(result.approximate);
@@ -199,7 +224,7 @@ describe("milestoneHistory", () => {
 
   it("stops at today when the target date is still ahead", () => {
     const result = history({
-      milestone: { name: "Beta", startDate: "2026-03-08", targetDate: "2026-04-01" },
+      milestone: { id: BETA, name: "Beta", startDate: "2026-03-08", targetDate: "2026-04-01" },
       today: "2026-03-10",
     });
 
@@ -212,7 +237,7 @@ describe("milestoneHistory", () => {
 
   it("answers with nothing when the milestone has not started yet", () => {
     const result = history({
-      milestone: { name: "Beta", startDate: "2026-03-20", targetDate: "2026-04-01" },
+      milestone: { id: BETA, name: "Beta", startDate: "2026-03-20", targetDate: "2026-04-01" },
     });
 
     assert.deepStrictEqual(result.points, []);
@@ -220,7 +245,7 @@ describe("milestoneHistory", () => {
 
   it("tracks several issues joining and finishing independently", () => {
     const result = history({
-      milestone: { name: "Beta", startDate: "2026-03-01", targetDate: "2026-03-04" },
+      milestone: { id: BETA, name: "Beta", startDate: "2026-03-01", targetDate: "2026-03-04" },
       members: [
         member("a", "done", "2026-03-01"),
         member("b", "doing", "2026-03-02"),
@@ -244,7 +269,7 @@ describe("milestoneHistory", () => {
 
   it("keeps drawing past a target date that has gone by, where the finishing happened", () => {
     const result = history({
-      milestone: { name: "Beta", startDate: "2026-03-01", targetDate: "2026-03-03" },
+      milestone: { id: BETA, name: "Beta", startDate: "2026-03-01", targetDate: "2026-03-03" },
       members: [member("a", "done", "2026-03-01")],
       events: [event("a", "status", "Todo", "Done", "2026-03-05")],
     });
@@ -260,7 +285,7 @@ describe("milestoneHistory", () => {
 
   it("still has a series when the target passed before the work was even filed", () => {
     const result = history({
-      milestone: { name: "Beta", startDate: null, targetDate: "2026-01-10" },
+      milestone: { id: BETA, name: "Beta", startDate: null, targetDate: "2026-01-10" },
       members: [member("a", "doing", "2026-03-03")],
     });
 
@@ -273,7 +298,7 @@ describe("milestoneHistory", () => {
 
   it("buckets an evening edit on the day the server is having, not the day UTC is", () => {
     const result = history({
-      milestone: { name: "Beta", startDate: "2026-03-04", targetDate: "2026-03-05" },
+      milestone: { id: BETA, name: "Beta", startDate: "2026-03-04", targetDate: "2026-03-05" },
       members: [{ id: "a", statusId: "done", createdAt: "2026-03-04T17:00:00.000Z" }],
       // 17:30 on the 5th in Los Angeles, which UTC calls the small hours of the 6th.
       events: [
@@ -293,7 +318,7 @@ describe("milestoneHistory", () => {
 
   it("caps a long-running milestone at the most recent year of days", () => {
     const result = history({
-      milestone: { name: "Beta", startDate: "2020-01-01", targetDate: null },
+      milestone: { id: BETA, name: "Beta", startDate: "2020-01-01", targetDate: null },
       members: [member("a", "todo", "2019-06-01")],
     });
 

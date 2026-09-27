@@ -2028,6 +2028,114 @@ describe("IssueTrackerService", () => {
     }).pipe(Effect.provide(makeTestLayer())),
   );
 
+  it.effect("rebuilds a cloud milestone's burn-up from the replica's audit rows", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const daysAgo = (days: number) => DateTime.toEpochMillis(DateTime.subtract(now, { days }));
+      const status = (id: string, category: string, position: number) =>
+        routedStoredEntity("issueStatus", {
+          id,
+          scope: "company",
+          teamId: null,
+          baseStatusId: null,
+          name: id,
+          color: "#123456",
+          category,
+          position,
+          hidden: false,
+          createdAt: daysAgo(10),
+          updatedAt: daysAgo(10),
+        });
+      const tracker = yield* makeIssueTrackerService({
+        replicaReader: readyReplicaReader([
+          status("status-todo", "unstarted", 0),
+          status("status-done", "completed", 1),
+          routedStoredEntity("issueMilestone", {
+            id: "milestone-cloud",
+            cloudProjectId: "cloud-project-alpha",
+            name: "Cloud only",
+            description: null,
+            startDate: yield* dateDaysFromToday(-3),
+            targetDate: null,
+            position: 0,
+            createdAt: daysAgo(3),
+            updatedAt: daysAgo(3),
+          }),
+          routedStoredEntity("issue", {
+            id: "issue-cloud-shipped",
+            key: "SYNC-1",
+            keyNumber: 1,
+            title: "Shipped",
+            description: "",
+            statusId: "status-done",
+            priority: "none",
+            assignee: null,
+            projectId: "cloud-project-alpha",
+            milestoneId: "milestone-cloud",
+            cycleId: null,
+            parentId: null,
+            sortOrder: "m",
+            labelIds: [],
+            dueDate: null,
+            triage: false,
+            slackSource: null,
+            teamIds: [],
+            workflowOwner: { kind: "company" },
+            workModelSelection: null,
+            automationAssignment: null,
+            pullRequest: null,
+            createdAt: daysAgo(3),
+            updatedAt: daysAgo(1),
+          }),
+          // Native cloud rows batch every changed field and log ids, not display names.
+          routedStoredEntity("issueAuditEvent", {
+            id: "audit-joined",
+            issueId: "issue-cloud-shipped",
+            kind: "field_changed",
+            actor: { kind: "environment", environmentId: ROUTED_ENVIRONMENT_ID },
+            payload: { changes: { milestoneId: { before: null, after: "milestone-cloud" } } },
+            operationId: null,
+            createdAt: daysAgo(2),
+          }),
+          routedStoredEntity("issueAuditEvent", {
+            id: "audit-finished",
+            issueId: "issue-cloud-shipped",
+            kind: "field_changed",
+            actor: { kind: "environment", environmentId: ROUTED_ENVIRONMENT_ID },
+            payload: { changes: { statusId: { before: "status-todo", after: "status-done" } } },
+            operationId: null,
+            createdAt: daysAgo(1),
+          }),
+        ]),
+        syncEngineRegistry: null,
+      });
+
+      const history = yield* tracker.milestoneHistory({
+        milestoneId: IssueMilestoneId.make("milestone-cloud"),
+      });
+
+      assert.isFalse(history.approximate);
+      assert.deepStrictEqual(
+        history.points.map((point) => [point.scope, point.started, point.completed]),
+        [
+          [0, 0, 0],
+          [1, 0, 0],
+          [1, 1, 1],
+          [1, 1, 1],
+        ],
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          makeDependencyLayer(),
+          Layer.succeed(IssueEnrichmentEngine, makeFakeEngine()),
+          Layer.succeed(IssueCommentAgentEngine, makeFakeCommentAgentEngine()),
+          Layer.succeed(SlackIntakeEngine, makeFakeSlackEngine()),
+        ),
+      ),
+    ),
+  );
+
   it.effect("rewrites milestone positions within one project only", () =>
     Effect.gen(function* () {
       const tracker = yield* IssueTrackerService;
