@@ -824,4 +824,29 @@ describe("rightPanelStore", () => {
       ),
     ).toEqual(["terminal:term-1", "browser:tab-b", "browser:tab-c"]);
   });
+
+  it("keeps the remote browser beside local tabs through browser reconciliation", () => {
+    useRightPanelStore.getState().openBrowser(refA, "tab-a");
+    useRightPanelStore.getState().openRemoteBrowser(refA);
+    useRightPanelStore.getState().reconcileBrowserSurfaces(refA, []);
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual(["remote-browser"]);
+    expect(state.activeSurfaceId).toBe("remote-browser");
+  });
+
+  it("opens the remote browser once, replacing an empty new-tab placeholder", () => {
+    useRightPanelStore.getState().openBrowser(refA, null);
+    useRightPanelStore.getState().openRemoteBrowser(refA);
+    useRightPanelStore.getState().openBrowser(refA, "tab-a");
+    useRightPanelStore.getState().openRemoteBrowser(refA);
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual([
+      "remote-browser",
+      "browser:tab-a",
+    ]);
+    expect(state.activeSurfaceId).toBe("remote-browser");
+    expect(state.isOpen).toBe(true);
+  });
 });

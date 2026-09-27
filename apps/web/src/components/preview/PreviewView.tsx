@@ -8,7 +8,7 @@ import {
   type PreviewViewportSetting,
   type ScopedThreadRef,
 } from "@spiritdevs/contracts";
-import { normalizePreviewUrl } from "@spiritdevs/shared/preview";
+import { isLoopbackHost, normalizePreviewUrl } from "@spiritdevs/shared/preview";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -27,7 +27,13 @@ import {
   useThreadPreviewState,
 } from "~/previewStateStore";
 import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
-import { useEnvironmentHttpBaseUrl } from "~/state/environments";
+import {
+  type BrowserPlacement,
+  localMachineLabel,
+  useEnvironmentOnThisMachine,
+} from "~/browser/browserPlacement";
+import { openRemoteBrowser } from "~/browser/remoteBrowserStore";
+import { useEnvironment, useEnvironmentHttpBaseUrl } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { selectThreadPreviewMiniPlayer, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
@@ -64,6 +70,8 @@ import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 
 interface Props {
   threadRef: ScopedThreadRef;
+  /** Which browser this surface shows. */
+  placement?: BrowserPlacement;
   tabId?: string | null;
   configuredUrls?: ReadonlyArray<string> | undefined;
   visible: boolean;
@@ -77,164 +85,24 @@ interface Props {
 const localApi = typeof window === "undefined" ? null : ensureLocalApi();
 
 /**
- * Single-tab preview surface: chrome row on top, one webview below, empty
- * state when no session exists for the thread.
+ * One browser surface. Remote surfaces stream the environment's browser; local
+ * surfaces are a single desktop webview tab with the chrome row on top and an
+ * empty state when no session exists for the thread.
  */
 export function PreviewView(props: Props) {
-  return (
-    <PreviewHostView
-      key={`${props.threadRef.environmentId}:${props.threadRef.threadId}`}
-      {...props}
-    />
-  );
-}
-
-function PreviewHostView(props: Props) {
-  const preferenceKey = `pathway:browser-host:${props.threadRef.environmentId}:${props.threadRef.threadId}`;
-  const [remote, setRemote] = useState(() => {
-    if (!previewBridge) return true;
-    try {
-      return window.localStorage?.getItem(preferenceKey) === "environment";
-    } catch {
-      return false;
-    }
-  });
-  const selectHost = useAtomCommand(previewEnvironment.remoteCommand);
-  const [changingHost, setChangingHost] = useState(false);
-  const [hostError, setHostError] = useState<string>();
-  const [environmentHostReady, setEnvironmentHostReady] = useState(!!previewBridge);
-  const [hostAttempt, setHostAttempt] = useState(0);
-  const hostChangeVersion = useRef(0);
-  useEffect(() => {
-    if (!props.visible) return;
-    let disposed = false;
-    if (!previewBridge) {
-      setEnvironmentHostReady(false);
-      setHostError(undefined);
-      void selectHost({
-        environmentId: props.threadRef.environmentId,
-        input: { action: "selectHost", threadId: props.threadRef.threadId, host: "environment" },
-      })
-        .then((result) => {
-          if (disposed) return;
-          if (result._tag === "Failure") {
-            const error = squashAtomCommandFailure(result);
-            setHostError(
-              error instanceof Error ? error.message : "Could not select the environment browser.",
-            );
-          } else setEnvironmentHostReady(true);
-        })
-        .catch((error: unknown) => {
-          if (!disposed)
-            setHostError(
-              error instanceof Error ? error.message : "Could not select the environment browser.",
-            );
-        });
-      return () => {
-        disposed = true;
-        setEnvironmentHostReady(false);
-      };
-    }
-    const version = hostChangeVersion.current;
-    void selectHost({
-      environmentId: props.threadRef.environmentId,
-      input: { action: "list", threadId: props.threadRef.threadId },
-    }).then((result) => {
-      if (
-        disposed ||
-        version !== hostChangeVersion.current ||
-        result._tag !== "Success" ||
-        result.value.host === undefined
-      )
-        return;
-      setRemote(result.value.host === "environment");
-    });
-    return () => {
-      disposed = true;
-    };
-  }, [
-    props.visible,
-    props.threadRef.environmentId,
-    props.threadRef.threadId,
-    selectHost,
-    hostAttempt,
-  ]);
-  const changeHost = async (next: boolean) => {
-    hostChangeVersion.current += 1;
-    setChangingHost(true);
-    setHostError(undefined);
-    try {
-      const result = await selectHost({
-        environmentId: props.threadRef.environmentId,
-        input: {
-          action: "selectHost",
-          threadId: props.threadRef.threadId,
-          host: next ? "environment" : "automatic",
-        },
-      });
-      if (result._tag === "Failure") {
-        const error = squashAtomCommandFailure(result);
-        setHostError(error instanceof Error ? error.message : "Could not change browser host.");
-        return;
-      }
-      setRemote(next);
-      try {
-        window.localStorage?.setItem(preferenceKey, next ? "environment" : "desktop");
-      } catch {
-        /* Browser storage is optional. */
-      }
-    } finally {
-      setChangingHost(false);
-    }
-  };
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {previewBridge && (
-        <div className="flex justify-end border-b px-2 py-1">
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span>Browser host</span>
-            <select
-              aria-label="Browser host"
-              className="rounded bg-background px-2 py-1"
-              value={remote ? "environment" : "desktop"}
-              disabled={changingHost}
-              onChange={(event) => void changeHost(event.target.value === "environment")}
-            >
-              <option value="desktop">This desktop</option>
-              <option value="environment">Environment browser</option>
-            </select>
-          </label>
-        </div>
-      )}
-      {hostError && (
-        <p role="alert" className="p-2 text-sm text-destructive">
-          {hostError}
-        </p>
-      )}
-      {!previewBridge && !environmentHostReady ? (
-        <div className="p-3 text-sm text-muted-foreground">
-          {hostError ? (
-            <button
-              className="rounded border px-2 py-1"
-              onClick={() => setHostAttempt((value) => value + 1)}
-            >
-              Retry browser connection
-            </button>
-          ) : (
-            <p role="status">Connecting to the environment browser…</p>
-          )}
-        </div>
-      ) : remote ? (
-        <RemoteBrowserView
-          key={`${props.threadRef.environmentId}:${props.threadRef.threadId}`}
-          threadRef={props.threadRef}
-          visible={props.visible}
-        />
-      ) : (
-        <DesktopPreviewView {...props} />
-      )}
-    </div>
-  );
+  const key = `${props.threadRef.environmentId}:${props.threadRef.threadId}`;
+  // Only the desktop has a local browser; every other client browses remotely.
+  if (props.placement === "remote" || !previewBridge) {
+    return (
+      <RemoteBrowserView
+        key={key}
+        threadRef={props.threadRef}
+        visible={props.visible}
+        configuredUrls={props.configuredUrls}
+      />
+    );
+  }
+  return <DesktopPreviewView key={key} {...props} />;
 }
 
 function DesktopPreviewView({
@@ -271,6 +139,8 @@ function DesktopPreviewView({
     : null;
   const open = useAtomCommand(previewEnvironment.open);
   const resize = useAtomCommand(previewEnvironment.resize, "preview viewport resize");
+  const environmentOnThisMachine = useEnvironmentOnThisMachine(threadRef.environmentId);
+  const environmentLabel = useEnvironment(threadRef.environmentId)?.label ?? "the environment";
 
   usePreviewSession(threadRef);
 
@@ -331,10 +201,9 @@ function DesktopPreviewView({
     [open, runtimeTabId, threadRef],
   );
 
-  const handleSubmitUrl = useCallback(
-    async (next: string) => {
+  const navigateLocally = useCallback(
+    async (normalized: string) => {
       try {
-        const normalized = normalizePreviewUrl(next);
         if (await navigateToResolvedUrl(normalized)) {
           recordVisitForThread(threadRef, normalized);
         }
@@ -345,8 +214,58 @@ function DesktopPreviewView({
     [navigateToResolvedUrl, threadRef],
   );
 
+  const handleSubmitUrl = useCallback(
+    async (next: string) => {
+      let normalized: string;
+      try {
+        normalized = normalizePreviewUrl(next);
+      } catch {
+        return;
+      }
+      // This tab's localhost is this machine, not the environment's. Offer both
+      // rather than silently loading the wrong server.
+      if (!environmentOnThisMachine && URL.canParse(normalized)) {
+        const { host, hostname } = new URL(normalized);
+        if (isLoopbackHost(hostname)) {
+          const toastId = toastManager.add(
+            stackedThreadToast({
+              type: "info",
+              title: `${host} runs on ${environmentLabel}`,
+              description: `This tab browses from ${localMachineLabel()}. Open it in the remote browser to reach the environment's server.`,
+              actionProps: {
+                children: "Open in remote browser",
+                onClick: () => {
+                  toastManager.close(toastId);
+                  openRemoteBrowser(threadRef, { url: normalized });
+                },
+              },
+              data: {
+                secondaryActionProps: {
+                  children: `Open on ${localMachineLabel()}`,
+                  onClick: () => {
+                    toastManager.close(toastId);
+                    void navigateLocally(normalized);
+                  },
+                },
+                secondaryActionVariant: "outline",
+              },
+            }),
+          );
+          return;
+        }
+      }
+      await navigateLocally(normalized);
+    },
+    [environmentLabel, environmentOnThisMachine, navigateLocally, threadRef],
+  );
+
   const handleOpenServerUrl = useCallback(
     async (next: string) => {
+      // Discovered servers listen on the environment; only its own browser can reach them.
+      if (!environmentOnThisMachine) {
+        openRemoteBrowser(threadRef, { url: next });
+        return;
+      }
       try {
         const resolved = resolveDiscoveredServerUrl(threadRef.environmentId, next);
         if (await navigateToResolvedUrl(resolved)) {
@@ -356,7 +275,7 @@ function DesktopPreviewView({
         // Server-side `failed` event renders the unreachable view.
       }
     },
-    [navigateToResolvedUrl, threadRef],
+    [environmentOnThisMachine, navigateToResolvedUrl, threadRef],
   );
 
   const handleRefresh = useCallback(() => {

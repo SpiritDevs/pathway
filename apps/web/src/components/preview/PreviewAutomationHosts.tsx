@@ -44,6 +44,7 @@ import { resolveBrowserRecordingStopTarget } from "~/browser/browserRecordingSco
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
 import { runBrowserViewportMutation } from "~/browser/browserViewportActions";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
+import { isThisMachineTarget } from "~/browser/browserPlacement";
 import { isElectron } from "~/env";
 import { useEnvironments } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
@@ -290,13 +291,20 @@ export function PreviewAutomationHosts() {
        * Host lifetime follows the desktop runtime's environment connections,
        * not the routed thread. This keeps background threads automatable and
        * lets the subscription runtime own reconnects for every saved target.
+       *
+       * Only environments on this machine get a desktop host: the agent's
+       * `localhost` is its environment, which this webview can only reach when
+       * they share a machine. Everywhere else the environment's own browser is
+       * the only host, so agent tabs are remote and every client can watch them.
        */}
-      {environments.map((environment) => (
-        <PreviewAutomationHost
-          key={environment.environmentId}
-          environmentId={environment.environmentId}
-        />
-      ))}
+      {environments
+        .filter((environment) => isThisMachineTarget(environment.entry.target))
+        .map((environment) => (
+          <PreviewAutomationHost
+            key={environment.environmentId}
+            environmentId={environment.environmentId}
+          />
+        ))}
     </>
   );
 }

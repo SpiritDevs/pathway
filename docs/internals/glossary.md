@@ -128,6 +128,13 @@ An answer returned to an outstanding provider request. It depends on the origina
 **Browser host**:
 The runtime that owns the automated browser, its live tabs, and its cookies. It may be on a different machine from the environment where the agent runs.
 
+**Remote browser**:
+The environment browser as the user sees it: Chromium on the thread's environment, streamed to any client. Its `localhost` is the environment. Its automation host id is `environment-browser:<environmentId>` (`environmentBrowserHostClientId`). In the right panel it is the single `remote-browser` surface.
+
+**Local browser**:
+The desktop app's own webview. Its `localhost` is the user's machine. The desktop hosts agent automation with it only for environments on the same machine.
+_Avoid_: This desktop (as a host choice)
+
 **Model manifest**:
 A versioned data file used for model metadata and classification. It does not prove that an account or installed provider can use a model.
 

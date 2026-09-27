@@ -9,9 +9,21 @@ import {
   TerminalLinkPreviewOpenError,
 } from "./openTerminalLinkInPreview";
 
+const mocks = vi.hoisted(() => ({
+  placement: "local" as "local" | "remote",
+  openRemoteBrowser: vi.fn(),
+}));
+
 vi.mock("~/previewStateStore", () => ({
   applyPreviewServerSnapshot: vi.fn(),
-  isPreviewSupportedInRuntime: () => true,
+}));
+
+vi.mock("~/browser/browserPlacement", () => ({
+  readDefaultBrowserPlacement: () => mocks.placement,
+}));
+
+vi.mock("~/browser/remoteBrowserStore", () => ({
+  openRemoteBrowser: mocks.openRemoteBrowser,
 }));
 
 vi.mock("~/rightPanelStore", () => ({
@@ -36,6 +48,8 @@ const snapshot: PreviewSessionSnapshot = {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  mocks.placement = "local";
+  mocks.openRemoteBrowser.mockClear();
 });
 
 describe("openTerminalLinkInPreview", () => {
@@ -125,6 +139,31 @@ describe("openTerminalLinkInPreview", () => {
     });
 
     expect(reportError).not.toHaveBeenCalled();
+    expect(fallbackToBrowser).not.toHaveBeenCalled();
+  });
+
+  it("opens links from a remote environment's terminal in its own browser", async () => {
+    mocks.placement = "remote";
+    const openPreview = vi.fn(async () => AsyncResult.success(snapshot));
+    const fallbackToBrowser = vi.fn();
+
+    await openTerminalLinkInPreview({
+      url: "http://localhost:3000/",
+      position: { x: 12, y: 34 },
+      threadRef,
+      openPreview,
+      localApi: {
+        contextMenu: {
+          show: vi.fn(async () => "open-in-preview"),
+        },
+      } as unknown as LocalApi,
+      fallbackToBrowser,
+    });
+
+    expect(mocks.openRemoteBrowser).toHaveBeenCalledWith(threadRef, {
+      url: "http://localhost:3000/",
+    });
+    expect(openPreview).not.toHaveBeenCalled();
     expect(fallbackToBrowser).not.toHaveBeenCalled();
   });
 });

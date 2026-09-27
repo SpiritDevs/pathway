@@ -28,8 +28,13 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import type { BrowserPlacement } from "~/browser/browserPlacement";
 import { isElectron } from "~/env";
-import type { RightPanelKind, RightPanelSurface } from "~/rightPanelStore";
+import {
+  isRemoteBrowserSurface,
+  type RightPanelKind,
+  type RightPanelSurface,
+} from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -64,7 +69,14 @@ interface RightPanelTabsProps {
   onCloseSurfacesToRight: (surface: RightPanelSurface) => void;
   onCloseAllSurfaces: () => void;
   onCopyFilePath: (relativePath: string) => void;
-  onAddBrowser: () => void;
+  /** Opens a browser tab; without a placement it opens the thread's default browser. */
+  onAddBrowser: (placement?: BrowserPlacement) => void;
+  /** Browsers the new-tab menu offers, default first. A single option reads as "Browser". */
+  browserOptions?: ReadonlyArray<{ readonly placement: BrowserPlacement; readonly label: string }>;
+  /** Tab labels saying where each browser runs. `local` is null when there is no ambiguity. */
+  browserLabels?: { readonly remote: string; readonly local: string | null };
+  /** Reopens a local tab's page in the thread environment's browser. */
+  onOpenInRemoteBrowser?: (surface: RightPanelSurface) => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
@@ -103,7 +115,7 @@ export function RightPanelTabBarActions({ children }: { children: ReactNode }) {
 }
 
 const SURFACE_DISABLED_REASONS = {
-  browser: "Browser previews are only available in the Pathway desktop app.",
+  browser: "The browser is only available from a thread.",
   terminal: "Terminal surfaces are only available from a project thread.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
@@ -112,7 +124,13 @@ const SURFACE_DISABLED_REASONS = {
   sideChat: "Side chats need a connected thread with at least one completed response.",
 } as const;
 
-type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
+type TabContextMenuAction =
+  | "copy-path"
+  | "open-remote"
+  | "close"
+  | "close-others"
+  | "close-to-right"
+  | "close-all";
 
 function DisabledReasonTooltip(props: { reason: string; trigger: ReactElement }) {
   return (
@@ -143,7 +161,7 @@ function SurfaceMenuItem(props: {
 }
 
 function RightPanelEmptyState(props: {
-  onAddBrowser: () => void;
+  onAddBrowser: (placement?: BrowserPlacement) => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
@@ -168,7 +186,7 @@ function RightPanelEmptyState(props: {
       icon: Globe2,
       available: props.browserAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.browser,
-      onClick: props.onAddBrowser,
+      onClick: () => props.onAddBrowser(),
       badgeCount: 0,
     },
     {
@@ -304,6 +322,7 @@ export function resolveRightPanelSurfaceTitle(
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>,
   terminalLabelsById: ReadonlyMap<string, string>,
   threadTitlesById?: ReadonlyMap<string, string>,
+  browserLabels?: RightPanelTabsProps["browserLabels"],
 ): string {
   switch (surface.kind) {
     case "diff":
@@ -326,15 +345,20 @@ export function resolveRightPanelSurfaceTitle(
     case "thread":
       return threadTitlesById?.get(surface.resourceId)?.trim() || "Side chat";
     case "preview": {
-      const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
-      if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
-      if (snapshot.navStatus.title.trim().length > 0) return snapshot.navStatus.title;
-      try {
-        return new URL(snapshot.navStatus.url).host || "Browser";
-      } catch {
-        return "Browser";
-      }
+      if (isRemoteBrowserSurface(surface)) return browserLabels?.remote ?? "Remote browser";
+      const title = localBrowserTitle(surface.resourceId ? sessions[surface.resourceId] : null);
+      return browserLabels?.local ? `${browserLabels.local} · ${title}` : title;
     }
+  }
+}
+
+function localBrowserTitle(snapshot: PreviewSessionSnapshot | null | undefined): string {
+  if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
+  if (snapshot.navStatus.title.trim().length > 0) return snapshot.navStatus.title;
+  try {
+    return new URL(snapshot.navStatus.url).host || "Browser";
+  } catch {
+    return "Browser";
   }
 }
 
@@ -367,6 +391,7 @@ function SurfaceIcon({
 }) {
   switch (surface.kind) {
     case "preview": {
+      if (isRemoteBrowserSurface(surface)) return <Globe2 className="size-3 shrink-0" />;
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       const url = !snapshot || snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
       return <PreviewFavicon url={url} />;
@@ -430,6 +455,13 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       if (surface.kind === "file") {
         items.push({ id: "copy-path", label: "Copy path" });
       }
+      if (
+        props.onOpenInRemoteBrowser &&
+        surface.kind === "preview" &&
+        surface.resourceId !== null
+      ) {
+        items.push({ id: "open-remote", label: "Open in remote browser" });
+      }
       items.push(
         { id: "close", label: "Close" },
         {
@@ -453,6 +485,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       switch (action) {
         case "copy-path":
           if (surface.kind === "file") props.onCopyFilePath(surface.relativePath);
+          break;
+        case "open-remote":
+          props.onOpenInRemoteBrowser?.(surface);
           break;
         case "close":
           props.onCloseSurface(surface);
@@ -525,6 +560,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                 props.previewSessions,
                 props.terminalLabelsById,
                 props.threadTitlesById,
+                props.browserLabels,
               );
               return (
                 <div
@@ -583,16 +619,22 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   <Plus className="size-3.5" />
                 </MenuTrigger>
                 <MenuPopup align="start" side="bottom" sideOffset={6} className="min-w-44">
-                  {(props.allowedSurfaceKinds?.has("preview") ?? true) ? (
-                    <SurfaceMenuItem
-                      available={props.browserAvailable}
-                      disabledReason={SURFACE_DISABLED_REASONS.browser}
-                      onClick={props.onAddBrowser}
-                    >
-                      <Globe2 />
-                      Browser
-                    </SurfaceMenuItem>
-                  ) : null}
+                  {(props.allowedSurfaceKinds?.has("preview") ?? true)
+                    ? (props.browserOptions && props.browserOptions.length > 1
+                        ? props.browserOptions
+                        : [{ placement: undefined, label: "Browser" }]
+                      ).map((option) => (
+                        <SurfaceMenuItem
+                          key={option.label}
+                          available={props.browserAvailable}
+                          disabledReason={SURFACE_DISABLED_REASONS.browser}
+                          onClick={() => props.onAddBrowser(option.placement)}
+                        >
+                          <Globe2 />
+                          {option.label}
+                        </SurfaceMenuItem>
+                      ))
+                    : null}
                   {(props.allowedSurfaceKinds?.has("terminal") ?? true) ? (
                     <SurfaceMenuItem
                       available={props.terminalAvailable}

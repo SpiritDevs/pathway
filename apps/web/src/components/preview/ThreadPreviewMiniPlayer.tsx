@@ -1,10 +1,18 @@
 "use client";
 
-import type { ScopedThreadRef } from "@spiritdevs/contracts";
+import type { PreviewRemoteTab, ScopedThreadRef } from "@spiritdevs/contracts";
 import { PanelRightIcon, PictureInPicture2, XIcon } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useLayoutEffect, useRef, useState } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { BrowserSurfaceSlot } from "~/browser/BrowserSurfaceSlot";
+import { RemoteBrowserStream } from "~/browser/RemoteBrowserStream";
+import { openRemoteBrowser } from "~/browser/remoteBrowserStore";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
@@ -89,6 +97,7 @@ export function ThreadPreviewMiniPlayer({
   const snapshot = previewState.sessions[tabId] ?? null;
   const runtimeTabId = previewRuntimeTabId(threadRef, previewState.serverEpoch, tabId);
   const desktopOverlay = previewState.desktopByTabId[tabId] ?? null;
+  const remote = miniPlayer?.placement === "remote";
   const position = miniPlayer?.tabId === tabId ? miniPlayer.position : null;
   const size =
     miniPlayer?.tabId === tabId && miniPlayer.size
@@ -100,8 +109,19 @@ export function ThreadPreviewMiniPlayer({
 
   const openInPanel = () => {
     usePreviewMiniPlayerStore.getState().close(threadRef);
-    useRightPanelStore.getState().openBrowser(threadRef, tabId);
+    if (remote) openRemoteBrowser(threadRef, { tabId });
+    else useRightPanelStore.getState().openBrowser(threadRef, tabId);
   };
+
+  // The agent closed its remote tab: there is nothing left to watch.
+  const closeWhenRemoteTabGone = useCallback(
+    (tabs: ReadonlyArray<PreviewRemoteTab>) => {
+      if (!tabs.some((tab) => tab.tabId === tabId)) {
+        usePreviewMiniPlayerStore.getState().close(threadRef);
+      }
+    },
+    [tabId, threadRef],
+  );
 
   const toggleNativePictureInPicture = () => {
     if (!previewBridge) return;
@@ -274,7 +294,7 @@ export function ThreadPreviewMiniPlayer({
     }
   };
 
-  if (!snapshot || miniPlayer?.tabId !== tabId) return null;
+  if ((!remote && !snapshot) || miniPlayer?.tabId !== tabId) return null;
 
   return (
     <section
@@ -327,25 +347,27 @@ export function ThreadPreviewMiniPlayer({
           >
             <PanelRightIcon />
           </Button>
-          <Button
-            variant={desktopOverlay?.pictureInPicture ? "secondary" : "ghost"}
-            size="icon-xs"
-            aria-label={
-              desktopOverlay?.pictureInPicture
-                ? "Close popped-out preview"
-                : "Pop preview into separate window"
-            }
-            title={
-              desktopOverlay?.pictureInPicture
-                ? "Close separate window"
-                : "Pop into separate window"
-            }
-            disabled={!desktopOverlay?.hasWebContents}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={toggleNativePictureInPicture}
-          >
-            <PictureInPicture2 />
-          </Button>
+          {remote ? null : (
+            <Button
+              variant={desktopOverlay?.pictureInPicture ? "secondary" : "ghost"}
+              size="icon-xs"
+              aria-label={
+                desktopOverlay?.pictureInPicture
+                  ? "Close popped-out preview"
+                  : "Pop preview into separate window"
+              }
+              title={
+                desktopOverlay?.pictureInPicture
+                  ? "Close separate window"
+                  : "Pop into separate window"
+              }
+              disabled={!desktopOverlay?.hasWebContents}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={toggleNativePictureInPicture}
+            >
+              <PictureInPicture2 />
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon-xs"
@@ -361,20 +383,32 @@ export function ThreadPreviewMiniPlayer({
 
       <div className="relative h-full min-h-0">
         <div className="absolute inset-0 z-[29] rounded-xl bg-muted shadow-2xl/35" />
-        <BrowserSurfaceSlot
-          tabId={runtimeTabId}
-          visible={Boolean(desktopOverlay?.hasWebContents)}
-          cornerRadius={12}
-          fitSourceContent
-          layoutVersion={
-            position
-              ? `${position.x}:${position.y}`
-              : `initial:${bottomInset}:${defaultPosition?.x ?? "right"}:${defaultPosition?.y ?? "top"}:${defaultLayoutVersion}`
-          }
-          className="absolute inset-0"
-        />
+        {remote ? (
+          <div className="pointer-events-auto absolute inset-0 z-[30] flex items-center justify-center overflow-hidden rounded-xl">
+            <RemoteBrowserStream
+              threadRef={threadRef}
+              tabId={tabId}
+              onTabs={closeWhenRemoteTabGone}
+              onActivate={openInPanel}
+              compact
+            />
+          </div>
+        ) : (
+          <BrowserSurfaceSlot
+            tabId={runtimeTabId}
+            visible={Boolean(desktopOverlay?.hasWebContents)}
+            cornerRadius={12}
+            fitSourceContent
+            layoutVersion={
+              position
+                ? `${position.x}:${position.y}`
+                : `initial:${bottomInset}:${defaultPosition?.x ?? "right"}:${defaultPosition?.y ?? "top"}:${defaultLayoutVersion}`
+            }
+            className="absolute inset-0"
+          />
+        )}
         <div className="pointer-events-none absolute inset-0 z-[31] rounded-xl ring-1 ring-inset ring-border/80" />
-        {!desktopOverlay?.hasWebContents ? (
+        {!remote && !desktopOverlay?.hasWebContents ? (
           <div className="pointer-events-none absolute inset-0 z-[32] flex items-center justify-center rounded-xl bg-muted text-xs text-muted-foreground">
             Reconnecting preview…
           </div>

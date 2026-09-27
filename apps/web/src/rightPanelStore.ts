@@ -31,6 +31,8 @@ export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 export type RightPanelSurface =
   | { id: `browser:${string}`; kind: "preview"; resourceId: string }
   | { id: "browser:new"; kind: "preview"; resourceId: null }
+  /** The thread environment's own browser, streamed; its tabs live on the environment. */
+  | { id: typeof REMOTE_BROWSER_SURFACE_ID; kind: "preview"; resourceId: null }
   | {
       id: `terminal:${string}`;
       kind: "terminal";
@@ -72,6 +74,14 @@ export type RightPanelSurface =
     }
   | { id: `thread:${string}`; kind: "thread"; resourceId: ThreadId };
 
+export const REMOTE_BROWSER_SURFACE_ID = "remote-browser";
+
+export function isRemoteBrowserSurface(
+  surface: { readonly id: string } | null | undefined,
+): boolean {
+  return surface?.id === REMOTE_BROWSER_SURFACE_ID;
+}
+
 const RIGHT_PANEL_STORAGE_KEY = "pathway:right-panel-state:v2";
 // v9 removed the "plan" surface kind (plans render inline in the transcript).
 // v10 keys pull-request surfaces by reference instead of a singleton tab.
@@ -104,6 +114,7 @@ interface RightPanelStoreState {
     kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "thread">,
   ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
+  openRemoteBrowser: (ref: ScopedThreadRef) => void;
   openDirectory: (ref: ScopedThreadRef, cwd: string) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number, cwd?: string) => void;
   openPullRequest: (
@@ -494,6 +505,18 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             return upsertSurface({ ...current, surfaces: withoutPlaceholder }, surface);
           }),
         ),
+      openRemoteBrowser: (ref) =>
+        set((state) =>
+          updateThread(state, ref, (current) =>
+            upsertSurface(
+              {
+                ...current,
+                surfaces: current.surfaces.filter((entry) => entry.id !== "browser:new"),
+              },
+              { id: REMOTE_BROWSER_SURFACE_ID, kind: "preview", resourceId: null },
+            ),
+          ),
+        ),
       openPullRequest: (ref, target) =>
         set((state) =>
           updateThread(state, ref, (current) => upsertSurface(current, pullRequestSurface(target))),
@@ -688,7 +711,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               (surface): surface is Extract<RightPanelSurface, { kind: "preview" }> =>
                 surface.kind === "preview" &&
                 surface.id !== "browser:new" &&
-                validIds.has(surface.id),
+                (validIds.has(surface.id) || isRemoteBrowserSurface(surface)),
             );
             const knownIds = new Set(existingBrowser.map((surface) => surface.id));
             const added = tabIds

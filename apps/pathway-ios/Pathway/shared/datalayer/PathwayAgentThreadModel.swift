@@ -285,6 +285,14 @@ final class PathwayAgentThreadModel {
     /// Advances when a connection ends or settings change, so an older config read cannot land.
     @ObservationIgnored var configRevision = 0
     private(set) var browserTakeover: [String: JSONValue]?
+    private(set) var previewActivity: [String: JSONValue]?
+    /// The remote tab the agent is browsing in during the current run, when it browses in the environment's own browser.
+    var agentRemoteBrowserTabID: String? {
+        guard let activity = previewActivity,
+              activity["hostClientId"]?.stringValue == "environment-browser:\(thread.environmentId)",
+              let runID = activeRunID, activity["runId"]?.stringValue == runID else { return nil }
+        return activity["tabId"]?.stringValue
+    }
     private(set) var checkpoints: [JSONValue] = []
     private(set) var plans: [JSONValue] = []
     var isSending = false
@@ -994,6 +1002,7 @@ final class PathwayAgentThreadModel {
             }
         }
         if let value = object["browserTakeover"] { browserTakeover = value.objectValue }
+        if let value = object["previewActivity"] { previewActivity = value.objectValue }
         if let value = object["title"]?.stringValue { threadTitle = value }
         if !hasComposerRuntimeOverride, let value = object["runtimeMode"]?.stringValue { runtimeMode = value }
         if !hasComposerInteractionOverride, let value = object["interactionMode"]?.stringValue { interactionMode = value }
