@@ -422,7 +422,8 @@ function auditChanges(entity: IssueAuditEventEntity): ReadonlyArray<LegacyAuditC
   return projected.length === 0 ? [{ field: null, before: null, after: null }] : projected;
 }
 
-function eventsFromReplica(
+/** Audit rows in the legacy one-change-per-row log shape, oldest first. */
+export function issueEventsFromReplica(
   entities: ReadonlyArray<IssueAuditEventEntity>,
 ): ReadonlyArray<IssueEvent> {
   return [...entities]
@@ -506,7 +507,7 @@ export function issueDetailProjectionFromReplica(
       comments,
     },
     comments,
-    events: eventsFromReplica(synced.auditEvents),
+    events: issueEventsFromReplica(synced.auditEvents),
     threadLinks: issueThreadLinksFromReplica(synced.threadLinks),
   };
 }

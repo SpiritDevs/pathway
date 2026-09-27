@@ -151,6 +151,7 @@ import {
 import {
   issueCollectionProjectionFromReplica,
   issueDetailProjectionFromReplica,
+  issueEventsFromReplica,
   effectiveIssueStatusesForOwnerFromReplica,
   issueThreadLinksFromReplica,
 } from "@spiritdevs/backend/sync/issueLegacyProjection";
@@ -3001,34 +3002,54 @@ export const makeIssueTrackerService = Effect.fn(function* (
    *
    * Gathering only: the reconstruction itself is {@link milestoneHistory}, which also documents
    * what the change log cannot tell it. The members are the rollup set — assigned to this
-   * milestone, not soft-deleted, not in triage — matching what the progress ring counts.
+   * milestone, not soft-deleted, not in triage — matching what the progress ring counts. A cloud
+   * workspace reads all of it from the company replica, whose audit rows are the change log there.
    */
   const milestoneHistoryRead: IssueTrackerServiceShape["milestoneHistory"] = Effect.fn(
     "IssueTrackerService.milestoneHistory",
   )(function* (input) {
-    const [milestones, statuses, records, today] = yield* Effect.all([
-      listMilestones(),
-      listStatuses(),
-      listRecords(),
-      todayLocal,
-    ]);
-    const milestone = milestones.find((candidate) => candidate.id === input.milestoneId);
-    if (milestone === undefined) {
-      return yield* notFound(input.milestoneId, `No task milestone with id ${input.milestoneId}.`);
-    }
+    const today = yield* todayLocal;
+    const isMember = (issue: Pick<Issue, "milestoneId" | "deletedAt" | "triage">) =>
+      issue.milestoneId === input.milestoneId && issue.deletedAt === null && !issue.triage;
+    const missing = () =>
+      notFound(input.milestoneId, `No task milestone with id ${input.milestoneId}.`);
 
-    const members = records.filter(
-      (record) =>
-        record.milestoneId === milestone.id && record.deletedAt === null && !record.triage,
-    );
-    const events = yield* eventRepository
-      .listByIssuesAndFields({
-        issueIds: members.map((record) => record.id),
-        fields: ISSUE_EVENT_ASSIGNMENT_FIELDS,
-      })
-      .pipe(Effect.mapError(storage("Failed to read the task change log")));
-
-    return milestoneHistory({ milestone, members, events, statuses, today, zone: localZone });
+    return yield* routeReplicaIssueRead({
+      replica: readReplica,
+      fromReplica: (readModel) => {
+        const projection = issueCollectionProjectionFromReplica(readModel);
+        const milestone = projection.milestones.find(
+          (candidate) => candidate.id === input.milestoneId,
+        );
+        if (milestone === undefined) return Effect.fail(missing());
+        const members = projection.issues.filter(isMember);
+        const memberIds = new Set<string>(members.map((issue) => issue.id));
+        const events = issueEventsFromReplica(
+          readModel.issueAuditEvents.filter((event) => memberIds.has(event.issueId)),
+        );
+        const statuses = projection.statuses;
+        return Effect.succeed(
+          milestoneHistory({ milestone, members, events, statuses, today, zone: localZone }),
+        );
+      },
+      fromLegacy: Effect.gen(function* () {
+        const [milestones, statuses, records] = yield* Effect.all([
+          listMilestones(),
+          listStatuses(),
+          listRecords(),
+        ]);
+        const milestone = milestones.find((candidate) => candidate.id === input.milestoneId);
+        if (milestone === undefined) return yield* missing();
+        const members = records.filter(isMember);
+        const events = yield* eventRepository
+          .listByIssuesAndFields({
+            issueIds: members.map((record) => record.id),
+            fields: ISSUE_EVENT_ASSIGNMENT_FIELDS,
+          })
+          .pipe(Effect.mapError(storage("Failed to read the task change log")));
+        return milestoneHistory({ milestone, members, events, statuses, today, zone: localZone });
+      }),
+    });
   });
 
   const publishCycles = () =>
