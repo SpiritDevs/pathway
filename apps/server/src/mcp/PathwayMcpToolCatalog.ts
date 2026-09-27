@@ -3,6 +3,7 @@ import { Tool } from "effect/unstable/ai";
 
 import { EmailToolkit } from "./toolkits/email/tools.ts";
 import { IssuesToolkit } from "./toolkits/issues/tools.ts";
+import { ProjectsToolkit } from "./toolkits/projects/tools.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { PreviewToolkit } from "./toolkits/preview/tools.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
@@ -11,6 +12,7 @@ import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 export const PATHWAY_MCP_TOOLS = [
   ...Object.values(PreviewToolkit.tools),
   ...Object.values(IssuesToolkit.tools),
+  ...Object.values(ProjectsToolkit.tools),
   ...Object.values(OrchestratorToolkit.tools),
   ...Object.values(WorktreeToolkit.tools),
   ...Object.values(EmailToolkit.tools),

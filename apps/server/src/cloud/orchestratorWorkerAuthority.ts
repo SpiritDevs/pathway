@@ -57,6 +57,8 @@ export function workerToolCapability(name: string): string | null {
     ].includes(name)
   )
     return "tasks.manage";
+  // No orchestrator capability covers project settings yet, so workers may only read them.
+  if (name === "projects_list") return "projects.read";
   if (name.startsWith("email_") || name === "resources/read" || name.startsWith("tasks/"))
     return "mail.read";
   if (["delegate_task", "create_threads", "pathway_thread_start"].includes(name))

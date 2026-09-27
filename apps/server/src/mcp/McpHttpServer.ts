@@ -50,6 +50,7 @@ import {
 import packageJson from "../../package.json" with { type: "json" };
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as PeerEnvironments from "../cloud/peerEnvironments.ts";
+import * as CloudProjectIcons from "../cloud/cloudProjectIcons.ts";
 import * as OrchestratorWorkerAuthority from "../cloud/orchestratorWorkerAuthority.ts";
 import * as RemoteDispatch from "../cloud/remoteDispatch.ts";
 import * as ServerConfig from "../config.ts";
@@ -69,6 +70,8 @@ import * as EmailMcpService from "./toolkits/email/EmailMcpService.ts";
 import { EmailToolkitHandlersLive } from "./toolkits/email/handlers.ts";
 import { EmailToolkit } from "./toolkits/email/tools.ts";
 import { IssuesToolkitHandlersLive } from "./toolkits/issues/handlers.ts";
+import { ProjectsToolkitHandlersLive } from "./toolkits/projects/handlers.ts";
+import { ProjectsToolkit } from "./toolkits/projects/tools.ts";
 import {
   IssuesMcpDetail,
   IssuesMcpGetAttachmentResult,
@@ -1290,6 +1293,7 @@ const ToolkitHandlersLive = Layer.mergeAll(
   PreviewStandardToolkitHandlersLive,
   PreviewSnapshotToolkitHandlersLive,
   IssuesToolkitHandlersLive,
+  ProjectsToolkitHandlersLive,
   OrchestratorToolkitHandlersLive,
   WorktreeToolkitHandlersLive,
   EmailToolkitHandlersLive,
@@ -1297,6 +1301,7 @@ const ToolkitHandlersLive = Layer.mergeAll(
 
 const McpToolkitServicesLive = Layer.mergeAll(
   DelegatedBusiness.layer,
+  CloudProjectIcons.layer,
   OrchestratorMcpServiceLive,
   WorktreeMcpService.layer,
   EmailMcpServiceLive,
@@ -1310,11 +1315,12 @@ const buildPathwayMcpToolkits = Effect.gen(function* () {
   const standardPreview = (yield* PreviewStandardToolkit) as unknown as BuiltToolkit;
   const snapshot = (yield* PreviewSnapshotToolkit) as unknown as BuiltToolkit;
   const issues = (yield* IssuesToolkit) as unknown as BuiltToolkit;
+  const projects = (yield* ProjectsToolkit) as unknown as BuiltToolkit;
   const orchestrator = (yield* OrchestratorToolkit) as unknown as BuiltToolkit;
   const worktree = (yield* WorktreeToolkit) as unknown as BuiltToolkit;
   const email = (yield* EmailToolkit) as unknown as BuiltToolkit;
   return {
-    toolkits: [standardPreview, issues, orchestrator, worktree, email],
+    toolkits: [standardPreview, issues, projects, orchestrator, worktree, email],
     snapshot,
   };
 });

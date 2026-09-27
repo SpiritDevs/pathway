@@ -886,6 +886,7 @@ export const CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS: ReadonlyArray<string> =
   "issues_get",
   "issues_get_attachment",
   "issues_milestones_list",
+  "projects_list",
   "orchestrator_capabilities",
   "list_scheduled_tasks",
   "pathway_provider_allowance",

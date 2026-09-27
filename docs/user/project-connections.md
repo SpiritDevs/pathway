@@ -52,6 +52,13 @@ and replaces any built-in icon. Either choice is saved with the project, so ever
 connection shows the same icon, even when the computer holding the file is offline. The reset
 button beside **Project icon** returns to the detected icon.
 
+Agents can make these changes too. Ask an agent to rename a project, set its icon to an image, reset
+the icon, choose the default model or workspace for new threads, or edit the project's scripts. The
+agent changes its own thread's project unless you name another one. An agent can use any image on
+the computer it runs on for a company project; for a project outside a company, the image must be
+inside the project's folder. Agents working for an orchestrator can view project settings but
+can't change them.
+
 On iPhone and iPad, choose **New Project** from the Focus menu in **Thread options**, or from the
 **Projects** screen. The sheet offers name, icon, Focus, company, source, and environment
 choices; use **Browse** to pick each folder. A project's **Icon** row in its settings sets or clears
