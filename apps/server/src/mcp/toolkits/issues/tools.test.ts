@@ -47,20 +47,12 @@ it("exports provider-compatible object schemas with described parameters", () =>
  * this guards against.
  */
 it("states the side effect of every tool that writes", () => {
-  const writers = [
-    "issues_create",
-    "issues_milestone_create",
-    "issues_milestone_update",
-    "issues_milestone_delete",
-    "issues_update",
-    "issues_comment",
-    "issues_comment_evidence",
-    "issues_delete",
-    "issues_restore",
-    "issues_link_thread",
-  ] as const;
-  for (const name of writers) {
-    const tool = IssuesToolkit.tools[name];
+  const writers = Object.values(IssuesToolkit.tools).filter(
+    (tool) => !Context.get(tool.annotations, Tool.Readonly),
+  );
+  expect(writers.length).toBeGreaterThan(20);
+  for (const tool of writers) {
+    const name = tool.name;
     expect(Tool.getDescription(tool), `${name} should state its side effect`).toMatch(
       /writes to the tracker|visible to everyone|recorded against your name|recoverable|attributed to you|Record that a thread/i,
     );
@@ -73,7 +65,12 @@ it("marks the read tools read-only and the delete destructive", () => {
     "issues_list",
     "issues_get",
     "issues_get_attachment",
+    "issues_history",
     "issues_milestones_list",
+    "issues_milestone_history",
+    "issues_cycles_list",
+    "issues_labels_list",
+    "issues_statuses_list",
   ] as const) {
     expect(Context.get(IssuesToolkit.tools[name].annotations, Tool.Readonly)).toBe(true);
   }

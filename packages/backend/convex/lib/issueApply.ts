@@ -2664,8 +2664,9 @@ async function resolveCommentAttachments(
       attachment === null ||
       attachment.issueId !== issueId ||
       attachment.state !== "ready" ||
-      actor.kind !== "member" ||
-      attachment.uploadedByMembershipId !== actor.membership._id
+      (actor.kind === "member"
+        ? attachment.uploadedByMembershipId !== actor.membership._id
+        : attachment.uploadedByEnvironmentId !== actor.registration.environmentId)
     ) {
       return {
         ok: false,

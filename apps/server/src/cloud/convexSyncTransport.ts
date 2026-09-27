@@ -41,9 +41,14 @@ import * as Queue from "effect/Queue";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as HttpBody from "effect/unstable/http/HttpBody";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
 import { convexErrorCode, type ConvexServiceTokenProvider } from "./convexServiceToken.ts";
 
@@ -327,6 +332,9 @@ export const makeConvexSyncTransport = Effect.fn("cloud.convex_sync_transport.ma
   // One permit, because `setAuth` is client-wide mutable state: two calls in flight during a token
   // refresh would otherwise race to decide which token the other one presents.
   const callLock = yield* Semaphore.make(1);
+  // Attachment uploads send bytes to the byte store directly, so they exist only where the caller
+  // runs with an HTTP client — the server daemon does; transport tests need not.
+  const httpClient = Option.getOrUndefined(yield* Effect.serviceOption(HttpClient.HttpClient));
 
   const serviceToken: Effect.Effect<string, SyncTransportError> = tokens.token.pipe(
     Effect.mapError(
@@ -366,6 +374,16 @@ export const makeConvexSyncTransport = Effect.fn("cloud.convex_sync_transport.ma
         ),
       );
     });
+
+  const runAction = <Reference extends FunctionReference<"action">>(
+    reference: Reference,
+    args: FunctionArgs<Reference>,
+  ) =>
+    authorized((convex) =>
+      convex.action === undefined
+        ? Promise.reject(new Error("This Convex client cannot run actions."))
+        : convex.action(reference, args),
+    );
 
   const latestVersionOnce = (
     companyId: string,
@@ -486,6 +504,63 @@ export const makeConvexSyncTransport = Effect.fn("cloud.convex_sync_transport.ma
           attachmentIds: [...input.attachmentIds],
         }),
       ),
+
+    // The same three steps the web composer takes: prepare against Convex, send the bytes straight
+    // to the byte store, then have Convex verify them before the id may be put on a comment.
+    uploadIssueAttachment:
+      httpClient === undefined
+        ? undefined
+        : (input) =>
+            Effect.gen(function* () {
+              const bytes = input.bytes as Uint8Array<ArrayBuffer>;
+              const digest = yield* Effect.promise(() => crypto.subtle.digest("SHA-256", bytes));
+              const [prepared] = yield* runAction(api.issueAttachments.prepareUpload, {
+                companyId: input.companyId,
+                issueId: input.issueId,
+                uploads: [
+                  {
+                    clientRequestId: input.clientRequestId,
+                    fileName: input.fileName,
+                    mimeType: input.mimeType,
+                    byteSize: bytes.byteLength,
+                    checksum: Buffer.from(digest).toString("hex"),
+                  },
+                ],
+              });
+              if (prepared === undefined) {
+                return yield* new SyncTransportError({
+                  reason: "transport",
+                  message: "No attachment upload was prepared.",
+                });
+              }
+              if (prepared.state === "upload-required") {
+                if (prepared.uploadUrl === null) {
+                  return yield* new SyncTransportError({
+                    reason: "transport",
+                    message: "No attachment upload URL was returned.",
+                  });
+                }
+                const form = new FormData();
+                form.append("file", new Blob([bytes], { type: input.mimeType }), input.fileName);
+                yield* HttpClientRequest.put(prepared.uploadUrl).pipe(
+                  HttpClientRequest.setBody(HttpBody.formData(form)),
+                  httpClient.execute,
+                  Effect.flatMap(HttpClientResponse.filterStatusOk),
+                  Effect.mapError(
+                    (cause) =>
+                      new SyncTransportError({
+                        reason: "transport",
+                        message: `The attachment store rejected the file: ${cause.message}`,
+                      }),
+                  ),
+                );
+                yield* runAction(api.issueAttachments.finalizeUpload, {
+                  companyId: input.companyId,
+                  attachmentId: prepared.attachmentId,
+                });
+              }
+              return { attachmentId: prepared.attachmentId };
+            }),
   });
 });
 

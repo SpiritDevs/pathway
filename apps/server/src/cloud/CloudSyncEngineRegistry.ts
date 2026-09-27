@@ -47,6 +47,14 @@ export interface CloudIssueAttachmentResolver {
     readonly issueId: string;
     readonly attachmentIds: ReadonlyArray<string>;
   }) => Effect.Effect<ReadonlyArray<CloudIssueAttachmentUrl>, { readonly message: string }>;
+  readonly uploadIssueAttachment: (input: {
+    readonly companyId: string;
+    readonly issueId: string;
+    readonly clientRequestId: string;
+    readonly fileName: string;
+    readonly mimeType: string;
+    readonly bytes: Uint8Array;
+  }) => Effect.Effect<{ readonly attachmentId: string }, { readonly message: string }>;
 }
 
 export interface CloudSyncIssueEngineHandle {
@@ -70,6 +78,9 @@ export interface CloudSyncIssueEngineHandle {
   }>;
   readonly resolveIssueAttachmentUrls?:
     | CloudIssueAttachmentResolver["resolveIssueAttachmentUrls"]
+    | undefined;
+  readonly uploadIssueAttachment?:
+    | CloudIssueAttachmentResolver["uploadIssueAttachment"]
     | undefined;
 }
 
@@ -99,6 +110,9 @@ export interface CloudSyncEngineRegistryShape {
     readonly resolveIssueAttachmentUrls?:
       | CloudIssueAttachmentResolver["resolveIssueAttachmentUrls"]
       | undefined;
+    readonly uploadIssueAttachment?:
+      | CloudIssueAttachmentResolver["uploadIssueAttachment"]
+      | undefined;
   }) => Effect.Effect<void>;
   /**
    * Removes this exact engine registration. The identity check prevents an older stopping daemon
@@ -114,6 +128,9 @@ export interface CloudSyncEngineRegistryShape {
       readonly engine: SyncEngine<CloudSyncEntity, IssueSyncOperation>;
       readonly resolveIssueAttachmentUrls?:
         | CloudIssueAttachmentResolver["resolveIssueAttachmentUrls"]
+        | undefined;
+      readonly uploadIssueAttachment?:
+        | CloudIssueAttachmentResolver["uploadIssueAttachment"]
         | undefined;
     },
     use: Effect.Effect<A, E, R>,
@@ -193,6 +210,9 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
         ...(input.resolveIssueAttachmentUrls === undefined
           ? {}
           : { resolveIssueAttachmentUrls: input.resolveIssueAttachmentUrls }),
+        ...(input.uploadIssueAttachment === undefined
+          ? {}
+          : { uploadIssueAttachment: input.uploadIssueAttachment }),
       };
       return new Map(registered).set(input.engine.companyId, { engine: input.engine, handle });
     });

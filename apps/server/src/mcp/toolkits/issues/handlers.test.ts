@@ -70,6 +70,17 @@ import {
   type IssuesMcpMilestoneResult,
   type IssuesMcpMilestonesListResult,
   type IssuesMcpThreadLinksResult,
+  type IssuesMcpCommentsResult,
+  type IssuesMcpCycleResult,
+  type IssuesMcpCyclesListResult,
+  type IssuesMcpHistoryResult,
+  type IssuesMcpLabelResult,
+  type IssuesMcpLabelsListResult,
+  type IssuesMcpRelationsResult,
+  type IssuesMcpStatusesListResult,
+  type IssuesMcpStatusResult,
+  type IssuesMcpTodosResult,
+  type IssuesMcpTriageAcceptResult,
 } from "./tools.ts";
 
 const THREAD = ThreadId.make("thread-agent-1");
@@ -868,6 +879,223 @@ describe("issues MCP toolkit", () => {
         threadId: "thread-someone-else",
       });
       assert.strictEqual(explicit.threads.length, 2);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+  it.effect("creates, schedules, assigns, and deletes cycles by name", () =>
+    Effect.gen(function* () {
+      const created = yield* callTool<typeof IssuesMcpCycleResult.Type>("issues_cycle_create", {
+        name: "Sprint 14",
+        startDate: "2026-10-01",
+        endDate: "2026-10-14",
+      });
+      assert.deepStrictEqual(created.cycle, {
+        name: "Sprint 14",
+        startDate: "2026-10-01",
+        endDate: "2026-10-14",
+        completed: false,
+      });
+      const moved = yield* callTool<typeof IssuesMcpCycleResult.Type>("issues_cycle_update", {
+        cycle: "sprint 14",
+        endDate: "2026-10-21",
+      });
+      assert.strictEqual(moved.cycle.endDate, "2026-10-21");
+
+      yield* callTool<IssuesMcpIssueResult>("issues_create", { title: "Plan", cycle: "Sprint 14" });
+      const detail = yield* callTool<IssuesMcpDetail>("issues_get", { key: "ISS-1" });
+      assert.strictEqual(detail.cycle, "Sprint 14");
+
+      const remaining = yield* callTool<typeof IssuesMcpCyclesListResult.Type>(
+        "issues_cycle_delete",
+        { cycle: "Sprint 14" },
+      );
+      assert.lengthOf(remaining.cycles, 0);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("links and unlinks tasks from either side of the relation", () =>
+    Effect.gen(function* () {
+      yield* callTool<IssuesMcpIssueResult>("issues_create", { title: "Schema" });
+      yield* callTool<IssuesMcpIssueResult>("issues_create", { title: "Migration" });
+
+      const linked = yield* callTool<typeof IssuesMcpRelationsResult.Type>(
+        "issues_relation_create",
+        { key: "ISS-2", relation: "blocked by", otherKey: "iss-1" },
+      );
+      assert.deepStrictEqual(
+        linked.relations.map(({ relation, key }) => [relation, key]),
+        [["blocked by", "ISS-1"]],
+      );
+      const fromOtherSide = yield* callTool<IssuesMcpDetail>("issues_get", { key: "ISS-1" });
+      assert.strictEqual(fromOtherSide.relations[0]?.relation, "blocks");
+
+      const unlinked = yield* callTool<typeof IssuesMcpRelationsResult.Type>(
+        "issues_relation_delete",
+        { key: "ISS-1", relation: "blocks", otherKey: "ISS-2" },
+      );
+      assert.lengthOf(unlinked.relations, 0);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("manages a checklist by item number", () =>
+    Effect.gen(function* () {
+      yield* callTool<IssuesMcpIssueResult>("issues_create", { title: "Release" });
+      for (const text of ["Tag", "Build", "Publish"]) {
+        yield* callTool<typeof IssuesMcpTodosResult.Type>("issues_todo_create", {
+          key: "ISS-1",
+          text,
+        });
+      }
+      const ticked = yield* callTool<typeof IssuesMcpTodosResult.Type>("issues_todo_update", {
+        key: "ISS-1",
+        todo: 2,
+        done: true,
+      });
+      assert.deepStrictEqual(ticked.todos[1], { text: "Build", done: true });
+
+      const reordered = yield* callTool<typeof IssuesMcpTodosResult.Type>("issues_todos_reorder", {
+        key: "ISS-1",
+        order: [3, 1, 2],
+      });
+      assert.deepStrictEqual(
+        reordered.todos.map(({ text }) => text),
+        ["Publish", "Tag", "Build"],
+      );
+      const removed = yield* callTool<typeof IssuesMcpTodosResult.Type>("issues_todo_delete", {
+        key: "ISS-1",
+        todo: 1,
+      });
+      assert.deepStrictEqual(
+        removed.todos.map(({ text }) => text),
+        ["Tag", "Build"],
+      );
+      const missing = yield* callTool<typeof IssuesMcpTodosResult.Type>("issues_todo_update", {
+        key: "ISS-1",
+        todo: 9,
+        done: true,
+      }).pipe(Effect.flip);
+      assert.include(missing.message, "no number 9");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("attaches files from disk to a comment, then edits and deletes it", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const directory = yield* fileSystem.makeTempDirectoryScoped();
+      const screenshot = `${directory}/screenshot.png`;
+      yield* fileSystem.writeFile(screenshot, Buffer.from("screenshot-bytes"));
+      yield* callTool<IssuesMcpIssueResult>("issues_create", { title: "Broken layout" });
+
+      const posted = yield* callTool<IssuesMcpCommentResult>("issues_comment", {
+        key: "ISS-1",
+        body: "Here is what I see.",
+        files: [screenshot],
+      });
+      assert.lengthOf(posted.comment.attachmentIds, 1);
+
+      const unsupported = yield* callTool<IssuesMcpCommentResult>("issues_comment", {
+        key: "ISS-1",
+        body: "Binary",
+        files: [`${directory}/tool.exe`],
+      }).pipe(Effect.flip);
+      assert.include(unsupported.message, "Tasks accept images");
+
+      const edited = yield* callTool<IssuesMcpCommentResult>("issues_comment_update", {
+        key: "ISS-1",
+        comment: 1,
+        body: "Here is what I see after the fix.",
+      });
+      assert.strictEqual(edited.comment.body, "Here is what I see after the fix.");
+      const deleted = yield* callTool<typeof IssuesMcpCommentsResult.Type>(
+        "issues_comment_delete",
+        { key: "ISS-1", comment: 1 },
+      );
+      assert.lengthOf(deleted.comments, 0);
+    }).pipe(Effect.scoped, Effect.provide(TestLayer)),
+  );
+
+  it.effect("administers labels and workflow statuses by name", () =>
+    Effect.gen(function* () {
+      yield* callTool<typeof IssuesMcpLabelResult.Type>("issues_label_create", {
+        name: "flaky",
+        color: "#eb5757",
+      });
+      const renamed = yield* callTool<typeof IssuesMcpLabelResult.Type>("issues_label_update", {
+        label: "Flaky",
+        name: "flaky-test",
+      });
+      assert.deepStrictEqual(renamed.label, { name: "flaky-test", color: "#eb5757" });
+      const labels = yield* callTool<typeof IssuesMcpLabelsListResult.Type>("issues_label_delete", {
+        label: "flaky-test",
+      });
+      assert.lengthOf(labels.labels, 0);
+
+      const created = yield* callTool<typeof IssuesMcpStatusResult.Type>("issues_status_create", {
+        name: "QA",
+        category: "review",
+      });
+      assert.strictEqual(created.status.category, "review");
+      const before = yield* callTool<typeof IssuesMcpStatusesListResult.Type>(
+        "issues_statuses_list",
+        {},
+      );
+      const names = before.statuses.map(({ name }) => name);
+      const reordered = yield* callTool<typeof IssuesMcpStatusesListResult.Type>(
+        "issues_statuses_reorder",
+        { statuses: names.toReversed() },
+      );
+      assert.deepStrictEqual(
+        reordered.statuses.map(({ name }) => name),
+        names.toReversed(),
+      );
+      const partial = yield* callTool<typeof IssuesMcpStatusesListResult.Type>(
+        "issues_statuses_reorder",
+        { statuses: ["QA"] },
+      ).pipe(Effect.flip);
+      assert.include(partial.message, "exactly once");
+
+      yield* callTool<IssuesMcpIssueResult>("issues_create", { title: "Check", status: "QA" });
+      const remaining = yield* callTool<typeof IssuesMcpStatusesListResult.Type>(
+        "issues_status_delete",
+        { status: "QA", moveTasksTo: names[0] },
+      );
+      assert.notInclude(
+        remaining.statuses.map(({ name }) => name),
+        "QA",
+      );
+      const moved = yield* callTool<IssuesMcpDetail>("issues_get", { key: "ISS-1" });
+      assert.strictEqual(moved.status, names[0]);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("accepts and rejects triage items, and reads a task's history", () =>
+    Effect.gen(function* () {
+      yield* callTool<IssuesMcpIssueResult>("issues_create", { title: "From Slack", triage: true });
+      yield* callTool<IssuesMcpIssueResult>("issues_create", { title: "Noise", triage: true });
+
+      const accepted = yield* callTool<typeof IssuesMcpTriageAcceptResult.Type>(
+        "issues_triage_accept",
+        { key: "ISS-1", status: "started", priority: "high" },
+      );
+      assert.strictEqual(accepted.issue.triage, false);
+      assert.strictEqual(accepted.issue.priority, "high");
+      assert.strictEqual(accepted.investigation, null);
+
+      const rejected = yield* callTool<IssuesMcpIssueResult>("issues_triage_reject", {
+        key: "ISS-2",
+      });
+      assert.isNotNull(rejected.issue.deletedAt);
+
+      const history = yield* callTool<typeof IssuesMcpHistoryResult.Type>("issues_history", {
+        key: "ISS-1",
+      });
+      assert.isAbove(history.events.length, 0);
+      assert.strictEqual(history.events.at(-1)?.actor, `agent:${AGENT_DRIVER}`);
+
+      yield* callTool<IssuesMcpThreadLinksResult>("issues_link_thread", { key: "ISS-1" });
+      const unlinked = yield* callTool<IssuesMcpThreadLinksResult>("issues_unlink_thread", {
+        key: "ISS-1",
+      });
+      assert.lengthOf(unlinked.threads, 0);
     }).pipe(Effect.provide(TestLayer)),
   );
 });

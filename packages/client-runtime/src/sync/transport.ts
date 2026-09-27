@@ -83,5 +83,17 @@ export class SyncTransport extends Context.Service<
           SyncTransportError
         >)
       | undefined;
+    /** Optional server capability for uploading a file an agent attaches to a task comment. */
+    readonly uploadIssueAttachment?:
+      | ((input: {
+          readonly companyId: string;
+          readonly issueId: string;
+          /** Makes a retried upload return the same attachment instead of a second copy. */
+          readonly clientRequestId: string;
+          readonly fileName: string;
+          readonly mimeType: string;
+          readonly bytes: Uint8Array;
+        }) => Effect.Effect<{ readonly attachmentId: string }, SyncTransportError>)
+      | undefined;
   }
 >()("@spiritdevs/client-runtime/sync/transport/SyncTransport") {}

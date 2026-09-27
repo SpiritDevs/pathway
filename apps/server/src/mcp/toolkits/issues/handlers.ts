@@ -32,8 +32,11 @@ import {
   type IssueStatusCategory,
   type IssueStatusId,
   type IssueThreadLinkOrigin,
+  type IssueTodoId,
   type IssuesSnapshot,
+  type ChatAttachmentId,
   ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES,
+  issueAttachmentMaxBytes,
   PREVIEW_AUTOMATION_RECORDING_CHUNK_MAX_BYTES,
   type PreviewAutomationRecordingChunk,
   type PreviewAutomationSnapshot,
@@ -44,6 +47,8 @@ import {
 } from "@spiritdevs/contracts";
 import { MembershipId } from "@spiritdevs/contracts/company";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 import {
   IssueTrackerService,
@@ -515,6 +520,24 @@ export const formatIssueRow = (index: TrackerIndex, issue: Issue): IssuesMcpRow 
   };
 };
 
+const formatRelations = (index: TrackerIndex, relations: IssueDetail["relations"]) =>
+  relations.flatMap((edge) => {
+    const otherId =
+      edge.direction === "outgoing" ? edge.relation.relatedIssueId : edge.relation.issueId;
+    const other = index.issuesById.get(otherId);
+    return other
+      ? [
+          {
+            relation: issueRelationPhrase(edge.relation.kind, edge.direction),
+            kind: edge.relation.kind,
+            direction: edge.direction,
+            key: other.key,
+            title: other.title,
+          },
+        ]
+      : [];
+  });
+
 const formatIssueDetail = (
   index: TrackerIndex,
   issue: Issue,
@@ -544,22 +567,7 @@ const formatIssueDetail = (
       .filter((child) => child.deletedAt === null)
       .map((child) => child.key),
     todos: detail.todos.map((todo) => ({ text: todo.text, done: todo.done })),
-    relations: detail.relations.flatMap((edge) => {
-      const otherId =
-        edge.direction === "outgoing" ? edge.relation.relatedIssueId : edge.relation.issueId;
-      const other = index.issuesById.get(otherId);
-      return other
-        ? [
-            {
-              relation: issueRelationPhrase(edge.relation.kind, edge.direction),
-              kind: edge.relation.kind,
-              direction: edge.direction,
-              key: other.key,
-              title: other.title,
-            },
-          ]
-        : [];
-    }),
+    relations: formatRelations(index, detail.relations),
     comments: detail.comments.map(formatMcpComment),
     attachments: formatIssueAttachments(detail.comments),
     threads: threads.map((link) => ({
@@ -571,6 +579,156 @@ const formatIssueDetail = (
     updatedAt: issue.updatedAt,
   };
 };
+
+const formatCycle = (cycle: IssueCycle) => ({
+  name: cycle.name,
+  startDate: cycle.startDate,
+  endDate: cycle.endDate,
+  completed: cycle.completedAt !== null,
+});
+
+const formatLabel = (label: IssueLabel) => ({ name: label.name, color: label.color });
+
+const formatStatus = (status: IssueStatus) => ({
+  name: status.name,
+  category: status.category,
+  color: status.color,
+});
+
+const byPosition = (left: IssueStatus, right: IssueStatus) =>
+  left.position - right.position || left.id.localeCompare(right.id);
+
+/**
+ * One row by exact name, for the tools that administer the row itself. Unlike assigning a task,
+ * renaming or deleting "the done column" must not quietly pick one of several.
+ */
+const resolveNamed = <A extends { readonly name: string }>(
+  rows: ReadonlyArray<A>,
+  value: string,
+  noun: string,
+): Effect.Effect<A, IssueTrackerError> => {
+  const wanted = normalizeName(value);
+  const matches = rows.filter((row) => normalizeName(row.name) === wanted);
+  if (matches.length === 1) return Effect.succeed(matches[0]!);
+  return Effect.fail(
+    matches.length > 1
+      ? invalid(`More than one ${noun} is called "${value.trim()}"; rename one in Pathway first.`)
+      : notFound(
+          `No ${noun} called "${value.trim()}". Valid ${noun}s: ${quoteOptions(rows.map((row) => row.name))}.`,
+          value.trim(),
+        ),
+  );
+};
+
+/** Names to ids for a reorder, which the tracker only accepts as a complete list. */
+const orderByNames = <A extends { readonly name: string; readonly id: string }>(
+  rows: ReadonlyArray<A>,
+  names: ReadonlyArray<string>,
+  noun: string,
+): Effect.Effect<ReadonlyArray<A["id"]>, IssueTrackerError> =>
+  Effect.gen(function* () {
+    const ordered: Array<A["id"]> = [];
+    for (const name of names) ordered.push((yield* resolveNamed(rows, name, noun)).id);
+    const missing = rows.filter((row) => !ordered.includes(row.id));
+    if (missing.length > 0 || new Set(ordered).size !== ordered.length) {
+      return yield* invalid(
+        `List every ${noun} exactly once. Current ${noun}s: ${quoteOptions(rows.map((row) => row.name))}.`,
+      );
+    }
+    return ordered;
+  });
+
+/** 1-based positions, as issues_get numbers comments and todos, to the row. */
+const numbered = <A>(
+  rows: ReadonlyArray<A>,
+  position: number,
+  noun: string,
+  key: string,
+): Effect.Effect<A, IssueTrackerError> => {
+  const row = rows[position - 1];
+  return row === undefined
+    ? Effect.fail(notFound(`${key} has ${rows.length} ${noun}s; there is no number ${position}.`))
+    : Effect.succeed(row);
+};
+
+/** The stored row a phrase describes, read as "<issue> <relation> <other>". */
+const relationEnds = (relation: string, issue: Issue, other: Issue) => {
+  switch (relation) {
+    case "blocks":
+      return { issueId: issue.id, relatedIssueId: other.id, kind: "blocks" } as const;
+    case "blocked by":
+      return { issueId: other.id, relatedIssueId: issue.id, kind: "blocks" } as const;
+    case "duplicates":
+      return { issueId: issue.id, relatedIssueId: other.id, kind: "duplicate" } as const;
+    case "duplicated by":
+      return { issueId: other.id, relatedIssueId: issue.id, kind: "duplicate" } as const;
+    default:
+      return { issueId: issue.id, relatedIssueId: other.id, kind: "relates" } as const;
+  }
+};
+
+/** File types tasks accept, by extension; the tracker enforces the per-type size limits. */
+const ATTACHMENT_MIME_BY_EXTENSION: Record<string, string> = {
+  ".avif": "image/avif",
+  ".bmp": "image/bmp",
+  ".gif": "image/gif",
+  ".heic": "image/heic",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".tif": "image/tiff",
+  ".tiff": "image/tiff",
+  ".webp": "image/webp",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".json": "application/json",
+  ".log": "text/plain",
+  ".md": "text/plain",
+  ".txt": "text/plain",
+};
+
+/** Reads each file an agent named and stores it on the task, before the comment is written. */
+const storeFiles = Effect.fn("issues_mcp.storeFiles")(function* (
+  issue: Issue,
+  paths: ReadonlyArray<string>,
+) {
+  const tracker = yield* IssueTrackerService;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const attachmentIds: Array<ChatAttachmentId> = [];
+  for (const raw of paths) {
+    const filePath = raw.trim();
+    if (!path.isAbsolute(filePath)) {
+      return yield* invalid(`Attach files by absolute path, not "${filePath}".`, issue.key);
+    }
+    const mimeType = ATTACHMENT_MIME_BY_EXTENSION[path.extname(filePath).toLowerCase()];
+    if (mimeType === undefined) {
+      return yield* invalid(
+        `Tasks accept images, mp4 or webm recordings, and .txt, .log, .md or .json files, not ${path.basename(filePath)}.`,
+        issue.key,
+      );
+    }
+    const info = yield* fileSystem
+      .stat(filePath)
+      .pipe(Effect.mapError(() => notFound(`No file at ${filePath}.`, filePath)));
+    const limit = issueAttachmentMaxBytes(mimeType) ?? 0;
+    if (info.type !== "File" || Number(info.size) > limit) {
+      return yield* invalid(`${filePath} is not a file of at most ${limit} bytes.`, issue.key);
+    }
+    const bytes = yield* fileSystem
+      .readFile(filePath)
+      .pipe(Effect.mapError((cause) => storage(`Failed to read ${filePath}: ${cause.message}`)));
+    const stored = yield* tracker.storeCommentFile({
+      issueId: issue.id,
+      fileName: path.basename(filePath),
+      mimeType,
+      bytes,
+    });
+    attachmentIds.push(stored.attachmentId);
+  }
+  return attachmentIds;
+});
 
 /** Newest-updated first. An agent asking "what is going on" means recency, not board position. */
 const byRecency = (left: Issue, right: Issue): number =>
@@ -957,7 +1115,15 @@ const handlers = {
       const actor = yield* callerActor();
       const index = yield* readIndex();
       const issue = yield* resolveIssue(index, input.key);
-      const created = yield* tracker.commentCreate({ issueId: issue.id, body: input.body }, actor);
+      const attachmentIds = yield* storeFiles(issue, input.files ?? []);
+      const created = yield* tracker.commentCreate(
+        {
+          issueId: issue.id,
+          body: input.body,
+          ...(attachmentIds.length === 0 ? {} : { attachmentIds }),
+        },
+        actor,
+      );
       return {
         key: issue.key,
         comment: formatMcpComment(created.comment),
@@ -970,12 +1136,6 @@ const handlers = {
       const actor = yield* callerActor();
       const index = yield* readIndex();
       const issue = yield* resolveIssue(index, input.key);
-      if (yield* tracker.replicaRoutable) {
-        return yield* invalid(
-          "Browser evidence attachments are not supported for cloud-synced companies yet. Add the captured file from the Pathway web comment composer instead.",
-          issue.key,
-        );
-      }
       const scope = yield* McpInvocationContext.requireMcpCapability("preview").pipe(
         Effect.mapError(evidenceFailure),
       );
@@ -1051,7 +1211,12 @@ const handlers = {
         bytes = Buffer.concat(chunks, artifact.sizeBytes);
       }
 
-      const stored = yield* tracker.storeCommentEvidence({ issueId: issue.id, mimeType, bytes });
+      const stored = yield* tracker.storeCommentFile({
+        issueId: issue.id,
+        fileName: mimeType === "image/png" ? "screenshot.png" : `recording.${mimeType.slice(6)}`,
+        mimeType,
+        bytes,
+      });
       const created = yield* tracker.commentCreate(
         { issueId: issue.id, body: input.body, attachmentIds: [stored.attachmentId] },
         actor,
@@ -1104,6 +1269,402 @@ const handlers = {
           createdAt: link.createdAt,
         })),
       };
+    }).pipe(withinPinnedRoute),
+
+  issues_comment_update: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const actor = yield* callerActor();
+      const issue = yield* resolveIssue(yield* readIndex(), input.key);
+      const detail = yield* tracker.getDetail({ issueId: issue.id });
+      const comment = yield* numbered(detail.comments, input.comment, "comment", issue.key);
+      const updated = yield* tracker.commentUpdate(
+        { commentId: comment.id, patch: { body: input.body } },
+        actor,
+      );
+      return { key: issue.key, comment: formatMcpComment(updated.comment) };
+    }).pipe(withinPinnedRoute),
+
+  issues_comment_delete: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const actor = yield* callerActor();
+      const issue = yield* resolveIssue(yield* readIndex(), input.key);
+      const detail = yield* tracker.getDetail({ issueId: issue.id });
+      const comment = yield* numbered(detail.comments, input.comment, "comment", issue.key);
+      const remaining = yield* tracker.commentDelete({ commentId: comment.id }, actor);
+      return { key: issue.key, comments: remaining.comments.map(formatMcpComment) };
+    }).pipe(withinPinnedRoute),
+
+  issues_todo_create: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const issue = yield* resolveIssue(yield* readIndex(), input.key);
+      const result = yield* tracker.todoCreate({ issueId: issue.id, text: input.text });
+      return { key: issue.key, todos: result.todos.map(({ text, done }) => ({ text, done })) };
+    }).pipe(withinPinnedRoute),
+
+  issues_todo_update: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const issue = yield* resolveIssue(yield* readIndex(), input.key);
+      const detail = yield* tracker.getDetail({ issueId: issue.id });
+      const todo = yield* numbered(detail.todos, input.todo, "checklist item", issue.key);
+      const result = yield* tracker.todoUpdate({
+        todoId: todo.id,
+        patch: {
+          ...(input.text === undefined ? {} : { text: input.text }),
+          ...(input.done === undefined ? {} : { done: input.done }),
+        },
+      });
+      return { key: issue.key, todos: result.todos.map(({ text, done }) => ({ text, done })) };
+    }).pipe(withinPinnedRoute),
+
+  issues_todo_delete: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const issue = yield* resolveIssue(yield* readIndex(), input.key);
+      const detail = yield* tracker.getDetail({ issueId: issue.id });
+      const todo = yield* numbered(detail.todos, input.todo, "checklist item", issue.key);
+      const result = yield* tracker.todoDelete({ todoId: todo.id });
+      return { key: issue.key, todos: result.todos.map(({ text, done }) => ({ text, done })) };
+    }).pipe(withinPinnedRoute),
+
+  issues_todos_reorder: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const issue = yield* resolveIssue(yield* readIndex(), input.key);
+      const detail = yield* tracker.getDetail({ issueId: issue.id });
+      if (
+        input.order.length !== detail.todos.length ||
+        new Set(input.order).size !== input.order.length
+      ) {
+        return yield* invalid(
+          `List each of ${issue.key}'s ${detail.todos.length} checklist items exactly once.`,
+          issue.key,
+        );
+      }
+      const todoIds: Array<IssueTodoId> = [];
+      for (const position of input.order) {
+        todoIds.push((yield* numbered(detail.todos, position, "checklist item", issue.key)).id);
+      }
+      const result = yield* tracker.todosReorder({ issueId: issue.id, todoIds });
+      return { key: issue.key, todos: result.todos.map(({ text, done }) => ({ text, done })) };
+    }).pipe(withinPinnedRoute),
+
+  issues_relation_create: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const actor = yield* callerActor();
+      const index = yield* readIndex();
+      const issue = yield* resolveIssue(index, input.key);
+      const other = yield* resolveIssue(index, input.otherKey);
+      yield* tracker.relationCreate(relationEnds(input.relation, issue, other), actor);
+      const detail = yield* tracker.getDetail({ issueId: issue.id });
+      return { key: issue.key, relations: formatRelations(index, detail.relations) };
+    }).pipe(withinPinnedRoute),
+
+  issues_relation_delete: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const actor = yield* callerActor();
+      const index = yield* readIndex();
+      const issue = yield* resolveIssue(index, input.key);
+      const other = yield* resolveIssue(index, input.otherKey);
+      const ends = relationEnds(input.relation, issue, other);
+      const detail = yield* tracker.getDetail({ issueId: issue.id });
+      const edge = detail.relations.find(
+        ({ relation }) =>
+          relation.kind === ends.kind &&
+          ((relation.issueId === ends.issueId && relation.relatedIssueId === ends.relatedIssueId) ||
+            // "relates to" reads the same from both sides, so either stored direction matches.
+            (ends.kind === "relates" &&
+              relation.issueId === ends.relatedIssueId &&
+              relation.relatedIssueId === ends.issueId)),
+      );
+      if (edge === undefined) {
+        return yield* notFound(
+          `No "${issue.key} ${input.relation} ${other.key}" link exists. Use issues_get to see its links.`,
+          issue.key,
+        );
+      }
+      yield* tracker.relationDelete({ relationId: edge.relation.id }, actor);
+      const after = yield* tracker.getDetail({ issueId: issue.id });
+      return { key: issue.key, relations: formatRelations(index, after.relations) };
+    }).pipe(withinPinnedRoute),
+
+  issues_unlink_thread: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const invocation = yield* McpInvocationContext.McpInvocationContext;
+      const actor = yield* callerActor();
+      const issue = yield* resolveIssue(yield* readIndex(), input.key);
+      const threadId =
+        input.threadId === undefined || input.threadId.trim().length === 0
+          ? invocation.threadId
+          : ThreadId.make(input.threadId.trim());
+      const links = yield* tracker.unlinkThread({ issueId: issue.id, threadId }, actor);
+      return {
+        key: issue.key,
+        threads: links.links.map((link) => ({
+          threadId: link.threadId,
+          origin: link.origin,
+          createdAt: link.createdAt,
+        })),
+      };
+    }).pipe(withinPinnedRoute),
+
+  issues_history: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const issue = yield* resolveIssue(yield* readIndex(), input.key);
+      const { events } = yield* tracker.getEvents({ issueId: issue.id });
+      return {
+        key: issue.key,
+        events: [...events]
+          .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+          .map((event) => ({
+            at: event.createdAt,
+            actor: formatIssueActor(event.actor),
+            kind: event.kind,
+            field: event.field,
+            before: event.before,
+            after: event.after,
+          })),
+      };
+    }).pipe(withinPinnedRoute),
+
+  issues_triage_accept: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const actor = yield* callerActor();
+      const index = yield* readIndex();
+      const issue = yield* resolveIssue(index, input.key);
+      const project =
+        input.project === undefined || input.project === null
+          ? input.project
+          : yield* resolveProject(index, input.project);
+      const projectId =
+        project === undefined ? issue.projectId : project === null ? null : project.projectId;
+      const status = yield* resolveStatus(
+        index,
+        input.status,
+        yield* tracker.statusesForProject({ projectId }),
+      );
+      const assignee =
+        input.assignee === undefined || input.assignee === null
+          ? input.assignee
+          : yield* resolveIssueAssignee(tracker, input.assignee, actor.provider);
+      const accepted = yield* tracker.triageAccept(
+        {
+          issueId: issue.id,
+          statusId: status.id,
+          ...(project === undefined ? {} : { projectId: project?.projectId ?? null }),
+          ...(input.priority === undefined ? {} : { priority: input.priority }),
+          ...(assignee === undefined ? {} : { assignee }),
+          runEnrichment: input.investigate ?? false,
+        },
+        actor,
+      );
+      const after = yield* readIndex();
+      return {
+        issue: formatIssueRow(after, accepted.issue),
+        investigation:
+          input.investigate === true
+            ? (accepted.enrichmentRefusal ?? (accepted.enrichmentRun === null ? null : "started"))
+            : null,
+      };
+    }).pipe(withinPinnedRoute),
+
+  issues_triage_reject: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const actor = yield* callerActor();
+      const index = yield* readIndex();
+      const issue = yield* resolveIssue(index, input.key);
+      const rejected = yield* tracker.triageReject({ issueId: issue.id }, actor);
+      return { issue: formatIssueRow(index, rejected.issue) };
+    }).pipe(withinPinnedRoute),
+
+  issues_cycles_list: () =>
+    Effect.gen(function* () {
+      const index = yield* readIndex();
+      return {
+        cycles: [...index.cycles]
+          .sort((left, right) => left.startDate.localeCompare(right.startDate))
+          .map(formatCycle),
+      };
+    }).pipe(withinPinnedRoute),
+
+  issues_cycle_create: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const created = yield* tracker.cycleCreate(input);
+      return { cycle: formatCycle(created.cycle) };
+    }).pipe(withinPinnedRoute),
+
+  issues_cycle_update: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const index = yield* readIndex();
+      const cycle = yield* resolveNamed(index.cycles, input.cycle, "cycle");
+      const updated = yield* tracker.cycleUpdate({
+        cycleId: cycle.id,
+        patch: {
+          ...(input.name === undefined ? {} : { name: input.name }),
+          ...(input.startDate === undefined ? {} : { startDate: input.startDate }),
+          ...(input.endDate === undefined ? {} : { endDate: input.endDate }),
+        },
+      });
+      return { cycle: formatCycle(updated.cycle) };
+    }).pipe(withinPinnedRoute),
+
+  issues_cycle_delete: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const actor = yield* callerActor();
+      const index = yield* readIndex();
+      const cycle = yield* resolveNamed(index.cycles, input.cycle, "cycle");
+      const remaining = yield* tracker.cycleDelete({ cycleId: cycle.id }, actor);
+      return { cycles: remaining.cycles.map(formatCycle) };
+    }).pipe(withinPinnedRoute),
+
+  issues_milestones_reorder: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const index = yield* readIndex();
+      const project = yield* resolveProject(index, input.project);
+      const milestones = index.milestones.filter(
+        (milestone) => milestone.projectId === project.projectId,
+      );
+      const milestoneIds = yield* orderByNames(milestones, input.milestones, "milestone");
+      const result = yield* tracker.milestonesReorder({
+        projectId: project.projectId,
+        milestoneIds: [...milestoneIds],
+      });
+      return {
+        milestones: result.milestones
+          .filter((milestone) => milestone.projectId === project.projectId)
+          .map((milestone) => formatMilestone(index, milestone)),
+      };
+    }).pipe(withinPinnedRoute),
+
+  issues_milestone_history: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const index = yield* readIndex();
+      const project = yield* resolveProject(index, input.project);
+      const milestone = yield* resolveMilestone(index, input.milestone, project.projectId);
+      const history = yield* tracker.milestoneHistory({ milestoneId: milestone.id });
+      return { milestone: milestone.name, ...history };
+    }).pipe(withinPinnedRoute),
+
+  issues_labels_list: () =>
+    Effect.gen(function* () {
+      const index = yield* readIndex();
+      return { labels: index.snapshot.labels.map(formatLabel) };
+    }).pipe(withinPinnedRoute),
+
+  issues_label_create: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const index = yield* readIndex();
+      const created = yield* tracker.createLabel({
+        name: input.name,
+        color:
+          input.color ??
+          AGENT_LABEL_COLORS[index.snapshot.labels.length % AGENT_LABEL_COLORS.length]!,
+      });
+      return { label: formatLabel(created.label) };
+    }).pipe(withinPinnedRoute),
+
+  issues_label_update: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const index = yield* readIndex();
+      const label = yield* resolveNamed(index.snapshot.labels, input.label, "label");
+      const updated = yield* tracker.updateLabel({
+        labelId: label.id,
+        patch: {
+          ...(input.name === undefined ? {} : { name: input.name }),
+          ...(input.color === undefined ? {} : { color: input.color }),
+        },
+      });
+      return { label: formatLabel(updated.label) };
+    }).pipe(withinPinnedRoute),
+
+  issues_label_delete: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const index = yield* readIndex();
+      const label = yield* resolveNamed(index.snapshot.labels, input.label, "label");
+      const remaining = yield* tracker.deleteLabel({ labelId: label.id });
+      return { labels: remaining.labels.map(formatLabel) };
+    }).pipe(withinPinnedRoute),
+
+  issues_statuses_list: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const index = yield* readIndex();
+      const statuses =
+        input.project === undefined
+          ? index.statuses
+          : yield* tracker.statusesForProject({
+              projectId: (yield* resolveProject(index, input.project)).projectId,
+            });
+      return { statuses: [...statuses].sort(byPosition).map(formatStatus) };
+    }).pipe(withinPinnedRoute),
+
+  issues_status_create: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const index = yield* readIndex();
+      const created = yield* tracker.createStatus({
+        name: input.name,
+        category: input.category,
+        color:
+          input.color ?? AGENT_LABEL_COLORS[index.statuses.length % AGENT_LABEL_COLORS.length]!,
+      });
+      return { status: formatStatus(created.status) };
+    }).pipe(withinPinnedRoute),
+
+  issues_status_update: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const index = yield* readIndex();
+      const status = yield* resolveNamed(index.statuses, input.status, "status");
+      const updated = yield* tracker.updateStatus({
+        statusId: status.id,
+        patch: {
+          ...(input.name === undefined ? {} : { name: input.name }),
+          ...(input.category === undefined ? {} : { category: input.category }),
+          ...(input.color === undefined ? {} : { color: input.color }),
+        },
+      });
+      return { status: formatStatus(updated.status) };
+    }).pipe(withinPinnedRoute),
+
+  issues_status_delete: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const actor = yield* callerActor();
+      const index = yield* readIndex();
+      const status = yield* resolveNamed(index.statuses, input.status, "status");
+      const target = yield* resolveNamed(index.statuses, input.moveTasksTo, "status");
+      const remaining = yield* tracker.deleteStatus(
+        { statusId: status.id, reassignToStatusId: target.id },
+        actor,
+      );
+      return { statuses: [...remaining.statuses].sort(byPosition).map(formatStatus) };
+    }).pipe(withinPinnedRoute),
+
+  issues_statuses_reorder: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const index = yield* readIndex();
+      const statusIds = yield* orderByNames(index.statuses, input.statuses, "status");
+      const result = yield* tracker.reorderStatuses({ statusIds: [...statusIds] });
+      return { statuses: [...result.statuses].sort(byPosition).map(formatStatus) };
     }).pipe(withinPinnedRoute),
 } satisfies Parameters<typeof IssuesToolkit.toLayer>[0];
 

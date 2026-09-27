@@ -31,6 +31,19 @@ export class OrchestratorWorkerPermissionError extends Data.TaggedError(
   "OrchestratorWorkerPermissionError",
 )<{ readonly message: string }> {}
 
+/** Every other `issues_*` tool writes to the tracker and needs `tasks.manage`. */
+const ISSUES_READ_TOOL_NAMES = new Set([
+  "issues_list",
+  "issues_get",
+  "issues_get_attachment",
+  "issues_history",
+  "issues_milestones_list",
+  "issues_milestone_history",
+  "issues_cycles_list",
+  "issues_labels_list",
+  "issues_statuses_list",
+]);
+
 export function workerToolCapability(name: string): string | null {
   if (name === "pathway_mail_read") return "mail.read";
   if (name === "pathway_mail_write") return "mail.send";
@@ -38,25 +51,8 @@ export function workerToolCapability(name: string): string | null {
   if (name === "pathway_time_write") return "time.manage";
   if (name === "pathway_provider_allowance" || name === "pathway_allowance_allocate")
     return "environments.read";
-  if (
-    ["issues_list", "issues_get", "issues_get_attachment", "issues_milestones_list"].includes(name)
-  )
-    return "tasks.read";
-  if (
-    [
-      "issues_create",
-      "issues_update",
-      "issues_comment",
-      "issues_comment_evidence",
-      "issues_delete",
-      "issues_restore",
-      "issues_link_thread",
-      "issues_milestone_create",
-      "issues_milestone_update",
-      "issues_milestone_delete",
-    ].includes(name)
-  )
-    return "tasks.manage";
+  if (name.startsWith("issues_"))
+    return ISSUES_READ_TOOL_NAMES.has(name) ? "tasks.read" : "tasks.manage";
   // No orchestrator capability covers project settings yet, so workers may only read them.
   if (name === "projects_list") return "projects.read";
   if (name.startsWith("email_") || name === "resources/read" || name.startsWith("tasks/"))

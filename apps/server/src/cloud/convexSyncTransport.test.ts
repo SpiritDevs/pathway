@@ -210,7 +210,7 @@ const makeRelayEndpoint = (options?: {
 };
 
 interface RecordedConvexCall {
-  readonly kind: "query" | "mutation";
+  readonly kind: "query" | "mutation" | "action";
   /** `getFunctionName`, e.g. `sync:bootstrap`. */
   readonly name: string;
   readonly args: unknown;
@@ -234,8 +234,8 @@ const makeFakeConvexClient = (
   const calls: Array<RecordedConvexCall> = [];
   let token: string | null = null;
   const invoke = (
-    kind: "query" | "mutation",
-    reference: FunctionReference<"query" | "mutation">,
+    kind: RecordedConvexCall["kind"],
+    reference: FunctionReference<RecordedConvexCall["kind"]>,
     args: unknown,
   ): Promise<unknown> => {
     const call: RecordedConvexCall = { kind, name: getFunctionName(reference), args, token };
@@ -251,6 +251,8 @@ const makeFakeConvexClient = (
       invoke("query", reference, args)) as ConvexClientLike["query"],
     mutation: ((reference: FunctionReference<"mutation">, args: unknown) =>
       invoke("mutation", reference, args)) as ConvexClientLike["mutation"],
+    action: ((reference: FunctionReference<"action">, args: unknown) =>
+      invoke("action", reference, args)) as NonNullable<ConvexClientLike["action"]>,
   };
   return { client, calls };
 };
@@ -520,6 +522,71 @@ describe("classifyConvexFailure", () => {
 // --------------------------------------------------------------------------
 
 describe("convex sync transport", () => {
+  it.effect("uploads an agent attachment by preparing, sending the bytes, and finalizing", () =>
+    Effect.gen(function* () {
+      const puts: Array<{ readonly method: string; readonly url: string }> = [];
+      const fake = makeFakeConvexClient((call) =>
+        call.name === "issueAttachments:prepareUpload"
+          ? [
+              {
+                attachmentId: "attachment-9",
+                state: "upload-required",
+                uploadUrl: "https://upload.example.test/put",
+              },
+            ]
+          : { status: "ready" },
+      );
+      const transport = yield* makeConvexSyncTransport({
+        convexUrl: CONVEX_URL,
+        tokens: staticTokenProvider(["service-token-a"]),
+        client: fake.client,
+        createSubscriptionClient: null,
+      }).pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.sync(() => {
+              puts.push({ method: request.method, url: request.url });
+              return HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }));
+            }),
+          ),
+        ),
+      );
+
+      const uploaded = yield* transport.uploadIssueAttachment!({
+        companyId: COMPANY_ID,
+        issueId: "issue-1",
+        clientRequestId: "request-1",
+        fileName: "shot.png",
+        mimeType: "image/png",
+        bytes: new TextEncoder().encode("png"),
+      });
+
+      assert.deepEqual(uploaded, { attachmentId: "attachment-9" });
+      assert.deepEqual(puts, [{ method: "PUT", url: "https://upload.example.test/put" }]);
+      assert.deepEqual(
+        fake.calls.map((call) => [call.kind, call.name]),
+        [
+          ["action", "issueAttachments:prepareUpload"],
+          ["action", "issueAttachments:finalizeUpload"],
+        ],
+      );
+      assert.deepEqual(fake.calls[0]?.args, {
+        companyId: COMPANY_ID,
+        issueId: "issue-1",
+        uploads: [
+          {
+            clientRequestId: "request-1",
+            fileName: "shot.png",
+            mimeType: "image/png",
+            byteSize: 3,
+            checksum: NodeCrypto.createHash("sha256").update("png").digest("hex"),
+          },
+        ],
+      });
+    }),
+  );
+
   it.effect("passes each sync function the arguments the contract names", () =>
     Effect.gen(function* () {
       const fake = makeFakeConvexClient((call) => {

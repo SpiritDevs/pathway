@@ -902,6 +902,9 @@ const runCloudSyncCompany = Effect.fn("cloud.sync_daemon.run_company")(function*
       ...(transport.issueAttachmentUrls === undefined
         ? {}
         : { resolveIssueAttachmentUrls: transport.issueAttachmentUrls }),
+      ...(transport.uploadIssueAttachment === undefined
+        ? {}
+        : { uploadIssueAttachment: transport.uploadIssueAttachment }),
     },
     Effect.raceFirst(supervise, reconcileCloudProjects),
   );

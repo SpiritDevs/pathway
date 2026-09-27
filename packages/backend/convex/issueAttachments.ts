@@ -11,11 +11,7 @@
  */
 import { v } from "convex/values";
 import { makeFunctionReference } from "convex/server";
-import {
-  ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
-  ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES,
-  ISSUE_DIAGNOSTIC_ATTACHMENT_MAX_BYTES,
-} from "@spiritdevs/contracts";
+import { issueAttachmentMaxBytes } from "@spiritdevs/contracts";
 
 import type { Doc, Id } from "./_generated/dataModel.js";
 import {
@@ -33,7 +29,7 @@ import {
   actorRecord,
   requireCompanyActor,
   requireRecordPermission,
-  type MemberActor,
+  type CompanyActor,
 } from "./lib/identity.ts";
 import { encodeIssueAttachment } from "./lib/issueApply.ts";
 import { domainIdArg } from "./lib/validators.ts";
@@ -218,14 +214,8 @@ function normalizeUpload(input: {
     throw backendError("invalid-arguments", "An attachment MIME type must be 1 to 100 characters.");
   if (!Number.isSafeInteger(input.byteSize) || input.byteSize <= 0)
     throw backendError("invalid-arguments", "An attachment must contain bytes.");
-  const maxBytes = mimeType.startsWith("image/")
-    ? ISSUE_COMMENT_ATTACHMENT_MAX_BYTES
-    : mimeType === "video/mp4" || mimeType === "video/webm"
-      ? ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES
-      : mimeType === "application/json" || mimeType === "text/plain"
-        ? ISSUE_DIAGNOSTIC_ATTACHMENT_MAX_BYTES
-        : 0;
-  if (maxBytes === 0)
+  const maxBytes = issueAttachmentMaxBytes(mimeType);
+  if (maxBytes === null)
     throw backendError("invalid-arguments", `Unsupported attachment MIME type ${mimeType}.`);
   if (input.byteSize > maxBytes)
     throw backendError("invalid-arguments", `The attachment exceeds the ${maxBytes} byte limit.`);
@@ -236,7 +226,7 @@ function normalizeUpload(input: {
 
 async function issueForUpload(
   ctx: QueryCtx,
-  actor: MemberActor,
+  actor: CompanyActor,
   issueId: string,
 ): Promise<Doc<"issues">> {
   const issue = await ctx.db
@@ -251,14 +241,20 @@ async function issueForUpload(
   return issue;
 }
 
-async function memberForUpload(ctx: QueryCtx, companyId: string): Promise<MemberActor> {
-  const actor = await requireCompanyActor(ctx, companyId);
-  if (actor.kind !== "member")
-    throw backendError(
-      "permission-denied",
-      "Task attachments must be uploaded by an active company member.",
-    );
-  return actor;
+/**
+ * Members upload from the composer; an environment uploads for the agents it runs, the same
+ * identity those agents' comments are written with. Either may only finish its own uploads.
+ */
+function uploaderFields(actor: CompanyActor) {
+  return actor.kind === "member"
+    ? { uploadedByMembershipId: actor.membership._id }
+    : { uploadedByMembershipId: null, uploadedByEnvironmentId: actor.registration.environmentId };
+}
+
+function uploadedBy(row: Doc<"issueAttachments">, actor: CompanyActor): boolean {
+  return actor.kind === "member"
+    ? row.uploadedByMembershipId === actor.membership._id
+    : row.uploadedByEnvironmentId === actor.registration.environmentId;
 }
 
 const beginResult = v.object({
@@ -346,18 +342,29 @@ export const beginPrepare = internalMutation({
   args: { companyId: domainIdArg, issueId: domainIdArg, upload: uploadInput },
   returns: beginResult,
   handler: async (ctx, args) => {
-    const actor = await memberForUpload(ctx, args.companyId);
+    const actor = await requireCompanyActor(ctx, args.companyId);
     const issue = await issueForUpload(ctx, actor, args.issueId);
     const upload = normalizeUpload(args.upload);
-    const existing = await ctx.db
-      .query("issueAttachments")
-      .withIndex("by_company_uploader_and_request", (q) =>
-        q
-          .eq("companyId", actor.company._id)
-          .eq("uploadedByMembershipId", actor.membership._id)
-          .eq("clientRequestId", upload.clientRequestId),
-      )
-      .unique();
+    const existing =
+      actor.kind === "member"
+        ? await ctx.db
+            .query("issueAttachments")
+            .withIndex("by_company_uploader_and_request", (q) =>
+              q
+                .eq("companyId", actor.company._id)
+                .eq("uploadedByMembershipId", actor.membership._id)
+                .eq("clientRequestId", upload.clientRequestId),
+            )
+            .unique()
+        : await ctx.db
+            .query("issueAttachments")
+            .withIndex("by_company_environment_uploader_and_request", (q) =>
+              q
+                .eq("companyId", actor.company._id)
+                .eq("uploadedByEnvironmentId", actor.registration.environmentId)
+                .eq("clientRequestId", upload.clientRequestId),
+            )
+            .unique();
     if (existing !== null) {
       if (
         existing.issueId !== issue.id ||
@@ -398,7 +405,7 @@ export const beginPrepare = internalMutation({
       mimeType: upload.mimeType,
       byteSize: upload.byteSize,
       checksum: upload.checksum,
-      uploadedByMembershipId: actor.membership._id,
+      ...uploaderFields(actor),
       state: "pending",
       createdAt: now,
       updatedAt: now,
@@ -531,7 +538,7 @@ export const finalizeCandidate = internalQuery({
     state: v.union(v.literal("pending"), v.literal("ready")),
   }),
   handler: async (ctx, args) => {
-    const actor = await memberForUpload(ctx, args.companyId);
+    const actor = await requireCompanyActor(ctx, args.companyId);
     const row = await ctx.db
       .query("issueAttachments")
       .withIndex("by_company_and_domain_id", (q) =>
@@ -541,7 +548,7 @@ export const finalizeCandidate = internalQuery({
     if (
       row === null ||
       row.deletedAt !== null ||
-      row.uploadedByMembershipId !== actor.membership._id ||
+      !uploadedBy(row, actor) ||
       row.uploadthingFileKey === undefined
     )
       throw backendError("entity-not-found", `No pending attachment ${args.attachmentId}.`);
@@ -569,7 +576,7 @@ export const commitFinalize = internalMutation({
   },
   returns: v.object({ status: v.union(v.literal("ready"), v.literal("already-ready")) }),
   handler: async (ctx, args) => {
-    const actor = await memberForUpload(ctx, args.companyId);
+    const actor = await requireCompanyActor(ctx, args.companyId);
     const row = await ctx.db
       .query("issueAttachments")
       .withIndex("by_company_and_domain_id", (q) =>
@@ -579,7 +586,7 @@ export const commitFinalize = internalMutation({
     if (
       row === null ||
       row.deletedAt !== null ||
-      row.uploadedByMembershipId !== actor.membership._id ||
+      !uploadedBy(row, actor) ||
       row.uploadthingFileKey !== args.key
     )
       throw backendError("entity-not-found", `No pending attachment ${args.attachmentId}.`);
