@@ -2032,6 +2032,7 @@ async function insertRegistration(
       | "issues.create"
       | "issues.update"
       | "issues.delete"
+      | "comments.create"
     )[];
   },
 ) {
@@ -2815,6 +2816,82 @@ describe("issueComment attachments", () => {
       }
     },
   );
+
+  it("lets an environment upload for its agents and bind only its own files", async () => {
+    const t = harness();
+    await seed(t);
+    await twoIssues(t);
+    await insertRegistration(t, {
+      environmentId: ENVIRONMENT_ONE,
+      state: "active",
+      permissions: ["issues.read", "comments.create"],
+    });
+    await insertAttachment(t, {
+      id: ATTACHMENT_FOREIGN_OWNER_ID,
+      issueId: ISSUE_A,
+      state: "ready",
+    });
+    const checksum = "cd".repeat(32);
+    setUploadThingClient({
+      prepareUpload: async ({ customId }) => ({
+        key: `ut-${customId}`,
+        url: `https://upload.example.test/${customId}`,
+        expiresAt: Date.now() + 60_000,
+      }),
+      verifyUpload: async (key) => ({
+        key,
+        url: `https://utfs.io/f/${key}`,
+        byteSize: 8,
+        mimeType: "image/png",
+        checksum,
+      }),
+      deleteFiles: async () => {},
+    });
+    try {
+      const environment = asEnvironment(t, ENVIRONMENT_ONE);
+      const [prepared] = await environment.action(api.issueAttachments.prepareUpload, {
+        companyId: COMPANY_ID,
+        issueId: ISSUE_A,
+        uploads: [
+          {
+            clientRequestId: "agent-shot",
+            fileName: "shot.png",
+            mimeType: "image/png",
+            byteSize: 8,
+            checksum,
+          },
+        ],
+      });
+      await environment.action(api.issueAttachments.finalizeUpload, {
+        companyId: COMPANY_ID,
+        attachmentId: prepared!.attachmentId,
+      });
+
+      const op = makeEnvironmentOps(ENVIRONMENT_ONE, "a");
+      const borrowed = op("issueComment.create", COMMENT_ID, {
+        issueId: ISSUE_A,
+        body: "A member's file",
+        attachmentIds: [ATTACHMENT_FOREIGN_OWNER_ID],
+      });
+      const own = op("issueComment.create", COMMENT_ID, {
+        issueId: ISSUE_A,
+        body: "Agent evidence",
+        attachmentIds: [prepared!.attachmentId],
+      });
+      const result = await environment.mutation(api.sync.applyOperations, {
+        companyId: COMPANY_ID,
+        operations: [borrowed, own],
+      });
+      const receipts = byOperationId(result.receipts);
+      expect(receipts.get(borrowed.operationId)).toMatchObject({
+        status: "rejected",
+        code: "invalid-arguments",
+      });
+      expect(receipts.get(own.operationId)).toMatchObject({ status: "accepted" });
+    } finally {
+      setUploadThingClient(null);
+    }
+  });
 
   it("garbage-collects expired pending rows and their UploadThing keys", async () => {
     const t = harness();

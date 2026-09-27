@@ -2035,6 +2035,8 @@ export default defineSchema({
     byteSize: v.number(),
     checksum: v.string(),
     uploadedByMembershipId: v.union(v.id("memberships"), v.null()),
+    /** Set instead of the membership when an environment's agent uploaded the file. */
+    uploadedByEnvironmentId: v.optional(v.string()),
     /** `pending` uploads with no comment are garbage-collected. */
     state: v.union(v.literal("pending"), v.literal("finalized"), v.literal("ready")),
     createdAt: v.number(),
@@ -2050,6 +2052,11 @@ export default defineSchema({
     .index("by_company_uploader_and_request", [
       "companyId",
       "uploadedByMembershipId",
+      "clientRequestId",
+    ])
+    .index("by_company_environment_uploader_and_request", [
+      "companyId",
+      "uploadedByEnvironmentId",
       "clientRequestId",
     ])
     /** Live rows of one issue, for the scope migration a team change performs. */

@@ -15,7 +15,8 @@ import {
   ISSUE_COMMENT_AGENT_RUN_TRANSCRIPT_MAX_CHARS,
   ISSUE_DESCRIPTION_MAX_CHARS,
   ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
-  ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES,
+  issueAttachmentMaxBytes,
+  ChatAttachmentId,
   ISSUE_MAX_PARENT_DEPTH,
   ISSUE_TITLE_MAX_CHARS,
   SLACK_MAX_CHANNEL_WATCHES,
@@ -228,7 +229,7 @@ import {
   type CloudSyncIssueEngineHandle,
 } from "../cloud/CloudSyncEngineRegistry.ts";
 import { ServerConfig } from "../config.ts";
-import { parseBase64DataUrl } from "../imageMime.ts";
+import { inferImageExtension, parseBase64DataUrl } from "../imageMime.ts";
 import type { IssueTrackerRepositoryError } from "../persistence/Errors.ts";
 import { IssueCommentRepository } from "../persistence/Services/IssueComments.ts";
 import { IssueCycleRepository } from "../persistence/Services/IssueCycles.ts";
@@ -711,10 +712,14 @@ export interface IssueTrackerServiceShape {
   readonly uploadCommentAttachment: (
     input: IssueCommentAttachmentUploadInput,
   ) => Effect.Effect<IssueCommentAttachmentUploadResult, IssueTrackerError>;
-  /** Store trusted Preview evidence without widening the public image-upload RPC. */
-  readonly storeCommentEvidence: (input: {
+  /**
+   * Store a file an agent attaches — Preview evidence or a file from disk — without widening the
+   * public image-upload RPC. Accepts what {@link issueAttachmentMaxBytes} accepts.
+   */
+  readonly storeCommentFile: (input: {
     readonly issueId: IssueId;
-    readonly mimeType: "image/png" | "video/mp4" | "video/webm";
+    readonly fileName: string;
+    readonly mimeType: string;
     readonly bytes: Uint8Array;
   }) => Effect.Effect<IssueCommentAttachmentUploadResult, IssueTrackerError>;
   /**
@@ -3987,17 +3992,22 @@ export const makeIssueTrackerService = Effect.fn(function* (
       });
     });
 
-  const legacyStoreCommentEvidence: IssueTrackerServiceShape["storeCommentEvidence"] = Effect.fn(
-    "IssueTrackerService.legacyStoreCommentEvidence",
+  const legacyStoreCommentFile: IssueTrackerServiceShape["storeCommentFile"] = Effect.fn(
+    "IssueTrackerService.legacyStoreCommentFile",
   )(function* (input) {
-    const maximumBytes =
-      input.mimeType === "image/png"
-        ? ISSUE_COMMENT_ATTACHMENT_MAX_BYTES
-        : ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES;
-    if (input.bytes.byteLength === 0 || input.bytes.byteLength > maximumBytes) {
-      return yield* invalid("The task evidence is empty or too large.", input.issueId);
+    const mimeType = input.mimeType.trim().toLowerCase();
+    // The environment-local store keeps images and recordings; text files need the cloud tracker.
+    if (!mimeType.startsWith("image/") && mimeType !== "video/mp4" && mimeType !== "video/webm") {
+      return yield* invalid(
+        `This tracker can only attach images and mp4 or webm recordings, not ${mimeType}.`,
+        input.issueId,
+      );
     }
-    return yield* writeCommentAttachment(input);
+    const maximumBytes = issueAttachmentMaxBytes(mimeType) ?? 0;
+    if (input.bytes.byteLength === 0 || input.bytes.byteLength > maximumBytes) {
+      return yield* invalid("The attachment is empty or too large.", input.issueId);
+    }
+    return yield* writeCommentAttachment({ issueId: input.issueId, mimeType, bytes: input.bytes });
   });
 
   const publishViews = () =>
@@ -5254,18 +5264,60 @@ export const makeIssueTrackerService = Effect.fn(function* (
       ),
     );
   const replicaRoutable = resolveReplicaRoute.pipe(Effect.map((route) => route !== null));
-  const replicaAttachmentUnsupported = () =>
-    invalid(
-      "Server-produced task attachments are not supported for cloud-synced companies yet. Add the attachment from the Pathway web comment composer instead.",
-    );
+  /** A cloud-synced company keeps attachments in its own store, uploaded as this environment. */
+  const storeCommentFile: IssueTrackerServiceShape["storeCommentFile"] = (input) =>
+    Effect.gen(function* () {
+      const route = yield* resolveReplicaRoute;
+      if (route === null) return yield* legacyStoreCommentFile(input);
+      const maximumBytes = issueAttachmentMaxBytes(input.mimeType);
+      if (maximumBytes === null) {
+        return yield* invalid(
+          `Tasks accept images, mp4 or webm recordings, and plain text or JSON files, not ${input.mimeType}.`,
+          input.issueId,
+        );
+      }
+      if (input.bytes.byteLength === 0 || input.bytes.byteLength > maximumBytes) {
+        return yield* invalid(
+          `The attachment is empty or larger than the ${maximumBytes} byte limit.`,
+          input.issueId,
+        );
+      }
+      const upload = route.engine.uploadIssueAttachment;
+      if (upload === undefined) {
+        return yield* invalid("This environment cannot upload task attachments yet.");
+      }
+      const uploaded = yield* upload({
+        companyId: route.companyId,
+        issueId: input.issueId,
+        clientRequestId: yield* newId,
+        fileName: input.fileName,
+        mimeType: input.mimeType,
+        bytes: input.bytes,
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new IssueTrackerError({
+              reason: "storage",
+              message: `Failed to upload the attachment: ${cause.message}`,
+            }),
+        ),
+      );
+      return { attachmentId: ChatAttachmentId.make(uploaded.attachmentId) };
+    });
   const uploadCommentAttachment: IssueTrackerServiceShape["uploadCommentAttachment"] = (input) =>
-    Effect.flatMap(replicaRoutable, (routable) =>
-      routable ? replicaAttachmentUnsupported() : legacyUploadCommentAttachment(input),
-    );
-  const storeCommentEvidence: IssueTrackerServiceShape["storeCommentEvidence"] = (input) =>
-    Effect.flatMap(replicaRoutable, (routable) =>
-      routable ? replicaAttachmentUnsupported() : legacyStoreCommentEvidence(input),
-    );
+    Effect.flatMap(replicaRoutable, (routable) => {
+      if (!routable) return legacyUploadCommentAttachment(input);
+      const parsed = parseBase64DataUrl(input.dataUrl);
+      if (parsed === null || !parsed.mimeType.startsWith("image/")) {
+        return invalid("A comment attachment must be a base64 image data URL.", input.issueId);
+      }
+      return storeCommentFile({
+        issueId: input.issueId,
+        fileName: `image${inferImageExtension({ mimeType: parsed.mimeType })}`,
+        mimeType: parsed.mimeType,
+        bytes: Buffer.from(parsed.base64, "base64"),
+      });
+    });
   const memberActorForCloudUserId: IssueTrackerServiceShape["memberActorForCloudUserId"] = (
     cloudUserId,
   ) =>
@@ -6320,7 +6372,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     cancelCommentAgentRun,
     retryCommentAgentRun,
     uploadCommentAttachment,
-    storeCommentEvidence,
+    storeCommentFile,
     viewCreate,
     viewUpdate,
     viewDelete,

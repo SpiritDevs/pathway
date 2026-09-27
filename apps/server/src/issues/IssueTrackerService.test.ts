@@ -112,7 +112,10 @@ const ROOTLESS_PROJECT = ProjectId.make("project-rootless");
 const ROUTED_COMPANY_ID = CompanyId.make("company-routed-issue-writes");
 const ROUTED_ENVIRONMENT_ID = EnvironmentId.make("environment-routed-issue-writes");
 
-function readyReplicaReader(entities: ReadonlyArray<StoredSyncEntity> = []): IssueReplicaReader {
+function readyReplicaReader(
+  entities: ReadonlyArray<StoredSyncEntity> = [],
+  engine: Partial<CloudSyncIssueEngineHandle> = {},
+): IssueReplicaReader {
   const readModel = issueReadModelFromStoredReplica({
     checkpoint: {
       schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
@@ -136,6 +139,7 @@ function readyReplicaReader(entities: ReadonlyArray<StoredSyncEntity> = []): Iss
     sync: Effect.die("unused"),
     operationDisposition: () => Effect.die("unused"),
     readIssueSnapshot: Effect.succeed({ readModel, bootstrapped: true, quarantined: 0 }),
+    ...engine,
   };
   const route = {
     companyId: ROUTED_COMPANY_ID,
@@ -428,30 +432,52 @@ describe("IssueTrackerService", () => {
   );
 
   it.effect(
-    "refuses every legacy attachment producer when the company replica is authoritative",
+    "uploads agent attachments to the company's store when the replica is authoritative",
     () =>
       Effect.gen(function* () {
+        const uploads: Array<{ fileName: string; mimeType: string; size: number }> = [];
         const tracker = yield* makeIssueTrackerService({
-          replicaReader: readyReplicaReader(),
+          replicaReader: readyReplicaReader([], {
+            uploadIssueAttachment: (input) =>
+              Effect.sync(() => {
+                uploads.push({
+                  fileName: input.fileName,
+                  mimeType: input.mimeType,
+                  size: input.bytes.byteLength,
+                });
+                return { attachmentId: `cloud-${uploads.length}` };
+              }),
+          }),
           syncEngineRegistry: null,
         });
-        const uploadError = yield* tracker
-          .uploadCommentAttachment({
-            issueId: IssueId.make("replica-issue"),
-            dataUrl: `data:image/png;base64,${PNG_BASE64}`,
+        const issueId = IssueId.make("replica-issue");
+        const image = yield* tracker.uploadCommentAttachment({
+          issueId,
+          dataUrl: `data:image/png;base64,${PNG_BASE64}`,
+        });
+        const log = yield* tracker.storeCommentFile({
+          issueId,
+          fileName: "build.log",
+          mimeType: "text/plain",
+          bytes: Buffer.from("proof"),
+        });
+        assert.deepStrictEqual([image.attachmentId, log.attachmentId], ["cloud-1", "cloud-2"]);
+        assert.deepStrictEqual(uploads[1], {
+          fileName: "build.log",
+          mimeType: "text/plain",
+          size: 5,
+        });
+
+        const refused = yield* tracker
+          .storeCommentFile({
+            issueId,
+            fileName: "tool.exe",
+            mimeType: "application/octet-stream",
+            bytes: Buffer.from("x"),
           })
           .pipe(Effect.flip);
-        const evidenceError = yield* tracker
-          .storeCommentEvidence({
-            issueId: IssueId.make("replica-issue"),
-            mimeType: "image/png",
-            bytes: Buffer.from("proof"),
-          })
-          .pipe(Effect.flip);
-        for (const error of [uploadError, evidenceError]) {
-          assert.strictEqual(error.reason, "invalid");
-          assert.include(error.message, "not supported for cloud-synced companies");
-        }
+        assert.strictEqual(refused.reason, "invalid");
+        assert.strictEqual(uploads.length, 2);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(

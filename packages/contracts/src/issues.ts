@@ -210,6 +210,20 @@ export const ISSUE_COMMENT_ATTACHMENT_MAX_BYTES = PROVIDER_SEND_TURN_MAX_IMAGE_B
 /** Short browser recordings attached by agents as review evidence. */
 export const ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES = 25 * 1024 * 1024;
 export const ISSUE_DIAGNOSTIC_ATTACHMENT_MAX_BYTES = 256 * 1024;
+
+/**
+ * The byte ceiling for one task attachment of this MIME type, or null when tasks do not accept
+ * the type at all: images, short browser recordings, and small text or JSON diagnostics.
+ */
+export const issueAttachmentMaxBytes = (mimeType: string): number | null => {
+  const type = mimeType.trim().toLowerCase().split(";", 1)[0] ?? "";
+  if (type.startsWith("image/")) return ISSUE_COMMENT_ATTACHMENT_MAX_BYTES;
+  if (type === "video/mp4" || type === "video/webm") return ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES;
+  if (type === "application/json" || type === "text/plain") {
+    return ISSUE_DIAGNOSTIC_ATTACHMENT_MAX_BYTES;
+  }
+  return null;
+};
 /**
  * The wire bound on the upload. Base64 spends four characters on every three bytes, and the
  * `data:image/webp;base64,` header and any wrapping whitespace ride on top of that.
