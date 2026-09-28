@@ -9,6 +9,7 @@ import {
 import { runAtomCommand, squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runtime";
 import type {
   EnvironmentId,
+  EnvironmentSurfaceSizing,
   EnvironmentSurfaceViewport,
   PreviewTabId,
   ThreadId,
@@ -41,6 +42,7 @@ export function useRemoteBrowserSurface({
   threadId,
   tabId,
   enabled,
+  sizing = "active",
   containerRef,
   canvasRef,
 }: {
@@ -48,6 +50,8 @@ export function useRemoteBrowserSurface({
   threadId: ThreadId;
   tabId: PreviewTabId | undefined;
   enabled: boolean;
+  /** Passive viewers (thumbnails) watch without resizing the page the agent sees. */
+  sizing?: EnvironmentSurfaceSizing;
   containerRef: RefObject<HTMLElement | null>;
   canvasRef: RefObject<HTMLCanvasElement | null>;
 }) {
@@ -133,11 +137,12 @@ export function useRemoteBrowserSurface({
     };
     const created = createEnvironmentSurfaceStream({
       viewport: initial,
-      resolveUrl: async (next) => {
+      sizing,
+      resolveUrl: async (next, nextSizing) => {
         const result = await runAtomCommand(
           registry,
           surfaceSocket.resolveUrl,
-          { environmentId, input: { target, viewport: next } },
+          { environmentId, input: { target, viewport: next, sizing: nextSizing } },
           { reportFailure: false },
         );
         if (result._tag === "Success") return result.value;
@@ -154,7 +159,7 @@ export function useRemoteBrowserSurface({
       created.close();
       if (stream.current === created) stream.current = null;
     };
-  }, [canvasRef, environmentId, live, registry, tabId, threadId]);
+  }, [canvasRef, environmentId, live, registry, sizing, tabId, threadId]);
 
   useEffect(() => {
     if (!viewport || !stream.current || sameSurfaceViewport(streamViewport.current, viewport))

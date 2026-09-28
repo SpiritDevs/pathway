@@ -147,6 +147,8 @@ function RemoteBrowserSurface({
     threadId: threadRef.threadId,
     tabId,
     enabled: true,
+    // The mini-player is a thumbnail; it must not shrink the agent's page.
+    sizing: compact ? "passive" : "active",
     containerRef,
     canvasRef,
   });
