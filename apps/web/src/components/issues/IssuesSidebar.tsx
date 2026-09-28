@@ -13,6 +13,10 @@
  * Each section heading collapses its section, remembered per device so the sidebar looks the same
  * when you come back. Projects and labels can also be searched by name.
  *
+ * Projects list the ones with tasks, under the ones pinned on this device, which stay visible even
+ * with the section collapsed. The rest wait behind "Show … without tasks", archived ones behind
+ * "Archived". Right-clicking a project opens its menu: pin, new task, open, settings, rename, archive, delete.
+ *
  * @module components/issues/IssuesSidebar
  */
 import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
@@ -21,6 +25,7 @@ import { useLocation, useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
+  ArchiveIcon,
   ArrowDownIcon,
   ArrowUpIcon,
   BookmarkIcon,
@@ -31,14 +36,16 @@ import {
   MilestoneIcon,
   MoreHorizontalIcon,
   PencilIcon,
+  PinIcon,
   PlusIcon,
   SearchIcon,
   Trash2Icon,
   UserIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { usePrimaryEnvironmentId } from "~/state/environments";
 
 import { cn } from "~/lib/utils";
 import {
@@ -56,6 +63,7 @@ import {
   useUpdateIssueView,
 } from "~/state/issues";
 import { duplicateNameError } from "../settings/issues/issuesSettings.logic";
+import { CreateProjectDialog } from "../projects/CreateProjectDialog";
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
 import {
   AlertDialog,
@@ -94,7 +102,14 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { IssueLabelDot, IssueProgressRing } from "./IssueGlyphs";
+import {
+  IssuesProjectContextMenu,
+  RenameIssueProjectDialog,
+  type IssuesProjectMenuTarget,
+} from "./IssuesProjectMenu";
+import { countIssuesByProject, issuesSidebarProjects } from "./issuesSidebarProjects.logic";
 import { NewCycleDialog } from "./NewCycleDialog";
+import { NewIssueDialog } from "./NewIssueDialog";
 import {
   ISSUE_ASSIGNEE_MEMBER_PREFIX,
   ISSUE_ASSIGNEE_USER_VALUE,
@@ -121,16 +136,27 @@ import {
 } from "./issuesViews.logic";
 import { isMilestonesPathname, milestoneIdInPathname } from "./milestonesOverview.logic";
 import { useIssueMemberDirectory } from "./issueMemberDirectory";
-import { useIssueProjectOptions } from "./useIssueProjectOptions";
+import {
+  useIssueProjectOptionsIncludingArchived,
+  type IssueProjectOption,
+} from "./useIssueProjectOptions";
 
 /** A stable empty array: the milestone rows are memo-free, but a fresh `[]` per render is noise. */
 const NO_MILESTONE_IDS: ReadonlyArray<string> = [];
 
 const COLLAPSED_SECTIONS_KEY = "pathway:issues-sidebar:collapsed-sections";
-const NO_COLLAPSED_SECTIONS: ReadonlyArray<string> = [];
-const CollapsedSections = Schema.Array(Schema.String);
+const PINNED_PROJECTS_KEY = "pathway:issues-sidebar:pinned-projects";
+const NO_IDS: ReadonlyArray<string> = [];
+const StoredIds = Schema.Array(Schema.String);
 
 type IssuesSidebarSectionId = "cycles" | "projects" | "views" | "labels";
+
+/** Where a context menu opens: at the pointer, or under the row when the keyboard opened it. */
+function menuPoint(event: MouseEvent<HTMLElement>): { x: number; y: number } {
+  if (event.clientX !== 0 || event.clientY !== 0) return { x: event.clientX, y: event.clientY };
+  const rect = event.currentTarget.getBoundingClientRect();
+  return { x: rect.left, y: rect.bottom };
+}
 
 const matchesQuery = (name: string, query: string) =>
   name.toLowerCase().includes(query.trim().toLowerCase());
@@ -144,7 +170,9 @@ export function IssuesSidebar() {
   const search = parseIssuesSearch(rawSearch as Record<string, unknown>);
   const onIssues = pathname === "/issues";
   const triageCount = useTriageCount();
-  const projects = useIssueProjectOptions();
+  const allProjects = useIssueProjectOptionsIncludingArchived();
+  const projects = useMemo(() => allProjects.filter((project) => !project.archived), [allProjects]);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const labels = useIssueLabels();
   const store = useIssuesStore();
   const cycles = useIssueCycles();
@@ -160,9 +188,20 @@ export function IssuesSidebar() {
   const [pendingDeleteView, setPendingDeleteView] = useState<IssueView | null>(null);
   const [collapsedSections, setCollapsedSections] = useLocalStorage(
     COLLAPSED_SECTIONS_KEY,
-    NO_COLLAPSED_SECTIONS,
-    CollapsedSections,
+    NO_IDS,
+    StoredIds,
   );
+  const [pinnedProjectIds, setPinnedProjectIds] = useLocalStorage(
+    PINNED_PROJECTS_KEY,
+    NO_IDS,
+    StoredIds,
+  );
+  const [showAllProjects, setShowAllProjects] = useState(false);
+  const [showArchivedProjects, setShowArchivedProjects] = useState(false);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [projectMenu, setProjectMenu] = useState<IssuesProjectMenuTarget | null>(null);
+  const [renamingProject, setRenamingProject] = useState<IssueProjectOption | null>(null);
+  const [newTaskProject, setNewTaskProject] = useState<IssueProjectOption | null>(null);
   const sectionProps = (id: IssuesSidebarSectionId) => ({
     collapsed: collapsedSections.includes(id),
     onToggleCollapsed: () =>
@@ -175,6 +214,7 @@ export function IssuesSidebar() {
   // midnight timer, and a reconnect or any diff re-reads it.
   const byStatus = useMemo(() => issueCyclesByStatus(cycles, todayIssueDate()), [cycles]);
   const cycleCounts = useMemo(() => countIssuesByCycle(store), [store]);
+  const projectIssueCounts = useMemo(() => countIssuesByProject(store), [store]);
   const today = useMemo(() => todayIssueDate(), []);
 
   const filter = issuesSearchFilter(search);
@@ -228,6 +268,47 @@ export function IssuesSidebar() {
   };
 
   const clearFilters = () => navigateWith(issuesFilterSearchPatch(NO_ISSUES_LIST_FILTER));
+
+  const isProjectActive = (project: IssueProjectOption) =>
+    onIssues &&
+    project.projectIds.every((projectId) => issuesFilterHasValue(filter, "project", projectId));
+  const projectTaskCount = (project: IssueProjectOption) =>
+    project.projectIds.reduce((total, id) => total + (projectIssueCounts.get(id) ?? 0), 0);
+  const togglePinnedProject = (project: IssueProjectOption) =>
+    setPinnedProjectIds((current) =>
+      current.includes(project.id)
+        ? current.filter((id) => id !== project.id)
+        : [...current, project.id],
+    );
+  /** A project leaving the list takes its pin and any filter still naming it with it. */
+  const forgetProject = (project: IssueProjectOption) => {
+    setPinnedProjectIds((current) => current.filter((id) => id !== project.id));
+    if (isProjectActive(project)) applyProjectFilter([]);
+  };
+  const listProjects = (query: string) =>
+    issuesSidebarProjects({
+      projects: allProjects,
+      pinnedIds: pinnedProjectIds,
+      issueCounts: projectIssueCounts,
+      isActive: isProjectActive,
+      query,
+      showAll: showAllProjects,
+    });
+  const projectRow = (project: IssueProjectOption) => (
+    <ProjectRow
+      isActive={isProjectActive(project)}
+      key={project.id}
+      milestones={milestones.filter((milestone) =>
+        project.projectIds.includes(milestone.projectId),
+      )}
+      milestoneProgress={milestoneProgress}
+      onContextMenu={(point) => setProjectMenu({ project, ...point })}
+      onSelectMilestone={navigateToMilestone}
+      onSelectProject={() => applyProjectFilter(project.projectIds)}
+      selectedMilestoneIds={openMilestoneIds}
+      title={project.title}
+    />
+  );
 
   const noFilter = !isIssuesListFilterActive(filter);
 
@@ -393,40 +474,86 @@ export function IssuesSidebar() {
           )}
         </IssuesSidebarSection>
 
-        <IssuesSidebarSection {...sectionProps("projects")} searchable title="Projects">
+        <IssuesSidebarSection
+          {...sectionProps("projects")}
+          action={
+            <SidebarGroupAction
+              aria-label="Add project"
+              onClick={() => setCreateProjectOpen(true)}
+              title="Add project"
+            >
+              <PlusIcon />
+            </SidebarGroupAction>
+          }
+          renderAlwaysShown={(query) => {
+            const { pinned } = listProjects(query);
+            return pinned.length === 0 ? null : <SidebarMenu>{pinned.map(projectRow)}</SidebarMenu>;
+          }}
+          searchable
+          title="Projects"
+        >
           {(query) => {
-            const shown = projects.filter((project) => matchesQuery(project.title, query));
+            const { pinned, listed, hiddenCount, archived } = listProjects(query);
+            const toggleRow = (label: string, onClick: () => void) => (
+              <SidebarMenuItem>
+                <button
+                  className="w-full rounded-md px-2 py-1 text-start text-xs text-sidebar-muted-foreground outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={onClick}
+                  type="button"
+                >
+                  {label}
+                </button>
+              </SidebarMenuItem>
+            );
+            const nothing = pinned.length + listed.length + hiddenCount + archived.length === 0;
             return (
               <SidebarMenu>
-                {projects.length === 0 ? (
+                {nothing ? (
                   <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">
-                    No projects yet.
+                    {allProjects.length === 0 ? "No projects yet." : "No matching projects."}
                   </p>
-                ) : shown.length === 0 ? (
-                  <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">
-                    No matching projects.
-                  </p>
-                ) : (
-                  shown.map((project) => (
-                    <ProjectRow
-                      isActive={
-                        onIssues &&
-                        project.projectIds.every((projectId) =>
-                          issuesFilterHasValue(filter, "project", projectId),
-                        )
-                      }
-                      key={project.id}
-                      milestones={milestones.filter((milestone) =>
-                        project.projectIds.includes(milestone.projectId),
-                      )}
-                      milestoneProgress={milestoneProgress}
-                      onSelectMilestone={navigateToMilestone}
-                      onSelectProject={() => applyProjectFilter(project.projectIds)}
-                      selectedMilestoneIds={openMilestoneIds}
-                      title={project.title}
-                    />
-                  ))
-                )}
+                ) : null}
+                {pinned.length > 0 &&
+                (listed.length > 0 || hiddenCount > 0 || archived.length > 0) ? (
+                  <li
+                    aria-hidden
+                    className="flex items-center gap-1.5 px-2 py-1 text-sidebar-muted-foreground/70"
+                  >
+                    <PinIcon className="size-3" />
+                    <span className="h-px flex-1 bg-sidebar-border" />
+                  </li>
+                ) : null}
+                {listed.map(projectRow)}
+                {hiddenCount > 0
+                  ? toggleRow(`Show ${hiddenCount} without tasks`, () => setShowAllProjects(true))
+                  : showAllProjects && query.trim() === ""
+                    ? toggleRow("Hide projects without tasks", () => setShowAllProjects(false))
+                    : null}
+                {archived.length === 0
+                  ? null
+                  : toggleRow(
+                      showArchivedProjects ? "Hide archived" : `Archived (${archived.length})`,
+                      () => setShowArchivedProjects(!showArchivedProjects),
+                    )}
+                {showArchivedProjects || query.trim() !== ""
+                  ? archived.map((project) => (
+                      <SidebarMenuItem key={project.id}>
+                        {/* An archived project has no tasks in the tracker to filter to, so its
+                            row opens the menu where Restore lives. */}
+                        <SidebarMenuButton
+                          className="text-sidebar-muted-foreground"
+                          onClick={(event) => setProjectMenu({ project, ...menuPoint(event) })}
+                          onContextMenu={(event) => {
+                            event.preventDefault();
+                            setProjectMenu({ project, ...menuPoint(event) });
+                          }}
+                        >
+                          <ArchiveIcon />
+                          <span className="truncate">{project.title}</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    ))
+                  : null}
               </SidebarMenu>
             );
           }}
@@ -490,6 +617,52 @@ export function IssuesSidebar() {
 
       <NewCycleDialog onOpenChange={setNewCycleOpen} open={newCycleOpen} />
 
+      {/* Mounted only while open, like the menu and the new-task dialog below: each holds cloud
+          connections and subscriptions the sidebar should not carry the rest of the time. */}
+      {createProjectOpen ? (
+        <CreateProjectDialog
+          environmentId={primaryEnvironmentId}
+          onOpenChange={setCreateProjectOpen}
+          open
+        />
+      ) : null}
+
+      {projectMenu === null ? null : (
+        <IssuesProjectContextMenu
+          key={`${projectMenu.project.id}:${projectMenu.x}:${projectMenu.y}`}
+          onClose={() => setProjectMenu(null)}
+          onForget={() => forgetProject(projectMenu.project)}
+          onNewTask={() => setNewTaskProject(projectMenu.project)}
+          onRename={() => setRenamingProject(projectMenu.project)}
+          onTogglePin={() => togglePinnedProject(projectMenu.project)}
+          pinned={pinnedProjectIds.includes(projectMenu.project.id)}
+          target={projectMenu}
+          taskCount={projectTaskCount(projectMenu.project)}
+        />
+      )}
+
+      <RenameIssueProjectDialog
+        onOpenChange={(open) => {
+          if (!open) setRenamingProject(null);
+        }}
+        project={renamingProject}
+      />
+
+      {/* Seeds its fields from these defaults when it mounts. */}
+      {newTaskProject === null ? null : (
+        <NewIssueDialog
+          defaultProjectId={newTaskProject.id}
+          defaultStatusId={store.statuses[0]?.id ?? null}
+          labels={labels}
+          onOpenChange={(open) => {
+            if (!open) setNewTaskProject(null);
+          }}
+          open
+          projects={projects}
+          statuses={store.statuses}
+        />
+      )}
+
       <RenameIssueViewDialog
         onOpenChange={(open) => {
           if (!open) setRenamingView(null);
@@ -544,13 +717,17 @@ function IssuesSidebarSection({
   onToggleCollapsed,
   searchable = false,
   action,
+  renderAlwaysShown,
   children,
 }: {
   title: string;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   searchable?: boolean;
+  /** Sits right of the heading, after the search button when there is one. */
   action?: ReactNode;
+  /** Rows shown above the rest even while the section is collapsed, such as pinned projects. */
+  renderAlwaysShown?: (query: string) => ReactNode;
   children: (query: string) => ReactNode;
 }) {
   const [query, setQuery] = useState<string | null>(null);
@@ -582,14 +759,14 @@ function IssuesSidebarSection({
         <SidebarGroupAction
           aria-label={query === null ? `Search ${noun}` : `Close the ${noun} search`}
           aria-pressed={query !== null}
+          className={action === undefined ? undefined : "right-9"}
           onClick={() => setQuery(query === null ? "" : null)}
           title={`Search ${noun}`}
         >
           <SearchIcon className="size-3.5" />
         </SidebarGroupAction>
-      ) : (
-        action
-      )}
+      ) : null}
+      {action}
       {query === null ? null : (
         <div className="px-2 pb-1">
           <SidebarInput
@@ -606,6 +783,7 @@ function IssuesSidebarSection({
           />
         </div>
       )}
+      {renderAlwaysShown?.(query ?? "")}
       {open ? children(query ?? "") : null}
     </SidebarGroup>
   );
@@ -776,6 +954,7 @@ function ProjectRow({
   selectedMilestoneIds,
   onSelectProject,
   onSelectMilestone,
+  onContextMenu,
 }: {
   title: string;
   isActive: boolean;
@@ -787,6 +966,7 @@ function ProjectRow({
   selectedMilestoneIds: ReadonlyArray<string>;
   onSelectProject: () => void;
   onSelectMilestone: (milestoneId: IssueMilestoneId) => void;
+  onContextMenu: (point: { x: number; y: number }) => void;
 }) {
   const holdsSelection = milestones.some((milestone) =>
     selectedMilestoneIds.includes(milestone.id),
@@ -796,7 +976,14 @@ function ProjectRow({
 
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton isActive={isActive} onClick={onSelectProject}>
+      <SidebarMenuButton
+        isActive={isActive}
+        onClick={onSelectProject}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onContextMenu(menuPoint(event));
+        }}
+      >
         <FolderIcon />
         <span className="truncate">{title}</span>
       </SidebarMenuButton>

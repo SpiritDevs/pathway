@@ -635,14 +635,14 @@ export const ensureEnvironmentProject = mutation({
       // outbound observation may never resurrect a project the company already deleted.
       return project.id;
     } else if (
+      // Archiving is a company decision, like deletion: a checkout republishing its project must
+      // not quietly undo it. Only `setCompanyProjectArchived` clears the stamp.
       project.name !== name ||
-      project.archivedAt !== null ||
       ((project.repositoryIdentity === undefined || project.repositoryIdentity === null) &&
         repositoryIdentity != null)
     ) {
       await ctx.db.patch(project._id, {
         name,
-        archivedAt: null,
         ...((project.repositoryIdentity === undefined || project.repositoryIdentity === null) &&
         repositoryIdentity != null
           ? { repositoryIdentity }
@@ -924,6 +924,43 @@ export const setCompanyProjectIconImage = mutation({
       iconImage: { storageId: args.storageId, url },
     });
     return true;
+  },
+});
+
+/**
+ * Archives or restores a company project. Archiving keeps every row — tasks, milestones, bindings —
+ * and only stamps `archivedAt`, which clients read as "out of the tracker" and issue writes read as
+ * "no longer a valid project". Restoring clears the stamp and everything comes back as it was.
+ */
+export const setCompanyProjectArchived = mutation({
+  args: { companyId: domainIdArg, cloudProjectId: domainIdArg, archived: v.boolean() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { actor, project } = await requireManagedProject(
+      ctx,
+      args.companyId,
+      args.cloudProjectId,
+    );
+    // Idempotent, and a repeat archive keeps the original stamp.
+    if ((project.archivedAt !== null) === args.archived) return null;
+    const now = Date.now();
+    await ctx.db.patch(project._id, { archivedAt: args.archived ? now : null, updatedAt: now });
+    const changedProject = await ctx.db.get(project._id);
+    if (changedProject === null) throw backendError("entity-not-found", "The project vanished.");
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes: [
+        {
+          entityKind: "cloudProject",
+          entityId: changedProject.id,
+          changeKind: "upsert",
+          versionDocId: changedProject._id,
+          payload: encodeCloudProject(changedProject),
+        },
+      ],
+    });
+    return null;
   },
 });
 

@@ -28,6 +28,8 @@ export interface IssueProjectOption extends IssueProjectChoice {
   readonly companyId: CompanyId | null;
   readonly companyIds: ReadonlyArray<CompanyId>;
   readonly isCompanyProject: boolean;
+  /** The company project is archived: it and its tasks are out of the tracker until restored. */
+  readonly archived: boolean;
   /** Every environment-local or cloud id represented by this logical project. */
   readonly projectIds: ReadonlyArray<ProjectId>;
   /** The checkout used when this project still needs to be registered with the company. */
@@ -131,7 +133,9 @@ export function buildIssueProjectOptions(input: {
   readonly caseInsensitiveEnvironmentIds?: ReadonlySet<EnvironmentId>;
   readonly companyId?: CompanyId | null;
 }): ReadonlyArray<IssueProjectOption> {
-  const cloudProjects = input.cloudProjects.filter((project) => project.archivedAt === null);
+  // Archived projects still match their checkouts: dropping them here would make each checkout
+  // look unregistered and resurface as a project of its own.
+  const cloudProjects = input.cloudProjects;
   const activeEnvironmentBindings = input.environmentBindings.filter(
     (binding) => binding.status !== "revoked",
   );
@@ -192,6 +196,7 @@ export function buildIssueProjectOptions(input: {
       id: ProjectId.make(String(id)),
       title: canonicalCloudProject?.name ?? group.displayName,
       isCompanyProject: canonicalCloudProject !== null,
+      archived: canonicalCloudProject !== null && canonicalCloudProject.archivedAt !== null,
       projectIds: [...projectIds],
       localProject: localProject ?? null,
       environmentProjects: group.memberProjects,
@@ -251,6 +256,7 @@ export function buildIssueProjectOptions(input: {
       id: ProjectId.make(project.id),
       title: project.name,
       isCompanyProject: true,
+      archived: project.archivedAt !== null,
       projectIds: [ProjectId.make(project.id)],
       localProject: null,
       environmentProjects: [],
@@ -264,7 +270,13 @@ export function buildIssueProjectOptions(input: {
   return options.sort((left, right) => left.title.localeCompare(right.title));
 }
 
+/** Every project a task can be filed under. Archived projects are left out. */
 export function useIssueProjectOptions(): ReadonlyArray<IssueProjectOption> {
+  return useLiveIssueProjectOptions(useIssueProjectOptionsIncludingArchived());
+}
+
+/** For the places that manage projects rather than file work under them, such as restoring one. */
+export function useIssueProjectOptionsIncludingArchived(): ReadonlyArray<IssueProjectOption> {
   const groups = useProjectGroups();
   const replicas = useAtomValue(scopedCompanyRegistryReplicasAtom);
   return useMergedIssueProjectOptions(groups, replicas);
@@ -273,7 +285,19 @@ export function useIssueProjectOptions(): ReadonlyArray<IssueProjectOption> {
 export function useUnscopedIssueProjectOptions(): ReadonlyArray<IssueProjectOption> {
   const groups = useUnscopedProjectGroups();
   const replicas = useAtomValue(companyRegistryReplicasAtom);
-  return useMergedIssueProjectOptions(groups, replicas);
+  return useLiveIssueProjectOptions(useMergedIssueProjectOptions(groups, replicas));
+}
+
+function useLiveIssueProjectOptions(
+  options: ReadonlyArray<IssueProjectOption>,
+): ReadonlyArray<IssueProjectOption> {
+  return useMemo(
+    () =>
+      options.some((option) => option.archived)
+        ? options.filter((option) => !option.archived)
+        : options,
+    [options],
+  );
 }
 
 function useMergedIssueProjectOptions(

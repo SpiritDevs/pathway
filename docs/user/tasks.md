@@ -8,6 +8,10 @@ Choose **New task** to capture work. A task can have a project, status, assignee
 
 Agents can work with tasks the way you do. Ask an agent to file or update tasks; post, edit, or delete its own comments with screenshots and other files from its computer attached; tick off checklists; link tasks as blocking, related, or duplicate; accept or reject triage items; and manage cycles, milestones, labels, and statuses, including their dates and order. Every change an agent makes is attributed to it in the task's history. Agents can attach images, mp4 or webm recordings, and text or JSON files.
 
+On web and desktop, the **Projects** list in the Tasks sidebar shows projects that have tasks. To see the rest, choose **Show … without tasks** below the list, or search for any project. Use **+** beside the search button to add a project. Right-click a project to pin it, create a task in it, open it or its settings, copy its path, rename it, archive it, or delete it. Pinned projects stay at the top, above a pin divider, and stay visible when the list is collapsed. Pins apply to the current device.
+
+Archiving a project hides the project and its tasks and milestones from Tasks. To bring them back unchanged, open **Archived** at the bottom of the list and choose **Restore**. Deleting a project permanently removes it, along with its tasks, milestones, captured emails, and connected automation, from every Pathway app. Files on disk are not touched.
+
 Manage statuses, labels, milestones, imports, and enrichment under **Settings → Tasks**. Slack intake and task automation are available in **Settings → Integrations**. Task due dates can appear in Calendar, and task creation time appears in Time Tracker.
 
 Tasks was previously named Issues. Existing tasks, keys, saved views, links, and history continue to work. **Scheduled tasks** keeps its name for recurring automations.
