@@ -97,8 +97,10 @@ export function DeviceToolSyncSettings() {
   };
   const targets = deviceToolUpdateTargets(rows, outcomes);
   const updateAll = () => {
-    // A new round reports only its own hosts.
-    setOutcomes(new Map());
+    // A new round reports only its own hosts, but requests still in flight stay pending.
+    setOutcomes(
+      (previous) => new Map([...previous].filter(([, outcome]) => outcome.status === "pending")),
+    );
     void Promise.all(targets.map(update));
   };
   const checkAll = () => {

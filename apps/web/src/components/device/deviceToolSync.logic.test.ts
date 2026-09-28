@@ -112,6 +112,15 @@ describe("hostHelperState", () => {
     expect(hostHelperState(host({ drift: undefined }))).toBe("unknown");
     expect(hostHelperState(host({ drift: [drift("hub", "unknown")] }))).toBe("unknown");
   });
+
+  it("does not recommend a restart when a probe failed", () => {
+    expect(hostHelperState(host({ drift: [drift("hub", "unknown", [], true)] }))).toBe("unknown");
+    expect(
+      hostHelperState(
+        host({ drift: [drift("hub", "match", ["0.12.0"], true), drift("agent", "unknown")] }),
+      ),
+    ).toBe("unknown");
+  });
 });
 
 describe("hostToolColumns", () => {

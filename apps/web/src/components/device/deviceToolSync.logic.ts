@@ -74,8 +74,9 @@ export function hostHelperState(host: DeviceHostSummary): DeviceHelperState {
   if (helpers.length === 0) return "unknown";
   const worst = worstDriftStatus(helpers);
   if (worst === "missing" || worst === "different") return "behind";
-  if (helpers.some((entry) => entry.restartRequired)) return "restart";
-  return worst === "unknown" ? "unknown" : "current";
+  if (worst === "unknown") return "unknown";
+  // Only a confirmed matching install can be waiting on a restart.
+  return helpers.some((entry) => entry.restartRequired) ? "restart" : "current";
 }
 
 const RUNTIME_LABEL = { ios: "iOS", android: "Android" } as const;
@@ -85,7 +86,8 @@ function cell(entries: ReadonlyArray<DeviceToolDrift>, actual: string): DeviceTo
     status: worstDriftStatus(entries),
     actual,
     expected: entries.length > 0 ? entries.map((entry) => entry.expected).join(" · ") : null,
-    restartRequired: entries.some((entry) => entry.restartRequired),
+    restartRequired:
+      worstDriftStatus(entries) === "match" && entries.some((entry) => entry.restartRequired),
   };
 }
 

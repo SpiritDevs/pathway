@@ -298,10 +298,19 @@ export function DevicePanel(props: {
                             />
                           );
                           if (!owner) return row;
-                          // The disabled row ignores pointer events, so the wrapper owns the tooltip.
+                          // The disabled row ignores pointer events and focus, so the wrapper owns the tooltip.
                           return (
                             <Tooltip key={deviceKey(device)}>
-                              <TooltipTrigger render={<div />}>{row}</TooltipTrigger>
+                              <TooltipTrigger
+                                render={
+                                  <div
+                                    tabIndex={0}
+                                    className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                  />
+                                }
+                              >
+                                {row}
+                              </TooltipTrigger>
                               <TooltipPopup>
                                 {owner} is using this device. It becomes available when that
                                 environment turns off device support or stops.
