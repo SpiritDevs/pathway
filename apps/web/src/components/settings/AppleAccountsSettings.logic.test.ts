@@ -4,12 +4,14 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   APPLE_CONFLICT_MESSAGE,
+  appleRpcCompanyId,
   completeProjectLinkPicker,
   describeAppleError,
   EMPTY_PROJECT_LINK_PICKER,
   environmentHealthRows,
   environmentKeyState,
   keyDraftProblem,
+  keyEditRevision,
   keySummary,
   normalizeTeamId,
   pickProjectLinkAccount,
@@ -168,5 +170,35 @@ describe("project link picker", () => {
     });
     expect(pickProjectLinkAccount(state, "acct")).toBe(state);
     expect(completeProjectLinkPicker(pickProjectLinkTeam(state, "OTHER"))).toBeNull();
+  });
+});
+
+describe("linked-project errors", () => {
+  it("uses the caller's message for either linked-projects code", () => {
+    for (const code of ["apple-account-linked-projects", "apple-team-linked-projects"]) {
+      const error = new ConvexError({ code, message: "Server text" });
+      expect(
+        describeAppleError(error, {
+          fallback: "Failed",
+          linkedProjectsMessage: "Unlink projects that use this team first.",
+        }).message,
+      ).toBe("Unlink projects that use this team first.");
+      expect(describeAppleError(error, { fallback: "Failed" }).message).toBe("Server text");
+    }
+  });
+});
+
+describe("keyEditRevision", () => {
+  it("submits the captured revision and holds when the live one moves", () => {
+    expect(keyEditRevision(3, 3)).toEqual({ expectedRevision: 3, needsReview: false });
+    expect(keyEditRevision(3, 4)).toEqual({ expectedRevision: 3, needsReview: true });
+  });
+});
+
+describe("appleRpcCompanyId", () => {
+  it("authorizes personal accounts with the content company and company accounts with their own", () => {
+    expect(appleRpcCompanyId({ kind: "user" }, "personal")).toBe("personal");
+    expect(appleRpcCompanyId({ kind: "user" }, null)).toBeNull();
+    expect(appleRpcCompanyId({ kind: "company", companyId: "acme" }, "personal")).toBe("acme");
   });
 });

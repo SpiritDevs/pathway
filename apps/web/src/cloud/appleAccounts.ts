@@ -18,6 +18,7 @@ import type {
 } from "@spiritdevs/contracts/apple";
 import type { ConvexClient } from "convex/browser";
 import {
+  getFunctionName,
   makeFunctionReference,
   type FunctionArgs,
   type FunctionReference,
@@ -68,6 +69,10 @@ export const appleAccountFunctions = {
   revoke: makeFunctionReference<"mutation", typeof AppleRevokeInput.Type, AppleIntegration>(
     "appleIntegrations:revoke",
   ),
+  /** Removes the team, its key and leases; fails while projects link it. Takes the key revision. */
+  removeTeam: makeFunctionReference<"mutation", typeof AppleRevokeInput.Type, null>(
+    "appleIntegrations:removeTeam",
+  ),
   status: makeFunctionReference<"query", typeof AppleTeamInput.Type, AppleCloudStatus>(
     "appleIntegrations:status",
   ),
@@ -89,28 +94,70 @@ export function useAppleAccountsClient(): ConvexClient | null {
   return useAuthenticatedConvexClient().client;
 }
 
-/** Live Convex query; `args: null` skips the subscription. Data resets when the arguments change. */
+export interface AppleCloudQueryState<Data> {
+  readonly client: object | null;
+  readonly key: string | null;
+  readonly data: Data | undefined;
+  readonly error: unknown;
+}
+
+/** State is only valid for the client identity and query arguments that produced it. */
+export function selectAppleCloudQueryState<Data>(
+  state: AppleCloudQueryState<Data>,
+  client: object | null,
+  key: string | null,
+): { readonly data: Data | undefined; readonly error: unknown } {
+  return client !== null && key !== null && state.client === client && state.key === key
+    ? { data: state.data, error: state.error }
+    : { data: undefined, error: undefined };
+}
+
+/** Subscribes to one query. Callbacks that arrive after unsubscribing are dropped. */
+export function subscribeAppleCloudQuery<Query extends FunctionReference<"query">>(
+  client: Pick<ConvexClient, "onUpdate">,
+  query: Query,
+  args: FunctionArgs<Query>,
+  onState: (next: {
+    readonly data: FunctionReturnType<Query> | undefined;
+    readonly error: unknown;
+  }) => void,
+): () => void {
+  let active = true;
+  const unsubscribe = client.onUpdate(
+    query,
+    args,
+    (data) => {
+      if (active) onState({ data, error: undefined });
+    },
+    (error) => {
+      if (active) onState({ data: undefined, error });
+    },
+  );
+  return () => {
+    active = false;
+    unsubscribe();
+  };
+}
+
+/** Live Convex query; `args: null` skips the subscription. Data resets when the client or arguments change. */
 export function useAppleCloudQuery<Query extends FunctionReference<"query">>(
   client: ConvexClient | null,
   query: Query,
   args: FunctionArgs<Query> | null,
 ): { readonly data: FunctionReturnType<Query> | undefined; readonly error: unknown } {
-  const key = client && args ? JSON.stringify(args) : null;
-  const [state, setState] = useState<{
-    key: string | null;
-    data: FunctionReturnType<Query> | undefined;
-    error: unknown;
-  }>({ key: null, data: undefined, error: undefined });
+  const key = client && args ? JSON.stringify([getFunctionName(query), args]) : null;
+  const [state, setState] = useState<AppleCloudQueryState<FunctionReturnType<Query>>>({
+    client: null,
+    key: null,
+    data: undefined,
+    error: undefined,
+  });
   useEffect(() => {
     if (!client || key === null) return;
-    return client.onUpdate(
-      query,
-      JSON.parse(key) as FunctionArgs<Query>,
-      (data) => setState({ key, data, error: undefined }),
-      (error) => setState({ key, data: undefined, error }),
+    const [, parsedArgs] = JSON.parse(key) as [string, FunctionArgs<Query>];
+    return subscribeAppleCloudQuery(client, query, parsedArgs, (next) =>
+      setState({ client, key, ...next }),
     );
   }, [client, key, query]);
-  return state.key === key && key !== null
-    ? { data: state.data, error: state.error }
-    : { data: undefined, error: undefined };
+  return selectAppleCloudQueryState(state, client, key);
 }

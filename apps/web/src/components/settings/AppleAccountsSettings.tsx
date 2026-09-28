@@ -4,7 +4,7 @@ import type { EnvironmentId } from "@spiritdevs/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import * as Cause from "effect/Cause";
 import { PlusIcon, RefreshCwIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   appleAccountFunctions,
@@ -31,23 +31,29 @@ import {
   APPLE_CONFLICT_MESSAGE,
   APPLE_TEAM_ID_PATTERN,
   APPLE_TEAM_TYPES,
+  appleRpcCompanyId,
   describeAppleError,
   EMPTY_KEY_DRAFT,
   ENVIRONMENT_KEY_STATE_LABELS,
   environmentHealthRows,
   keyDraftProblem,
+  keyEditRevision,
   keySummary,
   normalizeTeamId,
   scopeLabel,
   type AppleTeamType,
   type KeyDraft,
 } from "./AppleAccountsSettings.logic";
+import {
+  buildProviderEnvironmentOptions,
+  resolveSelectedProviderEnvironmentId,
+} from "./ProviderSettingsPanel.logic";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
 function reportAppleError(
   title: string,
   error: unknown,
-  options: { fallback: string; conflictMessage?: string },
+  options: Parameters<typeof describeAppleError>[1],
 ) {
   toastManager.add(
     stackedThreadToast({
@@ -62,9 +68,12 @@ function relativeTime(epochMs: number | null): string {
   return epochMs === null ? "never" : formatRelativeTimeLabel(new Date(epochMs).toISOString());
 }
 
-/** The company this environment authorizes Apple reads for, and a display name for tethering. */
+/** Where Apple reads run and authorize, and a display name for tethering. */
 interface AppleCompanyContext {
-  readonly companyId: CompanyId | null;
+  /** Authorizes environment reads of personal accounts; company accounts use their own company. */
+  readonly contentCompanyId: CompanyId | null;
+  /** The connected environment that runs connection tests and app lists. */
+  readonly environmentId: EnvironmentId | null;
   /** Set only for organization workspaces; personal workspaces have nothing to tether to. */
   readonly tetherCompany: { readonly id: CompanyId; readonly name: string } | null;
   readonly companyName: (companyId: string) => string | undefined;
@@ -73,9 +82,14 @@ interface AppleCompanyContext {
 export function AppleAccountsSettings() {
   const settings = useCompanySettings();
   const client = useAppleAccountsClient();
+  const environment = useAppleEnvironmentSelection();
+  const contentCompanyId = (settings.contentCompanyId ??
+    settings.personalCompany?.id ??
+    null) as CompanyId | null;
   const context = useMemo<AppleCompanyContext>(
     () => ({
-      companyId: settings.companyId,
+      contentCompanyId,
+      environmentId: environment.environmentId,
       tetherCompany:
         settings.activeCompany?.workspaceKind === "organization" && settings.companyId !== null
           ? { id: settings.companyId, name: settings.activeCompany.name }
@@ -83,7 +97,13 @@ export function AppleAccountsSettings() {
       companyName: (companyId) =>
         settings.companies.find((company) => company.id === companyId)?.name,
     }),
-    [settings.activeCompany, settings.companies, settings.companyId],
+    [
+      contentCompanyId,
+      environment.environmentId,
+      settings.activeCompany,
+      settings.companies,
+      settings.companyId,
+    ],
   );
   const accounts = useAppleCloudQuery(
     client,
@@ -123,6 +143,7 @@ export function AppleAccountsSettings() {
             Apple IDs, their Developer teams and App Store Connect API keys sync to every
             environment you use. An Apple ID is personal unless you share it with a company.
           </p>
+          <AppleEnvironmentPicker selection={environment} />
           {adding && client ? (
             <AddAccountForm
               context={context}
@@ -181,6 +202,69 @@ export function AppleAccountsSettings() {
         </div>
       </SettingsSection>
     </SettingsPageContainer>
+  );
+}
+
+/** Connected environments, primary first; a vanished pick falls back without being forgotten. */
+function useAppleEnvironmentSelection() {
+  const { environments } = useEnvironments();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const options = useMemo(
+    () =>
+      buildProviderEnvironmentOptions(
+        environments.filter((environment) => environment.connection.phase === "connected"),
+        primaryEnvironmentId,
+      ),
+    [environments, primaryEnvironmentId],
+  );
+  const [selectedId, setSelectedId] = useState<EnvironmentId | null>(null);
+  const environmentId = resolveSelectedProviderEnvironmentId(
+    options,
+    selectedId,
+    primaryEnvironmentId,
+  );
+  return { options, environmentId, select: setSelectedId };
+}
+
+function AppleEnvironmentPicker({
+  selection,
+}: {
+  selection: ReturnType<typeof useAppleEnvironmentSelection>;
+}) {
+  if (selection.options.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Connect to an environment to test keys and list apps.
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <span className="text-muted-foreground">Test and list apps on</span>
+      <Select
+        value={selection.environmentId}
+        onValueChange={(value) => {
+          if (value !== null) selection.select(value);
+        }}
+      >
+        <SelectTrigger size="sm" aria-label="Environment for Apple reads" className="w-auto">
+          <SelectValue>
+            {
+              selection.options.find(
+                (environment) => environment.environmentId === selection.environmentId,
+              )?.label
+            }
+          </SelectValue>
+        </SelectTrigger>
+        <SelectPopup>
+          {selection.options.map((environment) => (
+            <SelectItem key={environment.environmentId} value={environment.environmentId}>
+              {environment.label}
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
+    </div>
   );
 }
 
@@ -452,7 +536,12 @@ function AccountDetail({
           </p>
         ) : (
           teams.data.map((team) => (
-            <TeamCard key={team.teamId} team={team} companyId={context.companyId} />
+            <TeamCard
+              key={team.teamId}
+              team={team}
+              companyId={appleRpcCompanyId(account.scope, context.contentCompanyId)}
+              environmentId={context.environmentId}
+            />
           ))
         )}
       </div>
@@ -588,17 +677,25 @@ function useNowUntil(deadlines: ReadonlyArray<number | null>): number {
   return now;
 }
 
-function TeamCard({ team, companyId }: { team: AppleTeam; companyId: CompanyId | null }) {
+function TeamCard({
+  team,
+  companyId,
+  environmentId,
+}: {
+  team: AppleTeam;
+  companyId: CompanyId | null;
+  environmentId: EnvironmentId | null;
+}) {
   const client = useAppleAccountsClient();
   const status = useAppleCloudQuery(client, appleAccountFunctions.status, {
     accountId: team.accountId,
     teamId: team.teamId,
   });
   const { environments } = useEnvironments();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const testConnection = useAtomCommand(appleEnvironment.testConnection, { reportFailure: false });
   const [keyFormOpen, setKeyFormOpen] = useState(false);
   const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const [busy, setBusy] = useState(false);
   const integration = status.data?.integration ?? null;
   const now = useNowUntil(status.data?.environments.map((health) => health.leaseExpiresAt) ?? []);
@@ -635,10 +732,30 @@ function TeamCard({ team, companyId }: { team: AppleTeam; companyId: CompanyId |
       setConfirmRevoke(false);
     }
   };
-  const runTest = async () => {
-    if (!target || primaryEnvironmentId === null || busy) return;
+  const removeTeam = async () => {
+    if (!client || !integration || busy) return;
     setBusy(true);
-    const result = await testConnection({ environmentId: primaryEnvironmentId, input: target });
+    try {
+      await client.mutation(appleAccountFunctions.removeTeam, {
+        accountId: team.accountId,
+        teamId: team.teamId,
+        expectedRevision: integration.revision,
+      });
+    } catch (error) {
+      reportAppleError("Could not remove team", error, {
+        fallback: "The team was not removed.",
+        conflictMessage: APPLE_CONFLICT_MESSAGE,
+        linkedProjectsMessage: "Unlink projects that use this team first.",
+      });
+      setConfirmRemove(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const runTest = async () => {
+    if (!target || environmentId === null || busy) return;
+    setBusy(true);
+    const result = await testConnection({ environmentId, input: target });
     setBusy(false);
     if (AsyncResult.isSuccess(result)) {
       const failure = result.value.health.error;
@@ -702,7 +819,7 @@ function TeamCard({ team, companyId }: { team: AppleTeam; companyId: CompanyId |
                 <Button
                   size="xs"
                   variant="outline"
-                  disabled={busy || target === null || primaryEnvironmentId === null}
+                  disabled={busy || target === null || environmentId === null}
                   onClick={() => void runTest()}
                 >
                   Test connection
@@ -743,13 +860,42 @@ function TeamCard({ team, companyId }: { team: AppleTeam; companyId: CompanyId |
           {keyFormOpen ? (
             <KeyForm
               team={team}
-              expectedRevision={integration.revision}
+              liveRevision={integration.revision}
               onDone={() => setKeyFormOpen(false)}
             />
           ) : null}
-          {integration.connected && target !== null && primaryEnvironmentId !== null ? (
-            <TeamApps environmentId={primaryEnvironmentId} target={target} />
+          {integration.connected && target !== null && environmentId !== null ? (
+            <TeamApps environmentId={environmentId} target={target} />
           ) : null}
+          <div className="flex flex-wrap items-center gap-2 border-t pt-2">
+            {confirmRemove ? (
+              <>
+                <span className="text-xs text-muted-foreground">
+                  Remove this team and its API key from every environment?
+                </span>
+                <Button
+                  size="xs"
+                  variant="destructive"
+                  disabled={busy}
+                  onClick={() => void removeTeam()}
+                >
+                  Remove team
+                </Button>
+                <Button size="xs" variant="ghost" onClick={() => setConfirmRemove(false)}>
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="xs"
+                variant="destructive-outline"
+                disabled={busy}
+                onClick={() => setConfirmRemove(true)}
+              >
+                Remove team
+              </Button>
+            )}
+          </div>
         </>
       )}
     </div>
@@ -787,18 +933,23 @@ function EnvironmentHealthList({ rows }: { rows: ReturnType<typeof environmentHe
 
 function KeyForm({
   team,
-  expectedRevision,
+  liveRevision,
   onDone,
 }: {
   team: AppleTeam;
-  expectedRevision: number;
+  liveRevision: number;
   onDone: () => void;
 }) {
   const client = useAppleAccountsClient();
   const [draft, setDraft] = useState<KeyDraft>(EMPTY_KEY_DRAFT);
+  const [capturedRevision, setCapturedRevision] = useState(liveRevision);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileInputId = useId();
+  const revision = keyEditRevision(capturedRevision, liveRevision);
+  // Our own successful connect bumps the revision before the form closes; that is not a conflict.
+  const needsReview = revision.needsReview && !busy;
   // The private key lives only in this form's state. Drop it and the file selection on unmount.
   useEffect(
     () => () => {
@@ -808,7 +959,7 @@ function KeyForm({
   );
   const problem = keyDraftProblem(draft);
   const save = async () => {
-    if (!client || busy || problem) return;
+    if (!client || busy || problem || revision.needsReview) return;
     setBusy(true);
     setError(null);
     try {
@@ -818,10 +969,9 @@ function KeyForm({
         issuerId: draft.issuerId.trim(),
         keyId: draft.keyId.trim(),
         privateKey: draft.privateKey,
-        expectedRevision,
+        expectedRevision: revision.expectedRevision,
       });
       setDraft(EMPTY_KEY_DRAFT);
-      if (fileInputRef.current) fileInputRef.current.value = "";
       toastManager.add({ type: "success", title: "App Store Connect key connected" });
       onDone();
     } catch (failure) {
@@ -832,6 +982,9 @@ function KeyForm({
         }).message,
       );
     } finally {
+      // Never keep the private key after a submit; the issuer and key IDs stay for a retry.
+      setDraft((current) => ({ ...current, privateKey: "" }));
+      if (fileInputRef.current) fileInputRef.current.value = "";
       setBusy(false);
     }
   };
@@ -870,8 +1023,9 @@ function KeyForm({
         />
       </label>
       <div className="space-y-1 text-xs sm:col-span-2">
-        <span>Private key (.p8)</span>
+        <label htmlFor={fileInputId}>Private key (.p8)</label>
         <input
+          id={fileInputId}
           ref={fileInputRef}
           type="file"
           accept=".p8"
@@ -902,13 +1056,28 @@ function KeyForm({
           onChange={(event) => setDraft({ ...draft, privateKey: event.target.value })}
         />
       </div>
-      {error ? (
+      {needsReview ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-2 text-xs text-destructive sm:col-span-2"
+        >
+          <span>{APPLE_CONFLICT_MESSAGE}</span>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() => setCapturedRevision(liveRevision)}
+          >
+            I've reviewed the changes
+          </Button>
+        </div>
+      ) : error ? (
         <p role="alert" className="text-xs text-destructive sm:col-span-2">
           {error}
         </p>
       ) : null}
       <div className="flex gap-2 sm:col-span-2">
-        <Button type="submit" size="sm" disabled={busy || problem !== null}>
+        <Button type="submit" size="sm" disabled={busy || problem !== null || revision.needsReview}>
           {busy ? "Checking key…" : "Connect key"}
         </Button>
         <Button

@@ -62,6 +62,18 @@ export function keySummary(integration: AppleIntegration): string {
   return integration.keyIdSuffix === null ? "Key connected" : `Key …${integration.keyIdSuffix}`;
 }
 
+/**
+ * Environment Apple RPCs authorize against a company the environment is registered in. Company
+ * accounts use their own company; personal accounts use the settings content company, which is the
+ * personal workspace under Your profile.
+ */
+export function appleRpcCompanyId<Id extends string>(
+  scope: { readonly kind: "user" } | { readonly kind: "company"; readonly companyId: Id },
+  contentCompanyId: Id | null,
+): Id | null {
+  return scope.kind === "company" ? scope.companyId : contentCompanyId;
+}
+
 export function scopeLabel(
   scope: AppleAccount["scope"],
   companyName: (companyId: string) => string | undefined,
@@ -104,19 +116,32 @@ const ASC_ERROR_MESSAGES: Readonly<Record<string, string>> = {
 export const APPLE_CONFLICT_MESSAGE =
   "This changed on another device. The latest details are shown now; review them and try again.";
 
+const LINKED_PROJECTS_CODES: ReadonlySet<string> = new Set([
+  "apple-account-linked-projects",
+  "apple-team-linked-projects",
+]);
+
 /**
  * `conflictMessage` replaces the server's text for stale-revision conflicts. Omit it where
  * `entity-conflict` carries a specific reason, such as a duplicate Apple ID. Linked projects
- * arrive as `apple-account-linked-projects` and keep the server's text.
+ * arrive as `apple-account-linked-projects` or `apple-team-linked-projects` and keep the server's
+ * text unless `linkedProjectsMessage` is given.
  */
 export function describeAppleError(
   error: unknown,
-  options: { readonly fallback: string; readonly conflictMessage?: string },
+  options: {
+    readonly fallback: string;
+    readonly conflictMessage?: string;
+    readonly linkedProjectsMessage?: string;
+  },
 ): AppleErrorDetails {
   const data = errorData(error);
   const code = typeof data.code === "string" ? data.code : null;
   const serverMessage =
     typeof data.message === "string" && data.message.trim() ? data.message : null;
+  if (code !== null && LINKED_PROJECTS_CODES.has(code) && options.linkedProjectsMessage) {
+    return { code, message: options.linkedProjectsMessage };
+  }
   if (code === "entity-conflict") {
     return { code, message: options.conflictMessage ?? serverMessage ?? APPLE_CONFLICT_MESSAGE };
   }
@@ -147,6 +172,20 @@ export interface KeyDraft {
 }
 
 export const EMPTY_KEY_DRAFT: KeyDraft = { issuerId: "", keyId: "", privateKey: "" };
+
+/**
+ * A key form submits the team revision it opened against. When the live revision moves on, the
+ * form holds until the user acknowledges the latest details, so another device's change is never
+ * silently replaced.
+ */
+export interface KeyEditRevision {
+  readonly expectedRevision: number;
+  readonly needsReview: boolean;
+}
+
+export function keyEditRevision(capturedRevision: number, liveRevision: number): KeyEditRevision {
+  return { expectedRevision: capturedRevision, needsReview: capturedRevision !== liveRevision };
+}
 
 export function keyDraftProblem(draft: KeyDraft): string | null {
   if (!draft.issuerId.trim()) return "Enter the issuer ID from App Store Connect.";

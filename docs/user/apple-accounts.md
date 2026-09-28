@@ -18,6 +18,8 @@ Only the person who added an Apple ID can change who it is shared with. Unlink i
 
 Each Apple ID can have several Developer teams. Choose **Add team** and enter the team ID, team name and type. The team ID has ten letters or digits and appears under Membership details in your Apple Developer account.
 
+To remove a team, choose **Remove team** on it and confirm. This removes the team and its API key from every environment. Unlink any projects that use the team first; Pathway tells you when one still does.
+
 ## Connect an App Store Connect API key
 
 Each team uses one App Store Connect API key. In App Store Connect, open **Users and Access → Integrations** and create a Team key with at least the Developer role. Then, in Pathway, choose **Connect key** on the team and enter the issuer ID and key ID. Choose the downloaded `.p8` file, or paste its contents.
@@ -26,15 +28,17 @@ Pathway checks the key with App Store Connect before saving it, then encrypts it
 
 - **Replace key** swaps in a new key. If App Store Connect rejects the new key, the current one keeps working.
 - **Revoke** removes the key. Every environment stops using it within 30 seconds.
-- **Test connection** checks the key from the environment you are connected to.
+- **Test connection** checks the key from the environment chosen next to **Test and list apps on**.
 
 Below the key, each environment that has used it recently shows whether it is connected, when it last read App Store Connect, and its most recent error. An environment connects on its first App Store Connect read and appears as idle after a short period without one.
 
 Once a key is connected, the team lists its apps with their bundle IDs.
 
+When you are connected to more than one environment, including remote ones, choose which one tests keys and lists apps with **Test and list apps on**. It starts on your main environment.
+
 ## Link a project to an app
 
-Open a project's settings and find **App Store Connect**. Choose an Apple ID, then a team, then the app, and choose **Link app**. Pathway confirms that the app exists under that team before saving the link. Everyone who can see the project sees which app it is linked to. Reading builds and testers still requires access to the Apple ID. Choose **Unlink** to remove the link.
+Open a project's settings and find **App Store Connect**. Choose an Apple ID, then a team, then the app, and choose **Link app**. The app list comes from the environment that holds the project. Pathway confirms that the app exists under that team before saving the link. Everyone who can see the project sees which app it is linked to. Reading builds and testers still requires access to the Apple ID. Choose **Unlink** to remove the link.
 
 Projects must sync to a company before they can be linked.
 
@@ -44,4 +48,6 @@ App Store Connect creates new apps only on its website. Choose **Create a new ap
 
 ## Changes from other devices
 
-If an Apple ID or key changes on another device while you are editing, Pathway shows the latest details and asks you to try again, so an older edit never overwrites a newer one.
+If an Apple ID or key changes on another device while you are editing, Pathway shows the latest details and asks you to try again, so an older edit never overwrites a newer one. While you are entering a new key, Pathway pauses the form until you confirm you have reviewed the change.
+
+If connecting a key fails, Pathway clears the private key you entered. The issuer ID and key ID stay filled in, so choose the `.p8` file again to retry.

@@ -420,6 +420,11 @@ export function ProjectDetail({
         companies.find((company) => workspaceProject.companyIds.includes(String(company.id))) ??
         null);
   const syncedIcon = useCompanyProjectIcon(workspaceProject?.cloudProjectId ?? null);
+  // A folded row can hold one cloud project per company; App Store links belong to the owner's.
+  const appStoreConnectProjectId =
+    workspaceProject === null || owningCompany === null
+      ? null
+      : workspaceProjectCloudIdForCompany(workspaceProject, String(owningCompany.id));
   const mergeTarget =
     workspaceProject === null
       ? null
@@ -1349,10 +1354,11 @@ export function ProjectDetail({
           </SettingsSection>
         ) : null}
 
-        {owningCompany !== null && workspaceProject?.cloudProjectId ? (
+        {appStoreConnectProjectId !== null && owningCompany !== null ? (
           <ProjectAppStoreConnectSection
             companyId={owningCompany.id as CompanyId}
-            projectId={workspaceProject.cloudProjectId}
+            projectId={appStoreConnectProjectId}
+            environmentId={selectedCheckout.environmentId}
           />
         ) : (
           <SettingsSection title="App Store Connect">

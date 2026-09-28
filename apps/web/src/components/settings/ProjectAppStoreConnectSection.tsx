@@ -1,3 +1,4 @@
+import type { EnvironmentId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { ExternalLinkIcon } from "lucide-react";
 import { useState } from "react";
@@ -10,7 +11,6 @@ import {
 } from "~/cloud/appleAccounts";
 import { readLocalApi } from "~/localApi";
 import { appleEnvironment } from "~/state/apple";
-import { usePrimaryEnvironmentId } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -37,13 +37,18 @@ function reportError(title: string, error: unknown, fallback: string) {
   );
 }
 
-/** Links a synced project to one App Store Connect app under a chosen Apple ID and team. */
+/**
+ * Links a synced project to one App Store Connect app under a chosen Apple ID and team. Apps are
+ * listed by `environmentId`, the environment that holds the project's checkout.
+ */
 export function ProjectAppStoreConnectSection({
   companyId,
   projectId,
+  environmentId,
 }: {
   companyId: CompanyId;
   projectId: string;
+  environmentId: EnvironmentId;
 }) {
   const client = useAppleAccountsClient();
   const link = useAppleCloudQuery(client, appleAccountFunctions.projectLink, {
@@ -59,7 +64,7 @@ export function ProjectAppStoreConnectSection({
       ) : link.data === undefined ? (
         <p className="px-4 py-3 text-sm text-muted-foreground">Loading…</p>
       ) : link.data === null ? (
-        <LinkPicker companyId={companyId} projectId={projectId} />
+        <LinkPicker companyId={companyId} projectId={projectId} environmentId={environmentId} />
       ) : (
         <LinkedApp companyId={companyId} projectId={projectId} link={link.data} />
       )}
@@ -117,9 +122,16 @@ function LinkedApp({
   );
 }
 
-function LinkPicker({ companyId, projectId }: { companyId: CompanyId; projectId: string }) {
+function LinkPicker({
+  companyId,
+  projectId,
+  environmentId,
+}: {
+  companyId: CompanyId;
+  projectId: string;
+  environmentId: EnvironmentId;
+}) {
   const client = useAppleAccountsClient();
-  const environmentId = usePrimaryEnvironmentId();
   const [picker, setPicker] = useState(EMPTY_PROJECT_LINK_PICKER);
   const [busy, setBusy] = useState(false);
   const accounts = useAppleCloudQuery(client, appleAccountFunctions.listAccounts, { companyId });
@@ -129,7 +141,7 @@ function LinkPicker({ companyId, projectId }: { companyId: CompanyId; projectId:
     picker.accountId === null ? null : { accountId: picker.accountId },
   );
   const apps = useEnvironmentQuery(
-    environmentId === null || picker.accountId === null || picker.teamId === null
+    picker.accountId === null || picker.teamId === null
       ? null
       : appleEnvironment.listApps({
           environmentId,
@@ -151,6 +163,13 @@ function LinkPicker({ companyId, projectId }: { companyId: CompanyId; projectId:
     }
   };
 
+  if (accounts.error) {
+    return (
+      <p role="alert" className="px-4 py-3 text-sm text-destructive">
+        {describeAppleError(accounts.error, { fallback: "Could not load Apple accounts." }).message}
+      </p>
+    );
+  }
   if (accounts.data !== undefined && accountList.length === 0) {
     return (
       <p className="px-4 py-3 text-sm text-muted-foreground">
@@ -206,28 +225,29 @@ function LinkPicker({ companyId, projectId }: { companyId: CompanyId; projectId:
           </SelectPopup>
         </Select>
       </div>
+      {teams.error ? (
+        <p role="alert" className="text-xs text-destructive">
+          {describeAppleError(teams.error, { fallback: "Could not load teams." }).message}
+        </p>
+      ) : null}
       {picker.teamId !== null ? (
-        environmentId === null ? (
-          <p className="text-xs text-muted-foreground">Connect to an environment to list apps.</p>
-        ) : (
-          <AppList
-            title="Apps"
-            apps={apps.data}
-            error={apps.error}
-            isPending={apps.isPending}
-            onRefresh={apps.refresh}
-            renderAction={(app) => (
-              <Button
-                size="xs"
-                variant={picker.appId === app.id ? "default" : "outline"}
-                disabled={busy}
-                onClick={() => setPicker(pickProjectLinkApp(picker, app.id))}
-              >
-                {picker.appId === app.id ? "Selected" : "Select"}
-              </Button>
-            )}
-          />
-        )
+        <AppList
+          title="Apps"
+          apps={apps.data}
+          error={apps.error}
+          isPending={apps.isPending}
+          onRefresh={apps.refresh}
+          renderAction={(app) => (
+            <Button
+              size="xs"
+              variant={picker.appId === app.id ? "default" : "outline"}
+              disabled={busy}
+              onClick={() => setPicker(pickProjectLinkApp(picker, app.id))}
+            >
+              {picker.appId === app.id ? "Selected" : "Select"}
+            </Button>
+          )}
+        />
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" disabled={busy || complete === null} onClick={() => void link()}>
