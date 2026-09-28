@@ -8,6 +8,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import {
   deviceToolBanner,
   deviceToolOperationSupported,
+  unresolvedDeviceToolHosts,
   deviceToolProgressLabel,
   type DeviceToolOperation,
 } from "./deviceToolSync.logic";
@@ -30,10 +31,13 @@ export function DeviceToolDriftBanner({
     error: string | null;
   } | null>(null);
   const banner = deviceToolBanner(state);
-  // A failure is only retried while its drift is still showing and the environment supports it.
+  // A failure stays retryable while one of its own hosts still needs work and the environment
+  // supports it. Once they are all current, other hosts' drift gets the banner's fresh action.
   if (
     request?.error != null &&
-    (!banner || !deviceToolOperationSupported(state, request.operation))
+    (!banner ||
+      unresolvedDeviceToolHosts(state, request.hostIds).length === 0 ||
+      !deviceToolOperationSupported(state, request.operation))
   ) {
     setRequest(null);
   }

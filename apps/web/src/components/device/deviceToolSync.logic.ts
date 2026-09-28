@@ -212,6 +212,17 @@ export function deviceToolOperationSupported(
     : state.supportsEnvironmentToolSync === true;
 }
 
+/** The hosts among `hostIds` still present and not yet confirmed current. */
+export function unresolvedDeviceToolHosts(
+  state: Pick<DeviceServiceState, "hosts">,
+  hostIds: ReadonlyArray<string>,
+): string[] {
+  return hostIds.filter((id) => {
+    const host = state.hosts.find((candidate) => candidate.id === id);
+    return host !== undefined && hostHelperState(host) !== "current";
+  });
+}
+
 /**
  * Retires failures that can no longer be retried: the host needs nothing now, or the environment
  * stopped supporting the operation. They stay in the summary, but new drift gets its own action

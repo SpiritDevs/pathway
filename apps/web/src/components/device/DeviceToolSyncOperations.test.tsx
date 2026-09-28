@@ -370,3 +370,55 @@ it.each([false, undefined])(
     expect(mocks.restart).toHaveBeenCalledTimes(1);
   },
 );
+
+it.each<Operation>(["update", "restart"])(
+  "banner: resolved original %s hosts must not be retried because a different host still drifts",
+  async (operation) => {
+    mocks[operation].mockResolvedValue({ _tag: "Failure", cause: "failed" });
+    await mount(
+      "banner",
+      multi([
+        ["a", operation],
+        ["b", "current"],
+      ]),
+    );
+    await click(label(operation));
+    await push(
+      "banner",
+      multi([
+        ["a", "current"],
+        ["b", operation],
+      ]),
+    );
+    expect(renderer.toJSON()).not.toBeNull();
+    mocks[operation].mockResolvedValue({ _tag: "Success" });
+    await click(button(label(operation)) ? label(operation) : "Retry");
+    expect(targetIds(operation)).toEqual(["a", "b"]);
+  },
+);
+
+it("banner: an old failure arriving after its target resolves must not attach to unrelated remaining drift", async () => {
+  const finish = hold("restart");
+  await mount(
+    "banner",
+    multi([
+      ["a", "restart"],
+      ["b", "current"],
+    ]),
+  );
+  await click("Restart");
+  await push(
+    "banner",
+    multi([
+      ["a", "current"],
+      ["b", "update"],
+    ]),
+  );
+  expect(button("Restarting…").props.disabled).toBe(true);
+  await finish({ _tag: "Failure", cause: "failed" });
+  mocks.restart.mockResolvedValue({ _tag: "Success" });
+  mocks.update.mockResolvedValue({ _tag: "Success" });
+  await click(button("Update") ? "Update" : "Retry");
+  expect.soft(targetIds("restart")).toEqual(["a"]);
+  expect.soft(targetIds("update")).toEqual(["b"]);
+});
