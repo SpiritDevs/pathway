@@ -1,3 +1,6 @@
+import { AppleRpcs } from "@spiritdevs/contracts/apple";
+import { makeConfiguredAppleRuntime } from "./apple/appleBackend.ts";
+import { makeAppleRpcLayer } from "./apple/appleRpc.ts";
 import { UsageRecoveryService } from "./providerUsage/UsageRecoveryService.ts";
 import { ModelManifest } from "./provider/ModelManifest.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -515,6 +518,7 @@ const usageRecoveryRpcLayer = UsageRecoveryRpcGroup.toLayer(
 
 // Computer RPCs are served by their own handler layer (see makeWsComputerRpcLayer).
 const CoreWsRpcGroup = WsRpcGroup.omit(
+  ...([...AppleRpcs.requests.keys()] as ReadonlyArray<RpcGroup.Rpcs<typeof AppleRpcs>["_tag"]>),
   WS_METHODS.usageRecoveryGet,
   WS_METHODS.usageRecoverySubscribe,
   WS_METHODS.usageRecoverySchedule,
@@ -3304,6 +3308,7 @@ const makeWsRpcLayer = (
 
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
+    const appleRuntime = yield* makeConfiguredAppleRuntime();
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
@@ -3331,6 +3336,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           Layer.mergeAll(
             makeWsRpcLayer(session, previewAutomationBroker, providerUsageUpdates),
             makeWsComputerRpcLayer(session),
+            makeAppleRpcLayer(appleRuntime, session.scopes),
             usageRecoveryRpcLayer,
           ).pipe(
             Layer.provideMerge(RpcSerialization.layerJson),

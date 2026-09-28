@@ -87,6 +87,10 @@
     "./dictation": {
       "types": "./src/dictation.ts",
       "import": "./src/dictation.ts"
+    },
+    "./apple": {
+      "types": "./src/apple.ts",
+      "import": "./src/apple.ts"
     }
   },
   "scripts": {

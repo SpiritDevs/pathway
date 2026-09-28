@@ -62,6 +62,10 @@
     "./sync/workflow": {
       "types": "./src/sync/workflow.ts",
       "import": "./src/sync/workflow.ts"
+    },
+    "./appStoreConnectApi": {
+      "types": "./src/appStoreConnectApi.ts",
+      "import": "./src/appStoreConnectApi.ts"
     }
   },
   "scripts": {

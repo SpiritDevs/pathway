@@ -1,3 +1,9 @@
+import {
+  appleFailure,
+  appleTeamType,
+  appleApp,
+  sealedAppleCredential,
+} from "./lib/appleValidators.ts";
 /**
  * Convex schema for the cloud-sync backend.
  *
@@ -941,6 +947,66 @@ export default defineSchema({
   // ---------------------------------------------------------------------------
   // Company-owned integrations and durable automation
   // ---------------------------------------------------------------------------
+
+  appleAccounts: defineTable({
+    id: v.string(),
+    ownerUserId: v.id("users"),
+    companyId: v.union(v.id("companies"), v.null()),
+    email: v.string(),
+    displayName: v.string(),
+    revision: v.number(),
+    createdAt: v.number(),
+    verifiedAt: v.union(v.number(), v.null()),
+  })
+    .index("by_domain_id", ["id"])
+    .index("by_owner", ["ownerUserId"])
+    .index("by_company", ["companyId"]),
+  appleTeams: defineTable({
+    accountId: v.id("appleAccounts"),
+    teamId: v.string(),
+    name: v.string(),
+    type: appleTeamType,
+    revision: v.number(),
+    connected: v.boolean(),
+    issuerId: v.union(v.string(), v.null()),
+    keyIdSuffix: v.union(v.string(), v.null()),
+    lastVerifiedAt: v.union(v.number(), v.null()),
+  })
+    .index("by_account", ["accountId"])
+    .index("by_account_and_team", ["accountId", "teamId"]),
+  appleIntegrationCredentials: defineTable({
+    teamId: v.id("appleTeams"),
+    ...sealedAppleCredential,
+  }).index("by_team", ["teamId"]),
+  /** COR-101 will write and lease sealed sessions; passwords never enter this table. */
+  appleAccountSessions: defineTable({
+    accountId: v.id("appleAccounts"),
+    revision: v.number(),
+    expiresAt: v.number(),
+    ...sealedAppleCredential,
+  }).index("by_account", ["accountId"]),
+  appleEnvironmentLeases: defineTable({
+    teamId: v.id("appleTeams"),
+    environmentId: v.string(),
+    companyId: v.id("companies"),
+    accountRevision: v.number(),
+    revision: v.number(),
+    expiresAt: v.number(),
+    lastVerifiedAt: v.union(v.number(), v.null()),
+    error: v.union(appleFailure, v.null()),
+  })
+    .index("by_team", ["teamId"])
+    .index("by_team_and_environment_and_company", ["teamId", "environmentId", "companyId"]),
+  appleProjectLinks: defineTable({
+    companyId: v.id("companies"),
+    projectId: v.id("cloudProjects"),
+    accountId: v.id("appleAccounts"),
+    teamId: v.string(),
+    app: appleApp,
+    linkedAt: v.number(),
+  })
+    .index("by_project", ["projectId"])
+    .index("by_account", ["accountId"]),
 
   /** One Slack workspace connected to one company. Credentials live in the split table below. */
   slackIntegrations: defineTable({

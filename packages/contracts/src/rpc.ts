@@ -1,3 +1,4 @@
+import { AppleRpcs } from "./apple.ts";
 import {
   UsageRecoveryThreadInput,
   UsageRecoveryScheduleInput,
@@ -2543,4 +2544,5 @@ export const WsRpcGroup = RpcGroup.make(
   .merge(WsDeviceRpcGroup)
   .merge(IssuesRpcs)
   .merge(EmailRpcs)
+  .merge(AppleRpcs)
   .merge(WsComputerRpcGroup);

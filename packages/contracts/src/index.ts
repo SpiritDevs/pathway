@@ -62,3 +62,4 @@ export * from "./threadAlerts.ts";
 export * from "./storage.ts";
 
 export * from "./device.ts";
+export * from "./apple.ts";
