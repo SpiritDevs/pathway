@@ -362,6 +362,10 @@ final class PathwayComputerSurfaceModel {
     private(set) var busy = false
     var error: String?
     var notice: String?
+    /// Unsent text for the host and the hand-back message. They live here, not in the controls,
+    /// so a dropped connection that hides the controls until reconnect keeps them.
+    var typing = ""
+    var draft = ""
     private(set) var pendingFollowUp: PathwayComputerHandBackFollowUp?
     let frames: PathwayComputerSurfaceStream
 

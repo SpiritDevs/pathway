@@ -46,10 +46,8 @@ struct AgentThreadComputerSurface: View {
 }
 
 private struct ComputerSurfaceControls: View {
-    let surface: PathwayComputerSurfaceModel
+    @Bindable var surface: PathwayComputerSurfaceModel
     let session: PathwayComputerSurfaceSession
-    @State private var typing = ""
-    @State private var draft = ""
 
     private var interactive: Bool { session.mine && session.input }
 
@@ -110,11 +108,11 @@ private struct ComputerSurfaceControls: View {
     private var keyboard: some View {
         VStack(spacing: 6) {
             HStack {
-                TextField("Type on the computer", text: $typing)
+                TextField("Type on the computer", text: $surface.typing)
                     .textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled()
                     .onSubmit(sendTyping)
                     .accessibilityIdentifier("thread-computer-surface-type")
-                Button("Type", action: sendTyping).disabled(typing.isEmpty)
+                Button("Type", action: sendTyping).disabled(surface.typing.isEmpty)
             }
             ScrollView(.horizontal) {
                 HStack(spacing: 6) {
@@ -151,13 +149,13 @@ private struct ComputerSurfaceControls: View {
             .padding(12)
         } else if session.mine {
             HStack(alignment: .bottom) {
-                TextField("Tell the agent what's next…", text: $draft, axis: .vertical)
+                TextField("Tell the agent what's next…", text: $surface.draft, axis: .vertical)
                     .lineLimit(1...4).textFieldStyle(.roundedBorder)
                     .accessibilityLabel("Message for the agent")
                     .accessibilityIdentifier("thread-computer-surface-hand-back-message")
-                Button(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Hand back" : "Send & hand back") {
-                    let message = draft
-                    Task { if await surface.handBack(message), draft == message { draft = "" } }
+                Button(surface.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Hand back" : "Send & hand back") {
+                    let message = surface.draft
+                    Task { if await surface.handBack(message), surface.draft == message { surface.draft = "" } }
                 }
                 .buttonStyle(.borderedProminent).disabled(surface.busy)
                 .accessibilityIdentifier("thread-computer-surface-hand-back")
@@ -167,9 +165,9 @@ private struct ComputerSurfaceControls: View {
     }
 
     private func sendTyping() {
-        guard !typing.isEmpty else { return }
-        surface.send(PathwayComputerSurfaceInput.type(typing))
-        typing = ""
+        guard !surface.typing.isEmpty else { return }
+        surface.send(PathwayComputerSurfaceInput.type(surface.typing))
+        surface.typing = ""
     }
 
     private static let keys: [(title: String, key: String, accessibility: String)] = [

@@ -141,12 +141,14 @@ struct PathwayComputerSurfaceTests {
         #expect(first["messageId"] != nil && first["messageId"] == retry["messageId"])
     }
 
-    @MainActor @Test func aDroppedConnectionEndsControlUntilAFreshSnapshot() async {
+    @MainActor @Test func aDroppedConnectionEndsControlUntilAFreshSnapshotAndKeepsDrafts() async {
         let rpc = SurfaceRPC()
         let model = surfaceModel(rpc)
         let mine = session(controller: ["kind": .string("client"), "clientId": .string("me")])
         model.receive(mine)
         #expect(model.session?.mine == true)
+        model.typing = "half a sentence"
+        model.draft = "then run the tests"
         model.receive(.object(["_pathwayTransport": .string("disconnected")]))
         #expect(model.session == nil && model.notice != nil)
         model.sendKey("A")
@@ -154,6 +156,7 @@ struct PathwayComputerSurfaceTests {
         #expect(model.error != nil && rpc.log.isEmpty)
         model.receive(session(controller: ["kind": .string("idle")]))
         #expect(model.session?.tone == .idle)
+        #expect(model.typing == "half a sentence" && model.draft == "then run the tests")
         await model.takeControl()
         #expect(rpc.log == ["takeControl"])
     }
