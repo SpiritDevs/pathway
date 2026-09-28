@@ -7,6 +7,7 @@ import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import {
   deviceToolBanner,
+  deviceToolOperationSupported,
   deviceToolProgressLabel,
   type DeviceToolOperation,
 } from "./deviceToolSync.logic";
@@ -29,6 +30,13 @@ export function DeviceToolDriftBanner({
     error: string | null;
   } | null>(null);
   const banner = deviceToolBanner(state);
+  // A failure is only retried while its drift is still showing and the environment supports it.
+  if (
+    request?.error != null &&
+    (!banner || !deviceToolOperationSupported(state, request.operation))
+  ) {
+    setRequest(null);
+  }
   if (!banner) return null;
   const run = async (operation: DeviceToolOperation, hostIds: ReadonlyArray<string>) => {
     const command = operation === "restart" ? restartTools : updateTools;

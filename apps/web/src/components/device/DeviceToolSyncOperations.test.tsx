@@ -250,3 +250,123 @@ it.each([false, undefined])(
     expect(mocks.restart).not.toHaveBeenCalled();
   },
 );
+
+const healthy = () => state("match", false);
+const multi = (entries: ReadonlyArray<readonly [string, Operation | "current"]>) => ({
+  ...healthy(),
+  hosts: entries.map(([id, op]) => ({
+    ...(op === "current" ? healthy() : snapshot(op)).hosts[0]!,
+    id,
+    label: id,
+    kind: "ssh" as const,
+  })),
+});
+const targetIds = (operation: Operation) =>
+  mocks[operation].mock.calls.map(([call]) => call.input.hostId);
+
+it("banner: after resolved drift, a new host's drift must not retry the old host", async () => {
+  mocks.update.mockResolvedValue({ _tag: "Failure", cause: "failed" });
+  await mount(
+    "banner",
+    multi([
+      ["a", "update"],
+      ["b", "current"],
+    ]),
+  );
+  await click("Update");
+  await push(
+    "banner",
+    multi([
+      ["a", "current"],
+      ["b", "current"],
+    ]),
+  );
+  expect(renderer.toJSON()).toBeNull();
+  await push(
+    "banner",
+    multi([
+      ["a", "current"],
+      ["b", "update"],
+    ]),
+  );
+  mocks.update.mockResolvedValue({ _tag: "Success" });
+  await click(button("Update") ? "Update" : "Retry");
+  expect(targetIds("update")).toEqual(["a", "b"]);
+});
+
+it.each(["Settings", "banner"] as const)(
+  "%s: failed update must not supersede a fresh restart after an all-current snapshot",
+  async (component) => {
+    mocks.update.mockResolvedValue({ _tag: "Failure", cause: "failed" });
+    mocks.restart.mockResolvedValue({ _tag: "Success" });
+    await mount(component, snapshot("update"));
+    await click("Update");
+    await push(component, state("match", false));
+    expect(button("Retry")).toBeUndefined();
+    await push(component, snapshot("restart"));
+    mocks.update.mockResolvedValue({ _tag: "Success" });
+    await click(button("Restart") ? "Restart" : "Retry");
+    expect.soft(mocks.restart).toHaveBeenCalledTimes(1);
+    expect.soft(mocks.update).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("banner: failure received while hidden must not attach its targets to new drift", async () => {
+  const finish = hold("restart");
+  await mount(
+    "banner",
+    multi([
+      ["a", "restart"],
+      ["b", "current"],
+    ]),
+  );
+  await click("Restart");
+  await push(
+    "banner",
+    multi([
+      ["a", "current"],
+      ["b", "current"],
+    ]),
+  );
+  await finish({ _tag: "Failure", cause: "failed" });
+  expect(renderer.toJSON()).toBeNull();
+  await push(
+    "banner",
+    multi([
+      ["a", "current"],
+      ["b", "restart"],
+    ]),
+  );
+  mocks.restart.mockResolvedValue({ _tag: "Success" });
+  await click(button("Restart") ? "Restart" : "Retry");
+  expect(targetIds("restart")).toEqual(["a", "b"]);
+});
+
+it.each([false, undefined])(
+  "banner: capability %s must prevent Retry from issuing an unsupported restart",
+  async (capability) => {
+    mocks.restart.mockResolvedValue({ _tag: "Failure", cause: "failed" });
+    await mount("banner", snapshot("restart"));
+    await click("Restart");
+    await push("banner", { ...snapshot("restart"), supportsToolRestart: capability });
+    expect(texts()).toContain(
+      "Turn device support off and on in Settings after finishing active work",
+    );
+    expect.soft(Boolean(button("Retry"))).toBe(false);
+    if (button("Retry")) await click("Retry");
+    expect(mocks.restart).toHaveBeenCalledTimes(1);
+  },
+);
+
+it.each([false, undefined])(
+  "Settings: capability %s must prevent Retry from issuing an unsupported restart after drift flips",
+  async (capability) => {
+    mocks.restart.mockResolvedValue({ _tag: "Failure", cause: "failed" });
+    mocks.update.mockResolvedValue({ _tag: "Success" });
+    await mount("Settings", snapshot("restart"));
+    await click("Restart");
+    await push("Settings", { ...snapshot("update"), supportsToolRestart: capability });
+    await click(button("Update") ? "Update" : "Retry");
+    expect(mocks.restart).toHaveBeenCalledTimes(1);
+  },
+);

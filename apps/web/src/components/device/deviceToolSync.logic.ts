@@ -33,6 +33,8 @@ export interface DeviceToolSyncRow<Id extends string = string> {
   readonly canUpdate: boolean;
   /** Installed pins are waiting and the environment can restart its helpers in place. */
   readonly canRestart: boolean;
+  /** What the environment can do at all, whatever its drift recommends. */
+  readonly supports: Readonly<Record<DeviceToolOperation, boolean>>;
   readonly columns: {
     readonly xcode: DeviceToolCell;
     readonly runtimes: DeviceToolCell;
@@ -47,7 +49,12 @@ export type DeviceToolOperation = "update" | "restart";
 export type DeviceToolUpdateOutcome = { readonly operation: DeviceToolOperation } & (
   | { readonly status: "pending" }
   | { readonly status: "success" }
-  | { readonly status: "failed"; readonly message: string }
+  | {
+      readonly status: "failed";
+      readonly message: string;
+      /** The drift it answered resolved or the operation lost support, so it is history, not a Retry. */
+      readonly retired?: true;
+    }
 );
 
 const OPERATION_COPY = {
@@ -186,10 +193,43 @@ export function deviceToolSyncRows<Id extends string>(
         stale: host.toolInspectionError !== undefined,
         canUpdate: state.supportsEnvironmentToolSync === true && helperState === "behind",
         canRestart: state.supportsToolRestart === true && helperState === "restart",
+        supports: {
+          update: deviceToolOperationSupported(state, "update"),
+          restart: deviceToolOperationSupported(state, "restart"),
+        },
         columns: hostToolColumns(host),
       };
     });
   });
+}
+
+export function deviceToolOperationSupported(
+  state: Pick<DeviceServiceState, "supportsEnvironmentToolSync" | "supportsToolRestart">,
+  operation: DeviceToolOperation,
+): boolean {
+  return operation === "restart"
+    ? state.supportsToolRestart === true
+    : state.supportsEnvironmentToolSync === true;
+}
+
+/**
+ * Retires failures that can no longer be retried: the host needs nothing now, or the environment
+ * stopped supporting the operation. They stay in the summary, but new drift gets its own action
+ * instead of an old Retry. Returns the same map when nothing changed.
+ */
+export function retireStaleDeviceToolFailures<Row extends DeviceToolSyncRow>(
+  rows: ReadonlyArray<Row>,
+  outcomes: ReadonlyMap<string, DeviceToolUpdateOutcome>,
+): ReadonlyMap<string, DeviceToolUpdateOutcome> {
+  let next: Map<string, DeviceToolUpdateOutcome> | null = null;
+  for (const row of rows) {
+    const outcome = outcomes.get(row.key);
+    if (outcome?.status !== "failed" || outcome.retired) continue;
+    if ((row.canUpdate || row.canRestart) && row.supports[outcome.operation]) continue;
+    next ??= new Map(outcomes);
+    next.set(row.key, { ...outcome, retired: true });
+  }
+  return next ?? outcomes;
 }
 
 /** Rows Update all should target: behind, updatable, and not already in flight. */

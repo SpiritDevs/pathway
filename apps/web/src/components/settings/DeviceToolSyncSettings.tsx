@@ -15,6 +15,7 @@ import {
   carryPendingDeviceToolUpdates,
   deviceToolProgressLabel,
   deviceToolUpdateTargets,
+  retireStaleDeviceToolFailures,
   summarizeDeviceToolUpdates,
   type DeviceToolCell,
   type DeviceToolSyncRow,
@@ -103,7 +104,9 @@ export function DeviceToolSyncSettings() {
         : { operation, status: "failed", message: formatEnvironmentQueryError(result.cause) },
     );
   };
-  const targets = deviceToolUpdateTargets(rows, outcomes);
+  const current = retireStaleDeviceToolFailures(rows, outcomes);
+  if (current !== outcomes) setOutcomes(current);
+  const targets = deviceToolUpdateTargets(rows, current);
   const updateAll = () => {
     // A new round reports only its own hosts, but requests still in flight stay pending.
     setOutcomes(carryPendingDeviceToolUpdates);
@@ -119,7 +122,7 @@ export function DeviceToolSyncSettings() {
         ),
     ).finally(() => setChecking(false));
   };
-  const summary = summarizeDeviceToolUpdates(outcomes);
+  const summary = summarizeDeviceToolUpdates(current);
   const multipleReleases = rows.some((row) => row.olderRelease);
 
   return (
@@ -168,7 +171,7 @@ export function DeviceToolSyncSettings() {
                 <DeviceToolSyncTableRow
                   key={row.key}
                   row={row}
-                  outcome={outcomes.get(row.key)}
+                  outcome={current.get(row.key)}
                   onRun={(operation) => void update(row, operation)}
                 />
               ))}
@@ -238,8 +241,8 @@ function DeviceToolSyncTableRow({
           </span>
         ) : outcome?.status === "success" && !row.canUpdate && !row.canRestart ? (
           <CheckIcon aria-label="Done" className="ml-auto size-4 text-success" />
-        ) : outcome?.status === "failed" && (row.canUpdate || row.canRestart) ? (
-          // Retry repeats the request that failed, whatever the latest snapshot recommends.
+        ) : outcome?.status === "failed" && !outcome.retired ? (
+          // Retry repeats the request that failed while its drift is unresolved and still supported.
           <Button size="xs" variant="outline" onClick={() => onRun(outcome.operation)}>
             Retry
           </Button>
@@ -256,7 +259,7 @@ function DeviceToolSyncTableRow({
             Restart
           </Button>
         ) : null}
-        {outcome?.status === "failed" ? (
+        {outcome?.status === "failed" && !outcome.retired ? (
           <p role="alert" className="mt-1 max-w-48 text-left text-destructive">
             {outcome.message}
           </p>
