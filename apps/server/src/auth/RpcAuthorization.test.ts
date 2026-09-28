@@ -19,6 +19,7 @@ import {
   RPC_REQUIRED_SCOPES,
   extraScopeForServerSettingsPatch,
   requiredScopeForRpcMethod,
+  requiredScopeForDeviceList,
 } from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
@@ -136,4 +137,18 @@ describe("RPC authorization scopes", () => {
     );
     expect(AuthStandardClientScopes).not.toContain(AuthAccessWriteScope);
   });
+});
+
+it("requires operate permission for host retry while preserving read-only listing", () => {
+  expect(requiredScopeForDeviceList({})).toBe(AuthOrchestrationReadScope);
+  expect(requiredScopeForDeviceList({ retryHostId: "remote-host" })).toBe(
+    AuthOrchestrationOperateScope,
+  );
+});
+
+it("requires operate permission for tool updates even alongside a read-only check", () => {
+  expect(requiredScopeForDeviceList({ updateTool: "agent", inspectOnly: true })).toBe(
+    AuthOrchestrationOperateScope,
+  );
+  expect(requiredScopeForDeviceList({ updateTool: "hub" })).toBe(AuthOrchestrationOperateScope);
 });
