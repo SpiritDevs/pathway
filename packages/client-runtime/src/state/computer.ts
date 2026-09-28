@@ -1,4 +1,4 @@
-import { COMPUTER_WS_METHODS } from "@spiritdevs/contracts";
+import { COMPUTER_SURFACE_METHODS, COMPUTER_WS_METHODS } from "@spiritdevs/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -19,6 +19,7 @@ export function createComputerEnvironmentAtoms<R, E>(
   const controlScheduler = createAtomCommandScheduler();
   const inputScheduler = createAtomCommandScheduler();
   const provisionScheduler = createAtomCommandScheduler();
+  const surfaceScheduler = createAtomCommandScheduler();
   const threadKey = ({
     environmentId,
     input,
@@ -80,6 +81,37 @@ export function createComputerEnvironmentAtoms<R, E>(
     events: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:computer:events",
       tag: COMPUTER_WS_METHODS.subscribeEvents,
+    }),
+    /** Who controls the environment's screen. Carries no frames; the surface socket does. */
+    surfaceState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:computer:surface-state",
+      tag: COMPUTER_SURFACE_METHODS.subscribe,
+      idleTtlMs: 0,
+    }),
+    takeSurfaceControl: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer:surface-take-control",
+      tag: COMPUTER_SURFACE_METHODS.takeControl,
+      scheduler: surfaceScheduler,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
+    releaseSurfaceControl: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer:surface-release-control",
+      tag: COMPUTER_SURFACE_METHODS.releaseControl,
+      scheduler: surfaceScheduler,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
+    /** Serial with take/release/hand-back, so input never lands after control has moved. */
+    surfaceInput: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer:surface-input",
+      tag: COMPUTER_SURFACE_METHODS.input,
+      scheduler: surfaceScheduler,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
+    surfaceHandBack: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer:surface-hand-back",
+      tag: COMPUTER_SURFACE_METHODS.handBack,
+      scheduler: surfaceScheduler,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
     }),
   };
 }

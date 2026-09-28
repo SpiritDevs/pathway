@@ -195,6 +195,18 @@ separate RPCs; releasing can resume an already waiting agent before the follow-u
 arrives. The UI owns follow-up retry and should retain the returned attachment and
 summary until dispatch succeeds.
 
+## Web client
+
+The web and desktop client renders this surface as the `computer` right-panel tab
+(`apps/web/src/components/computer/ComputerSurfaceView.tsx`). It streams through
+`useEnvironmentSurface`, the same hook the remote browser uses, and reads state
+from `computerEnvironment.surfaceState`. Input goes through one serial queue; plain
+left clicks are paired into double clicks before sending; wheel and, on hosts with
+pointer phases, pointer moves are coalesced per animation frame. Hand-back
+dispatches through `dispatchComputerHandBack` in client-runtime and keeps the
+capture for a retry when dispatch fails. The mobile clients do not have this view
+yet.
+
 ## Host support and verification
 
 A host without CUA reports no computer capture/input support, and the frame route

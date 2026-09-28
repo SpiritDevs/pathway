@@ -398,6 +398,8 @@ import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./chat/ThreadD
 import { ThreadWorkspaceMoveDialog } from "./chat/ThreadWorkspaceMoveDialog";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { AgentsPanel } from "./AgentsPanel";
+import { ComputerSurfaceView } from "./computer/ComputerSurfaceView";
+import { useComputerEventsServed } from "../hooks/useComputerSupport";
 import {
   deriveAgentPanelModel,
   projectedSubagentsToRuntime,
@@ -4644,6 +4646,11 @@ function ChatViewContent(props: ChatViewProps) {
   const addAgentsSurface = useCallback(() => {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
+  }, [activeThreadRef]);
+  const computerServed = useComputerEventsServed(activeThreadRef?.environmentId ?? null);
+  const addComputerSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "computer");
   }, [activeThreadRef]);
   const environmentOnThisMachine = useEnvironmentOnThisMachine(
     activeThreadRef?.environmentId ?? null,
@@ -9722,6 +9729,8 @@ function ChatViewContent(props: ChatViewProps) {
         }
         onStateChange={handlePullRequestTabStatusChange}
       />
+    ) : activeRightPanelSurface?.kind === "computer" && activeThreadRef ? (
+      <ComputerSurfaceView threadRef={activeThreadRef} />
     ) : activeRightPanelSurface?.kind === "agents" ? (
       <AgentsPanel
         model={agentPanelModel}
@@ -10679,6 +10688,7 @@ function ChatViewContent(props: ChatViewProps) {
               onAddFiles={addFilesSurface}
               onAddPullRequest={addPullRequestSurface}
               onAddAgents={addAgentsSurface}
+              {...(computerServed ? { onAddComputer: addComputerSurface } : {})}
               onAddSideChat={createSideChat}
               browserAvailable
               terminalAvailable={activeWorkspaceRoot !== undefined}
@@ -10745,6 +10755,7 @@ function ChatViewContent(props: ChatViewProps) {
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddAgents={addAgentsSurface}
+            {...(computerServed ? { onAddComputer: addComputerSurface } : {})}
             onAddSideChat={createSideChat}
             browserAvailable
             terminalAvailable={activeWorkspaceRoot !== undefined}

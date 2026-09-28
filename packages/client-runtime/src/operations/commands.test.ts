@@ -55,6 +55,7 @@ import {
   mergeThreadBack,
   cancelQueuedRun,
   editQueuedRun,
+  dispatchComputerHandBack,
   editAndRestartMessage,
   promoteQueuedRun,
   reorderQueuedRun,
@@ -558,6 +559,43 @@ describe("V2 environment commands", () => {
           messageId: "message-original",
           replacementMessageId: "message-replacement",
           text: "Corrected text",
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("queues a Computer hand-back behind the active run with its capture", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const attachment = {
+        type: "image" as const,
+        id: "capture",
+        name: "computer.jpg",
+        mimeType: "image/jpeg",
+        sizeBytes: 10,
+      };
+
+      yield* dispatchComputerHandBack({
+        commandId: CommandId.make("hand-back"),
+        threadId: v2ThreadId,
+        messageId: MessageId.make("message-hand-back"),
+        message: "  Now save the file ",
+        summary: "You clicked File.",
+        attachment,
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(commands).toEqual([
+        {
+          type: "message.dispatch",
+          commandId: "hand-back",
+          createdBy: "user",
+          creationSource: "web",
+          threadId: v2ThreadId,
+          messageId: "message-hand-back",
+          text: "/computer-use Now save the file\n\nYou clicked File.",
+          attachments: [attachment],
+          dispatchMode: { type: "queue_after_active" },
         },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
