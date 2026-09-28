@@ -65,3 +65,4 @@ export * from "./device.ts";
 export * from "./apple.ts";
 
 export * from "./xcode.ts";
+export * from "./environmentSurface.ts";

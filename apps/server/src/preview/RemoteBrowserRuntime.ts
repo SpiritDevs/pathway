@@ -1,3 +1,6 @@
+import { EnvironmentSurfaceStream, type SurfaceSink } from "../surface/EnvironmentSurfaceStream.ts";
+import { jpegDimensions } from "@spiritdevs/shared/environmentSurface";
+import type { EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
 import { fillBrowserLoginFields } from "@spiritdevs/shared/browserPasswordAutofill";
 // @effect-diagnostics nodeBuiltinImport:off - Playwright and streaming encoder run at this adapter boundary.
 // @effect-diagnostics globalDate:off globalTimers:off - Native browser events and encoder frame pacing use the Node event loop.
@@ -74,7 +77,10 @@ interface Tab {
   page: Page;
   openerTabId: PreviewTabId | null;
   session: CDPSession | null;
-  captureStarting: Promise<void> | null;
+  captureTail: Promise<void>;
+  captureConfig: string;
+  surface: EnvironmentSurfaceStream;
+  surfaceTimer: ReturnType<typeof setInterval> | null;
   listeners: Set<(frame: PreviewRemoteFrame) => void>;
   frame: PreviewRemoteFrame | null;
   jpeg: Buffer | null;
@@ -221,6 +227,8 @@ export class RemoteBrowserRuntime {
     });
     context.on("close", () => {
       for (const tab of session.tabs.values()) {
+        tab.surface.close();
+        if (tab.surfaceTimer) clearInterval(tab.surfaceTimer);
         if (tab.publishTimer) clearTimeout(tab.publishTimer);
         tab.publishTimer = null;
         if (tab.recording) void this.stopRecording(tab).catch(() => undefined);
@@ -244,7 +252,10 @@ export class RemoteBrowserRuntime {
       page,
       openerTabId: null,
       session: null,
-      captureStarting: null,
+      captureTail: Promise.resolve(),
+      captureConfig: "",
+      surface: new EnvironmentSurfaceStream(),
+      surfaceTimer: null,
       listeners: new Set(),
       frame: null,
       jpeg: null,
@@ -260,6 +271,8 @@ export class RemoteBrowserRuntime {
     session.tabs.set(tab.id, tab);
     session.selectedTabId ??= tab.id;
     page.on("close", () => {
+      tab.surface.close();
+      if (tab.surfaceTimer) clearInterval(tab.surfaceTimer);
       session.tabs.delete(tab.id);
       if (tab.publishTimer) clearTimeout(tab.publishTimer);
       tab.publishTimer = null;
@@ -667,7 +680,7 @@ export class RemoteBrowserRuntime {
   private async status(tab: Tab): Promise<PreviewAutomationStatus> {
     return {
       available: true,
-      visible: tab.listeners.size > 0,
+      visible: tab.listeners.size > 0 || tab.surface.size > 0,
       tabId: tab.id,
       url: tab.page.url(),
       title: await tab.page.title(),
@@ -950,79 +963,154 @@ export class RemoteBrowserRuntime {
     return artifact;
   }
 
-  private async startCapture(tab: Tab): Promise<void> {
-    if (tab.captureStarting) return tab.captureStarting;
-    if (tab.session) return;
-    const start = async () => {
-      const cdp = await tab.page.context().newCDPSession(tab.page);
-      tab.session = cdp;
-      cdp.on("Page.screencastFrame", (event) => {
-        void cdp
-          .send("Page.screencastFrameAck", { sessionId: event.sessionId })
-          .catch(() => undefined);
-        tab.jpeg = Buffer.from(event.data, "base64");
-        const size = tab.page.viewportSize() ?? { width: 1280, height: 800 };
-        const frame: PreviewRemoteFrame = {
-          tabId: tab.id,
-          mimeType: "image/jpeg",
-          data: event.data,
-          ...size,
-          sequence: ++tab.sequence,
-          tabs: tab.owner.metadata,
-          metadataRevision: tab.owner.metadataRevision,
-        };
-        tab.frame = frame;
-        const publish = () => {
-          tab.publishTimer = null;
-          if (!tab.frame || tab.page.isClosed() || tab.session !== cdp) return;
-          tab.publishedAt = Date.now();
-          for (const listener of tab.listeners)
-            listener({
-              ...tab.frame,
-              tabs: tab.owner.metadata,
-              metadataRevision: tab.owner.metadataRevision,
-            });
-        };
-        const remaining = 160 - (Date.now() - tab.publishedAt);
-        if (remaining <= 0) {
-          if (tab.publishTimer) clearTimeout(tab.publishTimer);
-          publish();
-        } else if (!tab.publishTimer) {
-          tab.publishTimer = setTimeout(publish, remaining);
+  private startCapture(tab: Tab): Promise<void> {
+    const reconcile = async () => {
+      const wanted = tab.listeners.size > 0 || tab.surface.size > 0 || tab.recording !== null;
+      if (!wanted || tab.page.isClosed()) {
+        const cdp = tab.session;
+        tab.session = null;
+        tab.captureConfig = "";
+        if (tab.publishTimer) clearTimeout(tab.publishTimer);
+        tab.publishTimer = null;
+        if (cdp) {
+          await cdp.send("Page.stopScreencast").catch(() => undefined);
+          await cdp.detach().catch(() => undefined);
         }
-      });
+        tab.jpeg = null;
+        tab.frame = null;
+        return;
+      }
+      const config = tab.surface.configuration(
+        tab.page.viewportSize() ?? { width: 1280, height: 800 },
+      );
+      const key = JSON.stringify(config);
+      if (tab.session && tab.captureConfig === key) return;
+      const cdp = tab.session ?? (await tab.page.context().newCDPSession(tab.page));
+      if (!tab.session) {
+        tab.session = cdp;
+        cdp.on("Page.screencastFrame", (event) => {
+          void cdp
+            .send("Page.screencastFrameAck", { sessionId: event.sessionId })
+            .catch(() => undefined);
+          if (tab.session !== cdp || (!tab.listeners.size && !tab.surface.size && !tab.recording))
+            return;
+          this.publishCapture(tab, event.data);
+        });
+      } else await cdp.send("Page.stopScreencast");
       try {
+        // A single viewport policy also keeps Playwright's CSS-coordinate input consistent.
+        if (tab.surface.size) {
+          await tab.page.setViewportSize({ width: config.width, height: config.height });
+          await cdp.send("Emulation.setDeviceMetricsOverride", {
+            width: config.width,
+            height: config.height,
+            deviceScaleFactor: config.deviceScale,
+            mobile: false,
+          });
+        }
         await cdp.send("Page.startScreencast", {
           format: "jpeg",
-          quality: 75,
-          maxWidth: 1280,
-          maxHeight: 900,
+          quality: config.quality,
+          maxWidth: config.maxWidth,
+          maxHeight: config.maxHeight,
           everyNthFrame: 1,
         });
+        tab.captureConfig = key;
+        if (tab.surface.size && !tab.jpeg) {
+          const jpeg = await tab.page.screenshot({
+            type: "jpeg",
+            quality: config.quality,
+            timeout: 5000,
+          });
+          if (tab.surface.size) this.publishCapture(tab, jpeg.toString("base64"));
+        }
       } catch (error) {
         tab.session = null;
+        tab.captureConfig = "";
         await cdp.detach().catch(() => undefined);
         throw error;
       }
     };
-    tab.captureStarting = start();
-    try {
-      await tab.captureStarting;
-    } finally {
-      tab.captureStarting = null;
-    }
+    const result = tab.captureTail.then(reconcile);
+    tab.captureTail = result.catch(() => undefined);
+    return result;
   }
 
-  private async stopUnusedCapture(tab: Tab) {
-    if (tab.captureStarting) await tab.captureStarting.catch(() => undefined);
-    if (tab.listeners.size || tab.recording || !tab.session) return;
-    const cdp = tab.session;
-    tab.session = null;
-    if (tab.publishTimer) clearTimeout(tab.publishTimer);
-    tab.publishTimer = null;
-    await cdp.send("Page.stopScreencast").catch(() => undefined);
-    await cdp.detach().catch(() => undefined);
-    tab.jpeg = null;
+  private publishCapture(tab: Tab, data: string) {
+    const size = tab.page.viewportSize() ?? { width: 1280, height: 800 };
+    const sequence = ++tab.sequence;
+    if (tab.surface.size || tab.recording) tab.jpeg = Buffer.from(data, "base64");
+    if (tab.surface.size && tab.jpeg) {
+      const pixels = jpegDimensions(tab.jpeg) ?? size;
+      tab.surface.publish({
+        ...pixels,
+        sequence,
+        deviceScale: pixels.width / size.width,
+        timestampMs: Date.now(),
+        jpeg: tab.jpeg,
+      });
+    }
+    // Retain the old RPC representation only while an old client needs it.
+    if (!tab.listeners.size) return;
+    tab.frame = { tabId: tab.id, mimeType: "image/jpeg", data, ...size, sequence };
+    const publish = () => {
+      tab.publishTimer = null;
+      if (!tab.frame || tab.page.isClosed() || !tab.session) return;
+      tab.publishedAt = Date.now();
+      for (const listener of tab.listeners)
+        listener({
+          ...tab.frame,
+          tabs: tab.owner.metadata,
+          metadataRevision: tab.owner.metadataRevision,
+        });
+    };
+    const remaining = 160 - (Date.now() - tab.publishedAt);
+    if (remaining <= 0) {
+      if (tab.publishTimer) clearTimeout(tab.publishTimer);
+      publish();
+    } else if (!tab.publishTimer) tab.publishTimer = setTimeout(publish, remaining);
+  }
+
+  private stopUnusedCapture(tab: Tab) {
+    return this.startCapture(tab);
+  }
+
+  async subscribeSurface(
+    threadId: string,
+    tabId: string,
+    viewport: EnvironmentSurfaceViewport,
+    sink: SurfaceSink,
+  ) {
+    const { tab } = await this.getTab(threadId, tabId);
+    const remove = tab.surface.add(sink, viewport);
+    if (!tab.surfaceTimer) {
+      let updating = false;
+      tab.surfaceTimer = setInterval(() => {
+        tab.surface.tick();
+        if (updating) return;
+        updating = true;
+        void this.startCapture(tab)
+          .catch(() => tab.surface.close())
+          .finally(() => {
+            updating = false;
+          });
+      }, 100);
+    }
+    const unsubscribe = async () => {
+      remove();
+      if (!tab.surface.size && tab.surfaceTimer) {
+        clearInterval(tab.surfaceTimer);
+        tab.surfaceTimer = null;
+      }
+      await this.stopUnusedCapture(tab);
+    };
+    try {
+      await this.startCapture(tab);
+    } catch (error) {
+      await unsubscribe();
+      throw error;
+    }
+    return unsubscribe;
   }
 
   async subscribe(

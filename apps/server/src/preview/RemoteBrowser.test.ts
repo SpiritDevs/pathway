@@ -24,6 +24,7 @@ const makeHarness = Effect.fn(function* () {
   const subscribed = Promise.withResolvers<void>();
   const unsubscribe = vi.fn(async () => undefined);
   const runtime = {
+    subscribeSurface: vi.fn(async () => async () => undefined),
     command: vi.fn(async (_input: unknown, beforeAction?: () => Promise<void>) => {
       await beforeAction?.();
       return { tabs: [], selectedTabId: null, artifacts: [] };

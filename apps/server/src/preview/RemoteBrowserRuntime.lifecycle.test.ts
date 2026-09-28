@@ -65,6 +65,7 @@ function browserFixture() {
       if (options?.path) await NodeFSP.writeFile(options.path, "test-image");
       return Buffer.from("jpeg");
     }),
+    setViewportSize: vi.fn(async () => undefined),
     viewportSize: () => ({ width: 1280, height: 800 }),
     context: () => context,
     goto: vi.fn(async (next: string) => {
@@ -100,6 +101,29 @@ describe("RemoteBrowserRuntime lifecycle", () => {
     await runtime?.close();
     vi.useRealTimers();
     await NodeFSP.rm(directory, { recursive: true, force: true });
+  });
+
+  it("shares one screencast with binary and RPC viewers and stops after the last leaves", async () => {
+    const fixture = browserFixture();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    const { tabs } = await runtime.command({ action: "open", threadId });
+    expect(fixture.context.newCDPSession).not.toHaveBeenCalled();
+    const sink = { send: vi.fn(), bufferedAmount: () => 0, close: vi.fn() };
+    const remove = await runtime.subscribeSurface(
+      threadId,
+      tabs[0]!.tabId,
+      { width: 1280, height: 800, deviceScale: 1 },
+      sink,
+    );
+    expect(sink.send).toHaveBeenCalled();
+    const rpc = vi.fn();
+    const removeRpc = await runtime.subscribe(threadId, tabs[0]!.tabId, rpc);
+    expect(fixture.context.newCDPSession).toHaveBeenCalledTimes(1);
+    await remove();
+    expect(fixture.cdp.detach).not.toHaveBeenCalled();
+    await removeRpc();
+    expect(fixture.cdp.detach).toHaveBeenCalledOnce();
+    expect(fixture.cdp.send).toHaveBeenCalledWith("Page.stopScreencast");
   });
 
   it("watches task metadata without launching Chromium and reports newly opened pages", async () => {

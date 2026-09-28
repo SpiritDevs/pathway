@@ -19,6 +19,7 @@ describe("remote browser RPC authorization", () => {
   it.effect("keeps the hosted browser after leaving the service construction context", () =>
     Effect.gen(function* () {
       const browser = {
+        subscribeSurface: vi.fn(() => Effect.void),
         command: vi.fn(() => Effect.succeed({ tabs: [], selectedTabId: null })),
         frames: vi.fn(() => Stream.empty),
       };
@@ -43,6 +44,7 @@ describe("remote browser RPC authorization", () => {
   it.effect("denies browser commands to read-only tokens before invoking the browser", () =>
     Effect.gen(function* () {
       const browser = {
+        subscribeSurface: vi.fn(() => Effect.void),
         command: vi.fn(() => Effect.succeed({ tabs: [], selectedTabId: null })),
         frames: vi.fn(() => Stream.empty),
       };
@@ -59,6 +61,7 @@ describe("remote browser RPC authorization", () => {
   it.effect("requires read scope before subscribing and forwards metadata-only subscriptions", () =>
     Effect.gen(function* () {
       const browser = {
+        subscribeSurface: vi.fn(() => Effect.void),
         command: vi.fn(() => Effect.succeed({ tabs: [], selectedTabId: null })),
         frames: vi.fn(() => Stream.empty),
       };
@@ -79,6 +82,7 @@ describe("remote browser RPC authorization", () => {
     Effect.gen(function* () {
       let tracingEnabled: boolean | undefined;
       const browser = {
+        subscribeSurface: vi.fn(() => Effect.void),
         command: vi.fn(() =>
           Effect.gen(function* () {
             tracingEnabled = yield* References.TracerEnabled;

@@ -1,3 +1,6 @@
+import type { EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
+import type { SurfaceSink } from "../surface/EnvironmentSurfaceStream.ts";
+import type * as Scope from "effect/Scope";
 import {
   environmentBrowserHostClientId,
   PREVIEW_AUTOMATION_OPERATIONS,
@@ -25,6 +28,10 @@ import { issueAssetUrl } from "../assets/AssetAccess.ts";
 import { type BrowserArtifact, RemoteBrowserRuntime } from "./RemoteBrowserRuntime.ts";
 
 export interface RemoteBrowserService {
+  readonly subscribeSurface: (
+    input: { threadId: ThreadId; tabId: string; viewport: EnvironmentSurfaceViewport },
+    sink: SurfaceSink,
+  ) => Effect.Effect<void, PreviewRemoteError, Scope.Scope>;
   readonly command: (
     input: PreviewRemoteCommand,
   ) => Effect.Effect<PreviewRemoteResult, PreviewRemoteError>;
@@ -37,6 +44,8 @@ export const RemoteBrowser = Context.Reference<RemoteBrowserService>(
   "@spiritdevs/pathway/RemoteBrowser",
   {
     defaultValue: () => ({
+      subscribeSurface: () =>
+        Effect.fail(new PreviewRemoteError({ detail: "Surface streaming is unavailable." })),
       command: () =>
         Effect.fail(
           new PreviewRemoteError({
@@ -64,7 +73,7 @@ const operation = <A>(run: () => Promise<A>) =>
 interface RemoteBrowserDependencies {
   readonly runtime: Pick<
     RemoteBrowserRuntime,
-    "command" | "automate" | "subscribe" | "closeThread"
+    "command" | "automate" | "subscribe" | "subscribeSurface" | "closeThread"
   >;
   readonly broker: PreviewAutomationBroker["Service"];
   readonly environmentId: EnvironmentId;
@@ -204,6 +213,16 @@ export const makeRemoteBrowser = Effect.fn("RemoteBrowser.make")(function* ({
 
   return {
     command,
+    subscribeSurface: Effect.fn("RemoteBrowser.subscribeSurface")(function* (input, sink) {
+      yield* checkAvailable(input.threadId);
+      yield* Effect.acquireRelease(
+        operation(() =>
+          runtime.subscribeSurface(input.threadId, input.tabId, input.viewport, sink),
+        ),
+        (unsubscribe) => Effect.promise(unsubscribe),
+      );
+      yield* checkAvailable(input.threadId);
+    }),
     frames: (input) =>
       Stream.callback<PreviewRemoteFrame, PreviewRemoteError>(
         (queue) =>
