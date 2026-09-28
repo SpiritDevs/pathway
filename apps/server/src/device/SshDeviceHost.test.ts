@@ -27,7 +27,7 @@ it.effect("preserves installed status after probes and cleans failed agent activ
     const spawner = ChildProcessSpawner.make((command) =>
       Effect.gen(function* () {
         if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
-        const forwarding = command.args.includes("-N");
+        const forwarding = command.args.includes("-T");
         let output = "";
         if (forwarding) {
           if (failForward) {
@@ -40,6 +40,7 @@ it.effect("preserves installed status after probes and cleans failed agent activ
             });
           }
           forwards++;
+          output = "ready\n";
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => {
               forwards--;
@@ -116,8 +117,8 @@ it.effect("preserves installed status after probes and cleans failed agent activ
       Effect.provide(ServerConfig.layerTest(home, home)),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
-    expect(new Set(owners).size).toBe(1);
-    expect(owners[0]).toMatch(/^[a-f0-9]{24}$/);
+    expect(new Set(owners).size).toBe(2);
+    expect(owners[0]).toMatch(/^[a-f0-9]{24}-[a-f0-9-]{36}$/);
     expect(forwards).toBe(1);
     expect(modes.filter((mode) => mode === "start")).toHaveLength(2);
     yield* host.platformAvailability("ios");

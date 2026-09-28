@@ -1,3 +1,9 @@
+import * as NodeCrypto from "node:crypto";
+import * as NodeOS from "node:os";
+import { deviceCacheBaseDir } from "./deviceMachineLock.ts";
+import { makeDeviceLeases } from "./DeviceLeases.ts";
+import { inspectLocalDeviceSdks } from "./deviceSdkInventory.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { pruneLocalDeviceTools } from "./deviceToolMaintenance.ts";
 import { deviceToolInstallMessage } from "@spiritdevs/contracts";
 /**
@@ -199,6 +205,27 @@ const deviceHostEnvironment = (
 export const make = Effect.fn("LocalDeviceHost.make")(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const config = yield* ServerConfig.ServerConfig;
+  const cacheBaseDir = yield* deviceCacheBaseDir;
+  const environmentService = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironment);
+  const descriptor = Option.isSome(environmentService)
+    ? yield* environmentService.value.getDescriptor
+    : null;
+  const leases = makeDeviceLeases(cacheBaseDir, {
+    environmentId:
+      descriptor?.environmentId ??
+      NodeCrypto.createHash("sha256").update(config.stateDir).digest("hex"),
+    environmentLabel: descriptor?.label ?? NodeOS.hostname(),
+  });
+  const leaseOperation = <T>(operation: () => Promise<T>) =>
+    Effect.tryPromise({
+      try: operation,
+      catch: (cause) =>
+        new DeviceHost.DeviceHostError({
+          hostId: LOCAL_DEVICE_HOST_ID,
+          step: "checking simulator ownership",
+          cause,
+        }),
+    });
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const net = yield* NetService.NetService;
@@ -223,14 +250,15 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
     return reason === null ? { platform, available: true } : { platform, available: false, reason };
   });
 
+  let sdkInventory: DeviceHostSummary["sdkInventory"];
   const summary: Effect.Effect<DeviceHostSummary> = Effect.gen(function* () {
     const [platforms, hubInstalled, agentDeviceInstalled] = yield* Effect.all([
       Effect.all([platformAvailability("ios"), platformAvailability("android")]),
-      isDeviceHubInstalled(config.baseDir).pipe(
+      isDeviceHubInstalled(cacheBaseDir).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, path),
       ),
-      isAgentDeviceInstalled(config.baseDir).pipe(
+      isAgentDeviceInstalled(cacheBaseDir).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, path),
       ),
@@ -244,7 +272,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       : false;
     const agentAlive =
       Option.isSome(daemon) && daemon.value.pid ? yield* isProcessAlive(daemon.value.pid) : false;
-    const tools = yield* deviceToolVersions(config.baseDir, {
+    const tools = yield* deviceToolVersions(cacheBaseDir, {
       ...(hubAlive ? { hub: DEVICE_HUB_VERSION } : {}),
       ...(agentAlive && Option.isSome(daemon) && daemon.value.version
         ? { agent: daemon.value.version }
@@ -255,6 +283,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
     );
     return {
       tools,
+      sdkInventory,
       id: hostId,
       kind: "local",
       label: "This machine",
@@ -568,7 +597,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       Effect.provideService(Path.Path, path),
       Effect.provideService(HostProcessPlatform, hostPlatform),
     );
-    const installed = yield* isDeviceHubInstalled(config.baseDir).pipe(
+    const installed = yield* isDeviceHubInstalled(cacheBaseDir).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
     );
@@ -576,7 +605,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       const inventory = yield* summary;
       yield* onPhase("installing", deviceToolInstallMessage("device hub", inventory.tools?.hub));
     }
-    const hubTool = yield* ensureDeviceHub(config.baseDir).pipe(
+    const hubTool = yield* ensureDeviceHub(cacheBaseDir).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
       Effect.provideService(ProcessRunner.ProcessRunner, runner),
@@ -591,7 +620,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
     );
     yield* onPhase("starting");
     const hub = yield* spawnHub(hubTool, nodePath);
-    yield* pruneLocalDeviceTools(config.baseDir, nodePath, "hub").pipe(
+    yield* pruneLocalDeviceTools(cacheBaseDir, nodePath, "hub").pipe(
       Effect.provideService(Path.Path, path),
       Effect.provideService(ProcessRunner.ProcessRunner, runner),
       Effect.ignore,
@@ -631,7 +660,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       > {
         const running = yield* ensureHubReady(onPhase);
         if (running.agentDevice) return { ...toReady(running), agentDevice: running.agentDevice };
-        const installed = yield* isAgentDeviceInstalled(config.baseDir).pipe(
+        const installed = yield* isAgentDeviceInstalled(cacheBaseDir).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
           Effect.provideService(Path.Path, path),
         );
@@ -642,7 +671,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
             deviceToolInstallMessage("agent tools", inventory.tools?.agent),
           );
         }
-        const agentTool = yield* ensureAgentDevice(config.baseDir).pipe(
+        const agentTool = yield* ensureAgentDevice(cacheBaseDir).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
           Effect.provideService(Path.Path, path),
           Effect.provideService(ProcessRunner.ProcessRunner, runner),
@@ -658,7 +687,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
         agentToolRef = { entryPath: agentTool.entryPath, nodePath: running.hub.nodePath };
         yield* onPhase("starting");
         const agentDevice = yield* startAgentDeviceDaemon(agentTool, running.hub.nodePath);
-        yield* pruneLocalDeviceTools(config.baseDir, running.hub.nodePath, "agent").pipe(
+        yield* pruneLocalDeviceTools(cacheBaseDir, running.hub.nodePath, "agent").pipe(
           Effect.provideService(Path.Path, path),
           Effect.provideService(ProcessRunner.ProcessRunner, runner),
           Effect.ignore,
@@ -736,6 +765,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       yield* stopHub(running?.hub);
       yield* fs.remove(hubStatePath(), { force: true }).pipe(Effect.ignore);
       yield* stopAgentDeviceDaemon(agentToolRef);
+      yield* leaseOperation(() => leases.releaseAll()).pipe(Effect.ignore);
     }),
   );
 
@@ -745,6 +775,32 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
   const host: DeviceHost.DeviceHost["Service"] = {
     id: hostId,
     summary,
+    inspect: Effect.gen(function* () {
+      const host = yield* summary;
+      sdkInventory = yield* inspectLocalDeviceSdks().pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, runner),
+        Effect.mapError(
+          (cause) => new DeviceHost.DeviceHostError({ hostId, step: "inspecting SDKs", cause }),
+        ),
+      );
+      return { ...host, sdkInventory };
+    }),
+    acquireDevice: (key) => leaseOperation(() => leases.acquire(key)),
+    deviceOwners: (keys) => leaseOperation(() => leases.inspectMany(keys)),
+    updateTools: (tools) =>
+      Effect.forEach(
+        tools,
+        (tool) =>
+          (tool === "hub" ? ensureDeviceHub(cacheBaseDir) : ensureAgentDevice(cacheBaseDir)).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.provideService(Path.Path, path),
+            Effect.provideService(ProcessRunner.ProcessRunner, runner),
+            Effect.mapError(
+              (cause) => new DeviceHost.DeviceHostError({ hostId, step: "updating tools", cause }),
+            ),
+          ),
+        { discard: true },
+      ),
     platformAvailability,
     ensureReady,
     ensureAgentReady,

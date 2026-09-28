@@ -60,9 +60,10 @@ const fixture = (
       ),
       Layer.provideMerge(
         Layer.succeed(DeviceService, {
+          claimDevice: () => Effect.void,
           currentReadiness: () =>
             Effect.succeed({ hostId: LOCAL_DEVICE_HOST_ID, hub: { origin: "http://hub.test" } }),
-        } as DeviceService["Service"]),
+        } as unknown as DeviceService["Service"]),
       ),
       Layer.provideMerge(Layer.succeed(HttpClient.HttpClient, client)),
     ),
@@ -110,7 +111,8 @@ describe("device hub proxy", () => {
 
   it("requires operate scope for stream tuning", async () => {
     const readOnly = fixture([AuthOrchestrationReadScope]);
-    const path = "http://t3.test/api/device-hub/vendor/serve-emu/api/stream-settings";
+    const path =
+      "http://t3.test/api/device-hub/vendor/serve-emu/api/stream-settings?device=emulator-5554";
     expect((await readOnly.handler(new Request(path, { method: "POST" }))).status).toBe(403);
     const operator = fixture([AuthOrchestrationOperateScope]);
     const response = await operator.handler(new Request(path, { method: "POST" }));

@@ -66,6 +66,7 @@ const makeFixture = Effect.fn("deviceProxyAuth.fixture")(function* (devUrl?: URL
     );
   });
   const deviceService = {
+    claimDevice: () => Effect.void,
     currentReadiness: (hostId: string | undefined) => {
       hosts.push(hostId);
       return Effect.succeed({
@@ -73,7 +74,7 @@ const makeFixture = Effect.fn("deviceProxyAuth.fixture")(function* (devUrl?: URL
         hub: { origin: "http://127.0.0.1:34999" },
       });
     },
-  } as DeviceService["Service"];
+  } as unknown as DeviceService["Service"];
   const routes = Layer.mergeAll(
     deviceHubProxyRouteLayer,
     browserApiCorsLayer,

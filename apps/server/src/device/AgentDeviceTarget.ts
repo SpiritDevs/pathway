@@ -1,3 +1,4 @@
+import { processIdentity } from "./deviceMachineLock.ts";
 import * as NodeCrypto from "node:crypto";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
@@ -40,4 +41,35 @@ export const writeAgentDeviceConfig = Effect.fn("AgentDeviceTarget.writeConfig")
     yield* fs.writeFileString(temporary, content);
     yield* fs.rename(temporary, file);
   }).pipe(Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.ignore)));
+});
+
+const AgentTargetGrant = Schema.Struct({
+  configPath: Schema.String,
+  endpoint: Schema.String,
+  deviceId: Schema.String,
+  platform: Schema.Literals(["ios", "android"]),
+  serverPid: Schema.Int,
+  serverIdentity: Schema.String,
+});
+
+const encodeGrant = Schema.encodeEffect(Schema.fromJsonString(AgentTargetGrant));
+
+/** Bind the CLI's target flags to the simulator whose lease device_open acquired. */
+export const writeAgentDeviceTargetGrant = Effect.fn("AgentDeviceTarget.writeGrant")(function* (
+  stateDir: string,
+  session: string,
+  target: { configPath: string; deviceId: string; platform: "ios" | "android" },
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const directory = path.join(stateDir, "device", "targets");
+  yield* fs.makeDirectory(directory, { recursive: true });
+  const endpoint = yield* fs.readFileString(target.configPath);
+  const content = yield* encodeGrant({
+    ...target,
+    endpoint,
+    serverPid: process.pid,
+    serverIdentity: processIdentity(process.pid) ?? "unknown",
+  });
+  yield* fs.writeFileString(path.join(directory, session + ".json"), content, { mode: 0o600 });
 });

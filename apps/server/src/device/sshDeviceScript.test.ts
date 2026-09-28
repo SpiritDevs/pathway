@@ -57,8 +57,9 @@ describe("remote helper lifecycle", () => {
         await NodeFSP.mkdir(bin);
         await NodeFSP.writeFile(NodePath.join(bin, "adb"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
         const root = NodePath.join(home, ".pathway/device");
-        const hubDir = NodePath.join(root, `tools/expo-device-hub@${DEVICE_HUB_VERSION}`);
-        const agentDir = NodePath.join(root, `tools/agent-device@${AGENT_DEVICE_VERSION}`);
+        const cache = NodePath.join(home, ".pathway/device-cache");
+        const hubDir = NodePath.join(cache, `tools/expo-device-hub/${DEVICE_HUB_VERSION}`);
+        const agentDir = NodePath.join(cache, `tools/agent-device/${AGENT_DEVICE_VERSION}`);
         const hub = NodePath.join(hubDir, "node_modules/expo-device-hub/dist/server/cli.mjs");
         const agent = NodePath.join(agentDir, "node_modules/agent-device/bin/agent-device.mjs");
         await NodeFSP.mkdir(NodePath.join(hubDir, "node_modules/expo-device-hub/dist/server"), {
@@ -116,8 +117,7 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
         const template = NodePath.join(home, "hub-template");
         await NodeFSP.cp(hubDir, template, { recursive: true });
         await NodeFSP.rm(NodePath.join(hubDir, ".install-complete"));
-        const installLock = hubDir + ".lock";
-        await NodeFSP.symlink("2147483647:exited-installer", installLock);
+
         await NodeFSP.writeFile(
           NodePath.join(bin, "npm"),
           `#!${process.execPath}\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='--version'){console.log('10.0.0');process.exit(0);}fs.cpSync(${JSON.stringify(template)},args[args.indexOf('--prefix')+1],{recursive:true});`,
@@ -125,9 +125,7 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
         );
         await NodeFSP.mkdir(NodePath.join(root, "hosts/one"), { recursive: true });
         await NodeFSP.writeFile(NodePath.join(root, "hosts/one/fail-start-once"), "");
-        // Unavailable advisory bookkeeping must not prevent either helper from starting.
-        await NodeFSP.writeFile(NodePath.join(root, "tools/.maintenance-lock"), "blocked");
-        await NodeFSP.writeFile(NodePath.join(root, "tools/.users"), "unwritable lease directory");
+
         try {
           const [manual, concurrent] = await Promise.all([
             invoke("one", "start"),
@@ -174,7 +172,7 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
             [hubDir, "expo-device-hub", nextHubVersion],
             [agentDir, "agent-device", nextAgentVersion],
           ]) {
-            const destination = NodePath.join(root, `tools/${name}@${version}`);
+            const destination = NodePath.join(cache, `tools/${name}/${version}`);
             await NodeFSP.cp(source!, destination, { recursive: true });
             await NodeFSP.writeFile(NodePath.join(destination, ".install-complete"), version!);
           }

@@ -97,3 +97,46 @@ it.effect("unreadable inventory stays unknown instead of reporting no installs",
     Effect.provide(NodeServices.layer),
   ),
 );
+
+it("downloads a shared tool only once across independent environment processes", async () => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { createRequire } = await import("node:module");
+  const resolve = createRequire(import.meta.url).resolve;
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "pathway-device-download-"));
+  try {
+    const script = path.join(base, "install.mjs");
+    await fs.writeFile(
+      script,
+      `
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import * as Effect from ${JSON.stringify(resolve("effect/Effect"))};
+import * as NodeServices from ${JSON.stringify(resolve("@effect/platform-node/NodeServices"))};
+import * as Runner from ${JSON.stringify(new URL("../processRunner.ts", import.meta.url).href)};
+import { ensureDeviceHub } from ${JSON.stringify(new URL("./DeviceToolchain.ts", import.meta.url).href)};
+const base = ${JSON.stringify(base)};
+const runner = { run: input => Effect.promise(async () => {
+  await fs.appendFile(path.join(base, 'downloads'), 'download\\n');
+  const stage = input.args[input.args.indexOf('--prefix') + 1];
+  const entry = path.join(stage, 'node_modules/expo-device-hub/dist/server/cli.mjs');
+  await fs.mkdir(path.dirname(entry), { recursive: true });
+  await fs.writeFile(entry, 'export {};');
+  return { code: 0, stdout: '', stderr: '', timedOut: false, stdoutTruncated: false, stderrTruncated: false, stdoutInvalidUtf8: false, stderrInvalidUtf8: false };
+}) };
+const tool = await Effect.runPromise(ensureDeviceHub(base).pipe(Effect.provideService(Runner.ProcessRunner, runner), Effect.provide(NodeServices.layer)));
+console.log(tool.entryPath);
+`,
+    );
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () => promisify(execFile)(process.execPath, [script])),
+    );
+    expect(new Set(results.map((result) => result.stdout.trim())).size).toBe(1);
+    expect(await fs.readFile(path.join(base, "downloads"), "utf8")).toBe("download\n");
+  } finally {
+    await fs.rm(base, { recursive: true, force: true });
+  }
+});

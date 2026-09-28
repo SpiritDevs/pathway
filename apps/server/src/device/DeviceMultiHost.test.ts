@@ -19,6 +19,8 @@ it.effect("keeps hosts independent when serials collide and another host fails",
         helpers: { serveSimAxSettings: null, serveSimCli: null },
       };
       return {
+        acquireDevice: () => Effect.succeed(null),
+        deviceOwners: () => Effect.succeed({}),
         id,
         summary: Effect.succeed({
           id,

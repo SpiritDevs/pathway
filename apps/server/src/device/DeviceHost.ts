@@ -11,6 +11,7 @@
  */
 import type {
   DeviceHostId,
+  DeviceOwnership,
   DeviceHostSummary,
   DevicePlatform,
   DevicePlatformAvailability,
@@ -81,6 +82,13 @@ export class DeviceHost extends Context.Service<
     readonly id: DeviceHostId;
     readonly summary: Effect.Effect<DeviceHostSummary>;
     readonly inspect?: Effect.Effect<DeviceHostSummary, DeviceHostError>;
+    readonly updateTools?: (
+      tools: ReadonlyArray<"hub" | "agent">,
+    ) => Effect.Effect<void, DeviceHostError>;
+    readonly acquireDevice: (key: string) => Effect.Effect<DeviceOwnership | null, DeviceHostError>;
+    readonly deviceOwners: (
+      keys: ReadonlyArray<string>,
+    ) => Effect.Effect<Readonly<Record<string, DeviceOwnership>>, DeviceHostError>;
     readonly platformAvailability: (
       platform: DevicePlatform,
     ) => Effect.Effect<DevicePlatformAvailability>;

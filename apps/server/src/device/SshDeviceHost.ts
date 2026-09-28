@@ -1,8 +1,14 @@
+import * as NodeOS from "node:os";
+import { remoteDeviceGuardian } from "./remoteDeviceLease.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as Option from "effect/Option";
 import * as NodeCrypto from "node:crypto";
 import {
   type DeviceHostSummary,
   DevicePlatformAvailability,
   DeviceToolVersions,
+  DeviceSdkInventory,
+  DeviceOwnership,
   deviceToolInstallMessage,
   type SshDeviceHostConfig,
 } from "@spiritdevs/contracts";
@@ -27,6 +33,7 @@ import { quoteRemoteArg, remoteDeviceEnvironment, remoteDeviceScript } from "./s
 const Probe = Schema.Struct({
   nodePath: Schema.String,
   tools: Schema.optional(DeviceToolVersions),
+  sdkInventory: Schema.optional(DeviceSdkInventory),
   platforms: Schema.Array(DevicePlatformAvailability),
 });
 const Started = Schema.Struct({
@@ -40,6 +47,12 @@ const Started = Schema.Struct({
     serveSimCli: Schema.NullOr(Schema.String),
   }),
 });
+const decodeLease = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ owner: Schema.NullOr(DeviceOwnership) })),
+);
+const decodeOwners = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ owners: Schema.Record(Schema.String, DeviceOwnership) })),
+);
 const decodeProbe = Schema.decodeUnknownEffect(Schema.fromJsonString(Probe));
 const decodeStarted = Schema.decodeUnknownEffect(Schema.fromJsonString(Started));
 const targetFor = (config: SshDeviceHostConfig) => ({
@@ -58,15 +71,17 @@ const commandArgs = (script: string) => [
 const bootstrap = (
   config: SshDeviceHostConfig,
   owner: string,
-  mode: "probe" | "start" | "agent-start" | "stop-agent" | "stop",
+  mode: Parameters<typeof remoteDeviceScript>[1],
+  deviceKey?: string | ReadonlyArray<string>,
 ) =>
   runSshCommand(targetFor(config), {
     preHostArgs: identityArgs(config),
     remoteCommandArgs: commandArgs(
       'command -v node >/dev/null 2>&1 || { echo "Node is missing from the non-interactive SSH PATH" >&2; exit 1; }; exec node',
     ),
-    stdin: remoteDeviceScript(owner, mode),
-    timeoutMs: mode === "start" || mode === "agent-start" ? 1_300_000 : 45_000,
+    stdin: remoteDeviceScript(owner, mode, deviceKey),
+    timeoutMs:
+      mode === "start" || mode === "agent-start" || mode.startsWith("update-") ? 1_300_000 : 90_000,
   }).pipe(
     Effect.mapError(
       (cause) => new DeviceHost.DeviceHostError({ hostId: config.id, step: mode, cause }),
@@ -101,6 +116,7 @@ export const probe = Effect.fn("SshDeviceHost.probe")(function* (
     label: config.label,
     kind: "ssh",
     tools: value.tools,
+    sdkInventory: value.sdkInventory,
     hubInstalled:
       value.tools?.hub.installedVersions.includes(value.tools.hub.requiredVersion) ?? false,
     agentDeviceInstalled:
@@ -127,7 +143,17 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const parentScope = yield* Scope.Scope;
   const ssh = yield* resolveSshCommand;
-  const owner = yield* ownerFor(config.id);
+  const owner = (yield* ownerFor(config.id)) + "-" + NodeCrypto.randomUUID();
+  const environmentService = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironment);
+  const descriptor = Option.isSome(environmentService)
+    ? yield* environmentService.value.getDescriptor
+    : null;
+  const environment = {
+    environmentId:
+      descriptor?.environmentId ??
+      NodeCrypto.createHash("sha256").update(server.stateDir).digest("hex"),
+    environmentLabel: descriptor?.label ?? NodeOS.hostname(),
+  };
   const provide = <A, E>(
     effect: Effect.Effect<
       A,
@@ -241,15 +267,18 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
             "ServerAliveInterval=10",
             "-o",
             "ServerAliveCountMax=3",
-            "-N",
+            "-T",
             "-L",
             `127.0.0.1:${hubPort}:127.0.0.1:${remote.hubPort}`,
             ...(remote.daemonPort === undefined
               ? []
               : ["-L", `127.0.0.1:${daemonPort}:127.0.0.1:${remote.daemonPort}`]),
             config.target,
+            ...commandArgs(
+              `exec node -e ${quoteRemoteArg(remoteDeviceGuardian(owner, environment))}`,
+            ),
           ],
-          { stdin: "ignore", stdout: "ignore", stderr: "pipe" },
+          { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
         ),
       )
       .pipe(
@@ -259,6 +288,26 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
             new DeviceHost.DeviceHostError({ hostId: config.id, step: "forwarding ports", cause }),
         ),
       );
+    const acknowledgement = yield* child.stdout.pipe(
+      Stream.decodeText(),
+      Stream.splitLines,
+      Stream.runHead,
+      Effect.timeout("15 seconds"),
+      Effect.mapError(
+        (cause) =>
+          new DeviceHost.DeviceHostError({
+            hostId: config.id,
+            step: "starting ownership guardian",
+            cause,
+          }),
+      ),
+    );
+    if (Option.isNone(acknowledgement) || acknowledgement.value.trim() !== "ready")
+      return yield* new DeviceHost.DeviceHostError({
+        hostId: config.id,
+        step: "starting ownership guardian",
+        cause: new Error("No guardian acknowledgement"),
+      });
     let stderr = "";
     yield* child.stderr.pipe(
       Stream.decodeText(),
@@ -420,9 +469,43 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
         );
       }),
     );
+  const lease = (key: string) =>
+    provide(bootstrap(config, owner, "lease-acquire", key)).pipe(
+      Effect.flatMap((result) => decodeLease(result.stdout.trim())),
+      Effect.map((result) => result.owner),
+      Effect.mapError(
+        (cause) =>
+          new DeviceHost.DeviceHostError({
+            hostId: config.id,
+            step: "checking simulator ownership",
+            cause,
+          }),
+      ),
+    );
+  const deviceOwners = (keys: ReadonlyArray<string>) =>
+    provide(bootstrap(config, owner, "lease-inspect", keys)).pipe(
+      Effect.flatMap((result) => decodeOwners(result.stdout.trim())),
+      Effect.map((result) => result.owners),
+      Effect.mapError(
+        (cause) =>
+          new DeviceHost.DeviceHostError({
+            hostId: config.id,
+            step: "checking simulator ownership",
+            cause,
+          }),
+      ),
+    );
   yield* Effect.addFinalizer(() => stop);
   return {
     id: config.id,
+    acquireDevice: lease,
+    deviceOwners,
+    updateTools: (tools) =>
+      Effect.forEach(
+        tools,
+        (tool) => provide(bootstrap(config, owner, tool === "hub" ? "update-hub" : "update-agent")),
+        { discard: true },
+      ),
     summary: Effect.sync(() => summary),
     inspect: provide(probe(config, owner)).pipe(
       Effect.tap((value) =>
