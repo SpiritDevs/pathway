@@ -181,7 +181,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
     ]);
   });
 
-  it("puts collaboration, environments and Apple accounts in the Account group", () => {
+  it("puts collaboration, environments, Apple accounts and Xcode in the Account group", () => {
     expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Account")?.paths).toEqual([
       "/settings/members-teams",
       "/settings/company-members",
@@ -190,7 +190,12 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/calendars",
       "/settings/environments",
       "/settings/apple",
+      "/settings/xcode",
     ]);
+    expect(searchSettings("install xcode")[0]).toMatchObject({
+      id: "xcode-install",
+      to: "/settings/xcode",
+    });
     expect(searchSettings("app store connect")[0]).toMatchObject({
       id: "apple-api-key",
       to: "/settings/apple",

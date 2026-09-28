@@ -206,7 +206,7 @@ export function AppleAccountsSettings() {
 }
 
 /** Connected environments, primary first; a vanished pick falls back without being forgotten. */
-function useAppleEnvironmentSelection() {
+export function useAppleEnvironmentSelection() {
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const options = useMemo(
@@ -226,28 +226,28 @@ function useAppleEnvironmentSelection() {
   return { options, environmentId, select: setSelectedId };
 }
 
-function AppleEnvironmentPicker({
+export function AppleEnvironmentPicker({
   selection,
+  label = "Test and list apps on",
+  emptyMessage = "Connect to an environment to test keys and list apps.",
 }: {
   selection: ReturnType<typeof useAppleEnvironmentSelection>;
+  label?: string;
+  emptyMessage?: string;
 }) {
   if (selection.options.length === 0) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        Connect to an environment to test keys and list apps.
-      </p>
-    );
+    return <p className="text-xs text-muted-foreground">{emptyMessage}</p>;
   }
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
-      <span className="text-muted-foreground">Test and list apps on</span>
+      <span className="text-muted-foreground">{label}</span>
       <Select
         value={selection.environmentId}
         onValueChange={(value) => {
           if (value !== null) selection.select(value);
         }}
       >
-        <SelectTrigger size="sm" aria-label="Environment for Apple reads" className="w-auto">
+        <SelectTrigger size="sm" aria-label={label} className="w-auto">
           <SelectValue>
             {
               selection.options.find(

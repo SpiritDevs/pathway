@@ -6,7 +6,7 @@ Open **Settings → Apple accounts** to manage the Apple IDs, Developer teams an
 
 Choose **Add Apple ID** and enter the Apple ID email and an optional display name. You can add several Apple IDs, for example a personal one and one for work. Select an Apple ID in the list to see its details.
 
-Pathway does not sign in to your Apple ID yet, so a new Apple ID shows **Not verified yet**. Apple ID sign-in arrives with managed Xcode. You can rename an Apple ID at any time.
+Adding an Apple ID does not sign in to it, so a new Apple ID shows **Not verified yet**. You sign in from an environment when it needs your Apple ID, such as when you [install Xcode](xcode.md). You can rename an Apple ID at any time.
 
 ## Personal or shared with a company
 

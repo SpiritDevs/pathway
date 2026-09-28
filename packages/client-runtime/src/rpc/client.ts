@@ -5,6 +5,8 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
 } from "@spiritdevs/contracts";
+import { APPLE_WS_METHODS } from "@spiritdevs/contracts/apple";
+import { XCODE_WS_METHODS } from "@spiritdevs/contracts/xcode";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
@@ -67,7 +69,9 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.previewAutomationConnect
   | typeof WS_METHODS.subscribeVcsStatus
   | typeof WS_METHODS.terminalAttach
-  | typeof COMPUTER_WS_METHODS.subscribeEvents;
+  | typeof COMPUTER_WS_METHODS.subscribeEvents
+  | typeof APPLE_WS_METHODS.appleIdSubscribe
+  | typeof XCODE_WS_METHODS.subscribe;
 
 export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.cloudInstallRelayClient

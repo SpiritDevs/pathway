@@ -2156,6 +2156,17 @@ function OpenCommandPaletteDialog(props: {
       await navigate({ to: "/settings/notifications" });
     },
   });
+  actionItems.push({
+    kind: "action",
+    value: "action:xcode-settings",
+    searchTerms: ["install xcode", "xcode", "simulator", "ios", "runtimes", "xcode-select"],
+    title: "Open Xcode settings",
+    description: "Install Xcode, switch versions and add platforms on an environment's Mac",
+    icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/settings/xcode" });
+    },
+  });
   if (activeThread && alertMutations && alertPolicies !== null && alertPoliciesReady)
     actionItems.push({
       kind: "action",
