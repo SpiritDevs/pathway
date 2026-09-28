@@ -3,6 +3,11 @@ import { createPortal } from "react-dom";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { cn } from "~/lib/utils";
+import {
+  resolveInlineRightPanelHostSelector,
+  useIsSplitWindow,
+  usePaneId,
+} from "~/panes/usePaneFocus";
 
 const INLINE_RIGHT_PANEL_EXIT_DURATION_MS = 180;
 
@@ -56,12 +61,14 @@ export function InlineRightPanelPresence({
   );
 }
 
+/** Renders the panel beside the page, in the host that belongs to the page's pane. */
 export function InlineRightPanelPortal(props: { children: ReactNode; open: boolean }) {
+  const hostSelector = resolveInlineRightPanelHostSelector(usePaneId(), useIsSplitWindow());
   const [host, setHost] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
-    setHost(document.querySelector<HTMLElement>("[data-inline-right-panel-host]"));
-  }, []);
+    setHost(document.querySelector<HTMLElement>(hostSelector));
+  }, [hostSelector]);
 
   if (host === null) return null;
 

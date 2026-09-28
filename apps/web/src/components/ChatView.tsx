@@ -209,6 +209,7 @@ import {
   shouldMountRightPanelSheet,
   shouldPresentRightPanelAsSheet,
 } from "../rightPanelLayout";
+import { isPaneFocused, useIsNarrowPane, useIsSplitWindow, usePaneId } from "../panes/usePaneFocus";
 import {
   isRemoteBrowserSurface,
   pullRequestSurfaceId,
@@ -1843,9 +1844,17 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
-  const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const paneId = usePaneId();
+  const splitWindow = useIsSplitWindow();
+  const viewportRequiresRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const narrowPane = useIsNarrowPane();
+  const shouldUseRightPanelSheet = viewportRequiresRightPanelSheet || narrowPane;
+  // The shell's terminal hosts sit below the whole pane row, so a split window
+  // keeps each pane's terminal inside its own page.
+  const terminalCardDetached = !shouldUseRightPanelSheet && !splitWindow;
+  // Split, the right panel lives inside this page's pane, so the pane bounds it.
   const [workspaceLayoutRef, workspaceLayoutWidth] = useElementWidth<HTMLDivElement>(
-    "[data-app-workspace-main-row]",
+    splitWindow ? "[data-pane-frame]" : "[data-app-workspace-main-row]",
   );
   const previewPanelInlineSize = usePreviewPanelInlineSize(workspaceLayoutWidth ?? undefined);
   const [conversationLayoutRef, conversationLayoutWidth] = useElementWidth<HTMLDivElement>();
@@ -5151,10 +5160,11 @@ function ChatViewContent(props: ChatViewProps) {
   useEffect(
     () =>
       subscribePreviewAction((action) => {
+        if (!isPaneFocused(paneId)) return;
         if (action === "toggle-panel") togglePreviewPanel();
         if (action === "toggle-browser-panel") toggleBrowserPanel();
       }),
-    [toggleBrowserPanel, togglePreviewPanel],
+    [paneId, toggleBrowserPanel, togglePreviewPanel],
   );
   // Debounce *showing* the scroll-to-bottom pill so it doesn't flash during
   // thread switches. LegendList fires scroll events with isAtEnd=false while
@@ -6020,6 +6030,7 @@ function ChatViewContent(props: ChatViewProps) {
     () =>
       onOpenThreadWorkspaceMove((target) => {
         if (
+          isPaneFocused(paneId) &&
           activeThreadRef !== null &&
           target.environmentId === activeThreadRef.environmentId &&
           target.threadId === activeThreadRef.threadId
@@ -6027,7 +6038,7 @@ function ChatViewContent(props: ChatViewProps) {
           setWorkspaceMoveOpen(true);
         }
       }),
-    [activeThreadRef],
+    [activeThreadRef, paneId],
   );
   // Once revealed for a given mismatch, the banner stays mounted until the
   // mismatch changes or resolves, so clearing the draft doesn't flicker it.
@@ -6639,6 +6650,7 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
+      if (!isPaneFocused(paneId)) return;
       const eventFromSideChat = eventPathContainsSelector(event, SIDE_CHAT_SURFACE_SELECTOR);
       if (!shortcutScopeOwnsEvent(isPanelPresentation ? "side-chat" : "page", eventFromSideChat)) {
         return;
@@ -6816,6 +6828,7 @@ function ChatViewContent(props: ChatViewProps) {
     toggleTerminalVisibility,
     composerRef,
     isPanelPresentation,
+    paneId,
     revealPanelThreadAsPage,
   ]);
 
@@ -10547,7 +10560,7 @@ function ChatViewContent(props: ChatViewProps) {
 
         {!isPanelPresentation ? (
           <TerminalCardPortal
-            detached={!shouldUseRightPanelSheet}
+            detached={terminalCardDetached}
             fullWidth={terminalUiState.terminalFullWidth}
           >
             {mountedTerminalThreadRefs.map(
@@ -10570,7 +10583,7 @@ function ChatViewContent(props: ChatViewProps) {
                   closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
                   keybindings={keybindings}
                   onAddTerminalContext={addTerminalContextToDraft}
-                  detached={!shouldUseRightPanelSheet}
+                  detached={terminalCardDetached}
                 />
               ),
             )}

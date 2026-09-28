@@ -73,6 +73,7 @@ import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { isPaneFocused, usePaneId } from "../../panes/usePaneFocus";
 
 function KeybindingPill({ value }: { value: string }) {
   const parts = value.split("+");
@@ -1105,9 +1106,11 @@ export function KeybindingsSettingsPanel() {
   const rows = useMemo(() => buildKeybindingRows(keybindings, query), [keybindings, query]);
   const commandOptions = useMemo(() => buildKeybindingCommandOptions(keybindings), [keybindings]);
   const whenVariables = useMemo(() => buildWhenVariableOptions(), []);
+  const paneId = usePaneId();
 
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (!isPaneFocused(paneId)) return;
       const isMod = event.metaKey || event.ctrlKey;
       if (!isMod || event.altKey || event.key.toLowerCase() !== "f") return;
 
@@ -1129,7 +1132,7 @@ export function KeybindingsSettingsPanel() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [paneId]);
 
   const openKeybindingsFile = useCallback(() => {
     if (!keybindingsConfigPath) return;

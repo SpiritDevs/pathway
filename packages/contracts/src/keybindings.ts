@@ -65,6 +65,15 @@ export const CALENDAR_KEYBINDING_COMMANDS = [
 ] as const;
 export type CalendarKeybindingCommand = (typeof CALENDAR_KEYBINDING_COMMANDS)[number];
 
+/** Split panes in the main window. Inert in a torn-out window, which never splits. */
+export const PANE_KEYBINDING_COMMANDS = [
+  "pane.split",
+  "pane.focusLeft",
+  "pane.focusRight",
+  "pane.close",
+] as const;
+export type PaneKeybindingCommand = (typeof PANE_KEYBINDING_COMMANDS)[number];
+
 export const BUILT_IN_KEYBINDING_COMMANDS = [
   "sidebar.toggle",
   "orchestrator.toggle",
@@ -93,6 +102,7 @@ export const BUILT_IN_KEYBINDING_COMMANDS = [
   "chat.new",
   "chat.newLocal",
   "editor.openFavorite",
+  ...PANE_KEYBINDING_COMMANDS,
   ...MODEL_PICKER_KEYBINDING_COMMANDS,
   ...THREAD_KEYBINDING_COMMANDS,
   ...CALENDAR_KEYBINDING_COMMANDS,

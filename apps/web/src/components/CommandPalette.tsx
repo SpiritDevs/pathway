@@ -62,12 +62,21 @@ import {
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@spiritdevs/contracts";
 import { CompanyId } from "@spiritdevs/contracts/company";
-import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
+import {
+  RouterContextProvider,
+  useLocation,
+  useNavigate,
+  useParams,
+  useRouter,
+} from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
+  AppWindowIcon,
   ArrowLeftIcon,
+  ArrowRightIcon,
   CameraIcon,
   CircleDotIcon,
+  Columns2Icon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FocusIcon,
@@ -82,6 +91,7 @@ import {
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
+  XIcon,
 } from "lucide-react";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 import {
@@ -203,6 +213,24 @@ import { Kbd, KbdGroup } from "./ui/kbd";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
+import { useFocusedPaneRouter } from "../panes/usePaneFocus";
+import { usePaneKeybindings } from "../panes/usePaneKeybindings";
+import {
+  closeAllSidePanes,
+  closeFocusedPane,
+  openDestinationInPane,
+  splitFocusedPane,
+} from "../panes/paneActions";
+import { PANE_DESTINATION_LABELS, type PaneDestination } from "../panes/paneDestinations";
+import { isSplit } from "../panes/paneLayout";
+import { usePaneStore } from "../panes/paneStore";
+import {
+  canOpenPageWindows,
+  closeAllPageWindows,
+  openPageWindow,
+  usePageWindows,
+} from "../panes/pageWindows";
+import { isChildWindow } from "../panes/windowMode";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -235,6 +263,12 @@ import {
 import { useEnvironmentControl } from "../cloud/useEnvironmentControl";
 import { CONVERSATIONS_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
 
+const PALETTE_PANE_DESTINATIONS = (
+  Object.keys(PANE_DESTINATION_LABELS) as Array<keyof typeof PANE_DESTINATION_LABELS>
+).filter((destination): destination is PaneDestination => destination !== "orchestrator");
+const PALETTE_PANE_DESTINATION_LABELS = PALETTE_PANE_DESTINATIONS.map(
+  (destination) => PANE_DESTINATION_LABELS[destination],
+);
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 const EMPTY_REPOSITORY_CHOICE_CANDIDATES: ReadonlyArray<SidebarProjectSnapshot> = [];
 const LUCIDE_ICON_NAMES = new Set<string>(iconNames);
@@ -579,7 +613,22 @@ async function toggleCurrentThreadAlerts(environmentId: string, threadId: string
   });
 }
 
+/**
+ * Mounted around the app shell, outside every pane, so it reads and navigates
+ * the focused pane's router. The shell itself goes back under the app router.
+ */
 export function CommandPalette({ children }: { children: ReactNode }) {
+  const appRouter = useRouter();
+  return (
+    <RouterContextProvider router={useFocusedPaneRouter(appRouter)}>
+      <FocusedPaneCommandPalette>
+        <RouterContextProvider router={appRouter}>{children}</RouterContextProvider>
+      </FocusedPaneCommandPalette>
+    </RouterContextProvider>
+  );
+}
+
+function FocusedPaneCommandPalette({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reduceCommandPaletteUiState, {
     open: false,
     mode: "command",
@@ -595,6 +644,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
   const pathname = useLocation({ select: (location) => location.pathname });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  usePaneKeybindings();
   const { activeFocusId, setActiveFocusId, visibleFocuses } = useFocusSelection();
   const { theme, themeHalves, resolvedTheme } = useTheme();
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
@@ -2384,6 +2434,112 @@ function OpenCommandPaletteDialog(props: {
       });
     },
   });
+
+  // Panes live in the main window only; the palette runs under the focused pane's router.
+  const paneSplit = usePaneStore((state) => isSplit(state.layout));
+  const pageWindowCount = usePageWindows().length;
+  const focusedPaneHref = useLocation({ select: (location) => location.href });
+  if (!isChildWindow) {
+    actionItems.push({
+      kind: "action",
+      value: "action:pane-split",
+      searchTerms: ["split", "pane", "panel", "side by side", "duplicate"],
+      title: "Split panel",
+      icon: <Columns2Icon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "pane.split",
+      run: async () => splitFocusedPane(),
+    });
+    actionItems.push({
+      kind: "submenu",
+      value: "action:open-in-panel",
+      searchTerms: [
+        "open",
+        "panel",
+        "pane",
+        "split",
+        "side by side",
+        ...PALETTE_PANE_DESTINATION_LABELS,
+      ],
+      title: "Open page in panel…",
+      icon: <Columns2Icon className={ITEM_ICON_CLASS} />,
+      addonIcon: <Columns2Icon className={ADDON_ICON_CLASS} />,
+      groups: (["right", "left"] as const).map((edge) => ({
+        value: `panel-${edge}`,
+        label: edge === "right" ? "Right panel" : "Left panel",
+        items: PALETTE_PANE_DESTINATIONS.map(
+          (destination): CommandPaletteActionItem => ({
+            kind: "action",
+            value: `action:open-in-panel:${edge}:${destination}`,
+            searchTerms: [PANE_DESTINATION_LABELS[destination], edge],
+            title: `Open ${PANE_DESTINATION_LABELS[destination]} in ${edge} panel`,
+            icon: <Columns2Icon className={ITEM_ICON_CLASS} />,
+            run: async () => openDestinationInPane(destination, edge),
+          }),
+        ),
+      })),
+    });
+  }
+  if (!isChildWindow && paneSplit) {
+    actionItems.push(
+      {
+        kind: "action",
+        value: "action:pane-focus-left",
+        searchTerms: ["focus", "pane", "panel", "left", "previous"],
+        title: "Focus panel on the left",
+        icon: <ArrowLeftIcon className={ITEM_ICON_CLASS} />,
+        shortcutCommand: "pane.focusLeft",
+        run: async () => usePaneStore.getState().focusAdjacentPane("left"),
+      },
+      {
+        kind: "action",
+        value: "action:pane-focus-right",
+        searchTerms: ["focus", "pane", "panel", "right", "next"],
+        title: "Focus panel on the right",
+        icon: <ArrowRightIcon className={ITEM_ICON_CLASS} />,
+        shortcutCommand: "pane.focusRight",
+        run: async () => usePaneStore.getState().focusAdjacentPane("right"),
+      },
+      {
+        kind: "action",
+        value: "action:pane-close",
+        searchTerms: ["close", "pane", "panel"],
+        title: "Close panel",
+        icon: <XIcon className={ITEM_ICON_CLASS} />,
+        shortcutCommand: "pane.close",
+        run: async () => closeFocusedPane(),
+      },
+      {
+        kind: "action",
+        value: "action:pane-close-all",
+        searchTerms: ["close", "all", "panes", "panels", "unsplit"],
+        title: "Close all panels",
+        icon: <XIcon className={ITEM_ICON_CLASS} />,
+        run: async () => closeAllSidePanes(),
+      },
+    );
+  }
+  if (canOpenPageWindows) {
+    actionItems.push({
+      kind: "action",
+      value: "action:open-page-in-window",
+      searchTerms: ["window", "new window", "tear out", "pop out", "detach"],
+      title: "Open current page in new window",
+      icon: <AppWindowIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await openPageWindow(focusedPaneHref);
+      },
+    });
+  }
+  if (pageWindowCount > 0) {
+    actionItems.push({
+      kind: "action",
+      value: "action:close-all-windows",
+      searchTerms: ["close", "all", "windows"],
+      title: "Close all windows",
+      icon: <XIcon className={ITEM_ICON_CLASS} />,
+      run: async () => closeAllPageWindows(),
+    });
+  }
 
   actionItems.push({
     kind: "action",

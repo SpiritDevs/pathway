@@ -1643,8 +1643,12 @@ describe("DesktopWindow torn-out windows", () => {
         child.isFocused.mockReturnValue(true);
 
         yield* desktopWindow.dispatchMenuAction("open-settings");
+        yield* desktopWindow.dispatchMenuAction("pane-split");
         assert.equal(child.send.mock.calls.length, 0);
-        assert.deepEqual(scenario.main.send.mock.calls, [[MENU_ACTION_CHANNEL, "open-settings"]]);
+        assert.deepEqual(scenario.main.send.mock.calls, [
+          [MENU_ACTION_CHANNEL, "open-settings"],
+          [MENU_ACTION_CHANNEL, "pane-split"],
+        ]);
       }).pipe(Effect.provide(scenario.layer));
     }),
   );

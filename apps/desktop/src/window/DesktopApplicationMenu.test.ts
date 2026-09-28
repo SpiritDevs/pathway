@@ -213,7 +213,7 @@ describe("DesktopApplicationMenu", () => {
     }),
   );
 
-  it.effect("closes every torn-out window from the Window menu", () =>
+  it.effect("offers pane and window items that route through DesktopWindow", () =>
     Effect.gen(function* () {
       const selectedActions: Array<string> = [];
       const applicationMenuTemplate =
@@ -228,12 +228,21 @@ describe("DesktopApplicationMenu", () => {
         if (typeof item?.click !== "function") throw new Error(`Expected "${label}" to click.`);
         item.click({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
       };
+      const viewMenu = template.find((item) => item.label === "View");
+      click(viewMenu, "Split Panel");
+      click(viewMenu, "Close Panel");
+      click(viewMenu, "Close All Panels");
       click(
         template.find((item) => item.role === "windowMenu"),
         "Close All Pathway Windows",
       );
 
-      assert.deepEqual(selectedActions, ["close-all-windows"]);
+      assert.deepEqual(selectedActions, [
+        "pane-split",
+        "pane-close",
+        "pane-close-all",
+        "close-all-windows",
+      ]);
     }),
   );
 

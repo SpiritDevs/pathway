@@ -146,6 +146,7 @@ import {
   resolveIssuesListDrop,
   type IssuesListDrop,
 } from "./issuesListDnd.logic";
+import { isPaneFocused, usePaneId } from "../../panes/usePaneFocus";
 
 const TABS: ReadonlyArray<{ readonly value: IssuesTab; readonly label: string }> = [
   { value: "active", label: "Active" },
@@ -469,11 +470,14 @@ function IssuesListView({
     }
   });
 
+  const paneId = usePaneId();
   useEffect(() => {
-    const listener = (event: globalThis.KeyboardEvent) => handleKeyDown(event);
+    const listener = (event: globalThis.KeyboardEvent) => {
+      if (isPaneFocused(paneId)) handleKeyDown(event);
+    };
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
-  }, []);
+  }, [paneId]);
 
   // Only the keyboard scrolls: a click already happened on a visible row, and yanking it to the
   // top of the viewport under the pointer is disorienting.

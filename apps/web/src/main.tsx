@@ -10,6 +10,7 @@ import { ManagedRelayAuthProvider } from "./cloud/managedAuth";
 import { hasClerkPublicConfig, hasCloudPublicConfig } from "./cloud/publicConfig";
 import { CloudSyncRuntimeMount } from "./cloud/syncRuntimeMount";
 import { getRouter } from "./router";
+import { registerPrimaryRouter } from "./panes/paneRouters";
 import {
   syncDocumentElectronPlatformClasses,
   syncDocumentWindowControlsOverlayClass,
@@ -25,6 +26,7 @@ const ElectronClerkProvider = React.lazy(() => import("./components/clerk/Electr
 const history = isElectron ? createHashHistory() : createBrowserHistory();
 
 const router = getRouter(history);
+registerPrimaryRouter(router);
 
 if (isElectron) {
   syncDocumentElectronPlatformClasses(navigator.platform);

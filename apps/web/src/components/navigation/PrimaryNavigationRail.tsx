@@ -1,21 +1,25 @@
 import { OrchestratorAvatar } from "../orchestrator/OrchestratorAvatar";
 import {
   DndContext,
+  DragOverlay,
   PointerSensor,
   closestCenter,
+  useDraggable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
+  type DragMoveEvent,
+  type DragStartEvent,
+  type Modifier,
 } from "@dnd-kit/core";
-import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import {
   SortableContext,
   arrayMove,
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import type { ContextMenuItem } from "@spiritdevs/contracts";
+import { CSS, getEventCoordinates } from "@dnd-kit/utilities";
 import {
   BotIcon,
   CalendarDaysIcon,
@@ -42,17 +46,53 @@ import {
   type ComponentProps,
   type MouseEvent,
 } from "react";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { createPortal } from "react-dom";
+import { useLocation, useNavigate, useRouterState } from "@tanstack/react-router";
 
 import { useCalendarViewer } from "../../cloud/calendarReadModel";
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { readLocalApi } from "../../localApi";
+import {
+  canOpenPageWindows,
+  closeAllPageWindows,
+  closePageWindow,
+  usePageWindows,
+  type PageWindow,
+} from "../../panes/pageWindows";
+import {
+  closeAllSidePanes,
+  closePaneById,
+  openDestinationInPane,
+  openDestinationInWindow,
+  readPaneHref,
+} from "../../panes/paneActions";
+import type { PaneDestination } from "../../panes/paneDestinations";
+import { isSplit, PRIMARY_PANE_ID } from "../../panes/paneLayout";
+import { getPaneRouter } from "../../panes/paneRouters";
+import { usePaneStore } from "../../panes/paneStore";
+import {
+  beginRailDrag,
+  endRailDrag,
+  handleRailDragEndedOutsideWindow,
+  resolveRailDragTarget,
+  updateRailDragTarget,
+  useRailDragStore,
+  type RailDragGeometry,
+  type RailDragTarget,
+} from "../../panes/railDrag";
 import { useEmailUnreadTotal } from "../../state/email";
 import { SidebarProviderUpdatePill } from "../sidebar/SidebarProviderUpdatePill";
 import { SidebarUpdatePill } from "../sidebar/SidebarUpdatePill";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import {
+  buildRailPageMenu,
+  findPanesShowing,
+  findWindowsShowing,
+  resolveHrefDestination,
+  type RailPageMenuAction,
+} from "./railPageMenu";
 
 export const PRIMARY_NAVIGATION_COMPACT_WIDTH = "3.5rem";
 export const PRIMARY_NAVIGATION_EXPANDED_WIDTH = "13rem";
@@ -206,6 +246,10 @@ type NavigationRailButtonProps = {
   reorderable?: boolean;
   /** Unread work behind this destination; zero renders nothing. */
   badgeCount?: number;
+  /** Also showing in a pane other than the focused one. */
+  openInPane?: boolean;
+  /** Also showing in a page window. */
+  openInWindow?: boolean;
   onClick?: ComponentProps<typeof Button>["onClick"];
   onContextMenu?: ComponentProps<typeof Button>["onContextMenu"];
 };
@@ -226,6 +270,38 @@ export function formatNavigationBadgeCount(count: number): string {
   return count > 99 ? "99+" : String(count);
 }
 
+/** Pane and window pips, drawn under the icon when compact and after the label when expanded. */
+function OpenPlacementMarks({
+  expanded,
+  openInPane,
+  openInWindow,
+}: {
+  expanded: boolean;
+  openInPane: boolean;
+  openInWindow: boolean;
+}) {
+  if (!openInPane && !openInWindow) return null;
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "pointer-events-none flex items-center gap-0.5",
+        expanded ? "shrink-0" : "absolute bottom-0.5 left-1/2 -translate-x-1/2",
+      )}
+    >
+      {openInPane ? <span className="size-1.5 rounded-full bg-primary" /> : null}
+      {openInWindow ? <span className="size-1.5 rounded-full border border-primary" /> : null}
+    </span>
+  );
+}
+
+function describeOpenPlacements(openInPane: boolean, openInWindow: boolean): string {
+  if (openInPane && openInWindow) return " · Open in a panel and a window";
+  if (openInPane) return " · Open in a panel";
+  if (openInWindow) return " · Open in a window";
+  return "";
+}
+
 function NavigationRailButton({
   active = false,
   expanded,
@@ -234,6 +310,8 @@ function NavigationRailButton({
   label,
   reorderable = false,
   badgeCount = 0,
+  openInPane = false,
+  openInWindow = false,
   onClick,
   onContextMenu,
 }: NavigationRailButtonProps) {
@@ -271,6 +349,11 @@ function NavigationRailButton({
               {expanded ? (
                 <span className="min-w-0 flex-1 truncate text-left text-sm">{label}</span>
               ) : null}
+              <OpenPlacementMarks
+                expanded={expanded}
+                openInPane={openInPane}
+                openInWindow={openInWindow}
+              />
               {badgeLabel === null ? null : expanded ? (
                 <span className="shrink-0 rounded-full bg-sidebar-accent px-1.5 text-[11px] leading-4 font-medium text-sidebar-accent-foreground tabular-nums">
                   {badgeLabel}
@@ -287,6 +370,7 @@ function NavigationRailButton({
         />
         <TooltipPopup side="right" sideOffset={8}>
           {badgeLabel === null ? label : `${label} · ${badgeLabel} unread`}
+          {describeOpenPlacements(openInPane, openInWindow)}
           {reorderable ? " · Drag to reorder" : null}
         </TooltipPopup>
       </Tooltip>
@@ -294,18 +378,25 @@ function NavigationRailButton({
   );
 }
 
+type RailPageButtonProps = {
+  active: boolean;
+  expanded: boolean;
+  openInPane: boolean;
+  openInWindow: boolean;
+  onClick: ComponentProps<typeof Button>["onClick"];
+  onContextMenu: ComponentProps<typeof Button>["onContextMenu"];
+};
+
 function SortableNavigationRailButton({
   active,
   expanded,
   item,
+  openInPane,
+  openInWindow,
   onClick,
   onContextMenu,
-}: {
-  active: boolean;
-  expanded: boolean;
+}: RailPageButtonProps & {
   item: MobileNavigationItem & { destination: MovablePrimaryNavigationDestination };
-  onClick: ComponentProps<typeof Button>["onClick"];
-  onContextMenu: ComponentProps<typeof Button>["onContextMenu"];
 }) {
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.destination,
@@ -326,10 +417,116 @@ function SortableNavigationRailButton({
         label={item.label}
         onClick={onClick}
         onContextMenu={onContextMenu}
+        openInPane={openInPane}
+        openInWindow={openInWindow}
         reorderable
       />
     </div>
   );
+}
+
+/** A fixed rail page that can still be dragged out to open beside the others. It never moves in the rail. */
+function DraggableNavigationRailButton({
+  item,
+  ...props
+}: RailPageButtonProps & { item: MobileNavigationItem & { destination: PaneDestination } }) {
+  const { listeners, setNodeRef } = useDraggable({ id: item.destination });
+  return (
+    <div ref={setNodeRef} {...listeners} className="w-full touch-none">
+      <NavigationRailButton
+        {...props}
+        badgeCount={item.badgeCount ?? 0}
+        icon={item.icon}
+        label={item.label}
+      />
+    </div>
+  );
+}
+
+/** Follows the pointer once a drag leaves the rail, where the rail's own overflow would clip the button. */
+function RailDragChip({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+  return (
+    <div className="pointer-events-none inline-flex items-center gap-2 rounded-lg border border-border bg-popover px-2.5 py-1.5 text-sm text-popover-foreground shadow-lg">
+      <Icon className="size-4" />
+      {label}
+    </div>
+  );
+}
+
+type DragPointerSource = { readonly activatorEvent: Event | null };
+
+function resolveDragTarget(
+  geometry: RailDragGeometry | null,
+  activatorEvent: Event | null,
+  delta: { readonly x: number; readonly y: number },
+): RailDragTarget {
+  const origin = activatorEvent ? getEventCoordinates(activatorEvent) : null;
+  if (!geometry || !origin) return { kind: "rail" };
+  return resolveRailDragTarget({ x: origin.x + delta.x, y: origin.y + delta.y }, geometry);
+}
+
+function readDragScreenPoint(
+  { activatorEvent }: DragPointerSource,
+  delta: { readonly x: number; readonly y: number },
+) {
+  if (!(activatorEvent instanceof MouseEvent)) return null;
+  return { x: activatorEvent.screenX + delta.x, y: activatorEvent.screenY + delta.y };
+}
+
+function measureRailDragGeometry(rail: HTMLElement | null): RailDragGeometry | null {
+  const row = document.querySelector("[data-pane-row]")?.getBoundingClientRect();
+  if (!rail || !row) return null;
+  return {
+    railRight: rail.getBoundingClientRect().right,
+    row: { left: row.left, top: row.top, width: row.width, height: row.height },
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+  };
+}
+
+const PRIMARY_PANE_TOKEN = "@primary";
+
+/**
+ * Pages showing somewhere other than the focused pane: in another pane of the
+ * split, or in a page window. The focused pane's page already has the active marker.
+ */
+function useOpenPlacements(pageWindows: readonly PageWindow[]) {
+  // The app router, not the focused pane's: the primary pane may be one of the others.
+  const primaryRouter = getPaneRouter(PRIMARY_PANE_ID);
+  const primaryDestination = useRouterState({
+    ...(primaryRouter ? { router: primaryRouter } : {}),
+    select: (state) => resolvePrimaryNavigationDestination(state.location.pathname),
+  });
+  const otherPanesKey = usePaneStore((state) => {
+    const { panes, focusedPaneId } = state.layout;
+    if (panes.length < 2) return "";
+    return panes
+      .filter((entry) => entry.id !== focusedPaneId)
+      .map((entry) =>
+        entry.id === PRIMARY_PANE_ID ? PRIMARY_PANE_TOKEN : resolveHrefDestination(entry.href),
+      )
+      .join(",");
+  });
+  const inPane = useMemo(
+    () =>
+      new Set(
+        otherPanesKey
+          .split(",")
+          .filter(Boolean)
+          .map((token) => (token === PRIMARY_PANE_TOKEN ? primaryDestination : token)),
+      ),
+    [otherPanesKey, primaryDestination],
+  );
+  const inWindow = useMemo(
+    () => new Set<string>(pageWindows.map((entry) => resolveHrefDestination(entry.href))),
+    [pageWindows],
+  );
+  return { inPane, inWindow };
+}
+
+function isMovableDestination(
+  destination: PaneDestination,
+): destination is MovablePrimaryNavigationDestination {
+  return (PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS as readonly string[]).includes(destination);
 }
 
 export function MobileNavigationToolbar({
@@ -499,7 +696,14 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
       activationConstraint: { distance: 6 },
     }),
   );
-  const draggedDestinationRef = useRef<MovablePrimaryNavigationDestination | null>(null);
+  const draggedDestinationRef = useRef<PaneDestination | null>(null);
+  const railRef = useRef<HTMLElement>(null);
+  const dragGeometryRef = useRef<RailDragGeometry | null>(null);
+  const pageWindows = usePageWindows();
+  const openPlacements = useOpenPlacements(pageWindows);
+  const splitDragDestination = useRailDragStore((state) =>
+    state.phase === "rail" ? null : state.destination,
+  );
   const rememberedThreadRouteRef = useRef<RememberedThreadRoute | null>(
     resolveRememberedThreadRoute(pathname, null),
   );
@@ -704,9 +908,64 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
     }, 0);
   }, []);
 
+  // Over the rail a drag reorders it, so it stays on the vertical axis and collides
+  // with its neighbours. Past the rail's edge it opens the page beside the others,
+  // so it follows the pointer freely and nothing in the rail makes room for it.
+  const dragModifiers = useMemo<Modifier[]>(
+    () => [
+      ({ activatorEvent, transform }) =>
+        resolveDragTarget(dragGeometryRef.current, activatorEvent, transform).kind === "rail"
+          ? { ...transform, x: 0 }
+          : transform,
+    ],
+    [],
+  );
+  const collisionDetection = useCallback<CollisionDetection>((args) => {
+    if (!isMovableDestination(args.active.id as PaneDestination)) return [];
+    const geometry = dragGeometryRef.current;
+    const pointer = args.pointerCoordinates;
+    if (geometry && pointer && resolveRailDragTarget(pointer, geometry).kind !== "rail") return [];
+    return closestCenter(args);
+  }, []);
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    const destination = event.active.id as PaneDestination;
+    draggedDestinationRef.current = destination;
+    dragGeometryRef.current = measureRailDragGeometry(railRef.current);
+    beginRailDrag(destination, dragGeometryRef.current?.row ?? null);
+  }, []);
+
+  const handleDragMove = useCallback((event: DragMoveEvent) => {
+    updateRailDragTarget(
+      resolveDragTarget(dragGeometryRef.current, event.activatorEvent, event.delta),
+    );
+  }, []);
+
+  const handleDragCancel = useCallback(() => {
+    dragGeometryRef.current = null;
+    endRailDrag();
+    clearDraggedDestinationAfterClick();
+  }, [clearDraggedDestinationAfterClick]);
+
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
-      const destination = event.active.id as MovablePrimaryNavigationDestination;
+      const destination = event.active.id as PaneDestination;
+      const target = resolveDragTarget(dragGeometryRef.current, event.activatorEvent, event.delta);
+      dragGeometryRef.current = null;
+      endRailDrag();
+      clearDraggedDestinationAfterClick();
+
+      if (target.kind === "outside") {
+        const screenPoint = readDragScreenPoint(event, event.delta);
+        if (screenPoint) handleRailDragEndedOutsideWindow(destination, screenPoint);
+        return;
+      }
+      if (target.kind === "pane") {
+        if (target.zone === "center") navigationItemsByDestination[destination].onNavigate();
+        else openDestinationInPane(destination, target.zone);
+        return;
+      }
+      if (!isMovableDestination(destination)) return;
       const overDestination = event.over?.id as MovablePrimaryNavigationDestination | undefined;
       if (overDestination && destination !== overDestination) {
         const fromIndex = viewOrder.indexOf(destination);
@@ -715,45 +974,71 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
           persistViewOrder(arrayMove([...viewOrder], fromIndex, toIndex));
         }
       }
-      clearDraggedDestinationAfterClick();
     },
-    [clearDraggedDestinationAfterClick, persistViewOrder, viewOrder],
+    [clearDraggedDestinationAfterClick, navigationItemsByDestination, persistViewOrder, viewOrder],
   );
 
-  const handleViewContextMenu = useCallback(
-    async (
-      event: MouseEvent<HTMLButtonElement>,
-      destination: MovablePrimaryNavigationDestination,
-    ) => {
+  const handlePageContextMenu = useCallback(
+    async (event: MouseEvent<HTMLButtonElement>, destination: PaneDestination) => {
       event.preventDefault();
       event.stopPropagation();
       const api = readLocalApi();
       if (!api) return;
 
-      const index = viewOrder.indexOf(destination);
-      const items: readonly ContextMenuItem<"move-up" | "move-down">[] = [
-        { id: "move-up", label: "Move up", disabled: index <= 0 },
-        { id: "move-down", label: "Move down", disabled: index >= viewOrder.length - 1 },
-      ];
-      const action = await api.contextMenu.show(items, {
+      const { layout } = usePaneStore.getState();
+      const index = isMovableDestination(destination) ? viewOrder.indexOf(destination) : -1;
+      const items = buildRailPageMenu({
+        canOpenWindows: canOpenPageWindows,
+        split: isSplit(layout),
+        panes: findPanesShowing(
+          destination,
+          layout.panes.map((entry) => ({ id: entry.id, href: readPaneHref(entry.id) })),
+        ),
+        windows: findWindowsShowing(destination, pageWindows),
+        anyWindows: pageWindows.length > 0,
+        move:
+          index < 0 ? null : { canMoveUp: index > 0, canMoveDown: index < viewOrder.length - 1 },
+      });
+      const action = await api.contextMenu.show<RailPageMenuAction>(items, {
         x: event.clientX,
         y: event.clientY,
       });
       if (!action) return;
-      persistViewOrder(
-        movePrimaryNavigationDestination(
-          viewOrder,
-          destination,
-          action === "move-up" ? "up" : "down",
-        ),
-      );
+      if (action === "open-left" || action === "open-right") {
+        openDestinationInPane(destination, action === "open-left" ? "left" : "right");
+      } else if (action === "open-window") {
+        void openDestinationInWindow(destination);
+      } else if (action === "close-all-panes") {
+        closeAllSidePanes();
+      } else if (action === "close-all-windows") {
+        closeAllPageWindows();
+      } else if (action.startsWith("close-pane:")) {
+        closePaneById(action.slice("close-pane:".length));
+      } else if (action.startsWith("close-window:")) {
+        closePageWindow(action.slice("close-window:".length));
+      } else if (
+        (action === "move-up" || action === "move-down") &&
+        isMovableDestination(destination)
+      ) {
+        persistViewOrder(
+          movePrimaryNavigationDestination(
+            viewOrder,
+            destination,
+            action === "move-up" ? "up" : "down",
+          ),
+        );
+      }
     },
-    [persistViewOrder, viewOrder],
+    [pageWindows, persistViewOrder, viewOrder],
   );
+
+  const splitDragItem =
+    splitDragDestination === null ? null : navigationItemsByDestination[splitDragDestination];
 
   return (
     <>
       <aside
+        ref={railRef}
         aria-label="Primary navigation"
         className="relative z-20 hidden h-dvh w-(--primary-navigation-rail-width) shrink-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-linear motion-reduce:transition-none md:flex"
         data-expanded={expanded}
@@ -767,24 +1052,30 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
             expanded ? "items-stretch" : "items-center",
           )}
         >
-          <NavigationRailButton
-            active={activeDestination === "dashboard"}
-            expanded={expanded}
-            icon={navigationItemsByDestination.dashboard.icon}
-            label={navigationItemsByDestination.dashboard.label}
-            onClick={navigationItemsByDestination.dashboard.onNavigate}
-          />
           <DndContext
-            collisionDetection={closestCenter}
-            modifiers={[restrictToVerticalAxis]}
+            collisionDetection={collisionDetection}
+            modifiers={dragModifiers}
             sensors={sensors}
-            onDragCancel={clearDraggedDestinationAfterClick}
+            onDragCancel={handleDragCancel}
             onDragEnd={handleDragEnd}
-            onDragStart={(event) => {
-              draggedDestinationRef.current = event.active
-                .id as MovablePrimaryNavigationDestination;
-            }}
+            onDragMove={handleDragMove}
+            onDragStart={handleDragStart}
           >
+            <DraggableNavigationRailButton
+              active={activeDestination === "dashboard"}
+              expanded={expanded}
+              item={navigationItemsByDestination.dashboard}
+              openInPane={openPlacements.inPane.has("dashboard")}
+              openInWindow={openPlacements.inWindow.has("dashboard")}
+              onClick={(event) => {
+                if (draggedDestinationRef.current === "dashboard") {
+                  event.preventDefault();
+                  return;
+                }
+                navigateToDashboard();
+              }}
+              onContextMenu={(event) => void handlePageContextMenu(event, "dashboard")}
+            />
             <SortableContext items={[...visibleViewOrder]} strategy={verticalListSortingStrategy}>
               {movableNavigationItems.map((item) => (
                 <SortableNavigationRailButton
@@ -792,6 +1083,8 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
                   active={activeDestination === item.destination}
                   expanded={expanded}
                   item={item}
+                  openInPane={openPlacements.inPane.has(item.destination)}
+                  openInWindow={openPlacements.inWindow.has(item.destination)}
                   onClick={(event) => {
                     if (draggedDestinationRef.current === item.destination) {
                       event.preventDefault();
@@ -799,10 +1092,18 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
                     }
                     item.onNavigate();
                   }}
-                  onContextMenu={(event) => void handleViewContextMenu(event, item.destination)}
+                  onContextMenu={(event) => void handlePageContextMenu(event, item.destination)}
                 />
               ))}
             </SortableContext>
+            {splitDragItem
+              ? createPortal(
+                  <DragOverlay dropAnimation={null}>
+                    <RailDragChip icon={splitDragItem.icon} label={splitDragItem.label} />
+                  </DragOverlay>,
+                  document.body,
+                )
+              : null}
           </DndContext>
         </nav>
         <nav

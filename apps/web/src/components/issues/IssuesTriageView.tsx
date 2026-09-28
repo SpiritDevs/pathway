@@ -55,6 +55,7 @@ import {
 } from "./issuesList.logic";
 import { triageRowPresentation, type TriageRowPresentation } from "./triage.logic";
 import { useIssueProjectOptions } from "./useIssueProjectOptions";
+import { isPaneFocused, usePaneId } from "../../panes/usePaneFocus";
 
 /** Two lines of chips under a title; taller than a list row and still one estimate for all of them. */
 const ESTIMATED_TRIAGE_ROW_HEIGHT = 52;
@@ -263,11 +264,14 @@ export function IssuesTriageView({
     if (detailIssueKey !== null && issue !== undefined) openIssue(issue);
   });
 
+  const paneId = usePaneId();
   useEffect(() => {
-    const listener = (event: globalThis.KeyboardEvent) => handleKeyDown(event);
+    const listener = (event: globalThis.KeyboardEvent) => {
+      if (isPaneFocused(paneId)) handleKeyDown(event);
+    };
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
-  }, []);
+  }, [paneId]);
 
   useEffect(() => {
     if (!scrollToActiveRef.current) return;

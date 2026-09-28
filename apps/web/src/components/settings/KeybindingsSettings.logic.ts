@@ -266,8 +266,18 @@ export function buildKeybindingCommandOptions(
   );
 }
 
+// Users call panes "panels", so their commands say so.
+const PANE_COMMAND_LABELS: Partial<Record<string, string>> = {
+  "pane.split": "Panel: Split",
+  "pane.focusLeft": "Panel: Focus Left",
+  "pane.focusRight": "Panel: Focus Right",
+  "pane.close": "Panel: Close",
+};
+
 export function commandLabel(command: KeybindingCommand): string {
   if (command === "threadAlerts.toggle") return "Toggle alerts for current thread";
+  const paneLabel = PANE_COMMAND_LABELS[command];
+  if (paneLabel) return paneLabel;
   const raw = String(command);
   if (raw.startsWith("script.") && raw.endsWith(".run")) {
     return `Run Script: ${titleCaseCommandSegment(raw.slice("script.".length, -".run".length))}`;

@@ -31,6 +31,7 @@ import {
   threadTraversalDirectionFromCommand,
   type ShortcutEventLike,
 } from "./keybindings";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@spiritdevs/shared/keybindings";
 
 function event(overrides: Partial<ShortcutEventLike> = {}): ShortcutEventLike {
   return {
@@ -600,6 +601,20 @@ describe("chat/editor shortcuts", () => {
       ),
       "themeEditor.toggle",
     );
+  });
+
+  it("matches the default pane shortcuts, including Option-modified keys on macOS", () => {
+    const mac = { platform: "MacIntel" };
+    const resolve = (overrides: Partial<ShortcutEventLike>) =>
+      resolveShortcutCommand(
+        event({ metaKey: true, altKey: true, ...overrides }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        mac,
+      );
+    assert.strictEqual(resolve({ key: "«", code: "Backslash" }), "pane.split");
+    assert.strictEqual(resolve({ key: "ArrowLeft", code: "ArrowLeft" }), "pane.focusLeft");
+    assert.strictEqual(resolve({ key: "ArrowRight", code: "ArrowRight" }), "pane.focusRight");
+    assert.strictEqual(resolve({ key: "∑", code: "KeyW" }), "pane.close");
   });
 
   it("matches focus.cycle only in Agent Threads and outside terminal focus", () => {

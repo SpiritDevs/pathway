@@ -100,6 +100,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
+import { isPaneFocused, useIsNarrowPane, usePaneId } from "~/panes/usePaneFocus";
 import {
   RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
   shouldMountRightPanelSheet,
@@ -265,7 +266,9 @@ function PullRequestsRouteView() {
     selectedRightPanelSurface?.kind === "pull-request" ? selectedRightPanelSurface : null;
   const activePullRequestSurface = rightPanelState.isOpen ? selectedPullRequestSurface : null;
   const [rightPanelPoppedOut, setRightPanelPoppedOut] = useState(false);
-  const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const viewportRequiresRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const narrowPane = useIsNarrowPane();
+  const shouldUseRightPanelSheet = viewportRequiresRightPanelSheet || narrowPane;
   const desktopRightPanelPoppedOut = rightPanelPoppedOut && !shouldUseRightPanelSheet;
   const rightPanelUsesSheet = shouldPresentRightPanelAsSheet({
     viewportRequiresSheet: shouldUseRightPanelSheet,
@@ -1402,10 +1405,11 @@ function PullRequestsColumn({
   listBody: ReactNode;
 }) {
   const topbarSearchRef = useRef<HTMLDivElement | null>(null);
+  const paneId = usePaneId();
   // Mod+F belongs to this page's own search rather than the browser's find-in-page command.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || !isPaneFocused(paneId)) return;
       if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey)) return;
       if (event.altKey || event.shiftKey) return;
       event.preventDefault();
@@ -1415,7 +1419,7 @@ function PullRequestsColumn({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [paneId]);
 
   return (
     // Painted flat like the chat column: the inset underneath carries the chrome grain, and a

@@ -31,6 +31,7 @@ import { RightPanelTabs } from "../RightPanelTabs";
 import { Button } from "../ui/button";
 import { IssueDetailSheet } from "./IssueDetailSheet";
 import { issuesAssistantSurfaces, type IssuesAssistantTab } from "./issuesAssistantPanel.logic";
+import { useIsNarrowPane } from "~/panes/usePaneFocus";
 
 export type { IssuesAssistantTab } from "./issuesAssistantPanel.logic";
 
@@ -69,7 +70,9 @@ export function IssuesAssistantPanel({
   onOpenChange: (open: boolean) => void;
   onOpenIssue: (issueKey: string, title?: string) => void;
 }) {
-  const useSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const viewportRequiresSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const narrowPane = useIsNarrowPane();
+  const useSheet = viewportRequiresSheet || narrowPane;
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const closePreview = useAtomCommand(previewEnvironment.close, { reportFailure: false });
   const previewState = useThreadPreviewState(panelThreadRef);

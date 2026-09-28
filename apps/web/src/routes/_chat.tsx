@@ -8,6 +8,7 @@ import { useWorkspaceProjects } from "../components/projects/useWorkspaceProject
 import { workspaceThreadStartAvailability } from "../components/projects/workspaceProjects.logic";
 import { dispatchPreviewAction } from "../components/preview/previewActionBus";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { isPaneFocused, usePaneId } from "../panes/usePaneFocus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -29,6 +30,7 @@ function ChatRouteGlobalShortcuts() {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const paneId = usePaneId();
   const terminalOpen = useTerminalUiStateStore((state) =>
     routeThreadRef
       ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
@@ -44,7 +46,8 @@ function ChatRouteGlobalShortcuts() {
   );
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      // Every pane showing a chat route mounts this; only the focused one answers.
+      if (event.defaultPrevented || !isPaneFocused(paneId)) return;
       const command = resolveShortcutCommand(event, keybindings, {
         context: {
           terminalFocus: isTerminalFocused(),
@@ -149,6 +152,7 @@ function ChatRouteGlobalShortcuts() {
     handleNewThread,
     keybindings,
     defaultProjectRef,
+    paneId,
     previewOpen,
     routeThreadRef,
     selectedThreadKeysSize,
