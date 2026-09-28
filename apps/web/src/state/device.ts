@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { createDeviceEnvironmentAtoms } from "@spiritdevs/client-runtime/state/device";
 import {
@@ -91,14 +91,23 @@ export function useDeviceHubAccess(
     environmentId === null ? EMPTY_ACCESS_ATOM : deviceHubAccessAtom(environmentId),
   );
   const { hubBasePath } = useDeviceState(environmentId).state;
+  // A failed renewal still carries the last credentials; use them until they expire.
+  const credentials = Option.getOrNull(AsyncResult.value(result));
+  const expiresAt = credentials?.expiresAt ?? null;
+  // Expiry must surface on time even while renewal retries are still pending.
+  const [lapsed, setLapsed] = useState<number | null>(null);
+  useEffect(() => {
+    if (expiresAt === null) return;
+    const timer = setTimeout(() => setLapsed(expiresAt), Math.max(0, expiresAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [expiresAt]);
+  const expired = expiresAt !== null && lapsed === expiresAt;
   return useMemo(() => {
-    // A failed renewal still carries the last credentials; use them until they expire.
-    const credentials = Option.getOrNull(AsyncResult.value(result));
-    if (credentials === null || deviceHubCredentialsExpired(credentials)) return null;
+    if (credentials === null || expired || deviceHubCredentialsExpired(credentials)) return null;
     const access = deviceHubAccessAt(credentials, hubBasePath);
     // The hub proxy picks the simulator host from `hostId`.
     return { ...access, query: { ...access.query, hostId } };
-  }, [result, hubBasePath, hostId]);
+  }, [credentials, expired, hubBasePath, hostId]);
 }
 
 const EMPTY_ACCESS_ATOM = Atom.make(AsyncResult.initial<DeviceHubCredentials, never>()).pipe(
