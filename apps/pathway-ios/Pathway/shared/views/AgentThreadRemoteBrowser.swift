@@ -121,7 +121,7 @@ final class PathwayRemoteBrowserModel {
     init(thread: PathwayAgentThreadModel, request: PathwayAgentThreadModel.Request? = nil) {
         self.thread = thread
         injectedRequest = request
-        surface = PathwayEnvironmentSurfaceStream.forThread(thread)
+        surface = PathwayEnvironmentSurfaceStream.forThread(thread, sizing: .active)
         // Open on the page the agent is using, so watching it is one tap.
         selectedID = thread.agentRemoteBrowserTabID
     }
@@ -374,9 +374,9 @@ final class PathwayRemoteBrowserModel {
 
 extension PathwayEnvironmentSurfaceStream {
     /// A surface stream authorized like the thread's RPC socket, including over Pathway Connect.
-    static func forThread(_ thread: PathwayAgentThreadModel) -> PathwayEnvironmentSurfaceStream {
+    static func forThread(_ thread: PathwayAgentThreadModel, sizing: PathwaySurfaceSizing) -> PathwayEnvironmentSurfaceStream {
         let connect = thread.connect, environment = thread.environment
-        return PathwayEnvironmentSurfaceStream {
+        return PathwayEnvironmentSurfaceStream(sizing: sizing) {
             guard let connect else { throw PathwayRPCError.disconnected }
             return try await connect.prepare(environment: environment).webSocketURL
         }
@@ -780,7 +780,8 @@ struct AgentThreadRemoteBrowserPreview: View {
             .padding(.horizontal)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("thread-remote-browser-preview")
-            .onAppear { if stream == nil { stream = .forThread(model) } }
+            // Watches without sizing the page, so the strip never shrinks the agent's page.
+            .onAppear { if stream == nil { stream = .forThread(model, sizing: .passive) } }
         }
     }
 }

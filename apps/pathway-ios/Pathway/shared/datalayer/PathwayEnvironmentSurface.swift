@@ -53,6 +53,10 @@ struct PathwaySurfaceViewport: Equatable, Sendable {
     }
 }
 
+/// Whether a viewer's viewport sizes the page (`active`) or it only watches (`passive`), like
+/// a small preview that must not shrink the page the agent is using.
+enum PathwaySurfaceSizing: String, Sendable { case active, passive }
+
 enum PathwaySurfaceState: Equatable, Sendable { case connecting, live, stale, failed }
 
 struct PathwaySurfaceQuality: Equatable, Sendable {
@@ -119,7 +123,8 @@ struct PathwaySurfaceReconnect: Equatable {
 /// The surface route beside the RPC socket, keeping its ticket: tickets last minutes and are not
 /// consumed, so the prepared `/ws?wsTicket=` URL authorizes the surface socket too.
 /// Mirrors `resolveSurfaceSocketUrl` in `packages/client-runtime/src/surface/socketUrl.ts`.
-func pathwaySurfaceSocketURL(rpcSocketURL: URL, threadID: String, tabID: String, viewport: PathwaySurfaceViewport) -> URL? {
+func pathwaySurfaceSocketURL(rpcSocketURL: URL, threadID: String, tabID: String, viewport: PathwaySurfaceViewport,
+                             sizing: PathwaySurfaceSizing) -> URL? {
     guard var components = URLComponents(url: rpcSocketURL, resolvingAgainstBaseURL: false) else { return nil }
     var path = components.path
     while path.hasSuffix("/") { path.removeLast() }
@@ -133,7 +138,8 @@ func pathwaySurfaceSocketURL(rpcSocketURL: URL, threadID: String, tabID: String,
         URLQueryItem(name: "tabId", value: tabID),
         URLQueryItem(name: "width", value: String(viewport.width)),
         URLQueryItem(name: "height", value: String(viewport.height)),
-        URLQueryItem(name: "deviceScale", value: String(viewport.deviceScale))
+        URLQueryItem(name: "deviceScale", value: String(viewport.deviceScale)),
+        URLQueryItem(name: "sizing", value: sizing.rawValue)
     ]
     components.queryItems = query
     return components.url
@@ -168,6 +174,7 @@ final class PathwayEnvironmentSurfaceStream {
     @ObservationIgnored private(set) var pageSize: CGSize?
 
     @ObservationIgnored private let session: URLSession
+    @ObservationIgnored let sizing: PathwaySurfaceSizing
     @ObservationIgnored private let resolveRPCSocketURL: ResolveRPCSocketURL
     @ObservationIgnored private var viewport: PathwaySurfaceViewport?
     @ObservationIgnored private var viewportTask: Task<Void, Never>?
@@ -185,7 +192,8 @@ final class PathwayEnvironmentSurfaceStream {
     @ObservationIgnored private var lastMessage = ContinuousClock.now
     @ObservationIgnored private var tabID: String?
 
-    init(session: URLSession = .shared, resolveRPCSocketURL: @escaping ResolveRPCSocketURL) {
+    init(sizing: PathwaySurfaceSizing = .active, session: URLSession = .shared, resolveRPCSocketURL: @escaping ResolveRPCSocketURL) {
+        self.sizing = sizing
         self.session = session
         self.resolveRPCSocketURL = resolveRPCSocketURL
     }
@@ -250,7 +258,7 @@ final class PathwayEnvironmentSurfaceStream {
                 let base: URL
                 if let rpcURL { base = rpcURL } else { base = try await resolveRPCSocketURL(); rpcURL = base }
                 guard isCurrent else { return }
-                guard let url = pathwaySurfaceSocketURL(rpcSocketURL: base, threadID: threadID, tabID: tabID, viewport: viewport) else { throw URLError(.badURL) }
+                guard let url = pathwaySurfaceSocketURL(rpcSocketURL: base, threadID: threadID, tabID: tabID, viewport: viewport, sizing: sizing) else { throw URLError(.badURL) }
                 close = await connect(to: url, reconnect: &reconnect)
             } catch is CancellationError { return } catch {}
             guard isCurrent else { return }

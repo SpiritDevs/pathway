@@ -97,14 +97,25 @@ struct PathwayEnvironmentSurfaceTests {
         let rpc = try #require(URL(string: "wss://relay.example.com/env/abc/ws?wsTicket=t%2B1&other=x#frag"))
         let url = try #require(pathwaySurfaceSocketURL(
             rpcSocketURL: rpc,
-            threadID: "thread 1", tabID: "tab-1", viewport: viewport))
+            threadID: "thread 1", tabID: "tab-1", viewport: viewport, sizing: .active))
         let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
         #expect(components.scheme == "wss")
         #expect(components.path == "/env/abc/ws/environment-surface")
         #expect(components.fragment == nil)
         let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
         #expect(query == ["wsTicket": "t+1", "kind": "browser", "threadId": "thread 1", "tabId": "tab-1",
-                          "width": "390", "height": "600", "deviceScale": "2.0"])
+                          "width": "390", "height": "600", "deviceScale": "2.0", "sizing": "active"])
+    }
+
+    @Test func socketURLSendsTheSizingRoleExplicitly() throws {
+        let viewport = try #require(PathwaySurfaceViewport(size: CGSize(width: 320, height: 200), displayScale: 2))
+        let rpc = try #require(URL(string: "ws://192.168.1.4:3773/ws?wsTicket=t"))
+        func sizing(_ role: PathwaySurfaceSizing) throws -> [String?] {
+            let url = try #require(pathwaySurfaceSocketURL(rpcSocketURL: rpc, threadID: "t", tabID: "a", viewport: viewport, sizing: role))
+            return (URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []).filter { $0.name == "sizing" }.map(\.value)
+        }
+        #expect(try sizing(.active) == ["active"])
+        #expect(try sizing(.passive) == ["passive"])
     }
 
     @Test func tapsMapThroughTheAspectFitToCSSPixels() throws {
