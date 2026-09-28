@@ -72,15 +72,90 @@ struct PathwayComputerSurfaceTests {
 
     @Test func handBackFollowUpQueuesAfterTheActiveRun() {
         let attachment: JSONValue = .object(["type": .string("image"), "id": .string("att-1")])
-        let followUp = PathwayComputerHandBackFollowUp(threadID: "t-1", messageID: "m-1", message: "  finish up ", summary: "Clicked Save\n", attachment: attachment)
-        let command = followUp.command(commandID: "c-1").objectValue
+        let followUp = PathwayComputerHandBackFollowUp(threadID: "t-1", messageID: "m-1", commandID: "c-1", message: "  finish up ",
+                                                       summary: "Clicked Save\n", attachment: attachment)
+        let command = followUp.command.objectValue
         #expect(command?["type"] == .string("message.dispatch"))
+        #expect(command?["commandId"] == .string("c-1"))
         #expect(command?["messageId"] == .string("m-1"))
         #expect(command?["creationSource"] == .string("mobile"))
         #expect(command?["text"] == .string("/computer-use finish up\n\nClicked Save"))
         #expect(command?["attachments"] == .array([attachment]))
         #expect(command?["dispatchMode"] == .object(["type": .string("queue_after_active")]))
         #expect(PathwayComputerSurfaceInput.handBackText(message: "go", summary: " ") == "/computer-use go")
+    }
+
+    @Test func rotationReconnectsTheStreamButAKeyboardDoesNot() {
+        let portrait = PathwayComputerSurfaceViewport(size: CGSize(width: 390, height: 560), scale: 3)
+        let screen = CGSize(width: 1440, height: 900)
+        #expect(portrait.needsReconnect(for: .init(size: CGSize(width: 750, height: 330), scale: 3), screen: screen))
+        #expect(!portrait.needsReconnect(for: .init(size: CGSize(width: 390, height: 280), scale: 3), screen: screen))
+        #expect(!portrait.needsReconnect(for: .init(size: CGSize(width: 380, height: 560), scale: 3), screen: nil))
+        #expect(portrait.needsReconnect(for: .init(size: CGSize(width: 390, height: 560), scale: 2), screen: screen))
+    }
+
+    @MainActor @Test func escapeSkipsAStalledFullQueue() async {
+        let rpc = SurfaceRPC()
+        let model = surfaceModel(rpc)
+        model.receive(session(controller: ["kind": .string("client"), "clientId": .string("me")]))
+        var started = rpc.started.makeAsyncIterator()
+        model.sendKey("A")
+        #expect(await started.next() == "input:A")
+        for _ in 0 ..< 40 { model.sendKey("B") }
+        model.sendKey("Escape")
+        #expect(await started.next() == "input:Escape")
+        rpc.release()
+        // Hand-back waits for the drain, so by its call nothing queued before Escape can remain.
+        #expect(await model.handBack("finish"))
+        #expect(rpc.log == ["input:Escape", "input:A", "handBack", "dispatch"])
+    }
+
+    @MainActor @Test func handBackWaitsForQueuedInputAndStopsNewInput() async {
+        let rpc = SurfaceRPC()
+        let model = surfaceModel(rpc)
+        model.receive(session(controller: ["kind": .string("client"), "clientId": .string("me")]))
+        var started = rpc.started.makeAsyncIterator()
+        model.sendKey("A")
+        #expect(await started.next() == "input:A")
+        model.sendKey("B")
+        let handingBack = Task { await model.handBack("finish") }
+        await Task.yield()
+        model.sendKey("C")
+        rpc.release()
+        #expect(await handingBack.value)
+        #expect(rpc.log == ["input:A", "input:B", "handBack", "dispatch"])
+    }
+
+    @MainActor @Test func retryResendsTheSameCommand() async throws {
+        let rpc = SurfaceRPC()
+        rpc.failedDispatches = 1
+        let model = surfaceModel(rpc)
+        model.receive(session(controller: ["kind": .string("client"), "clientId": .string("me")]))
+        #expect(await model.handBack("finish"))
+        #expect(model.pendingFollowUp != nil && model.error != nil)
+        await model.retryFollowUp()
+        #expect(model.pendingFollowUp == nil && model.error == nil)
+        #expect(rpc.dispatched.count == 2)
+        let first = try #require(rpc.dispatched.first?.objectValue), retry = try #require(rpc.dispatched.last?.objectValue)
+        #expect(first["commandId"] != nil && first["commandId"] == retry["commandId"])
+        #expect(first["messageId"] != nil && first["messageId"] == retry["messageId"])
+    }
+
+    @MainActor @Test func aDroppedConnectionEndsControlUntilAFreshSnapshot() async {
+        let rpc = SurfaceRPC()
+        let model = surfaceModel(rpc)
+        let mine = session(controller: ["kind": .string("client"), "clientId": .string("me")])
+        model.receive(mine)
+        #expect(model.session?.mine == true)
+        model.receive(.object(["_pathwayTransport": .string("disconnected")]))
+        #expect(model.session == nil && model.notice != nil)
+        model.sendKey("A")
+        await model.takeControl()
+        #expect(model.error != nil && rpc.log.isEmpty)
+        model.receive(session(controller: ["kind": .string("idle")]))
+        #expect(model.session?.tone == .idle)
+        await model.takeControl()
+        #expect(rpc.log == ["takeControl"])
     }
 
     private func surfaceFrame(width: UInt16 = 100, height: UInt16 = 50, deviceScale: Float = 1, jpeg: [UInt8] = [1]) -> Data {
@@ -98,8 +173,54 @@ struct PathwayComputerSurfaceTests {
             "state": .object([
                 "computerId": .string("desktop"), "revision": .number(1), "controller": .object(controller),
                 "activeTurns": .array(turns.map { .object(["threadId": .string($0), "runId": .string("r")]) }),
-                "capabilities": .object(["capture": .bool(true), "input": .bool(true), "pointerPhases": .bool(pointerPhases)])
+                "capabilities": .object(["capture": .bool(false), "input": .bool(true), "pointerPhases": .bool(pointerPhases)])
             ])
         ])
     }
+
+    @MainActor private func surfaceModel(_ rpc: SurfaceRPC) -> PathwayComputerSurfaceModel {
+        let connect = PathwayConnectClient(relayURL: URL(string: "https://relay.test")!, clerkTokenProvider: { "unused" })
+        let environment = PathwayCompanyEnvironment(companyId: "company", environment: PathwayEnvironment(id: "environment", environmentId: "environment",
+            descriptor: PathwayEnvironmentDescriptor(environmentId: "environment", label: "Mac", serverVersion: "test"),
+            relayLinkState: "connected", managedEndpointAvailable: true, lastSeenAt: nil, state: "active"))
+        let model = PathwayComputerSurfaceModel(threadID: "t-view", environment: environment, connect: connect)
+        model.request = { method, payload in try await rpc.request(method, payload) }
+        return model
+    }
+}
+
+/// Records computer surface RPCs as they finish. The first input stalls until `release()`.
+@MainActor private final class SurfaceRPC {
+    let started: AsyncStream<String>
+    private let startedContinuation: AsyncStream<String>.Continuation
+    private(set) var log: [String] = []
+    private(set) var dispatched: [JSONValue] = []
+    var failedDispatches = 0
+    private var stallsInput = true
+    private var stalled: CheckedContinuation<Void, Never>?
+
+    init() { (started, startedContinuation) = AsyncStream.makeStream(of: String.self) }
+
+    func request(_ method: String, _ payload: JSONValue) async throws -> JSONValue {
+        let event = payload.objectValue?["event"]?.objectValue
+        let name = method == "computer.surface.input" ? "input:\(event?["key"]?.stringValue ?? "")"
+            : method == "orchestration.dispatchCommand" ? "dispatch" : String(method.split(separator: ".").last ?? "")
+        startedContinuation.yield(name)
+        if method == "computer.surface.input", stallsInput {
+            stallsInput = false
+            await withCheckedContinuation { stalled = $0 }
+        }
+        log.append(name)
+        switch method {
+        case "computer.surface.handBack":
+            return .object(["attachment": .object(["id": .string("capture")]), "summary": .string("Clicked Save")])
+        case "orchestration.dispatchCommand":
+            dispatched.append(payload)
+            if failedDispatches > 0 { failedDispatches -= 1; throw URLError(.networkConnectionLost) }
+        default: break
+        }
+        return .null
+    }
+
+    func release() { stalled?.resume(); stalled = nil }
 }

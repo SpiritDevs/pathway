@@ -304,15 +304,17 @@ enum PathwayComputerSurfaceInput {
     }
 }
 
-/// A hand-back whose follow-up has not reached the agent yet. Retrying sends only the message.
+/// A hand-back whose follow-up has not reached the agent yet. Its message and command ids are
+/// fixed at hand-back, so a retry after a lost response is the same command, never a second run.
 struct PathwayComputerHandBackFollowUp: Equatable, Sendable {
     let threadID: String
     let messageID: String
+    let commandID: String
     let message: String
     let summary: String
     let attachment: JSONValue
 
-    func command(commandID: String) -> JSONValue {
+    var command: JSONValue {
         .object([
             "type": .string("message.dispatch"), "commandId": .string(commandID),
             "threadId": .string(threadID), "messageId": .string(messageID),
@@ -324,6 +326,26 @@ struct PathwayComputerHandBackFollowUp: Equatable, Sendable {
     }
 }
 
+/// The view's size and display scale: the encoding budget a stream connection asks for.
+struct PathwayComputerSurfaceViewport: Equatable, Sendable {
+    /// How long the view must hold a new size before the stream reconnects for it.
+    static let settle = Duration.milliseconds(300)
+
+    var size: CGSize
+    var scale: Double
+
+    /// Whether a stream sized for `self` should reconnect for `next`: the display scale changed,
+    /// or the screen, aspect-fitted into the view, changed width by a fifth. Rotation reconnects;
+    /// a keyboard that only trims letterboxing does not.
+    func needsReconnect(for next: Self, screen: CGSize?) -> Bool {
+        guard next.scale == scale else { return true }
+        let aspect = screen.flatMap { $0.height > 0 ? $0.width / $0.height : nil } ?? 1.6
+        let fitted = { (size: CGSize) in min(size.width, size.height * aspect) }
+        let before = fitted(size), after = fitted(next.size)
+        return before <= 0 || abs(after - before) / before >= 0.2
+    }
+}
+
 /// The persistent computer view's connection. One RPC socket carries the state subscription,
 /// control, input and hand-back, because the server ties control to that socket's client id.
 @MainActor
@@ -331,9 +353,11 @@ struct PathwayComputerHandBackFollowUp: Equatable, Sendable {
 final class PathwayComputerSurfaceModel {
     typealias Request = @Sendable (_ method: String, _ payload: JSONValue) async throws -> JSONValue
     static let maxQueuedInputs = 32
+    /// How long the state subscription may stay down before the view gives up and says so.
+    static let reconnectGrace = Duration.seconds(15)
 
     private(set) var session: PathwayComputerSurfaceSession?
-    /// The state subscription failed; Reconnect starts it again.
+    /// The state subscription failed or could not recover; Reconnect starts it again.
     private(set) var disconnected: String?
     private(set) var busy = false
     var error: String?
@@ -344,35 +368,54 @@ final class PathwayComputerSurfaceModel {
     @ObservationIgnored let threadID: String
     @ObservationIgnored private let connect: PathwayConnectClient
     @ObservationIgnored private let environment: PathwayCompanyEnvironment
-    @ObservationIgnored private var request: Request?
+    /// The RPC connection's requests while `watch()` runs.
+    @ObservationIgnored var request: Request?
+    @ObservationIgnored private var stop: (@Sendable () async -> Void)?
     @ObservationIgnored private var inputs: [JSONValue] = []
-    @ObservationIgnored private var draining = false
+    @ObservationIgnored private var draining: Task<Void, Never>?
     @ObservationIgnored private var wheel: (point: CGPoint, deltaX: Double, deltaY: Double)?
     @ObservationIgnored private var wheelFlush: Task<Void, Never>?
-    /// Set before this client gives control up itself, so only a loss it did not ask for reads as one.
+    /// Set before this client gives control up itself, so only a loss it did not ask for reads
+    /// as one. Input stops here too, so nothing new overtakes a release or hand-back.
     @ObservationIgnored private var leaving = false
     @ObservationIgnored private var escaped = false
-    @ObservationIgnored private let viewport: OSAllocatedUnfairLock<(size: CGSize, scale: Double)>
+    @ObservationIgnored private var lost: Task<Void, Never>?
+    @ObservationIgnored private var resize: Task<Void, Never>?
+    /// The view's latest viewport, and the one the current stream connected with.
+    @ObservationIgnored private let viewport: OSAllocatedUnfairLock<(current: PathwayComputerSurfaceViewport, streamed: PathwayComputerSurfaceViewport?)>
 
     init(threadID: String, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient) {
         self.threadID = threadID
         self.connect = connect
         self.environment = environment
-        let viewport = OSAllocatedUnfairLock(initialState: (size: CGSize(width: 1280, height: 800), scale: 2.0))
+        let viewport = OSAllocatedUnfairLock(initialState: (
+            current: PathwayComputerSurfaceViewport(size: CGSize(width: 1280, height: 800), scale: 2),
+            streamed: PathwayComputerSurfaceViewport?.none
+        ))
         self.viewport = viewport
         frames = PathwayComputerSurfaceStream { computerID in
             let socketURL = try await connect.prepare(environment: environment).webSocketURL
-            let budget = viewport.withLock { $0 }
+            let budget = viewport.withLock { state in state.streamed = state.current; return state.current }
             guard let url = pathwayComputerSurfaceSocketURL(rpcSocketURL: socketURL, computerID: computerID,
                                                             viewport: budget.size, deviceScale: budget.scale) else { throw URLError(.badURL) }
             return url
         }
     }
 
-    /// The view's size and display scale: the encoding budget the next stream connection asks for.
+    /// Records the view's size. When it settles far enough from what the stream asked for, as
+    /// after rotation, the stream reconnects so the host encodes for the new shape.
     func setViewport(_ size: CGSize, scale: Double) {
         guard size.width > 0, size.height > 0 else { return }
-        viewport.withLock { $0 = (size, scale) }
+        let next = PathwayComputerSurfaceViewport(size: size, scale: scale)
+        let streamed = viewport.withLock { state in state.current = next; return state.streamed }
+        resize?.cancel(); resize = nil
+        guard frames.computerID != nil, let streamed, streamed.needsReconnect(for: next, screen: frames.screenSize) else { return }
+        resize = Task { [weak self] in
+            try? await Task.sleep(for: PathwayComputerSurfaceViewport.settle)
+            guard !Task.isCancelled, let self else { return }
+            resize = nil
+            if frames.computerID != nil { frames.reconnect() }
+        }
     }
 
     /// Runs until cancelled, which is when the view leaves the screen or the app backgrounds:
@@ -381,11 +424,15 @@ final class PathwayComputerSurfaceModel {
         let connect = connect, environment = environment
         let rpc = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
         request = { method, payload in try await rpc.request(method, payload: payload) }
+        stop = { await rpc.stop() }
         disconnected = nil
         defer {
             let releases = session?.mine == true
             leaving = true
             request = nil
+            stop = nil
+            lost?.cancel(); lost = nil
+            resize?.cancel(); resize = nil
             clearInput()
             frames.stream(nil)
             session = nil
@@ -396,8 +443,7 @@ final class PathwayComputerSurfaceModel {
         }
         do {
             for try await value in await rpc.subscribe("computer.surface.subscribe", payload: .object([:]), bufferingPolicy: .bufferingNewest(1)) {
-                if value.objectValue?["_pathwayTransport"] != nil { continue }
-                if let next = PathwayComputerSurfaceSession(value) { apply(next) }
+                receive(value)
             }
         } catch is CancellationError {} catch {
             if !Task.isCancelled { disconnected = error.localizedDescription }
@@ -405,7 +451,34 @@ final class PathwayComputerSurfaceModel {
         if !Task.isCancelled, disconnected == nil { disconnected = "The computer view disconnected." }
     }
 
-    func apply(_ next: PathwayComputerSurfaceSession) {
+    /// Applies one subscription value. A transport marker means the socket dropped. The next
+    /// socket gets a new client id, so control and queued input are gone, and nothing is sent
+    /// until a fresh snapshot says who holds the screen.
+    func receive(_ value: JSONValue) {
+        if value.objectValue?["_pathwayTransport"] != nil { lose(); return }
+        guard let next = PathwayComputerSurfaceSession(value) else { return }
+        lost?.cancel(); lost = nil
+        apply(next)
+    }
+
+    private func lose() {
+        if session?.mine == true, !leaving { notice = "The connection dropped, so you no longer have control." }
+        session = nil
+        leaving = false
+        escaped = false
+        clearInput()
+        frames.stream(nil)
+        guard lost == nil else { return }
+        lost = Task { [weak self] in
+            try? await Task.sleep(for: PathwayComputerSurfaceModel.reconnectGrace)
+            guard !Task.isCancelled, let self else { return }
+            lost = nil
+            disconnected = "Pathway could not reach the computer."
+            await stop?()
+        }
+    }
+
+    private func apply(_ next: PathwayComputerSurfaceSession) {
         let wasMine = session?.mine == true
         if wasMine, !next.mine, !leaving {
             notice = escaped ? "Escape stopped your control. Take control again to continue." : "You no longer have control."
@@ -427,20 +500,23 @@ final class PathwayComputerSurfaceModel {
         if error != nil { leaving = false }
     }
 
-    /// An empty message only releases. Otherwise the server captures the screen and releases,
-    /// then the message goes to the agent after its current reply.
+    /// An empty message only releases. Otherwise input stops, what is already queued lands, then
+    /// the server captures the screen and releases, and the message goes to the agent after its
+    /// current reply.
     func handBack(_ message: String) async -> Bool {
         let message = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { await release(); return error == nil }
         guard let session else { return false }
         let threadID = session.handBackThreadID(fallback: threadID)
-        let messageID = UUID().uuidString
+        let messageID = UUID().uuidString, commandID = UUID().uuidString
         leaving = true
+        flushWheel()
+        await draining?.value
         var followUp: PathwayComputerHandBackFollowUp?
         await run("Could not hand back to the agent.") { request in
             let result = try await request("computer.surface.handBack", .object(["threadId": .string(threadID), "messageId": .string(messageID)]))
             guard let fields = result.objectValue, let attachment = fields["attachment"] else { throw URLError(.cannotParseResponse) }
-            followUp = PathwayComputerHandBackFollowUp(threadID: threadID, messageID: messageID, message: message,
+            followUp = PathwayComputerHandBackFollowUp(threadID: threadID, messageID: messageID, commandID: commandID, message: message,
                                                         summary: fields["summary"]?.stringValue ?? "", attachment: attachment)
         }
         // Control is kept on failure, so the user can retry or just release.
@@ -449,7 +525,7 @@ final class PathwayComputerSurfaceModel {
         return true
     }
 
-    /// Sends the follow-up again without handing back again: the capture is already stored.
+    /// Sends the same follow-up command again without handing back again: the capture is stored.
     func retryFollowUp() async {
         guard let pendingFollowUp else { return }
         await dispatch(pendingFollowUp)
@@ -460,13 +536,14 @@ final class PathwayComputerSurfaceModel {
     private func dispatch(_ followUp: PathwayComputerHandBackFollowUp) async {
         pendingFollowUp = followUp
         await run("Could not send your message to the agent.") { request in
-            _ = try await request("orchestration.dispatchCommand", followUp.command(commandID: UUID().uuidString))
+            _ = try await request("orchestration.dispatchCommand", followUp.command)
         }
         if error == nil { pendingFollowUp = nil }
     }
 
+    /// Mutations wait for a snapshot from the current socket, so none lands on a lost control.
     private func run(_ fallback: String, _ action: (Request) async throws -> Void) async {
-        guard let request else { error = "The computer view is not connected."; return }
+        guard let request, session != nil else { error = "The computer view is not connected."; return }
         busy = true
         defer { busy = false }
         do { try await action(request); error = nil } catch { self.error = Self.message(error, fallback) }
@@ -474,21 +551,38 @@ final class PathwayComputerSurfaceModel {
 
     // MARK: Input
 
+    private var accepts: Bool { session?.mine == true && session?.input == true && !leaving }
+
     /// Queues one input while this connection has control. Inputs go out one at a time, in order.
     func send(_ event: JSONValue) {
-        guard session?.mine == true, session?.input == true else { return }
+        guard accepts else { return }
         flushWheel()
         enqueue(event)
     }
 
     func sendKey(_ key: String, modifiers: [String] = []) {
-        if key == "Escape" { escaped = true }
+        if key == "Escape", modifiers.isEmpty { escape(); return }
         send(PathwayComputerSurfaceInput.key(key, modifiers: modifiers))
+    }
+
+    /// Escape skips the queue: queued input is dropped and the press goes out now on the same
+    /// connection, so a stalled input or a full queue cannot hold up the host's emergency stop.
+    private func escape() {
+        guard session?.mine == true, session?.input == true, let request else { return }
+        escaped = true
+        clearInput()
+        Task { [weak self] in
+            do {
+                _ = try await request("computer.surface.input", .object(["event": PathwayComputerSurfaceInput.key("Escape")]))
+            } catch {
+                self?.error = PathwayComputerSurfaceModel.message(error, "The computer did not respond.")
+            }
+        }
     }
 
     /// Accumulates scroll at `point`; it goes out at most once per display frame.
     func scroll(at point: CGPoint, deltaX: Double, deltaY: Double) {
-        guard session?.mine == true, session?.input == true else { return }
+        guard accepts else { return }
         wheel = (point, (wheel?.deltaX ?? 0) + deltaX, (wheel?.deltaY ?? 0) + deltaY)
         guard wheelFlush == nil else { return }
         wheelFlush = Task { [weak self] in
@@ -509,13 +603,12 @@ final class PathwayComputerSurfaceModel {
     private func enqueue(_ event: JSONValue) {
         guard inputs.count < Self.maxQueuedInputs else { error = "The computer is busy. Try again in a moment."; return }
         inputs.append(event)
-        guard !draining else { return }
-        draining = true
-        Task { await drain() }
+        guard draining == nil else { return }
+        draining = Task { [weak self] in await self?.drain() }
     }
 
     private func drain() async {
-        defer { draining = false }
+        defer { draining = nil }
         while !inputs.isEmpty, let request {
             let event = inputs.removeFirst()
             do {

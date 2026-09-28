@@ -141,7 +141,8 @@ agent still works on the host Mac; nothing runs on your phone.
   the preview, to keep the host's screen open, before, during and after a task. Go back to return
   to the chat. The header says who has the screen: the agent, you, another device, or nobody. The
   view streams only while it is open and the app is in the foreground. If the screen can't be
-  shared, it says so; if the stream drops, **Reconnect** starts it again.
+  shared, it says so; if the stream drops, **Reconnect** starts it again. If the connection to the
+  host drops, you lose control until it comes back; if it can't come back, the view says so.
   - **Take control** hands you the mouse and keyboard; **Release** gives it up. Other devices can
     watch but not act.
   - With control, tap to click, double-tap to double-click, touch and hold to right-click, and
@@ -149,14 +150,17 @@ agent still works on the host Mac; nothing runs on your phone.
     mouse button down.
   - Type in **Type on the computer** to enter text on the host. The key bar sends Return, Escape,
     Tab, Delete and the arrow keys, and **⌘** offers shortcuts such as copy, paste, undo and
-    Spotlight. Escape stops your control and the agent's current action.
+    Spotlight. **Esc** goes out right away, ahead of anything still being sent, and stops your
+    control and the agent's current action.
   - **Hand back** gives control back. If you wrote a message in **Tell the agent what's next…**, it
     goes to the agent with a screenshot and a summary of what you did, after the agent's current
-    reply. If it can't be sent, **Retry** sends it again without losing the screenshot.
+    reply. Input you already sent reaches the host first. If the message can't be sent, **Retry**
+    sends it again without losing the screenshot, and the agent never gets it twice.
   - Leaving the view or switching away from the app releases control.
 - **Approving and stopping.** Approval, setup and control-off cards work as they do on the desktop.
-  Grant macOS permissions on the host Mac itself. To stop the agent, tap **Stop** in the chat;
-  Escape works only on the host's keyboard.
+  Grant macOS permissions on the host Mac itself. To stop the agent, tap **Stop** in the chat. To
+  stop it mid-action, press Escape on the host's keyboard, or take control in the computer view
+  and tap **Esc** in its key bar.
 - **Settings.** **Settings** > **Computer** lists your environments. Each shows whether its desktop
   is ready and its access and autonomy settings. Only an admin connection can change those
   settings. The agent cursor, preview size and action history are set on the host.

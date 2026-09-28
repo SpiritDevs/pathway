@@ -223,7 +223,13 @@ directly (`ready`, `ping`/`pong`, 24-byte header) with the prepared RPC URL's ti
 to clicks, double taps to `clickCount: 2`, long presses to right clicks and two-finger pans to
 wheel events coalesced to one send per frame. It never sends pointer phases. The view task ends
 when the destination disappears or the scene leaves the foreground, releasing control and closing
-both sockets. Hand-back dispatches the same `message.dispatch` with `creationSource: "mobile"`.
+both sockets. Hand-back stops new input, flushes the coalesced wheel and waits for queued input
+to drain before calling `handBack`, then dispatches the same `message.dispatch` with
+`creationSource: "mobile"`; its message and command ids are fixed at hand-back so Retry is
+idempotent. Escape bypasses the input queue, dropping what is queued. A transport marker on the
+subscription drops ownership and queued input until a fresh snapshot arrives; after 15 seconds
+without one the view stops and offers Reconnect. The stream reconnects, debounced, when the view's
+fitted size changes by a fifth, as on rotation.
 
 ## Host support and verification
 
