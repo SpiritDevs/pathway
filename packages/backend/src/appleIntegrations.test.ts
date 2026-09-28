@@ -158,6 +158,16 @@ async function setup(company = false) {
   });
   return { t, owner, account, target, connected, runtimeTarget: { ...target, companyId: COMPANY } };
 }
+async function appleRecords(t: Harness) {
+  return await t.run(async (ctx) => ({
+    accounts: await ctx.db.query("appleAccounts").collect(),
+    teams: await ctx.db.query("appleTeams").collect(),
+    credentials: await ctx.db.query("appleIntegrationCredentials").collect(),
+    leases: await ctx.db.query("appleEnvironmentLeases").collect(),
+    sessions: await ctx.db.query("appleAccountSessions").collect(),
+    links: await ctx.db.query("appleProjectLinks").collect(),
+  }));
+}
 
 describe("Apple account cloud custody", () => {
   beforeEach(() => {
@@ -641,6 +651,135 @@ describe("Apple account cloud custody", () => {
       }),
     ).toMatchObject({ scope: { kind: "company", companyId: COMPANY }, revision: 2 });
   });
+  it.each(["connected", "revoked"] as const)(
+    "team removal deletes the owner's %s team and its custody rows only",
+    async (state) => {
+      const { t, owner, account, target, runtimeTarget, connected } = await setup();
+      for (const id of ["env-a", "env-b"])
+        await environment(t, id).mutation(api.appleIntegrations.heartbeat, runtimeTarget);
+      const sibling = { ...target, teamId: "APPLETEAM2" };
+      await owner.mutation(api.appleIntegrations.upsertTeam, {
+        ...sibling,
+        name: "Team two",
+        type: "organization",
+      });
+      await owner.action(api.appleIntegrations.connect, {
+        ...sibling,
+        ...appleTestCredential,
+        expectedRevision: 0,
+      });
+      await environment(t, "env-a").mutation(api.appleIntegrations.heartbeat, {
+        ...sibling,
+        companyId: COMPANY,
+      });
+      await owner.action(api.appleIntegrations.linkProject, {
+        ...sibling,
+        companyId: COMPANY,
+        projectId: PROJECT,
+        appId: "app-1",
+      });
+      await t.run(async (ctx) => {
+        const storedAccount = (await ctx.db.query("appleAccounts").collect())[0]!;
+        await ctx.db.insert("appleAccountSessions", {
+          accountId: storedAccount._id,
+          revision: 1,
+          expiresAt: NOW + 30_000,
+          keyId: "test-seal",
+          iv: "session-iv",
+          ciphertext: "sealed-session",
+          authenticationTag: "session-tag",
+        });
+      });
+      const expectedRevision =
+        state === "revoked"
+          ? (
+              await owner.mutation(api.appleIntegrations.revoke, {
+                ...target,
+                expectedRevision: connected.revision,
+              })
+            ).revision
+          : connected.revision;
+      const before = await appleRecords(t);
+      const team = before.teams.find((row) => row.teamId === target.teamId)!;
+      expect(before.leases.filter((row) => row.teamId === team._id)).toHaveLength(2);
+      await expect(
+        owner.mutation(api.appleIntegrations.removeTeam, { ...target, expectedRevision }),
+      ).resolves.toBeNull();
+      expect(await appleRecords(t)).toEqual({
+        ...before,
+        teams: before.teams.filter((row) => row._id !== team._id),
+        credentials: before.credentials.filter((row) => row.teamId !== team._id),
+        leases: before.leases.filter((row) => row.teamId !== team._id),
+      });
+      await expect(
+        environment(t, "env-a").action(api.appleIntegrations.runtimeCredential, {
+          ...runtimeTarget,
+          revision: connected.revision,
+          accountRevision: account.revision,
+        }),
+      ).rejects.toThrow("team is unavailable");
+    },
+  );
+  it("team removal refuses linked projects without changing any records", async () => {
+    const { t, owner, target, runtimeTarget, connected } = await setup();
+    await environment(t, "env-a").mutation(api.appleIntegrations.heartbeat, runtimeTarget);
+    await owner.action(api.appleIntegrations.linkProject, {
+      ...runtimeTarget,
+      projectId: PROJECT,
+      appId: "app-1",
+    });
+    const before = await appleRecords(t);
+    await expect(
+      owner.mutation(api.appleIntegrations.removeTeam, {
+        ...target,
+        expectedRevision: connected.revision,
+      }),
+    ).rejects.toMatchObject({ data: { code: "apple-account-linked-projects" } });
+    expect(await appleRecords(t)).toEqual(before);
+    await owner.mutation(api.appleIntegrations.unlinkProject, {
+      companyId: COMPANY,
+      projectId: PROJECT,
+    });
+    await expect(
+      owner.mutation(api.appleIntegrations.removeTeam, {
+        ...target,
+        expectedRevision: connected.revision,
+      }),
+    ).resolves.toBeNull();
+  });
+  it("team removal rejects a stale revision without changing any records", async () => {
+    const { t, owner, target, runtimeTarget, connected } = await setup();
+    await environment(t, "env-a").mutation(api.appleIntegrations.heartbeat, runtimeTarget);
+    const before = await appleRecords(t);
+    await expect(
+      owner.mutation(api.appleIntegrations.removeTeam, {
+        ...target,
+        expectedRevision: connected.revision - 1,
+      }),
+    ).rejects.toMatchObject({ data: { code: "entity-conflict" } });
+    expect(await appleRecords(t)).toEqual(before);
+  });
+  it.each(["non-owner", "company outsider", "environment"] as const)(
+    "team removal denies the %s without changing any records",
+    async (caller) => {
+      const { t, target, runtimeTarget, connected } = await setup(caller === "company outsider");
+      await environment(t, "env-a").mutation(api.appleIntegrations.heartbeat, runtimeTarget);
+      const actor =
+        caller === "environment"
+          ? environment(t, "env-a")
+          : human(t, caller === "non-owner" ? "teammate" : "outsider");
+      const before = await appleRecords(t);
+      await expect(
+        actor.mutation(api.appleIntegrations.removeTeam, {
+          ...target,
+          expectedRevision: connected.revision,
+        }),
+      ).rejects.toMatchObject({
+        data: { code: caller === "company outsider" ? "not-a-member" : "permission-denied" },
+      });
+      expect(await appleRecords(t)).toEqual(before);
+    },
+  );
   it("account deletion removes team keys, leases, sessions and links", async () => {
     const { t, owner, target, account, runtimeTarget } = await setup();
     await environment(t, "env-a").mutation(api.appleIntegrations.heartbeat, runtimeTarget);

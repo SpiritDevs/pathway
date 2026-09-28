@@ -531,6 +531,36 @@ export const revoke = mutation({
     return metadata(account, { ...team, ...values });
   },
 });
+export const removeTeam = mutation({
+  args: { ...teamArgs, expectedRevision: v.number() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { account, team } = await authorizeAppleTeam(ctx, args, true);
+    assertRevision(team.revision, args.expectedRevision);
+    const link = await ctx.db
+      .query("appleProjectLinks")
+      .withIndex("by_account", (q) => q.eq("accountId", account._id))
+      .filter((q) => q.eq(q.field("teamId"), team.teamId))
+      .first();
+    if (link)
+      throw backendError(
+        "apple-account-linked-projects",
+        "Unlink projects before removing this Apple Developer team.",
+      );
+    const credential = await ctx.db
+      .query("appleIntegrationCredentials")
+      .withIndex("by_team", (q) => q.eq("teamId", team._id))
+      .unique();
+    if (credential) await ctx.db.delete(credential._id);
+    for (const lease of await ctx.db
+      .query("appleEnvironmentLeases")
+      .withIndex("by_team", (q) => q.eq("teamId", team._id))
+      .collect())
+      await ctx.db.delete(lease._id);
+    await ctx.db.delete(team._id);
+    return null;
+  },
+});
 export const heartbeat = mutation({
   args: runtimeArgs,
   returns: v.object({ integration: appleIntegration, expiresAt: v.union(v.number(), v.null()) }),

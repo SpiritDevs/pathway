@@ -21,6 +21,7 @@ Use the signed-in member's Convex identity for these calls. Account management a
 | `upsertTeam` mutation    | `{ accountId, teamId, name, type }`                                    | Team metadata; type is `individual`, `organization`, `enterprise`, or `unknown`       |
 | `connect` action         | `{ accountId, teamId, issuerId, keyId, privateKey, expectedRevision }` | `AppleIntegration`; replaces the team's key after a successful live ASC app-list call |
 | `revoke` mutation        | `{ accountId, teamId, expectedRevision }`                              | `AppleIntegration`; deletes the sealed key and increments its revision                |
+| `removeTeam` mutation    | `{ accountId, teamId, expectedRevision }`                              | `null`; removes the team, sealed key and environment health/lease rows                |
 | `status` query           | `{ accountId, teamId, companyId? }`                                    | `{ integration: AppleIntegration, environments: AppleEnvironmentHealth[] }`           |
 | `linkProject` action     | `{ companyId, projectId, accountId, teamId, appId }`                   | `AppleProjectLink`; verifies the app exists under the selected key before saving      |
 | `unlinkProject` mutation | `{ companyId, projectId }`                                             | `null`                                                                                |
@@ -28,7 +29,9 @@ Use the signed-in member's Convex identity for these calls. Account management a
 
 `listAccounts({ companyId })` still returns the caller's personal accounts when their active membership lacks `integrations.read`; company accounts are omitted. `accountStatus`, `listTeams` and `status` accept an optional `companyId`. Signed-in members are authorized against the account's scope; an environment identity must supply its registered company context, including for personal accounts.
 
-`AppleAccount` is `{ id, email, displayName, scope, revision, createdAt, verifiedAt }`. `verifiedAt` stays null until COR-101 verifies the Apple ID. Initial key revision is 0; pass the current revision when connecting or revoking. A stale revision returns `entity-conflict` and leaves current credentials unchanged. A rejected replacement also leaves the current key intact.
+`AppleAccount` is `{ id, email, displayName, scope, revision, createdAt, verifiedAt }`. `verifiedAt` stays null until COR-101 verifies the Apple ID. Initial key revision is 0; pass the current revision when connecting, revoking or removing a team. A stale revision returns `entity-conflict` and leaves current credentials unchanged. A rejected replacement also leaves the current key intact.
+
+`removeTeam` requires the personal account's owner or `integrations.manage` in the account's company. It checks the team's revision before deleting anything. Unlink every project using that account and team first; otherwise removal returns `apple-account-linked-projects` and leaves all records unchanged. Removal deletes the `appleTeams` row, its sealed `appleIntegrationCredentials` record and all `appleEnvironmentLeases` rows, which also hold environment health. The Apple account, account sessions and other teams remain. Environment identities cannot remove teams.
 
 `AppleIntegration` is `{ accountId, teamId, accountRevision, connected, revision, issuerId, keyIdSuffix, lastVerifiedAt }`. Only the last four key-ID characters are public. No Apple Developer team ID is inferred from the ASC issuer ID.
 
