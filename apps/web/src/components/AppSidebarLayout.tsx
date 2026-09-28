@@ -8,7 +8,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { RouterContextProvider, useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 
 import { getLocalStorageItem, useLocalStorage } from "../hooks/useLocalStorage";
 import { useIsMobile } from "../hooks/useMediaQuery";
@@ -42,6 +42,9 @@ import {
   useSidebarStageBackdropVariant,
 } from "./SidebarStageBackdrop";
 import { useProjects } from "../state/entities";
+import { PaneRow } from "../panes/PaneRow";
+import { useFocusedPaneRouter } from "../panes/usePaneFocus";
+import { isChildWindow } from "../panes/windowMode";
 import {
   resolveInitialThreadSidebarWidth,
   resolveThreadSidebarMaximumWidth,
@@ -155,7 +158,26 @@ function ProjectProjectionRetention() {
   return null;
 }
 
+/**
+ * The app shell. Everything outside the panes (rail, top bar, secondary sidebar)
+ * renders inside the focused pane's router context, so rail clicks, back and
+ * forward, and the sidebar all follow whichever pane has focus. A torn-out window
+ * has no rail and no split.
+ */
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
+  const appRouter = useRouter();
+  const focusedRouter = useFocusedPaneRouter(appRouter);
+
+  return (
+    <RouterContextProvider router={focusedRouter}>
+      <AppSidebarLayoutContent>
+        {isChildWindow ? children : <PaneRow appRouter={appRouter} primary={children} />}
+      </AppSidebarLayoutContent>
+    </RouterContextProvider>
+  );
+}
+
+function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   // Settings routes show the settings nav in place of whichever thread
   // sidebar is active.
@@ -183,9 +205,9 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const sidebarMaximumWidth = resolveThreadSidebarMaximumWidth(viewportWidth);
   const sidebarProviderStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
-    "--primary-navigation-rail-width": resolvePrimaryNavigationRailWidth(
-      isPrimaryNavigationExpanded,
-    ),
+    "--primary-navigation-rail-width": isChildWindow
+      ? "0px"
+      : resolvePrimaryNavigationRailWidth(isPrimaryNavigationExpanded),
   } as CSSProperties;
 
   useEffect(() => {
@@ -217,10 +239,12 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     >
       <ThreadQueueRuntime />
       <ProjectProjectionRetention />
-      <PrimaryNavigationRail
-        expanded={isPrimaryNavigationExpanded}
-        onExpandedChange={setPrimaryNavigationExpanded}
-      />
+      {isChildWindow ? null : (
+        <PrimaryNavigationRail
+          expanded={isPrimaryNavigationExpanded}
+          onExpandedChange={setPrimaryNavigationExpanded}
+        />
+      )}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-sidebar surface-grain">
         <WorkspaceTopBar />
         <div

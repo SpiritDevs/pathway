@@ -208,6 +208,10 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       assert.equal(defaultsByCommand.get("terminal.splitVertical"), "mod+shift+d");
       assert.equal(defaultsByCommand.get("modelPicker.jump.1"), "mod+1");
       assert.equal(defaultsByCommand.get("modelPicker.jump.9"), "mod+9");
+      assert.equal(defaultsByCommand.get("pane.split"), "mod+alt+\\");
+      assert.equal(defaultsByCommand.get("pane.focusLeft"), "mod+alt+arrowleft");
+      assert.equal(defaultsByCommand.get("pane.focusRight"), "mod+alt+arrowright");
+      assert.equal(defaultsByCommand.get("pane.close"), "mod+alt+w");
     }),
   );
 

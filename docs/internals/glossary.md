@@ -363,6 +363,21 @@ The user's account-synced collection of preferred spellings and explicit correct
 **Dictation cleanup**:
 The optional AI step that removes fillers, repetitions, and spoken self-corrections from recognized speech while preserving its meaning and language.
 
+## Panes and windows
+
+**Pane**:
+One rail page shown side by side with others in the main window, with its own router. Users see it as a _panel_. See [panes and windows](panes-and-windows.md).
+
+**Primary pane**:
+The pane rendered by the app router. It owns the URL; every other pane keeps its location in memory.
+
+**Focused pane**:
+The one pane the rail, sidebar, back and forward, and keyboard shortcuts act on.
+
+**Page window**:
+A rail page opened in its own window, in window mode: no rail and no split.
+_Avoid_: Popout, child window (in user-facing text)
+
 ## Queued submission
 
 A cloud-saved user message and its attachment references, assigned to a thread and destination

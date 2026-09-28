@@ -24,6 +24,7 @@ import {
 import { isElectron } from "../env";
 import { cn } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
+import { isPaneFocused, usePaneId } from "~/panes/usePaneFocus";
 
 function RestoreDefaultsButton({ onRestored }: { onRestored: () => void }) {
   const { changedSettingLabels, restoreDefaults } = useSettingsRestore(onRestored);
@@ -76,9 +77,10 @@ function SettingsContentLayout() {
     void navigate({ to: "/settings/general", replace: true });
   }, [navigate, settingsSectionIsVisible]);
 
+  const paneId = usePaneId();
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || !isPaneFocused(paneId)) return;
       if (event.key === "Escape") {
         event.preventDefault();
 
@@ -95,7 +97,7 @@ function SettingsContentLayout() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [navigateBackWithinApp]);
+  }, [navigateBackWithinApp, paneId]);
 
   if (!settingsSectionIsVisible) return null;
 

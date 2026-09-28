@@ -147,6 +147,11 @@ export const make = Effect.gen(function* () {
     const settingsClick = () => {
       runMenuEffect("open-settings", dispatchMenuAction("open-settings"));
     };
+    // Panes live in the main window, so DesktopWindow routes these there even
+    // when a torn-out window has focus.
+    const paneClick = (action: "pane-split" | "pane-close" | "pane-close-all") => () => {
+      runMenuEffect(action, dispatchMenuAction(action));
+    };
     const closeAllWindowsClick = () => {
       runMenuEffect("close-all-windows", closeAllChildWindows());
     };
@@ -234,6 +239,10 @@ export const make = Effect.gen(function* () {
           { label: "Zoom Out", accelerator: "CmdOrCtrl+-", click: zoomClick("out") },
           { type: "separator" },
           { role: "togglefullscreen" },
+          { type: "separator" },
+          { label: "Split Panel", click: paneClick("pane-split") },
+          { label: "Close Panel", click: paneClick("pane-close") },
+          { label: "Close All Panels", click: paneClick("pane-close-all") },
         ],
       },
       {

@@ -9,6 +9,7 @@ import { CheckIcon, ChevronDownIcon, XIcon } from "lucide-react";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { cn } from "~/lib/utils";
 import { shortcutScopeOwnsEvent } from "../ChatView.logic";
+import { isPaneFocused, usePaneId } from "../../panes/usePaneFocus";
 import ChatMarkdown from "../ChatMarkdown";
 
 interface PendingUserInputPanelProps {
@@ -88,6 +89,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   // sending from the composer advances the active question.
   const [collapsedQuestionId, setCollapsedQuestionId] = useState<string | null>(null);
   const isCollapsed = collapsedQuestionId !== null && collapsedQuestionId === activeQuestion?.id;
+  const paneId = usePaneId();
 
   useEffect(() => {
     onAdvanceRef.current = onAdvance;
@@ -152,6 +154,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       const target = event.target;
       const eventFromSideChat =
         target instanceof Element && target.closest("[data-side-chat-surface]") !== null;
+      if (!isPaneFocused(paneId)) return;
       if (!shortcutScopeOwnsEvent(shortcutScope, eventFromSideChat)) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
@@ -174,7 +177,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeQuestion, handleOptionSelection, isCollapsed, responseDisabled, shortcutScope]);
+  }, [activeQuestion, handleOptionSelection, isCollapsed, paneId, responseDisabled, shortcutScope]);
 
   if (!activeQuestion) {
     return null;

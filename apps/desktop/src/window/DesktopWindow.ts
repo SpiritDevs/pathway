@@ -1220,8 +1220,8 @@ export const make = Effect.gen(function* () {
     ).pipe(Effect.withSpan("desktop.window.flushWindowState")),
     dispatchMenuAction: Effect.fn("desktop.window.dispatchMenuAction")(function* (action, options) {
       yield* Effect.annotateCurrentSpan({ action });
-      // Every menu action acts on the main window, even when a torn-out window
-      // has focus.
+      // Every menu action (Settings, pane actions) acts on the main window, even
+      // when a torn-out window has focus.
       yield* dispatchRendererEvent(MENU_ACTION_CHANNEL, action, options);
     }),
     dispatchSnapShotEvent: Effect.fn("desktop.window.dispatchSnapShotEvent")(function* (event) {

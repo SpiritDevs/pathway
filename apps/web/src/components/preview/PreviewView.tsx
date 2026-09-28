@@ -41,6 +41,7 @@ import { useRightPanelStore } from "~/rightPanelStore";
 
 import { previewBridge } from "./previewBridge";
 import { subscribePreviewAction } from "./previewActionBus";
+import { isPaneFocused, usePaneId } from "../../panes/usePaneFocus";
 import { openPreviewSession } from "./openPreviewSession";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
@@ -706,9 +707,11 @@ function DesktopPreviewView({
 
   // Subscribe only while visible; `toggle-panel` is owned by ChatView's
   // URL-aware handler regardless of whether the panel is currently mounted.
+  const paneId = usePaneId();
   useEffect(() => {
     if (!visible) return;
     return subscribePreviewAction((action) => {
+      if (!isPaneFocused(paneId)) return;
       switch (action) {
         case "refresh":
           handleRefresh();
@@ -729,7 +732,7 @@ function DesktopPreviewView({
           return;
       }
     });
-  }, [handleRefresh, handleResetZoom, handleZoomIn, handleZoomOut, visible]);
+  }, [handleRefresh, handleResetZoom, handleZoomIn, handleZoomOut, paneId, visible]);
 
   return (
     <div

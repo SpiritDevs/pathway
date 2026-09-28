@@ -82,6 +82,9 @@ import {
   type KeybindingsUpdateToastController,
 } from "../components/KeybindingsUpdateToast.logic";
 import { resolveClerkAuthGateState } from "../components/clerk/authGate.logic";
+import { useSidePaneId } from "../panes/paneScope";
+import { ChildWindowSync } from "../panes/ChildWindowSync";
+import { isChildWindow } from "../panes/windowMode";
 
 // #region DEBUG
 function debugAuthGate(
@@ -149,11 +152,18 @@ export const Route = createRootRoute({
 });
 
 function EnvironmentPendingView() {
-  return <SplashScreen reason="environment" />;
+  // A side pane waits inside its own frame; the boot splash fills the whole window.
+  const sidePaneId = useSidePaneId();
+  return sidePaneId === null ? <SplashScreen reason="environment" /> : null;
 }
 
 function RootRouteView() {
+  const sidePaneId = useSidePaneId();
   const pathname = useLocation({ select: (location) => location.pathname });
+
+  // A side pane renders only its page: the primary pane already mounts the
+  // auth gate, the app shell, and every global host around it.
+  if (sidePaneId !== null) return <Outlet />;
 
   // Fail closed: accounts are mandatory (docs/internals/decisions/0001). A
   // build without a Clerk publishable key is a misconfiguration, not an open
@@ -406,27 +416,30 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         <DocumentTitleSync />
         <GlassAppearanceSync />
         <FontAppearanceSync />
-        <AgentCursorDesktopSync />
+        {isChildWindow ? null : <AgentCursorDesktopSync />}
         {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
-        <ConnectOnboardingDialog />
+        {isChildWindow ? null : <ConnectOnboardingDialog />}
         <SshPasswordPromptDialog />
-        <SnapShotCoordinator />
-        <DictationAccountCoordinator />
+        {isChildWindow ? null : <SnapShotCoordinator />}
+        {isChildWindow ? null : <DictationAccountCoordinator />}
         <ConfirmDialogHost />
         <TemporaryThreadDiscardDialog />
         <WorkspaceCleanupNoticeHost />
         {/* A rootless project prompts for a directory just in time, from anywhere in the app. */}
         <AttachProjectDirectoryHost />
         {/* Every project needs an owning company before it can carry issues. */}
-        {primaryEnvironmentAuthenticated ? <AssignPersonalProjectOwnership /> : null}
+        {primaryEnvironmentAuthenticated && !isChildWindow ? (
+          <AssignPersonalProjectOwnership />
+        ) : null}
         <SlowRpcRequestToastCoordinator />
         <PullRequestAgentReviewHost />
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
+        {/* Alerts belong to the main window alone, so a torn-out window never repeats them. */}
         {/* Captured mail toasts from any route, so a verification code finds you mid-thread. */}
-        {primaryEnvironmentAuthenticated ? <EmailCaptureToastHost /> : null}
-        {primaryEnvironmentAuthenticated ? <CalendarAlertHost /> : null}
-        {primaryEnvironmentAuthenticated ? <ThreadAlertRuntime /> : null}
+        {primaryEnvironmentAuthenticated && !isChildWindow ? <EmailCaptureToastHost /> : null}
+        {primaryEnvironmentAuthenticated && !isChildWindow ? <CalendarAlertHost /> : null}
+        {primaryEnvironmentAuthenticated && !isChildWindow ? <ThreadAlertRuntime /> : null}
         {appShell}
         {/* Above the router: a theme draft is judged by walking the app, so the
             editor has to survive navigation away from settings. */}
@@ -515,10 +528,11 @@ function DocumentTitleSync() {
   });
 
   useEffect(() => {
-    document.title = title;
+    if (!isChildWindow) document.title = title;
   }, [title]);
 
-  return null;
+  // A torn-out window titles itself after its page.
+  return isChildWindow ? <ChildWindowSync appName={title} /> : null;
 }
 
 function HostedStaticEnvironmentBootstrap() {
@@ -669,7 +683,8 @@ function EventRouter() {
         );
       useUiStateStore.getState().setProjectExpanded(bootstrapProjectKey, true);
 
-      if (readPathname() !== "/") {
+      // A torn-out window shows the page it was opened on, even the dashboard.
+      if (isChildWindow || readPathname() !== "/") {
         return;
       }
       if (handledBootstrapThreadIdRef.current === payload.bootstrapThreadId) {

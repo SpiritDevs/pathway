@@ -31,10 +31,11 @@ export function getRightPanelSplitWidth(rowWidth: number): number {
  */
 export function RightPanelResizeHandle({ handlers, resizeTo, className }: Props) {
   const onDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
-    const selector = "[data-app-workspace-main-row]";
+    // In a split window the panel shares its pane, not the whole row.
+    const selector = "[data-pane-frame], [data-app-workspace-main-row]";
     const row =
       event.currentTarget.closest<HTMLElement>(selector) ??
-      document.querySelector<HTMLElement>(selector);
+      document.querySelector<HTMLElement>("[data-app-workspace-main-row]");
     if (!row) return;
     resizeTo(getRightPanelSplitWidth(row.clientWidth));
   };

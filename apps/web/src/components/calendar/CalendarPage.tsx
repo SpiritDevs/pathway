@@ -41,6 +41,7 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 import { useClientSettings } from "~/hooks/useSettings";
 import { useTodayIssueDate } from "~/hooks/useTodayIssueDate";
 import { resolveShortcutCommand } from "~/keybindings";
+import { isPaneFocused, usePaneId } from "~/panes/usePaneFocus";
 import { cn } from "~/lib/utils";
 import {
   useIssueCycles,
@@ -703,10 +704,12 @@ function useCalendarKeys({
   // would tear down and re-add it between a key going down and the next one.
   const onActionRef = useRef(onAction);
   onActionRef.current = onAction;
+  const paneId = usePaneId();
   useEffect(() => {
     if (!enabled) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.repeat) return;
+      if (!isPaneFocused(paneId)) return;
       if (!calendarKeyIsAllowed(event)) return;
       const action = calendarKeyAction(
         resolveShortcutCommand(event, keybindings, { context: { calendarView: true } }),
@@ -718,7 +721,7 @@ function useCalendarKeys({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [enabled, keybindings]);
+  }, [enabled, keybindings, paneId]);
 }
 
 // ---------------------------------------------------------------------------
