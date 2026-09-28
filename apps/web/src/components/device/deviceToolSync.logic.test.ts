@@ -11,6 +11,7 @@ import {
   deviceToolRowKey,
   deviceToolSyncRows,
   carryPendingDeviceToolUpdates,
+  deviceToolProgressLabel,
   deviceToolUpdateTargets,
   hostHelperState,
   hostToolColumns,
@@ -228,7 +229,7 @@ describe("fan-out", () => {
 
   it("targets behind hosts that are not already updating", () => {
     const outcomes = new Map<string, DeviceToolUpdateOutcome>([
-      [deviceToolRowKey("a", "local"), { status: "pending" }],
+      [deviceToolRowKey("a", "local"), { operation: "update", status: "pending" }],
     ]);
     expect(deviceToolUpdateTargets(rows, outcomes).map((row) => row.environmentId)).toEqual(["b"]);
     expect(deviceToolUpdateTargets(rows, new Map()).map((row) => row.environmentId)).toEqual([
@@ -240,8 +241,11 @@ describe("fan-out", () => {
   it("keeps in-flight hosts out of the next Update all round", () => {
     // Update A, then Update all while A is still running: only B may be submitted.
     const afterA = new Map<string, DeviceToolUpdateOutcome>([
-      [deviceToolRowKey("a", "local"), { status: "pending" }],
-      [deviceToolRowKey("c", "local"), { status: "failed", message: "offline" }],
+      [deviceToolRowKey("a", "local"), { operation: "update", status: "pending" }],
+      [
+        deviceToolRowKey("c", "local"),
+        { operation: "update", status: "failed", message: "offline" },
+      ],
     ]);
     const nextRound = carryPendingDeviceToolUpdates(afterA);
     expect([...nextRound.keys()]).toEqual([deviceToolRowKey("a", "local")]);
@@ -252,14 +256,56 @@ describe("fan-out", () => {
     const summarize = (...values: DeviceToolUpdateOutcome[]) =>
       summarizeDeviceToolUpdates(new Map(values.map((value, index) => [String(index), value])));
     expect(summarize()).toBeNull();
-    expect(summarize({ status: "pending" }, { status: "success" })).toBe(
-      "Updating 1 host… 1 of 2 finished.",
+    expect(
+      summarize(
+        { operation: "update", status: "pending" },
+        { operation: "update", status: "success" },
+      ),
+    ).toBe("Updating 1 host… 1 of 2 finished.");
+    expect(
+      summarize(
+        { operation: "update", status: "success" },
+        { operation: "update", status: "success" },
+      ),
+    ).toBe("Updated 2 hosts.");
+    expect(summarize({ operation: "update", status: "failed", message: "offline" })).toBe(
+      "Update failed on 1 host.",
     );
-    expect(summarize({ status: "success" }, { status: "success" })).toBe("Updated 2 hosts.");
-    expect(summarize({ status: "failed", message: "offline" })).toBe("Update failed on 1 host.");
-    expect(summarize({ status: "success" }, { status: "failed", message: "offline" })).toBe(
-      "Updated 1 host; 1 failed.",
+    expect(
+      summarize(
+        { operation: "update", status: "success" },
+        { operation: "update", status: "failed", message: "offline" },
+      ),
+    ).toBe("Updated 1 host; 1 failed.");
+  });
+
+  it("labels restarts as restarts, whatever the drift says later", () => {
+    const summarize = (...values: DeviceToolUpdateOutcome[]) =>
+      summarizeDeviceToolUpdates(new Map(values.map((value, index) => [String(index), value])));
+    expect(deviceToolProgressLabel("restart")).toBe("Restarting…");
+    expect(deviceToolProgressLabel("update")).toBe("Updating…");
+    expect(summarize({ operation: "restart", status: "pending" })).toBe(
+      "Restarting 1 host… 0 of 1 finished.",
     );
+    expect(summarize({ operation: "restart", status: "success" })).toBe("Restarted 1 host.");
+    expect(summarize({ operation: "restart", status: "failed", message: "offline" })).toBe(
+      "Restart failed on 1 host.",
+    );
+    expect(
+      summarize(
+        { operation: "update", status: "pending" },
+        { operation: "restart", status: "success" },
+      ),
+    ).toBe("Updating and restarting 1 host… 1 of 2 finished.");
+  });
+
+  it("carries an in-flight restart into the next round with its operation", () => {
+    const next = carryPendingDeviceToolUpdates(
+      new Map<string, DeviceToolUpdateOutcome>([
+        ["a", { operation: "restart", status: "pending" }],
+      ]),
+    );
+    expect(next.get("a")).toEqual({ operation: "restart", status: "pending" });
   });
 });
 

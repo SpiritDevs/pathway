@@ -13,10 +13,12 @@ import { Spinner } from "../ui/spinner";
 import {
   deviceToolSyncRows,
   carryPendingDeviceToolUpdates,
+  deviceToolProgressLabel,
   deviceToolUpdateTargets,
   summarizeDeviceToolUpdates,
   type DeviceToolCell,
   type DeviceToolSyncRow,
+  type DeviceToolOperation,
   type DeviceToolUpdateOutcome,
 } from "../device/deviceToolSync.logic";
 import { SettingsRow } from "./settingsLayout";
@@ -86,9 +88,10 @@ export function DeviceToolSyncSettings() {
 
   const update = async (
     row: DeviceToolSyncRow<EnvironmentId>,
-    command: typeof updateTools = updateTools,
+    operation: DeviceToolOperation = "update",
   ) => {
-    setOutcome(row.key, { status: "pending" });
+    setOutcome(row.key, { operation, status: "pending" });
+    const command = operation === "restart" ? restartTools : updateTools;
     const result = await command({
       environmentId: row.environmentId,
       input: { hostId: row.hostId },
@@ -96,8 +99,8 @@ export function DeviceToolSyncSettings() {
     setOutcome(
       row.key,
       result._tag === "Success"
-        ? { status: "success" }
-        : { status: "failed", message: formatEnvironmentQueryError(result.cause) },
+        ? { operation, status: "success" }
+        : { operation, status: "failed", message: formatEnvironmentQueryError(result.cause) },
     );
   };
   const targets = deviceToolUpdateTargets(rows, outcomes);
@@ -167,7 +170,7 @@ export function DeviceToolSyncSettings() {
                   row={row}
                   outcome={outcomes.get(row.key)}
                   onUpdate={() => void update(row)}
-                  onRestart={() => void update(row, restartTools)}
+                  onRestart={() => void update(row, "restart")}
                 />
               ))}
             </tbody>
@@ -234,7 +237,7 @@ function DeviceToolSyncTableRow({
         {outcome?.status === "pending" ? (
           <span className="inline-flex items-center gap-1 text-muted-foreground">
             <Spinner className="size-3" />
-            {row.canRestart ? "Restarting…" : "Updating…"}
+            {deviceToolProgressLabel(outcome.operation)}
           </span>
         ) : outcome?.status === "success" && !row.canUpdate && !row.canRestart ? (
           <CheckIcon aria-label="Done" className="ml-auto size-4 text-success" />

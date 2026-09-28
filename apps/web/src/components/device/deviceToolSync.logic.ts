@@ -41,10 +41,25 @@ export interface DeviceToolSyncRow<Id extends string = string> {
   };
 }
 
-export type DeviceToolUpdateOutcome =
+/** What a host was asked to do. Labels follow the request, not later drift snapshots. */
+export type DeviceToolOperation = "update" | "restart";
+
+export type DeviceToolUpdateOutcome = { readonly operation: DeviceToolOperation } & (
   | { readonly status: "pending" }
   | { readonly status: "success" }
-  | { readonly status: "failed"; readonly message: string };
+  | { readonly status: "failed"; readonly message: string }
+);
+
+const OPERATION_COPY = {
+  update: { progress: "Updating", done: "Updated", failed: "Update failed" },
+  restart: { progress: "Restarting", done: "Restarted", failed: "Restart failed" },
+  mixed: { progress: "Updating and restarting", done: "Finished", failed: "Failed" },
+} as const;
+
+/** In-progress label for one host's request, e.g. "Restarting…". */
+export function deviceToolProgressLabel(operation: DeviceToolOperation): string {
+  return `${OPERATION_COPY[operation].progress}…`;
+}
 
 const HELPERS = ["hub", "agent", "serveSim"] as const;
 
@@ -199,7 +214,9 @@ export function summarizeDeviceToolUpdates(
   let pending = 0;
   let succeeded = 0;
   let failed = 0;
+  const operations = new Set<DeviceToolOperation>();
   for (const outcome of outcomes.values()) {
+    operations.add(outcome.operation);
     if (outcome.status === "pending") pending += 1;
     else if (outcome.status === "success") succeeded += 1;
     else failed += 1;
@@ -207,10 +224,12 @@ export function summarizeDeviceToolUpdates(
   const total = pending + succeeded + failed;
   if (total === 0) return null;
   const hosts = (count: number) => `${count} ${count === 1 ? "host" : "hosts"}`;
-  if (pending > 0) return `Updating ${hosts(pending)}… ${total - pending} of ${total} finished.`;
-  if (failed === 0) return `Updated ${hosts(succeeded)}.`;
-  if (succeeded === 0) return `Update failed on ${hosts(failed)}.`;
-  return `Updated ${hosts(succeeded)}; ${failed} failed.`;
+  const copy = OPERATION_COPY[operations.size === 1 ? [...operations][0]! : "mixed"];
+  if (pending > 0)
+    return `${copy.progress} ${hosts(pending)}… ${total - pending} of ${total} finished.`;
+  if (failed === 0) return `${copy.done} ${hosts(succeeded)}.`;
+  if (succeeded === 0) return `${copy.failed} on ${hosts(failed)}.`;
+  return `${copy.done} ${hosts(succeeded)}; ${failed} failed.`;
 }
 
 export type DeviceToolBanner =
