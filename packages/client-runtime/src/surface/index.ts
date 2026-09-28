@@ -6,3 +6,4 @@ export type {
   DecodedSurfaceFrame,
 } from "./client.ts";
 export { resolveSurfaceSocketUrl } from "./socketUrl.ts";
+export { createSurfaceSocketAtoms } from "./atoms.ts";

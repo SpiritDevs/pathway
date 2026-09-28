@@ -35,6 +35,19 @@ export function createPreviewEnvironmentAtoms<R, E>(
       scheduler: lifecycleScheduler,
       concurrency: lifecycleConcurrency,
     }),
+    // Interactions answer outside the serial lifecycle queue: a click waiting on
+    // a dialog must not block the reply that dismisses it.
+    remoteInteract: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:remote-interact",
+      tag: WS_METHODS.previewRemoteInteract,
+    }),
+    remoteInteractions: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:preview:remote-interactions",
+      tag: WS_METHODS.subscribePreviewRemoteInteractions,
+      // Pending prompts are presented only while someone subscribes; leaving
+      // must release them promptly so the server resumes auto-dismissing.
+      idleTtlMs: 0,
+    }),
     remoteFrames: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:preview:remote-frames",
       tag: WS_METHODS.subscribePreviewRemoteFrames,
