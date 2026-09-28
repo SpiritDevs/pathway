@@ -1,5 +1,8 @@
 # T3 Code device workspace review
 
+Historical review of #194. The backend rebuild supersedes its pins and archive
+recipe; see [Devices](devices.md) for the current implementation.
+
 Reviewed on 22 September 2026 against Pathway `852eafdd9fc03a196f02d53ba9692591e5c14b17`.
 
 ## Sources and scope
