@@ -62,6 +62,36 @@ struct PathwayRemoteBrowserInteraction: Decodable, Equatable {
     let downloads: [Download]
 }
 
+/// Which of a tab's page prompts to present. The environment refuses answers while the agent
+/// is working without a takeover, so then none present and the page waits for control instead.
+/// A prompt being answered stays hidden until the environment clears it; one whose answer
+/// failed is held back until the user asks for it again, so a refusal never re-opens a modal.
+struct PathwayRemoteBrowserPrompts: Equatable {
+    let dialog: PathwayRemoteBrowserInteraction.Dialog?
+    let select: PathwayRemoteBrowserInteraction.Select?
+    let chooser: PathwayRemoteBrowserInteraction.FileChooser?
+    /// The page is asking something only taking control can answer.
+    let waitingForControl: Bool
+    /// The page is still asking something whose answer failed.
+    let held: Bool
+
+    init(_ interaction: PathwayRemoteBrowserInteraction?, answered: Set<String>, held: Set<String>, canInteract: Bool) {
+        let ids = [interaction?.dialog?.dialogId, interaction?.select?.selectId, interaction?.fileChooser?.chooserId].compactMap { $0 }
+        waitingForControl = !ids.isEmpty && !canInteract
+        self.held = canInteract && ids.contains { held.contains($0) && !answered.contains($0) }
+        guard canInteract, let interaction else { (dialog, select, chooser) = (nil, nil, nil); return }
+        let hidden = answered.union(held)
+        dialog = interaction.dialog.flatMap { hidden.contains($0.dialogId) ? nil : $0 }
+        select = interaction.select.flatMap { hidden.contains($0.selectId) ? nil : $0 }
+        chooser = interaction.fileChooser.flatMap { hidden.contains($0.chooserId) ? nil : $0 }
+    }
+
+    /// Mirrors the environment's check for browser input.
+    static func canInteract(runStatuses: [String], takeoverStatus: String?) -> Bool {
+        takeoverStatus == "active" || !runStatuses.contains { ["preparing", "starting", "running"].contains($0) }
+    }
+}
+
 /// Maps a point in an aspect-fitted view of the page to the page's CSS pixels.
 enum PathwayRemoteBrowserGeometry {
     static func point(_ location: CGPoint, in size: CGSize, page: CGSize) -> CGPoint? {
@@ -107,6 +137,10 @@ final class PathwayRemoteBrowserModel {
 
     var takeoverStatus: String? { thread.browserTakeover?["status"]?.stringValue }
     var canTakeControl: Bool { thread.runs.contains { ["preparing", "starting", "running"].contains($0.status) } }
+    /// Whether the environment accepts input from this client now.
+    var canInteract: Bool {
+        PathwayRemoteBrowserPrompts.canInteract(runStatuses: thread.runs.map(\.status), takeoverStatus: takeoverStatus)
+    }
     func takeControl(_ action: String) async {
         do {
             var fields: [String: JSONValue] = [:]
@@ -184,10 +218,11 @@ final class PathwayRemoteBrowserModel {
         catch { self.error = error.localizedDescription; return false }
     }
 
-    /// Precise page input (`preview.remote.interact`) for the selected tab.
+    /// Precise page input (`preview.remote.interact`), for the selected tab unless a prompt's
+    /// own tab is given: answers must reach the tab that asked, even after switching tabs.
     @discardableResult
-    func interact(_ action: String, fields: [String: JSONValue] = [:]) async -> Bool {
-        guard isHostReady, let tabID = selected?.id else { return false }
+    func interact(_ action: String, fields: [String: JSONValue] = [:], tabID: String? = nil) async -> Bool {
+        guard isHostReady, let tabID = tabID ?? selected?.id else { return false }
         var payload = fields
         payload["action"] = .string(action)
         payload["threadId"] = .string(thread.threadID)
@@ -261,10 +296,11 @@ final class PathwayRemoteBrowserModel {
                     interactions = Dictionary(states.map { ($0.tabId, $0) }, uniquingKeysWith: { $1 })
                 }
                 await rpc.stop()
+                releaseInteractions()
                 return
             } catch {
                 await rpc.stop()
-                if Task.isCancelled { return }
+                if Task.isCancelled { releaseInteractions(); return }
             }
             guard let delay else { return }
             try? await Task.sleep(for: .seconds(delay))
@@ -272,22 +308,27 @@ final class PathwayRemoteBrowserModel {
         }
     }
 
-    func respond(to dialog: PathwayRemoteBrowserInteraction.Dialog, accept: Bool, text: String) async -> Bool {
+    /// Unsubscribed, the environment stops holding prompts for this client; stale ones must not
+    /// present when it subscribes again.
+    private func releaseInteractions() { interactions = [:] }
+
+    func respond(to dialog: PathwayRemoteBrowserInteraction.Dialog, accept: Bool, text: String, tabID: String) async -> Bool {
         var fields: [String: JSONValue] = ["dialogId": .string(dialog.dialogId), "accept": .bool(accept)]
         if dialog.kind == "prompt", accept { fields["promptText"] = .string(text) }
-        return await interact("dialogRespond", fields: fields)
+        return await interact("dialogRespond", fields: fields, tabID: tabID)
     }
 
-    func choose(_ select: PathwayRemoteBrowserInteraction.Select, indices: [Int]?) async -> Bool {
+    func choose(_ select: PathwayRemoteBrowserInteraction.Select, indices: [Int]?, tabID: String) async -> Bool {
         await interact("selectChoose", fields: ["selectId": .string(select.selectId),
-                                                "indices": indices.map { .array($0.map { .number(Double($0)) }) } ?? .null])
+                                                "indices": indices.map { .array($0.map { .number(Double($0)) }) } ?? .null],
+                       tabID: tabID)
     }
 
     /// Uploads the picked files to the environment, then hands them to the page.
     /// Returns false when the upload or the page refused them, so the picker can be offered again.
-    func respond(to chooser: PathwayRemoteBrowserInteraction.FileChooser, files: [URL]) async -> Bool {
+    func respond(to chooser: PathwayRemoteBrowserInteraction.FileChooser, files: [URL], tabID: String) async -> Bool {
         guard !files.isEmpty else {
-            return await interact("fileChooserRespond", fields: ["chooserId": .string(chooser.chooserId), "files": .array([])])
+            return await interact("fileChooserRespond", fields: ["chooserId": .string(chooser.chooserId), "files": .array([])], tabID: tabID)
         }
         guard let files = checkedUploads(files) else { return false }
         uploadStatus = files.count == 1 ? "Uploading \(files[0].0.lastPathComponent)…" : "Uploading \(files.count) files…"
@@ -296,7 +337,7 @@ final class PathwayRemoteBrowserModel {
             var uploaded: [JSONValue] = []
             for (file, size) in files { uploaded.append(try await upload(file, size: size)) }
             uploadStatus = "Sending to the page…"
-            return await interact("fileChooserRespond", fields: ["chooserId": .string(chooser.chooserId), "files": .array(uploaded)])
+            return await interact("fileChooserRespond", fields: ["chooserId": .string(chooser.chooserId), "files": .array(uploaded)], tabID: tabID)
         } catch is CancellationError { return false }
         catch { self.error = error.localizedDescription; return false }
     }
@@ -391,6 +432,7 @@ struct AgentThreadRemoteBrowser: View {
     @State private var showsDownloads = false
     @State private var passwordTabID: String?
     @State private var passwordOrigin: String?
+    @Environment(\.scenePhase) private var scenePhase
     init(model: PathwayAgentThreadModel) { _browser = State(initialValue: PathwayRemoteBrowserModel(thread: model)) }
 
     var body: some View {
@@ -433,7 +475,7 @@ struct AgentThreadRemoteBrowser: View {
                     Button("Go", action: navigate).disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }.labelStyle(.iconOnly)
                 if let error = browser.error { Text(error).font(.caption).foregroundStyle(.red) }
-                RemoteBrowserPage(browser: browser)
+                RemoteBrowserPage(browser: browser).modifier(RemoteBrowserPrompts(browser: browser))
                 HStack {
                     TextField("Type in selected page field", text: $typing)
                         .textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -497,10 +539,14 @@ struct AgentThreadRemoteBrowser: View {
                 }
             }
             .sheet(isPresented: $showsDownloads) { RemoteBrowserDownloads(browser: browser) }
-            .modifier(RemoteBrowserPrompts(browser: browser))
             .task { await browser.start() }
             .task(id: browser.isHostReady) { await browser.watchTabs() }
-            .task(id: browser.isHostReady) { await browser.watchInteractions() }
+            // Subscribing makes the environment hold page prompts for this client, so a phone in
+            // the background lets go of them, as it does of the pixels.
+            .task(id: "\(browser.isHostReady):\(scenePhase == .background)") {
+                guard scenePhase != .background else { return }
+                await browser.watchInteractions()
+            }
             .onDisappear { Task { await browser.stop() } }
             .onChange(of: browser.selected?.url) { _, url in address = url == "about:blank" ? "" : url ?? "" }
     }
@@ -554,78 +600,92 @@ private struct RemoteBrowserPage: View {
 }
 
 /// Presents the selected tab's page prompts natively: dialogs as alerts, `<select>` menus as a
-/// sheet, file choosers as the document picker. Each prompt shows once per id; answering it
-/// waits for the environment to clear it, and a failed answer shows the prompt again.
+/// sheet, file choosers as the document picker. While the agent works without a takeover, or
+/// after an answer fails, a banner says the page is asking instead of a modal covering the screen.
 private struct RemoteBrowserPrompts: ViewModifier {
     let browser: PathwayRemoteBrowserModel
     @State private var answered: Set<String> = []
+    @State private var held: Set<String> = []
     @State private var promptText = ""
     @State private var picking = false
 
-    private var dialog: PathwayRemoteBrowserInteraction.Dialog? {
-        browser.interaction?.dialog.flatMap { answered.contains($0.dialogId) ? nil : $0 }
-    }
-    private var select: PathwayRemoteBrowserInteraction.Select? {
-        browser.interaction?.select.flatMap { answered.contains($0.selectId) ? nil : $0 }
-    }
-    private var chooser: PathwayRemoteBrowserInteraction.FileChooser? {
-        browser.interaction?.fileChooser.flatMap { answered.contains($0.chooserId) ? nil : $0 }
-    }
-
     func body(content: Content) -> some View {
-        let dialog = dialog, chooser = chooser
+        let prompts = PathwayRemoteBrowserPrompts(browser.interaction, answered: answered, held: held, canInteract: browser.canInteract)
+        let dialog = prompts.dialog, chooser = prompts.chooser, tabID = browser.interaction?.tabId ?? ""
         content
+            .overlay(alignment: .top) {
+                if prompts.waitingForControl || prompts.held { banner(prompts) }
+            }
             .alert(dialog?.kind == "beforeunload" ? "Leave this page?" : "The page says",
                    isPresented: Binding(get: { dialog != nil }, set: { _ in }), presenting: dialog) { dialog in
                 if dialog.kind == "prompt" { TextField("Response", text: $promptText) }
                 if dialog.kind != "alert" {
-                    Button(dialog.kind == "beforeunload" ? "Stay" : "Cancel", role: .cancel) { answer(dialog, accept: false) }
+                    Button(dialog.kind == "beforeunload" ? "Stay" : "Cancel", role: .cancel) { answer(dialog, accept: false, tabID: tabID) }
                 }
-                Button(dialog.kind == "beforeunload" ? "Leave" : "OK") { answer(dialog, accept: true) }
+                Button(dialog.kind == "beforeunload" ? "Leave" : "OK") { answer(dialog, accept: true, tabID: tabID) }
             } message: { dialog in
                 Text(dialog.message.isEmpty && dialog.kind == "beforeunload" ? "Changes you made may not be saved." : dialog.message)
             }
             .onChange(of: dialog?.dialogId) { promptText = dialog?.defaultValue ?? "" }
-            .sheet(item: Binding(get: { select }, set: { next in
+            .sheet(item: Binding(get: { prompts.select }, set: { next in
                 // Swiping the sheet away cancels the menu, as Escape does in the page.
-                if next == nil, let select { choose(select, indices: nil) }
+                if next == nil, let select = prompts.select { choose(select, indices: nil, tabID: tabID) }
             })) { select in
-                RemoteBrowserSelectSheet(select: select) { choose(select, indices: $0) }
+                RemoteBrowserSelectSheet(select: select) { choose(select, indices: $0, tabID: tabID) }
             }
             .onChange(of: chooser?.chooserId) { picking = chooser != nil }
             .fileImporter(isPresented: $picking, allowedContentTypes: [.item], allowsMultipleSelection: chooser?.multiple ?? false) { result in
-                if let chooser { pick(chooser, files: (try? result.get()) ?? []) }
+                if let chooser { pick(chooser, files: (try? result.get()) ?? [], tabID: tabID) }
             } onCancellation: {
-                if let chooser { pick(chooser, files: []) }
+                if let chooser { pick(chooser, files: [], tabID: tabID) }
             }
+            // Gaining control is the moment a held prompt can be answered.
+            .onChange(of: browser.canInteract) { _, canInteract in if canInteract { held = [] } }
     }
 
-    /// Sends the pick, or the cancel as no files. A refused pick keeps the chooser open on the
-    /// page, so the picker is offered again.
-    private func pick(_ chooser: PathwayRemoteBrowserInteraction.FileChooser, files: [URL]) {
-        answer(chooser.chooserId) {
-            await browser.respond(to: chooser, files: files)
-        } refused: {
-            picking = true
+    private func banner(_ prompts: PathwayRemoteBrowserPrompts) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "questionmark.bubble")
+            if prompts.waitingForControl {
+                Text("The page is asking for a response. Take control to answer.")
+                if browser.canTakeControl && !["requested", "pausing", "proceeding", "active"].contains(browser.takeoverStatus ?? "") {
+                    Button("Take control") { Task { await browser.takeControl("request") } }.bold()
+                }
+            } else {
+                Text("The page is still asking for a response.")
+                Button("Answer") { held = [] }.bold()
+            }
         }
+        .font(.caption)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(.regularMaterial, in: .rect(cornerRadius: 12))
+        .padding(8)
+        .accessibilityElement(children: .combine)
     }
 
-    private func answer(_ dialog: PathwayRemoteBrowserInteraction.Dialog, accept: Bool) {
+    /// Sends the pick, or the cancel as no files. The answer goes to the tab that asked, even if
+    /// another tab is selected by the time the upload finishes.
+    private func pick(_ chooser: PathwayRemoteBrowserInteraction.FileChooser, files: [URL], tabID: String) {
+        answer(chooser.chooserId) { await browser.respond(to: chooser, files: files, tabID: tabID) }
+    }
+
+    private func answer(_ dialog: PathwayRemoteBrowserInteraction.Dialog, accept: Bool, tabID: String) {
         let text = promptText
-        answer(dialog.dialogId) { await browser.respond(to: dialog, accept: accept, text: text) }
+        answer(dialog.dialogId) { await browser.respond(to: dialog, accept: accept, text: text, tabID: tabID) }
     }
 
-    private func choose(_ select: PathwayRemoteBrowserInteraction.Select, indices: [Int]?) {
-        answer(select.selectId) { await browser.choose(select, indices: indices) }
+    private func choose(_ select: PathwayRemoteBrowserInteraction.Select, indices: [Int]?, tabID: String) {
+        answer(select.selectId) { await browser.choose(select, indices: indices, tabID: tabID) }
     }
 
-    /// Hides the prompt while its answer is sent, and brings it back if the answer fails.
-    private func answer(_ id: String, send: @escaping () async -> Bool, refused: @escaping () -> Void = {}) {
+    /// Hides the prompt while its answer is sent. If the answer fails, it is held behind the
+    /// banner rather than presented again, so a refusal cannot trap the screen in a modal.
+    private func answer(_ id: String, send: @escaping () async -> Bool) {
         guard answered.insert(id).inserted else { return }
         Task {
             guard !(await send()) else { return }
             answered.remove(id)
-            refused()
+            held.insert(id)
         }
     }
 }
@@ -754,20 +814,23 @@ struct AgentThreadRemoteBrowserPreview: View {
                         .accessibilityIdentifier("thread-remote-browser-preview-hide")
                 }
                 if let stream {
-                    if stream.state == .failed && !stream.hasFrame {
-                        HStack {
-                            Text("The remote browser disconnected.").font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Reconnect") { stream.reconnect() }.font(.caption.bold())
+                    // The surface stays mounted while failed: its task keeps retrying on its own.
+                    Button(action: open) {
+                        RemoteBrowserSurfaceView(stream: stream, threadID: model.threadID, tabID: tabID, compact: true)
+                            .frame(maxWidth: .infinity).frame(height: 200)
+                            .clipShape(.rect(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Live view of the agent's browser. Opens the remote browser.")
+                    .overlay {
+                        if stream.state == .failed && !stream.hasFrame {
+                            VStack(spacing: 8) {
+                                Text("The remote browser disconnected. Retrying…").font(.caption).foregroundStyle(.secondary)
+                                Button("Reconnect now") { stream.reconnect() }.font(.caption.bold())
+                            }
+                            .padding(12)
+                            .background(.regularMaterial, in: .rect(cornerRadius: 12))
                         }
-                    } else {
-                        Button(action: open) {
-                            RemoteBrowserSurfaceView(stream: stream, threadID: model.threadID, tabID: tabID, compact: true)
-                                .frame(maxWidth: .infinity).frame(height: 200)
-                                .clipShape(.rect(cornerRadius: 12))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Live view of the agent's browser. Opens the remote browser.")
                     }
                 }
             }

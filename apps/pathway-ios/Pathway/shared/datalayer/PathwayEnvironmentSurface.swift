@@ -120,6 +120,37 @@ struct PathwaySurfaceReconnect: Equatable {
     }
 }
 
+/// The newest undecoded frame and which socket's decoder, if any, owns it. Each socket
+/// (generation) gets a fresh queue; a decoder only ever takes and releases its own slot, so one
+/// unwinding from an earlier socket can neither steal frames nor block the next decoder.
+struct PathwaySurfaceDecodeQueue: Equatable {
+    private(set) var pending: Data?
+    private(set) var decoder: Int?
+
+    /// A new socket: the old socket's frame and decoder no longer count.
+    mutating func install() { pending = nil; decoder = nil }
+
+    /// Keeps only the newest frame. True when `generation` must start a decoder for it.
+    mutating func enqueue(_ frame: Data, generation: Int) -> Bool {
+        pending = frame
+        guard decoder == nil else { return false }
+        decoder = generation
+        return true
+    }
+
+    /// The frame for the decoder of `generation` to decode next, if it still owns the slot.
+    mutating func next(generation: Int) -> Data? {
+        guard decoder == generation, let frame = pending else { return nil }
+        pending = nil
+        return frame
+    }
+
+    /// The decoder of `generation` stopped; frees the slot only if it is still that decoder's.
+    mutating func finished(generation: Int) {
+        if decoder == generation { decoder = nil }
+    }
+}
+
 /// The surface route beside the RPC socket, keeping its ticket: tickets last minutes and are not
 /// consumed, so the prepared `/ws?wsTicket=` URL authorizes the surface socket too.
 /// Mirrors `resolveSurfaceSocketUrl` in `packages/client-runtime/src/surface/socketUrl.ts`.
@@ -185,7 +216,7 @@ final class PathwayEnvironmentSurfaceStream {
     @ObservationIgnored private var generation = 0
     /// The newest `run`; an older one still unwinding (say, from a slow ticket) touches nothing.
     @ObservationIgnored private var activeRun = 0
-    @ObservationIgnored private var pending: Data?
+    @ObservationIgnored private var frameQueue = PathwaySurfaceDecodeQueue()
     @ObservationIgnored private var decoding: Task<Void, Never>?
     @ObservationIgnored private var frames = 0
     @ObservationIgnored private var latencyMs = 0.0
@@ -280,6 +311,9 @@ final class PathwayEnvironmentSurfaceStream {
     private func connect(to url: URL, reconnect: inout PathwaySurfaceReconnect) async -> PathwaySurfaceReconnect.Close {
         generation += 1
         let generation = generation
+        // Whatever an earlier socket left decoding or queued is stale now.
+        decoding?.cancel(); decoding = nil
+        frameQueue.install()
         let socket = session.webSocketTask(with: url)
         socket.maximumMessageSize = PathwaySurfaceFrameHeader.maxFrameBytes
         self.socket = socket
@@ -298,7 +332,7 @@ final class PathwayEnvironmentSurfaceStream {
         }
         defer {
             monitor.cancel()
-            if generation == self.generation { decoding?.cancel(); decoding = nil; pending = nil }
+            if generation == self.generation { decoding?.cancel(); decoding = nil; frameQueue.install() }
             socket.cancel(with: .goingAway, reason: nil)
             if self.socket === socket { self.socket = nil }
         }
@@ -311,8 +345,9 @@ final class PathwayEnvironmentSurfaceStream {
                 case let .string(text):
                     if text == "ping" { socket.send(.string("pong")) { _ in } }
                 case let .data(data):
-                    pending = data
-                    if decoding == nil { decoding = Task { [weak self] in await self?.decodePending(generation: generation) } }
+                    if frameQueue.enqueue(data, generation: generation) {
+                        decoding = Task { [weak self] in await self?.decodePending(generation: generation) }
+                    }
                 @unknown default: continue
                 }
             }
@@ -325,13 +360,12 @@ final class PathwayEnvironmentSurfaceStream {
 
     /// Decodes the newest pending frame until none is left; frames that arrive meanwhile replace it.
     private func decodePending(generation: Int) async {
-        while let bytes = pending, generation == self.generation, !Task.isCancelled {
-            pending = nil
+        defer { frameQueue.finished(generation: generation) }
+        while !Task.isCancelled, generation == self.generation, let bytes = frameQueue.next(generation: generation) {
             let decoded = await Task.detached(priority: .userInitiated) { Self.decode(bytes) }.value
             guard generation == self.generation, !Task.isCancelled else { return }
             if let decoded { deliver(decoded) } else if state == .live { state = .stale }
         }
-        if generation == self.generation { decoding = nil }
     }
 
     private func deliver(_ frame: (header: PathwaySurfaceFrameHeader, image: CGImage)) {

@@ -270,6 +270,28 @@ struct PathwayThreadConversationTests {
         await browser.stop()
     }
 
+    @Test func browserPromptAnswersReachTheTabThatAskedAfterSwitchingTabs() async throws {
+        let thread = makeModel { _, _ in .object([:]) }
+        func tab(_ id: String) -> JSONValue {
+            .object(["tabId": .string(id), "url": .string("https://\(id).test"), "title": .string(id), "recording": .bool(false)])
+        }
+        var interactions: [JSONValue] = []
+        let browser = PathwayRemoteBrowserModel(thread: thread, request: { method, payload in
+            if method == "preview.remote.interact" { interactions.append(payload); return .object([:]) }
+            return .object(["tabs": .array([tab("a"), tab("b")]), "selectedTabId": .string("a")])
+        })
+        await browser.start()
+        #expect(browser.selected?.id == "a")
+        browser.selectedID = "b"
+        let chooser = try JSONDecoder().decode(PathwayRemoteBrowserInteraction.FileChooser.self,
+                                               from: Data(#"{"chooserId":"chooser-a","multiple":false}"#.utf8))
+        #expect(await browser.respond(to: chooser, files: [], tabID: "a"))
+        let sent = try #require(interactions.first?.objectValue)
+        #expect(sent["tabId"]?.stringValue == "a")
+        #expect(sent["chooserId"]?.stringValue == "chooser-a")
+        await browser.stop()
+    }
+
     @Test func streamingUpdatesPreserveOrderingAndReorderedItemsMove() throws {
         let model = makeModel { _, _ in .object([:]) }
         func item(_ id: String, _ ordinal: Int, _ text: String) -> JSONValue {

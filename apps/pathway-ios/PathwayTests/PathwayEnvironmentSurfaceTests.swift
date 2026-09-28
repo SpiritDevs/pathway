@@ -127,6 +127,61 @@ struct PathwayEnvironmentSurfaceTests {
         #expect(PathwayRemoteBrowserGeometry.point(.zero, in: view, page: .zero) == nil)
     }
 
+    @Test func aDecoderFromAnEarlierSocketNeverStrandsTheNextOne() {
+        var queue = PathwaySurfaceDecodeQueue()
+        let startsFirst = queue.enqueue(Data([1]), generation: 1)
+        let startsAgain = queue.enqueue(Data([2]), generation: 1)
+        let firstDecodes = queue.next(generation: 1)
+        #expect(startsFirst && !startsAgain)
+        #expect(firstDecodes == Data([2]))
+
+        // A new socket arrives while generation 1's decode is still in flight.
+        queue.install()
+        let startsSecond = queue.enqueue(Data([3]), generation: 2)
+        // The old decoder unwinds: it takes nothing and leaves generation 2's slot alone.
+        let staleTakes = queue.next(generation: 1)
+        queue.finished(generation: 1)
+        #expect(startsSecond)
+        #expect(staleTakes == nil)
+        #expect(queue.decoder == 2)
+        let secondDecodes = queue.next(generation: 2)
+        queue.finished(generation: 2)
+        #expect(secondDecodes == Data([3]))
+        #expect(queue.decoder == nil)
+        let restarts = queue.enqueue(Data([4]), generation: 2)
+        #expect(restarts)
+    }
+
+    @Test func pagePromptsWaitForControlWhileTheAgentWorks() throws {
+        let interaction = try JSONDecoder().decode(PathwayRemoteBrowserInteraction.self, from: Data(#"""
+        {"tabId":"a","dialog":{"dialogId":"d","kind":"confirm","message":"Sure?","defaultValue":""},
+         "fileChooser":null,"select":null,"downloads":[]}
+        """#.utf8))
+        #expect(!PathwayRemoteBrowserPrompts.canInteract(runStatuses: ["completed", "running"], takeoverStatus: nil))
+        #expect(!PathwayRemoteBrowserPrompts.canInteract(runStatuses: ["starting"], takeoverStatus: "requested"))
+        #expect(PathwayRemoteBrowserPrompts.canInteract(runStatuses: ["running"], takeoverStatus: "active"))
+        #expect(PathwayRemoteBrowserPrompts.canInteract(runStatuses: ["completed", "waiting"], takeoverStatus: nil))
+
+        let agentWorking = PathwayRemoteBrowserPrompts(interaction, answered: [], held: [], canInteract: false)
+        #expect(agentWorking.dialog == nil)
+        #expect(agentWorking.waitingForControl)
+        #expect(!agentWorking.held)
+
+        let inControl = PathwayRemoteBrowserPrompts(interaction, answered: [], held: [], canInteract: true)
+        #expect(inControl.dialog?.dialogId == "d")
+        #expect(!inControl.waitingForControl)
+
+        // Sent: hidden until the environment clears it. Refused: held behind the banner, not re-presented.
+        #expect(PathwayRemoteBrowserPrompts(interaction, answered: ["d"], held: [], canInteract: true).dialog == nil)
+        let refused = PathwayRemoteBrowserPrompts(interaction, answered: [], held: ["d"], canInteract: true)
+        #expect(refused.dialog == nil)
+        #expect(refused.held)
+        // Losing control after a refusal asks for control, not an answer.
+        let lostControl = PathwayRemoteBrowserPrompts(interaction, answered: [], held: ["d"], canInteract: false)
+        #expect(lostControl.waitingForControl && !lostControl.held && lostControl.dialog == nil)
+        #expect(!PathwayRemoteBrowserPrompts(nil, answered: [], held: [], canInteract: false).waitingForControl)
+    }
+
     @MainActor @Test func aSupersededRunLeavesItsSuccessorsSocketAlone() async throws {
         let server = try await SurfaceTestServer.start()
         defer { server.stop() }
