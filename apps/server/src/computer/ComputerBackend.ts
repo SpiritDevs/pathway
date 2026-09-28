@@ -22,6 +22,7 @@ import {
   type ComputerSpaceInventory,
   type ComputerState,
   type ComputerTarget,
+  type ComputerSurfaceInput,
   type ComputerUiNode,
   type ComputerVerifyStateResult,
   type ComputerWindow,
@@ -290,6 +291,12 @@ export interface ComputerBackend {
     readonly reuseRecentTree?: boolean;
   }) => BackendEffect<ComputerState>;
   /** Zoomed perception of one window or region. */
+  /** Primary-display capture independent of model observations and active tasks. */
+  readonly captureSurface?: () => BackendEffect<ComputerScreenshot>;
+  /** True physical pointer phases, when the host exposes them. */
+  readonly surfacePointer?: (
+    input: Extract<ComputerSurfaceInput, { type: "pointer.move" | "pointer.down" | "pointer.up" }>,
+  ) => ComputerBackendAction;
   readonly captureScreenshot: (
     request: ComputerCaptureRequest,
   ) => BackendEffect<ComputerScreenshot>;

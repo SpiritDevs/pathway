@@ -1,5 +1,6 @@
 import { XCODE_WS_METHODS } from "@spiritdevs/contracts/xcode";
 import { APPLE_WS_METHODS } from "@spiritdevs/contracts/apple";
+import { COMPUTER_SURFACE_METHODS } from "@spiritdevs/contracts";
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
@@ -300,6 +301,12 @@ export const RPC_REQUIRED_SCOPES = {
   // Computer: watching is a read and acting is a write. These only admit the call; the
   // environment's Computer access policy is applied by the handlers, because it reads live
   // settings and never restricts watching or Stop.
+  [COMPUTER_SURFACE_METHODS.getState]: AuthOrchestrationReadScope,
+  [COMPUTER_SURFACE_METHODS.subscribe]: AuthOrchestrationReadScope,
+  [COMPUTER_SURFACE_METHODS.takeControl]: AuthOrchestrationOperateScope,
+  [COMPUTER_SURFACE_METHODS.releaseControl]: AuthOrchestrationOperateScope,
+  [COMPUTER_SURFACE_METHODS.input]: AuthOrchestrationOperateScope,
+  [COMPUTER_SURFACE_METHODS.handBack]: AuthOrchestrationOperateScope,
   [COMPUTER_WS_METHODS.getStatus]: AuthOrchestrationReadScope,
   // The audit log spans every thread on this desktop, so only admins read it; Synara
   // limited it to the owner session.

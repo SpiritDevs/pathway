@@ -2322,6 +2322,7 @@ export const makeCuaComputerBackend = (options: CuaComputerBackendOptions = {}) 
         Effect.map(refresh(), () => state.size),
       getState,
       captureScreenshot,
+      captureSurface: () => captureOverview(false),
       focusWindow: (windowId: string): BackendEffect<void> =>
         Effect.gen(function* () {
           // Selection sends no input. The actual actuator revalidates the exact

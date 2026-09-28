@@ -1,3 +1,5 @@
+import * as Option from "effect/Option";
+import { ComputerService } from "./Services/ComputerService.ts";
 /**
  * The Computer calls each run has in flight, so Stop can end them with the
  * run, as Synara's in-flight request registry and `cancelTurn` do. Stop fences
@@ -112,6 +114,16 @@ export const computerRunStopFenceLayer = Layer.effect(
   RunStopFence,
   Effect.gen(function* () {
     const calls = yield* ComputerRunCalls;
-    return { stopRun: ({ threadId, runId }) => calls.stop(threadId, runId) };
+    const computer = yield* Effect.serviceOption(ComputerService);
+    return {
+      stopRun: ({ threadId, runId }) =>
+        calls.stop(threadId, runId).pipe(
+          Effect.andThen(() => {
+            if (Option.isNone(computer)) return Effect.void;
+            computer.value.manager.surfaceControl.endTurn(threadId, runId);
+            return Effect.ignore(computer.value.manager.releaseDesktopControl(threadId, runId));
+          }),
+        ),
+    };
   }),
 );

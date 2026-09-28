@@ -520,9 +520,7 @@ const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
   Layer.provide(
     computerServerOwnedRuntimeRequestsLayer.pipe(Layer.provide(ComputerApprovalGateLayerLive)),
   ),
-  Layer.provide(
-    ComputerRunCalls.computerRunStopFenceLayer.pipe(Layer.provide(ComputerRunCallsLive)),
-  ),
+  Layer.provide(ComputerRunCalls.computerRunStopFenceLayer.pipe(Layer.provide(ComputerLayerLive))),
   // Turn start admits each run's Computer intent against the host.
   Layer.provide(ComputerLayerLive),
   Layer.provide(questionAnswerDeliveryLayer),
