@@ -51,6 +51,11 @@ const foldRequest = async (
       : {}),
     ...(signal ? { signal } : {}),
   });
+  // A hub or proxy without the fold route has no fold capability; reading it
+  // again every few seconds would never change that.
+  if (!posture && (response.status === 404 || response.status === 501)) {
+    return { supported: false, posture: null, hingeAngle: null };
+  }
   if (!response.ok) {
     const payload: unknown = await response.json().catch(() => null);
     const error = isRecord(payload) ? payload.error : null;

@@ -559,7 +559,10 @@ export function DeviceStreamView(props: {
                   onClick={() => {
                     // An expired ticket surfaces as unauthorized on restart and
                     // refreshes access through the effect; no need to mint one here.
+                    // Drop the MJPEG fallback too, or a recovered H.264 stream
+                    // would decode behind a canvas still hidden for MJPEG.
                     clientRef.current?.stop();
+                    setMjpegUrl(null);
                     clientRef.current?.start();
                   }}
                 >
