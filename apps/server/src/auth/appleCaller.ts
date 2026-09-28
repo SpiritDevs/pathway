@@ -6,16 +6,17 @@ import { ServerSecretStore } from "./ServerSecretStore.ts";
 
 export type AppleCaller = { clerkSubject: string } | { userId: string };
 
-/** Cloud minting reserves cloud-connect for the linked owner; peer sessions retain the acting user. */
+/** Owner sessions retain the verified mint identity and must still match the current owner link. */
 export const resolveAppleCaller = Effect.fn("auth.resolveAppleCaller")(function* (
-  session: Pick<AuthenticatedSession, "subject">,
+  session: Pick<AuthenticatedSession, "subject" | "clerkSubject">,
 ): Effect.fn.Return<AppleCaller | null, never, ServerSecretStore> {
   if (session.subject === "cloud-connect") {
+    if (!session.clerkSubject) return null;
     const secrets = yield* ServerSecretStore;
     const linked = yield* secrets.get(CLOUD_LINKED_USER_ID).pipe(Effect.option);
     if (Option.isNone(linked) || Option.isNone(linked.value)) return null;
-    const clerkSubject = new TextDecoder().decode(linked.value.value).trim();
-    return clerkSubject ? { clerkSubject } : null;
+    const linkedSubject = new TextDecoder().decode(linked.value.value).trim();
+    return linkedSubject === session.clerkSubject ? { clerkSubject: session.clerkSubject } : null;
   }
   if (
     [

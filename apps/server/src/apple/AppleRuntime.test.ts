@@ -238,7 +238,11 @@ describe("environment Apple runtime", () => {
       });
       const authorize = vi.spyOn(backend, "authorizeCaller").mockRejectedValue(denied);
       const caller = { userId: "teammate-cloud-user" };
-      const handlers = makeAppleRpcHandlers(runtime, [AuthOrchestrationReadScope], caller);
+      const handlers = makeAppleRpcHandlers(
+        runtime,
+        [AuthOrchestrationReadScope],
+        Effect.succeed(caller),
+      );
       const reads: ReadonlyArray<
         Effect.Effect<unknown, AppleError | EnvironmentAuthorizationError>
       > = [
@@ -272,9 +276,13 @@ describe("environment Apple runtime", () => {
         failure: { code: "forbidden" },
       });
       expect(authorize).toHaveBeenCalledTimes(7);
-      const owner = makeAppleRpcHandlers(runtime, [AuthOrchestrationReadScope], {
-        clerkSubject: "owner",
-      });
+      const owner = makeAppleRpcHandlers(
+        runtime,
+        [AuthOrchestrationReadScope],
+        Effect.succeed({
+          clerkSubject: "owner",
+        }),
+      );
       expect(yield* owner[APPLE_WS_METHODS.listApps](target)).toHaveLength(1);
       expect(authorize).toHaveBeenCalledTimes(9);
       h.dispose();
@@ -293,9 +301,13 @@ describe("environment Apple runtime", () => {
             retryAfterSeconds: null,
           }),
         );
-      const handlers = makeAppleRpcHandlers(runtime, [AuthOrchestrationReadScope], {
-        userId: "member",
-      });
+      const handlers = makeAppleRpcHandlers(
+        runtime,
+        [AuthOrchestrationReadScope],
+        Effect.succeed({
+          userId: "member",
+        }),
+      );
       expect(yield* Effect.result(handlers[APPLE_WS_METHODS.listApps](target))).toMatchObject({
         _tag: "Failure",
         failure: { code: "forbidden" },
@@ -310,13 +322,17 @@ describe("environment Apple runtime", () => {
       Effect.gen(function* () {
         const h = harness();
         const { result: runtime, backend } = h.runtime("env");
-        const read = makeAppleRpcHandlers(runtime, [AuthOrchestrationReadScope], {
-          clerkSubject: "owner",
-        });
+        const read = makeAppleRpcHandlers(
+          runtime,
+          [AuthOrchestrationReadScope],
+          Effect.succeed({
+            clerkSubject: "owner",
+          }),
+        );
         const write = makeAppleRpcHandlers(
           runtime,
           [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
-          { clerkSubject: "owner" },
+          Effect.succeed({ clerkSubject: "owner" }),
         );
         expect([...WsRpcGroup.requests.keys()]).toEqual(
           expect.arrayContaining([...AppleRpcs.requests.keys()]),

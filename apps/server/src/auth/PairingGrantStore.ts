@@ -27,6 +27,7 @@ export interface BootstrapGrant {
   readonly method: ServerAuthBootstrapMethod;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly subject: string;
+  readonly clerkSubject?: string;
   readonly initiatingEnvironmentId?: EnvironmentId;
   readonly label?: string;
   readonly proofKeyThumbprint?: string;
@@ -204,6 +205,7 @@ export class PairingGrantStore extends Context.Service<
       readonly ttl?: Duration.Duration;
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly subject?: string;
+      readonly clerkSubject?: string;
       readonly initiatingEnvironmentId?: EnvironmentId;
       readonly label?: string;
       readonly proofKeyThumbprint?: string;
@@ -411,6 +413,7 @@ export const make = Effect.gen(function* () {
         method: "one-time-token",
         scopes: input?.scopes ?? AuthStandardClientScopes,
         subject,
+        ...(input?.clerkSubject ? { clerkSubject: input.clerkSubject } : {}),
         initiatingEnvironmentId: input?.initiatingEnvironmentId ?? null,
         label: input?.label ?? null,
         proofKeyThumbprint: input?.proofKeyThumbprint ?? null,
@@ -501,6 +504,7 @@ export const make = Effect.gen(function* () {
                 method: grant.method,
                 scopes: grant.scopes,
                 subject: grant.subject,
+                ...(grant.clerkSubject ? { clerkSubject: grant.clerkSubject } : {}),
                 ...(grant.initiatingEnvironmentId
                   ? { initiatingEnvironmentId: grant.initiatingEnvironmentId }
                   : {}),
@@ -538,6 +542,7 @@ export const make = Effect.gen(function* () {
           method: consumed.value.method,
           scopes: consumed.value.scopes,
           subject: consumed.value.subject,
+          ...(consumed.value.clerkSubject ? { clerkSubject: consumed.value.clerkSubject } : {}),
           ...(consumed.value.initiatingEnvironmentId
             ? { initiatingEnvironmentId: consumed.value.initiatingEnvironmentId }
             : {}),

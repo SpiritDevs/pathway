@@ -62,6 +62,7 @@ export interface IssuedBearerSession {
 }
 
 export interface AuthenticatedSession {
+  readonly clerkSubject?: string;
   readonly sessionId: AuthSessionId;
   readonly subject: string;
   readonly initiatingEnvironmentId?: EnvironmentId;
@@ -452,6 +453,7 @@ export class EnvironmentAuth extends Context.Service<
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly subject?: string;
       readonly initiatingEnvironmentId?: EnvironmentId;
+      readonly clerkSubject?: string;
       readonly proofKeyThumbprint?: string;
       readonly purpose?: "startup";
     }) => Effect.Effect<IssuedPairingLink, ServerAuthInternalError>;
@@ -596,6 +598,7 @@ export const make = Effect.gen(function* () {
       Effect.map((session) => ({
         sessionId: session.sessionId,
         subject: session.subject,
+        ...(session.clerkSubject ? { clerkSubject: session.clerkSubject } : {}),
         ...(session.initiatingEnvironmentId
           ? { initiatingEnvironmentId: session.initiatingEnvironmentId }
           : {}),
@@ -681,6 +684,7 @@ export const make = Effect.gen(function* () {
           .issue({
             method: "browser-session-cookie",
             subject: grant.subject,
+            ...(grant.clerkSubject ? { clerkSubject: grant.clerkSubject } : {}),
             ...(grant.initiatingEnvironmentId
               ? { initiatingEnvironmentId: grant.initiatingEnvironmentId }
               : {}),
@@ -729,6 +733,7 @@ export const make = Effect.gen(function* () {
             const session = yield* sessions.issue({
               method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
               subject: grant.subject,
+              ...(grant.clerkSubject ? { clerkSubject: grant.clerkSubject } : {}),
               ...(grant.initiatingEnvironmentId
                 ? { initiatingEnvironmentId: grant.initiatingEnvironmentId }
                 : {}),
@@ -825,6 +830,7 @@ export const make = Effect.gen(function* () {
       const issued = yield* bootstrapCredentials.issueOneTimeToken({
         scopes: input?.scopes ?? AuthStandardClientScopes,
         subject: input?.subject ?? "one-time-token",
+        ...(input?.clerkSubject ? { clerkSubject: input.clerkSubject } : {}),
         ...(input?.initiatingEnvironmentId
           ? { initiatingEnvironmentId: input.initiatingEnvironmentId }
           : {}),
@@ -1005,6 +1011,7 @@ export const make = Effect.gen(function* () {
             Effect.map((session) => ({
               sessionId: session.sessionId,
               subject: session.subject,
+              ...(session.clerkSubject ? { clerkSubject: session.clerkSubject } : {}),
               ...(session.initiatingEnvironmentId
                 ? { initiatingEnvironmentId: session.initiatingEnvironmentId }
                 : {}),

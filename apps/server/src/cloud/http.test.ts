@@ -362,6 +362,7 @@ describe("cloud mint credential handler", () => {
 
       expect(harness.pairingInputs).toHaveLength(1);
       expect(harness.pairingInputs[0]?.subject).toBe("cloud-connect");
+      expect(harness.pairingInputs[0]?.clerkSubject).toBe(LINKED_CLOUD_USER_ID);
       expect(harness.pairingInputs[0]?.initiatingEnvironmentId).toBeUndefined();
       expect(harness.secretReads).toContain(CLOUD_LINKED_USER_ID);
     }),

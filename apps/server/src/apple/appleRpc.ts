@@ -5,6 +5,7 @@ import * as References from "effect/References";
 import * as Stream from "effect/Stream";
 import { HttpServerRequest } from "effect/unstable/http";
 import { authenticatedWebSocketSession } from "../auth/EnvironmentAuth.ts";
+import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import { resolveAppleCaller, type AppleCaller } from "../auth/appleCaller.ts";
 import { requiredScopeForRpcMethod } from "../auth/RpcAuthorization.ts";
 import { AppleRuntime, safeAppleError } from "./AppleRuntime.ts";
@@ -13,8 +14,21 @@ import { appleIdSessionStub } from "./AppleIdSession.ts";
 export function makeAppleRpcHandlers(
   runtime: AppleRuntime,
   scopes: readonly AuthEnvironmentScope[],
-  caller: AppleCaller | null = null,
+  resolveCaller: Effect.Effect<AppleCaller | null> = Effect.succeed(null),
 ) {
+  const requireCaller = resolveCaller.pipe(
+    Effect.flatMap((caller) =>
+      caller
+        ? Effect.succeed(caller)
+        : Effect.fail(
+            new AppleError({
+              code: "forbidden",
+              message: "A known Pathway Cloud user is required to use Apple accounts.",
+              retryAfterSeconds: null,
+            }),
+          ),
+    ),
+  );
   const guard = <A>(
     method: string,
     target: { companyId: string; accountId: string },
@@ -24,26 +38,27 @@ export function makeAppleRpcHandlers(
     const operation: Effect.Effect<A, AppleError | EnvironmentAuthorizationError> = scopes.includes(
       requiredScope,
     )
-      ? Effect.tryPromise({
-          try: async () => {
-            if (!caller)
-              throw new AppleError({
-                code: "forbidden",
-                message: "A known Pathway Cloud user is required to use Apple accounts.",
-                retryAfterSeconds: null,
-              });
-            const authorization = {
-              companyId: target.companyId,
-              accountId: target.accountId,
-              caller,
-              manage: requiredScope === "orchestration:operate",
-            };
-            await runtime.authorizeCaller(authorization);
-            const result = await run();
-            await runtime.authorizeCaller(authorization);
-            return result;
-          },
-          catch: safeAppleError,
+      ? Effect.gen(function* () {
+          const caller = yield* requireCaller;
+          const authorization = {
+            companyId: target.companyId,
+            accountId: target.accountId,
+            caller,
+            manage: requiredScope === "orchestration:operate",
+          };
+          const result = yield* Effect.tryPromise({
+            try: async () => {
+              await runtime.authorizeCaller(authorization);
+              return await run();
+            },
+            catch: safeAppleError,
+          });
+          yield* requireCaller;
+          yield* Effect.tryPromise({
+            try: () => runtime.authorizeCaller(authorization),
+            catch: safeAppleError,
+          });
+          return result;
         })
       : Effect.fail(
           new EnvironmentAuthorizationError({
@@ -96,8 +111,11 @@ export const makeAppleRpcLayer = (runtime: AppleRuntime, scopes: readonly AuthEn
   AppleRpcs.toLayer(
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
+      const secrets = yield* ServerSecretStore;
       const session = authenticatedWebSocketSession(request);
-      const caller = session ? yield* resolveAppleCaller(session) : null;
+      const caller = session
+        ? resolveAppleCaller(session).pipe(Effect.provideService(ServerSecretStore, secrets))
+        : Effect.succeed(null);
       return makeAppleRpcHandlers(runtime, scopes, caller);
     }),
   );
