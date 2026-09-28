@@ -46,13 +46,13 @@ const fixture = Effect.gen(function* () {
         };
       }),
   );
-  const add = Effect.fn(function* (buffered: () => number = () => 0) {
+  const add = Effect.fn(function* (buffered: () => number = () => 0, viewerViewport = viewport) {
     const scope = yield* Scope.make();
     const frames: Uint8Array[] = [];
     const sent = yield* Queue.unbounded<void>();
     let closed = false;
     yield* stream
-      .subscribe(viewport, {
+      .subscribe(viewerViewport, {
         send: (bytes) => {
           frames.push(bytes);
           Queue.offerUnsafe(sent, undefined);
@@ -116,6 +116,47 @@ it.effect(
     ),
 );
 
+it.effect.each([
+  { width: 1920, height: 1080, deviceScale: 1 },
+  { width: 1920, height: 180, deviceScale: 1 },
+  { width: 320, height: 1080, deviceScale: 1 },
+])("re-encodes unchanged pixels when a $width x $height viewer joins or leaves", (largerViewport) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const a = yield* f.add(undefined, { width: 320, height: 180, deviceScale: 1 });
+      yield* Deferred.succeed(yield* Queue.take(f.captures), screenshot());
+      yield* Queue.take(a.sent);
+      const b = yield* f.add(undefined, largerViewport);
+      yield* Queue.take(b.sent);
+      expect(decodeSurfaceFrame(b.frames[0]!).width).toBe(320);
+
+      yield* TestClock.adjust(67);
+      yield* Deferred.succeed(yield* Queue.take(f.captures), screenshot());
+      yield* TestClock.adjust(67);
+      const next = yield* Queue.take(f.captures);
+      expect(f.configurations).toMatchObject([
+        { maxWidth: 320, maxHeight: 180, quality: 75 },
+        { maxWidth: largerViewport.width, maxHeight: largerViewport.height, quality: 75 },
+      ]);
+      expect(a.frames).toHaveLength(2);
+      expect(b.frames).toHaveLength(2);
+      expect(a.frames[1]).toBe(b.frames[1]);
+      expect(decodeSurfaceFrame(b.frames[1]!).width).toBe(largerViewport.width);
+
+      yield* b.close;
+      yield* Deferred.succeed(next, screenshot());
+      yield* TestClock.adjust(67);
+      yield* Queue.take(f.captures);
+      expect(f.configurations).toHaveLength(3);
+      expect(f.configurations[2]).toMatchObject({ maxWidth: 320, maxHeight: 180, quality: 75 });
+      expect(a.frames).toHaveLength(3);
+      expect(decodeSurfaceFrame(a.frames[2]!).width).toBe(320);
+      yield* a.close;
+    }),
+  ),
+);
+
 it.effect("adapts a shared encoder under backpressure and drains the last static frame", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -125,17 +166,63 @@ it.effect("adapts a shared encoder under backpressure and drains the last static
       yield* Deferred.succeed(yield* Queue.take(f.captures), screenshot());
       yield* Queue.take(f.encoded);
       yield* TestClock.adjust(67);
-      yield* Deferred.succeed(yield* Queue.take(f.captures), screenshot("changed"));
-      yield* Queue.take(f.encoded);
+      yield* Deferred.succeed(yield* Queue.take(f.captures), screenshot());
+      yield* TestClock.adjust(67);
+      const next = yield* Queue.take(f.captures);
       expect(f.configurations.map((c) => c.quality)).toEqual([60, 45]);
       expect(a.frames).toHaveLength(0);
       buffered = 0;
+      yield* Deferred.succeed(next, screenshot());
       yield* TestClock.adjust(67);
       yield* Queue.take(a.sent);
       expect(decodeSurfaceFrame(a.frames[0]!).deviceScale).toBeCloseTo(1.2);
       yield* a.close;
     }),
   ),
+);
+
+it.effect.each([viewport, { width: 1, height: 1, deviceScale: 1 }])(
+  "restores quality and size on unchanged pixels after backpressure clears for $width x $height",
+  (viewerViewport) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        let buffered = 300000;
+        const a = yield* f.add(() => buffered, viewerViewport);
+        yield* Deferred.succeed(yield* Queue.take(f.captures), screenshot());
+        yield* Queue.take(f.encoded);
+        expect(f.configurations[0]).toMatchObject({
+          maxWidth: Math.max(
+            1,
+            Math.floor(viewerViewport.width * viewerViewport.deviceScale * 0.8),
+          ),
+          maxHeight: Math.max(
+            1,
+            Math.floor(viewerViewport.height * viewerViewport.deviceScale * 0.8),
+          ),
+          quality: 60,
+        });
+        buffered = 0;
+        // Recovery requires 50 healthy ticks; complete an identical capture on every tick.
+        for (let tick = 0; tick < 50; tick++) {
+          yield* TestClock.adjust(67);
+          yield* Deferred.succeed(yield* Queue.take(f.captures), screenshot());
+        }
+        yield* TestClock.adjust(67);
+        yield* Queue.take(f.captures);
+        expect(f.configurations).toHaveLength(2);
+        expect(f.configurations[1]).toMatchObject({
+          maxWidth: viewerViewport.width * viewerViewport.deviceScale,
+          maxHeight: viewerViewport.height * viewerViewport.deviceScale,
+          quality: 75,
+        });
+        expect(a.frames).toHaveLength(2);
+        expect(decodeSurfaceFrame(a.frames[1]!).width).toBe(
+          viewerViewport.width * viewerViewport.deviceScale,
+        );
+        yield* a.close;
+      }),
+    ),
 );
 
 it.effect("closes viewers on capture failure and cancels in-flight captures on last detach", () =>

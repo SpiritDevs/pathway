@@ -33,7 +33,7 @@ export class ComputerSurfaceStream {
   private fiber: Fiber.Fiber<void> | undefined;
   private epoch = 0;
   private sequence = 0;
-  private geometry: string | undefined;
+  private encodingKey: string | undefined;
 
   private readonly capture: () => Effect.Effect<ComputerScreenshot, ComputerOperationError>;
   private readonly runFork: (effect: Effect.Effect<void>) => Fiber.Fiber<void>;
@@ -78,7 +78,7 @@ export class ComputerSurfaceStream {
       this.fiber = undefined;
       this.stream.close();
       this.dedupe.reset();
-      this.geometry = undefined;
+      this.encodingKey = undefined;
       return fiber ? Fiber.interrupt(fiber).pipe(Effect.asVoid) : Effect.void;
     });
   }
@@ -96,10 +96,10 @@ export class ComputerSurfaceStream {
             message: "Computer surface requires a primary-display frame with origin (0,0).",
           });
         const bytes = Buffer.from(frame.bytesBase64, "base64");
-        const geometry = `${region.width}:${region.height}`;
-        if (this.dedupe.shouldPublish(bytes, this.geometry !== geometry)) {
-          this.geometry = geometry;
-          const config = this.stream.configuration(region);
+        const config = this.stream.configuration(region);
+        const encodingKey = `${region.width}:${region.height}:${config.maxWidth}:${config.maxHeight}:${config.quality}`;
+        if (this.dedupe.shouldPublish(bytes, this.encodingKey !== encodingKey)) {
+          this.encodingKey = encodingKey;
           const encoded = yield* this.encode(bytes, config);
           if (epoch !== this.epoch || !this.stream.size) return;
           this.stream.publish({
@@ -119,7 +119,7 @@ export class ComputerSurfaceStream {
           if (epoch !== this.epoch) return;
           this.stream.close();
           this.dedupe.reset();
-          this.geometry = undefined;
+          this.encodingKey = undefined;
           this.fiber = undefined;
         }),
       ),
