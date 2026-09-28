@@ -148,7 +148,9 @@ agent still works on the host Mac; nothing runs on your phone.
   - With control, tap to click, double-tap to double-click, touch and hold to right-click, and
     drag with two fingers to scroll. Dragging with one finger does nothing, so you can't hold a
     mouse button down.
-  - Type in **Type on the computer** to enter text on the host. The key bar sends Return, Escape,
+  - Type in **Type on the computer** to enter text on the host. Text that can't be typed, for
+    example while the host is busy or the connection drops, stays in the field. Unsent text in
+    either field is kept while the app is running, even if you leave the view. The key bar sends Return, Escape,
     Tab, Delete and the arrow keys, and **⌘** offers shortcuts such as copy, paste, undo and
     Spotlight. **Esc** goes out right away, ahead of anything still being sent, and stops your
     control and the agent's current action.

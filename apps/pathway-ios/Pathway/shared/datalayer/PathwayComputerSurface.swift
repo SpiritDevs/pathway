@@ -363,9 +363,10 @@ final class PathwayComputerSurfaceModel {
     var error: String?
     var notice: String?
     /// Unsent text for the host and the hand-back message. They live here, not in the controls,
-    /// so a dropped connection that hides the controls until reconnect keeps them.
-    var typing = ""
-    var draft = ""
+    /// so a dropped connection that hides the controls keeps them, and are kept per thread in
+    /// memory so closing and reopening the view keeps them too.
+    var typing = "" { didSet { keepDrafts() } }
+    var draft = "" { didSet { keepDrafts() } }
     private(set) var pendingFollowUp: PathwayComputerHandBackFollowUp?
     let frames: PathwayComputerSurfaceStream
 
@@ -390,6 +391,8 @@ final class PathwayComputerSurfaceModel {
 
     init(threadID: String, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient) {
         self.threadID = threadID
+        typing = Self.drafts[threadID]?.typing ?? ""
+        draft = Self.drafts[threadID]?.draft ?? ""
         self.connect = connect
         self.environment = environment
         let viewport = OSAllocatedUnfairLock(initialState: (
@@ -558,10 +561,24 @@ final class PathwayComputerSurfaceModel {
     private var accepts: Bool { session?.mine == true && session?.input == true && !leaving }
 
     /// Queues one input while this connection has control. Inputs go out one at a time, in order.
-    func send(_ event: JSONValue) {
-        guard accepts else { return }
+    @discardableResult
+    func send(_ event: JSONValue) -> Bool {
+        guard accepts else { return false }
         flushWheel()
-        enqueue(event)
+        return enqueue(event)
+    }
+
+    /// Types the host field's text. The field clears only once the text is queued; text the
+    /// queue refuses, or later drops, stays in the field and the error says so.
+    func sendTyping() {
+        let text = String(typing.prefix(PathwayComputerSurfaceInput.textLimit))
+        guard !text.isEmpty else { return }
+        guard accepts else { error = "You don't have control, so your text wasn't typed."; return }
+        guard send(PathwayComputerSurfaceInput.type(text)) else {
+            error = "The computer is busy, so your text wasn't typed. Try again in a moment."
+            return
+        }
+        typing.removeFirst(text.count)
     }
 
     func sendKey(_ key: String, modifiers: [String] = []) {
@@ -604,11 +621,12 @@ final class PathwayComputerSurfaceModel {
         enqueue(PathwayComputerSurfaceInput.wheel(wheel.point, deltaX: wheel.deltaX, deltaY: wheel.deltaY))
     }
 
-    private func enqueue(_ event: JSONValue) {
-        guard inputs.count < Self.maxQueuedInputs else { error = "The computer is busy. Try again in a moment."; return }
+    @discardableResult
+    private func enqueue(_ event: JSONValue) -> Bool {
+        guard inputs.count < Self.maxQueuedInputs else { error = "The computer is busy. Try again in a moment."; return false }
         inputs.append(event)
-        guard draining == nil else { return }
-        draining = Task { [weak self] in await self?.drain() }
+        if draining == nil { draining = Task { [weak self] in await self?.drain() } }
+        return true
     }
 
     private func drain() async {
@@ -620,15 +638,35 @@ final class PathwayComputerSurfaceModel {
                 error = nil
             } catch {
                 self.error = Self.message(error, "The computer did not respond.")
+                restoreTyping([event] + inputs)
                 inputs.removeAll()
             }
         }
     }
 
     private func clearInput() {
+        restoreTyping(inputs)
         inputs.removeAll()
         wheelFlush?.cancel(); wheelFlush = nil
         wheel = nil
+    }
+
+    /// Puts text from undelivered `type` inputs back in front of the host field.
+    private func restoreTyping(_ events: [JSONValue]) {
+        let text = events.compactMap { event -> String? in
+            guard let fields = event.objectValue, fields["type"] == .string("type") else { return nil }
+            return fields["text"]?.stringValue
+        }.joined()
+        guard !text.isEmpty else { return }
+        typing = text + typing
+        error = "Some of your text wasn't typed on the computer. It's back in the text field."
+    }
+
+    /// Drafts by thread, for the life of the app.
+    private static var drafts: [String: (typing: String, draft: String)] = [:]
+
+    private func keepDrafts() {
+        Self.drafts[threadID] = typing.isEmpty && draft.isEmpty ? nil : (typing, draft)
     }
 
     private static func message(_ error: Error, _ fallback: String) -> String {

@@ -110,9 +110,9 @@ private struct ComputerSurfaceControls: View {
             HStack {
                 TextField("Type on the computer", text: $surface.typing)
                     .textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .onSubmit(sendTyping)
+                    .onSubmit(surface.sendTyping)
                     .accessibilityIdentifier("thread-computer-surface-type")
-                Button("Type", action: sendTyping).disabled(surface.typing.isEmpty)
+                Button("Type", action: surface.sendTyping).disabled(surface.typing.isEmpty)
             }
             ScrollView(.horizontal) {
                 HStack(spacing: 6) {
@@ -162,12 +162,6 @@ private struct ComputerSurfaceControls: View {
             }
             .padding(12)
         }
-    }
-
-    private func sendTyping() {
-        guard !surface.typing.isEmpty else { return }
-        surface.send(PathwayComputerSurfaceInput.type(surface.typing))
-        surface.typing = ""
     }
 
     private static let keys: [(title: String, key: String, accessibility: String)] = [

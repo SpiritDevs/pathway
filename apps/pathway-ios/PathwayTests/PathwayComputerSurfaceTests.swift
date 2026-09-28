@@ -181,32 +181,94 @@ struct PathwayComputerSurfaceTests {
         ])
     }
 
-    @MainActor private func surfaceModel(_ rpc: SurfaceRPC) -> PathwayComputerSurfaceModel {
+    @MainActor @Test func aFullQueueKeepsTheHostText() async {
+        let rpc = SurfaceRPC()
+        let model = surfaceModel(rpc)
+        model.receive(session(controller: ["kind": .string("client"), "clientId": .string("me")]))
+        var started = rpc.started.makeAsyncIterator()
+        model.sendKey("A")
+        #expect(await started.next() == "input:A")
+        for _ in 0 ..< PathwayComputerSurfaceModel.maxQueuedInputs { model.sendKey("B") }
+        model.typing = "hello"
+        model.sendTyping()
+        #expect(model.typing == "hello")
+        #expect(model.error == "The computer is busy, so your text wasn't typed. Try again in a moment.")
+        rpc.release()
+        #expect(await model.handBack("finish"))
+        #expect(!rpc.log.contains("input:hello"))
+    }
+
+    @MainActor @Test func queuedHostTextComesBackWhenTheConnectionDrops() async {
+        let rpc = SurfaceRPC()
+        let model = surfaceModel(rpc)
+        model.receive(session(controller: ["kind": .string("client"), "clientId": .string("me")]))
+        var started = rpc.started.makeAsyncIterator()
+        model.sendKey("A")
+        #expect(await started.next() == "input:A")
+        model.typing = "hello"
+        model.sendTyping()
+        #expect(model.typing.isEmpty)
+        model.typing = " world"
+        model.receive(.object(["_pathwayTransport": .string("disconnected")]))
+        #expect(model.typing == "hello world" && model.error != nil)
+        rpc.release()
+    }
+
+    @MainActor @Test func aFailedTypeRestoresTheHostText() async {
+        let rpc = SurfaceRPC()
+        rpc.stallsInput = false
+        rpc.rejectsTyping = true
+        let model = surfaceModel(rpc)
+        model.receive(session(controller: ["kind": .string("client"), "clientId": .string("me")]))
+        model.typing = "hello"
+        model.sendTyping()
+        #expect(model.typing.isEmpty)
+        #expect(await model.handBack("finish"))
+        #expect(rpc.log.first == "input:hello" && model.typing == "hello")
+    }
+
+    @MainActor @Test func draftsOutliveTheViewPerThread() {
+        let rpc = SurfaceRPC()
+        let threadID = UUID().uuidString
+        let first = surfaceModel(rpc, threadID: threadID)
+        first.typing = "half a sentence"
+        first.draft = "then run the tests"
+        let reopened = surfaceModel(rpc, threadID: threadID)
+        #expect(reopened.typing == "half a sentence" && reopened.draft == "then run the tests")
+        #expect(surfaceModel(rpc).typing.isEmpty && surfaceModel(rpc).draft.isEmpty)
+        reopened.typing = ""
+        reopened.draft = ""
+        #expect(surfaceModel(rpc, threadID: threadID).draft.isEmpty)
+    }
+
+    @MainActor private func surfaceModel(_ rpc: SurfaceRPC, threadID: String = UUID().uuidString) -> PathwayComputerSurfaceModel {
         let connect = PathwayConnectClient(relayURL: URL(string: "https://relay.test")!, clerkTokenProvider: { "unused" })
         let environment = PathwayCompanyEnvironment(companyId: "company", environment: PathwayEnvironment(id: "environment", environmentId: "environment",
             descriptor: PathwayEnvironmentDescriptor(environmentId: "environment", label: "Mac", serverVersion: "test"),
             relayLinkState: "connected", managedEndpointAvailable: true, lastSeenAt: nil, state: "active"))
-        let model = PathwayComputerSurfaceModel(threadID: "t-view", environment: environment, connect: connect)
+        let model = PathwayComputerSurfaceModel(threadID: threadID, environment: environment, connect: connect)
         model.request = { method, payload in try await rpc.request(method, payload) }
         return model
     }
 }
 
-/// Records computer surface RPCs as they finish. The first input stalls until `release()`.
+/// Records computer surface RPCs as they finish. The first input stalls until `release()`
+/// unless `stallsInput` is off.
 @MainActor private final class SurfaceRPC {
     let started: AsyncStream<String>
     private let startedContinuation: AsyncStream<String>.Continuation
     private(set) var log: [String] = []
     private(set) var dispatched: [JSONValue] = []
     var failedDispatches = 0
-    private var stallsInput = true
+    var rejectsTyping = false
+    var stallsInput = true
     private var stalled: CheckedContinuation<Void, Never>?
 
     init() { (started, startedContinuation) = AsyncStream.makeStream(of: String.self) }
 
     func request(_ method: String, _ payload: JSONValue) async throws -> JSONValue {
         let event = payload.objectValue?["event"]?.objectValue
-        let name = method == "computer.surface.input" ? "input:\(event?["key"]?.stringValue ?? "")"
+        let name = method == "computer.surface.input" ? "input:\(event?["key"]?.stringValue ?? event?["text"]?.stringValue ?? "")"
             : method == "orchestration.dispatchCommand" ? "dispatch" : String(method.split(separator: ".").last ?? "")
         startedContinuation.yield(name)
         if method == "computer.surface.input", stallsInput {
@@ -214,6 +276,7 @@ struct PathwayComputerSurfaceTests {
             await withCheckedContinuation { stalled = $0 }
         }
         log.append(name)
+        if rejectsTyping, event?["type"] == .string("type") { throw URLError(.networkConnectionLost) }
         switch method {
         case "computer.surface.handBack":
             return .object(["attachment": .object(["id": .string("capture")]), "summary": .string("Clicked Save")])
