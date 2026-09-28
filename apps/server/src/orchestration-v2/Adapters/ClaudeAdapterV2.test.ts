@@ -3290,10 +3290,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         // The Agent input carries a family alias; the child thread must run on
         // that family's current slug, not the parent's sonnet generation.
         const subagent = subagentEvents()[0]?.subagent;
-        assert.equal(subagent?.model, "claude-opus-5");
+        assert.equal(subagent?.model, "claude-opus-5-5");
         assert.deepEqual(subagent?.options, CLAUDE_TEST_MODEL_SELECTION.options);
         const childThread = childThreads()[0]?.appThread;
-        assert.equal(childThread?.modelSelection.model, "claude-opus-5");
+        assert.equal(childThread?.modelSelection.model, "claude-opus-5-5");
         assert.deepEqual(childThread?.modelSelection.options, CLAUDE_TEST_MODEL_SELECTION.options);
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
@@ -3360,7 +3360,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           }),
         );
         yield* awaitUntil(() => subagentEvents().length >= 1, "subagent node created");
-        assert.equal(subagentEvents()[0]?.subagent.model, "claude-opus-5");
+        assert.equal(subagentEvents()[0]?.subagent.model, "claude-opus-5-5");
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );

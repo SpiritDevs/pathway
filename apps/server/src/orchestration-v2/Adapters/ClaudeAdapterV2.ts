@@ -1793,8 +1793,8 @@ function claudeSubagentAsyncLaunchAck(
 const CLAUDE_SUBAGENT_MODEL_ALIASES = new Map<string, string>([
   ["fable", "claude-fable-5-1"],
   ["haiku", "claude-haiku-4-5"],
-  ["opus", "claude-opus-5"],
-  ["sonnet", "claude-sonnet-5"],
+  ["opus", "claude-opus-5-5"],
+  ["sonnet", "claude-sonnet-5-5"],
 ]);
 
 /** Per-native-thread ceiling on unclaimed Agent model overrides. */
