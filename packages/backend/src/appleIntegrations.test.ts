@@ -306,6 +306,254 @@ describe("Apple account cloud custody", () => {
       "not linked",
     );
   });
+  it("authorizes the RPC caller separately from the host for personal accounts", async () => {
+    const { t, owner, account, runtimeTarget } = await setup();
+    const env = environment(t, "env-a");
+    // A readable project link exposes these IDs without granting access to the private account.
+    await owner.action(api.appleIntegrations.linkProject, {
+      ...runtimeTarget,
+      projectId: PROJECT,
+      appId: "app-1",
+    });
+    const link = await human(t, "teammate").query(api.appleIntegrations.projectLink, {
+      companyId: COMPANY,
+      projectId: PROJECT,
+    });
+    expect(link?.accountId).toBe(account.id);
+    const input = { companyId: COMPANY, accountId: link!.accountId, manage: false };
+    await expect(
+      env.query(api.appleIntegrations.authorizeRuntimeCaller, {
+        ...input,
+        caller: { clerkSubject: "teammate" },
+      }),
+    ).rejects.toThrow("private to its owner");
+    await expect(
+      env.query(api.appleIntegrations.authorizeRuntimeCaller, {
+        ...input,
+        caller: { clerkSubject: "owner" },
+      }),
+    ).resolves.toBeNull();
+    const users = await t.run((ctx) => ctx.db.query("users").collect());
+    for (const user of users.filter((u) => u.clerkSubject !== "outsider")) {
+      const result = env.query(api.appleIntegrations.authorizeRuntimeCaller, {
+        ...input,
+        caller: { userId: user._id },
+      });
+      if (user.clerkSubject === "owner") await expect(result).resolves.toBeNull();
+      else await expect(result).rejects.toThrow("private to its owner");
+    }
+    for (const caller of [{ clerkSubject: "missing" }, { userId: "invalid-id" }])
+      await expect(
+        env.query(api.appleIntegrations.authorizeRuntimeCaller, { ...input, caller }),
+      ).rejects.toThrow("caller is unknown");
+    await expect(
+      owner.query(api.appleIntegrations.authorizeRuntimeCaller, {
+        ...input,
+        caller: { clerkSubject: "owner" },
+      }),
+    ).rejects.toThrow("environment identity");
+  });
+  it("denies another company registered on the same host", async () => {
+    const { t, runtimeTarget } = await setup(true);
+    const otherCompany = "01990000-0000-7000-8000-000000000099";
+    await t.run(async (ctx) => {
+      const original = (await ctx.db.query("companies").collect())[0]!;
+      const { _id: _companyId, _creationTime: _companyCreated, ...companyFields } = original;
+      const companyId = await ctx.db.insert("companies", { ...companyFields, id: otherCompany });
+      const registration = (await ctx.db.query("environmentRegistrations").collect()).find(
+        (r) => r.environmentId === "env-a",
+      )!;
+      const { _id: _regId, _creationTime: _regCreated, ...registrationFields } = registration;
+      await ctx.db.insert("environmentRegistrations", {
+        ...registrationFields,
+        id: "other-registration",
+        companyId,
+      });
+      const outsider = (await ctx.db.query("users").collect()).find(
+        (u) => u.clerkSubject === "outsider",
+      )!;
+      const membership = (await ctx.db.query("memberships").collect())[0]!;
+      const { _id: _memberId, _creationTime: _memberCreated, ...membershipFields } = membership;
+      const membershipId = await ctx.db.insert("memberships", {
+        ...membershipFields,
+        id: "other-member",
+        companyId,
+        userId: outsider._id,
+      });
+      await ctx.db.insert("companyOwners", {
+        companyId,
+        membershipId,
+        grantedByMembershipId: null,
+        createdAt: NOW,
+      });
+    });
+    const otherAccount = await human(t, "outsider").mutation(api.appleIntegrations.createAccount, {
+      email: "other@apple.test",
+      displayName: "Other",
+      scope: { kind: "company", companyId: otherCompany },
+    });
+    const env = environment(t, "env-a");
+    // Both host registrations are valid, but the caller belongs only to the first company.
+    await expect(
+      env.query(api.appleIntegrations.accountStatus, {
+        accountId: otherAccount.id,
+        companyId: otherCompany,
+      }),
+    ).resolves.toMatchObject({ id: otherAccount.id });
+    await expect(
+      env.query(api.appleIntegrations.authorizeRuntimeCaller, {
+        accountId: otherAccount.id,
+        companyId: otherCompany,
+        caller: { clerkSubject: "owner" },
+        manage: false,
+      }),
+    ).rejects.toThrow("not an active member");
+    await expect(
+      env.query(api.appleIntegrations.authorizeRuntimeCaller, {
+        accountId: runtimeTarget.accountId,
+        companyId: otherCompany,
+        caller: { clerkSubject: "owner" },
+        manage: false,
+      }),
+    ).rejects.toThrow("another company");
+  });
+  it("lists personal accounts when the selected company does not grant integrations.read", async () => {
+    const { t, owner, account } = await setup();
+    const companyAccount = await owner.mutation(api.appleIntegrations.createAccount, {
+      email: "shared@apple.test",
+      displayName: "Company",
+      scope: { kind: "company", companyId: COMPANY },
+    });
+    expect(await owner.query(api.appleIntegrations.listAccounts, { companyId: COMPANY })).toEqual([
+      account,
+      companyAccount,
+    ]);
+    await t.run(async (ctx) => {
+      const member = (await ctx.db.query("memberships").collect()).find(
+        (m) => m.displayNameSnapshot === "owner",
+      )!;
+      const ownership = await ctx.db
+        .query("companyOwners")
+        .withIndex("by_company_and_membership", (q) =>
+          q.eq("companyId", member.companyId).eq("membershipId", member._id),
+        )
+        .unique();
+      await ctx.db.delete(ownership!._id);
+    });
+    expect(await owner.query(api.appleIntegrations.listAccounts, { companyId: COMPANY })).toEqual([
+      account,
+    ]);
+    expect(await owner.query(api.appleIntegrations.listAccounts, {})).toEqual([account]);
+  });
+  it("requires the caller's current company integration permission for reads and writes", async () => {
+    const { t, runtimeTarget } = await setup(true);
+    const role = await t.run(async (ctx) => {
+      const member = (await ctx.db.query("memberships").collect()).find(
+        (m) => m.displayNameSnapshot === "teammate",
+      )!;
+      const owner = await ctx.db
+        .query("companyOwners")
+        .withIndex("by_company_and_membership", (q) =>
+          q.eq("companyId", member.companyId).eq("membershipId", member._id),
+        )
+        .unique();
+      await ctx.db.delete(owner!._id);
+      const roleId = await ctx.db.insert("roles", {
+        id: "integration-reader",
+        companyId: member.companyId,
+        name: "Reader",
+        description: "",
+        permissions: ["integrations.read"],
+        seeded: false,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      await ctx.db.insert("roleAssignments", {
+        id: "integration-reader-assignment",
+        companyId: member.companyId,
+        membershipId: member._id,
+        roleId,
+        scope: "company",
+        teamId: null,
+        createdAt: NOW,
+      });
+      return roleId;
+    });
+    const env = environment(t, "env-a");
+    const input = {
+      accountId: runtimeTarget.accountId,
+      companyId: COMPANY,
+      caller: { clerkSubject: "teammate" },
+    };
+    await expect(
+      env.query(api.appleIntegrations.authorizeRuntimeCaller, { ...input, manage: false }),
+    ).resolves.toBeNull();
+    await expect(
+      env.query(api.appleIntegrations.authorizeRuntimeCaller, { ...input, manage: true }),
+    ).rejects.toThrow("integrations.manage");
+    await t.run((ctx) =>
+      ctx.db.patch(role, { permissions: ["integrations.read", "integrations.manage"] }),
+    );
+    await expect(
+      env.query(api.appleIntegrations.authorizeRuntimeCaller, { ...input, manage: true }),
+    ).resolves.toBeNull();
+    await t.run((ctx) => ctx.db.patch(role, { permissions: [] }));
+    await expect(
+      env.query(api.appleIntegrations.authorizeRuntimeCaller, { ...input, manage: false }),
+    ).rejects.toThrow("integrations.read");
+  });
+  it("disconnects personal environment health immediately when the owner unlinks", async () => {
+    const { t, owner, target, runtimeTarget } = await setup();
+    await environment(t, "env-a").mutation(api.appleIntegrations.heartbeat, runtimeTarget);
+    expect(
+      (await owner.query(api.appleIntegrations.status, target)).environments[0]?.connected,
+    ).toBe(true);
+    await t.run(async (ctx) => {
+      const link = await ctx.db
+        .query("relayEnvironmentLinks")
+        .withIndex("by_user_and_environment", (q) =>
+          q.eq("userId", "owner").eq("environmentId", "env-a"),
+        )
+        .unique();
+      await ctx.db.patch(link!._id, { revokedAt: new Date(NOW).toISOString() });
+    });
+    const status = await owner.query(api.appleIntegrations.status, target);
+    expect(status.integration.connected).toBe(true);
+    expect(status.environments[0]).toMatchObject({ connected: false });
+  });
+  it.each(["tether", "untether"] as const)(
+    "rejects duplicate accounts when changing scope to %s",
+    async (direction) => {
+      const { owner, account } = await setup();
+      const companyAccount = await owner.mutation(api.appleIntegrations.createAccount, {
+        email: account.email,
+        displayName: "Company copy",
+        scope: { kind: "company", companyId: COMPANY },
+      });
+      const moving = direction === "tether" ? account : companyAccount;
+      await expect(
+        owner.mutation(api.appleIntegrations.updateAccount, {
+          accountId: moving.id,
+          displayName: "Changed",
+          scope:
+            direction === "tether" ? { kind: "company", companyId: COMPANY } : { kind: "user" },
+          expectedRevision: moving.revision,
+        }),
+      ).rejects.toThrow("already exists in this scope");
+      expect(
+        await owner.query(api.appleIntegrations.accountStatus, { accountId: moving.id }),
+      ).toEqual(moving);
+      // Renaming in the current scope excludes the account itself.
+      await expect(
+        owner.mutation(api.appleIntegrations.updateAccount, {
+          accountId: moving.id,
+          displayName: "Renamed",
+          scope: moving.scope,
+          expectedRevision: moving.revision,
+        }),
+      ).resolves.toMatchObject({ displayName: "Renamed", revision: moving.revision + 1 });
+    },
+  );
   it("shares tethered accounts with company members and environments, but not outsiders", async () => {
     const { t, account, runtimeTarget } = await setup(true);
     expect(
@@ -373,7 +621,12 @@ describe("Apple account cloud custody", () => {
         scope: { kind: "company", companyId: COMPANY },
         expectedRevision: account.revision,
       }),
-    ).rejects.toThrow("Unlink projects");
+    ).rejects.toMatchObject({
+      data: {
+        code: "apple-account-linked-projects",
+        message: "Unlink projects before changing this Apple account's scope.",
+      },
+    });
     await human(t, "teammate").mutation(api.appleIntegrations.unlinkProject, project);
     expect(await owner.query(api.appleIntegrations.projectLink, project)).toBeNull();
     await owner.mutation(api.appleIntegrations.updateAccount, {

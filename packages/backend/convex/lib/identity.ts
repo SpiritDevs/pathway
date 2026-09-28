@@ -210,7 +210,15 @@ export async function requireCompanyActor(ctx: QueryCtx, companyId: string): Pro
     };
   }
 
-  const user = await requireUser(ctx);
+  return await requireCompanyMember(ctx, company, await requireUser(ctx));
+}
+
+/** Resolve the human on whose behalf an authenticated environment is acting. */
+export async function requireCompanyMember(
+  ctx: QueryCtx,
+  company: Doc<"companies">,
+  user: Doc<"users">,
+): Promise<MemberActor> {
   const membership = await ctx.db
     .query("memberships")
     .withIndex("by_company_and_user", (q) => q.eq("companyId", company._id).eq("userId", user._id))

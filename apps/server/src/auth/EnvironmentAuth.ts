@@ -71,6 +71,16 @@ export interface AuthenticatedSession {
   readonly expiresAt?: DateTime.DateTime;
 }
 
+const authenticatedWebSocketSessions = new WeakMap<
+  HttpServerRequest.HttpServerRequest,
+  AuthenticatedSession
+>();
+
+/** Per-request RPC layers reuse the verified caller without consuming a DPoP proof twice. */
+export function authenticatedWebSocketSession(request: HttpServerRequest.HttpServerRequest) {
+  return authenticatedWebSocketSessions.get(request) ?? null;
+}
+
 const serverAuthInternalErrorContext = {
   cause: Schema.Defect(),
 };
@@ -991,7 +1001,7 @@ export const make = Effect.gen(function* () {
       if (Option.isSome(requestUrl)) {
         const websocketTicket = requestUrl.value.searchParams.get(WEBSOCKET_TICKET_QUERY_PARAM);
         if (websocketTicket && websocketTicket.trim().length > 0) {
-          return yield* sessions.verifyWebSocketToken(websocketTicket).pipe(
+          const session = yield* sessions.verifyWebSocketToken(websocketTicket).pipe(
             Effect.map((session) => ({
               sessionId: session.sessionId,
               subject: session.subject,
@@ -1004,10 +1014,14 @@ export const make = Effect.gen(function* () {
             })),
             mapSessionVerificationErrors,
           );
+          authenticatedWebSocketSessions.set(request, session);
+          return session;
         }
       }
 
-      return yield* authenticateRequest(request);
+      const session = yield* authenticateRequest(request);
+      authenticatedWebSocketSessions.set(request, session);
+      return session;
     });
 
   return EnvironmentAuth.of({

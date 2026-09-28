@@ -39,6 +39,15 @@ export function makeAppleBackend(
     teamId: input.teamId,
   });
   return {
+    authorizeCaller: async (input) => {
+      try {
+        await call((client) => client.query(api.appleIntegrations.authorizeRuntimeCaller, input));
+      } catch (error) {
+        if (["permission-denied", "not-a-member"].includes(convexErrorCode(error) ?? ""))
+          throw appleFailure("forbidden", "You do not have permission to use this Apple account.");
+        throw error;
+      }
+    },
     accountStatus: (input) =>
       call((client) =>
         client.query(api.appleIntegrations.accountStatus, {
@@ -96,6 +105,7 @@ function lazyBackend(initialize: () => Promise<AppleBackend>): AppleBackend {
     return pending;
   };
   return {
+    authorizeCaller: async (input) => (await get()).authorizeCaller(input),
     accountStatus: async (input) => (await get()).accountStatus(input),
     status: async (target) => (await get()).status(target),
     heartbeat: async (target) => (await get()).heartbeat(target),
@@ -118,6 +128,7 @@ export const makeConfiguredAppleRuntime = Effect.fn("apple.runtime.make")(functi
       ),
     );
   let backend: AppleBackend = {
+    authorizeCaller: unavailable,
     accountStatus: unavailable,
     status: unavailable,
     heartbeat: unavailable,

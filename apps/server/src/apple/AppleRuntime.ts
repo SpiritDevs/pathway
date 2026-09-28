@@ -12,8 +12,15 @@ import {
   type AscCredential,
 } from "@spiritdevs/backend/appStoreConnectApi";
 import * as Schema from "effect/Schema";
+import type { AppleCaller } from "../auth/appleCaller.ts";
 
 export interface AppleBackend {
+  authorizeCaller(input: {
+    companyId: string;
+    accountId: string;
+    caller: AppleCaller;
+    manage: boolean;
+  }): Promise<unknown>;
   accountStatus(input: { accountId: string; companyId: string }): Promise<unknown>;
   status(
     target: AppleTarget,
@@ -215,6 +222,11 @@ export class AppleRuntime {
         }
         throw safe;
       }
+    });
+  }
+  authorizeCaller(input: Parameters<AppleBackend["authorizeCaller"]>[0]) {
+    return this.#backend.authorizeCaller(input).catch((error: unknown) => {
+      throw safeAppleError(error);
     });
   }
   accountStatus(input: { companyId: string; accountId: string }) {

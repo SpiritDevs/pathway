@@ -25,12 +25,18 @@ import {
   requireRecordPermission,
   requireUser,
 } from "./lib/identity.ts";
-import { authorizeAppleAccount, authorizeAppleTeam } from "./lib/appleIdentity.ts";
+import {
+  authorizeAppleAccount,
+  authorizeAppleTeam,
+  authorizeAppleRuntimeCaller,
+  hasAppleOwnerLink,
+} from "./lib/appleIdentity.ts";
 import { backendError } from "./lib/errors.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { domainIdArg } from "./lib/validators.ts";
 import {
   appleAccount,
+  appleCaller,
   appleScope,
   appleTeam,
   appleTeamType,
@@ -133,7 +139,8 @@ export const listAccounts = query({
     ).filter((a) => a.companyId === null);
     if (!args.companyId) return await Promise.all(personal.map((a) => presentAccount(ctx, a)));
     const actor = await requireCompanyActor(ctx, args.companyId);
-    requirePermission(actor, "integrations.read");
+    if (!actor.permissions.isOwner && !actor.permissions.company.has("integrations.read"))
+      return await Promise.all(personal.map((a) => presentAccount(ctx, a)));
     const company = await ctx.db
       .query("appleAccounts")
       .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
@@ -141,6 +148,30 @@ export const listAccounts = query({
     return await Promise.all([...personal, ...company].map((a) => presentAccount(ctx, a)));
   },
 });
+async function assertUniqueAccount(
+  ctx: QueryCtx,
+  ownerUserId: Doc<"users">["_id"],
+  email: string,
+  companyId: Doc<"companies">["_id"] | null,
+  excludeId?: Doc<"appleAccounts">["_id"],
+) {
+  const existing = await ctx.db
+    .query("appleAccounts")
+    .withIndex("by_owner", (q) => q.eq("ownerUserId", ownerUserId))
+    .collect();
+  if (existing.some((a) => a._id !== excludeId && a.email === email && a.companyId === companyId))
+    throw backendError("entity-conflict", "This Apple ID already exists in this scope.");
+}
+
+export const authorizeRuntimeCaller = query({
+  args: { ...accountArgs, companyId: domainIdArg, caller: appleCaller, manage: v.boolean() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await authorizeAppleRuntimeCaller(ctx, args);
+    return null;
+  },
+});
+
 export const createAccount = mutation({
   args: { email: v.string(), displayName: v.string(), scope: v.optional(appleScope) },
   returns: appleAccount,
@@ -150,12 +181,7 @@ export const createAccount = mutation({
     const email = bounded(args.email, 320).toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email))
       throw backendError("invalid-arguments", "Enter a valid Apple ID email address.");
-    const existing = await ctx.db
-      .query("appleAccounts")
-      .withIndex("by_owner", (q) => q.eq("ownerUserId", user._id))
-      .collect();
-    if (existing.some((a) => a.email === email && a.companyId === companyId))
-      throw backendError("entity-conflict", "This Apple ID already exists in this scope.");
+    await assertUniqueAccount(ctx, user._id, email, companyId);
     const id = await ctx.db.insert("appleAccounts", {
       id: mintDomainId(Date.now()),
       ownerUserId: user._id,
@@ -193,10 +219,11 @@ export const updateAccount = mutation({
         .collect();
       if (links.length > 0)
         throw backendError(
-          "entity-conflict",
+          "apple-account-linked-projects",
           "Unlink projects before changing this Apple account's scope.",
         );
     }
+    await assertUniqueAccount(ctx, account.ownerUserId, account.email, companyId, account._id);
     await ctx.db.patch(account._id, {
       displayName: bounded(args.displayName, 200),
       companyId,
@@ -336,6 +363,9 @@ export const status = query({
             q.eq("companyId", lease.companyId).eq("environmentId", lease.environmentId),
           )
           .unique();
+        const ownerLinked =
+          account.companyId !== null ||
+          (await hasAppleOwnerLink(ctx, account, lease.environmentId));
         const current =
           team.connected &&
           team.revision === lease.revision &&
@@ -343,7 +373,11 @@ export const status = query({
         return {
           environmentId: lease.environmentId,
           leaseExpiresAt: current ? lease.expiresAt : null,
-          connected: current && lease.expiresAt > Date.now() && registration?.state === "active",
+          connected:
+            current &&
+            lease.expiresAt > Date.now() &&
+            registration?.state === "active" &&
+            ownerLinked,
           revision: team.revision,
           lastVerifiedAt: current ? lease.lastVerifiedAt : null,
           error: current ? lease.error : null,

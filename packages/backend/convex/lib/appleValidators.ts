@@ -75,3 +75,9 @@ export const appleProjectLink = v.object({
   app: appleApp,
   linkedAt: v.number(),
 });
+
+/** Trusted environment assertion derived from its authenticated RPC session, never RPC input. */
+export const appleCaller = v.union(
+  v.object({ clerkSubject: v.string() }),
+  v.object({ userId: v.string() }),
+);

@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import {
   AppleStatus,
+  AppleError,
   APPLE_WS_METHODS,
   AppleRpcs,
   type AppleEnvironmentHealth,
@@ -13,6 +15,7 @@ import {
   type AppleTarget,
 } from "@spiritdevs/contracts/apple";
 import {
+  type EnvironmentAuthorizationError,
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
   WsRpcGroup,
@@ -48,6 +51,7 @@ function harness(http?: AscHttp) {
   const runtimes: AppleRuntime[] = [];
   const credentials = vi.fn(async () => credential);
   const backendFor = (environmentId: string): AppleBackend => ({
+    authorizeCaller: async () => null,
     accountStatus: async () => ({}),
     status: async () => {
       if (failure) throw new Error(`Cloud transport ${credential.privateKey}`);
@@ -223,17 +227,97 @@ describe("environment Apple runtime", () => {
       expect(JSON.stringify(encoded)).not.toContain(forbidden);
     h.dispose();
   });
+  effectIt.effect("guards every Apple read before using the host credentials", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const { result: runtime, backend } = h.runtime("env");
+      const denied = new AppleError({
+        code: "forbidden",
+        message: "Account denied",
+        retryAfterSeconds: null,
+      });
+      const authorize = vi.spyOn(backend, "authorizeCaller").mockRejectedValue(denied);
+      const caller = { userId: "teammate-cloud-user" };
+      const handlers = makeAppleRpcHandlers(runtime, [AuthOrchestrationReadScope], caller);
+      const reads: ReadonlyArray<
+        Effect.Effect<unknown, AppleError | EnvironmentAuthorizationError>
+      > = [
+        handlers[APPLE_WS_METHODS.status](target),
+        handlers[APPLE_WS_METHODS.testConnection](target),
+        handlers[APPLE_WS_METHODS.listApps](target),
+        handlers[APPLE_WS_METHODS.listBuilds]({ ...target, appId: "app" }),
+        handlers[APPLE_WS_METHODS.listBetaGroups]({ ...target, appId: "app" }),
+        handlers[APPLE_WS_METHODS.appleIdStatus](target),
+        Stream.runHead(handlers[APPLE_WS_METHODS.appleIdSubscribe](target)),
+      ];
+      for (const read of reads) {
+        expect(yield* Effect.result(read)).toMatchObject({
+          _tag: "Failure",
+          failure: { code: "forbidden" },
+        });
+      }
+      expect(authorize).toHaveBeenCalledTimes(7);
+      expect(authorize).toHaveBeenCalledWith({
+        companyId: target.companyId,
+        accountId: target.accountId,
+        caller,
+        manage: false,
+      });
+      expect(h.credentials).not.toHaveBeenCalled();
+      expect(h.tokens).toHaveLength(0);
+      authorize.mockResolvedValue(null);
+      const unknown = makeAppleRpcHandlers(runtime, [AuthOrchestrationReadScope]);
+      expect(yield* Effect.result(unknown[APPLE_WS_METHODS.listApps](target))).toMatchObject({
+        _tag: "Failure",
+        failure: { code: "forbidden" },
+      });
+      expect(authorize).toHaveBeenCalledTimes(7);
+      const owner = makeAppleRpcHandlers(runtime, [AuthOrchestrationReadScope], {
+        clerkSubject: "owner",
+      });
+      expect(yield* owner[APPLE_WS_METHODS.listApps](target)).toHaveLength(1);
+      expect(authorize).toHaveBeenCalledTimes(9);
+      h.dispose();
+    }),
+  );
+  effectIt.effect("withholds an in-flight read when the caller loses authorization", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const { result: runtime, backend } = h.runtime("env");
+      vi.spyOn(backend, "authorizeCaller")
+        .mockResolvedValueOnce(null)
+        .mockRejectedValue(
+          new AppleError({
+            code: "forbidden",
+            message: "Membership revoked",
+            retryAfterSeconds: null,
+          }),
+        );
+      const handlers = makeAppleRpcHandlers(runtime, [AuthOrchestrationReadScope], {
+        userId: "member",
+      });
+      expect(yield* Effect.result(handlers[APPLE_WS_METHODS.listApps](target))).toMatchObject({
+        _tag: "Failure",
+        failure: { code: "forbidden" },
+      });
+      expect(h.tokens).toHaveLength(1);
+      h.dispose();
+    }),
+  );
   effectIt.effect(
     "registers all RPCs, blocks writes with read-only scopes, and leaves Apple ID/app creation explicitly stubbed",
     () =>
       Effect.gen(function* () {
         const h = harness();
         const { result: runtime, backend } = h.runtime("env");
-        const read = makeAppleRpcHandlers(runtime, [AuthOrchestrationReadScope]);
-        const write = makeAppleRpcHandlers(runtime, [
-          AuthOrchestrationReadScope,
-          AuthOrchestrationOperateScope,
-        ]);
+        const read = makeAppleRpcHandlers(runtime, [AuthOrchestrationReadScope], {
+          clerkSubject: "owner",
+        });
+        const write = makeAppleRpcHandlers(
+          runtime,
+          [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+          { clerkSubject: "owner" },
+        );
         expect([...WsRpcGroup.requests.keys()]).toEqual(
           expect.arrayContaining([...AppleRpcs.requests.keys()]),
         );
@@ -251,6 +335,7 @@ describe("environment Apple runtime", () => {
           failure: { _tag: "EnvironmentAuthorizationError" },
         });
         expect(h.credentials).not.toHaveBeenCalled();
+        const authorize = vi.spyOn(backend, "authorizeCaller");
         const account = vi.spyOn(backend, "accountStatus");
         const start = yield* Effect.result(
           write[APPLE_WS_METHODS.appleIdStart]({
@@ -262,6 +347,31 @@ describe("environment Apple runtime", () => {
         expect(start).toMatchObject({ _tag: "Failure", failure: { code: "not-implemented" } });
         expect(encodeUnknownJson(start)).not.toContain("password-must-not-be-kept");
         expect(encodeUnknownJson(account.mock.calls)).not.toContain("password-must-not-be-kept");
+        expect(authorize).toHaveBeenCalledWith({
+          companyId: target.companyId,
+          accountId: target.accountId,
+          caller: { clerkSubject: "owner" },
+          manage: true,
+        });
+        expect(encodeUnknownJson(authorize.mock.calls)).not.toContain("password-must-not-be-kept");
+        authorize.mockRejectedValueOnce(
+          new AppleError({
+            code: "forbidden",
+            message: "Read-only company member",
+            retryAfterSeconds: null,
+          }),
+        );
+        expect(
+          yield* Effect.result(
+            write[APPLE_WS_METHODS.registerBundleId]({
+              ...target,
+              name: "App",
+              identifier: "com.example.app",
+              platform: "IOS",
+            }),
+          ),
+        ).toMatchObject({ _tag: "Failure", failure: { code: "forbidden" } });
+        expect(h.tokens).toHaveLength(0);
         const create = yield* Effect.result(
           write[APPLE_WS_METHODS.createApp]({
             ...target,

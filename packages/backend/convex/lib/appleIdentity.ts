@@ -1,7 +1,11 @@
+import type { Infer } from "convex/values";
+import { appleCaller } from "./appleValidators.ts";
+import type { Doc } from "../_generated/dataModel.js";
 import type { QueryCtx } from "../_generated/server.js";
 import {
   isEnvironmentIdentity,
   requireCompanyActor,
+  requireCompanyMember,
   requireIdentity,
   requirePermission,
   requireUser,
@@ -9,6 +13,57 @@ import {
 import { backendError } from "./errors.ts";
 
 export type AppleAccountAccess = { accountId: string; companyId?: string };
+/** Also read by status subscriptions so unlinking invalidates personal-account health. */
+export async function hasAppleOwnerLink(
+  ctx: QueryCtx,
+  account: Doc<"appleAccounts">,
+  environmentId: string,
+) {
+  const owner = await ctx.db.get(account.ownerUserId);
+  if (!owner) return false;
+  const link = await ctx.db
+    .query("relayEnvironmentLinks")
+    .withIndex("by_user_and_environment", (q) =>
+      q.eq("userId", owner.clerkSubject).eq("environmentId", environmentId),
+    )
+    .unique();
+  return link !== null && link.revokedAt === null;
+}
+
+/** The host's registration grants custody, while the RPC caller grants account access. */
+export async function authorizeAppleRuntimeCaller(
+  ctx: QueryCtx,
+  input: AppleAccountAccess & {
+    companyId: string;
+    caller: Infer<typeof appleCaller>;
+    manage: boolean;
+  },
+) {
+  const { account, actor } = await authorizeAppleAccount(ctx, input);
+  if (!actor) throw backendError("permission-denied", "An environment identity is required.");
+  const identity = input.caller;
+  const userId = "userId" in identity ? ctx.db.normalizeId("users", identity.userId) : null;
+  const caller =
+    "clerkSubject" in identity
+      ? await ctx.db
+          .query("users")
+          .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", identity.clerkSubject))
+          .unique()
+      : userId === null
+        ? null
+        : await ctx.db.get(userId);
+  if (!caller) throw backendError("permission-denied", "The Apple caller is unknown.");
+  if (account.companyId === null) {
+    if (caller._id !== account.ownerUserId)
+      throw backendError("permission-denied", "This Apple account is private to its owner.");
+  } else {
+    requirePermission(
+      await requireCompanyMember(ctx, actor.company, caller),
+      input.manage ? "integrations.manage" : "integrations.read",
+    );
+  }
+}
+
 /** Personal keys follow the owner's active relay link, never an arbitrary company membership. */
 export async function authorizeAppleAccount(
   ctx: QueryCtx,
@@ -31,18 +86,7 @@ export async function authorizeAppleAccount(
       if (account.companyId !== actor.company._id)
         throw backendError("permission-denied", "The Apple account belongs to another company.");
     } else {
-      const owner = await ctx.db.get(account.ownerUserId);
-      const link =
-        owner &&
-        (await ctx.db
-          .query("relayEnvironmentLinks")
-          .withIndex("by_user_and_environment", (q) =>
-            q
-              .eq("userId", owner.clerkSubject)
-              .eq("environmentId", actor.registration.environmentId),
-          )
-          .unique());
-      if (!link || link.revokedAt !== null)
+      if (!(await hasAppleOwnerLink(ctx, account, actor.registration.environmentId)))
         throw backendError(
           "permission-denied",
           "This environment is not linked to the Apple account owner.",
