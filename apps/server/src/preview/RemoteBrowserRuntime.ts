@@ -78,6 +78,7 @@ interface Recording {
 }
 interface Tab {
   interactions: RemoteBrowserInteractions;
+  ready: Promise<void>;
   owner: BrowserSession;
   id: PreviewTabId;
   page: Page;
@@ -258,7 +259,10 @@ export class RemoteBrowserRuntime {
 
   private async register(session: BrowserSession, page: Page): Promise<Tab> {
     const existing = [...session.tabs.values()].find((tab) => tab.page === page);
-    if (existing) return existing;
+    if (existing) {
+      await existing.ready;
+      return existing;
+    }
     // Insert before awaiting opener/title so simultaneous page events cannot duplicate the tab.
     const id = PreviewTabId.make(`remote-${NodeCrypto.randomUUID()}`);
     const interactions = new RemoteBrowserInteractions(
@@ -271,6 +275,7 @@ export class RemoteBrowserRuntime {
     );
     const tab: Tab = {
       interactions,
+      ready: Promise.resolve(),
       owner: session,
       id,
       page,
@@ -324,13 +329,16 @@ export class RemoteBrowserRuntime {
     page.on("domcontentloaded", () => {
       void this.publishMetadata(session).catch(() => undefined);
     });
-    await interactions.install();
-    await interactions.watch((this.interactionWatchers.get(session.threadId)?.size ?? 0) > 0);
-    const opener = await page.opener().catch(() => null);
-    tab.openerTabId =
-      [...session.tabs.values()].find((candidate) => candidate.page === opener)?.id ?? null;
-    await this.publishMetadata(session);
-    this.publishInteractions(session);
+    tab.ready = (async () => {
+      await interactions.watch((this.interactionWatchers.get(session.threadId)?.size ?? 0) > 0);
+      await interactions.install();
+      const opener = await page.opener().catch(() => null);
+      tab.openerTabId =
+        [...session.tabs.values()].find((candidate) => candidate.page === opener)?.id ?? null;
+      await this.publishMetadata(session);
+      this.publishInteractions(session);
+    })();
+    await tab.ready;
     return tab;
   }
 
@@ -355,8 +363,12 @@ export class RemoteBrowserRuntime {
       if (!watchers.size && this.interactionWatchers.get(threadId) === watchers) {
         this.interactionWatchers.delete(threadId);
         const current = await this.sessions.get(threadId)?.catch(() => undefined);
-        if (current)
-          await Promise.all([...current.tabs.values()].map((tab) => tab.interactions.watch(false)));
+        if (current) {
+          const watched = (this.interactionWatchers.get(threadId)?.size ?? 0) > 0;
+          await Promise.all(
+            [...current.tabs.values()].map((tab) => tab.interactions.watch(watched)),
+          );
+        }
       }
     };
     try {
@@ -444,7 +456,8 @@ export class RemoteBrowserRuntime {
   }
 
   private serial<T>(tab: Tab, action: () => Promise<T>): Promise<T> {
-    const result = tab.tail.then(() => {
+    const result = tab.tail.then(async () => {
+      await tab.ready;
       this.assertThreadOpen(tab.owner.threadId);
       if (tab.page.isClosed()) throw new Error("The browser tab closed before the action ran.");
       return action();
@@ -1180,10 +1193,11 @@ export class RemoteBrowserRuntime {
     };
     try {
       await this.startCapture(tab);
-      // An unchanged RPC-owned screencast may be static, with no new CDP frame forthcoming.
-      if (!tab.jpeg && tab.surface.size) {
+      // The last binary viewer clears its replay frame even if another consumer keeps capture alive.
+      if (!tab.surface.hasFrame && tab.surface.size) {
         const data =
           tab.frame?.data ||
+          tab.jpeg?.toString("base64") ||
           (await tab.page.screenshot({ type: "jpeg", quality: 75, timeout: 5000 })).toString(
             "base64",
           );
@@ -1261,7 +1275,6 @@ export class RemoteBrowserRuntime {
       listeners.delete(listener);
       if (!listeners.size && this.watchers.get(threadId) === listeners)
         this.watchers.delete(threadId);
-      this.interactionWatchers.delete(threadId);
     };
   }
 

@@ -1,7 +1,6 @@
 import type {
   PreviewRemoteInteractionCommand,
   PreviewRemoteInteractionInput,
-  PreviewRemoteInteractionState,
   PreviewRemoteInteractionEvent,
 } from "@spiritdevs/contracts";
 import {
@@ -34,12 +33,10 @@ export function remoteBrowserRpcHandlers(
   };
   return {
     [WS_METHODS.previewRemoteInteract]: (input: PreviewRemoteInteractionCommand) => {
-      const command: Effect.Effect<
-        PreviewRemoteInteractionState,
-        PreviewRemoteError | EnvironmentAuthorizationError
-      > = scopes.includes(requiredScopeForRpcMethod(WS_METHODS.previewRemoteInteract))
-        ? browser.interact(input)
-        : Effect.fail(denied(WS_METHODS.previewRemoteInteract));
+      const command: Effect.Effect<void, PreviewRemoteError | EnvironmentAuthorizationError> =
+        scopes.includes(requiredScopeForRpcMethod(WS_METHODS.previewRemoteInteract))
+          ? browser.interact(input)
+          : Effect.fail(denied(WS_METHODS.previewRemoteInteract));
       return command.pipe(Effect.provideService(References.TracerEnabled, false));
     },
     [WS_METHODS.subscribePreviewRemoteInteractions]: (

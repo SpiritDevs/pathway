@@ -94,7 +94,18 @@ function browserFixture() {
   const launch = vi.fn(
     async () => context as unknown as BrowserContext,
   ) as unknown as typeof chromium.launchPersistentContext;
-  return { page, pageEvents, mainFrame, locator, cdp, cdpEvents, context, launch, documentState };
+  return {
+    page,
+    pageEvents,
+    mainFrame,
+    locator,
+    cdp,
+    cdpEvents,
+    context,
+    contextEvents,
+    launch,
+    documentState,
+  };
 }
 const threadId = ThreadId.make("browser-lifecycle-test");
 
@@ -108,6 +119,102 @@ describe("RemoteBrowserRuntime lifecycle", () => {
     await runtime?.close();
     vi.useRealTimers();
     await NodeFSP.rm(directory, { recursive: true, force: true });
+  });
+
+  it.each(["metadata", "frames"] as const)(
+    "keeps interaction subscribers when a %s subscriber leaves and unwatches the final subscriber",
+    async (kind) => {
+      const fixture = browserFixture();
+      runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+      const { tabs } = await runtime.command({ action: "open", threadId });
+      const first = vi.fn();
+      const second = vi.fn();
+      const removeFirst = await runtime.subscribeInteractions(threadId, first);
+      const removeSecond = await runtime.subscribeInteractions(threadId, second);
+      const removeFrames = await runtime.subscribe(
+        threadId,
+        kind === "frames" ? tabs[0]!.tabId : undefined,
+        () => undefined,
+      );
+      await removeFrames();
+      const dialog = {
+        type: () => "confirm",
+        message: () => "Continue?",
+        defaultValue: () => "",
+        dismiss: vi.fn(async () => undefined),
+      };
+      fixture.pageEvents.emit("dialog", dialog);
+      expect(first.mock.lastCall?.[0].tabs[0].dialog?.message).toBe("Continue?");
+      expect(second.mock.lastCall?.[0].tabs[0].dialog?.message).toBe("Continue?");
+      await removeFirst();
+      expect(dialog.dismiss).not.toHaveBeenCalled();
+      await removeSecond();
+      expect(dialog.dismiss).toHaveBeenCalledOnce();
+      fixture.pageEvents.emit("dialog", dialog);
+      expect(dialog.dismiss).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("watches prompts during bridge setup and awaits registration before navigating a new tab", async () => {
+    const fixture = browserFixture();
+    const popup = browserFixture();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    await runtime.command({ action: "open", threadId, url: "https://example.com" });
+    const changed = vi.fn();
+    const unwatch = await runtime.subscribeInteractions(threadId, changed);
+    const bindingStarted = deferred();
+    const bindingReady = deferred();
+    popup.page.exposeBinding.mockImplementation(async () => {
+      bindingStarted.resolve();
+      await bindingReady.promise;
+    });
+    fixture.context.newPage.mockImplementation(async () => {
+      fixture.contextEvents.emit("page", popup.page);
+      return popup.page as unknown as Page;
+    });
+    const opening = runtime.command({ action: "open", threadId, url: "http://example.test" });
+    await bindingStarted.promise;
+    const dialog = {
+      type: () => "alert",
+      message: () => "Opening",
+      defaultValue: () => "",
+      dismiss: vi.fn(async () => undefined),
+    };
+    try {
+      // An independent command completes while this tab's registration stays held.
+      await runtime.command({ action: "list", threadId });
+      popup.pageEvents.emit("dialog", dialog);
+      expect(dialog.dismiss).not.toHaveBeenCalled();
+      expect(changed.mock.lastCall?.[0].tabs[1].dialog?.message).toBe("Opening");
+      expect(popup.page.goto).not.toHaveBeenCalled();
+    } finally {
+      bindingReady.resolve();
+      await opening;
+    }
+    expect(popup.page.addInitScript.mock.invocationCallOrder[0]).toBeLessThan(
+      popup.page.goto.mock.invocationCallOrder[0]!,
+    );
+    await unwatch();
+  });
+
+  it("replays a static capture when a binary viewer reconnects while RPC capture stays alive", async () => {
+    const fixture = browserFixture();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    const { tabs } = await runtime.command({ action: "open", threadId });
+    const tabId = tabs[0]!.tabId;
+    const removeRpc = await runtime.subscribe(threadId, tabId, () => undefined);
+    const sink = { send: vi.fn(), bufferedAmount: () => 0, close: vi.fn() };
+    const viewport = { width: 1280, height: 800, deviceScale: 1 };
+    const remove = await runtime.subscribeSurface(threadId, tabId, viewport, sink);
+    expect(sink.send).toHaveBeenCalledOnce();
+    await remove();
+    sink.send.mockClear();
+    const reconnect = await runtime.subscribeSurface(threadId, tabId, viewport, sink);
+    expect(sink.send).toHaveBeenCalledOnce();
+    expect(fixture.page.screenshot).toHaveBeenCalledOnce();
+    expect(fixture.context.newCDPSession).toHaveBeenCalledOnce();
+    await reconnect();
+    await removeRpc();
   });
 
   it("shares one screencast with binary and RPC viewers and stops after the last leaves", async () => {

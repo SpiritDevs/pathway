@@ -36,7 +36,7 @@ import { type BrowserArtifact, RemoteBrowserRuntime } from "./RemoteBrowserRunti
 export interface RemoteBrowserService {
   readonly interact: (
     input: PreviewRemoteInteractionCommand,
-  ) => Effect.Effect<PreviewRemoteInteractionState, PreviewRemoteError>;
+  ) => Effect.Effect<void, PreviewRemoteError>;
   readonly interactions: (input: {
     threadId: ThreadId;
   }) => Stream.Stream<PreviewRemoteInteractionEvent, PreviewRemoteError>;
@@ -292,10 +292,7 @@ export const makeRemoteBrowser = Effect.fn("RemoteBrowser.make")(function* ({
       yield* broker
         .selectHostForThread({ environmentId, threadId: input.threadId, clientId })
         .pipe(Effect.mapError((error) => new PreviewRemoteError({ detail: error.message })));
-      const state = yield* operation(() =>
-        runtime.interact(input, () => Effect.runPromise(authorize)),
-      );
-      return yield* signState(state, new Map());
+      yield* operation(() => runtime.interact(input, () => Effect.runPromise(authorize)));
     }),
     interactions: (input) =>
       Stream.unwrap(

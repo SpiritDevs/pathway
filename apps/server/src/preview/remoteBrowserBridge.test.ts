@@ -24,7 +24,7 @@ class Select extends Element {
   }));
 }
 describe("browser document bridge", () => {
-  it("intercepts a watched native select, chooses by index and dispatches input/change", async () => {
+  it("intercepts selects without secure-context crypto and gives each popup a fresh ID", async () => {
     const events = new Map<string, (event: unknown) => void>();
     const messages: unknown[] = [];
     const context = {
@@ -45,7 +45,8 @@ describe("browser document bridge", () => {
         observe() {}
         disconnect() {}
       },
-      crypto: { randomUUID: () => "id" },
+      crypto: {},
+      isSecureContext: false,
       __pathwayBrowserEvent: async (value: unknown) => {
         messages.push(value);
         return true;
@@ -61,21 +62,27 @@ describe("browser document bridge", () => {
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(messages.at(-1)).toMatchObject({
       type: "select",
-      selectId: "id",
+      selectId: "1",
       options: [
         { index: 0, selected: true },
         { index: 1, selected: false },
       ],
     });
-    NodeVM.runInNewContext(selectResponseScript("id", [1]), context);
+    NodeVM.runInNewContext(selectResponseScript("1", [1]), context);
     expect(select.options.map((o) => o.selected)).toEqual([false, true]);
     expect(select.dispatchEvent.mock.calls.map((args) => args[0].type)).toEqual([
       "input",
       "change",
     ]);
-    expect(() => NodeVM.runInNewContext(selectResponseScript("id", [0]), context)).toThrow(
+    expect(() => NodeVM.runInNewContext(selectResponseScript("1", [0]), context)).toThrow(
       "no longer",
     );
+    events.get("pointerdown")!(event);
+    expect(messages.at(-1)).toMatchObject({ type: "select", selectId: "2" });
+    expect(() => NodeVM.runInNewContext(selectResponseScript("1", [0]), context)).toThrow(
+      "no longer",
+    );
+    NodeVM.runInNewContext(selectResponseScript("2", null), context);
     context.__pathwayBrowserWatching = false;
     preventDefault.mockClear();
     events.get("pointerdown")!(event);

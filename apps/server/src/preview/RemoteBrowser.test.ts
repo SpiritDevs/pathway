@@ -17,6 +17,7 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { makeRemoteBrowser } from "./RemoteBrowser.ts";
+import type { BrowserArtifact } from "./RemoteBrowserRuntime.ts";
 
 const threadId = ThreadId.make("remote-deleted-task");
 const makeHarness = Effect.fn(function* () {
@@ -74,6 +75,9 @@ const makeHarness = Effect.fn(function* () {
       Queue.offer(responses, response).pipe(Effect.asVoid),
     invoke: <A>() => Effect.die("Unexpected invocation") as Effect.Effect<A>,
   };
+  const signArtifact = vi.fn((artifact: BrowserArtifact) =>
+    Effect.succeed({ ...artifact, url: "test-capture" }),
+  );
   const service = yield* makeRemoteBrowser({
     runtime,
     broker,
@@ -84,7 +88,7 @@ const makeHarness = Effect.fn(function* () {
         runs: agentRunning ? [{ status: "running" as const }] : [],
       })),
     deletedThreads: Stream.fromQueue(deletions),
-    signArtifact: (artifact) => Effect.succeed({ ...artifact, url: "test-capture" }),
+    signArtifact,
   });
   return {
     service,
@@ -96,6 +100,7 @@ const makeHarness = Effect.fn(function* () {
     closed,
     subscribed,
     unsubscribe,
+    signArtifact,
     markAgentRunning: () => {
       agentRunning = true;
     },
@@ -133,43 +138,69 @@ describe("remote browser deleted task lifecycle", () => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect("signs replayed download URLs and terminates the interaction stream on deletion", () =>
-    Effect.gen(function* () {
-      const h = yield* makeHarness();
-      const state: PreviewRemoteInteractionState = {
-        tabId: PreviewTabId.make("tab"),
-        cursor: "default",
-        clipboard: null,
-        dialog: null,
-        fileChooser: null,
-        select: null,
-        downloads: [
+  it.effect(
+    "acknowledges interactions without snapshots and reuses subscription download signatures",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const state: PreviewRemoteInteractionState = {
+          tabId: PreviewTabId.make("tab"),
+          cursor: "default",
+          clipboard: null,
+          dialog: null,
+          fileChooser: null,
+          select: null,
+          downloads: [
+            {
+              downloadId: "download",
+              name: "report.csv",
+              status: "ready",
+              attachmentId: "attachment",
+              sizeBytes: 4,
+            },
+          ],
+        };
+        const delivered = yield* Queue.unbounded<PreviewRemoteInteractionEvent>();
+        const unsubscribed = vi.fn(async () => undefined);
+        let publish = (_event: PreviewRemoteInteractionEvent) => {};
+        h.runtime.subscribeInteractions.mockImplementation(async (_thread, listener) => {
+          publish = listener;
+          listener({ type: "state", tabs: [state] });
+          return unsubscribed;
+        });
+        const running = yield* h.service.interactions({ threadId }).pipe(
+          Stream.runForEach((event) => Queue.offer(delivered, event)),
+          Effect.flip,
+          Effect.forkScoped,
+        );
+        expect((yield* Queue.take(delivered)).tabs[0]?.downloads[0]?.url).toBe("test-capture");
+        h.runtime.interact.mockResolvedValue(state);
+        for (const command of [
+          { action: "pointerMove", x: 1, y: 2 },
+          { action: "wheel", x: 1, y: 2, deltaX: 0, deltaY: 1 },
           {
-            downloadId: "download",
-            name: "report.csv",
-            status: "ready",
-            attachmentId: "attachment",
-            sizeBytes: 4,
+            action: "composition",
+            phase: "update",
+            text: "test",
+            selectionStart: 0,
+            selectionEnd: 4,
           },
-        ],
-      };
-      const delivered = yield* Queue.unbounded<PreviewRemoteInteractionEvent>();
-      const unsubscribed = vi.fn(async () => undefined);
-      h.runtime.subscribeInteractions.mockImplementation(async (_thread, listener) => {
-        listener({ type: "state", tabs: [state] });
-        return unsubscribed;
-      });
-      const running = yield* h.service.interactions({ threadId }).pipe(
-        Stream.runForEach((event) => Queue.offer(delivered, event)),
-        Effect.flip,
-        Effect.forkScoped,
-      );
-      expect((yield* Queue.take(delivered)).tabs[0]?.downloads[0]?.url).toBe("test-capture");
-      h.markDeleted();
-      yield* Queue.offer(h.deletions, threadId);
-      expect((yield* Fiber.join(running)).detail).toContain("unavailable");
-      expect(unsubscribed).toHaveBeenCalledOnce();
-    }).pipe(Effect.scoped),
+          { action: "clipboardRead" },
+        ] as const) {
+          expect(
+            yield* h.service.interact({ ...command, threadId, tabId: state.tabId }),
+          ).toBeUndefined();
+          publish({ type: "state", tabs: [{ ...state, clipboard: "copied" }] });
+          const event = yield* Queue.take(delivered);
+          expect(event.tabs[0]?.clipboard).toBe("copied");
+          expect(event.tabs[0]?.downloads[0]?.url).toBe("test-capture");
+        }
+        expect(h.signArtifact).toHaveBeenCalledOnce();
+        h.markDeleted();
+        yield* Queue.offer(h.deletions, threadId);
+        expect((yield* Fiber.join(running)).detail).toContain("unavailable");
+        expect(unsubscribed).toHaveBeenCalledOnce();
+      }).pipe(Effect.scoped),
   );
 
   it.effect(

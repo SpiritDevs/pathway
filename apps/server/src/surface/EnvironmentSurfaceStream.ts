@@ -31,6 +31,9 @@ export class EnvironmentSurfaceStream {
   get size() {
     return this.viewers.size;
   }
+  get hasFrame() {
+    return this.latest !== null;
+  }
   add(sink: SurfaceSink, viewport: EnvironmentSurfaceViewport) {
     const viewer: Viewer = { sink, viewport, pending: this.latest, level: 0, healthy: 0 };
     this.viewers.add(viewer);

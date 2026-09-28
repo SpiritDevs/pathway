@@ -19,13 +19,55 @@ import {
   failEnvironmentScopeRequired,
 } from "../auth/http.ts";
 import { withSessionWebSocket } from "../auth/sessionWebSocket.ts";
-import { RemoteBrowser } from "../preview/RemoteBrowser.ts";
+import { RemoteBrowser, type RemoteBrowserService } from "../preview/RemoteBrowser.ts";
+import { makeSurfaceSocket } from "./surfaceSocket.ts";
 
 const Query = Schema.Struct({
   ...EnvironmentSurfaceTarget.fields,
   ...EnvironmentSurfaceViewport.fields,
 });
 export const decodeSurfaceQuery = Schema.decodeUnknownOption(Query);
+
+export const serveEnvironmentSurface = Effect.fn("serveEnvironmentSurface")(function* (
+  socket: Socket.Socket,
+  input: typeof Query.Type,
+  browser: RemoteBrowserService,
+) {
+  const ready = yield* Deferred.make<Option.Option<Socket.WebSocket["Service"]>>();
+  let alive = true;
+  let onPong = () => {};
+  const reader = yield* socket
+    .runRaw((message) => {
+      if (message === "ready")
+        return Effect.serviceOption(Socket.WebSocket).pipe(
+          Effect.flatMap((native) => Deferred.succeed(ready, native)),
+        );
+      if (message === "pong") {
+        alive = true;
+        onPong();
+      }
+    })
+    .pipe(Effect.forkScoped);
+  const native = yield* Deferred.await(ready).pipe(
+    Effect.timeout("10 seconds"),
+    Effect.raceFirst(Fiber.join(reader).pipe(Effect.andThen(Effect.never))),
+  );
+  const connection = yield* makeSurfaceSocket(socket, native);
+  onPong = connection.pong;
+  yield* browser.subscribeSurface({ ...input, viewport: input }, connection.sink);
+  yield* Effect.gen(function* () {
+    while (true) {
+      yield* Effect.sleep("15 seconds");
+      if (!alive) {
+        connection.close("Surface heartbeat expired");
+        return;
+      }
+      alive = false;
+      connection.ping();
+    }
+  }).pipe(Effect.forkScoped);
+  yield* Fiber.join(reader).pipe(Effect.raceFirst(connection.failure));
+});
 
 export const environmentSurfaceRouteLayer = HttpRouter.add(
   "GET",
@@ -58,41 +100,7 @@ export const environmentSurfaceRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Invalid surface target or viewport", { status: 400 });
     const browser = yield* RemoteBrowser;
     yield* withSessionWebSocket(session.sessionId, (socket) =>
-      Effect.gen(function* () {
-        const ready = yield* Deferred.make<Socket.WebSocket["Service"]>();
-        let alive = true;
-        const reader = yield* socket
-          .runRaw((message) => {
-            if (message === "ready")
-              return Effect.gen(function* () {
-                const ws = yield* Effect.serviceOption(Socket.WebSocket);
-                if (Option.isSome(ws)) yield* Deferred.succeed(ready, ws.value);
-              });
-            if (message === "pong") alive = true;
-          })
-          .pipe(Effect.forkScoped);
-        const ws = yield* Deferred.await(ready).pipe(Effect.timeout("10 seconds"));
-        yield* browser.subscribeSurface(
-          { ...input.value, viewport: input.value },
-          {
-            send: (bytes) => ws.send(bytes as Uint8Array<ArrayBuffer>),
-            bufferedAmount: () => ws.bufferedAmount,
-            close: () => ws.close(1001, "Surface closed"),
-          },
-        );
-        yield* Effect.gen(function* () {
-          while (true) {
-            yield* Effect.sleep("15 seconds");
-            if (!alive) {
-              ws.close(1001, "Surface heartbeat expired");
-              return;
-            }
-            alive = false;
-            if (ws.bufferedAmount <= 256 * 1024) ws.send("ping");
-          }
-        }).pipe(Effect.forkScoped);
-        yield* Fiber.join(reader);
-      }),
+      serveEnvironmentSurface(socket, input.value, browser),
     ).pipe(
       Effect.catchTags({
         SocketError: () => Effect.void,

@@ -3,8 +3,14 @@ import * as NodeHttp from "node:http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { ENVIRONMENT_SURFACE_WS_PATH, type AuthEnvironmentScope } from "@spiritdevs/contracts";
-import { Deferred, Effect, Layer, Stream } from "effect";
+import {
+  ENVIRONMENT_SURFACE_WS_PATH,
+  ThreadId,
+  PreviewTabId,
+  type AuthEnvironmentScope,
+} from "@spiritdevs/contracts";
+import { Deferred, Effect, Fiber, Layer, Queue, Stream } from "effect";
+import * as Socket from "effect/unstable/socket/Socket";
 import {
   FetchHttpClient,
   HttpClient,
@@ -18,8 +24,99 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { RemoteBrowser, type RemoteBrowserService } from "../preview/RemoteBrowser.ts";
-import { environmentSurfaceRouteLayer } from "./environmentSurfaceRoute.ts";
-import type { SurfaceSink } from "./EnvironmentSurfaceStream.ts";
+import {
+  environmentSurfaceRouteLayer,
+  serveEnvironmentSurface,
+} from "./environmentSurfaceRoute.ts";
+import {
+  EnvironmentSurfaceStream,
+  SURFACE_SOCKET_BUDGET,
+  type SurfaceSink,
+} from "./EnvironmentSurfaceStream.ts";
+
+it.effect("streams over writer-only sockets and bounds frames until the client's pong", () =>
+  Effect.gen(function* () {
+    const incoming = yield* Queue.unbounded<string>();
+    const outgoing = yield* Queue.unbounded<Uint8Array | string | Socket.CloseEvent>();
+    const subscribed = yield* Deferred.make<SurfaceSink>();
+    const released = yield* Deferred.make<void>();
+    const pongHandled = yield* Queue.unbounded<void>();
+    const writeReady = yield* Deferred.make<void>();
+    const socket = Socket.make({
+      runRaw: (handler) =>
+        Stream.fromQueue(incoming).pipe(
+          Stream.runForEach((message) =>
+            Effect.gen(function* () {
+              const result = handler(message);
+              if (Effect.isEffect(result)) yield* result;
+              if (message === "pong") yield* Queue.offer(pongHandled, undefined);
+            }),
+          ),
+        ),
+      writer: Effect.succeed((message) =>
+        Effect.gen(function* () {
+          if (message instanceof Uint8Array) yield* Deferred.await(writeReady);
+          yield* Queue.offer(outgoing, message);
+        }),
+      ),
+    });
+    const browser: RemoteBrowserService = {
+      interact: () => Effect.void,
+      interactions: () => Stream.empty,
+      command: () => Effect.succeed({ tabs: [], selectedTabId: null }),
+      frames: () => Stream.empty,
+      subscribeSurface: (_input, sink) =>
+        Effect.gen(function* () {
+          yield* Effect.addFinalizer(() => Deferred.succeed(released, undefined));
+          yield* Deferred.succeed(subscribed, sink);
+        }),
+    };
+    const viewport = { width: 800, height: 600, deviceScale: 1 };
+    const running = yield* serveEnvironmentSurface(
+      socket,
+      {
+        ...viewport,
+        kind: "browser",
+        threadId: ThreadId.make("thread"),
+        tabId: PreviewTabId.make("tab"),
+      },
+      browser,
+    ).pipe(Effect.scoped, Effect.forkScoped);
+    yield* Queue.offer(incoming, "ready");
+    const sink = yield* Deferred.await(subscribed);
+    const surface = new EnvironmentSurfaceStream();
+    surface.add(sink, viewport);
+    const frame = {
+      width: 800,
+      height: 600,
+      deviceScale: 1,
+      timestampMs: 0,
+      jpeg: new Uint8Array([1, 2, 3]),
+    };
+    surface.publish({ ...frame, sequence: 1 });
+    expect(sink.bufferedAmount()).toBeGreaterThan(SURFACE_SOCKET_BUDGET);
+    surface.publish({ ...frame, sequence: 2 });
+    surface.publish({ ...frame, sequence: 3 });
+    yield* Deferred.succeed(writeReady, undefined);
+    expect(yield* Queue.take(outgoing)).toBeInstanceOf(Uint8Array);
+    expect(yield* Queue.take(outgoing)).toBe("ping");
+    // A synchronous Bun-style write must not clear backpressure before network delivery.
+    expect(sink.bufferedAmount()).toBeGreaterThan(SURFACE_SOCKET_BUDGET);
+    yield* Queue.offer(incoming, "pong");
+    yield* Queue.take(pongHandled);
+    expect(sink.bufferedAmount()).toBe(0);
+    surface.tick();
+    const latest = yield* Queue.take(outgoing);
+    expect(latest).toBeInstanceOf(Uint8Array);
+    if (latest instanceof Uint8Array)
+      expect(new DataView(latest.buffer).getUint32(4, true)).toBe(3);
+    expect(yield* Queue.take(outgoing)).toBe("ping");
+    sink.close();
+    expect(yield* Queue.take(outgoing)).toEqual(new Socket.CloseEvent(1001, "Surface closed"));
+    yield* Fiber.interrupt(running);
+    yield* Deferred.await(released);
+  }).pipe(Effect.scoped),
+);
 const makeServerLayer = (
   browser: RemoteBrowserService,
   options: { revokeAfterAuthentication?: boolean; afterSnapshot?: Effect.Effect<void> } = {},

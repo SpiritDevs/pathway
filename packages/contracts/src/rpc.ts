@@ -2,7 +2,6 @@ import { XcodeRpcs } from "./xcode.ts";
 import { AppleRpcs } from "./apple.ts";
 import {
   PreviewRemoteInteractionCommand,
-  PreviewRemoteInteractionState,
   PreviewRemoteInteractionEvent,
   PreviewRemoteInteractionInput,
 } from "./previewRemoteInteractions.ts";
@@ -1256,7 +1255,7 @@ export const WsPreviewOpenRpc = Rpc.make(WS_METHODS.previewOpen, {
 
 export const WsPreviewRemoteInteractRpc = Rpc.make(WS_METHODS.previewRemoteInteract, {
   payload: PreviewRemoteInteractionCommand,
-  success: PreviewRemoteInteractionState,
+  success: Schema.Void,
   error: Schema.Union([PreviewRemoteError, EnvironmentAuthorizationError]),
 });
 export const WsPreviewRemoteInteractionsRpc = Rpc.make(

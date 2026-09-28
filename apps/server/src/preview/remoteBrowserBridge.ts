@@ -5,6 +5,7 @@ export const remoteBrowserBridge = `(() => {
   void globalThis.__pathwayBrowserEvent({ type: 'ready' }).then(watched => { globalThis.__pathwayBrowserWatching = watched; }).catch(() => {});
   const emit = value => { void globalThis.__pathwayBrowserEvent(value).catch(() => {}); };
   let cursor = 'default', target = null, scheduled = false;
+  let selectSequence = 0;
   const update = () => {
     scheduled = false;
     if (!globalThis.__pathwayBrowserWatching || !target || !target.isConnected) return;
@@ -39,7 +40,7 @@ export const remoteBrowserBridge = `(() => {
     event.preventDefault();
     element.focus();
     if (event.type === 'click' && globalThis.__pathwayRemoteSelect?.element === element) return;
-    const id = crypto.randomUUID();
+    const id = String(++selectSequence);
     globalThis.__pathwayRemoteSelect = { id, element };
     emit({ type: 'select', selectId: id, multiple: element.multiple, options: Array.from(element.options).slice(0, 1000).map((option, index) => ({ index, label: option.label.slice(0, 1000), value: option.value.slice(0, 1000), selected: option.selected, disabled: option.disabled || (option.parentElement instanceof HTMLOptGroupElement && option.parentElement.disabled) })) });
   };
