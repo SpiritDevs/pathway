@@ -27,16 +27,17 @@ async function deviceLease(keys, acquire) {
       try { previous = JSON.parse(fs.readFileSync(file, 'utf8')); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
       if (previous) {
-        const identity = previous.instance + ':' + previous.pid + ':' + previous.identity;
+        const relinquished = previous.relinquished === true;
+        const identity = relinquished ? previous.instance + ':relinquished:' + previous.deviceId : previous.instance + ':' + previous.pid + ':' + previous.identity;
         if (!alive.has(identity)) {
           let latest = previous;
-          if (previous.ownerFile) {
+          if (!relinquished && previous.ownerFile) {
             let currentOwner;
             try { currentOwner = JSON.parse(fs.readFileSync(previous.ownerFile, 'utf8')); }
             catch (error) { if (error.code !== 'ENOENT') throw error; }
             if (currentOwner?.instance === previous.instance) latest = currentOwner;
           }
-          alive.set(identity, maintenanceAlive(latest.pid, latest.identity) || [...(previous.helpers || []), ...(latest.helpers || [])].some(helper => maintenanceAlive(helper.pid, helper.identity)));
+          alive.set(identity, (!relinquished && maintenanceAlive(latest.pid, latest.identity)) || [...(previous.helpers || []), ...(latest.helpers || [])].some(helper => maintenanceAlive(helper.pid, helper.identity)));
         }
         if (alive.get(identity) && previous.instance !== current?.instance) {
           owners[key] = { environmentId: previous.environmentId, environmentLabel: previous.environmentLabel };

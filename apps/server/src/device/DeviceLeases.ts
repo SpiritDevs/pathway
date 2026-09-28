@@ -23,6 +23,7 @@ const decodeLeaseOwner = Schema.decodeUnknownSync(Schema.fromJsonString(LeaseOwn
 const Lease = Schema.Struct({
   ...LeaseOwner.fields,
   deviceId: Schema.String,
+  relinquished: Schema.optional(Schema.Boolean),
 });
 const decodeLease = Schema.decodeUnknownSync(Schema.fromJsonString(Lease));
 
@@ -48,20 +49,23 @@ export function makeDeviceLeases(root: string, owner: DeviceOwnership) {
         throw error;
       });
     if (!value) return null;
-    const key = `${value.instance}:${value.pid}:${value.identity}`;
+    const key = value.relinquished
+      ? `${value.instance}:relinquished:${value.deviceId}`
+      : `${value.instance}:${value.pid}:${value.identity}`;
     if (!alive.has(key)) {
-      const current = value.ownerFile
-        ? await NodeFSP.readFile(value.ownerFile, "utf8")
-            .then(decodeLeaseOwner)
-            .catch((error: NodeJS.ErrnoException) => {
-              if (error.code === "ENOENT") return null;
-              throw error;
-            })
-        : null;
+      const current =
+        !value.relinquished && value.ownerFile
+          ? await NodeFSP.readFile(value.ownerFile, "utf8")
+              .then(decodeLeaseOwner)
+              .catch((error: NodeJS.ErrnoException) => {
+                if (error.code === "ENOENT") return null;
+                throw error;
+              })
+          : null;
       const latest = current?.instance === value.instance ? current : value;
       alive.set(
         key,
-        isMachineOwnerAlive(latest) ||
+        (!value.relinquished && isMachineOwnerAlive(latest)) ||
           [...(value.helpers ?? []), ...(latest.helpers ?? [])].some(isMachineOwnerAlive),
       );
     }
@@ -108,7 +112,7 @@ export function makeDeviceLeases(root: string, owner: DeviceOwnership) {
         if (!name.endsWith(".json")) continue;
         const file = NodePath.join(directory, name);
         const value = await NodeFSP.readFile(file, "utf8").then(decodeLease);
-        if (value.instance !== instance) continue;
+        if (value.instance !== instance || value.relinquished) continue;
         const temporary = file + "." + instance;
         await NodeFSP.writeFile(temporary, JSON.stringify({ ...value, helpers }));
         await NodeFSP.rename(temporary, file);
@@ -120,8 +124,15 @@ export function makeDeviceLeases(root: string, owner: DeviceOwnership) {
         if (!name.endsWith(".json")) continue;
         const file = NodePath.join(directory, name);
         const value = await NodeFSP.readFile(file, "utf8").then(decodeLease);
-        if (value.instance === instance && !(value.helpers ?? []).some(isMachineOwnerAlive))
+        if (value.instance !== instance) continue;
+        if (!(value.helpers ?? []).some(isMachineOwnerAlive)) {
           await NodeFSP.unlink(file);
+          continue;
+        }
+        // Stop relinquishes the server's claim; surviving helpers alone retain exclusivity.
+        const temporary = file + "." + instance;
+        await NodeFSP.writeFile(temporary, JSON.stringify({ ...value, relinquished: true }));
+        await NodeFSP.rename(temporary, file);
       }
     });
   return { acquire, inspect, inspectMany, releaseAll, retainHelpers };

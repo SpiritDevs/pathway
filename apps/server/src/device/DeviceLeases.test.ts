@@ -7,7 +7,8 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import * as NodeEvents from "node:events";
 import { makeDeviceLeases } from "./DeviceLeases.ts";
-import { withMachineLock } from "./deviceMachineLock.ts";
+import { remoteDeviceScript } from "./sshDeviceScript.ts";
+import { machineOwner, withMachineLock } from "./deviceMachineLock.ts";
 
 const directories: string[] = [];
 const temporary = async () => {
@@ -155,3 +156,82 @@ process.on('message', () => {});
       }
   }
 });
+
+it.each(["local", "SSH"])(
+  "expires relinquished leases after helper exit for the %s reader",
+  async (reader) => {
+    const root = await temporary();
+    const helpers = Array.from({ length: 2 }, () =>
+      NodeChildProcess.spawn(
+        process.execPath,
+        ["-e", "process.stdin.resume();console.log('ready');"],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      ),
+    );
+    try {
+      await Promise.all(
+        helpers.map((helper) => NodeEvents.EventEmitter.once(helper.stdout, "data")),
+      );
+      const owner = makeDeviceLeases(root, alice);
+      const contender = makeDeviceLeases(root, bob);
+      const remoteState = NodePath.join(root, ".pathway/device/hosts/contender");
+      await NodeFSP.mkdir(remoteState, { recursive: true });
+      await NodeFSP.writeFile(
+        NodePath.join(remoteState, "lease-owner.json"),
+        JSON.stringify({
+          ...bob,
+          ...machineOwner(),
+          instance: "remote-contender",
+        }),
+      );
+      const remote = async (
+        mode: "lease-acquire" | "lease-inspect",
+        key: string | ReadonlyArray<string>,
+      ) => {
+        const result = await NodeUtil.promisify(NodeChildProcess.execFile)(
+          process.execPath,
+          ["-e", remoteDeviceScript("contender", mode, key)],
+          { env: { ...process.env, HOME: root, PATHWAY_DEVICE_CACHE_DIR: root } },
+        );
+        return JSON.parse(result.stdout);
+      };
+      const acquire = (key: string) =>
+        reader === "local"
+          ? contender.acquire(key)
+          : remote("lease-acquire", key).then((result) => result.owner);
+      const inspect = (keys: ReadonlyArray<string>) =>
+        reader === "local"
+          ? contender.inspectMany(keys)
+          : remote("lease-inspect", keys).then((result) => result.owners);
+      await owner.acquire("ios:phone");
+      await owner.acquire("ios:active");
+      await owner.retainHelpers([helpers[0]!.pid!]);
+      await owner.releaseAll();
+      await owner.releaseAll();
+      expect(await acquire("ios:phone")).toEqual(alice);
+      expect(await inspect(["ios:phone"])).toEqual({ "ios:phone": alice });
+
+      // New helper registration and other active leases must not revive the relinquished one.
+      await owner.acquire("ios:active");
+      await owner.retainHelpers([helpers[1]!.pid!]);
+      const exited = NodeEvents.EventEmitter.once(helpers[0]!, "exit");
+      helpers[0]!.stdin.end();
+      await exited;
+      expect(process.kill(process.pid, 0)).toBe(true);
+      for (const keys of [
+        ["ios:active", "ios:phone"],
+        ["ios:phone", "ios:active"],
+      ])
+        expect(await inspect(keys)).toEqual({ "ios:active": alice });
+      expect(await acquire("ios:phone")).toBeNull();
+      expect(await acquire("ios:active")).toEqual(alice);
+    } finally {
+      for (const helper of helpers)
+        if (helper.exitCode === null && helper.signalCode === null) {
+          const exited = NodeEvents.EventEmitter.once(helper, "exit");
+          helper.kill();
+          await exited;
+        }
+    }
+  },
+);
