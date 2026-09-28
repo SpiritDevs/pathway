@@ -22,8 +22,22 @@ import {
 } from "@spiritdevs/contracts";
 import { AppStoreConnectClient, type AscHttp } from "@spiritdevs/backend/appStoreConnectApi";
 import { AppleRuntime, type AppleBackend } from "./AppleRuntime.ts";
+import { AppleIdSession } from "./AppleIdSession.ts";
 import { makeAppleRpcHandlers } from "./appleRpc.ts";
 import { appleTestCredential } from "../../../../packages/backend/src/fixtures/appleTestKey.ts";
+const testSessions = () =>
+  new AppleIdSession({
+    status: async () => {
+      throw new Error("No Cloud test session");
+    },
+    read: async () => {
+      throw new Error("No session");
+    },
+    save: async () => {
+      throw new Error("No session");
+    },
+    revoke: async () => undefined,
+  });
 const encodeUnknownJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const encodeStatus = Schema.encodeSync(AppleStatus);
 const NOW = 1_800_000_000_000;
@@ -241,6 +255,7 @@ describe("environment Apple runtime", () => {
       const handlers = makeAppleRpcHandlers(
         runtime,
         [AuthOrchestrationReadScope],
+        testSessions(),
         Effect.succeed(caller),
       );
       const reads: ReadonlyArray<
@@ -270,7 +285,7 @@ describe("environment Apple runtime", () => {
       expect(h.credentials).not.toHaveBeenCalled();
       expect(h.tokens).toHaveLength(0);
       authorize.mockResolvedValue(null);
-      const unknown = makeAppleRpcHandlers(runtime, [AuthOrchestrationReadScope]);
+      const unknown = makeAppleRpcHandlers(runtime, [AuthOrchestrationReadScope], testSessions());
       expect(yield* Effect.result(unknown[APPLE_WS_METHODS.listApps](target))).toMatchObject({
         _tag: "Failure",
         failure: { code: "forbidden" },
@@ -279,6 +294,7 @@ describe("environment Apple runtime", () => {
       const owner = makeAppleRpcHandlers(
         runtime,
         [AuthOrchestrationReadScope],
+        testSessions(),
         Effect.succeed({
           clerkSubject: "owner",
         }),
@@ -304,6 +320,7 @@ describe("environment Apple runtime", () => {
       const handlers = makeAppleRpcHandlers(
         runtime,
         [AuthOrchestrationReadScope],
+        testSessions(),
         Effect.succeed({
           userId: "member",
         }),
@@ -317,21 +334,33 @@ describe("environment Apple runtime", () => {
     }),
   );
   effectIt.effect(
-    "registers all RPCs, blocks writes with read-only scopes, and leaves Apple ID/app creation explicitly stubbed",
+    "registers all RPCs, blocks writes with read-only scopes, and redacts Apple ID failures",
     () =>
       Effect.gen(function* () {
         const h = harness();
         const { result: runtime, backend } = h.runtime("env");
+        const sessions = new AppleIdSession({
+          status: async () => {
+            throw new Error("No Cloud test session");
+          },
+          read: async () => {
+            throw new Error("No session");
+          },
+          save: async () => {
+            throw new Error("No session");
+          },
+          revoke: async () => undefined,
+        });
         const read = makeAppleRpcHandlers(
           runtime,
           [AuthOrchestrationReadScope],
-          Effect.succeed({
-            clerkSubject: "owner",
-          }),
+          sessions,
+          Effect.succeed({ clerkSubject: "owner" }),
         );
         const write = makeAppleRpcHandlers(
           runtime,
           [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+          sessions,
           Effect.succeed({ clerkSubject: "owner" }),
         );
         expect([...WsRpcGroup.requests.keys()]).toEqual(
@@ -360,7 +389,7 @@ describe("environment Apple runtime", () => {
             password: "password-must-not-be-kept",
           }),
         );
-        expect(start).toMatchObject({ _tag: "Failure", failure: { code: "not-implemented" } });
+        expect(start).toMatchObject({ _tag: "Failure", failure: { code: "cloud-unavailable" } });
         expect(encodeUnknownJson(start)).not.toContain("password-must-not-be-kept");
         expect(encodeUnknownJson(account.mock.calls)).not.toContain("password-must-not-be-kept");
         expect(authorize).toHaveBeenCalledWith({

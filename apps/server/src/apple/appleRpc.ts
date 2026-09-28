@@ -1,3 +1,5 @@
+import type { AppleIdSessionState } from "@spiritdevs/contracts/apple";
+import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { APPLE_WS_METHODS, AppleRpcs, AppleError } from "@spiritdevs/contracts/apple";
 import { EnvironmentAuthorizationError, type AuthEnvironmentScope } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
@@ -9,11 +11,13 @@ import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import { resolveAppleCaller, type AppleCaller } from "../auth/appleCaller.ts";
 import { requiredScopeForRpcMethod } from "../auth/RpcAuthorization.ts";
 import { AppleRuntime, safeAppleError } from "./AppleRuntime.ts";
-import { appleIdSessionStub } from "./AppleIdSession.ts";
+import { AppleIdSession } from "./AppleIdSession.ts";
+import * as Queue from "effect/Queue";
 
 export function makeAppleRpcHandlers(
   runtime: AppleRuntime,
   scopes: readonly AuthEnvironmentScope[],
+  sessions: AppleIdSession,
   resolveCaller: Effect.Effect<AppleCaller | null> = Effect.succeed(null),
 ) {
   const requireCaller = resolveCaller.pipe(
@@ -68,16 +72,20 @@ export function makeAppleRpcHandlers(
         );
     return operation.pipe(Effect.provideService(References.TracerEnabled, false));
   };
-  const stub = (method: string, input: { companyId: string; accountId: string }) =>
-    guard(method, input, () =>
-      runtime.accountStatus({ companyId: input.companyId, accountId: input.accountId }),
-    ).pipe(Effect.andThen(appleIdSessionStub.unavailable));
-  return AppleRpcs.of({
+  return {
     [APPLE_WS_METHODS.registerBundleId]: (input) =>
       guard(APPLE_WS_METHODS.registerBundleId, input, () => runtime.registerBundleId(input)),
     [APPLE_WS_METHODS.createApp]: (input) =>
       guard(APPLE_WS_METHODS.createApp, input, () => runtime.status(input)).pipe(
-        Effect.andThen(appleIdSessionStub.createApp),
+        Effect.andThen(
+          Effect.fail(
+            new AppleError({
+              code: "not-implemented",
+              message: "App creation is not supported by the Apple ID download session service.",
+              retryAfterSeconds: null,
+            }),
+          ),
+        ),
       ),
     [APPLE_WS_METHODS.status]: (input) =>
       guard(APPLE_WS_METHODS.status, input, () => runtime.status(input)),
@@ -91,23 +99,50 @@ export function makeAppleRpcHandlers(
       guard(APPLE_WS_METHODS.listBetaGroups, input, () =>
         runtime.listBetaGroups(input, input.appId),
       ),
-    [APPLE_WS_METHODS.appleIdStart]: (input) => stub(APPLE_WS_METHODS.appleIdStart, input),
-    [APPLE_WS_METHODS.appleIdComplete]: (input) => stub(APPLE_WS_METHODS.appleIdComplete, input),
-    [APPLE_WS_METHODS.appleIdCancel]: (input) => stub(APPLE_WS_METHODS.appleIdCancel, input),
-    [APPLE_WS_METHODS.appleIdSignOut]: (input) => stub(APPLE_WS_METHODS.appleIdSignOut, input),
+    [APPLE_WS_METHODS.appleIdStart]: (input) =>
+      guard(APPLE_WS_METHODS.appleIdStart, input, () => sessions.start(input, input.password)),
+    [APPLE_WS_METHODS.appleIdComplete]: (input) =>
+      guard(APPLE_WS_METHODS.appleIdComplete, input, () =>
+        sessions.complete(input, input.flowId, input.code),
+      ),
+    [APPLE_WS_METHODS.appleIdRequestCode]: (input) =>
+      guard(APPLE_WS_METHODS.appleIdRequestCode, input, () =>
+        sessions.requestCode(input, input.flowId, input.phoneNumberId),
+      ),
+    [APPLE_WS_METHODS.appleIdCancel]: (input) =>
+      guard(APPLE_WS_METHODS.appleIdCancel, input, () => sessions.cancel(input, input.flowId)),
+    [APPLE_WS_METHODS.appleIdSignOut]: (input) =>
+      guard(APPLE_WS_METHODS.appleIdSignOut, input, () => sessions.signOut(input)),
     [APPLE_WS_METHODS.appleIdStatus]: (input) =>
-      guard(APPLE_WS_METHODS.appleIdStatus, input, () =>
-        runtime.accountStatus({ companyId: input.companyId, accountId: input.accountId }),
-      ).pipe(Effect.andThen(appleIdSessionStub.status)),
+      guard(APPLE_WS_METHODS.appleIdStatus, input, () => sessions.status(input)),
     [APPLE_WS_METHODS.appleIdSubscribe]: (input) =>
-      Stream.fromEffect(
-        guard(APPLE_WS_METHODS.appleIdSubscribe, input, () =>
-          runtime.accountStatus({ companyId: input.companyId, accountId: input.accountId }),
+      Stream.callback<typeof AppleIdSessionState.Type, AppleError | EnvironmentAuthorizationError>(
+        (queue) =>
+          Effect.gen(function* () {
+            const initial = yield* guard(APPLE_WS_METHODS.appleIdSubscribe, input, () =>
+              sessions.status(input),
+            );
+            yield* Effect.acquireRelease(
+              Effect.sync(() => sessions.watch(input, (state) => Queue.offerUnsafe(queue, state))),
+              (unsubscribe) => Effect.sync(unsubscribe),
+            );
+            Queue.offerUnsafe(queue, initial);
+            // Re-read after registering to cover a challenge racing the initial authorization.
+            yield* guard(APPLE_WS_METHODS.appleIdSubscribe, input, () => sessions.status(input));
+          }),
+        { bufferSize: 1, strategy: "sliding" },
+      ).pipe(
+        Stream.mapEffect(() =>
+          guard(APPLE_WS_METHODS.appleIdSubscribe, input, () => sessions.status(input)),
         ),
-      ).pipe(Stream.flatMap(() => appleIdSessionStub.changes)),
-  });
+      ),
+  } satisfies RpcGroup.HandlersFrom<RpcGroup.Rpcs<typeof AppleRpcs>>;
 }
-export const makeAppleRpcLayer = (runtime: AppleRuntime, scopes: readonly AuthEnvironmentScope[]) =>
+export const makeAppleRpcLayer = (
+  runtime: AppleRuntime,
+  scopes: readonly AuthEnvironmentScope[],
+  sessions: AppleIdSession,
+) =>
   AppleRpcs.toLayer(
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
@@ -116,6 +151,6 @@ export const makeAppleRpcLayer = (runtime: AppleRuntime, scopes: readonly AuthEn
       const caller = session
         ? resolveAppleCaller(session).pipe(Effect.provideService(ServerSecretStore, secrets))
         : Effect.succeed(null);
-      return makeAppleRpcHandlers(runtime, scopes, caller);
+      return makeAppleRpcHandlers(runtime, scopes, sessions, caller);
     }),
   );

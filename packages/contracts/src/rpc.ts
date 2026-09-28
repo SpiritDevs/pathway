@@ -1,3 +1,4 @@
+import { XcodeRpcs } from "./xcode.ts";
 import { AppleRpcs } from "./apple.ts";
 import {
   UsageRecoveryThreadInput,
@@ -2545,4 +2546,5 @@ export const WsRpcGroup = RpcGroup.make(
   .merge(IssuesRpcs)
   .merge(EmailRpcs)
   .merge(AppleRpcs)
+  .merge(XcodeRpcs)
   .merge(WsComputerRpcGroup);

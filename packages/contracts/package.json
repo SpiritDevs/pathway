@@ -88,6 +88,10 @@
       "types": "./src/dictation.ts",
       "import": "./src/dictation.ts"
     },
+    "./xcode": {
+      "types": "./src/xcode.ts",
+      "import": "./src/xcode.ts"
+    },
     "./apple": {
       "types": "./src/apple.ts",
       "import": "./src/apple.ts"

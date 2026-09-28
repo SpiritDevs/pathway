@@ -955,6 +955,7 @@ export default defineSchema({
     email: v.string(),
     displayName: v.string(),
     revision: v.number(),
+    sessionRevision: v.optional(v.number()),
     createdAt: v.number(),
     verifiedAt: v.union(v.number(), v.null()),
   })
@@ -978,10 +979,11 @@ export default defineSchema({
     teamId: v.id("appleTeams"),
     ...sealedAppleCredential,
   }).index("by_team", ["teamId"]),
-  /** COR-101 will write and lease sealed sessions; passwords never enter this table. */
+  /** Sealed, expiring Apple ID cookies. Passwords never enter this table. */
   appleAccountSessions: defineTable({
     accountId: v.id("appleAccounts"),
     revision: v.number(),
+    accountRevision: v.number(),
     expiresAt: v.number(),
     ...sealedAppleCredential,
   }).index("by_account", ["accountId"]),

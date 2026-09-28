@@ -1,3 +1,4 @@
+import { XCODE_WS_METHODS } from "@spiritdevs/contracts/xcode";
 import { APPLE_WS_METHODS } from "@spiritdevs/contracts/apple";
 import {
   AuthAccessReadScope,
@@ -28,6 +29,15 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
  * runtime failure.
  */
 export const RPC_REQUIRED_SCOPES = {
+  [XCODE_WS_METHODS.status]: AuthOrchestrationReadScope,
+  [XCODE_WS_METHODS.subscribe]: AuthOrchestrationReadScope,
+  [XCODE_WS_METHODS.install]: AuthOrchestrationOperateScope,
+  [XCODE_WS_METHODS.cancel]: AuthOrchestrationOperateScope,
+  [XCODE_WS_METHODS.retry]: AuthOrchestrationOperateScope,
+  [XCODE_WS_METHODS.approve]: AuthOrchestrationOperateScope,
+  [XCODE_WS_METHODS.select]: AuthOrchestrationOperateScope,
+  [XCODE_WS_METHODS.installRuntimes]: AuthOrchestrationOperateScope,
+  [APPLE_WS_METHODS.appleIdRequestCode]: AuthOrchestrationOperateScope,
   [APPLE_WS_METHODS.registerBundleId]: AuthOrchestrationOperateScope,
   [APPLE_WS_METHODS.createApp]: AuthOrchestrationOperateScope,
   [APPLE_WS_METHODS.status]: AuthOrchestrationReadScope,
