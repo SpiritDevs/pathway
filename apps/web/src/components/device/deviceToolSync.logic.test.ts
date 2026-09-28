@@ -10,6 +10,7 @@ import {
   deviceToolBanner,
   deviceToolRowKey,
   deviceToolSyncRows,
+  carryPendingDeviceToolUpdates,
   deviceToolUpdateTargets,
   hostHelperState,
   hostToolColumns,
@@ -234,6 +235,17 @@ describe("fan-out", () => {
       "a",
       "b",
     ]);
+  });
+
+  it("keeps in-flight hosts out of the next Update all round", () => {
+    // Update A, then Update all while A is still running: only B may be submitted.
+    const afterA = new Map<string, DeviceToolUpdateOutcome>([
+      [deviceToolRowKey("a", "local"), { status: "pending" }],
+      [deviceToolRowKey("c", "local"), { status: "failed", message: "offline" }],
+    ]);
+    const nextRound = carryPendingDeviceToolUpdates(afterA);
+    expect([...nextRound.keys()]).toEqual([deviceToolRowKey("a", "local")]);
+    expect(deviceToolUpdateTargets(rows, nextRound).map((row) => row.environmentId)).toEqual(["b"]);
   });
 
   it("summarizes per-environment progress and failures", () => {

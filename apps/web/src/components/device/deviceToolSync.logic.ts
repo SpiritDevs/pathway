@@ -182,6 +182,13 @@ export function deviceToolUpdateTargets<Row extends DeviceToolSyncRow>(
   return rows.filter((row) => row.canUpdate && outcomes.get(row.key)?.status !== "pending");
 }
 
+/** Outcomes carried into a new Update all round: only requests still in flight. */
+export function carryPendingDeviceToolUpdates(
+  outcomes: ReadonlyMap<string, DeviceToolUpdateOutcome>,
+): Map<string, DeviceToolUpdateOutcome> {
+  return new Map([...outcomes].filter(([, outcome]) => outcome.status === "pending"));
+}
+
 /** One line describing a fan-out across environments, or null before the first update. */
 export function summarizeDeviceToolUpdates(
   outcomes: ReadonlyMap<string, DeviceToolUpdateOutcome>,
