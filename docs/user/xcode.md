@@ -2,7 +2,7 @@
 
 iOS, watchOS and tvOS simulators need Xcode on the Mac that runs your environment. Pathway can download and install Xcode for you, from any device you use Pathway on. Installing from the web app or your laptop sets up the environment's Mac, not the device in front of you.
 
-Open **Settings → Xcode**, or search the command palette for **Install Xcode**. When an environment runs on a Mac without Xcode, the Devices view shows the same setup in place of the device list.
+Open **Settings → Xcode**, or search the command palette for **Install Xcode**. When an environment runs on a Mac without Xcode or without an iOS simulator, the Devices view shows the same setup above the device list. Android devices stay available while Xcode installs.
 
 Xcode needs a Mac. When the environment runs on Linux or Windows, Pathway says so and offers nothing to install.
 
@@ -56,11 +56,11 @@ Some steps need an administrator on the Mac. The job then shows **Needs admin ap
 
 - **Cancel** stops the job. Choose **Resume** later to pick it up again.
 - If a step fails, or the environment restarts during a job, choose **Retry** to continue from the first unfinished step.
-- If your Apple session expires during a download, Pathway asks you to sign in again. Once you are signed in, choose **Retry**.
+- If your Apple session expires during a download, Pathway asks you to sign in again. Once you are signed in, choose **Retry**. If Apple rejects a session that still shows as signed in, choose **Sign in again** first.
 
 Canceling cannot undo steps that already finished, such as accepting the license or selecting Xcode.
 
-When the install finishes, the Devices view shows your simulators.
+When the install finishes, the Devices view refreshes and shows your simulators. If Xcode is ready but has no iOS platform yet, the setup offers to add it.
 
 ## Switch Xcode versions
 
