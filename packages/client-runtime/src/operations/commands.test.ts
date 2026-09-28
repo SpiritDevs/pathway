@@ -601,6 +601,43 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
+  it.effect("retries a Computer hand-back with the same command and message ids", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const followUp = {
+        commandId: CommandId.make("hand-back-once"),
+        threadId: v2ThreadId,
+        messageId: MessageId.make("message-hand-back-once"),
+        message: "Continue",
+        summary: "",
+        attachment: {
+          type: "image" as const,
+          id: "capture",
+          name: "computer.jpg",
+          mimeType: "image/jpeg",
+          sizeBytes: 10,
+        },
+      };
+
+      // The first response was lost; Retry sends the same follow-up again.
+      yield* dispatchComputerHandBack(followUp).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      );
+      yield* dispatchComputerHandBack(followUp).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      );
+
+      expect(commands.map((command) => command.commandId)).toEqual([
+        "hand-back-once",
+        "hand-back-once",
+      ]);
+      expect(
+        commands.map((command) => (command.type === "message.dispatch" ? command.messageId : null)),
+      ).toEqual(["message-hand-back-once", "message-hand-back-once"]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
   it.effect("carries the Computer switch and generation on dispatch and edit-and-restart", () =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];

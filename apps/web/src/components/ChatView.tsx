@@ -258,7 +258,11 @@ import { TerminalCardPortal } from "./terminal/TerminalCardPortal";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbar } from "./BranchToolbar";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import {
+  keybindingCaptureOwnsEvent,
+  resolveShortcutCommand,
+  shortcutLabelForCommand,
+} from "../keybindings";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
@@ -6689,6 +6693,8 @@ function ChatViewContent(props: ChatViewProps) {
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
       if (!isPaneFocused(paneId)) return;
+      // A controlled remote screen takes every key, printable ones included.
+      if (keybindingCaptureOwnsEvent(event)) return;
       const eventFromSideChat = eventPathContainsSelector(event, SIDE_CHAT_SURFACE_SELECTOR);
       if (!shortcutScopeOwnsEvent(isPanelPresentation ? "side-chat" : "page", eventFromSideChat)) {
         return;

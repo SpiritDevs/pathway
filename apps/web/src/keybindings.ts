@@ -223,6 +223,32 @@ function matchesCommandShortcut(
   return resolveShortcutCommand(event, keybindings, options) === command;
 }
 
+/**
+ * Marks an element that takes raw keys itself, such as a shortcut recorder or a
+ * controlled remote screen. Window-level shortcut and type-to-focus handlers
+ * leave events from inside it alone.
+ */
+export const KEYBINDING_CAPTURE_ATTRIBUTE = "data-keybinding-capture";
+
+interface ClosestTarget {
+  readonly closest?: (selector: string) => unknown;
+}
+
+export function keybindingCaptureOwnsEvent(event: {
+  readonly target: unknown;
+  readonly composedPath: () => readonly unknown[];
+}): boolean {
+  const path = event.composedPath();
+  const targets = path.length > 0 ? path : [event.target];
+  return targets.some((target) => {
+    const closest = (target as ClosestTarget | null)?.closest;
+    return (
+      typeof closest === "function" &&
+      closest.call(target, `[${KEYBINDING_CAPTURE_ATTRIBUTE}]`) !== null
+    );
+  });
+}
+
 export function resolveShortcutCommand(
   event: ShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,

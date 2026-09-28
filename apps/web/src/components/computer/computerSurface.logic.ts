@@ -116,3 +116,89 @@ export function computerKeyInput(
 export function computerPointerButton(button: number): "left" | "right" | null {
   return button === 0 ? "left" : button === 2 ? "right" : null;
 }
+
+/** Shown when this view gave control up without the user choosing to. */
+export const COMPUTER_LOST_CONTROL_NOTICE = {
+  escape: "Escape stopped your control. Take control again to continue.",
+  hidden: "Control was released while this tab was hidden. Take control again to continue.",
+  other: "You no longer have control.",
+} as const;
+
+/** Lands every input this view has accepted: the waiting click, then the send queue. */
+export function drainComputerInput(
+  clicks: { readonly flush: () => void },
+  queue: { readonly settled: () => Promise<void> },
+): Promise<void> {
+  clicks.flush();
+  return queue.settled();
+}
+
+export interface ComputerControlLease {
+  /** Whether user input may be queued. False while control is being given up. */
+  readonly accepting: () => boolean;
+  /**
+   * Runs a takeover; `attempt` resolves true when the server granted control. False
+   * when refused, or when the view left while the takeover was in flight.
+   */
+  readonly acquire: (attempt: () => Promise<boolean>) => Promise<boolean>;
+  /**
+   * Stops input, lands what is already queued, then runs `finish` (a release or a
+   * hand back). Call `resume` if `finish` kept control.
+   */
+  readonly relinquish: <T>(finish: () => Promise<T>) => Promise<T>;
+  readonly resume: () => void;
+  /**
+   * The view is going away (unmounted or hidden): release control if held, and
+   * release a takeover still in flight as soon as it lands. True when control
+   * was held or being taken.
+   */
+  readonly leave: (mine: boolean) => boolean;
+}
+
+/**
+ * Orders control changes against this view's own input and lifetime, so a hand
+ * back never overtakes queued typing and a late takeover is never stranded.
+ */
+export function createComputerControlLease(options: {
+  readonly release: () => Promise<unknown>;
+  readonly drainInput: () => Promise<void>;
+}): ComputerControlLease {
+  let accepting = true;
+  let acquiring = false;
+  let releaseOnAcquire = false;
+
+  const relinquish = async <T>(finish: () => Promise<T>): Promise<T> => {
+    accepting = false;
+    await options.drainInput();
+    return finish();
+  };
+
+  return {
+    accepting: () => accepting,
+    acquire: async (attempt) => {
+      accepting = true;
+      releaseOnAcquire = false;
+      acquiring = true;
+      let acquired = false;
+      try {
+        acquired = await attempt();
+      } finally {
+        acquiring = false;
+      }
+      if (!acquired || !releaseOnAcquire) return acquired;
+      releaseOnAcquire = false;
+      accepting = false;
+      await options.release();
+      return false;
+    },
+    relinquish,
+    resume: () => {
+      accepting = true;
+    },
+    leave: (mine) => {
+      if (acquiring) releaseOnAcquire = true;
+      if (mine) void relinquish(options.release);
+      return mine || acquiring;
+    },
+  };
+}

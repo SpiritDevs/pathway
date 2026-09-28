@@ -300,7 +300,12 @@ export interface ControlWorkspacePreparationInput extends ThreadCommandInput {
 }
 
 export interface DispatchComputerHandBackInput extends ThreadCommandInput {
-  /** The id allocated before `computer.surface.handBack`, so a retry cannot duplicate the message. */
+  /**
+   * Allocated once per follow-up, with `messageId`, and reused by every retry:
+   * a retry after a lost response is then a duplicate command, not a second run.
+   */
+  readonly commandId: CommandId;
+  /** The id allocated before `computer.surface.handBack`. */
   readonly messageId: MessageId;
   readonly message: string;
   readonly summary: string;
@@ -929,7 +934,7 @@ export const dispatchComputerHandBack = Effect.fn("EnvironmentCommands.dispatchC
   function* (input: DispatchComputerHandBackInput) {
     return yield* dispatch({
       type: "message.dispatch",
-      commandId: yield* allocateCommandId(input),
+      commandId: input.commandId,
       createdBy: "user",
       creationSource: input.creationSource ?? "web",
       threadId: input.threadId,

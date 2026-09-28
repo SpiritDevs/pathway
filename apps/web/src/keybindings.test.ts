@@ -18,6 +18,7 @@ import {
   isTerminalCloseShortcut,
   isTerminalNewShortcut,
   isTerminalSplitShortcut,
+  keybindingCaptureOwnsEvent,
   isTerminalSplitVerticalShortcut,
   isTerminalToggleShortcut,
   resolveShortcutCommand,
@@ -1012,5 +1013,24 @@ describe("plus key parsing", () => {
         platform: "Linux",
       }),
     );
+  });
+});
+
+describe("keybindingCaptureOwnsEvent", () => {
+  const element = (inCapture: boolean) => ({
+    closest: (selector: string) =>
+      inCapture && selector === "[data-keybinding-capture]" ? {} : null,
+  });
+
+  it("claims events from inside a capturing element", () => {
+    const canvas = element(true);
+    assert.isTrue(keybindingCaptureOwnsEvent({ target: canvas, composedPath: () => [canvas] }));
+    assert.isTrue(keybindingCaptureOwnsEvent({ target: canvas, composedPath: () => [] }));
+  });
+
+  it("leaves other events to app shortcuts", () => {
+    const body = element(false);
+    assert.isFalse(keybindingCaptureOwnsEvent({ target: body, composedPath: () => [body] }));
+    assert.isFalse(keybindingCaptureOwnsEvent({ target: {}, composedPath: () => [{}, null] }));
   });
 });

@@ -204,7 +204,16 @@ from `computerEnvironment.surfaceState`. Input goes through one serial queue; pl
 left clicks are paired into double clicks before sending; wheel and, on hosts with
 pointer phases, pointer moves are coalesced per animation frame. Hand-back
 dispatches through `dispatchComputerHandBack` in client-runtime and keeps the
-capture for a retry when dispatch fails. The mobile clients do not have this view
+capture, command id and message id for a retry when dispatch fails, so a retry
+after a lost response is a duplicate command rather than a second run.
+
+`createComputerControlLease` (`computerSurface.logic.ts`) orders control changes
+against the view's own input: release and hand back stop new input, flush the
+waiting click and drain the send queue first. Unmounting or hiding the page
+releases held control, and a takeover still in flight is released when it lands.
+While in control the canvas carries `data-keybinding-capture` and stops key
+propagation, so window-level shortcuts and type-to-focus leave its keys alone;
+the remote browser canvas does the same. The mobile clients do not have this view
 yet.
 
 ## Host support and verification

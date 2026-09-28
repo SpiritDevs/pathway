@@ -6,8 +6,12 @@ import {
 } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
+import { createComputerClickDispatch } from "./computerClickDispatch";
+import { createComputerInputQueue } from "./computerInputQueue";
 import {
   computerControlView,
+  createComputerControlLease,
+  drainComputerInput,
   computerHandBackThreadId,
   computerKeyInput,
   computerPointerButton,
@@ -148,5 +152,141 @@ describe("computerPointerButton", () => {
     expect(computerPointerButton(0)).toBe("left");
     expect(computerPointerButton(2)).toBe("right");
     expect(computerPointerButton(1)).toBeNull();
+  });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+/** A view's input path: a paired-click dispatcher feeding a serial send queue. */
+function inputPath(log: string[]) {
+  const queue = createComputerInputQueue();
+  const clicks = createComputerClickDispatch({
+    // A long pairing wait: only an explicit flush can send the click in time.
+    delayMs: 60_000,
+    dispatch: ({ clickCount }) => {
+      queue.push(async () => {
+        await Promise.resolve();
+        log.push(`click ${clickCount}`);
+      });
+    },
+  });
+  return { queue, clicks };
+}
+
+describe("createComputerControlLease", () => {
+  it("lands the waiting click and queued typing before handing back", async () => {
+    const log: string[] = [];
+    const { queue, clicks } = inputPath(log);
+    const lease = createComputerControlLease({
+      release: async () => log.push("release"),
+      drainInput: () => drainComputerInput(clicks, queue),
+    });
+    const typed = deferred<void>();
+    queue.push(async () => {
+      await typed.promise;
+      log.push("type hello");
+    });
+    clicks.click({ x: 1, y: 1 }, 1);
+
+    const handedBack = lease.relinquish(async () => {
+      log.push("hand back");
+      return "done";
+    });
+    expect(lease.accepting()).toBe(false);
+    typed.resolve();
+
+    await expect(handedBack).resolves.toBe("done");
+    expect(log).toEqual(["type hello", "click 1", "hand back"]);
+  });
+
+  it("reopens input when the hand back kept control", async () => {
+    const lease = createComputerControlLease({
+      release: async () => undefined,
+      drainInput: async () => undefined,
+    });
+    await lease.relinquish(async () => "failed");
+    expect(lease.accepting()).toBe(false);
+    lease.resume();
+    expect(lease.accepting()).toBe(true);
+  });
+
+  it("releases a takeover that lands after the view closed", async () => {
+    const log: string[] = [];
+    const lease = createComputerControlLease({
+      release: async () => log.push("release"),
+      drainInput: async () => undefined,
+    });
+    const granted = deferred<boolean>();
+    const acquiring = lease.acquire(() => granted.promise);
+
+    // Unmount while the takeover is in flight: not yet ours, but still owed a release.
+    expect(lease.leave(false)).toBe(true);
+    expect(log).toEqual([]);
+    granted.resolve(true);
+
+    await expect(acquiring).resolves.toBe(false);
+    expect(log).toEqual(["release"]);
+    expect(lease.accepting()).toBe(false);
+  });
+
+  it("does not release a refused takeover", async () => {
+    const log: string[] = [];
+    const lease = createComputerControlLease({
+      release: async () => log.push("release"),
+      drainInput: async () => undefined,
+    });
+    const granted = deferred<boolean>();
+    const acquiring = lease.acquire(() => granted.promise);
+    lease.leave(false);
+    granted.resolve(false);
+    await expect(acquiring).resolves.toBe(false);
+    expect(log).toEqual([]);
+  });
+
+  it("releases held control when the page hides, after queued input", async () => {
+    const log: string[] = [];
+    const { queue, clicks } = inputPath(log);
+    let resolveRelease!: () => void;
+    const released = new Promise<void>((resolve) => {
+      resolveRelease = resolve;
+    });
+    const lease = createComputerControlLease({
+      release: async () => {
+        log.push("release");
+        resolveRelease();
+      },
+      drainInput: () => drainComputerInput(clicks, queue),
+    });
+    clicks.click({ x: 1, y: 1 }, 1);
+
+    expect(lease.leave(true)).toBe(true);
+    await released;
+    expect(log).toEqual(["click 1", "release"]);
+  });
+
+  it("has nothing to release when idle", () => {
+    const lease = createComputerControlLease({
+      release: async () => undefined,
+      drainInput: async () => undefined,
+    });
+    expect(lease.leave(false)).toBe(false);
+  });
+
+  it("a later takeover is not undone by an earlier leave", async () => {
+    const log: string[] = [];
+    const lease = createComputerControlLease({
+      release: async () => log.push("release"),
+      drainInput: async () => undefined,
+    });
+    lease.leave(false);
+    await expect(lease.acquire(async () => true)).resolves.toBe(true);
+    expect(log).toEqual([]);
+    expect(lease.accepting()).toBe(true);
   });
 });

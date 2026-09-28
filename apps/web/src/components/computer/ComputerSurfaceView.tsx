@@ -2,6 +2,7 @@ import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import {
   COMPUTER_TEXT_MAX_LENGTH,
   type ChatImageAttachment,
+  type CommandId,
   type MessageId,
   type ComputerSurfaceInput,
   type ComputerSurfaceSessionState,
@@ -19,7 +20,8 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { surfaceIndicator, wheelPixels } from "~/browser/remoteBrowserSurface";
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
-import { cn, newMessageId } from "~/lib/utils";
+import { KEYBINDING_CAPTURE_ATTRIBUTE } from "~/keybindings";
+import { cn, newCommandId, newMessageId } from "~/lib/utils";
 import { computerEnvironment } from "~/state/computer";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -28,7 +30,10 @@ import { useEnvironmentSurface } from "~/surface/useEnvironmentSurface";
 import { createComputerClickDispatch } from "./computerClickDispatch";
 import { createComputerInputQueue } from "./computerInputQueue";
 import {
+  COMPUTER_LOST_CONTROL_NOTICE,
   computerControlView,
+  createComputerControlLease,
+  drainComputerInput,
   computerHandBackThreadId,
   computerKeyInput,
   computerModifiers,
@@ -107,8 +112,10 @@ function CenteredNotice(props: {
   );
 }
 
+/** One follow-up; its ids are allocated once so every retry is the same command. */
 interface PendingFollowUp {
   readonly threadId: ThreadId;
+  readonly commandId: CommandId;
   readonly messageId: MessageId;
   readonly message: string;
   readonly summary: string;
@@ -165,8 +172,8 @@ function ComputerSurface({
     if (wasMine.current && !control.mine && !leavingRef.current) {
       setNotice(
         escapedRef.current
-          ? "Escape stopped your control. Take control again to continue."
-          : "You no longer have control.",
+          ? COMPUTER_LOST_CONTROL_NOTICE.escape
+          : COMPUTER_LOST_CONTROL_NOTICE.other,
       );
     }
     if (!control.mine) leavingRef.current = false;
@@ -203,7 +210,34 @@ function ComputerSurface({
     clicks.cancel();
     queue.clear();
   }, [clicks, interactive, queue]);
-  useEffect(() => () => clicks.cancel(), [clicks]);
+
+  // Every give-up path (release, hand back, closing, hiding) lands queued input
+  // first, and a takeover that lands after the view left is released.
+  const releaseRef = useRef(releaseControl);
+  releaseRef.current = releaseControl;
+  const lease = useMemo(
+    () =>
+      createComputerControlLease({
+        release: () => releaseRef.current({ environmentId, input: {} }),
+        drainInput: () => drainComputerInput(clicks, queue),
+      }),
+    [clicks, environmentId, queue],
+  );
+  const mineRef = useRef(control.mine);
+  mineRef.current = control.mine;
+  useEffect(() => () => void lease.leave(mineRef.current), [lease]);
+
+  // Nobody can steer a screen they can't see: a hidden tab gives control back.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "hidden") return;
+      if (!lease.leave(mineRef.current)) return;
+      leavingRef.current = true;
+      setNotice(COMPUTER_LOST_CONTROL_NOTICE.hidden);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [lease]);
 
   const enqueue = (event: ComputerSurfaceInput) => {
     queue.push(async () => {
@@ -216,6 +250,7 @@ function ComputerSurface({
   const enqueueRef = useRef(enqueue);
   enqueueRef.current = enqueue;
   const send = (event: ComputerSurfaceInput) => {
+    if (!lease.accepting()) return;
     clicks.flush();
     enqueue(event);
   };
@@ -286,18 +321,6 @@ function ComputerSurface({
     };
   }, [interactive, pointerPhases, surface.pageSize]);
 
-  // Closing the view gives control back: nobody can steer a screen they can't see.
-  const mineRef = useRef(control.mine);
-  mineRef.current = control.mine;
-  const releaseRef = useRef(releaseControl);
-  releaseRef.current = releaseControl;
-  useEffect(
-    () => () => {
-      if (mineRef.current) void releaseRef.current({ environmentId, input: {} });
-    },
-    [environmentId],
-  );
-
   const run = async (action: () => Promise<string | null>) => {
     setBusy(true);
     try {
@@ -310,16 +333,24 @@ function ComputerSurface({
   const onTakeControl = () =>
     run(async () => {
       setNotice(null);
-      const outcome = await takeControl({ environmentId, input: {} });
-      if (outcome._tag === "Success") canvasRef.current?.focus();
-      return failureText(outcome, "Could not take control.");
+      let failure: string | null = null;
+      const acquired = await lease.acquire(async () => {
+        const outcome = await takeControl({ environmentId, input: {} });
+        failure = failureText(outcome, "Could not take control.");
+        return outcome._tag === "Success";
+      });
+      if (acquired) canvasRef.current?.focus();
+      return failure;
     });
 
   const onRelease = () =>
     run(async () => {
       leavingRef.current = true;
-      const outcome = await releaseControl({ environmentId, input: {} });
-      if (outcome._tag === "Failure") leavingRef.current = false;
+      const outcome = await lease.relinquish(() => releaseControl({ environmentId, input: {} }));
+      if (outcome._tag === "Failure") {
+        leavingRef.current = false;
+        lease.resume();
+      }
       return failureText(outcome, "Could not release control.");
     });
 
@@ -328,6 +359,7 @@ function ComputerSurface({
       environmentId,
       input: {
         threadId: followUp.threadId,
+        commandId: followUp.commandId,
         messageId: followUp.messageId,
         message: followUp.message,
         summary: followUp.summary,
@@ -351,15 +383,20 @@ function ComputerSurface({
       const threadId = computerHandBackThreadId(session, threadRef.threadId);
       const messageId = newMessageId();
       leavingRef.current = true;
-      const outcome = await handBack({ environmentId, input: { threadId, messageId } });
+      // The capture and summary must include every click and keystroke already sent.
+      const outcome = await lease.relinquish(() =>
+        handBack({ environmentId, input: { threadId, messageId } }),
+      );
       if (outcome._tag === "Failure") {
         leavingRef.current = false;
+        lease.resume();
         // Control is kept on failure, so the user can retry or just release.
         return failureText(outcome, "Could not hand back to the agent.");
       }
       setDraft("");
       return dispatch({
         threadId,
+        commandId: newCommandId(),
         messageId,
         message,
         summary: outcome.value.summary,
@@ -376,7 +413,7 @@ function ComputerSurface({
     if (!button || !point) return;
     const modifiers = computerModifiers(event);
     if (button === "left" && modifiers.length === 0) {
-      clicks.click(point, event.detail);
+      if (lease.accepting()) clicks.click(point, event.detail);
       return;
     }
     send({
@@ -437,6 +474,7 @@ function ComputerSurface({
               : "Live view of the environment's screen"
           }
           tabIndex={interactive ? 0 : undefined}
+          {...(interactive ? { [KEYBINDING_CAPTURE_ATTRIBUTE]: "" } : {})}
           className={cn(
             "h-full w-full object-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary",
             !surface.hasFrame && "invisible",
@@ -455,6 +493,8 @@ function ComputerSurface({
           onKeyDown={
             interactive
               ? (event) => {
+                  // While in control every key belongs to the screen, not to app shortcuts.
+                  event.stopPropagation();
                   const input = computerKeyInput(event);
                   if (!input) return;
                   // Paste arrives as text through onPaste.

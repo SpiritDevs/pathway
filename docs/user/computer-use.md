@@ -67,7 +67,12 @@ you, another device, or nobody.
   the screenshot.
 - Pressing Escape while you have control stops your control and the agent's current action. Take
   control again to continue.
-- Switching to another tab, closing the view or disconnecting releases control.
+- Switching to another tab, closing the view or disconnecting releases control. So does hiding
+  Pathway, such as switching browser tabs or minimising the window; the view tells you when you
+  come back.
+- While you have control, keys you press on the view go to the host, not to Pathway's shortcuts or
+  the chat composer. Click outside the view to use Pathway's shortcuts again.
+- Anything you clicked or typed reaches the host before control is released or handed back.
 
 The view streams only while it is on screen, and it says so when the environment can't share its
 screen. On a host that can't track a held mouse button, dragging isn't available; clicks are.
