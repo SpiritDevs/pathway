@@ -31,6 +31,8 @@ export interface DeviceToolSyncRow<Id extends string = string> {
   /** Inventory is cached because the latest inspection failed. */
   readonly stale: boolean;
   readonly canUpdate: boolean;
+  /** Installed pins are waiting and the environment can restart its helpers in place. */
+  readonly canRestart: boolean;
   readonly columns: {
     readonly xcode: DeviceToolCell;
     readonly runtimes: DeviceToolCell;
@@ -168,6 +170,7 @@ export function deviceToolSyncRows<Id extends string>(
         olderRelease,
         stale: host.toolInspectionError !== undefined,
         canUpdate: state.supportsEnvironmentToolSync === true && helperState === "behind",
+        canRestart: state.supportsToolRestart === true && helperState === "restart",
         columns: hostToolColumns(host),
       };
     });
@@ -217,7 +220,12 @@ export type DeviceToolBanner =
       readonly message: string;
       readonly canUpdate: boolean;
     }
-  | { readonly kind: "restart"; readonly message: string };
+  | {
+      readonly kind: "restart";
+      readonly hostIds: ReadonlyArray<string>;
+      readonly message: string;
+      readonly canRestart: boolean;
+    };
 
 /** The Device panel's compact notice when this environment's helpers do not match its pins. */
 export function deviceToolBanner(state: DeviceServiceState): DeviceToolBanner | null {
@@ -235,11 +243,16 @@ export function deviceToolBanner(state: DeviceServiceState): DeviceToolBanner | 
       canUpdate: state.supportsEnvironmentToolSync === true,
     };
   }
-  if (state.hosts.some((host) => hostHelperState(host) === "restart")) {
+  const waiting = state.hosts.filter((host) => hostHelperState(host) === "restart");
+  if (waiting.length > 0) {
+    const canRestart = state.supportsToolRestart === true;
     return {
       kind: "restart",
-      message:
-        "Updated device tools are installed. Turn device support off and on in Settings after finishing active work to use them.",
+      hostIds: waiting.map((host) => host.id),
+      message: canRestart
+        ? "Updated device tools are installed. Restart them to use the new versions; open devices stay connected."
+        : "Updated device tools are installed. Turn device support off and on in Settings after finishing active work to use them.",
+      canRestart,
     };
   }
   return null;

@@ -126,7 +126,10 @@ refreshes versions everywhere without installing or starting anything.
 every host that is behind. Each host reports its own progress and errors, so a
 failed host can be retried on its own.
 
-Updates install tools but do not restart running device helpers. To use them,
+Updates install tools but do not restart running device helpers. A host showing
+**Restart to apply** has a **Restart** button, in Settings and in the Devices
+panel, that restarts its helpers in place. Open devices stay connected and keep
+their owner. On environments running an older Pathway without that button,
 finish active work, then turn **Device support** off and on for that
 environment. An environment marked **Older release** runs a Pathway version
 that pins older tools; update Pathway there to match. Xcode and runtime

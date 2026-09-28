@@ -7,7 +7,7 @@ import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { deviceToolBanner } from "./deviceToolSync.logic";
 
-/** Compact notice when this environment's helpers are behind its release's pins. */
+/** Compact notice when this environment's helpers are behind its release's pins or await a restart. */
 export function DeviceToolDriftBanner({
   state,
   environmentId,
@@ -16,16 +16,17 @@ export function DeviceToolDriftBanner({
   environmentId: EnvironmentId;
 }) {
   const updateTools = useAtomCommand(deviceEnvironment.updateTools, { reportFailure: false });
+  const restartTools = useAtomCommand(deviceEnvironment.restartTools, { reportFailure: false });
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const banner = deviceToolBanner(state);
   if (!banner) return null;
-  const update = async (hostIds: ReadonlyArray<string>) => {
+  const run = async (command: typeof updateTools, hostIds: ReadonlyArray<string>) => {
     setPending(true);
     setError(null);
     try {
       const results = await Promise.all(
-        hostIds.map((hostId) => updateTools({ environmentId, input: { hostId } })),
+        hostIds.map((hostId) => command({ environmentId, input: { hostId } })),
       );
       const failure = results.find((result) => result._tag === "Failure");
       if (failure?._tag === "Failure") setError(formatEnvironmentQueryError(failure.cause));
@@ -48,9 +49,19 @@ export function DeviceToolDriftBanner({
           size="xs"
           variant="outline"
           disabled={pending}
-          onClick={() => void update(banner.hostIds)}
+          onClick={() => void run(updateTools, banner.hostIds)}
         >
           {pending ? "Updating…" : error ? "Retry" : "Update"}
+        </Button>
+      ) : null}
+      {banner.kind === "restart" && banner.canRestart ? (
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={pending}
+          onClick={() => void run(restartTools, banner.hostIds)}
+        >
+          {pending ? "Restarting…" : error ? "Retry" : "Restart"}
         </Button>
       ) : null}
     </div>

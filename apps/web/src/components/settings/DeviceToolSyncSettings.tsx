@@ -75,6 +75,7 @@ export function DeviceToolSyncSettings() {
   );
 
   const updateTools = useAtomCommand(deviceEnvironment.updateTools, { reportFailure: false });
+  const restartTools = useAtomCommand(deviceEnvironment.restartTools, { reportFailure: false });
   const list = useAtomCommand(deviceEnvironment.list, { reportFailure: false });
   const [outcomes, setOutcomes] = useState<ReadonlyMap<string, DeviceToolUpdateOutcome>>(
     () => new Map(),
@@ -83,9 +84,12 @@ export function DeviceToolSyncSettings() {
   const setOutcome = (key: string, outcome: DeviceToolUpdateOutcome) =>
     setOutcomes((previous) => new Map(previous).set(key, outcome));
 
-  const update = async (row: DeviceToolSyncRow<EnvironmentId>) => {
+  const update = async (
+    row: DeviceToolSyncRow<EnvironmentId>,
+    command: typeof updateTools = updateTools,
+  ) => {
     setOutcome(row.key, { status: "pending" });
-    const result = await updateTools({
+    const result = await command({
       environmentId: row.environmentId,
       input: { hostId: row.hostId },
     });
@@ -100,7 +104,7 @@ export function DeviceToolSyncSettings() {
   const updateAll = () => {
     // A new round reports only its own hosts, but requests still in flight stay pending.
     setOutcomes(carryPendingDeviceToolUpdates);
-    void Promise.all(targets.map(update));
+    void Promise.all(targets.map((row) => update(row)));
   };
   const checkAll = () => {
     setChecking(true);
@@ -163,6 +167,7 @@ export function DeviceToolSyncSettings() {
                   row={row}
                   outcome={outcomes.get(row.key)}
                   onUpdate={() => void update(row)}
+                  onRestart={() => void update(row, restartTools)}
                 />
               ))}
             </tbody>
@@ -190,10 +195,12 @@ function DeviceToolSyncTableRow({
   row,
   outcome,
   onUpdate,
+  onRestart,
 }: {
   row: DeviceToolSyncRow;
   outcome: DeviceToolUpdateOutcome | undefined;
   onUpdate: () => void;
+  onRestart: () => void;
 }) {
   const badge = HELPER_BADGE[row.helperState];
   return (
@@ -227,13 +234,17 @@ function DeviceToolSyncTableRow({
         {outcome?.status === "pending" ? (
           <span className="inline-flex items-center gap-1 text-muted-foreground">
             <Spinner className="size-3" />
-            Updating…
+            {row.canRestart ? "Restarting…" : "Updating…"}
           </span>
-        ) : outcome?.status === "success" && !row.canUpdate ? (
-          <CheckIcon aria-label="Updated" className="ml-auto size-4 text-success" />
+        ) : outcome?.status === "success" && !row.canUpdate && !row.canRestart ? (
+          <CheckIcon aria-label="Done" className="ml-auto size-4 text-success" />
         ) : row.canUpdate ? (
           <Button size="xs" variant={outcome ? "outline" : "default"} onClick={onUpdate}>
             {outcome?.status === "failed" ? "Retry" : "Update"}
+          </Button>
+        ) : row.canRestart ? (
+          <Button size="xs" variant="outline" onClick={onRestart}>
+            {outcome?.status === "failed" ? "Retry" : "Restart"}
           </Button>
         ) : null}
         {outcome?.status === "failed" ? (

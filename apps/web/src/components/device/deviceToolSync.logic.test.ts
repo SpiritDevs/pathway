@@ -296,6 +296,17 @@ describe("deviceToolBanner", () => {
   it("asks for a restart once installed pins are waiting to run", () => {
     expect(
       deviceToolBanner(state({ hosts: [host({ drift: [drift("agent", "match", ["x"], true)] })] })),
-    ).toMatchObject({ kind: "restart" });
+    ).toMatchObject({ kind: "restart", canRestart: false });
+  });
+
+  it("offers an in-place restart on servers that support it", () => {
+    expect(
+      deviceToolBanner(
+        state({
+          hosts: [host({ drift: [drift("agent", "match", ["x"], true)] })],
+          supportsToolRestart: true,
+        }),
+      ),
+    ).toMatchObject({ kind: "restart", hostIds: ["local"], canRestart: true });
   });
 });
