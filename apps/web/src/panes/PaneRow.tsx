@@ -88,7 +88,8 @@ export function PaneRow({
               else frameRefs.current.delete(entry.id);
             }}
             className={cn(
-              "relative flex min-h-0 min-w-0 overflow-hidden",
+              // Each pane holds its own frame, with its inline right panel beside it.
+              "relative flex min-h-0 min-w-0 gap-2 overflow-hidden rounded-t-xl md:rounded-xl",
               entry.id === enteringPaneId && "pane-enter",
               // An inset ring marks the focused pane without shifting its layout.
               focused &&
@@ -227,18 +228,18 @@ function PaneDivider({
   );
 
   return (
-    // The hit area is wider than the rule it draws, and overlaps both panes equally.
+    // The gap between two panes' frames is the hit area; its rule shows on hover.
     <div
       aria-label="Resize panels"
       aria-orientation="vertical"
-      className="group/pane-divider relative z-40 -mx-1 w-2 shrink-0 cursor-col-resize touch-none"
+      className="group/pane-divider relative z-40 w-2 shrink-0 cursor-col-resize touch-none"
       onDoubleClick={equalizePanes}
       onPointerDown={onPointerDown}
       role="separator"
       style={{ order }}
       title="Drag to resize · Double-click to share equally"
     >
-      <span className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border transition-colors group-hover/pane-divider:bg-primary/60" />
+      <span className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors group-hover/pane-divider:bg-primary/60" />
     </div>
   );
 }
@@ -258,9 +259,9 @@ function CollapsedPaneTabs({
   return (
     <div
       className={cn(
-        "flex w-7 shrink-0 flex-col gap-1 bg-sidebar/60 py-2",
-        side === "left" ? "order-[-1] border-r" : "order-[999] border-l",
-        "border-border",
+        // A narrow card of its own, set off from the frames like the panes are.
+        "flex w-7 shrink-0 flex-col gap-1 rounded-xl border border-sidebar-border bg-background py-2",
+        side === "left" ? "order-[-1] mr-2" : "order-[999] ml-2",
       )}
     >
       {panes.map((entry) => (

@@ -43,7 +43,7 @@ import {
 } from "./SidebarStageBackdrop";
 import { useProjects } from "../state/entities";
 import { PaneRow } from "../panes/PaneRow";
-import { useFocusedPaneRouter } from "../panes/usePaneFocus";
+import { isPaneFocused, useFocusedPaneRouter, usePaneId } from "../panes/usePaneFocus";
 import { isChildWindow } from "../panes/windowMode";
 import {
   resolveInitialThreadSidebarWidth,
@@ -94,9 +94,11 @@ function SidebarControl({ useArtworkContrast }: { useArtworkContrast: boolean })
   const isSidebarArtworkVisible = isSidebarVisible || hoverRevealed;
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle");
 
+  const paneId = usePaneId();
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || !isPaneFocused(paneId)) return;
       if (
         event.target instanceof HTMLElement &&
         event.target.closest("[data-keybinding-capture]")
@@ -113,14 +115,15 @@ function SidebarControl({ useArtworkContrast }: { useArtworkContrast: boolean })
     // Capture before focused editors consume commands such as Mod+B for rich-text formatting.
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [keybindings, toggleSidebar]);
+  }, [keybindings, paneId, toggleSidebar]);
 
   return (
     // The right-side layout controls carry mr-px (border compensation inside
     // the panel), so the trigger mirrors it: both clusters sit one extra pixel
-    // off their edge and the titlebar reads symmetric.
+    // off their edge and the titlebar reads symmetric. From md up it sits inside
+    // its frame, whose border supplies that pixel.
     <div
-      className="pointer-events-none fixed left-[var(--workspace-controls-left)] top-[calc(var(--workspace-controls-top)+2.75rem)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center transition-[left] duration-200 ease-linear motion-reduce:transition-none md:top-11 md:left-[calc(var(--primary-navigation-rail-width)+var(--workspace-controls-left))]"
+      className="pointer-events-none fixed left-[var(--workspace-controls-left)] top-[calc(var(--workspace-controls-top)+2.75rem)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center md:absolute md:top-0 md:ml-0"
       data-sidebar-control=""
     >
       <Tooltip>
@@ -159,19 +162,20 @@ function ProjectProjectionRetention() {
 }
 
 /**
- * The app shell. Everything outside the panes (rail, top bar, secondary sidebar)
- * renders inside the focused pane's router context, so rail clicks, back and
- * forward, and the sidebar all follow whichever pane has focus. A torn-out window
- * has no rail and no split.
+ * The app shell. The rail and top bar sit outside the panes and render inside
+ * the focused pane's router context, so rail clicks and back and forward follow
+ * whichever pane has focus. Each pane is a `WorkspaceFrame` with its own
+ * sidebar. A torn-out window has no rail and no split.
  */
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const appRouter = useRouter();
   const focusedRouter = useFocusedPaneRouter(appRouter);
+  const frame = <WorkspaceFrame>{children}</WorkspaceFrame>;
 
   return (
     <RouterContextProvider router={focusedRouter}>
       <AppSidebarLayoutContent>
-        {isChildWindow ? children : <PaneRow appRouter={appRouter} primary={children} />}
+        {isChildWindow ? frame : <PaneRow appRouter={appRouter} primary={frame} />}
       </AppSidebarLayoutContent>
     </RouterContextProvider>
   );
@@ -179,32 +183,15 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
 
 function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
-  // Settings routes show the settings nav in place of whichever thread
-  // sidebar is active.
   // Seeds server-side visited tracking from this browser's localStorage the
   useThreadVisitedMigration();
   const pathname = useLocation({ select: (location) => location.pathname });
-  const isMobile = useIsMobile();
   const [isPrimaryNavigationExpanded, setPrimaryNavigationExpanded] = useLocalStorage(
     PRIMARY_NAVIGATION_EXPANDED_STORAGE_KEY,
     false,
     Schema.Boolean,
   );
-  const secondarySidebarKind = resolveSecondarySidebarKind(pathname);
-  // Mobile web keeps the existing drawer as its only global navigation. On
-  // desktop, the icon rail owns global navigation and this panel is contextual.
-  const shouldRenderSecondarySidebar = shouldRenderSecondarySidebarForViewport(
-    isMobile,
-    secondarySidebarKind,
-  );
-  const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
-  // Subscribed rather than read once: the clamp must track live window size,
-  // and a clamped drag ends with an unchanged width, which skips the re-render
-  // that would otherwise refresh a render-time snapshot.
-  const viewportWidth = useSyncExternalStore(subscribeToViewportWidth, readViewportWidth);
-  const sidebarMaximumWidth = resolveThreadSidebarMaximumWidth(viewportWidth);
-  const sidebarProviderStyle = {
-    "--sidebar-width": `${sidebarWidth}px`,
+  const shellStyle = {
     "--primary-navigation-rail-width": isChildWindow
       ? "0px"
       : resolvePrimaryNavigationRailWidth(isPrimaryNavigationExpanded),
@@ -231,12 +218,7 @@ function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
   }, [navigate, pathname]);
 
   return (
-    <SidebarProvider
-      className="h-dvh! min-h-0!"
-      defaultOpen
-      hoverReveal
-      style={sidebarProviderStyle}
-    >
+    <div className="flex h-dvh min-h-0 w-full" style={shellStyle}>
       <ThreadQueueRuntime />
       <ProjectProjectionRetention />
       {isChildWindow ? null : (
@@ -253,51 +235,7 @@ function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
         >
           <div className="flex min-h-0 min-w-0 flex-1 gap-2" data-app-workspace-main-row="">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2" data-app-primary-column="">
-              <div
-                className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-t-xl bg-background shadow-[0_-4px_12px_rgb(0_0_0/0.06)] md:rounded-xl md:border md:border-sidebar-border md:shadow-sm/5 dark:shadow-[0_-4px_12px_rgb(0_0_0/0.24)] dark:md:shadow-sm/5"
-                data-app-content-frame=""
-              >
-                {shouldRenderSecondarySidebar ? (
-                  <Sidebar
-                    side="left"
-                    collapsible="offcanvas"
-                    data-app-sidebar=""
-                    className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:absolute! md:inset-y-0 md:left-0! md:h-full!"
-                    resizable={{
-                      maxWidth: sidebarMaximumWidth,
-                      minWidth: THREAD_SIDEBAR_MIN_WIDTH,
-                      shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
-                        nextWidth <= currentWidth ||
-                        wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
-                      storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-                      onResize: setSidebarWidth,
-                    }}
-                  >
-                    {secondarySidebarKind === "settings" ? (
-                      <>
-                        <ContextualSidebarHeader title="Settings" />
-                        <SettingsSidebarNav pathname={pathname} />
-                      </>
-                    ) : secondarySidebarKind === "email" ? (
-                      <EmailSidebar />
-                    ) : secondarySidebarKind === "calendar" ? (
-                      <CalendarSidebar />
-                    ) : secondarySidebarKind === "orchestrator" ? (
-                      <OrchestratorSidebar />
-                    ) : secondarySidebarKind === "projects" ? (
-                      <ProjectsSidebar />
-                    ) : secondarySidebarKind === "issues" ? (
-                      <IssuesSidebar />
-                    ) : secondarySidebarKind === "source-control" ? (
-                      <SourceControlSidebar />
-                    ) : (
-                      <ThreadSidebar />
-                    )}
-                    <SidebarRail />
-                  </Sidebar>
-                ) : null}
-                {children}
-              </div>
+              {children}
               <div className="contents" data-terminal-card-host="" />
             </div>
             <div className="contents" data-inline-right-panel-host="" />
@@ -305,8 +243,85 @@ function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
           <div className="contents" data-terminal-full-width-host="" />
         </div>
       </div>
-      {shouldRenderSecondarySidebar ? <SidebarControl useArtworkContrast /> : null}
       <OrchestratorOverlay />
+    </div>
+  );
+}
+
+/**
+ * One pane's card: the page with its contextual sidebar, which follows the
+ * router the frame renders under. Split, every pane has its own frame, so each
+ * sidebar collapses on its own. A side pane's root route renders one around its
+ * page.
+ */
+export function WorkspaceFrame({ children }: { children: ReactNode }) {
+  // Settings routes show the settings nav in place of whichever thread
+  // sidebar is active.
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const isMobile = useIsMobile();
+  const secondarySidebarKind = resolveSecondarySidebarKind(pathname);
+  // Mobile web keeps the existing drawer as its only global navigation. On
+  // desktop, the icon rail owns global navigation and this panel is contextual.
+  const shouldRenderSecondarySidebar = shouldRenderSecondarySidebarForViewport(
+    isMobile,
+    secondarySidebarKind,
+  );
+  const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
+  // Subscribed rather than read once: the clamp must track live window size,
+  // and a clamped drag ends with an unchanged width, which skips the re-render
+  // that would otherwise refresh a render-time snapshot.
+  const viewportWidth = useSyncExternalStore(subscribeToViewportWidth, readViewportWidth);
+  const sidebarMaximumWidth = resolveThreadSidebarMaximumWidth(viewportWidth);
+
+  return (
+    <SidebarProvider
+      className="relative min-h-0! min-w-0 flex-1 overflow-hidden rounded-t-xl bg-background shadow-[0_-4px_12px_rgb(0_0_0/0.06)] md:rounded-xl md:border md:border-sidebar-border md:shadow-sm/5 dark:shadow-[0_-4px_12px_rgb(0_0_0/0.24)] dark:md:shadow-sm/5"
+      data-app-content-frame=""
+      defaultOpen
+      hoverReveal
+      style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+    >
+      {shouldRenderSecondarySidebar ? (
+        <Sidebar
+          side="left"
+          collapsible="offcanvas"
+          data-app-sidebar=""
+          className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:absolute! md:inset-y-0 md:left-0! md:h-full!"
+          resizable={{
+            maxWidth: sidebarMaximumWidth,
+            minWidth: THREAD_SIDEBAR_MIN_WIDTH,
+            shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
+              nextWidth <= currentWidth ||
+              wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
+            storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+            onResize: setSidebarWidth,
+          }}
+        >
+          {secondarySidebarKind === "settings" ? (
+            <>
+              <ContextualSidebarHeader title="Settings" />
+              <SettingsSidebarNav pathname={pathname} />
+            </>
+          ) : secondarySidebarKind === "email" ? (
+            <EmailSidebar />
+          ) : secondarySidebarKind === "calendar" ? (
+            <CalendarSidebar />
+          ) : secondarySidebarKind === "orchestrator" ? (
+            <OrchestratorSidebar />
+          ) : secondarySidebarKind === "projects" ? (
+            <ProjectsSidebar />
+          ) : secondarySidebarKind === "issues" ? (
+            <IssuesSidebar />
+          ) : secondarySidebarKind === "source-control" ? (
+            <SourceControlSidebar />
+          ) : (
+            <ThreadSidebar />
+          )}
+          <SidebarRail />
+        </Sidebar>
+      ) : null}
+      {children}
+      {shouldRenderSecondarySidebar ? <SidebarControl useArtworkContrast /> : null}
     </SidebarProvider>
   );
 }

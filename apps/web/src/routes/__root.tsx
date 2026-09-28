@@ -28,7 +28,7 @@ import {
   resolveCloudSyncConvexUrl,
   resolveConvexClerkTokenOptions,
 } from "../cloud/publicConfig";
-import { AppSidebarLayout } from "../components/AppSidebarLayout";
+import { AppSidebarLayout, WorkspaceFrame } from "../components/AppSidebarLayout";
 import { OrchestratorProvider } from "../components/orchestrator/OrchestratorProvider";
 import { PairingRouteSurface } from "../components/auth/PairingRouteSurface";
 import { CommandPalette } from "../components/CommandPalette";
@@ -161,9 +161,15 @@ function RootRouteView() {
   const sidePaneId = useSidePaneId();
   const pathname = useLocation({ select: (location) => location.pathname });
 
-  // A side pane renders only its page: the primary pane already mounts the
-  // auth gate, the app shell, and every global host around it.
-  if (sidePaneId !== null) return <Outlet />;
+  // A side pane renders only its page and sidebar: the primary pane already
+  // mounts the auth gate, the app shell, and every global host around it.
+  if (sidePaneId !== null) {
+    return (
+      <WorkspaceFrame>
+        <Outlet />
+      </WorkspaceFrame>
+    );
+  }
 
   // Fail closed: accounts are mandatory (docs/internals/decisions/0001). A
   // build without a Clerk publishable key is a misconfiguration, not an open

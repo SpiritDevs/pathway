@@ -10,9 +10,11 @@ Because each pane has a router, routed pages render in a pane unchanged: `usePar
 
 ## Chrome follows the focused pane
 
-`AppSidebarLayout` renders the rail, top bar, and secondary sidebar inside `RouterContextProvider` with the **focused pane's** router. Those components did not change: rail clicks, back and forward, and the sidebar act on the focused pane because the router they read is that pane's. `PaneRow` puts the primary pane's outlet back under the app router. The command palette runs under the focused pane's router the same way.
+`AppSidebarLayout` renders the rail and top bar inside `RouterContextProvider` with the **focused pane's** router. Those components did not change: rail clicks and back and forward act on the focused pane because the router they read is that pane's. The command palette runs under the focused pane's router the same way. Until a newly focused side pane's router has loaded, the chrome stays on the app router, since match hooks throw against a router with no matches.
 
-Anything window-global inside a page must act only when its pane has focus: window keydown listeners, the preview and workspace-move buses, and the right-panel portal. `panes/usePaneFocus.ts` provides `usePaneId()` and `isPaneFocused()` for that; listeners check at event time so focus changes never re-render a page. Each pane frame has its own right-panel host, and a pane narrower than about 720 px shows the thread panel as a sheet.
+Each pane is its own `WorkspaceFrame`: the card with the page and its secondary sidebar, under its own `SidebarProvider`, so every pane's sidebar follows that pane's route and collapses on its own. `PaneRow` wraps the primary pane's frame back under the app router; a side pane's root route renders a frame around its outlet.
+
+Anything window-global inside a pane must act only when its pane has focus: window keydown listeners (including the sidebars' shortcuts and the sidebar toggle), the preview and workspace-move buses, and the right-panel portal. `panes/usePaneFocus.ts` provides `usePaneId()` and `isPaneFocused()` for that; listeners check at event time so focus changes never re-render a page. Each pane frame has its own right-panel host, and a pane narrower than about 720 px shows the thread panel as a sheet.
 
 ## Layout
 
