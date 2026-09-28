@@ -60,29 +60,52 @@ describe("browser document bridge", () => {
     const event = { type: "pointerdown", composedPath: () => [select], preventDefault };
     events.get("pointerdown")!(event);
     expect(preventDefault).toHaveBeenCalledOnce();
+    const firstId = (messages.at(-1) as { selectId: string }).selectId;
     expect(messages.at(-1)).toMatchObject({
       type: "select",
-      selectId: "1",
       options: [
         { index: 0, selected: true },
         { index: 1, selected: false },
       ],
     });
-    NodeVM.runInNewContext(selectResponseScript("1", [1]), context);
+    NodeVM.runInNewContext(selectResponseScript(firstId, [1]), context);
     expect(select.options.map((o) => o.selected)).toEqual([false, true]);
     expect(select.dispatchEvent.mock.calls.map((args) => args[0].type)).toEqual([
       "input",
       "change",
     ]);
-    expect(() => NodeVM.runInNewContext(selectResponseScript("1", [0]), context)).toThrow(
+    expect(() => NodeVM.runInNewContext(selectResponseScript(firstId, [0]), context)).toThrow(
       "no longer",
     );
     events.get("pointerdown")!(event);
-    expect(messages.at(-1)).toMatchObject({ type: "select", selectId: "2" });
-    expect(() => NodeVM.runInNewContext(selectResponseScript("1", [0]), context)).toThrow(
+    const secondId = (messages.at(-1) as { selectId: string }).selectId;
+    expect(secondId).not.toBe(firstId);
+    expect(() => NodeVM.runInNewContext(selectResponseScript(firstId, [0]), context)).toThrow(
       "no longer",
     );
-    NodeVM.runInNewContext(selectResponseScript("2", null), context);
+    NodeVM.runInNewContext(selectResponseScript(secondId, null), context);
+    // Another document (frame or reload) never reuses an ID, so a late reply
+    // to one popup cannot change another document's newer popup.
+    const otherEvents = new Map<string, (event: unknown) => void>();
+    const otherMessages: unknown[] = [];
+    const other = {
+      ...context,
+      __pathwayBrowserBridge: false,
+      document: {
+        addEventListener: (name: string, listener: (event: unknown) => void) =>
+          otherEvents.set(name, listener),
+      },
+      __pathwayBrowserEvent: async (value: unknown) => {
+        otherMessages.push(value);
+        return true;
+      },
+    };
+    NodeVM.runInNewContext(remoteBrowserBridge, other);
+    await Promise.resolve();
+    other.__pathwayBrowserWatching = true;
+    otherEvents.get("pointerdown")!({ ...event, composedPath: () => [new Select()] });
+    const otherId = (otherMessages.at(-1) as { selectId: string }).selectId;
+    expect([firstId, secondId]).not.toContain(otherId);
     context.__pathwayBrowserWatching = false;
     preventDefault.mockClear();
     events.get("pointerdown")!(event);

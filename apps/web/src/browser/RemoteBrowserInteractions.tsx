@@ -372,7 +372,7 @@ function FileChooserPrompt({
         ),
       );
       setStatus("Sending to the page…");
-      await interact({
+      const accepted = await interact({
         action: "fileChooserRespond",
         chooserId: chooser.chooserId,
         files: uploaded.map((file) => ({
@@ -381,6 +381,10 @@ function FileChooserPrompt({
           mimeType: file.mimeType,
         })),
       });
+      if (!accepted) {
+        setStatus("The page did not accept those files. Choose again or cancel.");
+        setBusy(false);
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Upload failed.");
       setBusy(false);
