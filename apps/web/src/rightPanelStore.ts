@@ -21,6 +21,7 @@ export const RIGHT_PANEL_KINDS = [
   "files",
   "file",
   "preview",
+  "device",
   "terminal",
   "pull-request",
   "agents",
@@ -28,7 +29,15 @@ export const RIGHT_PANEL_KINDS = [
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
+export type DeviceSurfaceTarget = {
+  hostId: string;
+  deviceId: string;
+  platform: "ios" | "android";
+  name: string;
+};
+
 export type RightPanelSurface =
+  | { id: `device:${string}`; kind: "device"; target?: DeviceSurfaceTarget }
   | { id: `browser:${string}`; kind: "preview"; resourceId: string }
   | { id: "browser:new"; kind: "preview"; resourceId: null }
   /** The thread environment's own browser, streamed; its tabs live on the environment. */
@@ -113,6 +122,8 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "thread">,
   ) => void;
+  openDevice: (ref: ScopedThreadRef, target: DeviceSurfaceTarget) => void;
+  reconcileDeviceSurfaces: (ref: ScopedThreadRef, targets: readonly DeviceSurfaceTarget[]) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openRemoteBrowser: (ref: ScopedThreadRef) => void;
   openDirectory: (ref: ScopedThreadRef, cwd: string) => void;
@@ -175,6 +186,8 @@ const singletonSurface = (
   kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request" | "thread">,
 ): RightPanelSurface => {
   switch (kind) {
+    case "device":
+      return { id: "device:new", kind };
     case "diff":
       return { id: "diff", kind };
     case "files":
@@ -183,6 +196,12 @@ const singletonSurface = (
       return { id: "agents", kind };
   }
 };
+
+export function deviceSurfaceId(
+  target: Pick<DeviceSurfaceTarget, "hostId" | "deviceId">,
+): `device:${string}` {
+  return `device:${encodeURIComponent(target.hostId)}:${encodeURIComponent(target.deviceId)}`;
+}
 
 const browserSurface = (tabId: string | null): RightPanelSurface =>
   tabId
@@ -363,6 +382,26 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                     // Issue tabs belong to the Issues workspace's local panel state, never to a
                     // persisted thread panel.
                     if (surface.kind === "issue") return [];
+                    if (surface.kind === "device") {
+                      if (!surface.target) return surface.id === "device:new" ? [surface] : [];
+                      const { hostId, deviceId, platform, name } = surface.target;
+                      if (
+                        typeof hostId !== "string" ||
+                        !hostId ||
+                        typeof deviceId !== "string" ||
+                        !deviceId ||
+                        typeof name !== "string" ||
+                        (platform !== "ios" && platform !== "android")
+                      )
+                        return [];
+                      return [
+                        {
+                          id: deviceSurfaceId(surface.target),
+                          kind: "device",
+                          target: surface.target,
+                        },
+                      ];
+                    }
                     if (surface.kind === "thread") {
                       if (
                         typeof surface.resourceId !== "string" ||
@@ -493,6 +532,36 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               return upsertSurface(current, existing ?? browserSurface(null));
             }
             return upsertSurface(current, singletonSurface(kind));
+          }),
+        ),
+      openDevice: (ref, target) =>
+        set((state) =>
+          updateThread(state, ref, (current) =>
+            upsertSurface(
+              {
+                ...current,
+                surfaces: current.surfaces.filter((surface) => surface.id !== "device:new"),
+              },
+              { id: deviceSurfaceId(target), kind: "device", target },
+            ),
+          ),
+        ),
+      reconcileDeviceSurfaces: (ref, targets) =>
+        set((state) =>
+          updateThread(state, ref, (current) => {
+            const valid = new Set(targets.map(deviceSurfaceId));
+            const surfaces = current.surfaces.filter(
+              (surface) => surface.kind !== "device" || !surface.target || valid.has(surface.id),
+            );
+            if (surfaces.length === current.surfaces.length) return current;
+            return {
+              ...current,
+              surfaces,
+              isOpen: current.isOpen && surfaces.length > 0,
+              activeSurfaceId: surfaces.some((surface) => surface.id === current.activeSurfaceId)
+                ? current.activeSurfaceId
+                : (surfaces.at(-1)?.id ?? null),
+            };
           }),
         ),
       openBrowser: (ref, tabId) =>
