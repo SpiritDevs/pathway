@@ -5,6 +5,7 @@ import { type ResizableWidthHandlers, useResizableWidth } from "./useResizableWi
 export interface PreviewPanelInlineSize {
   readonly width: number;
   readonly handlers: ResizableWidthHandlers;
+  readonly resizeTo: (width: number) => void;
 }
 
 const PREVIEW_PANEL_WIDTH_STORAGE_KEY = "pathway:preview-panel-width";

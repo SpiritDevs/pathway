@@ -71,7 +71,7 @@ export function RightPanelSheet(props: {
   defaultWidth?: number;
 }) {
   const maxWidth = useRightPanelSheetMaxWidth();
-  const { width, handlers } = useResizableWidth({
+  const { width, handlers, resizeTo } = useResizableWidth({
     storageKey: props.widthStorageKey ?? PREVIEW_PANEL_WIDTH_STORAGE_KEY,
     defaultWidth: props.defaultWidth ?? PREVIEW_PANEL_DEFAULT_WIDTH,
     minWidth: PREVIEW_PANEL_MIN_WIDTH,
@@ -100,7 +100,7 @@ export function RightPanelSheet(props: {
         style={sheetStyle}
         viewportClassName={RIGHT_PANEL_SHEET_VIEWPORT_CLASS_NAME}
       >
-        <RightPanelResizeHandle className="max-sm:hidden" handlers={handlers} />
+        <RightPanelResizeHandle className="max-sm:hidden" handlers={handlers} resizeTo={resizeTo} />
         {props.children}
       </SheetPopup>
     </Sheet>

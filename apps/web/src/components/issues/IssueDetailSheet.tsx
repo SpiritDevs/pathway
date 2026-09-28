@@ -400,7 +400,11 @@ export function IssueDetailSheet({
         style={sheetStyle}
         viewportClassName={cn(RIGHT_PANEL_SHEET_VIEWPORT_CLASS_NAME, "pointer-events-none")}
       >
-        <RightPanelResizeHandle className="max-sm:hidden" handlers={sheetSize.handlers} />
+        <RightPanelResizeHandle
+          className="max-sm:hidden"
+          handlers={sheetSize.handlers}
+          resizeTo={sheetSize.resizeTo}
+        />
         <SheetTitle className="sr-only">{issue?.title ?? issueKey ?? "Task"}</SheetTitle>
         {content}
       </SheetPopup>

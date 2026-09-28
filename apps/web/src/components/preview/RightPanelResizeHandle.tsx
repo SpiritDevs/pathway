@@ -1,9 +1,21 @@
+import type { MouseEvent as ReactMouseEvent } from "react";
+
 import type { ResizableWidthHandlers } from "~/hooks/useResizableWidth";
 import { cn } from "~/lib/utils";
 
 interface Props {
   handlers: ResizableWidthHandlers;
+  /** Clamps and persists a width; the hook's `resizeTo`. */
+  resizeTo: (width: number) => void;
   className?: string;
+}
+
+/** The `gap-2` gutter between the main content and the right panel. */
+const RIGHT_PANEL_GUTTER_WIDTH = 8;
+
+/** Panel width that splits the workspace row evenly with the main content. */
+export function getRightPanelSplitWidth(rowWidth: number): number {
+  return Math.floor((rowWidth - RIGHT_PANEL_GUTTER_WIDTH) / 2);
 }
 
 /**
@@ -14,8 +26,19 @@ interface Props {
  * - Visual indicator is a 1px line that lights up on hover/active to mirror
  *   VS Code / Cursor. A 1px optical correction centers it between the two
  *   rendered border strokes rather than the panel border boxes.
+ * - Double-click resets the panel to half of the workspace row. Sheets are
+ *   portalled outside the row, so they fall back to the document's row.
  */
-export function RightPanelResizeHandle({ handlers, className }: Props) {
+export function RightPanelResizeHandle({ handlers, resizeTo, className }: Props) {
+  const onDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
+    const selector = "[data-app-workspace-main-row]";
+    const row =
+      event.currentTarget.closest<HTMLElement>(selector) ??
+      document.querySelector<HTMLElement>(selector);
+    if (!row) return;
+    resizeTo(getRightPanelSplitWidth(row.clientWidth));
+  };
+
   return (
     <div
       role="separator"
@@ -24,6 +47,7 @@ export function RightPanelResizeHandle({ handlers, className }: Props) {
         "group absolute inset-y-0 -left-2 z-20 w-2 cursor-col-resize select-none",
         className,
       )}
+      onDoubleClick={onDoubleClick}
       {...handlers}
     >
       <span
