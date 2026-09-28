@@ -1,3 +1,9 @@
+import {
+  ComputerService,
+  type ComputerServiceShape,
+} from "../computer/Services/ComputerService.ts";
+import { ComputerManager } from "../computer/ComputerManager.ts";
+import { FakeComputerBackend } from "../computer/FakeComputerBackend.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Isolated route integration test.
 import * as NodeHttp from "node:http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -120,7 +126,11 @@ it.effect("streams over writer-only sockets and bounds frames until the client's
 );
 const makeServerLayer = (
   browser: RemoteBrowserService,
-  options: { revokeAfterAuthentication?: boolean; afterSnapshot?: Effect.Effect<void> } = {},
+  options: {
+    revokeAfterAuthentication?: boolean;
+    afterSnapshot?: Effect.Effect<void>;
+    computer?: ComputerServiceShape;
+  } = {},
 ) => {
   const baseAuthLayer = EnvironmentAuth.layer.pipe(
     Layer.provide(SqlitePersistenceMemory),
@@ -168,6 +178,9 @@ const makeServerLayer = (
     disableListenLog: true,
   }).pipe(
     Layer.provide(Layer.succeed(RemoteBrowser, browser)),
+    Layer.provide(
+      options.computer ? Layer.succeed(ComputerService, options.computer) : Layer.empty,
+    ),
     Layer.provideMerge(authLayer),
     Layer.provideMerge(httpLayer),
   );
@@ -279,4 +292,91 @@ it.layer(NodeServices.layer)("environment surface route", (it) => {
         }),
     );
   }
+  it.effect("computer authenticates, streams binary frames and tears down on session revocation", () =>
+      Effect.gen(function* () {
+        const subscribed = yield* Deferred.make<SurfaceSink>();
+        const released = yield* Deferred.make<void>();
+        const browser: RemoteBrowserService = {
+          interact: () => Effect.die("unused"),
+          interactions: () => Stream.empty,
+          command: () => Effect.succeed({ tabs: [], selectedTabId: null }),
+          frames: () => Stream.empty,
+          subscribeSurface: (_input, sink) =>
+            Effect.gen(function* () {
+              yield* Effect.addFinalizer(() => Deferred.succeed(released, undefined));
+              yield* Deferred.succeed(subscribed, sink);
+            }),
+        };
+        const backend = Object.assign(new FakeComputerBackend(), {
+          captureSurface: () => Effect.die("route test capture unused"),
+        });
+        const manager = yield* ComputerManager.make({ backend });
+        manager.surfaceStream.subscribe = (_viewport, sink) =>
+          Effect.gen(function* () {
+            yield* Effect.addFinalizer(() => Deferred.succeed(released, undefined));
+            yield* Deferred.succeed(subscribed, sink);
+          });
+        yield* Effect.gen(function* () {
+          const query = {
+            kind: "computer",
+            computerId: "desktop",
+            threadId: "thread",
+            tabId: "tab",
+            width: "800",
+            height: "600",
+            deviceScale: "2",
+          };
+          expect(yield* getStatus(framePath(query))).toBe(401);
+          const denied = yield* issueTicket(["orchestration:operate"]);
+          expect(yield* getStatus(framePath({ ...query, wsTicket: denied.ticket }))).toBe(403);
+          const { ticket, sessionId } = yield* issueTicket(["orchestration:read"]);
+          expect(yield* getStatus(framePath({ ...query, width: "0", wsTicket: ticket }))).toBe(400);
+          expect(
+            yield* getStatus(framePath({ ...query, computerId: "missing", wsTicket: ticket })),
+          ).toBe(404);
+          const server = yield* HttpServer.HttpServer;
+          if (server.address._tag !== "TcpAddress") throw new Error("TCP required");
+          const port = server.address.port;
+          const received = yield* Deferred.make<Uint8Array>();
+          const closed = yield* Deferred.make<number>();
+          yield* Effect.acquireRelease(
+            Effect.sync(() => {
+              const ws = new WebSocket(
+                `ws://127.0.0.1:${port}${framePath({ ...query, wsTicket: ticket })}`,
+              );
+              ws.binaryType = "arraybuffer";
+              ws.addEventListener("open", () => ws.send("ready"));
+              ws.addEventListener("message", (event) =>
+                Deferred.doneUnsafe(
+                  received,
+                  Effect.succeed(new Uint8Array(event.data as ArrayBuffer)),
+                ),
+              );
+              ws.addEventListener("close", (event) =>
+                Deferred.doneUnsafe(closed, Effect.succeed(event.code)),
+              );
+              return ws;
+            }),
+            (ws) => Effect.sync(() => ws.close()),
+          );
+          const sink = yield* Deferred.await(subscribed);
+          sink.send(new Uint8Array([1, 2, 3]));
+          expect(Array.from(yield* Deferred.await(received))).toEqual([1, 2, 3]);
+          const auth = yield* EnvironmentAuth.EnvironmentAuth;
+          yield* auth.revokeSession(sessionId);
+          expect(yield* Deferred.await(closed)).toBe(1008);
+          yield* Deferred.await(released);
+        }).pipe(
+          Effect.provide(
+            makeServerLayer(browser, {
+              computer: {
+                supported: true,
+                availability: { kind: "available", backend: "fake" },
+                manager,
+              },
+            }),
+          ),
+        );
+      }),
+  );
 });

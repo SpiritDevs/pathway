@@ -1,5 +1,3 @@
-import * as Option from "effect/Option";
-import { ComputerService } from "./Services/ComputerService.ts";
 /**
  * The Computer calls each run has in flight, so Stop can end them with the
  * run, as Synara's in-flight request registry and `cancelTurn` do. Stop fences
@@ -15,6 +13,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import { RunStopFence } from "../orchestration-v2/RunStopFence.ts";
 import {
@@ -24,6 +23,7 @@ import {
   withDesktopOperationSignal,
 } from "./DesktopOperationQueue.ts";
 import { ComputerBackendError, type ComputerOperationError } from "./computerErrors.ts";
+import { ComputerService } from "./Services/ComputerService.ts";
 
 /** How long Stop waits for a stopped run's calls to unwind; Synara's bound. */
 export const COMPUTER_RUN_STOP_DRAIN = Duration.seconds(2);

@@ -568,6 +568,22 @@ const withGateway = <A, E>(
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
 describe("Cua native boundary", () => {
+  it.effect("captures the persistent primary screen without a turn or model observation", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({ nativeRevision: 37 });
+      const frame = yield* f.backend.captureSurface();
+      expect(frame.region).toMatchObject({ x: 0, y: 0 });
+      const capture = f.calls.find((call) => call.name === "get_desktop_state");
+      expect(capture).toBeDefined();
+      expect(capture?.modelObservation).not.toBe(true);
+      expect(capture?.task).toBeUndefined();
+      yield* f.backend.surfaceKeyboardWindow();
+      expect(f.calls.findLast((call) => call.name === "list_windows")?.args).toEqual({
+        include_keyboard_focus: true,
+      });
+    }),
+  );
+
   it.effect(
     "requests AX keyboard focus only for explicit observations, not input revalidation",
     () =>

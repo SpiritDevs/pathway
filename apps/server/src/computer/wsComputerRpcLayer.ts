@@ -1,7 +1,3 @@
-import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
-import { DesktopDispatchAuthority } from "./DesktopOperationQueue.ts";
-import { COMPUTER_SURFACE_METHODS } from "@spiritdevs/contracts";
-import { makeComputerSurfaceHandlers } from "./wsComputerSurfaceHandlers.ts";
 /**
  * The Computer half of the WebSocket RPC surface, built per socket beside the
  * main WS handler layer. It is its own layer because one handler literal for
@@ -14,6 +10,7 @@ import {
   type AuthEnvironmentScope,
   type AuthSessionId,
   COMPUTER_WS_METHODS,
+  COMPUTER_SURFACE_METHODS,
   ComputerError,
   EnvironmentAuthorizationError,
   WsComputerRpcGroup,
@@ -32,11 +29,14 @@ import {
   observeRpcStream as instrumentRpcStream,
 } from "../observability/RpcInstrumentation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
 import { ComputerApprovalGate } from "./ComputerApprovalGate.ts";
 import { requireComputerAccess } from "./computerAccessPolicy.ts";
 import { ComputerEventInterests } from "./computerEventInterests.ts";
 import { ComputerService } from "./Services/ComputerService.ts";
 import { makeWsComputerHandlers, wrapWsComputerHandlers } from "./wsComputerHandlers.ts";
+import { DesktopDispatchAuthority } from "./DesktopOperationQueue.ts";
+import { makeComputerSurfaceHandlers } from "./wsComputerSurfaceHandlers.ts";
 
 const TRACE_ATTRIBUTES = { "rpc.aggregate": "computer" } as const;
 
@@ -92,7 +92,6 @@ export const makeWsComputerRpcLayer = (currentSession: EnvironmentAuth.Authentic
           Effect.flatMap((settings) =>
             requireComputerAccess(settings.computer.accessPolicy, currentSession.scopes),
           ),
-          Effect.mapError((error) => new ComputerError({ message: error.message })),
         ),
       );
       const handlers = makeWsComputerHandlers(computerService, {

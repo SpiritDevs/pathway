@@ -146,9 +146,9 @@ export class ComputerSurfaceControl {
     return Effect.suspend(() => (this.holder ? Effect.fail(denied()) : Effect.void));
   }
 
-  assertHolder(clientId: string) {
+  assertHolder(clientId: string, allowClosing = false) {
     return Effect.suspend(() =>
-      this.holder?.clientId === clientId && !this.holder.closing
+      this.holder?.clientId === clientId && (allowClosing || !this.holder.closing)
         ? Effect.void
         : Effect.fail(denied()),
     );

@@ -290,13 +290,15 @@ export interface ComputerBackend {
      */
     readonly reuseRecentTree?: boolean;
   }) => BackendEffect<ComputerState>;
-  /** Zoomed perception of one window or region. */
   /** Primary-display capture independent of model observations and active tasks. */
   readonly captureSurface?: () => BackendEffect<ComputerScreenshot>;
+  /** Fresh human keyboard focus, distinct from the agent-selected window. */
+  readonly surfaceKeyboardWindow?: () => BackendEffect<ComputerWindow | undefined>;
   /** True physical pointer phases, when the host exposes them. */
   readonly surfacePointer?: (
     input: Extract<ComputerSurfaceInput, { type: "pointer.move" | "pointer.down" | "pointer.up" }>,
   ) => ComputerBackendAction;
+  /** Zoomed perception of one window or region. */
   readonly captureScreenshot: (
     request: ComputerCaptureRequest,
   ) => BackendEffect<ComputerScreenshot>;

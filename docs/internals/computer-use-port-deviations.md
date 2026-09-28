@@ -359,3 +359,10 @@ Synara has no mobile client, so each entry reads: the web behaviour (P6) → the
 ### Tooling
 
 - Swift-only commits skip the pre-commit hook (`--no-verify`), because `vp staged` runs `vp fmt`, which fails with no JavaScript staged.
+
+## Persistent computer viewer
+
+[Persistent computer surface](computer-use-surface.md) documents the environment-level
+frame target, connection-owned control, agent pause, human input and hand-back attachment
+RPCs added for COR-167. These live beyond any one agent turn and leave durable thread
+consent unchanged.

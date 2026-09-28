@@ -28,6 +28,7 @@ export const ComputerSurfaceController = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("agent"), threadId: ThreadId }),
   Schema.Struct({ kind: Schema.Literal("client"), clientId: Schema.String }),
 ]);
+export type ComputerSurfaceController = typeof ComputerSurfaceController.Type;
 export const ComputerSurfaceState = Schema.Struct({
   computerId: ComputerId,
   revision: Schema.Int,

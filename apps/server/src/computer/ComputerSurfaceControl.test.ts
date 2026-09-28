@@ -174,6 +174,27 @@ it.effect("disconnect aborts in-flight and queued input before waking waiting ag
 );
 
 it.layer(NodeServices.layer)("manager surface admission", (it) => {
+  it.effect("Escape cancels a handback capture while ownership is closing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const manager = yield* ComputerManager.make({ backend: new FakeComputerBackend() });
+        yield* manager.surfaceControl.take("a");
+        const entered = yield* Deferred.make<void>();
+        const back = yield* start(
+          manager.surfaceControl
+            .handBack("a", () =>
+              Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+            )
+            .pipe(Effect.exit),
+        );
+        yield* Deferred.await(entered);
+        yield* Effect.flip(manager.surfaceInput("b", { type: "key", key: "Escape" }));
+        yield* manager.surfaceInput("a", { type: "key", key: "Escape" });
+        expect((yield* Fiber.join(back))._tag).toBe("Failure");
+        expect(manager.surfaceControl.snapshot.controller.kind).toBe("idle");
+      }),
+    ),
+  );
   it.effect("rechecks durable consent when a paused agent resumes", () =>
     Effect.scoped(
       Effect.gen(function* () {

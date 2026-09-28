@@ -619,7 +619,8 @@ export class ComputerManager {
       () => ({
         capture: this.backend.capabilities().capture && this.backend.captureSurface !== undefined,
         input: this.backend.capabilities().input,
-        pointerPhases: this.backend.surfacePointer !== undefined,
+        pointerPhases:
+          this.backend.surfacePointer !== undefined && this.backend.stopInput !== undefined,
       }),
       () => this.backend.stopInput?.() ?? Effect.void,
     );
@@ -678,6 +679,7 @@ export class ComputerManager {
         this.backendHealth = event.health;
         this.republishAllThreads();
       } else if (event.type === "capabilities-changed") {
+        this.surfaceControl.publish();
         this.republishAllThreads();
       } else if (event.type === "desktop-interrupted") {
         // Locked-use resume policy: consent granted before a lock/sleep/session
@@ -1314,8 +1316,11 @@ export class ComputerManager {
       for (const live of this.activeAuthorities.values()) {
         for (const abort of live) Deferred.doneUnsafe(abort, Effect.fail(stopReason));
       }
-      return this.surfaceControl.interrupt().pipe(
-        Effect.andThen(() => this.backend.stopInput?.() ?? Effect.void),
+      return (
+        this.surfaceControl.snapshot.controller.kind === "client"
+          ? this.surfaceControl.interrupt()
+          : (this.backend.stopInput?.() ?? Effect.void)
+      ).pipe(
         Effect.ensuring(
           Effect.sync(() => this.emit({ type: "computer.input-stopped", stopped: false })),
         ),
@@ -1518,15 +1523,13 @@ export class ComputerManager {
   }
 
   /** Human input shares the same desktop transaction and cancellation path as agent input. */
-  surfaceInput(
+  surfaceInput<E = never>(
     clientId: string,
     input: ComputerSurfaceInput,
-    admit: Effect.Effect<void, { readonly message: string }> = Effect.void,
-  ): Effect.Effect<void, ComputerOperationError> {
+    admit: Effect.Effect<void, E> = Effect.void,
+  ): Effect.Effect<void, ComputerOperationError | E> {
     const action = Effect.gen({ self: this }, function* () {
-      yield* admit.pipe(
-        Effect.mapError((error) => new ComputerBackendError({ message: error.message })),
-      );
+      yield* admit;
       this.engageBackend();
       this.lastUserDesktopInputAt = this.now();
       if ("x" in input) {
@@ -1540,7 +1543,7 @@ export class ComputerManager {
         case "pointer.move":
         case "pointer.down":
         case "pointer.up":
-          if (!this.backend.surfacePointer)
+          if (!this.backend.surfacePointer || !this.backend.stopInput)
             return yield* new ComputerBackendError({
               message:
                 "This host does not support physical pointer phases. Use pointer.click instead.",
@@ -1567,12 +1570,14 @@ export class ComputerManager {
           break;
         case "key":
         case "type": {
-          const windows = yield* this.readWindows();
-          const window =
-            windows.find((w) => w.keyboardFocused === true && w.visible && !w.minimized) ??
-            (this.agentDialect !== "macos"
-              ? windows.find((w) => w.focused && w.visible && !w.minimized)
-              : undefined);
+          const window = this.backend.surfaceKeyboardWindow
+            ? yield* this.backend.surfaceKeyboardWindow()
+            : ((yield* this.readWindows()).find(
+                (w) => w.keyboardFocused === true && w.visible && !w.minimized,
+              ) ??
+              (this.agentDialect !== "macos"
+                ? (yield* this.readWindows()).find((w) => w.focused && w.visible && !w.minimized)
+                : undefined));
           if (!window)
             return yield* new ComputerBackendError({
               message: "No keyboard-focused window is available on the current desktop.",
@@ -1591,7 +1596,7 @@ export class ComputerManager {
       }
     });
     if (input.type === "key" && ["Escape", "Esc", "ESC"].includes(input.key))
-      return Effect.andThen(this.surfaceControl.assertHolder(clientId), () =>
+      return Effect.andThen(this.surfaceControl.assertHolder(clientId, true), () =>
         this.emergencyStopInput(),
       );
     return this.surfaceControl.input(
