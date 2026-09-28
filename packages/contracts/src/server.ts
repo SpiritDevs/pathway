@@ -680,6 +680,22 @@ export const ServerSelfUpdateResult = Schema.Struct({
 });
 export type ServerSelfUpdateResult = typeof ServerSelfUpdateResult.Type;
 
+/** One release's notes, already reduced to short plain-text items. */
+export const ServerUpdateReleaseNote = Schema.Struct({
+  version: TrimmedNonEmptyString,
+  items: Schema.Array(Schema.String),
+});
+export type ServerUpdateReleaseNote = typeof ServerUpdateReleaseNote.Type;
+
+/** What `server.checkForUpdate` found. `availableVersion` is null when the
+    server is current; `releaseNotes` may be empty when notes are unavailable. */
+export const ServerUpdateCheckResult = Schema.Struct({
+  currentVersion: TrimmedNonEmptyString,
+  availableVersion: Schema.NullOr(TrimmedNonEmptyString),
+  releaseNotes: Schema.Array(ServerUpdateReleaseNote),
+});
+export type ServerUpdateCheckResult = typeof ServerUpdateCheckResult.Type;
+
 export const DesktopUpdateCommitInput = Schema.Struct({
   requestId: TrimmedNonEmptyString,
 });

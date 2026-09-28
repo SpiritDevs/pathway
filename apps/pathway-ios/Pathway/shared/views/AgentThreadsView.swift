@@ -53,7 +53,7 @@ struct AgentThreadsView: View {
         .refreshable {
             await appModel.cloud.retry()
             if let connect = appModel.connect {
-                await appModel.cloud.refreshLifecycleMetadata(using: connect)
+                await appModel.cloud.refreshLifecycleMetadata(using: connect, force: true)
             }
         }
         .task(id: lifecycleRefreshKey) {
@@ -65,7 +65,7 @@ struct AgentThreadsView: View {
             await threadProviders.observe(environments: providerEnvironments, using: connect)
         }
         .navigationDestination(item: $routedThreadID) { threadID in
-            if let thread = appModel.cloud.threads.first(where: { $0.id == threadID }) {
+            if let thread = appModel.cloud.threadForNavigation(id: threadID) {
                 AgentThreadDetailRoute(thread: thread, initiallyReviewChanges: reviewingThreadID == thread.id)
             } else {
                 ContentUnavailableView(
@@ -416,11 +416,19 @@ struct AgentThreadsView: View {
         guard let index = ordered.firstIndex(where: { $0.id == thread.id }), ordered.indices.contains(index + offset) else { return }
         ordered.swapAt(index, index + offset)
         let writes = PathwayThreadOrder.plan(ordered: ordered, movedID: thread.id)
+        let mutations = writes.map { target, key in
+            appModel.cloud.beginThreadAction(.reorder(key), thread: target)
+        }
         Task {
             threadActions.errorMessage = nil
-            for (target, key) in writes {
-                await threadActions.perform(.reorder(key), thread: target, environments: appModel.cloud.environments, connect: appModel.connect)
-                if threadActions.errorMessage != nil { return }
+            for (index, write) in writes.enumerated() {
+                let (target, key) = write
+                await threadActions.perform(.reorder(key), thread: target,
+                    environments: appModel.cloud.environments, connect: appModel.connect)
+                if threadActions.errorMessage != nil {
+                    for mutation in mutations[index...] { appModel.cloud.rollbackThreadAction(mutation) }
+                    return
+                }
             }
         }
     }
@@ -548,7 +556,8 @@ private extension AgentThreadsView {
                 action,
                 thread: thread,
                 environments: appModel.cloud.environments,
-                connect: appModel.connect
+                connect: appModel.connect,
+                cloud: appModel.cloud
             )
         }
     }
@@ -1056,7 +1065,12 @@ struct AgentThreadConversationView: View {
                     }
                     HStack(spacing: 8) {
                     if let connectionStatus {
-                        Label(connectionStatus, systemImage: "arrow.triangle.2.circlepath")
+                        Label {
+                            Text(connectionStatus)
+                        } icon: {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .symbolEffect(.rotate, options: .repeat(.continuous))
+                        }
                             .font(.caption)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
@@ -1098,12 +1112,12 @@ struct AgentThreadConversationView: View {
 
     private var titledConversation: some View {
         conversationScrollView
-        .navigationTitle(model.threadTitle)
+        .navigationTitle(actionThread.shell.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(model.threadTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text(actionThread.shell.title).font(.subheadline.weight(.semibold)).lineLimit(1)
                     Text(model.environmentLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 .accessibilityIdentifier("agent-thread-heading")
@@ -1247,10 +1261,18 @@ struct AgentThreadConversationView: View {
         }
         return model.thread.shell.conversationPath ?? workspaceRoot
     }
+    private var actionThread: PathwayAgentThread {
+        let confirmed = appModel.cloud.threadForNavigation(id: model.thread.id)
+        let current = confirmed.flatMap {
+            (pathwayDate(from: $0.shell.updatedAt) ?? .distantPast) >
+                (pathwayDate(from: model.thread.shell.updatedAt) ?? .distantPast) ? $0 : nil
+        } ?? model.thread
+        return appModel.cloud.optimisticThread(current)
+    }
     private var threadActionsMenu: some View {
         Menu {
         Button("Rename thread", systemImage: "pencil") {
-            renameTitle = model.threadTitle
+            renameTitle = actionThread.shell.title
             showsRename = true
         }.disabled(isUpdatingLifecycle)
         if supportsThreadAction("threadTitleRegeneration") {
@@ -1258,30 +1280,30 @@ struct AgentThreadConversationView: View {
                 .disabled(isUpdatingLifecycle)
         }
         if supportsThreadAction("threadPinning") {
-            Button(model.thread.shell.pinnedAt == nil ? "Pin thread" : "Unpin thread",
-                   systemImage: model.thread.shell.pinnedAt == nil ? "pin" : "pin.slash") {
-                performLifecycle(model.thread.shell.pinnedAt == nil ? .pin : .unpin)
+            Button(actionThread.shell.pinnedAt == nil ? "Pin thread" : "Unpin thread",
+                   systemImage: actionThread.shell.pinnedAt == nil ? "pin" : "pin.slash") {
+                performLifecycle(actionThread.shell.pinnedAt == nil ? .pin : .unpin)
             }.disabled(isUpdatingLifecycle)
         }
-        if model.thread.shell.isTemporary {
+        if actionThread.shell.isTemporary {
             Button("Keep conversation", systemImage: "tray.and.arrow.down") { performLifecycle(.keepConversation) }
                 .disabled(isUpdatingLifecycle || !model.supportsConversations)
         }
-        if model.thread.shell.isConversation {
+        if actionThread.shell.isConversation {
             Button("Attach project", systemImage: "folder.badge.plus") { showsAttachment = true }
-                .disabled(!model.thread.canAttachProject || model.activeRunID != nil || model.isSending || isUpdatingLifecycle || !model.supportsConversations)
+                .disabled(!actionThread.canAttachProject || model.activeRunID != nil || model.isSending || isUpdatingLifecycle || !model.supportsConversations)
         }
         if supportsThreadAction("threadSettlement") {
             Button(isThreadSettled ? "Reopen thread" : "Settle thread", systemImage: isThreadSettled ? "arrow.uturn.backward" : "checkmark") {
                 performLifecycle(isThreadSettled ? .reopen : .settle)
             }.disabled(model.activeRunID != nil || model.isSending || isUpdatingLifecycle)
         }
-        if supportsThreadAction("threadForceSettlement"), !model.thread.shell.isTemporary, !isThreadSettled {
+        if supportsThreadAction("threadForceSettlement"), !actionThread.shell.isTemporary, !isThreadSettled {
             Button("Force settle thread", systemImage: "checkmark.circle.trianglebadge.exclamationmark") { showsForceSettle = true }
                 .disabled(isUpdatingLifecycle)
         }
         if supportsThreadAction("threadSnooze") {
-            if model.thread.lifecycleSection(at: Date()) == .snoozed {
+            if actionThread.lifecycleSection(at: Date()) == .snoozed {
                 Button("Wake thread", systemImage: "sun.max") { performLifecycle(.wake) }
                     .disabled(isUpdatingLifecycle)
             } else {
@@ -1290,12 +1312,12 @@ struct AgentThreadConversationView: View {
                     Button("For 3 hours") { snooze(hours: 3) }
                     Button("For 1 day") { snooze(hours: 24) }
                     Button("For 1 week") { snooze(hours: 168) }
-                }.disabled(model.activeRunID != nil || !model.queuedRuns.isEmpty || model.isSending || isUpdatingLifecycle || isThreadSettled || model.thread.shell.pendingRuntimeRequest != nil)
+                }.disabled(model.activeRunID != nil || !model.queuedRuns.isEmpty || model.isSending || isUpdatingLifecycle || isThreadSettled || actionThread.shell.pendingRuntimeRequest != nil)
             }
         }
         if supportsThreadAction("threadSettleAfterCompletion"), !isThreadSettled {
-            Button(model.thread.shell.settleAfterCompletion == true ? "Cancel settle after completion" : "Settle after completion", systemImage: "checkmark.circle") {
-                performLifecycle(.settleAfterCompletion(model.thread.shell.settleAfterCompletion != true))
+            Button(actionThread.shell.settleAfterCompletion == true ? "Cancel settle after completion" : "Settle after completion", systemImage: "checkmark.circle") {
+                performLifecycle(.settleAfterCompletion(actionThread.shell.settleAfterCompletion != true))
             }.disabled(isUpdatingLifecycle)
         }
         if let workspaceRoot = currentWorkspaceRoot, let connect = model.connect {
@@ -1304,20 +1326,20 @@ struct AgentThreadConversationView: View {
                     projectRoot: workspaceRoot, connect: connect, storageDirectory: model.storageDirectory)
             } label: { Label("Workspace", systemImage: "folder") }
         }
-        Button("Fork thread", systemImage: "arrow.triangle.branch") { fork() }.disabled(isForking || model.thread.shell.isTemporary)
-        if model.thread.shell.isTemporary { Text("Keep conversation before forking or starting a side chat.") }
+        Button("Fork thread", systemImage: "arrow.triangle.branch") { fork() }.disabled(isForking || actionThread.shell.isTemporary)
+        if actionThread.shell.isTemporary { Text("Keep conversation before forking or starting a side chat.") }
         Button("Copy conversation", systemImage: "doc.on.doc") {
             UIPasteboard.general.string = model.transcriptItems.filter(\.isConversation).compactMap(\.text).joined(separator: "\n\n")
         }
-        if let path = model.thread.shell.worktreePath ?? currentWorkspaceRoot {
+        if let path = actionThread.shell.worktreePath ?? currentWorkspaceRoot {
             Button("Copy path", systemImage: "doc.on.doc") { UIPasteboard.general.string = path }
         }
-        if let branch = model.thread.shell.branch {
+        if let branch = actionThread.shell.branch {
             Button("Copy branch", systemImage: "doc.on.doc") { UIPasteboard.general.string = branch }
         }
         Button("Copy thread ID", systemImage: "doc.on.doc") { UIPasteboard.general.string = model.threadID }
         Section {
-            if model.thread.shell.archivedAt != nil {
+            if actionThread.shell.archivedAt != nil {
                 Button("Restore thread", systemImage: "tray.and.arrow.up") { performLifecycle(.restore) }
                     .disabled(isUpdatingLifecycle)
             } else {
@@ -1351,19 +1373,25 @@ struct AgentThreadConversationView: View {
     private func performLifecycle(_ action: PathwayThreadAction) {
         guard !isUpdatingLifecycle else { return }
         isUpdatingLifecycle = true
+        let wasTemporary = model.thread.shell.isTemporary
+        let mutation = appModel.cloud.beginThreadAction(action, thread: model.thread)
         Task {
             defer { isUpdatingLifecycle = false }
             do {
                 _ = try await model.request("orchestration.dispatchCommand", payload: action.command(threadID: model.threadID),
                     reportsErrors: false, requiresSubscription: true)
-                if action == .delete || action == .archive || (model.thread.shell.isTemporary && (action == .settle || action == .discardAndSettle)) {
+                if action == .delete || action == .archive || (wasTemporary && (action == .settle || action == .discardAndSettle)) {
                     dismiss()
                 } else {
-                    let projection = try await model.request("orchestration.getThreadProjection", payload: .object(["threadId": .string(model.threadID)]))
-                    model.installSnapshot(projection)
+                    // A refresh failure must not roll back a command the server accepted.
+                    if let projection = try? await model.request("orchestration.getThreadProjection",
+                        payload: .object(["threadId": .string(model.threadID)]), reportsErrors: false) {
+                        model.installSnapshot(projection)
+                    }
                 }
             } catch {
-                if action == .settle && model.thread.shell.isTemporary && PathwayThreadActions.requiresDiscardConfirmation(error) {
+                appModel.cloud.rollbackThreadAction(mutation)
+                if action == .settle && wasTemporary && PathwayThreadActions.requiresDiscardConfirmation(error) {
                     showsUnfinishedGit = true
                 } else { navigationError = error.localizedDescription }
             }

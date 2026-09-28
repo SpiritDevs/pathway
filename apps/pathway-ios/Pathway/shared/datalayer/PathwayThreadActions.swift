@@ -60,6 +60,76 @@ enum PathwayThreadAction: Equatable, Sendable {
     }
 }
 
+// Keep the overlay until discovery reflects the command, not merely its RPC response.
+struct PathwayOptimisticThreadAction {
+    let id = UUID()
+    let threadID: String
+    let action: PathwayThreadAction
+    let date: Date
+    var baseline: PathwayAgentThread? = nil
+
+    func applying(to thread: PathwayAgentThread) -> PathwayAgentThread {
+        var result = thread
+        let timestamp = date.ISO8601Format()
+        switch action {
+        case .pin: result.shell.pinnedAt = timestamp
+        case .unpin: result.shell.pinnedAt = nil; result.shell.pinOrderKey = nil
+        case let .reorder(key): result.shell.pinOrderKey = key
+        case let .rename(title): result.shell.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .archive: result.shell.archivedAt = timestamp
+        case .restore: result.shell.archivedAt = nil
+        case .delete: result.shell.deletedAt = timestamp
+        case .settle, .forceSettle, .discardAndSettle:
+            result.shell.settledOverride = "settled"
+            result.shell.settledAt = timestamp
+            result.shell.pinnedAt = nil
+            result.shell.pinOrderKey = nil
+            result.shell.snoozedAt = nil
+            result.shell.snoozedUntil = nil
+            if thread.shell.isTemporary { result.shell.deletedAt = timestamp }
+            if action == .forceSettle {
+                result.shell.activeRunId = nil
+                result.shell.activityRunStatus = "idle"
+                result.shell.status = "idle"
+                result.shell.pendingRuntimeRequest = nil
+            }
+        case .reopen: result.shell.settledOverride = "active"; result.shell.settledAt = nil
+        case .wake: result.shell.snoozedAt = nil; result.shell.snoozedUntil = nil
+        case let .sleep(until):
+            result.shell.snoozedAt = timestamp
+            result.shell.snoozedUntil = until.ISO8601Format()
+        case .keepConversation: result.shell.temporary = false
+        case let .attachProject(projectID): result.shell.projectId = projectID
+        case let .settleAfterCompletion(enabled): result.shell.settleAfterCompletion = enabled
+        case .regenerateTitle: break // The generated title is only known to the server.
+        }
+        return result
+    }
+
+    func isReflected(in thread: PathwayAgentThread) -> Bool {
+        let shell = thread.shell
+        switch action {
+        case .pin: return shell.pinnedAt != nil
+        case .unpin: return shell.pinnedAt == nil
+        case let .reorder(key): return shell.pinOrderKey == key
+        case let .rename(title): return shell.title == title.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .archive: return shell.archivedAt != nil
+        case .restore: return shell.archivedAt == nil
+        case .delete: return shell.deletedAt != nil
+        case .settle, .forceSettle, .discardAndSettle:
+            if baseline?.shell.isTemporary == true { return shell.deletedAt != nil }
+            return shell.deletedAt != nil || (shell.settledOverride == "settled" && shell.pinnedAt == nil && shell.snoozedUntil == nil)
+        case .reopen: return shell.settledOverride == "active"
+        case .wake: return shell.snoozedUntil == nil
+        case let .sleep(until): return shell.snoozedUntil.flatMap(pathwayDate) == pathwayDate(from: until.ISO8601Format())
+        case .keepConversation: return !shell.isTemporary
+        case let .attachProject(projectID): return shell.projectId == projectID
+        case let .settleAfterCompletion(enabled): return (shell.settleAfterCompletion == true) == enabled
+        case .regenerateTitle: return true
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class PathwayThreadActions {
@@ -78,7 +148,8 @@ final class PathwayThreadActions {
         _ action: PathwayThreadAction,
         thread: PathwayAgentThread,
         environments: [PathwayCompanyEnvironment],
-        connect: PathwayConnectClient?
+        connect: PathwayConnectClient?,
+        cloud: PathwayCloudModel? = nil
     ) async {
         guard let connect, let environment = environments.first(where: {
             $0.companyId == thread.companyId && $0.environment.environmentId == thread.environmentId
@@ -87,6 +158,7 @@ final class PathwayThreadActions {
             return
         }
         await perform(threadID: thread.id) {
+            let mutation = cloud?.beginThreadAction(action, thread: thread)
             let rpc = PathwayRPCClient {
                 try await connect.prepare(environment: environment).webSocketURL
             }
@@ -108,6 +180,7 @@ final class PathwayThreadActions {
                 await rpc.stop()
             } catch {
                 await rpc.stop()
+                if let mutation { cloud?.rollbackThreadAction(mutation) }
                 if action == .settle && thread.shell.isTemporary && Self.requiresDiscardConfirmation(error) {
                     self.unfinishedGitThread = thread
                     return

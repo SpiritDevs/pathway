@@ -95,6 +95,8 @@ const makeHarness = Effect.fn("test.make_desktop_app_update_harness")(function* 
         DesktopTelemetryReceiver.layerTest({
           requestDesktopUpdate: (requestId) =>
             Deferred.succeed(requestIdDeferred, requestId).pipe(Effect.asVoid),
+          checkDesktopUpdate: (requestId) =>
+            Deferred.succeed(requestIdDeferred, requestId).pipe(Effect.asVoid),
           cancelDesktopUpdate: (requestId) =>
             Effect.sync(() => void canceledRequestIds.push(requestId)),
           desktopUpdates: Effect.succeed({
@@ -270,6 +272,44 @@ it.layer(NodeServices.layer)("desktop app update", (it) => {
         "A desktop app update is already in progress.",
       );
       yield* Fiber.interrupt(retry);
+    }),
+  );
+
+  it.effect("answers a check from the report carrying its request id", () =>
+    Effect.gen(function* () {
+      const notes = [{ version: "1.2.4", items: ["Faster thread list"] }];
+      const { service } = yield* makeHarness({
+        reports: (requestId) => [
+          report("someone-else", makeState({ status: "available", availableVersion: "9.9.9" })),
+          report(
+            requestId,
+            makeState({ status: "available", availableVersion: "1.2.4", releaseNotes: notes }),
+          ),
+        ],
+      });
+      expect(yield* service.check).toEqual({
+        currentVersion: "1.2.3",
+        availableVersion: "1.2.4",
+        releaseNotes: notes,
+      });
+    }),
+  );
+
+  it.effect("treats a disabled updater or failed check as an error, not up to date", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* DesktopAppUpdate.desktopUpdateCheckResult(makeState({ status: "up-to-date" })),
+      ).toEqual({ currentVersion: "1.2.3", availableVersion: null, releaseNotes: [] });
+      expect(
+        (yield* DesktopAppUpdate.desktopUpdateCheckResult(
+          makeState({ status: "disabled", enabled: false }),
+        ).pipe(Effect.flip)).reason,
+      ).toBe("Automatic updates are unavailable for this desktop app build.");
+      expect(
+        (yield* DesktopAppUpdate.desktopUpdateCheckResult(
+          makeState({ status: "error", errorContext: "check", message: "offline" }),
+        ).pipe(Effect.flip)).reason,
+      ).toBe("offline");
     }),
   );
 });

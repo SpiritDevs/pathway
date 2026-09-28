@@ -80,24 +80,6 @@ import Testing
         await model.stop()
     }
 
-    @Test func expiredCursorClearsReplicaBeforeStartingFreshBootstrap() async throws {
-        let client = ControlledCloudClient()
-        let model = PathwayCloudModel(client: client)
-        await model.received(companies: [company()])
-        var bootstrap = client.bootstrapEvents.makeAsyncIterator()
-        var drains = client.changeEvents.makeAsyncIterator()
-        try #require(await bootstrap.next()).resume(page(epoch: 1, entities: [change("stale")]))
-        await observed { model.entities(kind: "test", companyID: "company").count == 1 }
-        model.received(head: .init(version: 20, authorizationEpoch: 1), companyId: "company")
-        try #require(await drains.next()).resume(.init(tag: "CursorExpired", changes: nil, cursor: nil, hasMore: nil, latestVersion: 20, authorizationEpoch: 1))
-        let fresh = try #require(await bootstrap.next())
-        #expect(fresh.cursor == nil)
-        #expect(model.entities(kind: "test", companyID: "company").isEmpty)
-        fresh.resume(page(epoch: 1, version: 20, entities: [change("fresh")]))
-        await observed { model.entities(kind: "test", companyID: "company").count == 1 }
-        await model.stop()
-    }
-
     @Test func newerOrdinaryHeadDrainsCapturedSnapshotWithoutRestartingBootstrap() async throws {
         let client = ControlledCloudClient()
         let model = PathwayCloudModel(client: client)
@@ -158,6 +140,45 @@ import Testing
         await model.stop()
     }
 
+    @Test func cachedCursorResumesTheChangeFeedWithoutReseeding() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        await PathwayDiscoveryCache(directory: directory).save(.init(companies: [company()], entities: ["company": [change("cached")]], versions: ["company": 10], savedAt: Date(), epochs: ["company": 1]), revision: 1)
+        let client = ControlledCloudClient()
+        let model = PathwayCloudModel(client: client)
+        await model.configureLocalStorage(directory: directory)
+        await model.received(companies: [company()])
+        #expect(model.isConnected)
+        var drains = client.changeEvents.makeAsyncIterator()
+        model.received(head: .init(version: 12, authorizationEpoch: 1), companyId: "company")
+        let request = try #require(await drains.next())
+        #expect(request.cursor == 10)
+        request.resume(.init(tag: "Changes", changes: [.init(version: 12, entityKind: "test", entityId: "fresh", changeKind: "upsert", payload: .string("fresh"))],
+            cursor: 12, hasMore: false, latestVersion: 12, authorizationEpoch: 1))
+        await observed { model.entities(kind: "test", companyID: "company").count == 2 }
+        #expect(client.bootstrapCount == 0)
+        await model.stop()
+    }
+
+    @Test func expiredCursorKeepsTheCachedReplicaVisibleWhileReseeding() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        await PathwayDiscoveryCache(directory: directory).save(.init(companies: [company()], entities: ["company": [change("cached")]], versions: ["company": 10], savedAt: Date(), epochs: ["company": 1]), revision: 1)
+        let client = ControlledCloudClient()
+        let model = PathwayCloudModel(client: client)
+        await model.configureLocalStorage(directory: directory)
+        await model.received(companies: [company()])
+        var drains = client.changeEvents.makeAsyncIterator()
+        var bootstrap = client.bootstrapEvents.makeAsyncIterator()
+        model.received(head: .init(version: 500, authorizationEpoch: 1), companyId: "company")
+        try #require(await drains.next()).resume(.init(tag: "CursorExpired", changes: nil, cursor: nil, hasMore: nil, latestVersion: 500, authorizationEpoch: 1))
+        let seed = try #require(await bootstrap.next())
+        #expect(model.entities(kind: "test", companyID: "company") == [.string("cached")])
+        seed.resume(page(epoch: 1, version: 500, entities: [change("seeded")]))
+        await observed { model.entities(kind: "test", companyID: "company") == [.string("seeded")] }
+        await model.stop()
+    }
+
     @Test func signOutSupersedesAStorageLoadAlreadyWaitingForShutdown() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -175,6 +196,78 @@ import Testing
         await signedOut.value
         #expect(model.companies.isEmpty)
         #expect(model.entities(kind: "test", companyID: "company").isEmpty)
+    }
+
+    @Test func optimisticLifecyclePartitionsSurviveDiscoveryAndRollbackToLatestState() async throws {
+        let client = ControlledCloudClient()
+        let model = PathwayCloudModel(client: client)
+        await model.received(companies: [company()])
+        var bootstrap = client.bootstrapEvents.makeAsyncIterator()
+        var drains = client.changeEvents.makeAsyncIterator()
+        var shell = makeAgentThread(pinnedAt: "2026-01-01T00:00:00Z").shell
+        func threadChange(version: Int) throws -> PathwaySyncChange {
+            let encoded = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(shell))
+            return .init(version: version, entityKind: "agentThread", entityId: shell.id, changeKind: "upsert",
+                payload: .object(["environmentId": .string("environment-1"), "shell": encoded, "updatedAt": .number(Double(version))]))
+        }
+        try #require(await bootstrap.next()).resume(page(epoch: 1, entities: [try threadChange(version: 10)]))
+        await observed { model.activeThreads.count == 1 }
+        let thread = try #require(model.threads.first)
+        let mutation = model.beginThreadAction(.settle, thread: thread)
+        #expect(model.activeThreads.isEmpty)
+        #expect(model.settledThreads.map(\.id) == [thread.id])
+        shell.title = "Remote rename"
+        model.received(head: .init(version: 11, authorizationEpoch: 1), companyId: "company")
+        try #require(await drains.next()).resume(.init(tag: "Changes", changes: [try threadChange(version: 11)],
+            cursor: 11, hasMore: false, latestVersion: 11, authorizationEpoch: 1))
+        await observed { model.threads.first?.shell.title == "Remote rename" }
+        #expect(model.activeThreads.isEmpty)
+        model.rollbackThreadAction(mutation)
+        #expect(model.activeThreads.first?.shell.title == "Remote rename")
+        #expect(model.settledThreads.isEmpty)
+        let deletion = model.beginThreadAction(.delete, thread: thread)
+        #expect(model.threads.isEmpty)
+        #expect(model.threadForNavigation(id: thread.id) != nil)
+        model.rollbackThreadAction(deletion)
+        #expect(model.activeThreads.count == 1)
+        await model.stop()
+    }
+
+    @Test func changeRequestLookupsSkipThreadsThatHaveNotChanged() async throws {
+        let client = ControlledCloudClient()
+        let model = PathwayCloudModel(client: client)
+        await model.received(companies: [company()])
+        var bootstrap = client.bootstrapEvents.makeAsyncIterator()
+        var drains = client.changeEvents.makeAsyncIterator()
+        func threadChange(version: Int, completedAt: String) throws -> PathwaySyncChange {
+            let shell = makeAgentThread(latestRunCompletedAt: completedAt, pinnedAt: "2026-01-01T00:00:00Z", branch: "feature").shell
+            let encoded = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(shell))
+            return .init(version: version, entityKind: "agentThread", entityId: shell.id, changeKind: "upsert",
+                payload: .object(["environmentId": .string("environment-1"), "shell": encoded, "updatedAt": .number(Double(version))]))
+        }
+        try #require(await bootstrap.next()).resume(page(epoch: 1, entities: [try threadChange(version: 10, completedAt: "2026-09-01T00:00:00Z")]))
+        await observed { model.activeThreads.count == 1 }
+        var requested: [[String]] = []
+        let resolve: PathwayCloudModel.ChangeRequestResolve = { threads, publish in
+            requested.append(threads.map(\.id))
+            await publish(threads.map { .init(threadID: $0.id, status: .init(state: .open)) })
+        }
+
+        let threadID = try #require(model.activeThreads.first?.id)
+        await model.refreshLifecycleMetadata(resolve: resolve)
+        #expect(model.changeRequestStatuses[threadID]?.state == .open)
+        await model.refreshLifecycleMetadata(resolve: resolve)
+        #expect(requested == [[threadID]])
+
+        model.received(head: .init(version: 11, authorizationEpoch: 1), companyId: "company")
+        try #require(await drains.next()).resume(.init(tag: "Changes", changes: [try threadChange(version: 11, completedAt: "2026-09-02T00:00:00Z")],
+            cursor: 11, hasMore: false, latestVersion: 11, authorizationEpoch: 1))
+        await observed { model.threads.first?.shell.latestRunCompletedAt == "2026-09-02T00:00:00Z" }
+        await model.refreshLifecycleMetadata(resolve: resolve)
+        #expect(requested.count == 2)
+        await model.refreshLifecycleMetadata(force: true, resolve: resolve)
+        #expect(requested.count == 3)
+        await model.stop()
     }
 
     private func company(membership: String = "member", name: String = "Workspace") -> PathwayCompany {

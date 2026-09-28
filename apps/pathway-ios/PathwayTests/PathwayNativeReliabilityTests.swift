@@ -31,6 +31,58 @@ struct PathwayNativeReliabilityTests {
         #expect(calls == 1)
     }
 
+    @Test func repeatedTransportFailureStopsPresentingAsConnecting() {
+        let model = conversation { _, _ in .object([:]) }
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("failed"), "message": .string("Message too long")]))
+        guard case let .failed(message) = model.connectionState else { Issue.record("Expected a failed state"); return }
+        #expect(message.contains("Message too long"))
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("connecting")]))
+        #expect(model.connectionState == .connecting)
+        model.installSnapshot(.object(["visibleTurnItems": .array([.object(["item": .object(["id": .string("a"), "type": .string("assistant_message")])])])]))
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("failed"), "message": .string("offline")]))
+        #expect(model.connectionState == .cached)
+    }
+
+    @Test func longThreadsPageOlderItemsInAndKeepThemAcrossReconnects() async {
+        func row(_ ordinal: Int) -> JSONValue {
+            .object(["position": .number(Double(ordinal)), "item": .object(["id": .string("item-\(ordinal)"), "ordinal": .number(Double(ordinal)),
+                "type": .string("assistant_message"), "status": .string("completed")])])
+        }
+        func snapshot(_ ordinals: ClosedRange<Int>, olderItemsBefore: Int) -> JSONValue {
+            .object(["kind": .string("snapshot"), "snapshotSequence": .number(1), "olderItemsBefore": .number(Double(olderItemsBefore)),
+                "projection": .object(["visibleTurnItems": .array(ordinals.map(row))])])
+        }
+        var requests: [JSONValue] = []
+        let model = conversation { method, payload in
+            #expect(method == "orchestration.getThreadItems")
+            requests.append(payload)
+            return .object(["items": .array((2...4).map(row)), "olderItemsBefore": .number(2)])
+        }
+        model.applySubscriptionValue(snapshot(5...9, olderItemsBefore: 5))
+        #expect(model.items.map(\.ordinal) == Array(5...9))
+
+        // Updates to items outside the loaded window wait for their page.
+        model.applySubscriptionValue(.object(["kind": .string("event"), "sequence": .number(2), "event": .object([
+            "type": .string("turn-item.updated"), "payload": .object(["id": .string("item-1"), "ordinal": .number(1),
+                "type": .string("assistant_message"), "status": .string("completed")])])]))
+        #expect(model.items.first?.ordinal == 5)
+
+        await model.loadOlderItems()
+        #expect(requests.first?.objectValue?["beforePosition"] == .number(5))
+        #expect(model.items.map(\.ordinal) == Array(2...9))
+        #expect(model.olderItemsBefore == 2)
+
+        // A reconnect window that overlaps keeps the paged-in history and its cursor.
+        model.applySubscriptionValue(snapshot(6...10, olderItemsBefore: 6))
+        #expect(model.items.map(\.ordinal) == Array(2...10))
+        #expect(model.olderItemsBefore == 2)
+
+        // A window with a gap cannot be stitched to the old history, so it starts over.
+        model.applySubscriptionValue(snapshot(20...24, olderItemsBefore: 20))
+        #expect(model.items.map(\.ordinal) == Array(20...24))
+        #expect(model.olderItemsBefore == 20)
+    }
+
     @Test func lostLaunchResponseRetainsOperationAndPreparedAttachments() async throws {
         var launches: [JSONValue] = []
         var preparations: [JSONValue] = []

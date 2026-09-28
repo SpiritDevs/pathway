@@ -420,7 +420,10 @@ export function createProviderVersionAdvisory(input: {
   };
 }
 
-const fetchNpmLatestVersion = Effect.fn("fetchNpmLatestVersion")(function* (packageName: string) {
+/** Latest published version of an npm package, or null when the registry is unreachable. */
+export const fetchNpmLatestVersion = Effect.fn("fetchNpmLatestVersion")(function* (
+  packageName: string,
+) {
   const client = yield* HttpClient.HttpClient;
   const request = HttpClientRequest.get(
     `https://registry.npmjs.org/${encodeURIComponent(packageName)}/latest`,

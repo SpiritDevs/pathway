@@ -4,6 +4,7 @@ import {
   type DesktopUpdateStatusReport,
   type ServerSelfUpdateProgressStage,
   type ServerSelfUpdateResult,
+  type ServerUpdateCheckResult,
 } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -22,6 +23,35 @@ import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetry
     terminal outcome. Generous: it covers a slow download of a full build. */
 const DESKTOP_UPDATE_TIMEOUT = Duration.minutes(20);
 const DESKTOP_INSTALL_TIMEOUT = Duration.minutes(2);
+const DESKTOP_CHECK_TIMEOUT = Duration.minutes(2);
+
+/** What a settled desktop update state says about available updates. A
+    disabled updater or a failed check is an error, not "up to date". */
+export function desktopUpdateCheckResult(
+  state: DesktopUpdateState,
+): Effect.Effect<ServerUpdateCheckResult, ServerSelfUpdateError> {
+  if (state.status === "disabled") {
+    return Effect.fail(
+      new ServerSelfUpdateError({
+        reason:
+          state.message?.trim() || "Automatic updates are unavailable for this desktop app build.",
+      }),
+    );
+  }
+  if (state.status === "error" && state.errorContext === "check") {
+    return Effect.fail(
+      new ServerSelfUpdateError({
+        reason: state.message?.trim() || "The desktop app could not check for updates.",
+      }),
+    );
+  }
+  const newer = state.downloadedVersion ?? state.availableVersion;
+  return Effect.succeed({
+    currentVersion: state.currentVersion,
+    availableVersion: newer !== null && newer !== state.currentVersion ? newer : null,
+    releaseNotes: state.releaseNotes.filter((note) => note.version.trim() !== ""),
+  });
+}
 
 /** Progress stage a desktop update state maps to, or null when the state
     carries no progress worth streaming. */
@@ -55,6 +85,8 @@ export class DesktopAppUpdate extends Context.Service<
     /** Starts the prepared install. Success stops this server, so this effect
         returns only when installation fails or times out. */
     readonly commit: (requestId: string) => Effect.Effect<never, ServerSelfUpdateError>;
+    /** Asks the desktop app to check its update feed now. Never downloads. */
+    readonly check: Effect.Effect<ServerUpdateCheckResult, ServerSelfUpdateError>;
   }
 >()("@spiritdevs/pathway/desktopUpdate/DesktopAppUpdate") {}
 
@@ -216,7 +248,46 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
     );
   });
 
-  return DesktopAppUpdate.of({ available, run, commit });
+  const check: DesktopAppUpdate["Service"]["check"] = Effect.gen(function* () {
+    if (!available) {
+      return yield* failWith(
+        "This server was not started by the Pathway desktop app, so it cannot check for desktop updates.",
+      );
+    }
+    const answer = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const requestId = yield* crypto.randomUUIDv4.pipe(
+          Effect.mapError((error) =>
+            failWith("Could not generate a desktop update request id.", error),
+          ),
+        );
+        const { changes } = yield* receiver.desktopUpdates;
+        yield* receiver
+          .checkDesktopUpdate(requestId)
+          .pipe(
+            Effect.mapError((error) =>
+              failWith("Could not reach the Pathway desktop app on this machine.", error),
+            ),
+          );
+        return yield* changes.pipe(
+          Stream.filter((report) => report.requestId === requestId),
+          Stream.runHead,
+        );
+      }),
+    ).pipe(
+      Effect.timeout(DESKTOP_CHECK_TIMEOUT),
+      Effect.catchTags({
+        TimeoutError: () =>
+          failWith("The desktop app did not finish checking for updates in time."),
+      }),
+    );
+    if (Option.isNone(answer)) {
+      return yield* failWith("The desktop app stopped reporting its update.");
+    }
+    return yield* desktopUpdateCheckResult(answer.value.state);
+  }).pipe(Effect.withSpan("desktopUpdate.desktopAppUpdate.check"));
+
+  return DesktopAppUpdate.of({ available, run, commit, check });
 });
 
 export const layer = Layer.effect(DesktopAppUpdate, make());

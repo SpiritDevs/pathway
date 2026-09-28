@@ -1,4 +1,5 @@
 import type {
+  DesktopTelemetryCheckDesktopUpdate,
   DesktopTelemetryRequestDesktopUpdate,
   DesktopUpdateRemoteOutcome,
   DesktopUpdateState,
@@ -27,6 +28,8 @@ const { logInfo, logError } = DesktopObservability.makeComponentLogger("desktop-
 /** Pause before retrying an action the updater refused for a held reservation. */
 const ACTION_RETRY_DELAY = Duration.millis(250);
 const PREPARED_UPDATE_TTL = Duration.minutes(5);
+/** Bound on joining a check that was already running when a remote check arrived. */
+const CHECK_SETTLE_TIMEOUT = Duration.minutes(1);
 
 interface PreparedUpdate {
   readonly requestId: string;
@@ -314,6 +317,39 @@ export const listen: Effect.Effect<
         }),
       ),
     );
+
+  // Answers a server-triggered check with one report carrying its requestId.
+  // A check already in flight is joined rather than refused.
+  const handleCheck = (check: DesktopTelemetryCheckDesktopUpdate): Effect.Effect<void> =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { changes } = yield* updates.subscribe;
+        const result = yield* updates.check("remote-check");
+        const settled =
+          result.state.status === "checking"
+            ? yield* changes.pipe(
+                Stream.filter((state) => state.status !== "checking"),
+                Stream.runHead,
+                Effect.timeoutOption(CHECK_SETTLE_TIMEOUT),
+                Effect.map(Option.flatten),
+              )
+            : Option.some(result.state);
+        yield* publishReport(
+          Option.getOrElse(settled, () => result.state),
+          undefined,
+          check.requestId,
+        );
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        logError("remote update check failed unexpectedly", {
+          requestId: check.requestId,
+          cause: String(cause),
+        }),
+      ),
+    );
+
+  yield* Stream.runForEach(publisher.updateChecks, handleCheck).pipe(Effect.forkScoped);
 
   // Sequential by construction: a second remote request queued mid-run is
   // handled after the current one, when the state machine resolves it fast.

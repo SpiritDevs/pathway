@@ -31,7 +31,7 @@ import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
-import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
+import { normalizeDesktopUpdateReleaseNotes } from "@spiritdevs/shared/releaseNotes";
 import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
 import {
   createInitialDesktopUpdateState,

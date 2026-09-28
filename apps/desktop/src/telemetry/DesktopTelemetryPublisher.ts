@@ -3,6 +3,7 @@ import {
   type DesktopHostTelemetrySnapshot,
   type DesktopTelemetryControlMessage,
   type DesktopTelemetryCancelDesktopUpdate,
+  type DesktopTelemetryCheckDesktopUpdate,
   type DesktopTelemetryCommitDesktopUpdate,
   type DesktopTelemetryRequestDesktopUpdate,
   type DesktopUpdateStatusReport,
@@ -77,6 +78,7 @@ export class DesktopTelemetryPublisher extends Context.Service<
     readonly updateRequests: Stream.Stream<DesktopTelemetryRequestDesktopUpdate>;
     readonly updateCommits: Stream.Stream<DesktopTelemetryCommitDesktopUpdate>;
     readonly updateCancellations: Stream.Stream<DesktopTelemetryCancelDesktopUpdate>;
+    readonly updateChecks: Stream.Stream<DesktopTelemetryCheckDesktopUpdate>;
   }
 >()("@spiritdevs/desktop/telemetry/DesktopTelemetryPublisher") {}
 
@@ -177,6 +179,7 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const updateRequestQueue = yield* Queue.unbounded<DesktopTelemetryRequestDesktopUpdate>();
   const updateCommitQueue = yield* Queue.unbounded<DesktopTelemetryCommitDesktopUpdate>();
   const updateCancellationQueue = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
+  const updateCheckQueue = yield* Queue.unbounded<DesktopTelemetryCheckDesktopUpdate>();
 
   const offer = (event: PowerEvent): void => {
     Queue.offerUnsafe(powerEvents, event);
@@ -347,6 +350,8 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         return Queue.offer(updateCommitQueue, message).pipe(Effect.asVoid);
       case "cancelDesktopUpdate":
         return Queue.offer(updateCancellationQueue, message).pipe(Effect.asVoid);
+      case "checkDesktopUpdate":
+        return Queue.offer(updateCheckQueue, message).pipe(Effect.asVoid);
     }
   };
   const removeControlSource: DesktopTelemetryPublisher["Service"]["removeControlSource"] = (
@@ -421,6 +426,7 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     updateRequests: Stream.fromQueue(updateRequestQueue),
     updateCommits: Stream.fromQueue(updateCommitQueue),
     updateCancellations: Stream.fromQueue(updateCancellationQueue),
+    updateChecks: Stream.fromQueue(updateCheckQueue),
   });
 });
 

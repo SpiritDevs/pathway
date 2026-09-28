@@ -1,6 +1,8 @@
 # Environment settings on Apple clients
 
-Open **Settings → Workspaces → Environments & providers**, choose an environment, then open **Environment preferences**. Changes apply to the selected host and its connected clients. Choose **Save settings** before leaving.
+Open **Settings → Workspaces → Environments & providers** and choose an environment. The **Version** group at the top shows the version the environment is running. Choose **Check now** to look for a newer release. When one is available, choose **Notes** to read what changed, or **Update** to install it. The environment restarts to finish, which may interrupt running agent turns, and the version updates once it reconnects. Desktop hosts update through the desktop app's own release channel. Other hosts need the Pathway background service to update remotely; otherwise the group explains what to run on the host.
+
+Open **Environment preferences** to change host settings. Changes apply to the selected host and its connected clients. Choose **Save settings** before leaving.
 
 You can choose the default workspace for new threads, whether new worktrees start from origin, the directory used when adding projects, provider update checks, and the models used for generated text and context compaction.
 

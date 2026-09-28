@@ -35,6 +35,7 @@ final class PathwayCloudModel {
     private(set) var environments: [PathwayCompanyEnvironment] = []
     private(set) var projects: [PathwayCompanyProject] = []
     private(set) var environmentBindings: [PathwayCompanyEnvironmentBinding] = []
+    private var optimisticThreadActions: [PathwayOptimisticThreadAction] = []
     private(set) var threads: [PathwayAgentThread] = []
     private(set) var activeThreads: [PathwayAgentThread] = []
     private(set) var snoozedThreads: [PathwayAgentThread] = []
@@ -146,6 +147,11 @@ final class PathwayCloudModel {
     private(set) var threadPullRequestStatuses: [String: [String: PathwayThreadChangeRequestStatus]] = [:]
     private(set) var changeRequestStatuses: [String: PathwayThreadChangeRequestStatus] = [:]
     @ObservationIgnored private var lifecycleMetadataThreads: [PathwayAgentThread]?
+    @ObservationIgnored private var resolvedChangeRequests: [String: PathwayResolvedChangeRequest] = [:]
+    typealias ChangeRequestResolve = @MainActor (
+        [PathwayAgentThread], _ publish: @escaping @Sendable ([PathwayThreadChangeRequestResolution]) async -> Void
+    ) async -> Void
+    nonisolated static let changeRequestLifetime: TimeInterval = 10 * 60
     @ObservationIgnored private var isProvisioning = false
     @ObservationIgnored private var storageDirectory: URL?
     @ObservationIgnored private var discoveryCache: PathwayDiscoveryCache?
@@ -185,7 +191,11 @@ final class PathwayCloudModel {
             })
         }
         cachedAt = snapshot.savedAt
-        cursorByCompany = [:]
+        // Resume the change feed from the cached cursor instead of re-seeding the whole workspace;
+        // an epoch change or expired cursor still falls back to a full bootstrap.
+        let epochs = snapshot.epochs ?? [:]
+        cursorByCompany = snapshot.versions.filter { epochs[$0.key] != nil && entitiesByCompany[$0.key] != nil }
+        authorizationEpochByCompany = epochs.filter { cursorByCompany[$0.key] != nil }
         rebuildDiscoveryModels(persist: false)
     }
 
@@ -234,12 +244,12 @@ final class PathwayCloudModel {
         return try await client.applyIssueOperations(companyID: companyID, operations: operations)
     }
 
-    func environmentRequest(environment: PathwayCompanyEnvironment, method: String, payload: JSONValue) async throws -> JSONValue {
+    func environmentRequest(environment: PathwayCompanyEnvironment, method: String, payload: JSONValue, timeout: Duration = .seconds(30)) async throws -> JSONValue {
         guard let connect, environments.contains(where: { $0.id == environment.id }) else {
             throw URLError(.notConnectedToInternet)
         }
         observeEnvironmentEvents()
-        return try await issueEnvironmentClient.request(environment: environment, connect: connect, method: method, payload: payload)
+        return try await issueEnvironmentClient.request(environment: environment, connect: connect, method: method, payload: payload, timeout: timeout)
     }
 
     /// Placement probes open a temporary connection for the two reads, without subscribing to app data.
@@ -359,12 +369,14 @@ final class PathwayCloudModel {
         entitiesByCompany = [:]
         decodedDiscovery = [:]
         discoveryThreads = []
+        optimisticThreadActions = []
         cursorByCompany = [:]
         latestVersionByCompany = [:]
         authorizationEpochByCompany = [:]
         latestHeadByCompany = [:]
         changeRequestStatuses = [:]
         threadPullRequestStatuses = [:]
+        resolvedChangeRequests = [:]
         issues.replaceReplica([:])
         calendar.replaceReplica([:])
         email.replaceReplica([:])
@@ -433,34 +445,65 @@ final class PathwayCloudModel {
         projects.first { $0.companyId == companyId && $0.project.id == projectId }?.project.name
     }
 
-    func refreshLifecycleMetadata(using connect: PathwayConnectClient) async {
+    func refreshLifecycleMetadata(using connect: PathwayConnectClient, force: Bool = false) async {
+        let environments = environments, bindings = environmentBindings
+        await refreshLifecycleMetadata(force: force) { threads, publish in
+            await PathwayThreadChangeRequestResolver.resolve(
+                threads: threads, environments: environments, bindings: bindings, connect: connect, publish: publish
+            )
+        }
+    }
+
+    /// Looks up change-request status only for idle threads whose branch, attachments, or last run
+    /// changed since their previous lookup, or whose status has gone stale. Each lookup asks the
+    /// environment to refresh git remotes, so a full sweep of a long list is minutes of work.
+    func refreshLifecycleMetadata(force: Bool = false, resolve: ChangeRequestResolve) async {
+        if force { resolvedChangeRequests = [:] }
+        let now = Date()
+        let pending = activeThreads.filter { thread in
+            guard !thread.isRunning else { return false }
+            guard let resolved = resolvedChangeRequests[thread.id] else { return true }
+            return resolved.source != PathwayThreadChangeRequestSource(thread.shell)
+                || resolved.runCompletedAt != thread.shell.latestRunCompletedAt
+                || now.timeIntervalSince(resolved.date) > Self.changeRequestLifetime
+        }
         // A new attachment must supersede an in-flight lookup for the old snapshot.
-        guard !activeThreads.isEmpty, lifecycleMetadataThreads != activeThreads else { return }
-        lifecycleMetadataThreads = activeThreads
+        guard !pending.isEmpty, lifecycleMetadataThreads != pending else { return }
+        lifecycleMetadataThreads = pending
         let metadataID = UUID()
         lifecycleMetadataID = metadataID
         let generation = lifecycleGeneration
+        let accountDirectory = storageDirectory
         defer { if lifecycleMetadataID == metadataID { lifecycleMetadataThreads = nil; lifecycleMetadataID = nil } }
 
-        let accountDirectory = storageDirectory
-        let requestedThreads = Dictionary(uniqueKeysWithValues: activeThreads.map { ($0.id, $0) })
-        let resolutions = await PathwayThreadChangeRequestResolver.resolve(
-            threads: activeThreads,
-            environments: environments,
-            bindings: environmentBindings,
-            connect: connect
-        )
-        guard !Task.isCancelled, storageDirectory == accountDirectory, lifecycleGeneration == generation, lifecycleMetadataID == metadataID else { return }
+        let requestedThreads = Dictionary(uniqueKeysWithValues: pending.map { ($0.id, $0) })
+        await resolve(pending) { [weak self] resolutions in
+            await self?.install(resolutions, requested: requestedThreads, generation: generation, directory: accountDirectory)
+        }
+    }
+
+    /// Batches land as they resolve, so a superseded sweep still keeps the answers it already has.
+    private func install(
+        _ resolutions: [PathwayThreadChangeRequestResolution],
+        requested requestedThreads: [String: PathwayAgentThread],
+        generation: Int,
+        directory: URL?
+    ) {
+        guard storageDirectory == directory, lifecycleGeneration == generation else { return }
+        let date = Date()
+        let currentThreads = Dictionary(threads.map { ($0.id, $0) }) { first, _ in first }
         for resolution in resolutions {
             guard let requested = requestedThreads[resolution.threadID],
-                  let current = threads.first(where: { $0.id == resolution.threadID }),
+                  let current = currentThreads[resolution.threadID],
                   PathwayThreadChangeRequestSource(current.shell) == PathwayThreadChangeRequestSource(requested.shell) else { continue }
             changeRequestStatuses[resolution.threadID] = resolution.status
             threadPullRequestStatuses[resolution.threadID] = resolution.pullRequests
+            resolvedChangeRequests[resolution.threadID] = .init(source: .init(requested.shell),
+                runCompletedAt: requested.shell.latestRunCompletedAt, date: date)
         }
-        let currentThreadIDs = Set(threads.map(\.id))
-        threadPullRequestStatuses = threadPullRequestStatuses.filter { currentThreadIDs.contains($0.key) }
-        changeRequestStatuses = changeRequestStatuses.filter { currentThreadIDs.contains($0.key) }
+        threadPullRequestStatuses = threadPullRequestStatuses.filter { currentThreads[$0.key] != nil }
+        changeRequestStatuses = changeRequestStatuses.filter { currentThreads[$0.key] != nil }
+        resolvedChangeRequests = resolvedChangeRequests.filter { currentThreads[$0.key] != nil }
         rebuildThreadPartition()
     }
 }
@@ -678,10 +721,20 @@ extension PathwayCloudModel {
 
     private func drainChanges(companyId: String, membershipID: String, generation: Int, taskID: UUID) async throws {
         guard let client else { return }
+        // Rebuilding derived models walks the whole replica, so a long catch-up publishes once.
+        var applied = false
+        defer { if applied { rebuildDiscoveryModels() } }
         while let cursor = cursorByCompany[companyId], cursor < (latestVersionByCompany[companyId] ?? cursor) {
             try validateWork(companyId: companyId, membershipID: membershipID, generation: generation, taskID: taskID, bootstrap: false)
             let page = try await client.listChanges(companyId: companyId, cursor: cursor)
             try validateWork(companyId: companyId, membershipID: membershipID, generation: generation, taskID: taskID, bootstrap: false)
+            if page.tag == "CursorExpired", page.authorizationEpoch == authorizationEpochByCompany[companyId] {
+                // Same permissions: keep showing the replica until the new seed replaces it.
+                record(head: .init(version: page.latestVersion, authorizationEpoch: page.authorizationEpoch), companyId: companyId)
+                cursorByCompany.removeValue(forKey: companyId)
+                startBootstrap(companyId: companyId)
+                return
+            }
             if page.tag == "CursorExpired" || page.authorizationEpoch != authorizationEpochByCompany[companyId] {
                 record(head: .init(version: page.latestVersion, authorizationEpoch: page.authorizationEpoch), companyId: companyId)
                 invalidateReplica(companyId: companyId)
@@ -696,7 +749,7 @@ extension PathwayCloudModel {
             entitiesByCompany[companyId] = entities
             cursorByCompany[companyId] = nextCursor
             latestVersionByCompany[companyId] = max(latestVersionByCompany[companyId] ?? 0, page.latestVersion)
-            rebuildDiscoveryModels()
+            applied = true
             if page.hasMore != true, nextCursor >= page.latestVersion { break }
         }
     }
@@ -775,7 +828,7 @@ extension PathwayCloudModel {
                 }
             }
             discoveryThreads = nextThreads
-            threads = nextThreads
+            reconcileThreadActions(with: nextThreads)
             rebuildThreadPartition()
             threadQueue.retry()
         }
@@ -801,15 +854,57 @@ extension PathwayCloudModel {
             let generation = lifecycleGeneration
             let directory = storageDirectory
             let snapshot = PathwayDiscoveryCache.Snapshot(companies: companies,
-                entities: entitiesByCompany.mapValues { Array($0.values) }, versions: cursorByCompany, savedAt: date)
+                entities: entitiesByCompany.mapValues { Array($0.values) }, versions: cursorByCompany, savedAt: date,
+                epochs: authorizationEpochByCompany)
             await cache.save(snapshot, revision: DispatchTime.now().uptimeNanoseconds)
             if storageDirectory == directory, lifecycleGeneration == generation, !Task.isCancelled { cachedAt = date }
         }
     }
 
+    @discardableResult
+    func beginThreadAction(_ action: PathwayThreadAction, thread: PathwayAgentThread) -> UUID {
+        let mutation = PathwayOptimisticThreadAction(threadID: thread.id, action: action, date: Date(),
+            baseline: discoveryThreads.first { $0.id == thread.id } ?? thread)
+        if action != .regenerateTitle { optimisticThreadActions.append(mutation) }
+        rebuildThreadPartition()
+        return mutation.id
+    }
+
+    func rollbackThreadAction(_ id: UUID) {
+        optimisticThreadActions.removeAll { $0.id == id }
+        rebuildThreadPartition()
+    }
+
+    func reconcileThreadActions(with confirmed: [PathwayAgentThread]) {
+        let byID = Dictionary(uniqueKeysWithValues: confirmed.map { ($0.id, $0) })
+        // A later reflected action also acknowledges preceding actions on that thread.
+        // This handles a settle followed by reopen when discovery skips the settled snapshot.
+        var acknowledged: [String: Int] = [:]
+        for (index, mutation) in optimisticThreadActions.enumerated() {
+            guard let thread = byID[mutation.threadID] else {
+                acknowledged[mutation.threadID] = index
+                continue
+            }
+            if thread != mutation.baseline && mutation.isReflected(in: thread) {
+                acknowledged[mutation.threadID] = index
+            }
+        }
+        optimisticThreadActions = optimisticThreadActions.enumerated().compactMap { index, mutation in
+            index <= (acknowledged[mutation.threadID] ?? -1) ? nil : mutation
+        }
+    }
+
+    func threadForNavigation(id: String) -> PathwayAgentThread? {
+        threads.first { $0.id == id } ?? discoveryThreads.first { $0.id == id }
+    }
+
+    func optimisticThread(_ thread: PathwayAgentThread) -> PathwayAgentThread {
+        optimisticThreadActions.filter { $0.threadID == thread.id }.reduce(thread) { $1.applying(to: $0) }
+    }
+
     private func rebuildThreadPartition() {
         let partition = PathwayThreadLifecyclePartition(
-            threads: threads,
+            threads: discoveryThreads.map { optimisticThread($0) },
             now: Date(),
             changeRequestStates: changeRequestStatuses.compactMapValues(\.state),
             autoSettleAfterDays: PathwayGeneralPreferences.shared.autoSettleDays == 0 ? nil : PathwayGeneralPreferences.shared.autoSettleDays

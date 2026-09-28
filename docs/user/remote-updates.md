@@ -10,4 +10,4 @@ Older desktop hosts show instructions to update the app on that machine. Update 
 
 Background-service environments continue to use their server update flow. Environments that cannot update remotely offer a command to run on the host.
 
-Remote update controls are available in the web and desktop clients. The native iOS app does not currently offer these controls.
+Remote update controls are available in the web and desktop clients. On iOS, check for and install updates from the environment's **Version** group in settings; see [Environment settings on Apple clients](environment-settings-ios.md).

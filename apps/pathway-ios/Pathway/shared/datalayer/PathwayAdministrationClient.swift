@@ -1,6 +1,6 @@
 import Foundation
 
-typealias PathwayAdministrationRequest = @MainActor (PathwayCompanyEnvironment, String, JSONValue) async throws -> JSONValue
+typealias PathwayAdministrationRequest = @MainActor (PathwayCompanyEnvironment, String, JSONValue, Duration) async throws -> JSONValue
 typealias PathwayAdministrationHTTP = @MainActor (PathwayCompanyEnvironment, String, String, JSONValue?) async throws -> JSONValue
 typealias PathwayAdministrationCloudMutation = @MainActor (String, [String: JSONValue]) async throws -> JSONValue
 
@@ -10,11 +10,11 @@ struct PathwayAdministrationClient {
     let request: PathwayAdministrationRequest
     let http: PathwayAdministrationHTTP
     var cloudMutation: PathwayAdministrationCloudMutation?
-    func call<T: Decodable>(_ method: String, _ fields: [String: JSONValue] = [:]) async throws -> T {
-        try decode(await request(environment, method, .object(fields)))
+    func call<T: Decodable>(_ method: String, _ fields: [String: JSONValue] = [:], timeout: Duration = .seconds(30)) async throws -> T {
+        try decode(await request(environment, method, .object(fields), timeout))
     }
-    func run(_ method: String, _ fields: [String: JSONValue] = [:]) async throws -> JSONValue {
-        try await request(environment, method, .object(fields))
+    func run(_ method: String, _ fields: [String: JSONValue] = [:], timeout: Duration = .seconds(30)) async throws -> JSONValue {
+        try await request(environment, method, .object(fields), timeout)
     }
     func projects() async throws -> [PathwayAdministrationProject] {
         let result: PathwayAdministrationProjects = try decode(await http(environment, "GET", "/api/projects", nil))
@@ -47,7 +47,7 @@ struct PathwayAdministrationConfig: Decodable {
     let providers: [PathwayAdministrationProvider]
     let cwd: String
     let environment: Environment
-    struct Environment: Decodable { let label: String; let serverVersion: String }
+    struct Environment: Decodable { let label: String; let serverVersion: String; var capabilities: [String: JSONValue]? }
 }
 struct PathwayAdministrationProvider: Decodable, Identifiable {
     let instanceId: String

@@ -2,7 +2,9 @@
 
 Settle a thread when you are finished with it and want to move it out of your active list.
 
-An idle thread with linked pull requests settles automatically when all of them are merged. An open or closed-without-merging PR, or a status that cannot be determined, prevents automatic settlement. Unlink a PR from the thread if it should no longer count toward settlement. The settled banner and sidebar use the same linked PR statuses. Once a PR is reported as merged, an older cached status does not keep it active or offer Merge again.
+On iOS, thread actions update the list immediately while the environment saves the change. This includes settling, reopening, snoozing, waking, pinning, archiving, restoring, deleting, and renaming. If an action fails, the list restores the server state and shows an error or any required confirmation.
+
+An idle thread with linked pull requests settles automatically when all of them are merged. An open or closed-without-merging PR, or a status that cannot be determined, prevents automatic settlement. Unlink a PR from the thread if it should no longer count toward settlement. The settled banner and sidebar use the same linked PR statuses. Once a PR is reported as merged, an older cached status does not keep it active or offer Merge again. On iOS, pull request status is checked again after a thread's branch, linked PRs, or latest run change, and at most every ten minutes otherwise. Pull down on the thread list to check every thread now.
 
 When you return to Agent Threads from another section, recently loaded PR grouping is retained. Threads waiting for a PR status check appear after that check completes; already loaded rows stay visible. A loading message distinguishes this from an empty thread list.
 

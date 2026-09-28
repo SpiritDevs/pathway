@@ -3,6 +3,7 @@ import type {
   DesktopTelemetryRequestDesktopUpdate,
   DesktopTelemetryCommitDesktopUpdate,
   DesktopTelemetryCancelDesktopUpdate,
+  DesktopTelemetryCheckDesktopUpdate,
   DesktopUpdateStatusReport,
 } from "@spiritdevs/contracts";
 import * as Deferred from "effect/Deferred";
@@ -77,6 +78,7 @@ function runRemoteUpdatesTest(
     readonly requests: Queue.Queue<DesktopTelemetryRequestDesktopUpdate>;
     readonly commits: Queue.Queue<DesktopTelemetryCommitDesktopUpdate>;
     readonly cancellations: Queue.Queue<DesktopTelemetryCancelDesktopUpdate>;
+    readonly checks: Queue.Queue<DesktopTelemetryCheckDesktopUpdate>;
   }) => Effect.Effect<void, never, DesktopUpdates.DesktopUpdates | DesktopState.DesktopState>,
 ) {
   const { scheduler, drainWorkers } = makeWorkerScheduler();
@@ -85,6 +87,7 @@ function runRemoteUpdatesTest(
       const requests = yield* Queue.unbounded<DesktopTelemetryRequestDesktopUpdate>();
       const commits = yield* Queue.unbounded<DesktopTelemetryCommitDesktopUpdate>();
       const cancellations = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
+      const checks = yield* Queue.unbounded<DesktopTelemetryCheckDesktopUpdate>();
       const reports: DesktopUpdateStatusReport[] = [];
       const publisher = DesktopTelemetryPublisher.DesktopTelemetryPublisher.of({
         latest: Effect.succeedNone,
@@ -100,6 +103,7 @@ function runRemoteUpdatesTest(
         updateRequests: Stream.fromQueue(requests),
         updateCommits: Stream.fromQueue(commits),
         updateCancellations: Stream.fromQueue(cancellations),
+        updateChecks: Stream.fromQueue(checks),
       });
 
       const updates = yield* DesktopUpdates.DesktopUpdates;
@@ -108,7 +112,7 @@ function runRemoteUpdatesTest(
         Effect.provideService(DesktopTelemetryPublisher.DesktopTelemetryPublisher, publisher),
       );
       yield* drainWorkers;
-      yield* body({ drainWorkers, reports, requests, commits, cancellations });
+      yield* body({ drainWorkers, reports, requests, commits, cancellations, checks });
     }),
   ).pipe(
     Effect.provide(Layer.merge(TestClock.layer(), harness.layer)),
@@ -155,6 +159,28 @@ describe("DesktopRemoteUpdates", () => {
           .map((report) => report.state.status);
         assert.include(statuses, "available");
         assert.include(statuses, "downloaded");
+      }),
+    );
+  });
+
+  it.effect("answers a remote check with the settled state and never downloads", () => {
+    const harness = makeHarness();
+
+    return runRemoteUpdatesTest(harness, ({ drainWorkers, reports, checks }) =>
+      Effect.gen(function* () {
+        yield* Queue.offer(checks, { version: 1, type: "checkDesktopUpdate", requestId: "chk-1" });
+        yield* drainWorkers;
+        assert.equal(harness.checkCount(), 1);
+
+        harness.emit("update-available", { version: "1.2.4" });
+        yield* drainWorkers;
+
+        const answers = reports.filter((report) => report.requestId === "chk-1");
+        assert.equal(answers.length, 1);
+        assert.equal(answers[0]?.outcome, undefined);
+        assert.equal(answers[0]?.state.status, "available");
+        assert.equal(answers[0]?.state.availableVersion, "1.2.4");
+        assert.equal(harness.downloadCount(), 0);
       }),
     );
   });

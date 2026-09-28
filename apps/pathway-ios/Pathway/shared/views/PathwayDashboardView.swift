@@ -114,8 +114,8 @@ struct PathwayProjectsDestination: View {
 
     private func client(_ environment: PathwayCompanyEnvironment) -> PathwayAdministrationClient {
         PathwayAdministrationClient(environment: environment,
-            request: { environment, method, payload in
-                try await appModel.cloud.environmentRequest(environment: environment, method: method, payload: payload)
+            request: { environment, method, payload, timeout in
+                try await appModel.cloud.environmentRequest(environment: environment, method: method, payload: payload, timeout: timeout)
             }, http: { environment, method, path, payload in
                 guard let connect = appModel.connect else { throw URLError(.notConnectedToInternet) }
                 return try await PathwayEnvironmentHTTP.request(environment: environment, connect: connect, method: method, path: path, payload: payload)

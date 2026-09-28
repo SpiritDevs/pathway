@@ -41,4 +41,110 @@ struct PathwayThreadActionsTests {
         #expect(actions.errorMessage != nil)
         #expect(actions.pendingThreadIDs.isEmpty)
     }
+
+    @Test func settleMovesPinnedAndSnoozedThreadImmediately() {
+        let thread = makeAgentThread(snoozedUntil: "2099-01-01T00:00:00Z", pinnedAt: "2026-01-01T00:00:00Z")
+        let cloud = PathwayCloudModel()
+        let token = cloud.beginThreadAction(.settle, thread: thread)
+        let optimistic = cloud.optimisticThread(thread)
+        #expect(optimistic.lifecycleSection(at: Date()) == .settled)
+        #expect(optimistic.shell.pinnedAt == nil)
+        #expect(optimistic.shell.snoozedUntil == nil)
+        cloud.reconcileThreadActions(with: [thread])
+        #expect(cloud.optimisticThread(thread).lifecycleSection(at: Date()) == .settled)
+        cloud.rollbackThreadAction(token)
+        #expect(cloud.optimisticThread(thread) == thread)
+    }
+
+    @Test func failureRestoresLatestServerFieldsAndKeepsOtherActions() {
+        let thread = makeAgentThread()
+        let cloud = PathwayCloudModel()
+        let failed = cloud.beginThreadAction(.settle, thread: thread)
+        cloud.beginThreadAction(.rename("New title"), thread: thread)
+        var updated = thread
+        updated.shell.status = "running"
+        cloud.rollbackThreadAction(failed)
+        let visible = cloud.optimisticThread(updated)
+        #expect(visible.shell.title == "New title")
+        #expect(visible.shell.status == "running")
+        #expect(visible.shell.settledOverride == nil)
+    }
+
+    @Test func skippedIntermediateSnapshotAcknowledgesReverseAction() {
+        let thread = makeAgentThread()
+        let cloud = PathwayCloudModel()
+        cloud.beginThreadAction(.settle, thread: thread)
+        cloud.beginThreadAction(.reopen, thread: thread)
+        #expect(cloud.optimisticThread(thread).lifecycleSection(at: Date()) == .active)
+        var reopened = thread
+        reopened.shell.settledOverride = "active"
+        cloud.reconcileThreadActions(with: [reopened])
+        // A later remote settle must be visible after the reopen was acknowledged.
+        var settled = reopened
+        settled.shell.settledOverride = "settled"
+        settled.shell.settledAt = Date().ISO8601Format()
+        #expect(cloud.optimisticThread(settled) == settled)
+    }
+
+    @Test func acknowledgedActionDoesNotMaskLaterRemoteChanges() {
+        let thread = makeAgentThread()
+        let cloud = PathwayCloudModel()
+        cloud.beginThreadAction(.pin, thread: thread)
+        var confirmed = thread
+        confirmed.shell.pinnedAt = Date().ISO8601Format()
+        cloud.reconcileThreadActions(with: [confirmed])
+        #expect(cloud.optimisticThread(thread) == thread)
+    }
+
+    @Test func metadataAndLifecycleActionsHaveImmediatePredictedValues() {
+        let thread = makeAgentThread()
+        let now = Date()
+        let cases: [PathwayThreadAction] = [
+            .pin, .unpin, .rename("  Renamed  "), .archive, .restore, .delete,
+            .settle, .forceSettle, .discardAndSettle, .reopen, .wake,
+            .sleep(until: now.addingTimeInterval(3600)), .keepConversation,
+            .attachProject("new-project"), .settleAfterCompletion(true),
+            .settleAfterCompletion(false), .reorder("a1")
+        ]
+        for action in cases {
+            let mutation = PathwayOptimisticThreadAction(threadID: thread.id, action: action, date: now)
+            let updated = mutation.applying(to: thread)
+            #expect(mutation.isReflected(in: updated))
+            #expect(updated.id == thread.id)
+            #expect(updated.shell.modelSelection == thread.shell.modelSelection)
+        }
+    }
+
+    @Test func temporarySettleDisappearsAndCanBeRestoredForGitConfirmation() {
+        var thread = makeAgentThread()
+        thread.shell.temporary = true
+        let cloud = PathwayCloudModel()
+        let mutation = cloud.beginThreadAction(.settle, thread: thread)
+        #expect(PathwayThreadLifecyclePartition(threads: [cloud.optimisticThread(thread)], now: Date()).all.isEmpty)
+        cloud.rollbackThreadAction(mutation)
+        #expect(cloud.optimisticThread(thread) == thread)
+    }
+
+    @Test func optimisticActionsAreScopedToCompanyAndEnvironment() {
+        let thread = makeAgentThread()
+        let other = PathwayAgentThread(companyId: thread.companyId, environmentId: "other",
+            cloudProjectId: thread.cloudProjectId, shell: thread.shell, cloudUpdatedAt: 0)
+        let cloud = PathwayCloudModel()
+        cloud.beginThreadAction(.archive, thread: thread)
+        #expect(cloud.optimisticThread(other) == other)
+        #expect(cloud.optimisticThread(thread).shell.archivedAt != nil)
+    }
+
+
+    @Test func pinnedReorderingChangesTheRenderedOrderImmediately() {
+        let first = makeAgentThread(pinnedAt: "2026-01-01T00:00:00Z")
+        let second = PathwayAgentThread(companyId: first.companyId, environmentId: "second",
+            cloudProjectId: first.cloudProjectId, shell: first.shell, cloudUpdatedAt: 0)
+        let cloud = PathwayCloudModel()
+        let writes = PathwayThreadOrder.plan(ordered: [second, first], movedID: second.id)
+        for (thread, key) in writes { cloud.beginThreadAction(.reorder(key), thread: thread) }
+        let partition = PathwayThreadLifecyclePartition(threads: [first, second].map { cloud.optimisticThread($0) }, now: Date())
+        #expect(partition.active.map(\.id) == [second.id, first.id])
+    }
+
 }

@@ -263,8 +263,9 @@ export type DesktopUpdateRemoteOutcome = typeof DesktopUpdateRemoteOutcome.Type;
 export const DesktopUpdateStatusReport = Schema.Struct({
   version: Schema.Literal(1),
   type: Schema.Literal("desktopUpdateStatus"),
-  // Set while a server-triggered run owns the flow; absent for the attach
-  // snapshot and for locally driven update activity.
+  // Set while a server-triggered run owns the flow, and on the answer to a
+  // server-triggered check; absent for the attach snapshot and for locally
+  // driven update activity.
   requestId: Schema.optionalKey(TrimmedNonEmptyString),
   // Terminal marker for a server-triggered run; absent while it is working.
   outcome: Schema.optionalKey(DesktopUpdateRemoteOutcome),
@@ -322,12 +323,22 @@ export const DesktopTelemetryCancelDesktopUpdate = Schema.Struct({
 });
 export type DesktopTelemetryCancelDesktopUpdate = typeof DesktopTelemetryCancelDesktopUpdate.Type;
 
+/** Server -> desktop main: check the app's update feed now, then report the
+    resulting state with this requestId. Never downloads or installs. */
+export const DesktopTelemetryCheckDesktopUpdate = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("checkDesktopUpdate"),
+  requestId: TrimmedNonEmptyString,
+});
+export type DesktopTelemetryCheckDesktopUpdate = typeof DesktopTelemetryCheckDesktopUpdate.Type;
+
 export const DesktopTelemetryControlMessage = Schema.Union([
   DesktopTelemetrySetDiagnosticsDemand,
   DesktopTelemetrySetHostPowerIntervals,
   DesktopTelemetryRequestDesktopUpdate,
   DesktopTelemetryCommitDesktopUpdate,
   DesktopTelemetryCancelDesktopUpdate,
+  DesktopTelemetryCheckDesktopUpdate,
 ]);
 export type DesktopTelemetryControlMessage = typeof DesktopTelemetryControlMessage.Type;
 

@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import * as ServerConfig from "../config.ts";
@@ -103,9 +104,14 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
         available: false,
         run: () => Effect.die("unexpected desktop app update run"),
         commit: () => Effect.die("unexpected desktop app update commit"),
+        check: Effect.die("unexpected desktop app update check"),
       },
     ),
     Effect.provideService(HostProcessExecutablePath, "/usr/bin/node"),
+    Effect.provideService(
+      HttpClient.HttpClient,
+      HttpClient.make(() => Effect.die("unexpected HTTP request")),
+    ),
     Effect.provide(ServerConfig.layer({ ...config, mode: options.mode ?? "web" })),
   );
   return { selfUpdate, order };
@@ -189,6 +195,105 @@ it.layer(NodeServices.layer)("server self update", (it) => {
       );
       yield* Deferred.succeed(accepted, "launcher-id");
       expect((yield* Fiber.join(first)).updateId).toBe("launcher-id");
+    }),
+  );
+
+  it.effect("checks npm latest and attaches that release's notes", () =>
+    Effect.gen(function* () {
+      const requested: string[] = [];
+      const result = yield* ServerSelfUpdate.checkPublishedServerUpdate("1.0.0").pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) => {
+            requested.push(request.url);
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                request.url.includes("registry.npmjs.org")
+                  ? Response.json({ version: "1.1.0" })
+                  : Response.json({
+                      body: "## What's Changed\n* fix(ios): faster thread list by @x in https://github.com/SpiritDevs/pathway/pull/1\n\n**Full Changelog**: https://github.com/SpiritDevs/pathway/compare/v1.0.0...v1.1.0",
+                    }),
+              ),
+            );
+          }),
+        ),
+      );
+      expect(result).toEqual({
+        currentVersion: "1.0.0",
+        availableVersion: "1.1.0",
+        releaseNotes: [
+          {
+            version: "1.1.0",
+            items: [
+              "fix(ios): faster thread list by @x in https://github.com/SpiritDevs/pathway/pull/1",
+            ],
+          },
+        ],
+      });
+      expect(requested).toEqual([
+        "https://registry.npmjs.org/%40spiritdevs%2Fpathway/latest",
+        "https://api.github.com/repos/SpiritDevs/pathway/releases/tags/v1.1.0",
+      ]);
+    }),
+  );
+
+  it.effect("reports no update without fetching notes, and survives missing notes", () =>
+    Effect.gen(function* () {
+      const current = yield* ServerSelfUpdate.checkPublishedServerUpdate("1.1.0").pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            request.url.includes("registry.npmjs.org")
+              ? Effect.succeed(
+                  HttpClientResponse.fromWeb(request, Response.json({ version: "1.1.0" })),
+                )
+              : Effect.die("notes should not be fetched when current"),
+          ),
+        ),
+      );
+      expect(current).toEqual({
+        currentVersion: "1.1.0",
+        availableVersion: null,
+        releaseNotes: [],
+      });
+
+      const noNotes = yield* ServerSelfUpdate.checkPublishedServerUpdate("1.0.0").pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                request.url.includes("registry.npmjs.org")
+                  ? Response.json({ version: "1.1.0" })
+                  : new Response("not found", { status: 404 }),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(noNotes).toEqual({
+        currentVersion: "1.0.0",
+        availableVersion: "1.1.0",
+        releaseNotes: [],
+      });
+    }),
+  );
+
+  it.effect("routes desktop-managed checks to the desktop app", () =>
+    Effect.gen(function* () {
+      const answer = { currentVersion: "2.0.0", availableVersion: "2.1.0", releaseNotes: [] };
+      const { selfUpdate } = yield* makeHarness({
+        mode: "desktop",
+        desktopAppUpdate: {
+          available: true,
+          run: () => Effect.die("unexpected run"),
+          commit: () => Effect.die("unexpected commit"),
+          check: Effect.succeed(answer),
+        },
+      });
+      expect(yield* selfUpdate.check).toEqual(answer);
     }),
   );
 });

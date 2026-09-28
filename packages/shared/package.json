@@ -59,6 +59,10 @@
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
     },
+    "./releaseNotes": {
+      "types": "./src/releaseNotes.ts",
+      "import": "./src/releaseNotes.ts"
+    },
     "./semver": {
       "types": "./src/semver.ts",
       "import": "./src/semver.ts"

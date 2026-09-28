@@ -2699,6 +2699,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   searchThreads: "orchestration.searchThreads",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   getThreadProjection: "orchestration.getThreadProjection",
+  getThreadItems: "orchestration.getThreadItems",
   previewWorkspaceMove: "orchestration.previewWorkspaceMove",
   getWorkflowScript: "orchestration.getWorkflowScript",
   launchContinuation: "orchestration.launchContinuation",
@@ -2911,8 +2912,28 @@ export const OrchestrationV2SubscribeThreadInput = Schema.Struct({
   afterSequence: Schema.optionalKey(NonNegativeInt),
   /** Requests a marker between initial catch-up and live delivery. */
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Limits the snapshot to the latest visible items, for clients that page
+   * history in on scroll. Windowed snapshots omit `turnItems` and `nodes`; older
+   * items come from `getThreadItems` starting at the frame's `olderItemsBefore`.
+   */
+  recentItemLimit: Schema.optionalKey(PositiveInt),
 });
 export type OrchestrationV2SubscribeThreadInput = typeof OrchestrationV2SubscribeThreadInput.Type;
+
+export const OrchestrationV2GetThreadItemsInput = Schema.Struct({
+  threadId: ThreadId,
+  /** Returns visible items whose position is below this one. */
+  beforePosition: NonNegativeInt,
+  limit: PositiveInt.check(Schema.isLessThanOrEqualTo(200)),
+});
+export type OrchestrationV2GetThreadItemsInput = typeof OrchestrationV2GetThreadItemsInput.Type;
+
+export const OrchestrationV2ThreadItemsPage = Schema.Struct({
+  items: Schema.Array(OrchestrationV2ProjectedTurnItem),
+  olderItemsBefore: Schema.optionalKey(NonNegativeInt),
+});
+export type OrchestrationV2ThreadItemsPage = typeof OrchestrationV2ThreadItemsPage.Type;
 
 export const OrchestrationV2ThreadDetailSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
@@ -2928,6 +2949,8 @@ export const OrchestrationV2ThreadStreamItem = Schema.Union([
     kind: Schema.Literal("snapshot"),
     snapshotSequence: NonNegativeInt,
     projection: OrchestrationV2ThreadProjection,
+    /** Present when a windowed snapshot left older visible items behind. */
+    olderItemsBefore: Schema.optionalKey(NonNegativeInt),
   }),
   Schema.Struct({
     kind: Schema.Literal("event"),
@@ -3073,6 +3096,10 @@ export const OrchestrationV2RpcSchemas = {
   getThreadProjection: {
     input: OrchestrationV2GetThreadProjectionInput,
     output: OrchestrationV2ThreadProjection,
+  },
+  getThreadItems: {
+    input: OrchestrationV2GetThreadItemsInput,
+    output: OrchestrationV2ThreadItemsPage,
   },
   previewWorkspaceMove: {
     input: OrchestrationV2WorkspaceMovePreviewInput,

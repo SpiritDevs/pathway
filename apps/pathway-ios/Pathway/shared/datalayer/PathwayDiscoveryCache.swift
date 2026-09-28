@@ -6,6 +6,8 @@ actor PathwayDiscoveryCache {
         let entities: [String: [PathwaySyncChange]]
         let versions: [String: Int]
         let savedAt: Date
+        /// A cursor is only resumable with the authorization epoch it was read under.
+        var epochs: [String: Int]? = nil
     }
 
     private let file: URL

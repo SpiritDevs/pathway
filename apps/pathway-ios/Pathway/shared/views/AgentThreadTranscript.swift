@@ -19,6 +19,7 @@ struct AgentThreadTranscript: View {
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 22) {
+            if model.olderItemsBefore != nil { olderItemsRow }
             ForEach(layoutCache.rows(transcriptItems, activeRunID: model.activeRunID)) { row in
                 switch row.content {
                 case .item(let item):
@@ -38,6 +39,25 @@ struct AgentThreadTranscript: View {
         } message: { Text(errorMessage ?? "") }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-thread-transcript")
+    }
+
+    /// Loads the previous page as it scrolls into view; the bottom scroll anchor keeps the reader in place.
+    @ViewBuilder
+    private var olderItemsRow: some View {
+        Group {
+            if let error = model.olderItemsError {
+                Button("Couldn’t load earlier messages. Try again", systemImage: "arrow.clockwise") {
+                    Task { await model.loadOlderItems() }
+                }
+                .font(.footnote)
+                .accessibilityHint(error)
+            } else {
+                ProgressView()
+                    .onAppear { Task { await model.loadOlderItems() } }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("agent-thread-older-items")
     }
 
     @ViewBuilder
@@ -748,7 +768,16 @@ struct AgentThreadChangesView: View {
                         }.font(.subheadline)
                     }
                 }
-                if changes.isEmpty { Text("No file changes in this conversation.").foregroundStyle(.secondary) }
+                if changes.isEmpty {
+                    Text(model.olderItemsBefore == nil ? "No file changes in this conversation." : "No file changes in recent messages.").foregroundStyle(.secondary)
+                }
+                // Long threads open on recent messages, so older changes load on request.
+                if model.olderItemsBefore != nil {
+                    Button(model.isLoadingOlderItems ? "Loading earlier changes…" : "Load earlier changes", systemImage: "clock.arrow.circlepath") {
+                        Task { await model.loadOlderItems(limit: 200) }
+                    }
+                    .disabled(model.isLoadingOlderItems)
+                }
             }
             .navigationTitle("Changes").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }

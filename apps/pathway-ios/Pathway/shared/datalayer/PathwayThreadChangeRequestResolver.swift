@@ -37,6 +37,12 @@ struct PathwayThreadChangeRequestSource: Equatable, Sendable {
     }
 }
 
+struct PathwayResolvedChangeRequest {
+    let source: PathwayThreadChangeRequestSource
+    let runCompletedAt: String?
+    let date: Date
+}
+
 struct PathwayThreadChangeRequestResolution: Sendable {
     let threadID: String
     let status: PathwayThreadChangeRequestStatus
@@ -146,8 +152,9 @@ enum PathwayThreadChangeRequestResolver {
         threads: [PathwayAgentThread],
         environments: [PathwayCompanyEnvironment],
         bindings: [PathwayCompanyEnvironmentBinding],
-        connect: PathwayConnectClient
-    ) async -> [PathwayThreadChangeRequestResolution] {
+        connect: PathwayConnectClient,
+        publish: @escaping @Sendable ([PathwayThreadChangeRequestResolution]) async -> Void
+    ) async {
         let candidates = threads.compactMap { thread -> Candidate? in
             guard !thread.isRunning,
                   let environment = environments.first(where: {
@@ -161,13 +168,10 @@ enum PathwayThreadChangeRequestResolver {
             }
             return Candidate(threadID: thread.id, environment: environment, requests: requests, attachments: attachments, detachedURLs: thread.shell.detachedPullRequestUrls ?? [])
         }
-        return await withTaskGroup(of: [PathwayThreadChangeRequestResolution].self) { group in
+        await withTaskGroup(of: Void.self) { group in
             for candidates in Dictionary(grouping: candidates, by: \.environment.id).values {
-                group.addTask { await resolve(candidates: candidates, connect: connect) }
+                group.addTask { await resolve(candidates: candidates, connect: connect, publish: publish) }
             }
-            var resolutions: [PathwayThreadChangeRequestResolution] = []
-            for await results in group { resolutions.append(contentsOf: results) }
-            return resolutions
         }
     }
 
@@ -186,8 +190,14 @@ enum PathwayThreadChangeRequestResolver {
         return .init(state: state, checksFailed: statuses.contains { $0.checksFailed }, checksPending: statuses.contains { $0.checksPending }, isDraft: statuses.contains { $0.isDraft }, unavailable: statuses.contains { $0.unavailable })
     }
 
-    private static func resolve(candidates: [Candidate], connect: PathwayConnectClient) async -> [PathwayThreadChangeRequestResolution] {
-        guard let environment = candidates.first?.environment else { return [] }
+    /// Lookups run one at a time per environment and publish in small batches, so the rows at the
+    /// top of the list settle first without flooding the environment with git refreshes.
+    private static func resolve(
+        candidates: [Candidate],
+        connect: PathwayConnectClient,
+        publish: @Sendable ([PathwayThreadChangeRequestResolution]) async -> Void
+    ) async {
+        guard let environment = candidates.first?.environment else { return }
         let rpc = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
         var resolutions: [PathwayThreadChangeRequestResolution] = []
         var responses: [String: JSONValue] = [:]
@@ -215,8 +225,9 @@ enum PathwayThreadChangeRequestResolver {
             }
             guard !Task.isCancelled else { break }
             resolutions.append(.init(threadID: candidate.threadID, status: aggregate(statuses), pullRequests: linked))
+            if resolutions.count >= 10 { await publish(resolutions); resolutions = [] }
         }
         await rpc.stop()
-        return resolutions
+        if !resolutions.isEmpty { await publish(resolutions) }
     }
 }

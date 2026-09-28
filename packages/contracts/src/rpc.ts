@@ -332,6 +332,7 @@ import {
   ServerSelfUpdateInput,
   ServerSelfUpdateProgressEvent,
   ServerSelfUpdateResult,
+  ServerUpdateCheckResult,
   ServerTraceDiagnosticsResult,
   ServerProcessDiagnosticsResult,
   ServerProcessResourceHistoryInput,
@@ -459,6 +460,7 @@ export const WS_METHODS = {
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
   serverCommitDesktopUpdate: "server.commitDesktopUpdate",
+  serverCheckForUpdate: "server.checkForUpdate",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
@@ -633,6 +635,12 @@ export const WsServerUpdateServerWithProgressRpc = Rpc.make(
 export const WsServerCommitDesktopUpdateRpc = Rpc.make(WS_METHODS.serverCommitDesktopUpdate, {
   payload: DesktopUpdateCommitInput,
   success: ServerSelfUpdateResult,
+  error: Schema.Union([ServerSelfUpdateError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerCheckForUpdateRpc = Rpc.make(WS_METHODS.serverCheckForUpdate, {
+  payload: Schema.Struct({}),
+  success: ServerUpdateCheckResult,
   error: Schema.Union([ServerSelfUpdateError, EnvironmentAuthorizationError]),
 });
 
@@ -1275,6 +1283,15 @@ export const WsOrchestrationV2GetThreadProjectionRpc = Rpc.make(
   {
     payload: OrchestrationV2RpcSchemas.getThreadProjection.input,
     success: OrchestrationV2RpcSchemas.getThreadProjection.output,
+    error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsOrchestrationV2GetThreadItemsRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getThreadItems,
+  {
+    payload: OrchestrationV2RpcSchemas.getThreadItems.input,
+    success: OrchestrationV2RpcSchemas.getThreadItems.output,
     error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
   },
 );
@@ -2005,6 +2022,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpdateServerRpc,
   WsServerUpdateServerWithProgressRpc,
   WsServerCommitDesktopUpdateRpc,
+  WsServerCheckForUpdateRpc,
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,
@@ -2121,6 +2139,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SearchThreadsRpc,
   WsOrchestrationV2GetArchivedShellSnapshotRpc,
   WsOrchestrationV2GetThreadProjectionRpc,
+  WsOrchestrationV2GetThreadItemsRpc,
   WsOrchestrationV2PreviewWorkspaceMoveRpc,
   WsOrchestrationV2LaunchContinuationRpc,
   WsOrchestrationV2LaunchThreadRpc,

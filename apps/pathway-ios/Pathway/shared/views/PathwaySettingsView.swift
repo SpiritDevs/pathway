@@ -132,8 +132,8 @@ struct PathwaySettingsView: View {
     }
 
     private var environmentRequest: PathwayAdministrationRequest {
-        { environment, method, payload in
-            try await appModel.cloud.environmentRequest(environment: environment, method: method, payload: payload)
+        { environment, method, payload, timeout in
+            try await appModel.cloud.environmentRequest(environment: environment, method: method, payload: payload, timeout: timeout)
         }
     }
 

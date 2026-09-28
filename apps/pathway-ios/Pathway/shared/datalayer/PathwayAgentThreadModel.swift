@@ -296,6 +296,10 @@ final class PathwayAgentThreadModel {
     var maximumFileAttachmentBytes: Int? = nil
     var supportsAttachmentUploads = false
     var projectionCollections: [String: [JSONValue]] = [:]
+    /// Position the next older page ends at; nil once the start of the thread is loaded.
+    private(set) var olderItemsBefore: Int?
+    private(set) var isLoadingOlderItems = false
+    private(set) var olderItemsError: String?
     var draftAttachments: [PathwayThreadAttachmentDraft] = [] { didSet { saveDraft() } }
     var draft = "" { didSet { saveDraft() } }
     var threadID: String { thread.threadId }
@@ -338,6 +342,9 @@ final class PathwayAgentThreadModel {
     @ObservationIgnored private var pendingCacheWrite: PathwayThreadCachePendingWrite?
     @ObservationIgnored private var configTask: Task<Void, Never>?
     @ObservationIgnored private var lastSequence = 0
+    @ObservationIgnored private var hasInstalledSnapshot = false
+    /// Threads open on their latest items and page older ones in as the user scrolls back.
+    nonisolated static let recentItemLimit = 50
     @ObservationIgnored var childRoster: PathwayThreadSubagent?
     @ObservationIgnored var parentModelSelection: PathwayModelSelection?
     @ObservationIgnored var preparedNewSend: PathwayThreadPreparedNewSend? { didSet { saveDraft() } }
@@ -781,11 +788,20 @@ final class PathwayAgentThreadModel {
     }
     func run(for item: PathwayTimelineItem) -> PathwayThreadRun? { runs.first { $0.id == item.runID } }
 
-    func installSnapshot(_ projection: JSONValue, sequence: Int = 0) {
+    func installSnapshot(_ projection: JSONValue, sequence: Int = 0, olderItemsBefore before: Int? = nil) {
         guard let object = projection.objectValue else { return }
         projectionCollections = object.compactMapValues(\.arrayValue)
-        items = (object["visibleTurnItems"]?.arrayValue ?? []).compactMap { $0.objectValue?["item"].flatMap(PathwayTimelineItem.init(json:)) }.sorted(by: Self.order)
+        let window = Self.timelineItems(object["visibleTurnItems"]).sorted(by: Self.order)
         runs = (object["runs"]?.arrayValue ?? []).compactMap(PathwayThreadRun.init)
+        let known = Set(items.map(\.id))
+        if hasInstalledSnapshot, before != nil, let first = window.first, window.contains(where: { known.contains($0.id) }) {
+            // A reconnect keeps history already paged in, as long as the new window overlaps it.
+            let windowIDs = Set(window.map(\.id)), rolledBack = rolledBackRunIDs
+            items = items.filter { !windowIDs.contains($0.id) && Self.order($0, first) && !rolledBack.contains($0.runID ?? "") } + window
+        } else {
+            items = window; olderItemsBefore = before
+        }
+        hasInstalledSnapshot = true
         Task { await reconcileQueuedEdit() }
         subagents = (object["subagents"]?.arrayValue ?? []).compactMap(PathwayThreadSubagent.init)
         runtimeRequests = object["runtimeRequests"]?.arrayValue ?? []
@@ -796,13 +812,20 @@ final class PathwayAgentThreadModel {
     }
     func applySubscriptionValue(_ value: JSONValue) {
         guard let object = value.objectValue else { return }
-        if object["_pathwayTransport"] != nil {
+        if let transport = object["_pathwayTransport"]?.stringValue {
             isSubscriptionReady = false
-            connectionState = items.isEmpty ? .connecting : .cached
+            if transport == "failed", items.isEmpty {
+                connectionState = .failed("Couldn’t reach \(environmentLabel). Retrying… (\(object["message"]?.stringValue ?? "connection failed"))")
+            } else {
+                connectionState = items.isEmpty ? .connecting : .cached
+            }
             return
         }
         switch object["kind"]?.stringValue {
-        case "snapshot": if let projection = object["projection"] { installSnapshot(projection, sequence: object["snapshotSequence"]?.intValue ?? 0) }
+        case "snapshot":
+            if let projection = object["projection"] {
+                installSnapshot(projection, sequence: object["snapshotSequence"]?.intValue ?? 0, olderItemsBefore: object["olderItemsBefore"]?.intValue)
+            }
         case "event":
             guard let sequence = object["sequence"]?.intValue, sequence > lastSequence,
                   let event = object["event"]?.objectValue, let type = event["type"]?.stringValue, let payload = event["payload"] else { return }
@@ -814,7 +837,8 @@ final class PathwayAgentThreadModel {
                     items[index] = item
                     // Streaming text updates retain their position; only ordering changes sort.
                     if Self.order(previous, item) || Self.order(item, previous) { items.sort(by: Self.order) }
-                } else {
+                } else if olderItemsBefore == nil || items.first.map({ !Self.order(item, $0) }) ?? true {
+                    // Updates to items older than the loaded window arrive with their page instead.
                     var lower = 0, upper = items.count
                     while lower < upper {
                         let middle = lower + (upper - lower) / 2
@@ -865,6 +889,27 @@ final class PathwayAgentThreadModel {
         deriveActiveRun()
         applyChildRosterSelection()
     }
+    /// Pages in the items before the oldest loaded one, like scrolling back in Messages.
+    func loadOlderItems(limit: Int = recentItemLimit) async {
+        guard let before = olderItemsBefore, !isLoadingOlderItems else { return }
+        isLoadingOlderItems = true; olderItemsError = nil
+        defer { isLoadingOlderItems = false }
+        do {
+            let page = try await request("orchestration.getThreadItems", payload: .object([
+                "threadId": .string(threadID), "beforePosition": .number(Double(before)), "limit": .number(Double(limit))
+            ]), reportsErrors: false).objectValue
+            // A snapshot that replaced the window while this was in flight owns the cursor now.
+            guard olderItemsBefore == before else { return }
+            let known = Set(items.map(\.id)), rolledBack = rolledBackRunIDs
+            let older = Self.timelineItems(page?["items"]).filter { !known.contains($0.id) && !rolledBack.contains($0.runID ?? "") }
+            items = (older + items).sorted(by: Self.order)
+            olderItemsBefore = page?["olderItemsBefore"]?.intValue
+        } catch { olderItemsError = error.localizedDescription }
+    }
+    private var rolledBackRunIDs: Set<String> { Set(runs.filter { $0.status == "rolled_back" }.map(\.id)) }
+    private static func timelineItems(_ rows: JSONValue?) -> [PathwayTimelineItem] {
+        (rows?.arrayValue ?? []).compactMap { $0.objectValue?["item"].flatMap(PathwayTimelineItem.init(json:)) }
+    }
     private func deriveActiveRun() {
         activeRunID = runs.filter { $0.isActive }.max { $0.ordinal < $1.ordinal }?.id
     }
@@ -875,7 +920,8 @@ final class PathwayAgentThreadModel {
     static func json<T: Encodable>(_ value: T) throws -> JSONValue { try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value)) }
     private func persist() {
         guard persistsLocalState else { return }
-        pendingCacheWrite = PathwayThreadCachePendingWrite(items: items, revision: DispatchTime.now().uptimeNanoseconds)
+        // The cache only needs to paint the latest screen before the live window arrives.
+        pendingCacheWrite = PathwayThreadCachePendingWrite(items: Array(items.suffix(Self.recentItemLimit)), revision: DispatchTime.now().uptimeNanoseconds)
         guard cacheWriteTask == nil else { return }
         cacheWriteTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(for: .milliseconds(300)) } catch { return }

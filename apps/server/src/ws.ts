@@ -85,6 +85,7 @@ import * as ThreadManagementService from "./orchestration-v2/ThreadManagementSer
 import { EffectOutboxV2 } from "./orchestration-v2/EffectOutbox.ts";
 import type { OrchestratorV2Error } from "./orchestration-v2/Orchestrator.ts";
 import { issuePullRequestFromStatus } from "./orchestration-v2/RunFinalizationService.ts";
+import { threadItemsBefore, windowThreadProjection } from "./orchestration-v2/ThreadItemWindow.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadWorkspaceMove from "./orchestration-v2/ThreadWorkspaceMoveService.ts";
 import * as ContinuationLaunchService from "./orchestration-v2/ContinuationLaunchService.ts";
@@ -833,6 +834,7 @@ const makeWsRpcLayer = (
           readonly threadId: ThreadId;
           readonly afterSequence?: number;
           readonly requestCompletionMarker?: boolean;
+          readonly recentItemLimit?: number;
         }) {
           yield* Effect.annotateCurrentSpan({
             "orchestration_v2.thread_id": input.threadId,
@@ -925,14 +927,18 @@ const makeWsRpcLayer = (
                 }),
             ),
           );
-          const { projection, snapshotSequence } = snapshot;
+          const { snapshotSequence } = snapshot;
+          const window =
+            input.recentItemLimit === undefined
+              ? { projection: snapshot.projection }
+              : windowThreadProjection(snapshot.projection, input.recentItemLimit);
 
           return Stream.concat(
             Stream.concat(
               Stream.make({
                 kind: "snapshot" as const,
                 snapshotSequence,
-                projection,
+                ...window,
               }),
               completionMarker,
             ),
@@ -1385,6 +1391,24 @@ const makeWsRpcLayer = (
             getOrchestrationV2ArchivedShellSnapshot,
             { "rpc.aggregate": "orchestration" },
           ),
+        [ORCHESTRATION_V2_WS_METHODS.getThreadItems]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.getThreadItems,
+            threadManagement.getThreadProjection(input.threadId).pipe(
+              Effect.map((projection) =>
+                threadItemsBefore(projection, input.beforePosition, input.limit),
+              ),
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2GetThreadProjectionError({
+                    threadId: input.threadId,
+                    message: `Failed to load orchestration V2 thread ${input.threadId} items`,
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
         [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
@@ -1724,6 +1748,10 @@ const makeWsRpcLayer = (
             serverSelfUpdate.commitDesktopUpdate(input.requestId),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.serverCheckForUpdate]: () =>
+          observeRpcEffect(WS_METHODS.serverCheckForUpdate, serverSelfUpdate.check, {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.serverUpsertKeybinding]: (rule) =>
           observeRpcEffect(
             WS_METHODS.serverUpsertKeybinding,

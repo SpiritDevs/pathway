@@ -130,7 +130,9 @@ actor PathwayRPCClient {
             "orchestration.subscribeThread",
             payload: .object([
                 "threadId": .string(threadID),
-                "requestCompletionMarker": .bool(true)
+                "requestCompletionMarker": .bool(true),
+                // Older servers ignore this and send the whole thread.
+                "recentItemLimit": .number(Double(PathwayAgentThreadModel.recentItemLimit))
             ])
         )
     }
@@ -240,6 +242,8 @@ actor PathwayRPCClient {
                 let url = try await endpointProvider()
                 guard desired, !Task.isCancelled else { return }
                 let task = session.webSocketTask(with: url)
+                // A thread snapshot arrives as one frame; long threads far exceed the 1 MiB default.
+                task.maximumMessageSize = Self.maximumMessageSize
                 task.resume()
                 install(task, id: id)
                 try await receiveLoop(task, id: id)
@@ -250,6 +254,8 @@ actor PathwayRPCClient {
                 disconnect(id: id)
                 guard desired, !Task.isCancelled else { break }
                 failureCount += 1
+                // Keep retrying, but stop presenting a persistent failure as "connecting".
+                if failureCount >= 3 { yieldTransportState("failed", message: error.localizedDescription) }
                 let delay = min(5.0, 0.35 * pow(1.7, Double(failureCount - 1)))
                 try? await Task.sleep(for: .seconds(delay * Double.random(in: 0.5 ... 1)))
             }
@@ -476,10 +482,12 @@ actor PathwayRPCClient {
 
     /// Transport changes share the subscription queue so an old snapshot cannot overwrite
     /// a newer disconnect notification in the consumer.
-    private func yieldTransportState(_ state: String) {
+    private func yieldTransportState(_ state: String, message: String? = nil) {
         guard let subscriptionContinuation else { return }
-        pathwayRPCYieldTransportState(state, to: subscriptionContinuation, policy: subscriptionBufferingPolicy)
+        pathwayRPCYieldTransportState(state, message: message, to: subscriptionContinuation, policy: subscriptionBufferingPolicy)
     }
+
+    static let maximumMessageSize = 64 * 1024 * 1024
 
     private func allocateRequestID() -> Int {
         defer { nextRequestID += 1 }
@@ -512,10 +520,13 @@ func pathwayRPCBufferOverflowIsFatal(
 
 func pathwayRPCYieldTransportState(
     _ state: String,
+    message: String? = nil,
     to continuation: AsyncThrowingStream<JSONValue, Error>.Continuation,
     policy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy
 ) {
-    let result = continuation.yield(.object(["_pathwayTransport": .string(state)]))
+    var value: [String: JSONValue] = ["_pathwayTransport": .string(state)]
+    if let message { value["message"] = .string(message) }
+    let result = continuation.yield(.object(value))
     if pathwayRPCBufferOverflowIsFatal(result, policy: policy) {
         continuation.finish(throwing: PathwayRPCError.disconnected)
     }

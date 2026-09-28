@@ -76,6 +76,7 @@ function makePoolLayer(
           updateRequests: Stream.empty,
           updateCommits: Stream.empty,
           updateCancellations: Stream.empty,
+          updateChecks: Stream.empty,
         }),
         Layer.succeed(DesktopBackendConfiguration.DesktopBackendConfiguration, {
           resolvePrimary: Effect.die("unexpected primary config resolve"),

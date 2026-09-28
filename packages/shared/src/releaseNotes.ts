@@ -87,7 +87,8 @@ function isIgnoredReleaseNoteLine(line: string): boolean {
   );
 }
 
-function extractReleaseNoteItems(note: string | null | undefined): ReadonlyArray<string> {
+/** Reduces one markdown or HTML release body to short plain-text items. */
+export function extractReleaseNoteItems(note: string | null | undefined): ReadonlyArray<string> {
   if (!note) return [];
 
   const items: string[] = [];

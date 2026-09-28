@@ -26,16 +26,108 @@ struct PathwayAdministrationView: View {
 
 struct PathwayAdministrationEnvironmentView: View {
     let client: PathwayAdministrationClient
+    @State private var updates: PathwayEnvironmentUpdateModel
+    @State private var showingNotes = false
+    @State private var confirmingUpdate = false
+
+    init(client: PathwayAdministrationClient) {
+        self.client = client
+        _updates = State(initialValue: PathwayEnvironmentUpdateModel(client: client))
+    }
+
     var body: some View {
         List {
-            NavigationLink { PathwayAdministrationSettingsView(client: client) } label: { Label("Environment preferences", systemImage: "slider.horizontal.3") }
-            NavigationLink { PathwayAdministrationSettingsView(client: client, sourceControl: true) } label: { Label("Source control settings", systemImage: "arrow.triangle.branch") }
-            NavigationLink { PathwayAdministrationProjectsView(client: client) } label: { Label("Projects", systemImage: "folder") }
-            NavigationLink { PathwayAdministrationProvidersView(client: client) } label: { Label("Providers", systemImage: "cpu") }
-            NavigationLink { PathwayAdministrationSchedulesView(client: client) } label: { Label("Scheduled tasks", systemImage: "clock") }
-            NavigationLink { PathwayAdministrationUsageView(client: client) } label: { Label("Usage & limits", systemImage: "chart.bar") }
-            NavigationLink { PathwayAdministrationConnectionView(client: client) } label: { Label("Connection & diagnostics", systemImage: "network") }
-        }.navigationTitle(client.environment.environment.label)
+            versionSection
+            Section {
+                NavigationLink { PathwayAdministrationSettingsView(client: client) } label: { Label("Environment preferences", systemImage: "slider.horizontal.3") }
+                NavigationLink { PathwayAdministrationSettingsView(client: client, sourceControl: true) } label: { Label("Source control settings", systemImage: "arrow.triangle.branch") }
+                NavigationLink { PathwayAdministrationProjectsView(client: client) } label: { Label("Projects", systemImage: "folder") }
+                NavigationLink { PathwayAdministrationProvidersView(client: client) } label: { Label("Providers", systemImage: "cpu") }
+                NavigationLink { PathwayAdministrationSchedulesView(client: client) } label: { Label("Scheduled tasks", systemImage: "clock") }
+                NavigationLink { PathwayAdministrationUsageView(client: client) } label: { Label("Usage & limits", systemImage: "chart.bar") }
+                NavigationLink { PathwayAdministrationConnectionView(client: client) } label: { Label("Connection & diagnostics", systemImage: "network") }
+            }
+        }
+        .navigationTitle(client.environment.environment.label)
+        .task { await updates.refresh() }
+        .sheet(isPresented: $showingNotes) {
+            PathwayReleaseNotesSheet(version: updates.availableVersion ?? updates.version,
+                                     notes: updates.check?.releaseNotes ?? [])
+        }
+        .confirmationDialog("Update \(client.environment.environment.label)?", isPresented: $confirmingUpdate, titleVisibility: .visible) {
+            Button("Update to \(updates.availableVersion ?? "")") { Task { await updates.update() } }
+            Button("Cancel", role: .cancel) { }
+        } message: { Text("The environment restarts to finish the update. Running agent turns may be interrupted.") }
+    }
+
+    private var versionSection: some View {
+        Section {
+            LabeledContent("Version", value: updates.version)
+            HStack {
+                versionStatus
+                Spacer()
+                Button("Check now") { Task { await updates.checkNow() } }
+                    .buttonStyle(.borderless)
+                    .disabled(updates.phase != .idle)
+            }
+            if updates.availableVersion != nil {
+                HStack(spacing: 12) {
+                    if updates.canUpdate {
+                        Button { confirmingUpdate = true } label: { Label("Update", systemImage: "arrow.down.circle") }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(updates.phase != .idle)
+                    }
+                    Button { showingNotes = true } label: { Label("Notes", systemImage: "doc.text") }
+                        .buttonStyle(.bordered)
+                }
+            }
+        } header: {
+            Text("Version")
+        } footer: {
+            if let error = updates.error { Text(error).foregroundStyle(.red) }
+            else if let hint = updates.updateHint { Text(hint) }
+        }
+    }
+
+    @ViewBuilder private var versionStatus: some View {
+        switch updates.phase {
+        case .checking: Label { Text("Checking for updates") } icon: { ProgressView() }
+        case .updating: Label { Text("Updating to \(updates.availableVersion ?? "")") } icon: { ProgressView() }
+        case .idle:
+            if let available = updates.availableVersion {
+                Text("Version \(available) available").foregroundStyle(.tint)
+            } else {
+                Text(updates.message ?? "Check for a newer version").foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct PathwayReleaseNotesSheet: View {
+    let version: String
+    let notes: [PathwayServerUpdateCheck.ReleaseNote]
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if notes.isEmpty {
+                    ContentUnavailableView("No release notes", systemImage: "doc.text",
+                        description: Text("No notes were published for version \(version)."))
+                }
+                ForEach(notes) { note in
+                    Section(note.version) {
+                        ForEach(Array(note.items.enumerated()), id: \.offset) { _, item in
+                            Text(item).textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Release notes")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 
