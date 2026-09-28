@@ -1,11 +1,19 @@
 import { act, useSyncExternalStore } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
+import type { DeviceHubAccess } from "@spiritdevs/client-runtime/state/deviceHubAccess";
 import { EnvironmentId } from "@spiritdevs/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 // Like the real atom, a refresh yields a new access object and re-renders subscribers.
+const initialAccess: DeviceHubAccess = {
+  httpBase: "http://test",
+  wsBase: "ws://test",
+  query: {},
+  credentials: true,
+  expiresAt: null,
+};
 const accessStore = {
-  value: { httpBase: "http://test", wsBase: "ws://test", query: {}, credentials: true },
+  value: initialAccess,
   listeners: new Set<() => void>(),
   refresh() {
     accessStore.value = { ...accessStore.value };
@@ -18,6 +26,7 @@ const accessStore = {
 };
 vi.mock("~/state/device", () => ({
   useDeviceHubAccess: () => useSyncExternalStore(accessStore.subscribe, () => accessStore.value),
+  useDeviceHubAccessError: () => null,
   refreshDeviceHubAccess: () => accessStore.refresh(),
 }));
 import { DeviceStreamView } from "./DeviceStreamView";
@@ -34,6 +43,7 @@ let renderer: ReactTestRenderer | undefined;
 let primes = 0;
 beforeEach(() => {
   primes = 0;
+  accessStore.value = initialAccess;
 });
 afterEach(async () => {
   await act(async () => renderer?.unmount());
@@ -134,4 +144,19 @@ it("starts exactly one new stream per Reconnect press", async () => {
   expect(primes).toBe(1);
   await act(async () => renderer!.root.findByType("button").props.onClick());
   expect(primes).toBe(2);
+});
+
+it("keeps a healthy stream when its ticket rotates", async () => {
+  const { images } = await setup();
+  await act(async () => {
+    accessStore.value = {
+      ...accessStore.value,
+      query: { wsTicket: "rotated" },
+      expiresAt: Date.now() + 300_000,
+    };
+    for (const listener of accessStore.listeners) listener();
+  });
+  expect(images).toHaveLength(1);
+  expect(images[0]!.src).toContain("stream.mjpeg");
+  expect(primes).toBe(1);
 });

@@ -48,6 +48,8 @@ export function useDeviceState(environmentId: EnvironmentId | null): {
   };
 }
 
+const TICKET_RENEW_MARGIN_MS = 60_000;
+
 /**
  * Hub access for one environment. Bearer and DPoP connections mint a ticket
  * here; a stream that gets a 401 back refreshes this atom and reconnects.
@@ -60,7 +62,20 @@ const deviceHubAccessAtom = Atom.family((environmentId: EnvironmentId) =>
         get(environmentSession.preparedConnectionValueAtom(environmentId)),
       );
       if (prepared === null) return Effect.never;
-      return resolveDeviceHubCredentials({ prepared });
+      return resolveDeviceHubCredentials({ prepared }).pipe(
+        Effect.tap((credentials) =>
+          Effect.sync(() => {
+            if (credentials.expiresAt === null) return;
+            // Rotate a minute early so fold, accessibility and reconnects never
+            // go out with a dead ticket. Live streams read the newest one.
+            const timer = setTimeout(
+              () => get.refreshSelf(),
+              Math.max(0, credentials.expiresAt - Date.now() - TICKET_RENEW_MARGIN_MS),
+            );
+            get.addFinalizer(() => clearTimeout(timer));
+          }),
+        ),
+      );
     })
     .pipe(Atom.setIdleTTL(60_000), Atom.withLabel(`device-hub-access:${environmentId}`)),
 );
@@ -84,6 +99,16 @@ export function useDeviceHubAccess(
 const EMPTY_ACCESS_ATOM = Atom.make(AsyncResult.initial<DeviceHubCredentials, never>()).pipe(
   Atom.withLabel("device-hub-access:empty"),
 );
+
+/** Why this environment's hub credentials could not be resolved, e.g. a ticket request timed out. */
+export function useDeviceHubAccessError(environmentId: EnvironmentId | null): string | null {
+  const result = useAtomValue(
+    environmentId === null ? EMPTY_ACCESS_ATOM : deviceHubAccessAtom(environmentId),
+  );
+  return AsyncResult.isFailure(result)
+    ? "Could not authorize the device stream with this environment."
+    : null;
+}
 
 export function refreshDeviceHubAccess(environmentId: EnvironmentId): void {
   appAtomRegistry.refresh(deviceHubAccessAtom(environmentId));

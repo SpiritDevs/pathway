@@ -94,6 +94,7 @@ it("switches to fixed authenticated feeds while retaining one HID socket, routes
         httpBase: "https://t3.test/api/device-hub",
         wsBase: "wss://t3.test/api/device-hub",
         credentials: true,
+        expiresAt: null,
         query: { hostId: "remote", wsTicket: "ticket" },
       },
     },

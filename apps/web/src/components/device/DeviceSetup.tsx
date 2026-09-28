@@ -19,20 +19,23 @@ export const deviceHubDescription =
 export const agentDeviceDescription =
   "Allow new agent sessions in this environment to start and control local and remote devices, with required tools set up automatically.";
 
+/** An environment can stream once any host is ready, e.g. an SSH Mac from a Linux server. */
+export const anyDeviceHostReady = (state: DeviceServiceState) =>
+  state.hostStatus === "ready" ||
+  Object.values(state.hostStatuses).some((host) => host.status === "ready");
+
 export function platformSetupStatus(state: DeviceServiceState, platform: DevicePlatform) {
-  const availability = state.hosts
+  const candidates = state.hosts
     .flatMap((host) => host.platforms)
-    .find((candidate) => candidate.platform === platform);
+    .filter((candidate) => candidate.platform === platform);
+  const availability = candidates.find((candidate) => candidate.available) ?? candidates[0];
   if (!availability?.available) {
     return {
       ready: false,
       message: availability?.reason ?? `${platformName(platform)} support was not detected.`,
     };
   }
-  if (
-    state.hostStatus === "ready" &&
-    !state.devices.some((device) => device.platform === platform)
-  ) {
+  if (anyDeviceHostReady(state) && !state.devices.some((device) => device.platform === platform)) {
     return {
       ready: false,
       message:
@@ -173,14 +176,14 @@ export function DeviceSetup(props: {
         )}
         {step < 2 ? (
           <Button
-            disabled={props.state.hostStatus !== "ready" || pending !== null}
+            disabled={!anyDeviceHostReady(props.state) || pending !== null}
             onClick={() => setStep(step + 1)}
           >
             Continue
           </Button>
         ) : (
           <Button
-            disabled={props.state.hostStatus !== "ready" || pending !== null}
+            disabled={!anyDeviceHostReady(props.state) || pending !== null}
             onClick={() => void update("complete", { onboardingCompleted: true })}
           >
             {pending === "complete" ? "Saving…" : "Done"}
@@ -200,7 +203,7 @@ export function DeviceHubSetupStatus({
   readonly pending: boolean;
   readonly compact?: boolean;
 }) {
-  if (!pending && state.hostStatus !== "ready") return null;
+  if (!pending && !anyDeviceHostReady(state)) return null;
   return (
     <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
       {pending ? <Spinner className="size-3" /> : <Check className="size-3 text-success" />}
@@ -269,7 +272,7 @@ export function AgentDeviceSetupStatus(props: {
   }
   if (
     props.state.agentAccessEnabled &&
-    props.state.hostStatus === "ready" &&
+    anyDeviceHostReady(props.state) &&
     props.state.hosts.some((host) => host.agentDeviceInstalled)
   ) {
     return (

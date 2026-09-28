@@ -1170,9 +1170,16 @@ export const stateStream = (service: DeviceService["Service"]): Stream.Stream<De
   Stream.unwrap(
     Effect.gen(function* () {
       // Subscribe before reading the snapshot so no change between the two
-      // is lost; the scope lives as long as the stream does.
+      // is lost; the scope lives as long as the stream does. Changes queued
+      // before the snapshot are already in it, so drop them rather than let a
+      // client step back to an older revision.
       const subscription = yield* service.subscribe;
       const initial = yield* service.state;
-      return Stream.concat(Stream.make(initial), Stream.fromSubscription(subscription));
+      return Stream.concat(
+        Stream.make(initial),
+        Stream.fromSubscription(subscription).pipe(
+          Stream.filter((state) => state.revision > initial.revision),
+        ),
+      );
     }),
   ).pipe(Stream.scoped);

@@ -65,6 +65,29 @@ describe("DeviceService.stateStream", () => {
       expect(seen.map((state) => state.revision)).toEqual([0, 1, 2]);
     }),
   );
+
+  it.effect("drops changes queued before the snapshot it already reflects", () =>
+    Effect.gen(function* () {
+      const pubsub = yield* PubSub.unbounded<DeviceServiceState>();
+      const service: Pick<DeviceService["Service"], "state" | "subscribe"> = {
+        // Revision 1 lands after the subscription opens but before the snapshot is read.
+        state: PubSub.publish(pubsub, { ...baseState, revision: 1 }).pipe(
+          Effect.as({ ...baseState, revision: 2 }),
+        ),
+        subscribe: PubSub.subscribe(pubsub),
+      };
+
+      const collected = yield* stateStream(service as DeviceService["Service"]).pipe(
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      yield* PubSub.publish(pubsub, { ...baseState, revision: 3 });
+      const seen = yield* Fiber.join(collected);
+      expect(seen.map((state) => state.revision)).toEqual([2, 3]);
+    }),
+  );
 });
 
 const fixture = Effect.fn("fixture")(function* (

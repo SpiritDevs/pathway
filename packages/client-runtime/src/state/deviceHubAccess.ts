@@ -11,6 +11,7 @@
  * to one request, so one ticket covers everything a panel opens at once.
  * Callers fetch a fresh one each time they (re)connect a stream.
  */
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type { HttpClient } from "effect/unstable/http";
 
@@ -22,7 +23,11 @@ import { buildEnvironmentAuthHeaders } from "./environmentHttpAuth.ts";
 import { makeEnvironmentHttpApiClient, executeEnvironmentHttpRequest } from "../rpc/http.ts";
 import type { DeviceHubAccess } from "../device/hubAccess.ts";
 
-export { type DeviceHubAccess, withDeviceHubQuery } from "../device/hubAccess.ts";
+export {
+  type DeviceHubAccess,
+  deviceHubTicketExpired,
+  withDeviceHubQuery,
+} from "../device/hubAccess.ts";
 
 const TICKET_TIMEOUT_MS = 8_000;
 
@@ -31,6 +36,7 @@ export interface DeviceHubCredentials {
   readonly httpBaseUrl: string;
   readonly query: DeviceHubAccess["query"];
   readonly credentials: boolean;
+  readonly expiresAt: number | null;
 }
 
 export const resolveDeviceHubCredentials = Effect.fn(
@@ -39,7 +45,8 @@ export const resolveDeviceHubCredentials = Effect.fn(
   readonly prepared: PreparedConnection;
 }): Effect.fn.Return<DeviceHubCredentials, RemoteEnvironmentRequestError, HttpClient.HttpClient> {
   const { httpBaseUrl, httpAuthorization } = input.prepared;
-  if (httpAuthorization === null) return { httpBaseUrl, query: {}, credentials: true };
+  if (httpAuthorization === null)
+    return { httpBaseUrl, query: {}, credentials: true, expiresAt: null };
   const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
   const ticketUrl = environmentEndpointUrl(httpBaseUrl, "/api/auth/websocket-ticket");
   const headers = yield* buildEnvironmentAuthHeaders(httpAuthorization, "POST", ticketUrl, signer);
@@ -49,7 +56,12 @@ export const resolveDeviceHubCredentials = Effect.fn(
     TICKET_TIMEOUT_MS,
     client.auth.webSocketTicket({ headers }),
   );
-  return { httpBaseUrl, query: { wsTicket: ticket.ticket }, credentials: false };
+  return {
+    httpBaseUrl,
+    query: { wsTicket: ticket.ticket },
+    credentials: false,
+    expiresAt: DateTime.toEpochMillis(ticket.expiresAt),
+  };
 });
 
 /** Resolves the server's `DeviceServiceState.hubBasePath` against the environment origin. */
@@ -63,6 +75,7 @@ export const deviceHubAccessAt = (
     wsBase: httpBase.replace(/^http/, "ws"),
     query: credentials.query,
     credentials: credentials.credentials,
+    expiresAt: credentials.expiresAt,
   };
 };
 

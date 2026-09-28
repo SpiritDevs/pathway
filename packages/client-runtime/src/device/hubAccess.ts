@@ -8,7 +8,13 @@ export interface DeviceHubAccess {
   readonly query: Readonly<Record<string, string>>;
   /** Whether requests must include session cookies. */
   readonly credentials: boolean;
+  /** Epoch ms when the ticket in `query` expires; null for cookie sessions. */
+  readonly expiresAt: number | null;
 }
+
+/** Whether a rejected upgrade can be blamed on an expired ticket rather than the route. */
+export const deviceHubTicketExpired = (access: DeviceHubAccess, now = Date.now()): boolean =>
+  access.expiresAt !== null && now >= access.expiresAt;
 
 export const withDeviceHubQuery = (url: string, access: DeviceHubAccess): string => {
   const entries = Object.entries(access.query);
@@ -16,3 +22,9 @@ export const withDeviceHubQuery = (url: string, access: DeviceHubAccess): string
   const separator = url.includes("?") ? "&" : "?";
   return `${url}${separator}${new URLSearchParams(entries).toString()}`;
 };
+
+/** A fixed access, or a getter the owner updates as tickets rotate. */
+export type DeviceHubAccessSource = DeviceHubAccess | (() => DeviceHubAccess);
+
+export const currentDeviceHubAccess = (source: DeviceHubAccessSource): DeviceHubAccess =>
+  typeof source === "function" ? source() : source;

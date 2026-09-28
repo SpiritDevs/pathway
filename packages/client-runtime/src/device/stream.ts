@@ -28,7 +28,12 @@ import {
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import { createCanvasFrameSink, type DeviceFrameSink } from "./frame.ts";
-import { type DeviceHubAccess, withDeviceHubQuery } from "./hubAccess.ts";
+import {
+  type DeviceHubAccessSource,
+  currentDeviceHubAccess,
+  deviceHubTicketExpired,
+  withDeviceHubQuery,
+} from "./hubAccess.ts";
 import type { DevicePlatform } from "@spiritdevs/contracts";
 
 export type DeviceStreamStatus = "connecting" | "streaming" | "error";
@@ -103,7 +108,11 @@ export interface DeviceStreamEvents {
 export interface DeviceStreamTarget {
   readonly platform: DevicePlatform;
   readonly deviceId: string;
-  readonly access: DeviceHubAccess;
+  /**
+   * Read at every (re)connect, so a getter lets the owner rotate tickets
+   * without restarting a healthy stream.
+   */
+  readonly access: DeviceHubAccessSource;
   /** Native iOS WebViews can use MJPEG without cross-origin fetch or secure-context support. */
   readonly preferMjpeg?: boolean;
   /** Internal fixed-panel feeds share their parent's input session. */
@@ -349,13 +358,15 @@ export function createDeviceStreamClient(
   output: HTMLCanvasElement | DeviceFrameSink,
   events: DeviceStreamEvents,
 ): DeviceStreamClient {
-  const { access, platform, deviceId } = target;
+  const { platform, deviceId } = target;
+  const access = () => currentDeviceHubAccess(target.access);
   const sink = "present" in output ? output : createCanvasFrameSink(output);
   const vendor = platform === "ios" ? "/vendor/serve-sim" : "/vendor/serve-emu";
   const device = encodeURIComponent(deviceId);
   const httpUrl = (path: string) =>
-    withDeviceHubQuery(`${access.httpBase}${vendor}${path}`, access);
-  const wsUrl = (path: string) => withDeviceHubQuery(`${access.wsBase}${vendor}${path}`, access);
+    withDeviceHubQuery(`${access().httpBase}${vendor}${path}`, access());
+  const wsUrl = (path: string) =>
+    withDeviceHubQuery(`${access().wsBase}${vendor}${path}`, access());
   const useWebCodecs = isWebCodecsSupported() && !(platform === "ios" && target.preferMjpeg);
 
   let stopped = true;
@@ -642,7 +653,7 @@ export function createDeviceStreamClient(
     try {
       const response = await fetch(httpUrl(videoPath), {
         signal: videoController.signal,
-        credentials: access.credentials ? "include" : "same-origin",
+        credentials: access().credentials ? "include" : "same-origin",
       });
       if (!isCurrent()) {
         await response.body?.cancel();
@@ -737,7 +748,7 @@ export function createDeviceStreamClient(
     try {
       const response = await fetch(httpUrl(`/helper/${device}/stream.mjpeg`), {
         signal: controller.signal,
-        credentials: access.credentials ? "include" : "same-origin",
+        credentials: access().credentials ? "include" : "same-origin",
       });
       if (stopped || generation !== session) return;
       if (response.status === 401 || response.status === 403) return handleUnauthorized();
@@ -856,11 +867,11 @@ export function createDeviceStreamClient(
         false,
         event.reason || (event.code === 1006 ? "input socket refused" : `closed ${event.code}`),
       );
-      // A rejected HTTP upgrade surfaces as 1006, including an expired stream ticket.
+      // A rejected HTTP upgrade surfaces as 1006; only an expired ticket makes that an auth failure.
       if (
         event.code === 1008 ||
         event.code === 4401 ||
-        (event.code === 1006 && access.query.wsTicket)
+        (event.code === 1006 && deviceHubTicketExpired(access()))
       )
         return handleUnauthorized();
       scheduleRetry("input", () => void connectIosInput());
@@ -929,7 +940,7 @@ export function createDeviceStreamClient(
       if (
         event.code === 1008 ||
         event.code === 4401 ||
-        (event.code === 1006 && access.query.wsTicket)
+        (event.code === 1006 && deviceHubTicketExpired(access()))
       )
         return handleUnauthorized();
       configuring = false;

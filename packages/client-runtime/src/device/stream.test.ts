@@ -49,7 +49,7 @@ describe("native device stream transport", () => {
     vi.unstubAllGlobals();
   });
 
-  function setup(platform: "ios" | "android") {
+  function setup(platform: "ios" | "android", expiresAt: number | null = null) {
     vi.useFakeTimers();
     vi.stubGlobal("VideoDecoder", vi.fn());
     vi.stubGlobal("EncodedVideoChunk", vi.fn());
@@ -92,6 +92,7 @@ describe("native device stream transport", () => {
           httpBase: "https://environment.test/api/device-hub",
           wsBase: "wss://environment.test/api/device-hub",
           credentials: false,
+          expiresAt,
           query: { wsTicket: "stream-ticket", hostId: "ssh-host" },
         },
       },
@@ -159,12 +160,22 @@ describe("native device stream transport", () => {
   });
 
   it("renews an expired Android ticket when the HTTP upgrade is rejected instead of retrying it forever", async () => {
-    const { client, opened, events } = setup("android");
+    const { client, opened, events } = setup("android", Date.now() - 1);
     client.start();
     const socket = await opened;
     socket.onclose?.({ code: 1006, reason: "" });
     expect(events.onUnauthorized).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+    client.stop();
+  });
+
+  it("retries a rejected upgrade on a live ticket without minting another", async () => {
+    const { client, opened, events } = setup("android", Date.now() + 60_000);
+    client.start();
+    const socket = await opened;
+    socket.onclose?.({ code: 1006, reason: "" });
+    expect(events.onUnauthorized).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
     client.stop();
   });
 
@@ -289,6 +300,7 @@ describe("iOS input startup", () => {
           httpBase: "http://test/api/device-hub",
           wsBase: "ws://test/api/device-hub",
           credentials: true,
+          expiresAt: null,
           query: {},
         },
       },
@@ -435,6 +447,7 @@ function recoveryFixture(platform: "ios" | "android" = "ios", preferMjpeg = true
         httpBase: "https://test/api/device-hub",
         wsBase: "wss://test/api/device-hub",
         credentials: true,
+        expiresAt: null,
         query: {},
       },
     },

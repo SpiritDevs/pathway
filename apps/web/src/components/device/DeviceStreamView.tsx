@@ -3,7 +3,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
-import { refreshDeviceHubAccess, useDeviceHubAccess } from "~/state/device";
+import {
+  refreshDeviceHubAccess,
+  useDeviceHubAccess,
+  useDeviceHubAccessError,
+} from "~/state/device";
 import { createCanvasFrameSink } from "@spiritdevs/client-runtime/device/frame";
 import { resolveDeviceShape } from "@spiritdevs/client-runtime/device/shape-profile";
 import { deviceKeyboard, deviceModel } from "./deviceModels";
@@ -25,6 +29,7 @@ import {
 
 const AX_POLL_INTERVAL_MS = 2_000;
 const CONTROLS_RAIL_WIDTH = 56;
+const AUTH_RETRY_WINDOW_MS = 15_000;
 
 export interface DeviceViewControls {
   readonly phone: boolean;
@@ -89,6 +94,18 @@ export function DeviceStreamView(props: {
     cancelPhoneInputRef.current = cancel;
   }, []);
   const access = useDeviceHubAccess(props.environmentId, props.hostId);
+  const accessError = useDeviceHubAccessError(props.environmentId);
+  // The client reads the newest access on every (re)connect, so rotating a
+  // ticket does not restart a healthy stream; only a new hub or host does.
+  const accessRef = useRef(access);
+  accessRef.current = access;
+  const accessKey = access
+    ? `${access.httpBase}\n${access.query.hostId ?? ""}\n${access.credentials}`
+    : null;
+  // Set when the hub rejected the credential; the stream restarts once access changes.
+  const rejectedRef = useRef<{ readonly expiresAt: number | null } | null>(null);
+  const authRestartAtRef = useRef(0);
+  const [authEpoch, setAuthEpoch] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const clientRef = useRef<DeviceStreamClient | null>(null);
   const [status, setStatus] = useState<DeviceStreamStatus>("connecting");
@@ -111,16 +128,34 @@ export function DeviceStreamView(props: {
     connected: false,
   });
   const { onHandle, onScreen } = props;
+  const shownStatus: DeviceStreamStatus = accessError && !access ? "error" : status;
+  const shownDetail = accessError && !access ? accessError : detail;
+
+  useEffect(() => {
+    const rejected = rejectedRef.current;
+    if (!access || !rejected) return;
+    if (access.expiresAt !== null && access.expiresAt === rejected.expiresAt) return;
+    rejectedRef.current = null;
+    authRestartAtRef.current = Date.now();
+    setAuthEpoch((epoch) => epoch + 1);
+  }, [access]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!access || !canvas || !props.visible) {
+    const initialAccess = accessRef.current;
+    if (accessKey === null || initialAccess === null || !canvas || !props.visible) {
       setStatus("connecting");
       onHandle?.(null);
       return;
     }
+    let latestAccess = initialAccess;
     const client = createDeviceStreamClient(
-      { platform: props.platform, deviceId: props.deviceId, access },
+      {
+        platform: props.platform,
+        deviceId: props.deviceId,
+        // Keep the last good access if a refresh fails mid-stream.
+        access: () => (latestAccess = accessRef.current ?? latestAccess),
+      },
       createCanvasFrameSink(canvas, () => frameListenerRef.current?.()),
       {
         onDuoControl: setDuoControl,
@@ -135,7 +170,14 @@ export function DeviceStreamView(props: {
           onScreen?.(next);
         },
         onUnauthorized: () => {
-          // A fresh ticket re-runs this effect through the access dependency.
+          // A rejection right after a fresh credential is not an expired
+          // ticket; stop and offer Reconnect instead of minting in a loop.
+          if (Date.now() - authRestartAtRef.current < AUTH_RETRY_WINDOW_MS) {
+            setStatus("error");
+            setDetail("This environment rejected the device stream credentials.");
+            return;
+          }
+          rejectedRef.current = { expiresAt: accessRef.current?.expiresAt ?? null };
           refreshDeviceHubAccess(props.environmentId);
         },
         onMjpegFallback: (url) => {
@@ -167,7 +209,8 @@ export function DeviceStreamView(props: {
       setScreen(null);
     };
   }, [
-    access,
+    accessKey,
+    authEpoch,
     cancelPhoneInput,
     onHandle,
     onPhoneUnavailable,
@@ -543,20 +586,27 @@ export function DeviceStreamView(props: {
             </span>
           </div>
         ) : null}
-        {status !== "streaming" && !(retainingAndroidFrame && showPhone) ? (
+        {shownStatus !== "streaming" && !(retainingAndroidFrame && showPhone) ? (
           <div className="absolute inset-0">
             <DeviceLoadingView
               name={props.deviceName ?? "Device"}
               description={props.deviceDescription ?? ""}
               stage="stream"
-              message={status === "error" ? (detail ?? "Stream failed.") : "Connecting video…"}
-              error={status === "error"}
+              message={
+                shownStatus === "error" ? (shownDetail ?? "Stream failed.") : "Connecting video…"
+              }
+              error={shownStatus === "error"}
             >
-              {status === "error" ? (
+              {shownStatus === "error" ? (
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => {
+                    authRestartAtRef.current = 0;
+                    if (accessError) {
+                      refreshDeviceHubAccess(props.environmentId);
+                      return;
+                    }
                     // An expired ticket surfaces as unauthorized on restart and
                     // refreshes access through the effect; no need to mint one here.
                     // Drop the MJPEG fallback too, or a recovered H.264 stream

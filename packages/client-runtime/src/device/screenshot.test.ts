@@ -10,6 +10,7 @@ const target = {
     wsBase: "wss://remote.example",
     query: { ticket: "capture-ticket" },
     credentials: false,
+    expiresAt: null,
   },
 };
 

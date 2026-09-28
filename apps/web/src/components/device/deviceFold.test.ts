@@ -8,6 +8,7 @@ const access: DeviceHubAccess = {
   wsBase: "wss://env.example/api/device-hub",
   query: {},
   credentials: true,
+  expiresAt: null,
 };
 
 const respond = (status: number, body: unknown) =>

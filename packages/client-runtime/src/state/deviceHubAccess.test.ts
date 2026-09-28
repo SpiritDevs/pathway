@@ -29,6 +29,7 @@ it.effect("uses session cookies without minting tickets for the local client", (
       wsBase: "wss://device.test/api/device-hub",
       credentials: true,
       query: {},
+      expiresAt: null,
     });
   }).pipe(
     Effect.provide(remoteHttpClientLayer(() => Promise.reject(new Error("No HTTP expected")))),
@@ -43,6 +44,7 @@ it.effect("mints a media ticket with the remote credential and uses the environm
     });
     expect(access.query).toEqual({ wsTicket: "test-ticket" });
     expect(access.credentials).toBe(false);
+    expect(access.expiresAt).toBe(Date.parse("2026-09-22T00:00:00.000Z"));
   }).pipe(
     Effect.provide(
       remoteHttpClientLayer(async (input, init) => {

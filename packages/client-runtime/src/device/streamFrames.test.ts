@@ -63,6 +63,7 @@ it("delivers borrowed decoded frames, reports presentation failure, and discards
         httpBase: "https://test",
         wsBase: "wss://test",
         credentials: false,
+        expiresAt: null,
         query: {},
       },
     },

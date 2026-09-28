@@ -201,6 +201,7 @@ it.each(["hidden", "access renewed"] as const)(
       wsBase: "wss://remote.test/api/device-hub",
       query: {},
       credentials: false,
+      expiresAt: null,
     };
     const detail = snapshot("light");
     if (detail._tag !== "Success") throw new Error("Expected a successful snapshot");

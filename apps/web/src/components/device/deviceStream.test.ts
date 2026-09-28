@@ -92,6 +92,8 @@ describe("native device stream transport", () => {
           httpBase: "https://environment.test/api/device-hub",
           wsBase: "wss://environment.test/api/device-hub",
           credentials: false,
+          // Already expired, so a rejected upgrade reads as an auth failure.
+          expiresAt: 0,
           query: { wsTicket: "stream-ticket", hostId: "ssh-host" },
         },
       },
@@ -286,6 +288,7 @@ describe("iOS input startup", () => {
           httpBase: "http://test/api/device-hub",
           wsBase: "ws://test/api/device-hub",
           credentials: true,
+          expiresAt: null,
           query: {},
         },
       },
