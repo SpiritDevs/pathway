@@ -12,6 +12,7 @@ import {
   ISSUES_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
   type AuthEnvironmentScope,
+  type DeviceListInput,
   type ServerSettingsPatch,
   WS_METHODS,
   WsRpcGroup,
@@ -318,3 +319,8 @@ export function extraScopeForServerSettingsPatch(
 ): AuthEnvironmentScope | null {
   return patch.computer === undefined ? null : AuthAccessWriteScope;
 }
+
+export const requiredScopeForDeviceList = (input: DeviceListInput): AuthEnvironmentScope =>
+  input.retryHostId || input.updateTool
+    ? AuthOrchestrationOperateScope
+    : AuthOrchestrationReadScope;

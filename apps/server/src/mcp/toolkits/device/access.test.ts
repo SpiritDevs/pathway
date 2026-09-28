@@ -59,6 +59,9 @@ it.effect(
         const unexpected = () => Effect.die(new Error("Unexpected device operation"));
         const service = DeviceService.of({
           agentCli: unexpected(),
+          updateTool: unexpected,
+          inspect: unexpected(),
+          retryHost: unexpected,
           testHost: unexpected,
           agentTarget: unexpected,
           state: Effect.succeed(state),
