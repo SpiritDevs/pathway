@@ -6,6 +6,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthSessionId,
   LOCAL_DEVICE_HOST_ID,
+  DeviceOperationError,
   type AuthEnvironmentScope,
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
@@ -30,9 +31,11 @@ const fixture = (
   scopes: ReadonlyArray<AuthEnvironmentScope>,
   fail = false,
   authError?: ServerAuthCredentialError | ServerAuthInternalError,
+  deniedDevice?: string,
 ) => {
   let finalized = 0;
   const requests: string[] = [];
+  const claims: string[] = [];
   const client = HttpClient.make((request, _url, signal) =>
     Effect.gen(function* () {
       requests.push(request.url);
@@ -60,7 +63,16 @@ const fixture = (
       ),
       Layer.provideMerge(
         Layer.succeed(DeviceService, {
-          claimDevice: () => Effect.void,
+          claimDevice: (_hostId: string, deviceId: string) =>
+            Effect.gen(function* () {
+              claims.push(deviceId);
+              if (deviceId === deniedDevice)
+                return yield* new DeviceOperationError({
+                  operation: "claim",
+                  reason: "request_failed",
+                  cause: new Error("In use by another environment"),
+                });
+            }),
           currentReadiness: () =>
             Effect.succeed({ hostId: LOCAL_DEVICE_HOST_ID, hub: { origin: "http://hub.test" } }),
         } as unknown as DeviceService["Service"]),
@@ -74,6 +86,7 @@ const fixture = (
     handler: (request: Request) =>
       handler(request, Context.make(SessionStore, {} as SessionStore["Service"])),
     requests,
+    claims,
     finalized: () => finalized,
   };
 };
@@ -197,3 +210,49 @@ it.each(["/panel/2/stream.avcc", "/panel/1/webrtc/offer", "/panel/3/exec"])(
     expect(requests).toEqual([]);
   },
 );
+
+it.each([
+  "/vendor/serve-sim/helper/owned-by-other/stream.avcc?device=free-simulator",
+  "/vendor/serve-sim/helper/owned-by-other/panel/1/stream.avcc?device=free-simulator",
+  "/vendor/serve-sim/api/screenshot?device=free-simulator&device=owned-by-other",
+])("rejects ambiguous or malformed selectors before claiming or forwarding: %s", async (route) => {
+  const { handler, requests, claims } = fixture([AuthOrchestrationReadScope]);
+  const response = await handler(new Request(`http://t3.test/api/device-hub${route}`));
+  expect(response.status).toBe(400);
+  expect(claims).toEqual([]);
+  expect(requests).toEqual([]);
+});
+
+it.each(["", "?device=owned-by-other"])(
+  "claims the upstream path device with matching selectors %s",
+  async (query) => {
+    const { handler, claims } = fixture([AuthOrchestrationReadScope]);
+    const response = await handler(
+      new Request(
+        `http://t3.test/api/device-hub/vendor/serve-sim/helper/owned-by-other/stream.avcc${query}`,
+      ),
+    );
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(claims).toEqual(["owned-by-other"]);
+  },
+);
+
+it("denies the path device even when a matching query selector is supplied", async () => {
+  const { handler, claims, requests } = fixture(
+    [AuthOrchestrationReadScope],
+    false,
+    undefined,
+    "owned-by-other",
+  );
+  for (const query of ["", "?device=owned-by-other"]) {
+    const response = await handler(
+      new Request(
+        `http://t3.test/api/device-hub/vendor/serve-sim/helper/owned-by-other/stream.avcc${query}`,
+      ),
+    );
+    expect(response.status).toBe(409);
+  }
+  expect(claims).toEqual(["owned-by-other", "owned-by-other"]);
+  expect(requests).toEqual([]);
+});

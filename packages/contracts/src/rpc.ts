@@ -14,6 +14,7 @@ import {
   DeviceError,
   DeviceListInput,
   DeviceUpdateToolsInput,
+  DeviceRestartToolsInput,
   DeviceCheckRequirementsInput,
   DeviceCheckRequirementsResult,
   SshDeviceHostConfig,
@@ -503,6 +504,7 @@ export const WS_METHODS = {
   deviceConfigure: "device.configure",
   deviceList: "device.list",
   deviceUpdateTools: "device.updateTools",
+  deviceRestartTools: "device.restartTools",
   deviceCheckRequirements: "device.checkRequirements",
   deviceTestHost: "device.testHost",
   deviceOpen: "device.open",
@@ -2363,6 +2365,11 @@ export const WsComputerRpcGroup = RpcGroup.make(
   WsSubscribeComputerEventsRpc,
 );
 
+const WsDeviceRestartToolsRpc = Rpc.make(WS_METHODS.deviceRestartTools, {
+  payload: DeviceRestartToolsInput,
+  success: DeviceServiceState,
+  error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+});
 const WsDeviceUpdateToolsRpc = Rpc.make(WS_METHODS.deviceUpdateTools, {
   payload: DeviceUpdateToolsInput,
   success: DeviceServiceState,
@@ -2376,6 +2383,7 @@ const WsDeviceCheckRequirementsRpc = Rpc.make(WS_METHODS.deviceCheckRequirements
 
 export const WsDeviceRpcGroup = RpcGroup.make(
   WsDeviceUpdateToolsRpc,
+  WsDeviceRestartToolsRpc,
   WsDeviceCheckRequirementsRpc,
   WsDeviceConfigureRpc,
   WsDeviceListRpc,

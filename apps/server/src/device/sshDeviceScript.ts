@@ -27,6 +27,9 @@ export const remoteDeviceScript = (
     | "probe"
     | "start"
     | "agent-start"
+    | "restart-hub"
+    | "restart-agent"
+    | "restart-tools"
     | "stop-agent"
     | "stop"
     | "update-hub"
@@ -184,8 +187,40 @@ async function install(name, version, entry) {
     if (fs.existsSync(entry)) run(process.execPath, [entry, 'daemon', 'stop', '--state-dir', state]);
     return;
   }
+  const restarting = mode.startsWith('restart-');
+  const restartHub = mode === 'restart-hub' || mode === 'restart-tools';
+  const restartAgent = mode === 'restart-agent' || mode === 'restart-tools';
+  const hadAgent = !!read(daemonFile);
   const previousGuardian = read(path.join(state, 'lease-owner.json'));
-  if (previousGuardian) {
+  if (restarting) {
+    if (!previousGuardian || !maintenanceAlive(previousGuardian.pid, previousGuardian.identity)) throw Error('The device connection ended. Reconnect before restarting tools.');
+    // A surviving maintenance worker also retains ownership if its guardian crashes mid-restart.
+    retainLeaseHelpers([{ pid: process.pid, identity: maintenanceIdentity(process.pid) }]);
+    if (restartHub) {
+      const previous = read(hubFile);
+      const identity = previous?.pid ? maintenanceIdentity(previous.pid) : null;
+      stopHub(previous);
+      const deadline = Date.now() + 10000;
+      while (previous?.pid && maintenanceAlive(previous.pid, identity)) {
+        if (Date.now() >= deadline) throw Error('The old device hub is still running.');
+        await sleep(25);
+      }
+      fs.rmSync(hubFile, { force: true });
+    }
+    if (restartAgent && hadAgent) {
+      const previous = read(daemonFile);
+      const identity = previous?.pid ? maintenanceIdentity(previous.pid) : null;
+      const entry = read(agentFile)?.entryPath;
+      if (!entry || run(process.execPath, [entry, 'daemon', 'stop', '--state-dir', state]).status !== 0) throw Error('Could not stop agent tools for restart.');
+      const deadline = Date.now() + 10000;
+      while (previous?.pid && maintenanceAlive(previous.pid, identity)) {
+        if (Date.now() >= deadline) throw Error('The old agent daemon is still running.');
+        await sleep(25);
+      }
+      fs.rmSync(daemonFile, { force: true });
+    }
+  }
+  if (previousGuardian && !restarting) {
     const deadline = Date.now() + 10000;
     while (maintenanceAlive(previousGuardian.pid, previousGuardian.identity)) {
       if (Date.now() >= deadline) throw Error('The previous device connection is still closing. Retry shortly.');
@@ -194,9 +229,10 @@ async function install(name, version, entry) {
   }
   if (!ios && !android) throw Error(platforms.map(p => p.reason).join(' '));
   fs.mkdirSync(state, { recursive: true, mode: 0o700 });
-  const hubEntry = await install('expo-device-hub', hubVersion, 'dist/server/cli.mjs');
+  const hubEntry = restarting && !restartHub ? read(hubFile)?.entryPath : await install('expo-device-hub', hubVersion, 'dist/server/cli.mjs');
+  if (!hubEntry) throw Error('The device hub is not running.');
   let hub = read(hubFile);
-  if (!hub || hub.owner !== owner || hub.entryPath !== hubEntry || !await healthy(hub.port, '/readyz')) {
+  if ((!restarting || restartHub) && (!hub || hub.owner !== owner || hub.entryPath !== hubEntry || !await healthy(hub.port, '/readyz'))) {
     stopHub(hub);
     for (let attempt = 0; attempt < 5; attempt++) {
       const hubPort = await port();
@@ -207,8 +243,9 @@ async function install(name, version, entry) {
       try { await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); }
       finally { fs.closeSync(log); }
       child.unref();
-      hub = { owner, pid: child.pid, port: hubPort, entryPath: hubEntry };
+      hub = { owner, pid: child.pid, identity: maintenanceIdentity(child.pid), port: hubPort, entryPath: hubEntry };
       write(hubFile, hub);
+      if (restarting) retainLeaseHelpers();
       const deadline = Date.now() + 30000;
       let listening = false;
       while (child.exitCode === null && child.signalCode === null) {
@@ -223,17 +260,17 @@ async function install(name, version, entry) {
     }
   }
   let agentResult = {};
-  if (mode === 'agent-start') {
-  const agentEntry = await install('agent-device', agentVersion, 'bin/agent-device.mjs');
+  if (mode === 'agent-start' || (restarting && hadAgent)) {
+  const agentEntry = restarting && !restartAgent ? read(agentFile)?.entryPath : await install('agent-device', agentVersion, 'bin/agent-device.mjs');
   const previousAgent = read(agentFile)?.entryPath;
   let daemon = read(daemonFile);
-  if (daemon && (previousAgent !== agentEntry || !await healthy(daemon.httpPort, '/health'))) {
+  if ((!restarting || restartAgent) && daemon && (previousAgent !== agentEntry || !await healthy(daemon.httpPort, '/health'))) {
     const stopped = run(process.execPath, [previousAgent || agentEntry, 'daemon', 'stop', '--state-dir', state]);
     if (stopped.status !== 0) throw Error('Could not stop the previous agent-device version.');
     fs.rmSync(daemonFile, { force: true });
     daemon = null;
   }
-  if (!daemon) {
+  if (!daemon && (!restarting || restartAgent)) {
     fs.rmSync(daemonFile, { force: true });
     const env = { ...process.env, AGENT_DEVICE_STATE_DIR: state, AGENT_DEVICE_DAEMON_SERVER_MODE: 'http', AGENT_DEVICE_DAEMON_IDLE_TIMEOUT_MS: '0', AGENT_DEVICE_NO_UPDATE_NOTIFIER: '1' };
     delete env.AGENT_DEVICE_DAEMON_BASE_URL; delete env.AGENT_DEVICE_DAEMON_AUTH_TOKEN; delete env.AGENT_DEVICE_CONFIG;
@@ -241,7 +278,7 @@ async function install(name, version, entry) {
     daemon = read(daemonFile);
   }
   if (!daemon || !await healthy(daemon.httpPort, '/health')) throw Error('agent-device daemon did not become ready in ' + state);
-  write(agentFile, { entryPath: agentEntry });
+  write(agentFile, { entryPath: agentEntry, pid: daemon.pid, identity: maintenanceIdentity(daemon.pid) });
   agentResult = { daemonPort: daemon.httpPort, token: daemon.token, entryPath: agentEntry };
   }
   const vendor = path.resolve(path.dirname(hubEntry), '../../vendor/serve-sim/dist');
@@ -249,6 +286,6 @@ async function install(name, version, entry) {
   await pruneTools(path.join(cacheRoot, 'tools'), [['expo-device-hub', hubVersion], ...(mode === 'agent-start' ? [['agent-device', agentVersion]] : [])], false).catch(() => {});
   console.log(JSON.stringify({ nodePath: process.execPath, platforms, tools: versions(), hubPort: hub.port, ...agentResult,
     helpers: { serveSimAxSettings: optional(path.join(vendor, 'simax/serve-sim-ax-settings')), serveSimCli: optional(path.join(vendor, 'serve-sim.js')) } }));
-  } finally { releaseHost(); }
+  } finally { retainLeaseHelpers(); releaseHost(); }
 })().catch(error => { console.error(error.message); process.exitCode = 1; });
 `;

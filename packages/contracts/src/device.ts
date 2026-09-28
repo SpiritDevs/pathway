@@ -129,6 +129,10 @@ export const DeviceUpdateToolsInput = Schema.Struct({
 });
 export type DeviceUpdateToolsInput = typeof DeviceUpdateToolsInput.Type;
 
+/** Restart selected running helpers without closing device sessions or releasing ownership. */
+export const DeviceRestartToolsInput = DeviceUpdateToolsInput;
+export type DeviceRestartToolsInput = typeof DeviceRestartToolsInput.Type;
+
 export const DeviceRequirement = Schema.Struct({
   kind: Schema.Literals(["sdk", "runtime"]),
   platform: DevicePlatform,
@@ -203,6 +207,7 @@ export const DeviceServiceState = Schema.Struct({
   supportsEnvironmentToolSync: Schema.optional(Schema.Boolean),
   supportsHostRetry: Schema.optional(Schema.Boolean),
   supportsToolUpdate: Schema.optional(Schema.Boolean),
+  supportsToolRestart: Schema.optional(Schema.Boolean),
   supportsToolInspection: Schema.optional(Schema.Boolean),
   hosts: Schema.Array(DeviceHostSummary),
   hostStatus: DeviceHostStatus,

@@ -6,6 +6,9 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeEvents from "node:events";
+import { remoteDeviceGuardian } from "./remoteDeviceLease.ts";
+import { makeDeviceLeases } from "./DeviceLeases.ts";
 import * as NodeUtil from "node:util";
 import { quoteRemoteArg, remoteDeviceEnvironment, remoteDeviceScript } from "./sshDeviceScript.ts";
 import { AGENT_DEVICE_VERSION, DEVICE_HUB_VERSION } from "./DeviceToolchain.ts";
@@ -93,7 +96,7 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
         let invocation = 0;
         const invoke = async (
           owner: string,
-          mode: "probe" | "start" | "agent-start" | "stop-agent" | "stop",
+          mode: Parameters<typeof remoteDeviceScript>[1],
           upgraded = false,
         ) => {
           const file = NodePath.join(home, `${owner}-${mode}-${invocation++}.cjs`);
@@ -126,6 +129,7 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
         await NodeFSP.mkdir(NodePath.join(root, "hosts/one"), { recursive: true });
         await NodeFSP.writeFile(NodePath.join(root, "hosts/one/fail-start-once"), "");
 
+        let guardian: NodeChildProcess.ChildProcessWithoutNullStreams | undefined;
         try {
           const [manual, concurrent] = await Promise.all([
             invoke("one", "start"),
@@ -196,6 +200,38 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
             await NodeFSP.readFile(NodePath.join(root, "hosts/one/stopped-agent"), "utf8"),
           ).toBe(String(upgradedDaemon.pid));
           expect(repaired.daemonPort).not.toBe(upgraded.daemonPort);
+          const environment = { environmentId: "one", environmentLabel: "Remote environment" };
+          guardian = NodeChildProcess.spawn(
+            process.execPath,
+            ["-e", remoteDeviceGuardian("one", environment)],
+            {
+              env: { ...process.env, HOME: home },
+              stdio: ["pipe", "pipe", "pipe"],
+            },
+          );
+          await NodeEvents.EventEmitter.once(guardian.stdout, "data");
+          const acquire = await exec(
+            process.execPath,
+            ["-e", remoteDeviceScript("one", "lease-acquire", "ios:phone")],
+            { env: { ...process.env, HOME: home } },
+          );
+          expect(JSON.parse(acquire.stdout)).toEqual({ owner: null });
+          const contender = makeDeviceLeases(cache, {
+            environmentId: "other",
+            environmentLabel: "Other",
+          });
+          const readPid = async (file: string) =>
+            JSON.parse(await NodeFSP.readFile(NodePath.join(root, "hosts/one", file), "utf8")).pid;
+          for (const mode of ["restart-hub", "restart-agent", "restart-tools"] as const) {
+            const hubPid = await readPid("hub.json");
+            const agentPid = await readPid("daemon.json");
+            repaired = await invoke("one", mode, true);
+            expect((await readPid("hub.json")) === hubPid).toBe(mode === "restart-agent");
+            expect((await readPid("daemon.json")) === agentPid).toBe(mode === "restart-hub");
+            expect(await contender.acquire("ios:phone")).toEqual(environment);
+            expect((await fetch(`http://127.0.0.1:${repaired.hubPort}/readyz`)).ok).toBe(true);
+            expect((await fetch(`http://127.0.0.1:${repaired.daemonPort}/health`)).ok).toBe(true);
+          }
           // Stop still uses the recorded entry when a future pinned package is not installed yet.
           const originalScript = remoteDeviceScript("one", "stop-agent");
           const upgradedStop = NodePath.join(home, "upgraded-stop.cjs");
@@ -220,6 +256,11 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
               .owner,
           ).toBe("two");
         } finally {
+          if (guardian && guardian.exitCode === null && guardian.signalCode === null) {
+            const exited = NodeEvents.EventEmitter.once(guardian, "exit");
+            guardian.stdin.end();
+            await exited;
+          }
           await invoke("one", "stop").catch(() => {});
           await invoke("two", "stop").catch(() => {});
           await NodeFSP.rm(home, { recursive: true, force: true });

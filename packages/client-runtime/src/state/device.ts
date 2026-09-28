@@ -45,6 +45,13 @@ export function createDeviceEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    /** Restarts selected running helpers; the environment keeps sessions and simulator leases. */
+    restartTools: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:device:restart-tools",
+      tag: WS_METHODS.deviceRestartTools,
+      scheduler,
+      concurrency,
+    }),
     open: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:device:open",
       tag: WS_METHODS.deviceOpen,

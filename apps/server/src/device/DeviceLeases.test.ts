@@ -105,3 +105,53 @@ for (let i = 0; i < 4; i++) await withMachineLock(root, async () => {
   );
   await expect(NodeFSP.stat(NodePath.join(root, ".maintenance-lock"))).rejects.toThrow();
 });
+
+it("retains a dead owner's surviving helper and distinguishes instances sharing its PID", async () => {
+  const root = await temporary();
+  const helper = NodeChildProcess.spawn(
+    process.execPath,
+    ["-e", "process.stdin.resume();console.log('ready');"],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  await NodeEvents.EventEmitter.once(helper.stdout, "data");
+  const script = NodePath.join(root, "owner-with-helper.mjs");
+  await NodeFSP.writeFile(
+    script,
+    `
+import { makeDeviceLeases } from ${JSON.stringify(new URL("./DeviceLeases.ts", import.meta.url).href)};
+const one = makeDeviceLeases(${JSON.stringify(root)}, ${JSON.stringify(alice)});
+const two = makeDeviceLeases(${JSON.stringify(root)}, ${JSON.stringify(alice)});
+await one.acquire('ios:free-after-crash');
+await two.acquire('ios:still-streaming');
+await two.retainHelpers([${helper.pid}]);
+process.send('acquired');
+process.on('message', () => {});
+`,
+  );
+  const child = NodeChildProcess.fork(script, [], {
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
+    execArgv: [],
+  });
+  try {
+    await NodeEvents.EventEmitter.once(child, "message");
+    const exited = NodeEvents.EventEmitter.once(child, "exit");
+    child.kill("SIGKILL");
+    await exited;
+    const contender = makeDeviceLeases(root, bob);
+    expect(await contender.inspectMany(["ios:free-after-crash", "ios:still-streaming"])).toEqual({
+      "ios:still-streaming": alice,
+    });
+    expect(await contender.acquire("ios:still-streaming")).toEqual(alice);
+    const helperExited = NodeEvents.EventEmitter.once(helper, "exit");
+    helper.kill();
+    await helperExited;
+    expect(await contender.acquire("ios:still-streaming")).toBeNull();
+  } finally {
+    for (const process of [child, helper])
+      if (process.exitCode === null && process.signalCode === null) {
+        const exited = NodeEvents.EventEmitter.once(process, "exit");
+        process.kill();
+        await exited;
+      }
+  }
+});

@@ -61,6 +61,7 @@ it.effect(
           agentCli: unexpected(),
           updateTool: unexpected,
           updateTools: unexpected,
+          restartTools: unexpected,
           checkRequirements: unexpected,
           claimDevice: unexpected,
           inspect: unexpected(),

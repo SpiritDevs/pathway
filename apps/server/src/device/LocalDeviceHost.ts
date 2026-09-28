@@ -419,6 +419,9 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       );
     const startedAtMillis = yield* Clock.currentTimeMillis;
     const hub: HubProcess = { child, scope, origin, startedAtMillis, nodePath };
+    yield* leaseOperation(() => leases.retainHelpers([Number(child.pid)])).pipe(
+      Effect.tapError(() => stopHub(hub)),
+    );
     yield* Effect.forkIn(observeHubOutput(hub), scope);
     yield* waitForHttpReady({
       baseUrl: origin,
@@ -499,7 +502,10 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
   const startAgentDeviceDaemon = Effect.fn("LocalDeviceHost.startAgentDeviceDaemon")(function* (
     agentTool: DeviceToolPaths,
     nodePath: string,
-  ): Effect.fn.Return<DeviceHost.AgentDeviceEndpoint, DeviceHost.DeviceHostTimeoutError> {
+  ): Effect.fn.Return<
+    DeviceHost.AgentDeviceEndpoint,
+    DeviceHost.DeviceHostTimeoutError | DeviceHost.DeviceHostError
+  > {
     const stateDir = agentDeviceStateDir(path, config.stateDir);
     yield* fs.makeDirectory(stateDir, { recursive: true }).pipe(Effect.ignore);
     const existing = yield* readDaemonFile().pipe(Effect.option);
@@ -532,7 +538,11 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
           Effect.scoped,
           Effect.orElseSucceed(() => false),
         );
-      if (alive) return toEndpoint(existing.value);
+      if (alive) {
+        if (existing.value.pid)
+          yield* leaseOperation(() => leases.retainHelpers([existing.value.pid!]));
+        return toEndpoint(existing.value);
+      }
       yield* fs.remove(daemonFilePath(), { force: true }).pipe(Effect.ignore);
     }
     // There is no `daemon start`; the first command in a state dir spawns the
@@ -549,7 +559,10 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
     const deadline = (yield* Clock.currentTimeMillis) + DAEMON_READY_TIMEOUT_MS;
     while (true) {
       const file = yield* readDaemonFile().pipe(Effect.option);
-      if (file._tag === "Some") return toEndpoint(file.value);
+      if (file._tag === "Some") {
+        if (file.value.pid) yield* leaseOperation(() => leases.retainHelpers([file.value.pid!]));
+        return toEndpoint(file.value);
+      }
       if ((yield* Clock.currentTimeMillis) > deadline) {
         return yield* new DeviceHost.DeviceHostTimeoutError({
           hostId,
@@ -647,54 +660,94 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
   const ensureReady: DeviceHost.DeviceHost["Service"]["ensureReady"] = (onPhase) =>
     startLock.withPermits(1)(ensureHubReady(onPhase).pipe(Effect.map(toReady)));
 
+  const ensureAgentReadyUnlocked: DeviceHost.DeviceHost["Service"]["ensureAgentReady"] = (
+    onPhase,
+  ) =>
+    Effect.gen(function* (): Generator<
+      Effect.Effect<
+        unknown,
+        DeviceHost.DeviceHostError | DeviceHost.DeviceHostTimeoutError | NodeRuntimeUnavailableError
+      >,
+      DeviceHost.DeviceHostAgentReady
+    > {
+      const running = yield* ensureHubReady(onPhase);
+      if (running.agentDevice) return { ...toReady(running), agentDevice: running.agentDevice };
+      const installed = yield* isAgentDeviceInstalled(cacheBaseDir).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+      );
+      if (!installed) {
+        const inventory = yield* summary;
+        yield* onPhase(
+          "installing",
+          deviceToolInstallMessage("agent tools", inventory.tools?.agent),
+        );
+      }
+      const agentTool = yield* ensureAgentDevice(cacheBaseDir).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+        Effect.provideService(ProcessRunner.ProcessRunner, runner),
+        Effect.mapError(
+          (cause) =>
+            new DeviceHost.DeviceHostError({
+              hostId,
+              step: "installing agent tools",
+              cause,
+            }),
+        ),
+      );
+      agentToolRef = { entryPath: agentTool.entryPath, nodePath: running.hub.nodePath };
+      yield* onPhase("starting");
+      const agentDevice = yield* startAgentDeviceDaemon(agentTool, running.hub.nodePath);
+      yield* pruneLocalDeviceTools(cacheBaseDir, running.hub.nodePath, "agent").pipe(
+        Effect.provideService(Path.Path, path),
+        Effect.provideService(ProcessRunner.ProcessRunner, runner),
+        Effect.ignore,
+      );
+      const next = { ...running, agentDevice };
+      yield* Ref.set(runningRef, next);
+      return { ...toReady(next), agentDevice };
+    });
   const ensureAgentReady: DeviceHost.DeviceHost["Service"]["ensureAgentReady"] = (onPhase) =>
-    startLock.withPermits(1)(
-      Effect.gen(function* (): Generator<
-        Effect.Effect<
-          unknown,
-          | DeviceHost.DeviceHostError
-          | DeviceHost.DeviceHostTimeoutError
-          | NodeRuntimeUnavailableError
-        >,
-        DeviceHost.DeviceHostAgentReady
-      > {
-        const running = yield* ensureHubReady(onPhase);
-        if (running.agentDevice) return { ...toReady(running), agentDevice: running.agentDevice };
-        const installed = yield* isAgentDeviceInstalled(cacheBaseDir).pipe(
-          Effect.provideService(FileSystem.FileSystem, fs),
-          Effect.provideService(Path.Path, path),
-        );
-        if (!installed) {
-          const inventory = yield* summary;
-          yield* onPhase(
-            "installing",
-            deviceToolInstallMessage("agent tools", inventory.tools?.agent),
-          );
+    startLock.withPermit(ensureAgentReadyUnlocked(onPhase));
+
+  const restartTools: NonNullable<DeviceHost.DeviceHost["Service"]["restartTools"]> = (tools) =>
+    startLock.withPermit(
+      Effect.gen(function* () {
+        const previous = yield* Ref.get(runningRef);
+        if (!previous) return null;
+        if (tools.includes("hub")) {
+          // Disable the old supervisor before intentionally stopping this child.
+          yield* Ref.set(runningRef, null);
+          yield* stopHub(previous.hub);
+          const next = yield* ensureHubReady(() => Effect.void);
+          yield* Ref.set(runningRef, { ...next, agentDevice: previous.agentDevice });
         }
-        const agentTool = yield* ensureAgentDevice(cacheBaseDir).pipe(
-          Effect.provideService(FileSystem.FileSystem, fs),
-          Effect.provideService(Path.Path, path),
-          Effect.provideService(ProcessRunner.ProcessRunner, runner),
-          Effect.mapError(
-            (cause) =>
-              new DeviceHost.DeviceHostError({
-                hostId,
-                step: "installing agent tools",
-                cause,
-              }),
-          ),
-        );
-        agentToolRef = { entryPath: agentTool.entryPath, nodePath: running.hub.nodePath };
-        yield* onPhase("starting");
-        const agentDevice = yield* startAgentDeviceDaemon(agentTool, running.hub.nodePath);
-        yield* pruneLocalDeviceTools(cacheBaseDir, running.hub.nodePath, "agent").pipe(
-          Effect.provideService(Path.Path, path),
-          Effect.provideService(ProcessRunner.ProcessRunner, runner),
-          Effect.ignore,
-        );
-        const next = { ...running, agentDevice };
-        yield* Ref.set(runningRef, next);
-        return { ...toReady(next), agentDevice };
+        if (tools.includes("agent") && previous.agentDevice) {
+          yield* stopAgentDeviceDaemon(agentToolRef);
+          const daemon = yield* readDaemonFile().pipe(Effect.option);
+          if (
+            Option.isSome(daemon) &&
+            daemon.value.pid &&
+            (yield* isProcessAlive(daemon.value.pid))
+          )
+            return yield* new DeviceHost.DeviceHostError({
+              hostId,
+              step: "stopping agent tools for restart",
+              cause: new Error("The old daemon is still running."),
+            });
+          yield* Ref.update(runningRef, (running) =>
+            running ? { ...running, agentDevice: null } : running,
+          );
+          yield* ensureAgentReadyUnlocked(() => Effect.void);
+        }
+        const running = yield* Ref.get(runningRef);
+        return running
+          ? {
+              ...toReady(running),
+              ...(running.agentDevice ? { agentDevice: running.agentDevice } : {}),
+            }
+          : null;
       }),
     );
 
@@ -801,6 +854,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
           ),
         { discard: true },
       ),
+    restartTools,
     platformAvailability,
     ensureReady,
     ensureAgentReady,

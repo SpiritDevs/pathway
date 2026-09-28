@@ -98,6 +98,8 @@ const fixture = Effect.fn("fixture")(function* (
   inspectError = false,
   installTool?: Parameters<typeof makeWithHosts>[3],
   hostOverrides: Partial<DeviceHost.DeviceHost["Service"]> = {},
+  configureAgent?: Parameters<typeof makeWithHosts>[2],
+  grantAgentTarget?: Parameters<typeof makeWithHosts>[4],
 ) {
   const settings = yield* Ref.make(DEFAULT_SERVER_SETTINGS);
   const starts: string[] = [];
@@ -165,8 +167,9 @@ const fixture = Effect.fn("fixture")(function* (
   const service = yield* makeWithHosts(
     new Map([[host.id, host]]),
     undefined,
-    undefined,
+    configureAgent,
     installTool,
+    grantAgentTarget,
   ).pipe(
     Effect.provideService(DeviceHost.DeviceHost, host),
     Effect.provideService(
@@ -932,5 +935,95 @@ it.effect("clears stale ownership status when a released simulator is acquired",
     owner = null;
     yield* service.claimDevice("local", device.id);
     expect((yield* service.state).devices[0]?.inUseBy).toBeUndefined();
+  }).pipe(Effect.scoped),
+);
+
+it.effect("restarts selected helpers without closing sessions or releasing ownership", () =>
+  Effect.gen(function* () {
+    const restarted: ReadonlyArray<"hub" | "agent">[] = [];
+    const { service, starts, agentStops } = yield* fixture(
+      Effect.void,
+      undefined,
+      false,
+      undefined,
+      false,
+      undefined,
+      {
+        restartTools: (tools) =>
+          Effect.sync(() => {
+            restarted.push(tools);
+            return null;
+          }),
+      },
+    );
+    yield* service.configure({ enabled: true });
+    yield* service.open({
+      threadId: ThreadId.make("restart-session"),
+      deviceId: "Pixel_API_35",
+      platform: "android",
+    });
+    const before = yield* service.state;
+    const startsBefore = [...starts];
+    const result = yield* service.restartTools({ tools: ["hub", "hub"] });
+    expect(restarted).toEqual([["hub"]]);
+    expect(result.sessions).toEqual(before.sessions);
+    expect(result.devices).toEqual(before.devices);
+    expect(starts).toEqual(startsBefore);
+    expect(agentStops).toEqual([]);
+    yield* service.restartTools({});
+    expect(restarted[1]).toEqual(["hub", "agent"]);
+    expect((yield* service.restartTools({ hostId: "missing" }).pipe(Effect.result))._tag).toBe(
+      "Failure",
+    );
+  }).pipe(Effect.scoped),
+);
+
+it.effect("refreshes existing agent grants after restart changes the daemon endpoint", () =>
+  Effect.gen(function* () {
+    let endpoint = "";
+    const grants: string[] = [];
+    const { service } = yield* fixture(
+      Effect.void,
+      undefined,
+      false,
+      undefined,
+      false,
+      undefined,
+      {
+        restartTools: () =>
+          Effect.succeed({
+            nodePath: process.execPath,
+            hub: { origin: "http://device.test" },
+            helpers: { serveSimAxSettings: null, serveSimCli: null },
+            run: () => Effect.succeed({ stdout: "", stderr: "", code: 0 }),
+            agentDevice: { baseUrl: "http://restarted.test", token: "new", entryPath: "/agent" },
+          }),
+      },
+      (_hostId, ready) =>
+        Effect.sync(() => {
+          endpoint = ready.agentDevice.baseUrl;
+          return "/config";
+        }),
+      () =>
+        Effect.sync(() => {
+          grants.push(endpoint);
+        }),
+    );
+    yield* service.configure({ enabled: true, agentAccessEnabled: true });
+    yield* service.open({
+      threadId: ThreadId.make("agent-restart"),
+      deviceId: "Pixel_API_35",
+      platform: "android",
+    });
+    yield* service.agentTarget({
+      threadId: ThreadId.make("agent-restart"),
+      hostId: "local",
+      deviceId: "emulator-5554",
+    });
+    yield* service.restartTools({ tools: ["agent"] });
+    expect(grants).toEqual(["http://agent.test", "http://restarted.test"]);
+    yield* service.configure({ agentAccessEnabled: false });
+    yield* service.restartTools({ tools: ["hub"] });
+    expect(grants).toHaveLength(2);
   }).pipe(Effect.scoped),
 );

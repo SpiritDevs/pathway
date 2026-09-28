@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { ThreadId } from "@spiritdevs/contracts";
+import * as PubSub from "effect/PubSub";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
@@ -43,6 +44,7 @@ it.effect("keeps hosts independent when serials collide and another host fails",
         stop: Effect.void,
       };
     };
+    let version = "36";
     const http = HttpClient.make((request) =>
       Effect.succeed(
         HttpClientResponse.fromWeb(
@@ -53,7 +55,7 @@ it.effect("keeps hosts independent when serials collide and another host fails",
               {
                 id: "emulator-5554",
                 name: "Pixel",
-                version: "36",
+                version,
                 platform: "android",
                 booted: true,
                 physical: false,
@@ -80,6 +82,19 @@ it.effect("keeps hosts independent when serials collide and another host fails",
     const listed = yield* service.list;
     expect(listed.devices.map((device) => device.hostId).sort()).toEqual(["a", "b"]);
     expect(listed.hostStatuses.offline?.status).toBe("failed");
+    const subscription = yield* service.subscribe;
+    yield* service.list;
+    yield* service.list;
+    // A marker makes takeAll nonblocking; it must be the only publication.
+    yield* service.setHostStatus("a", { status: "ready", detail: "marker" });
+    const events = yield* PubSub.takeAll(subscription);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.hostStatuses.a?.detail).toBe("marker");
+    version = "37";
+    yield* service.list;
+    const changed = yield* PubSub.takeAll(subscription);
+    expect(changed).toHaveLength(1);
+    expect(changed[0]?.devices.map((device) => device.version)).toEqual(["37", "37"]);
     const threadId = ThreadId.make("thread");
     for (const hostId of ["a", "b"])
       yield* service.open({ threadId, hostId, deviceId: "emulator-5554", platform: "android" });
@@ -121,6 +136,7 @@ it.effect("keeps hosts independent when serials collide and another host fails",
     yield* service.configure({ enabled: false });
     expect((yield* service.state).hostStatuses).toEqual({});
   }).pipe(
+    Effect.scoped,
     Effect.provide(
       ServerSettingsService.layerTest({ enableDeviceSupport: true, enableAgentDeviceAccess: true }),
     ),

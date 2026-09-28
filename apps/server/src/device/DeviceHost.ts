@@ -85,6 +85,12 @@ export class DeviceHost extends Context.Service<
     readonly updateTools?: (
       tools: ReadonlyArray<"hub" | "agent">,
     ) => Effect.Effect<void, DeviceHostError>;
+    readonly restartTools?: (
+      tools: ReadonlyArray<"hub" | "agent">,
+    ) => Effect.Effect<
+      (DeviceHostReady & { agentDevice?: AgentDeviceEndpoint }) | null,
+      DeviceHostError | DeviceHostTimeoutError | NodeRuntimeUnavailableError
+    >;
     readonly acquireDevice: (key: string) => Effect.Effect<DeviceOwnership | null, DeviceHostError>;
     readonly deviceOwners: (
       keys: ReadonlyArray<string>,

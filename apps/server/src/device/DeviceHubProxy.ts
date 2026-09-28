@@ -207,10 +207,19 @@ const handler = Effect.gen(function* () {
   if (!ready) {
     return HttpServerResponse.text("Device hub is not running", { status: 503 });
   }
-  const pathDeviceId = /^\/vendor\/serve-sim\/helper\/([^/]+)\/(?!ws)/.exec(hubPath)?.[1];
-  const deviceId =
-    url.value.searchParams.get("device") ??
-    (pathDeviceId ? decodeURIComponent(pathDeviceId) : null);
+  const encodedPathDevice = /^\/vendor\/serve-sim\/helper\/([^/]+)\/(?!ws)/.exec(hubPath)?.[1];
+  const pathDevice =
+    encodedPathDevice === undefined
+      ? Option.some(undefined)
+      : yield* Effect.try(() => decodeURIComponent(encodedPathDevice)).pipe(Effect.option);
+  if (Option.isNone(pathDevice)) {
+    return HttpServerResponse.text("Invalid device selector", { status: 400 });
+  }
+  const queryDevices = url.value.searchParams.getAll("device");
+  const deviceId = pathDevice.value ?? queryDevices[0];
+  if (queryDevices.some((selector) => selector !== deviceId)) {
+    return HttpServerResponse.text("Conflicting device selectors", { status: 400 });
+  }
   const inventoryOnly = [
     "/api/devices",
     "/api/devices/ws",

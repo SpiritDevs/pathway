@@ -13,6 +13,7 @@
 import {
   type DeviceActionInput,
   type DeviceUpdateToolsInput,
+  type DeviceRestartToolsInput,
   type DeviceCheckRequirementsInput,
   type DeviceCheckRequirementsResult,
   type DeviceCloseInput,
@@ -125,6 +126,9 @@ export class DeviceService extends Context.Service<
     readonly updateTools: (
       input: DeviceUpdateToolsInput,
     ) => Effect.Effect<DeviceServiceState, DeviceError>;
+    readonly restartTools: (
+      input: DeviceRestartToolsInput,
+    ) => Effect.Effect<DeviceServiceState, DeviceError>;
     readonly checkRequirements: (
       input: DeviceCheckRequirementsInput,
     ) => Effect.Effect<DeviceCheckRequirementsResult, DeviceError>;
@@ -229,10 +233,15 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   const statePubSub = yield* PubSub.unbounded<DeviceServiceState>();
   const initialHosts = yield* Effect.forEach(hosts.values(), (host) => host.summary);
   let publishedHosts = new Map(hosts);
+  const agentTargets = new Map<
+    string,
+    { host: DeviceHost.DeviceHost["Service"]; deviceId: string; platform: DevicePlatform }
+  >();
   const stateRef = yield* SynchronizedRef.make<ServiceState>({
     state: {
       manifest: DEVICE_TOOL_MANIFEST,
       supportsEnvironmentToolSync: true,
+      supportsToolRestart: true,
       supportsHostRetry: true,
       supportsToolUpdate: installTool !== undefined,
       supportsToolInspection: true,
@@ -301,9 +310,6 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
           setHostStatus(host.id, { status, detail }).pipe(Effect.asVoid),
         )
         .pipe(
-          Effect.tapError((error) =>
-            setHostStatus(host.id, { status: "failed", detail: error.message }),
-          ),
           Effect.mapError(
             (error) =>
               new DeviceHostUnavailableError({
@@ -316,6 +322,9 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
                       : `Device support failed during ${error.step}.`,
                 cause: error,
               }),
+          ),
+          Effect.tapError((error) =>
+            setHostStatus(host.id, { status: "failed", detail: error.reason }),
           ),
         );
       if (hosts.get(host.id) !== host)
@@ -457,7 +466,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     return { devices, detail: list.errors?.map((error) => error.message).join("\n") || undefined };
   });
 
-  const refresh = Effect.fn("DeviceService.refresh")(function* (ready: DeviceReadiness) {
+  const fetchRefresh = Effect.fn("DeviceService.fetchRefresh")(function* (ready: DeviceReadiness) {
     const host = hosts.get(ready.hostId);
     const fetched = yield* fetchDevices(ready);
     const detail = fetched.detail;
@@ -477,47 +486,73 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       ...device,
       ...(owners[deviceLeaseKey(device)] ? { inUseBy: owners[deviceLeaseKey(device)] } : {}),
     }));
-    const hostSummaries = yield* Effect.forEach(hosts.values(), (host) => host.summary);
+    return { host, hostId: ready.hostId, devices, detail };
+  });
+
+  const mergeRefreshes = Effect.fn("DeviceService.mergeRefreshes")(function* (
+    fetched: ReadonlyArray<Effect.Success<ReturnType<typeof fetchRefresh>>>,
+  ) {
     return yield* lifecycleLock.withPermit(
       Effect.gen(function* () {
-        if (!(yield* readDeviceSettings).enabled || !host || hosts.get(ready.hostId) !== host)
+        if (!(yield* readDeviceSettings).enabled)
           return (yield* SynchronizedRef.get(stateRef)).state;
-        return yield* publish((state) => ({
-          ...state,
-          hosts: hostSummaries,
-          ...(ready.hostId === LOCAL_DEVICE_HOST_ID ? { hostStatusDetail: detail } : {}),
-          devices: [
-            ...state.devices.filter((device) => device.hostId !== ready.hostId),
-            ...devices,
-          ],
-          hostStatuses: {
-            ...state.hostStatuses,
-            [ready.hostId]: { status: "ready", ...(detail ? { detail } : {}) },
-          },
-        }));
+        const hostSummaries = yield* Effect.forEach(hosts.values(), (host) => host.summary);
+        const current = fetched.filter(
+          (value) => value.host && hosts.get(value.hostId) === value.host,
+        );
+        return yield* publish((state) => {
+          const devicesByHost = new Map(current.map((value) => [value.hostId, value.devices]));
+          const local = current.find((value) => value.hostId === LOCAL_DEVICE_HOST_ID);
+          return {
+            ...state,
+            hosts: hostSummaries,
+            ...(local ? { hostStatusDetail: local.detail } : {}),
+            devices: [...hosts.keys()].flatMap((id) =>
+              [
+                ...(devicesByHost.get(id) ??
+                  state.devices.filter((device) => device.hostId === id)),
+              ].sort((a, b) => a.id.localeCompare(b.id)),
+            ),
+            hostStatuses: {
+              ...state.hostStatuses,
+              ...Object.fromEntries(
+                current.map(({ hostId, detail }) => [
+                  hostId,
+                  {
+                    status: "ready" as const,
+                    ...(detail ? { detail } : {}),
+                  },
+                ]),
+              ),
+            },
+          };
+        });
       }),
     );
   });
 
+  const refresh = (ready: DeviceReadiness) =>
+    fetchRefresh(ready).pipe(Effect.flatMap((fetched) => mergeRefreshes([fetched])));
+
   const list: DeviceService["Service"]["list"] = Effect.gen(function* () {
     if (!(yield* readDeviceSettings).enabled) return (yield* SynchronizedRef.get(stateRef)).state;
-    yield* Effect.forEach(
+    const fetched = yield* Effect.forEach(
       hosts.values(),
       (host) =>
         Effect.gen(function* () {
           const ready = yield* readinessIfSupported(host.id);
-          if (ready) yield* refresh(ready);
+          return ready ? yield* fetchRefresh(ready) : null;
         }).pipe(
           Effect.catch((error) =>
             setHostStatus(host.id, {
               status: "failed",
               detail: error._tag === "DeviceHostUnavailableError" ? error.reason : error.message,
-            }),
+            }).pipe(Effect.as(null)),
           ),
         ),
       { concurrency: 4 },
     );
-    return (yield* SynchronizedRef.get(stateRef)).state;
+    return yield* mergeRefreshes(fetched.filter((value) => value !== null));
   }).pipe(Effect.withSpan("DeviceService.list"));
 
   const inspect = Effect.gen(function* () {
@@ -599,6 +634,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
                   }),
               ),
             );
+          if (!nextEnabled || !nextAgentAccess) agentTargets.clear();
           if (!nextEnabled) {
             yield* Effect.forEach(hosts.values(), (host) => host.stop, { discard: true });
           } else if (input.agentAccessEnabled === false) {
@@ -994,6 +1030,47 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       Effect.map(({ state }) => state.sessions.filter((session) => session.threadId === threadId)),
     );
 
+  const restartTools: DeviceService["Service"]["restartTools"] = Effect.fn(
+    "DeviceService.restartTools",
+  )(function* (input) {
+    yield* lifecycleLock.withPermit(
+      Effect.gen(function* () {
+        const host = yield* resolveHost(input.hostId);
+        if (!host.restartTools)
+          return yield* new DeviceHostUnavailableError({
+            hostId: host.id,
+            reason: "Tool restarts are unavailable on this host.",
+          });
+        const tools = [...new Set(input.tools ?? (["hub", "agent"] as const))];
+        const ready = yield* host.restartTools(tools).pipe(
+          Effect.mapError(
+            (cause) =>
+              new DeviceOperationError({
+                operation: "restart device tools",
+                reason: "command_failed",
+                cause,
+              }),
+          ),
+        );
+        if (ready?.agentDevice && configureAgent) {
+          const configPath = yield* configureAgent(host.id, {
+            ...ready,
+            agentDevice: ready.agentDevice,
+          });
+          for (const [session, target] of agentTargets) {
+            if (target.host === host)
+              yield* grantAgentTarget(session, {
+                configPath,
+                deviceId: target.deviceId,
+                platform: target.platform,
+              });
+          }
+        }
+      }),
+    );
+    return yield* inspect;
+  });
+
   const updateTools: DeviceService["Service"]["updateTools"] = Effect.fn(
     "DeviceService.updateTools",
   )(function* (input) {
@@ -1044,6 +1121,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
           return checkDeviceRequirements(result, input);
         }),
       updateTools,
+      restartTools,
       updateTool: (tool) => updateTools({ tools: [tool] }),
       retryHost,
       inspect,
@@ -1088,6 +1166,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
             deviceId: input.deviceId,
             platform: device.platform,
           });
+          agentTargets.set(session, { host, deviceId: input.deviceId, platform: device.platform });
           return ["--config", configPath, "--session", session];
         }),
       state: SynchronizedRef.get(stateRef).pipe(Effect.map(({ state }) => state)),

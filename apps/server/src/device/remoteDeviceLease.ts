@@ -4,6 +4,17 @@ import { deviceToolMaintenanceScript } from "./deviceToolMaintenance.ts";
 
 /** Shares the local lease format and lock, including when SSH and local environments meet. */
 export const remoteDeviceLeaseScript = String.raw`
+function retainLeaseHelpers(extra = []) {
+  const file = path.join(state, 'lease-owner.json');
+  const current = read(file);
+  if (!current) return;
+  const captured = [read(path.join(state, 'hub.json')), { ...read(path.join(state, 'agent.json')), ...read(path.join(state, 'daemon.json')) }]
+    .filter(value => Number.isSafeInteger(value?.pid) && value.pid > 0)
+    .map(value => ({ pid: value.pid, identity: value.identity || current.helpers?.find(helper => helper.pid === value.pid)?.identity || maintenanceIdentity(value.pid) }));
+  const helpers = [...(current.helpers || []).filter(value => maintenanceAlive(value.pid, value.identity)), ...extra, ...captured];
+  write(file, { ...current, helpers: [...new Map(helpers.map(value => [value.pid + ':' + value.identity, value])).values()] });
+}
+
 async function deviceLease(keys, acquire) {
   const directory = path.join(cacheRoot, 'leases');
   return withToolMaintenance(directory, async () => {
@@ -16,8 +27,17 @@ async function deviceLease(keys, acquire) {
       try { previous = JSON.parse(fs.readFileSync(file, 'utf8')); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
       if (previous) {
-        const identity = previous.pid + ':' + previous.identity;
-        if (!alive.has(identity)) alive.set(identity, maintenanceAlive(previous.pid, previous.identity));
+        const identity = previous.instance + ':' + previous.pid + ':' + previous.identity;
+        if (!alive.has(identity)) {
+          let latest = previous;
+          if (previous.ownerFile) {
+            let currentOwner;
+            try { currentOwner = JSON.parse(fs.readFileSync(previous.ownerFile, 'utf8')); }
+            catch (error) { if (error.code !== 'ENOENT') throw error; }
+            if (currentOwner?.instance === previous.instance) latest = currentOwner;
+          }
+          alive.set(identity, maintenanceAlive(latest.pid, latest.identity) || [...(previous.helpers || []), ...(latest.helpers || [])].some(helper => maintenanceAlive(helper.pid, helper.identity)));
+        }
         if (alive.get(identity) && previous.instance !== current?.instance) {
           owners[key] = { environmentId: previous.environmentId, environmentLabel: previous.environmentLabel };
           continue;
@@ -43,15 +63,18 @@ const path = require('node:path');
 const root = path.join(require('node:os').homedir(), '.pathway', 'device');
 const state = path.join(root, 'hosts', ${JSON.stringify(owner)});
 const read = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
-const record = { ...${JSON.stringify(environment)}, pid: process.pid, identity: maintenanceIdentity(process.pid), instance: require('node:crypto').randomUUID() };
 const file = path.join(state, 'lease-owner.json');
-fs.writeFileSync(file, JSON.stringify(record));
+const previous = read(file);
+const record = { ...${JSON.stringify(environment)}, pid: process.pid, identity: maintenanceIdentity(process.pid), instance: previous?.instance || require('node:crypto').randomUUID(), ownerFile: file };
 // These PIDs came from this environment's helper startup, never from a process-name search.
-const helpers = [read(path.join(state, 'hub.json')), read(path.join(state, 'daemon.json'))].filter(value => Number.isSafeInteger(value?.pid) && value.pid > 0).map(value => ({ pid: value.pid, identity: maintenanceIdentity(value.pid) }));
+const helpers = [read(path.join(state, 'hub.json')), { ...read(path.join(state, 'agent.json')), ...read(path.join(state, 'daemon.json')) }].filter(value => Number.isSafeInteger(value?.pid) && value.pid > 0).map(value => ({ pid: value.pid, identity: value.identity || previous?.helpers?.find(helper => helper.pid === value.pid)?.identity || maintenanceIdentity(value.pid) }));
+record.helpers = [...(previous?.helpers || []).filter(value => maintenanceAlive(value.pid, value.identity)), ...helpers];
+fs.writeFileSync(file, JSON.stringify(record));
 let stopping = false;
 const stop = async () => {
   if (stopping) return;
   stopping = true;
+  const helpers = read(file)?.helpers || record.helpers;
   for (const helper of helpers) if (maintenanceAlive(helper.pid, helper.identity)) {
     try { process.kill(helper.pid, 'SIGTERM'); } catch {}
   }
@@ -59,7 +82,7 @@ const stop = async () => {
   for (const helper of helpers) if (maintenanceAlive(helper.pid, helper.identity)) {
     try { process.kill(helper.pid, 'SIGKILL'); } catch {}
   }
-  if (read(file)?.instance === record.instance) fs.rmSync(file, { force: true });
+  // Retain the last helper identities so SIGKILL and slow exits cannot free leases early.
   process.exit(0);
 };
 process.stdin.resume();
