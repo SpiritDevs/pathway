@@ -1302,6 +1302,8 @@ export interface DesktopBridge {
   onSnapShotEvent?: (listener: (event: DesktopSnapShotEvent) => void) => () => void;
   getWindowFullscreenState: () => boolean;
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
+  /** Native trackpad release; the web API has no scroll-gesture end event. */
+  onTrackpadScrollEnd?: (listener: () => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   setUpdateChannel: (channel: DesktopUpdateChannel) => Promise<DesktopUpdateState>;
   checkForUpdate: () => Promise<DesktopUpdateCheckResult>;
