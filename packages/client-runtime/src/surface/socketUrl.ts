@@ -1,6 +1,7 @@
 import {
   COMPUTER_FRAME_WS_PATH,
   ENVIRONMENT_SURFACE_WS_PATH,
+  type EnvironmentSurfaceSizing,
   type EnvironmentSurfaceTarget,
   type EnvironmentSurfaceViewport,
   type AuthWebSocketTicketResult,
@@ -25,13 +26,18 @@ export const resolveSurfaceSocketUrl = Effect.fn("clientRuntime.surface.resolveS
     readonly prepared: PreparedConnection;
     readonly target: EnvironmentSurfaceTarget;
     readonly viewport: EnvironmentSurfaceViewport;
+    readonly sizing?: EnvironmentSurfaceSizing;
     readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
     readonly timeoutMs?: number;
   }) {
     const { prepared } = input;
     const base = new URL(computerFrameSocketBaseUrl(prepared.socketUrl));
     base.pathname = base.pathname.replace(COMPUTER_FRAME_WS_PATH, ENVIRONMENT_SURFACE_WS_PATH);
-    for (const [key, value] of Object.entries({ ...input.target, ...input.viewport }))
+    for (const [key, value] of Object.entries({
+      ...input.target,
+      ...input.viewport,
+      sizing: input.sizing ?? "active",
+    }))
       base.searchParams.set(key, String(value));
     const wsBaseUrl = base.toString();
     const timeout = input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs };

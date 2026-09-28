@@ -5,7 +5,7 @@ import type {
 } from "@spiritdevs/contracts";
 import { EnvironmentSurfaceStream, type SurfaceSink } from "../surface/EnvironmentSurfaceStream.ts";
 import { jpegDimensions } from "@spiritdevs/shared/environmentSurface";
-import type { EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
+import type { EnvironmentSurfaceSizing, EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
 import { fillBrowserLoginFields } from "@spiritdevs/shared/browserPasswordAutofill";
 // @effect-diagnostics nodeBuiltinImport:off - Playwright and streaming encoder run at this adapter boundary.
 // @effect-diagnostics globalDate:off globalTimers:off - Native browser events and encoder frame pacing use the Node event loop.
@@ -1068,7 +1068,7 @@ export class RemoteBrowserRuntime {
       if (
         tab.session &&
         tab.captureConfig === key &&
-        (!tab.surface.size ||
+        (!config.resizeViewport ||
           (currentViewport?.width === config.width && currentViewport.height === config.height))
       )
         return;
@@ -1086,7 +1086,7 @@ export class RemoteBrowserRuntime {
       } else await cdp.send("Page.stopScreencast");
       try {
         // A single viewport policy also keeps Playwright's CSS-coordinate input consistent.
-        if (tab.surface.size) {
+        if (config.resizeViewport) {
           await tab.page.setViewportSize({ width: config.width, height: config.height });
           await cdp.send("Emulation.setDeviceMetricsOverride", {
             width: config.width,
@@ -1167,9 +1167,10 @@ export class RemoteBrowserRuntime {
     tabId: string,
     viewport: EnvironmentSurfaceViewport,
     sink: SurfaceSink,
+    sizing: EnvironmentSurfaceSizing = "active",
   ) {
     const { tab } = await this.getTab(threadId, tabId);
-    const remove = tab.surface.add(sink, viewport);
+    const remove = tab.surface.add(sink, viewport, sizing);
     if (!tab.surfaceTimer) {
       let updating = false;
       tab.surfaceTimer = setInterval(() => {

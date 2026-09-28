@@ -1,4 +1,8 @@
-import type { EnvironmentSurfaceTarget, EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
+import type {
+  EnvironmentSurfaceSizing,
+  EnvironmentSurfaceTarget,
+  EnvironmentSurfaceViewport,
+} from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -27,6 +31,7 @@ export function createSurfaceSocketAtoms<R, E>(
         input: {
           readonly target: EnvironmentSurfaceTarget;
           readonly viewport: EnvironmentSurfaceViewport;
+          readonly sizing?: EnvironmentSurfaceSizing;
         },
         _registry,
         environmentId,
@@ -45,6 +50,7 @@ export function createSurfaceSocketAtoms<R, E>(
             prepared: prepared.value,
             target: input.target,
             viewport: input.viewport,
+            ...(input.sizing === undefined ? {} : { sizing: input.sizing }),
             signer,
           });
         }),

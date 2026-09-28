@@ -1,6 +1,7 @@
 import {
   AuthOrchestrationReadScope,
   ENVIRONMENT_SURFACE_WS_PATH,
+  EnvironmentSurfaceSizing,
   EnvironmentSurfaceTarget,
   EnvironmentSurfaceViewport,
 } from "@spiritdevs/contracts";
@@ -25,6 +26,7 @@ import { makeSurfaceSocket } from "./surfaceSocket.ts";
 const Query = Schema.Struct({
   ...EnvironmentSurfaceTarget.fields,
   ...EnvironmentSurfaceViewport.fields,
+  sizing: EnvironmentSurfaceSizing,
 });
 export const decodeSurfaceQuery = Schema.decodeUnknownOption(Query);
 
@@ -95,9 +97,10 @@ export const environmentSurfaceRouteLayer = HttpRouter.add(
       width: Number(params.get("width")),
       height: Number(params.get("height")),
       deviceScale: Number(params.get("deviceScale")),
+      sizing: params.get("sizing") ?? "active",
     });
     if (Option.isNone(input))
-      return HttpServerResponse.text("Invalid surface target or viewport", { status: 400 });
+      return HttpServerResponse.text("Invalid surface target, viewport or sizing", { status: 400 });
     const browser = yield* RemoteBrowser;
     yield* withSessionWebSocket(session.sessionId, (socket) =>
       serveEnvironmentSurface(socket, input.value, browser),

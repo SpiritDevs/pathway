@@ -1,4 +1,4 @@
-import type { EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
+import type { EnvironmentSurfaceSizing, EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
 import {
   encodeSurfaceFrame,
   SURFACE_MAX_FRAME_BYTES,
@@ -13,6 +13,7 @@ export interface SurfaceSink {
 interface Viewer {
   sink: SurfaceSink;
   viewport: EnvironmentSurfaceViewport;
+  sizing: EnvironmentSurfaceSizing;
   pending: Uint8Array | null;
   level: number;
   healthy: number;
@@ -34,8 +35,12 @@ export class EnvironmentSurfaceStream {
   get hasFrame() {
     return this.latest !== null;
   }
-  add(sink: SurfaceSink, viewport: EnvironmentSurfaceViewport) {
-    const viewer: Viewer = { sink, viewport, pending: this.latest, level: 0, healthy: 0 };
+  add(
+    sink: SurfaceSink,
+    viewport: EnvironmentSurfaceViewport,
+    sizing: EnvironmentSurfaceSizing = "active",
+  ) {
+    const viewer: Viewer = { sink, viewport, sizing, pending: this.latest, level: 0, healthy: 0 };
     this.viewers.add(viewer);
     this.flush(viewer);
     return () => {
@@ -66,9 +71,11 @@ export class EnvironmentSurfaceStream {
     }
   }
   configuration(fallback: { width: number; height: number }) {
-    const selected = [...this.viewers].sort(
-      (a, b) => b.viewport.width * b.viewport.height - a.viewport.width * a.viewport.height,
-    )[0]?.viewport;
+    const selected = [...this.viewers]
+      .filter((viewer) => viewer.sizing === "active")
+      .sort(
+        (a, b) => b.viewport.width * b.viewport.height - a.viewport.width * a.viewport.height,
+      )[0]?.viewport;
     const viewport = selected ?? { ...fallback, deviceScale: 1 };
     const dimensionScale = Math.min(1, 2560 / viewport.width, 1600 / viewport.height);
     const width = Math.max(1, Math.round(viewport.width * dimensionScale));
@@ -77,6 +84,7 @@ export class EnvironmentSurfaceStream {
     const level = Math.max(0, ...[...this.viewers].map((v) => v.level));
     const quality = levels[level]!;
     return {
+      resizeViewport: selected !== undefined,
       width,
       height,
       deviceScale,

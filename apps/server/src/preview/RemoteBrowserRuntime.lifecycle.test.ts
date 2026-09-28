@@ -240,6 +240,143 @@ describe("RemoteBrowserRuntime lifecycle", () => {
     expect(fixture.cdp.send).toHaveBeenCalledWith("Page.stopScreencast");
   });
 
+  it.each([
+    { width: 1440, height: 900 },
+    { width: 3000, height: 2000 },
+  ])(
+    "streams to a passive viewer without changing the agent's $width by $height viewport",
+    async (size) => {
+      const fixture = browserFixture();
+      runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+      const { tabs } = await runtime.command({ action: "open", threadId });
+      const tabId = tabs[0]!.tabId;
+      await runtime.command({ action: "resize", threadId, tabId, ...size });
+      fixture.page.setViewportSize.mockClear();
+      fixture.cdp.send.mockClear();
+      const sink = { send: vi.fn(), bufferedAmount: () => 0, close: vi.fn() };
+      const remove = await runtime.subscribeSurface(
+        threadId,
+        tabId,
+        { width: 320, height: 200, deviceScale: 2 },
+        sink,
+        "passive",
+      );
+      expect(fixture.page.viewportSize()).toEqual(size);
+      expect(fixture.page.setViewportSize).not.toHaveBeenCalled();
+      expect(fixture.cdp.send).not.toHaveBeenCalledWith(
+        "Emulation.setDeviceMetricsOverride",
+        expect.anything(),
+      );
+      expect(sink.send).toHaveBeenCalledOnce();
+      fixture.cdpEvents.emit("Page.screencastFrame", {
+        sessionId: 1,
+        data: Buffer.from("next-jpeg").toString("base64"),
+      });
+      expect(sink.send).toHaveBeenCalledTimes(2);
+      await remove();
+      expect(fixture.cdp.detach).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([true, false])(
+    "sizes only from active viewers when passive joins first is %s",
+    async (passiveFirst) => {
+      const fixture = browserFixture();
+      runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+      const { tabs } = await runtime.command({ action: "open", threadId });
+      const tabId = tabs[0]!.tabId;
+      const active = { send: vi.fn(), bufferedAmount: () => 0, close: vi.fn() };
+      const passive = { ...active, send: vi.fn() };
+      const subscribeActive = () =>
+        runtime!.subscribeSurface(
+          threadId,
+          tabId,
+          { width: 1000, height: 700, deviceScale: 1 },
+          active,
+        );
+      const subscribePassive = () =>
+        runtime!.subscribeSurface(
+          threadId,
+          tabId,
+          { width: 2400, height: 1500, deviceScale: 2 },
+          passive,
+          "passive",
+        );
+      const removeFirst = await (passiveFirst ? subscribePassive() : subscribeActive());
+      const removeSecond = await (passiveFirst ? subscribeActive() : subscribePassive());
+      expect(fixture.page.viewportSize()).toEqual({ width: 1000, height: 700 });
+      expect(fixture.page.setViewportSize.mock.calls).toEqual([[{ width: 1000, height: 700 }]]);
+      expect(fixture.context.newCDPSession).toHaveBeenCalledOnce();
+      active.send.mockClear();
+      passive.send.mockClear();
+      fixture.cdpEvents.emit("Page.screencastFrame", {
+        sessionId: 1,
+        data: Buffer.from("jpeg").toString("base64"),
+      });
+      expect(active.send).toHaveBeenCalledOnce();
+      expect(passive.send).toHaveBeenCalledOnce();
+      expect(active.send.mock.calls[0]![0]).toBe(passive.send.mock.calls[0]![0]);
+      await removeSecond();
+      await removeFirst();
+    },
+  );
+
+  it("keeps the last active viewport and continues passive frames after the active viewer leaves", async () => {
+    const fixture = browserFixture();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    const { tabs } = await runtime.command({ action: "open", threadId });
+    const tabId = tabs[0]!.tabId;
+    const active = { send: vi.fn(), bufferedAmount: () => 0, close: vi.fn() };
+    const passive = { ...active, send: vi.fn() };
+    const removeActive = await runtime.subscribeSurface(
+      threadId,
+      tabId,
+      { width: 1600, height: 1000, deviceScale: 2 },
+      active,
+    );
+    const removePassive = await runtime.subscribeSurface(
+      threadId,
+      tabId,
+      { width: 320, height: 200, deviceScale: 1 },
+      passive,
+      "passive",
+    );
+    fixture.page.setViewportSize.mockClear();
+    fixture.cdp.send.mockClear();
+    await removeActive();
+    expect(fixture.page.viewportSize()).toEqual({ width: 1600, height: 1000 });
+    expect(fixture.page.setViewportSize).not.toHaveBeenCalled();
+    expect(fixture.cdp.send).not.toHaveBeenCalledWith(
+      "Emulation.setDeviceMetricsOverride",
+      expect.anything(),
+    );
+    expect(fixture.cdp.detach).not.toHaveBeenCalled();
+    active.send.mockClear();
+    passive.send.mockClear();
+    fixture.cdpEvents.emit("Page.screencastFrame", {
+      sessionId: 1,
+      data: Buffer.from("jpeg").toString("base64"),
+    });
+    expect(active.send).not.toHaveBeenCalled();
+    expect(passive.send).toHaveBeenCalledOnce();
+
+    // The agent can resize again while passive viewers remain subscribed.
+    await runtime.command({ action: "resize", threadId, tabId, width: 1800, height: 1200 });
+    fixture.page.setViewportSize.mockClear();
+    const removeJoined = await runtime.subscribeSurface(
+      threadId,
+      tabId,
+      { width: 400, height: 250, deviceScale: 1 },
+      { ...passive, send: vi.fn() },
+      "passive",
+    );
+    expect(fixture.page.viewportSize()).toEqual({ width: 1800, height: 1200 });
+    expect(fixture.page.setViewportSize).not.toHaveBeenCalled();
+    await removeJoined();
+    await removePassive();
+    expect(fixture.cdp.detach).toHaveBeenCalledOnce();
+  });
+
   it("replays a static RPC capture when a binary viewer joins and restores viewer sizing after legacy resize", async () => {
     const fixture = browserFixture();
     runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);

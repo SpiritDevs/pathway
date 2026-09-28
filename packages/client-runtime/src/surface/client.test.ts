@@ -4,6 +4,7 @@ import {
   createEnvironmentSurfaceStream,
   decodeSurfaceImage,
   type DecodedSurfaceFrame,
+  type SurfaceStreamOptions,
 } from "./client.ts";
 import { encodeSurfaceFrame } from "@spiritdevs/shared/environmentSurface";
 class FakeSocket {
@@ -30,7 +31,10 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
-async function harness(decode = vi.fn(async () => frame())) {
+async function harness(
+  decode = vi.fn(async () => frame()),
+  options: Pick<SurfaceStreamOptions, "sizing"> = {},
+) {
   const sockets: FakeSocket[] = [];
   const resolveUrl = vi.fn(async () => ({
     url: "wss://environment.example/ws/environment-surface",
@@ -38,6 +42,7 @@ async function harness(decode = vi.fn(async () => frame())) {
   const onFrame = vi.fn();
   const onQuality = vi.fn();
   const client = createEnvironmentSurfaceStream({
+    ...options,
     resolveUrl,
     viewport,
     onFrame,
@@ -58,6 +63,7 @@ describe("surface client", () => {
   it("reconnects with fresh authorization, answers keepalive, and pauses hidden viewers", async () => {
     vi.useFakeTimers();
     const h = await harness();
+    expect(h.resolveUrl).toHaveBeenCalledWith(viewport, "active");
     expect(h.sockets[0]!.send).toHaveBeenCalledWith("ready");
     h.sockets[0]!.onmessage?.({ data: "ping" });
     expect(h.sockets[0]!.send).toHaveBeenCalledWith("pong");
@@ -75,6 +81,28 @@ describe("surface client", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(h.client.state).toBe("failed");
     expect(h.resolveUrl).toHaveBeenCalledTimes(3);
+  });
+  it("preserves passive sizing when reconnecting, resizing and resuming", async () => {
+    vi.useFakeTimers();
+    const h = await harness(undefined, { sizing: "passive" });
+    expect(h.resolveUrl).toHaveBeenLastCalledWith(viewport, "passive");
+    h.sockets[0]!.onclose?.({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.resolveUrl).toHaveBeenCalledTimes(2);
+    expect(h.resolveUrl).toHaveBeenLastCalledWith(viewport, "passive");
+    const next = { width: 320, height: 200, deviceScale: 1 };
+    h.client.setViewport(next);
+    await Promise.resolve();
+    expect(h.resolveUrl).toHaveBeenCalledTimes(3);
+    expect(h.resolveUrl).toHaveBeenLastCalledWith(next, "passive");
+    h.client.pause();
+    h.client.resume();
+    await Promise.resolve();
+    expect(h.resolveUrl).toHaveBeenCalledTimes(4);
+    expect(h.resolveUrl).toHaveBeenLastCalledWith(next, "passive");
+    h.sockets[3]!.onmessage?.({ data: new ArrayBuffer(25) });
+    await Promise.resolve();
+    expect(h.onFrame).toHaveBeenCalledOnce();
   });
   it("bounds decode backlog, releases replaced frames and rejects late decodes after pause", async () => {
     const held = Promise.withResolvers<DecodedSurfaceFrame>();

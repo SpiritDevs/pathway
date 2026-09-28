@@ -59,7 +59,7 @@ describe("resolveSurfaceSocketUrl", () => {
       }).pipe(Effect.provide(remoteHttpClientLayer(fetch.fetchFn)));
 
       expect(resolved).toEqual({
-        url: "ws://127.0.0.1:4321/ws/environment-surface?kind=browser&threadId=thread&tabId=tab&width=800&height=600&deviceScale=2",
+        url: "ws://127.0.0.1:4321/ws/environment-surface?kind=browser&threadId=thread&tabId=tab&width=800&height=600&deviceScale=2&sizing=active",
         expiresAt: null,
       });
       expect(fetch.calls).toHaveLength(0);
@@ -74,6 +74,7 @@ describe("resolveSurfaceSocketUrl", () => {
           _tag: "Bearer",
           token: "bearer-token",
         }),
+        sizing: "passive",
         target,
         viewport,
         signer: Option.none(),
@@ -82,6 +83,7 @@ describe("resolveSurfaceSocketUrl", () => {
       const parsed = new URL(url);
       expect(parsed.pathname).toBe("/ws/environment-surface");
       expect(parsed.searchParams.get("tabId")).toBe("tab");
+      expect(parsed.searchParams.get("sizing")).toBe("passive");
       expect(parsed.searchParams.get("wsTicket")).toBe("frame-ticket");
       expect(expiresAt).toBe(Date.parse("2026-05-01T12:05:00.000Z"));
       expect(String(fetch.calls[0]?.[0])).toBe(
@@ -102,6 +104,7 @@ describe("resolveSurfaceSocketUrl", () => {
           _tag: "Dpop",
           accessToken: "access-token",
         }),
+        sizing: "passive",
         target,
         viewport,
         signer: Option.some({
@@ -114,6 +117,7 @@ describe("resolveSurfaceSocketUrl", () => {
       }).pipe(Effect.provide(remoteHttpClientLayer(fetch.fetchFn)));
 
       expect(new URL(url).searchParams.get("wsTicket")).toBe("relay-ticket");
+      expect(new URL(url).searchParams.get("sizing")).toBe("passive");
       expect(expiresAt).toBe(Date.parse("2026-05-01T12:05:00.000Z"));
       expect(proofs).toEqual([
         {

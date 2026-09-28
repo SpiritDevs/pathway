@@ -4,7 +4,7 @@ import type {
   PreviewRemoteInteractionEvent,
 } from "@spiritdevs/contracts";
 import * as Clock from "effect/Clock";
-import type { EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
+import type { EnvironmentSurfaceSizing, EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
 import type { SurfaceSink } from "../surface/EnvironmentSurfaceStream.ts";
 import type * as Scope from "effect/Scope";
 import {
@@ -41,7 +41,12 @@ export interface RemoteBrowserService {
     threadId: ThreadId;
   }) => Stream.Stream<PreviewRemoteInteractionEvent, PreviewRemoteError>;
   readonly subscribeSurface: (
-    input: { threadId: ThreadId; tabId: string; viewport: EnvironmentSurfaceViewport },
+    input: {
+      threadId: ThreadId;
+      tabId: string;
+      viewport: EnvironmentSurfaceViewport;
+      sizing?: EnvironmentSurfaceSizing;
+    },
     sink: SurfaceSink,
   ) => Effect.Effect<void, PreviewRemoteError, Scope.Scope>;
   readonly command: (
@@ -346,7 +351,7 @@ export const makeRemoteBrowser = Effect.fn("RemoteBrowser.make")(function* ({
       yield* checkAvailable(input.threadId);
       yield* Effect.acquireRelease(
         operation(() =>
-          runtime.subscribeSurface(input.threadId, input.tabId, input.viewport, sink),
+          runtime.subscribeSurface(input.threadId, input.tabId, input.viewport, sink, input.sizing),
         ),
         (unsubscribe) => Effect.promise(unsubscribe),
       );

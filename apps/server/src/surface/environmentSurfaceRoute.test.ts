@@ -76,6 +76,7 @@ it.effect("streams over writer-only sockets and bounds frames until the client's
       socket,
       {
         ...viewport,
+        sizing: "active",
         kind: "browser",
         threadId: ThreadId.make("thread"),
         tabId: PreviewTabId.make("tab"),
@@ -200,68 +201,82 @@ const getStatus = (path: string) =>
   });
 
 it.layer(NodeServices.layer)("environment surface route", (it) => {
-  it.effect("authenticates, streams binary frames and tears down on session revocation", () =>
-    Effect.gen(function* () {
-      const subscribed = yield* Deferred.make<SurfaceSink>();
-      const released = yield* Deferred.make<void>();
-      const browser: RemoteBrowserService = {
-        interact: () => Effect.die("unused"),
-        interactions: () => Stream.empty,
-        command: () => Effect.succeed({ tabs: [], selectedTabId: null }),
-        frames: () => Stream.empty,
-        subscribeSurface: (_input, sink) =>
-          Effect.gen(function* () {
-            yield* Effect.addFinalizer(() => Deferred.succeed(released, undefined));
-            yield* Deferred.succeed(subscribed, sink);
-          }),
-      };
-      yield* Effect.gen(function* () {
-        const query = {
-          kind: "browser",
-          threadId: "thread",
-          tabId: "tab",
-          width: "800",
-          height: "600",
-          deviceScale: "2",
-        };
-        expect(yield* getStatus(framePath(query))).toBe(401);
-        const denied = yield* issueTicket(["orchestration:operate"]);
-        expect(yield* getStatus(framePath({ ...query, wsTicket: denied.ticket }))).toBe(403);
-        const { ticket, sessionId } = yield* issueTicket(["orchestration:read"]);
-        expect(yield* getStatus(framePath({ ...query, width: "0", wsTicket: ticket }))).toBe(400);
-        const server = yield* HttpServer.HttpServer;
-        if (server.address._tag !== "TcpAddress") throw new Error("TCP required");
-        const port = server.address.port;
-        const received = yield* Deferred.make<Uint8Array>();
-        const closed = yield* Deferred.make<number>();
-        yield* Effect.acquireRelease(
-          Effect.sync(() => {
-            const ws = new WebSocket(
-              `ws://127.0.0.1:${port}${framePath({ ...query, wsTicket: ticket })}`,
+  for (const sizing of [undefined, "active", "passive"] as const) {
+    it.effect(
+      `authenticates, streams ${sizing ?? "default"} sizing and tears down on session revocation`,
+      () =>
+        Effect.gen(function* () {
+          const subscribed = yield* Deferred.make<SurfaceSink>();
+          const subscribedInput =
+            yield* Deferred.make<Parameters<RemoteBrowserService["subscribeSurface"]>[0]>();
+          const released = yield* Deferred.make<void>();
+          const browser: RemoteBrowserService = {
+            interact: () => Effect.die("unused"),
+            interactions: () => Stream.empty,
+            command: () => Effect.succeed({ tabs: [], selectedTabId: null }),
+            frames: () => Stream.empty,
+            subscribeSurface: (input, sink) =>
+              Effect.gen(function* () {
+                yield* Effect.addFinalizer(() => Deferred.succeed(released, undefined));
+                yield* Deferred.succeed(subscribedInput, input);
+                yield* Deferred.succeed(subscribed, sink);
+              }),
+          };
+          yield* Effect.gen(function* () {
+            const query = {
+              kind: "browser",
+              threadId: "thread",
+              tabId: "tab",
+              width: "800",
+              height: "600",
+              deviceScale: "2",
+              ...(sizing === undefined ? {} : { sizing }),
+            };
+            expect(yield* getStatus(framePath(query))).toBe(401);
+            const denied = yield* issueTicket(["orchestration:operate"]);
+            expect(yield* getStatus(framePath({ ...query, wsTicket: denied.ticket }))).toBe(403);
+            const { ticket, sessionId } = yield* issueTicket(["orchestration:read"]);
+            expect(yield* getStatus(framePath({ ...query, width: "0", wsTicket: ticket }))).toBe(
+              400,
             );
-            ws.binaryType = "arraybuffer";
-            ws.addEventListener("open", () => ws.send("ready"));
-            ws.addEventListener("message", (event) =>
-              Deferred.doneUnsafe(
-                received,
-                Effect.succeed(new Uint8Array(event.data as ArrayBuffer)),
-              ),
+            expect(
+              yield* getStatus(framePath({ ...query, sizing: "invalid", wsTicket: ticket })),
+            ).toBe(400);
+            const server = yield* HttpServer.HttpServer;
+            if (server.address._tag !== "TcpAddress") throw new Error("TCP required");
+            const port = server.address.port;
+            const received = yield* Deferred.make<Uint8Array>();
+            const closed = yield* Deferred.make<number>();
+            yield* Effect.acquireRelease(
+              Effect.sync(() => {
+                const ws = new WebSocket(
+                  `ws://127.0.0.1:${port}${framePath({ ...query, wsTicket: ticket })}`,
+                );
+                ws.binaryType = "arraybuffer";
+                ws.addEventListener("open", () => ws.send("ready"));
+                ws.addEventListener("message", (event) =>
+                  Deferred.doneUnsafe(
+                    received,
+                    Effect.succeed(new Uint8Array(event.data as ArrayBuffer)),
+                  ),
+                );
+                ws.addEventListener("close", (event) =>
+                  Deferred.doneUnsafe(closed, Effect.succeed(event.code)),
+                );
+                return ws;
+              }),
+              (ws) => Effect.sync(() => ws.close()),
             );
-            ws.addEventListener("close", (event) =>
-              Deferred.doneUnsafe(closed, Effect.succeed(event.code)),
-            );
-            return ws;
-          }),
-          (ws) => Effect.sync(() => ws.close()),
-        );
-        const sink = yield* Deferred.await(subscribed);
-        sink.send(new Uint8Array([1, 2, 3]));
-        expect(Array.from(yield* Deferred.await(received))).toEqual([1, 2, 3]);
-        const auth = yield* EnvironmentAuth.EnvironmentAuth;
-        yield* auth.revokeSession(sessionId);
-        expect(yield* Deferred.await(closed)).toBe(1008);
-        yield* Deferred.await(released);
-      }).pipe(Effect.provide(makeServerLayer(browser)));
-    }),
-  );
+            const sink = yield* Deferred.await(subscribed);
+            expect((yield* Deferred.await(subscribedInput)).sizing).toBe(sizing ?? "active");
+            sink.send(new Uint8Array([1, 2, 3]));
+            expect(Array.from(yield* Deferred.await(received))).toEqual([1, 2, 3]);
+            const auth = yield* EnvironmentAuth.EnvironmentAuth;
+            yield* auth.revokeSession(sessionId);
+            expect(yield* Deferred.await(closed)).toBe(1008);
+            yield* Deferred.await(released);
+          }).pipe(Effect.provide(makeServerLayer(browser)));
+        }),
+    );
+  }
 });

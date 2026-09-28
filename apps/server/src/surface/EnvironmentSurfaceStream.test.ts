@@ -53,4 +53,25 @@ describe("surface fanout", () => {
     remove();
     expect(stream.configuration(viewport).width).toBe(1280);
   });
+  it("excludes passive viewers from viewport arbitration and retains frame fanout", () => {
+    const stream = new EnvironmentSurfaceStream();
+    const passive = { send: vi.fn(), close: vi.fn(), bufferedAmount: () => 0 };
+    stream.add(passive, { width: 2400, height: 1500, deviceScale: 2 }, "passive");
+    const fallback = { width: 1440, height: 900 };
+    expect(stream.configuration(fallback)).toMatchObject({ ...fallback, resizeViewport: false });
+    const active = { ...passive, send: vi.fn() };
+    const removeActive = stream.add(active, viewport);
+    expect(stream.configuration(fallback)).toMatchObject({
+      width: viewport.width,
+      height: viewport.height,
+      resizeViewport: true,
+    });
+    stream.publish(frame(1));
+    expect(active.send.mock.calls[0]![0]).toBe(passive.send.mock.calls[0]![0]);
+    removeActive();
+    expect(stream.configuration(fallback)).toMatchObject({ ...fallback, resizeViewport: false });
+    stream.publish(frame(2));
+    expect(decodeSurfaceFrame(passive.send.mock.calls[1]![0]).sequence).toBe(2);
+    expect(active.send).toHaveBeenCalledOnce();
+  });
 });

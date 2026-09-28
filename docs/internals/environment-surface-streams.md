@@ -2,7 +2,8 @@
 
 `GET /ws/environment-surface` streams an environment-owned surface. Version one
 supports `kind=browser&threadId=…&tabId=…`, plus `width`, `height` in CSS pixels and
-`deviceScale`. The prepared environment connection supplies the origin and proxy
+`deviceScale`. Optional `sizing=active|passive` defaults to `active`. The prepared
+environment connection supplies the origin and proxy
 prefix. Cookie, bearer-ticket and relay DPoP-ticket authentication match the
 computer frame route. `orchestration:read` is required. Session revocation closes
 the socket with 1008. The route does not launch a browser or create a tab.
@@ -46,6 +47,14 @@ at most 2, and raster area is at most four million pixels. This avoids competing
 resizes from multiple viewers. A viewer changing size reconnects with its new
 viewport. Legacy RPC resize commands remain available during migration.
 
+Use `sizing=passive` for mini-player previews. Passive viewers never set the page's
+viewport or device metrics, regardless of their requested dimensions. When no
+active binary viewer remains, the page keeps its current size, including the
+agent's size or the last active viewer's size. Agent resize commands still work.
+Passive viewers keep capture alive and receive the same encoded frames as other
+viewers. Clients scale those frames to fit their preview. The shared encoder's
+size and congestion limits still apply, with no per-viewer transcodes.
+
 Each viewer retains one replaceable pending frame. Native socket bufferedAmount
 above 256 KiB blocks further sends; the bound allows one admitted JPEG beyond
 that threshold. Frames above 8 MiB including the header are discarded. A shared
@@ -76,13 +85,15 @@ createEnvironmentSurfaceStream(options: SurfaceStreamOptions): {
 ```ts
 const stream = createEnvironmentSurfaceStream({
   viewport: { width: 1280, height: 800, deviceScale: 2 },
-  resolveUrl: (viewport) =>
+  sizing: "passive",
+  resolveUrl: (viewport, sizing) =>
     runtime.runPromise(
       resolveSurfaceSocketUrl({
         prepared: currentPreparedConnection(),
         signer: currentRelaySignerOption(),
         target: { kind: "browser", threadId, tabId },
         viewport,
+        sizing,
       }),
     ),
   onFrame: (frame) => draw(frame.image),
@@ -94,6 +105,11 @@ stream.pause();
 stream.resume();
 stream.close();
 ```
+
+`SurfaceStreamOptions.sizing` and `resolveSurfaceSocketUrl`'s `sizing` option both
+default to `active`. Forward the resolver's second argument as shown above so
+reconnects and `setViewport` preserve the role. `createSurfaceSocketAtoms.resolveUrl`
+accepts the same optional `sizing` field.
 
 The resolver runs on every connection attempt so refreshed credentials and relay
 URLs take effect. Retry delay starts at 500 ms, doubles to 30 seconds, with jitter.

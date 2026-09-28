@@ -3,6 +3,8 @@ import { ThreadId } from "./baseSchemas.ts";
 import { PreviewTabId } from "./preview.ts";
 
 export const ENVIRONMENT_SURFACE_WS_PATH = "/ws/environment-surface";
+export const EnvironmentSurfaceSizing = Schema.Literals(["active", "passive"]);
+export type EnvironmentSurfaceSizing = typeof EnvironmentSurfaceSizing.Type;
 export const EnvironmentSurfaceTarget = Schema.Struct({
   kind: Schema.Literal("browser"),
   threadId: ThreadId,

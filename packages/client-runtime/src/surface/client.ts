@@ -1,6 +1,6 @@
 /* eslint-disable unicorn/prefer-add-event-listener -- Each socket is exclusively owned by this lifecycle, including native adapters. */
 // @effect-diagnostics globalDate:off globalTimers:off globalRandom:off - Browser socket lifecycle and reconnect jitter run outside Effect.
-import type { EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
+import type { EnvironmentSurfaceSizing, EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
 import { decodeSurfaceFrame, type SurfaceFrameHeader } from "@spiritdevs/shared/environmentSurface";
 
 export type SurfaceConnectionState = "connecting" | "live" | "stale" | "failed";
@@ -14,8 +14,13 @@ export interface SurfaceQuality {
 }
 export interface SurfaceStreamOptions {
   /** Resolve against the current prepared environment connection on EVERY attempt. */
-  resolveUrl(viewport: EnvironmentSurfaceViewport): Promise<{ url: string }>;
+  resolveUrl(
+    viewport: EnvironmentSurfaceViewport,
+    sizing: EnvironmentSurfaceSizing,
+  ): Promise<{ url: string }>;
   viewport: EnvironmentSurfaceViewport;
+  /** Passive viewers receive frames without changing the page viewport. Defaults to active. */
+  sizing?: EnvironmentSurfaceSizing;
   onFrame(frame: DecodedSurfaceFrame): void;
   onState?(state: SurfaceConnectionState): void;
   onQuality?(quality: SurfaceQuality): void;
@@ -129,7 +134,7 @@ export function createEnvironmentSurfaceStream(options: SurfaceStreamOptions) {
         );
     };
     try {
-      const { url } = await options.resolveUrl(viewport);
+      const { url } = await options.resolveUrl(viewport, options.sizing ?? "active");
       if (current !== generation || closed || paused) return;
       const ws = (options.createSocket ?? ((url) => new WebSocket(url)))(url);
       socket = ws;
