@@ -176,6 +176,8 @@ final class PathwayEnvironmentSurfaceStream {
     @ObservationIgnored private var reopening = false
     /// Advances on every socket, so a late decode from an earlier one never lands.
     @ObservationIgnored private var generation = 0
+    /// The newest `run`; an older one still unwinding (say, from a slow ticket) touches nothing.
+    @ObservationIgnored private var activeRun = 0
     @ObservationIgnored private var pending: Data?
     @ObservationIgnored private var decoding: Task<Void, Never>?
     @ObservationIgnored private var frames = 0
@@ -209,11 +211,19 @@ final class PathwayEnvironmentSurfaceStream {
     }
 
     /// Asks the view to start a fresh `run`, after a refusal or when the user retries.
-    func reconnect() { reconnects += 1 }
+    /// Clears a failure first, so a view that only mounts the stream while it is not failed
+    /// mounts it again.
+    func reconnect() {
+        if state == .failed { state = .connecting }
+        reconnects += 1
+    }
 
     /// Streams until cancelled, reconnecting with backoff. Returns early after a refusal no
     /// retry can change; run it again (a new task) to reconnect.
     func run(threadID: String, tabID: String) async {
+        activeRun += 1
+        let run = activeRun
+        var isCurrent: Bool { run == activeRun && !Task.isCancelled }
         var reconnect = PathwaySurfaceReconnect()
         var rpcURL: URL?
         if self.tabID != tabID {
@@ -226,8 +236,10 @@ final class PathwayEnvironmentSurfaceStream {
         }
         quality = nil
         state = .connecting
-        defer { generation += 1 }
-        while !Task.isCancelled {
+        // Ending the current run strands its late decodes; a superseded run must leave the
+        // generation alone, or it would end its successor's socket.
+        defer { if run == activeRun { generation += 1 } }
+        while isCurrent {
             guard let viewport else {
                 // Nothing to ask for until the view has a size.
                 try? await Task.sleep(for: .milliseconds(50))
@@ -237,11 +249,11 @@ final class PathwayEnvironmentSurfaceStream {
             do {
                 let base: URL
                 if let rpcURL { base = rpcURL } else { base = try await resolveRPCSocketURL(); rpcURL = base }
-                try Task.checkCancellation()
+                guard isCurrent else { return }
                 guard let url = pathwaySurfaceSocketURL(rpcSocketURL: base, threadID: threadID, tabID: tabID, viewport: viewport) else { throw URLError(.badURL) }
                 close = await connect(to: url, reconnect: &reconnect)
             } catch is CancellationError { return } catch {}
-            guard !Task.isCancelled else { return }
+            guard isCurrent else { return }
             if reopening { reopening = false; continue }
             switch reconnect.closed(close, jitter: Double.random(in: 0.8...1.2)) {
             case .stop:
@@ -251,6 +263,7 @@ final class PathwayEnvironmentSurfaceStream {
                 state = next
                 if remint { rpcURL = nil }
                 do { try await Task.sleep(for: delay) } catch { return }
+                guard isCurrent else { return }
             }
         }
     }
@@ -277,7 +290,7 @@ final class PathwayEnvironmentSurfaceStream {
         }
         defer {
             monitor.cancel()
-            decoding?.cancel(); decoding = nil; pending = nil
+            if generation == self.generation { decoding?.cancel(); decoding = nil; pending = nil }
             socket.cancel(with: .goingAway, reason: nil)
             if self.socket === socket { self.socket = nil }
         }

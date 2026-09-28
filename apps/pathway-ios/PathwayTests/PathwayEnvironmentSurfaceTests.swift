@@ -1,5 +1,7 @@
 import CoreGraphics
 import Foundation
+import Network
+import os
 import Testing
 @testable import Pathway
 
@@ -112,5 +114,106 @@ struct PathwayEnvironmentSurfaceTests {
         #expect(PathwayRemoteBrowserGeometry.point(CGPoint(x: 0, y: 50), in: view, page: page) == CGPoint(x: 0, y: 0))
         #expect(PathwayRemoteBrowserGeometry.point(CGPoint(x: 200, y: 20), in: view, page: page) == nil)
         #expect(PathwayRemoteBrowserGeometry.point(.zero, in: view, page: .zero) == nil)
+    }
+
+    @MainActor @Test func aSupersededRunLeavesItsSuccessorsSocketAlone() async throws {
+        let server = try await SurfaceTestServer.start()
+        defer { server.stop() }
+        let held = AsyncStream<CheckedContinuation<URL, Never>>.makeStream()
+        let resolves = OSAllocatedUnfairLock(initialState: 0)
+        let stream = PathwayEnvironmentSurfaceStream {
+            // The first run's ticket is slow; the second resolves at once.
+            if resolves.withLock({ $0 += 1; return $0 }) == 1 { return await withCheckedContinuation { held.continuation.yield($0) } }
+            return server.rpcURL
+        }
+        stream.setViewport(PathwaySurfaceViewport(size: CGSize(width: 100, height: 100), displayScale: 2))
+
+        let first = Task { await stream.run(threadID: "thread", tabID: "tab") }
+        var heldResolves = held.stream.makeAsyncIterator()
+        let firstTicket = try #require(await heldResolves.next())
+        first.cancel()
+
+        let second = Task { await stream.run(threadID: "thread", tabID: "tab") }
+        defer { second.cancel() }
+        #expect(try await server.receive() == "ready")
+
+        // The first run's ticket lands after the second run is streaming.
+        firstTicket.resume(returning: server.rpcURL)
+        await first.value
+
+        try await server.send("ping")
+        #expect(try await server.receive() == "pong")
+    }
+}
+
+/// One loopback WebSocket connection, driven from the test.
+private final class SurfaceTestServer: @unchecked Sendable {
+    let rpcURL: URL
+    private let listener: NWListener
+    private let connections: AsyncStream<NWConnection>
+    private var connection: NWConnection?
+
+    private init(listener: NWListener, port: UInt16, connections: AsyncStream<NWConnection>) {
+        self.listener = listener
+        self.connections = connections
+        rpcURL = URL(string: "ws://127.0.0.1:\(port)/ws?wsTicket=ticket")!
+    }
+
+    static func start() async throws -> SurfaceTestServer {
+        let parameters = NWParameters.tcp
+        parameters.defaultProtocolStack.applicationProtocols.insert(NWProtocolWebSocket.Options(), at: 0)
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let listener = try NWListener(using: parameters)
+        let (connections, continuation) = AsyncStream<NWConnection>.makeStream()
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: .global())
+            continuation.yield(connection)
+        }
+        let port: UInt16 = try await withCheckedThrowingContinuation { ready in
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready: listener.stateUpdateHandler = nil; ready.resume(returning: listener.port?.rawValue ?? 0)
+                case let .failed(error): listener.stateUpdateHandler = nil; ready.resume(throwing: error)
+                default: break
+                }
+            }
+            listener.start(queue: .global())
+        }
+        return SurfaceTestServer(listener: listener, port: port, connections: connections)
+    }
+
+    private func current() async throws -> NWConnection {
+        if let connection { return connection }
+        var iterator = connections.makeAsyncIterator()
+        guard let next = await iterator.next() else { throw URLError(.cannotConnectToHost) }
+        connection = next
+        return next
+    }
+
+    /// The next text message; throws once the client closes.
+    func receive() async throws -> String {
+        let connection = try await current()
+        return try await withCheckedThrowingContinuation { result in
+            connection.receiveMessage { data, _, _, error in
+                if let error { result.resume(throwing: error) }
+                else if let data, !data.isEmpty { result.resume(returning: String(decoding: data, as: UTF8.self)) }
+                else { result.resume(throwing: URLError(.networkConnectionLost)) }
+            }
+        }
+    }
+
+    func send(_ text: String) async throws {
+        let connection = try await current()
+        let context = NWConnection.ContentContext(identifier: "text", metadata: [NWProtocolWebSocket.Metadata(opcode: .text)])
+        try await withCheckedThrowingContinuation { (result: CheckedContinuation<Void, Error>) in
+            connection.send(content: Data(text.utf8), contentContext: context, isComplete: true, completion: .contentProcessed { error in
+                if let error { result.resume(throwing: error) } else { result.resume() }
+            })
+        }
+    }
+
+    func stop() {
+        connection?.cancel()
+        listener.cancel()
     }
 }

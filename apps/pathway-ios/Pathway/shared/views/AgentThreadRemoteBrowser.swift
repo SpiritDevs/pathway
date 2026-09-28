@@ -97,6 +97,13 @@ final class PathwayRemoteBrowserModel {
     @ObservationIgnored private var metadataRevision: Double?
     @ObservationIgnored private var wheel: (point: CGPoint, deltaX: Double, deltaY: Double)?
     @ObservationIgnored private var wheelInFlight = false
+    /// Where saved downloads wait to be shared; removed with the browser.
+    @ObservationIgnored private let downloadsDirectory = FileManager.default.temporaryDirectory
+        .appending(path: "browser-downloads/\(UUID().uuidString)")
+
+    /// The page's file inputs accept at most this many files, this large in total, per pick.
+    static let maxUploadFiles = 20
+    static let maxUploadBytes = 50 * 1024 * 1024
 
     var takeoverStatus: String? { thread.browserTakeover?["status"]?.stringValue }
     var canTakeControl: Bool { thread.runs.contains { ["preparing", "starting", "running"].contains($0.status) } }
@@ -118,6 +125,8 @@ final class PathwayRemoteBrowserModel {
         // Open on the page the agent is using, so watching it is one tap.
         selectedID = thread.agentRemoteBrowserTabID
     }
+
+    deinit { try? FileManager.default.removeItem(at: downloadsDirectory) }
 
     func start() async {
         isHostReady = false
@@ -263,13 +272,13 @@ final class PathwayRemoteBrowserModel {
         }
     }
 
-    func respond(to dialog: PathwayRemoteBrowserInteraction.Dialog, accept: Bool, text: String) async {
+    func respond(to dialog: PathwayRemoteBrowserInteraction.Dialog, accept: Bool, text: String) async -> Bool {
         var fields: [String: JSONValue] = ["dialogId": .string(dialog.dialogId), "accept": .bool(accept)]
         if dialog.kind == "prompt", accept { fields["promptText"] = .string(text) }
-        await interact("dialogRespond", fields: fields)
+        return await interact("dialogRespond", fields: fields)
     }
 
-    func choose(_ select: PathwayRemoteBrowserInteraction.Select, indices: [Int]?) async {
+    func choose(_ select: PathwayRemoteBrowserInteraction.Select, indices: [Int]?) async -> Bool {
         await interact("selectChoose", fields: ["selectId": .string(select.selectId),
                                                 "indices": indices.map { .array($0.map { .number(Double($0)) }) } ?? .null])
     }
@@ -280,24 +289,46 @@ final class PathwayRemoteBrowserModel {
         guard !files.isEmpty else {
             return await interact("fileChooserRespond", fields: ["chooserId": .string(chooser.chooserId), "files": .array([])])
         }
-        uploadStatus = files.count == 1 ? "Uploading \(files[0].lastPathComponent)…" : "Uploading \(files.count) files…"
+        guard let files = checkedUploads(files) else { return false }
+        uploadStatus = files.count == 1 ? "Uploading \(files[0].0.lastPathComponent)…" : "Uploading \(files.count) files…"
         defer { uploadStatus = nil }
         do {
             var uploaded: [JSONValue] = []
-            for file in files { uploaded.append(try await upload(file)) }
+            for (file, size) in files { uploaded.append(try await upload(file, size: size)) }
             uploadStatus = "Sending to the page…"
             return await interact("fileChooserRespond", fields: ["chooserId": .string(chooser.chooserId), "files": .array(uploaded)])
         } catch is CancellationError { return false }
         catch { self.error = error.localizedDescription; return false }
     }
 
+    /// Sizes the picked files, or says why the pick is too big before anything uploads.
+    private func checkedUploads(_ files: [URL]) -> [(URL, Int)]? {
+        guard files.count <= Self.maxUploadFiles else {
+            error = "Choose up to \(Self.maxUploadFiles) files at a time."
+            return nil
+        }
+        var sized: [(URL, Int)] = []
+        for file in files {
+            let access = file.startAccessingSecurityScopedResource()
+            defer { if access { file.stopAccessingSecurityScopedResource() } }
+            guard let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0 else {
+                error = "\(file.lastPathComponent) could not be read, or is empty."
+                return nil
+            }
+            sized.append((file, size))
+        }
+        guard sized.reduce(0, { $0 + $1.1 }) <= Self.maxUploadBytes else {
+            error = files.count == 1 ? "Choose a file under 50 MB." : "Choose files under 50 MB in total."
+            return nil
+        }
+        return sized
+    }
+
     /// The same upload path as composer attachments: an upload URL, then an authenticated POST.
-    private func upload(_ file: URL) async throws -> JSONValue {
+    private func upload(_ file: URL, size: Int) async throws -> JSONValue {
         guard let connect = thread.connect else { throw PathwayRPCError.disconnected }
         let access = file.startAccessingSecurityScopedResource()
         defer { if access { file.stopAccessingSecurityScopedResource() } }
-        let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        guard size > 0, size <= 50 * 1024 * 1024 else { throw PathwayThreadConversationError.message("Choose a file under 50 MB.") }
         let name = String(file.lastPathComponent.prefix(255))
         let mimeType = UTType(filenameExtension: file.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
         let value = try await request("attachments.createUploadUrl", .object([
@@ -324,7 +355,7 @@ final class PathwayRemoteBrowserModel {
         do {
             let (temporary, response) = try await URLSession.shared.download(from: url)
             guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else { throw URLError(.badServerResponse) }
-            let directory = FileManager.default.temporaryDirectory.appending(path: "browser-downloads/\(download.downloadId)")
+            let directory = downloadsDirectory.appending(path: download.downloadId)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let destination = directory.appending(path: (download.name as NSString).lastPathComponent)
             try? FileManager.default.removeItem(at: destination)
@@ -332,6 +363,12 @@ final class PathwayRemoteBrowserModel {
             savedDownloads[download.downloadId] = destination
         } catch is CancellationError { return }
         catch { self.error = "Could not save \(download.name): \(error.localizedDescription)" }
+    }
+
+    /// Drops a saved download once it has been shared; Save fetches it again if needed.
+    func discardSaved(_ downloadID: String) {
+        guard savedDownloads.removeValue(forKey: downloadID) != nil else { return }
+        try? FileManager.default.removeItem(at: downloadsDirectory.appending(path: downloadID))
     }
 }
 
@@ -518,7 +555,7 @@ private struct RemoteBrowserPage: View {
 
 /// Presents the selected tab's page prompts natively: dialogs as alerts, `<select>` menus as a
 /// sheet, file choosers as the document picker. Each prompt shows once per id; answering it
-/// waits for the environment to clear it.
+/// waits for the environment to clear it, and a failed answer shows the prompt again.
 private struct RemoteBrowserPrompts: ViewModifier {
     let browser: PathwayRemoteBrowserModel
     @State private var answered: Set<String> = []
@@ -557,28 +594,39 @@ private struct RemoteBrowserPrompts: ViewModifier {
             }
             .onChange(of: chooser?.chooserId) { picking = chooser != nil }
             .fileImporter(isPresented: $picking, allowedContentTypes: [.item], allowsMultipleSelection: chooser?.multiple ?? false) { result in
-                guard let chooser else { return }
-                answered.insert(chooser.chooserId)
-                let files = (try? result.get()) ?? []
-                Task {
-                    // A refused pick keeps the chooser open on the page; offer the picker again.
-                    if !(await browser.respond(to: chooser, files: files)), !files.isEmpty {
-                        answered.remove(chooser.chooserId)
-                        picking = true
-                    }
-                }
+                if let chooser { pick(chooser, files: (try? result.get()) ?? []) }
+            } onCancellation: {
+                if let chooser { pick(chooser, files: []) }
             }
     }
 
+    /// Sends the pick, or the cancel as no files. A refused pick keeps the chooser open on the
+    /// page, so the picker is offered again.
+    private func pick(_ chooser: PathwayRemoteBrowserInteraction.FileChooser, files: [URL]) {
+        answer(chooser.chooserId) {
+            await browser.respond(to: chooser, files: files)
+        } refused: {
+            picking = true
+        }
+    }
+
     private func answer(_ dialog: PathwayRemoteBrowserInteraction.Dialog, accept: Bool) {
-        answered.insert(dialog.dialogId)
         let text = promptText
-        Task { await browser.respond(to: dialog, accept: accept, text: text) }
+        answer(dialog.dialogId) { await browser.respond(to: dialog, accept: accept, text: text) }
     }
 
     private func choose(_ select: PathwayRemoteBrowserInteraction.Select, indices: [Int]?) {
-        guard answered.insert(select.selectId).inserted else { return }
-        Task { await browser.choose(select, indices: indices) }
+        answer(select.selectId) { await browser.choose(select, indices: indices) }
+    }
+
+    /// Hides the prompt while its answer is sent, and brings it back if the answer fails.
+    private func answer(_ id: String, send: @escaping () async -> Bool, refused: @escaping () -> Void = {}) {
+        guard answered.insert(id).inserted else { return }
+        Task {
+            guard !(await send()) else { return }
+            answered.remove(id)
+            refused()
+        }
     }
 }
 
@@ -630,6 +678,7 @@ private struct RemoteBrowserDownloads: View {
     let browser: PathwayRemoteBrowserModel
     @Environment(\.dismiss) private var dismiss
     @State private var saving: Set<String> = []
+    @State private var sharing: PathwayRemoteBrowserSavedDownload?
 
     var body: some View {
         NavigationStack {
@@ -638,7 +687,9 @@ private struct RemoteBrowserDownloads: View {
                     Text(download.name).lineLimit(1)
                     Spacer()
                     if let local = browser.savedDownloads[download.downloadId] {
-                        ShareLink(item: local) { Label("Share", systemImage: "square.and.arrow.up") }
+                        Button("Share", systemImage: "square.and.arrow.up") {
+                            sharing = PathwayRemoteBrowserSavedDownload(id: download.downloadId, url: local)
+                        }
                     } else if download.status == "ready" {
                         if saving.contains(download.downloadId) { ProgressView() } else {
                             Button("Save") {
@@ -659,7 +710,29 @@ private struct RemoteBrowserDownloads: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         .presentationDetents([.medium, .large])
+        .sheet(item: $sharing) { saved in
+            RemoteBrowserShareSheet(url: saved.url) { browser.discardSaved(saved.id) }
+        }
     }
+}
+
+private struct PathwayRemoteBrowserSavedDownload: Identifiable {
+    let id: String
+    let url: URL
+}
+
+/// The system share sheet, reporting when it closes so the local copy can go.
+private struct RemoteBrowserShareSheet: UIViewControllerRepresentable {
+    let url: URL
+    let finished: () -> Void
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, _, _, _ in finished() }
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
 /// Live strip above the composer while the agent browses in the environment's browser.
