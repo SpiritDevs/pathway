@@ -68,10 +68,17 @@ export class XcodeInstall {
   readonly host: XcodeHost;
   readonly store: XcodeJobStore;
   readonly now: () => number;
-  constructor(host: XcodeHost, store: XcodeJobStore, now = Date.now) {
+  readonly accountAvailable: (account: AppleSessionTarget) => Promise<boolean>;
+  constructor(
+    host: XcodeHost,
+    store: XcodeJobStore,
+    now = Date.now,
+    accountAvailable: (account: AppleSessionTarget) => Promise<boolean> = async () => true,
+  ) {
     this.host = host;
     this.store = store;
     this.now = now;
+    this.accountAvailable = accountAvailable;
     this.#snapshot = {
       host: host.supported ? "mac" : "needs-mac",
       installed: [],
@@ -141,8 +148,46 @@ export class XcodeInstall {
     this.#job = next;
     this.#notify();
   }
+  /** Only an environment-level denial proves orphaning; a different caller's denial does not. */
+  async #reconcileAccount() {
+    const orphan = await this.#serial(async () => {
+      const job = this.#job;
+      if (!job || !active(job) || (await this.accountAvailable(job.account))) return null;
+      const failure = xcodeError(
+        "cancelled",
+        "The Apple account was removed or this environment no longer has access. Start a new Xcode job with an available account.",
+      );
+      const worker = this.#worker;
+      await this.#save({
+        ...job,
+        state: worker ? "cancelling" : "cancelled",
+        steps: this.#cancelledSteps(job, failure),
+      });
+      this.#controller?.abort(failure);
+      return { id: job.id, worker, failure };
+    });
+    if (!orphan?.worker) return;
+    // The worker persists its own exit; never join it while holding the command queue.
+    await orphan.worker;
+    await this.#serial(async () => {
+      const job = this.#job;
+      if (job?.id === orphan.id && job.state !== "cancelled")
+        await this.#save({
+          ...job,
+          state: "cancelled",
+          steps: this.#cancelledSteps(job, orphan.failure),
+        });
+    });
+  }
+  #cancelledSteps(job: XcodeJob, error: XcodeError): readonly XcodeStep[] {
+    return job.steps.map((step) =>
+      ["completed", "skipped"].includes(step.state)
+        ? step
+        : { ...step, state: "cancelled", error: { code: error.code, message: error.message } },
+    );
+  }
   async status(): Promise<XcodeStatus> {
-    await this.#init();
+    await this.#reconcileAccount();
     try {
       this.#snapshot = await this.host.inspect();
     } catch (error) {
@@ -203,7 +248,12 @@ export class XcodeInstall {
     this.#launch(false);
     return this.#job!;
   }
-  install(account: AppleSessionTarget, versionId: string, platforms: readonly XcodePlatform[]) {
+  async install(
+    account: AppleSessionTarget,
+    versionId: string,
+    platforms: readonly XcodePlatform[],
+  ) {
+    await this.#reconcileAccount();
     return this.#serial(async () => {
       if (!this.host.supported) throw xcodeError("needs-mac", "Xcode needs a Mac host.");
       return this.#start(
@@ -215,10 +265,16 @@ export class XcodeInstall {
       );
     });
   }
-  select(account: AppleSessionTarget, path: string) {
+  async select(account: AppleSessionTarget, path: string) {
+    await this.#reconcileAccount();
     return this.#serial(() => this.#start("select", path, null, account, []));
   }
-  installRuntimes(account: AppleSessionTarget, path: string, platforms: readonly XcodePlatform[]) {
+  async installRuntimes(
+    account: AppleSessionTarget,
+    path: string,
+    platforms: readonly XcodePlatform[],
+  ) {
+    await this.#reconcileAccount();
     return this.#serial(() => this.#start("runtimes", path, null, account, platforms));
   }
   #require(account: AppleSessionTarget, jobId: string) {
@@ -328,7 +384,9 @@ export class XcodeInstall {
         if (this.#closed) return;
         const cancelled = controller.signal.aborted;
         const failure = cancelled
-          ? xcodeError("cancelled", "The Xcode job was cancelled.")
+          ? isXcodeError(controller.signal.reason)
+            ? controller.signal.reason
+            : xcodeError("cancelled", "The Xcode job was cancelled.")
           : safe(error);
         await this.#serial(() =>
           this.#save({

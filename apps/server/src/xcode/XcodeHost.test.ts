@@ -8,7 +8,10 @@ import { CompanyId } from "@spiritdevs/contracts/company";
 import type { XcodeJob } from "@spiritdevs/contracts/xcode";
 import { MacXcodeHost } from "./XcodeHost.ts";
 import { fileXcodeJobStore } from "./XcodeJobStore.ts";
-import type { XcodeCommand } from "./XcodeProcess.ts";
+import { runXcodeProcess, type XcodeCommand } from "./XcodeProcess.ts";
+import * as Schema from "effect/Schema";
+const decodeScript = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.String));
+const quoteShell = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(
@@ -223,6 +226,59 @@ describe("Mac Xcode host boundary", () => {
     expect(command?.input).toContain("operation_pid=$!");
     expect(command?.input).not.toContain("SECRET-COOKIE");
   });
+  for (const outcome of ["failed", "cancelled"] as const) {
+    it(`cleans only the exact Applications staging directory after a ${outcome} copy`, async () => {
+      const h = await harness();
+      const directory = NodePath.join(h.root, "state", h.job.id);
+      await NodeFSP.mkdir(NodePath.join(directory, "expanded", "Xcode.app"), { recursive: true });
+      const stage = `${h.job.path}.pathway-${h.job.id}`;
+      const sibling = `${stage}-another-job`;
+      await NodeFSP.mkdir(sibling);
+      await NodeFSP.writeFile(NodePath.join(sibling, "keep"), "unrelated staging");
+      const run = h.host.runProcess;
+      vi.spyOn(h.host, "runProcess").mockImplementation(async (command, signal) => {
+        if (command.file !== "/usr/bin/osascript") return run(command, signal);
+        const script = decodeScript(
+          /do shell script (".*") with administrator privileges/.exec(command.input!)![1]!,
+        );
+        const allow = (await NodeFSP.readdir(directory)).find((name) => name.endsWith(".allow"))!;
+        // Exercise the emitted supervisor without elevation or Xcode tools. This fake copy
+        // leaves a partial app, and either fails or revokes the same marker used by cancel.
+        const fakeCopy = `const fs = require("node:fs");
+          fs.mkdirSync(process.argv[2]);
+          fs.writeFileSync(process.argv[2] + "/partial-app", "partial copy");
+          fs.mkdirSync(${JSON.stringify(h.job.path)});
+          fs.writeFileSync(${JSON.stringify(NodePath.join(h.job.path, "keep"))}, "destination owned by another operation");
+          ${outcome === "cancelled" ? `fs.unlinkSync(${JSON.stringify(NodePath.join(directory, allow))});` : "process.exit(7);"}`;
+        return runXcodeProcess(
+          {
+            file: "/bin/sh",
+            args: [
+              "-c",
+              script.replace(
+                "/usr/bin/ditto",
+                `${quoteShell(process.execPath)} -e ${quoteShell(fakeCopy)}`,
+              ),
+            ],
+            timeoutMs: 10_000,
+          },
+          signal,
+        );
+      });
+      await expect(
+        h.host.run("move", h.job, new AbortController().signal, () => undefined),
+      ).rejects.toMatchObject({ code: "admin-required" });
+      await h.host.cleanup(h.job);
+      await expect(NodeFSP.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(NodeFSP.stat(stage)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await NodeFSP.readFile(NodePath.join(sibling, "keep"), "utf8")).toBe(
+        "unrelated staging",
+      );
+      expect(await NodeFSP.readFile(NodePath.join(h.job.path, "keep"), "utf8")).toBe(
+        "destination owned by another operation",
+      );
+    });
+  }
   it("non-Mac status does not invoke processes, fetch metadata or touch the job directory", async () => {
     const run = vi.fn();
     const http = vi.fn();

@@ -83,30 +83,32 @@ export class AppleIdSession {
   }
   async status(target: AppleSessionTarget): Promise<State> {
     target = { companyId: target.companyId, accountId: target.accountId };
-    const meta = await this.backend.status(target);
-    const flow = this.#flows.get(key(target));
-    if (
-      flow &&
-      (meta.accountRevision !== flow.metadata.accountRevision ||
-        meta.revision !== flow.metadata.revision ||
-        flow.expiresAt <= this.now())
-    ) {
-      this.#drop(target);
-      return this.#publish(target, { state: "expired" });
-    }
-    if (flow) return this.#states.get(key(target)) ?? { state: "signed-out" };
-    if (meta.expiresAt !== null)
+    return this.#serial(target, async () => {
+      const meta = await this.backend.status(target);
+      const flow = this.#flows.get(key(target));
+      if (
+        flow &&
+        (meta.accountRevision !== flow.metadata.accountRevision ||
+          meta.revision !== flow.metadata.revision ||
+          flow.expiresAt <= this.now())
+      ) {
+        this.#drop(target);
+        return this.#publish(target, { state: "expired" });
+      }
+      if (flow) return this.#states.get(key(target)) ?? { state: "signed-out" };
+      if (meta.expiresAt !== null)
+        return this.#publish(
+          target,
+          meta.expiresAt > this.now()
+            ? { state: "authenticated", expiresAt: meta.expiresAt }
+            : { state: "expired" },
+        );
+      const state = this.#states.get(key(target));
       return this.#publish(
         target,
-        meta.expiresAt > this.now()
-          ? { state: "authenticated", expiresAt: meta.expiresAt }
-          : { state: "expired" },
+        state?.state === "failed" || state?.state === "expired" ? state : { state: "signed-out" },
       );
-    const state = this.#states.get(key(target));
-    return this.#publish(
-      target,
-      state?.state === "failed" || state?.state === "expired" ? state : { state: "signed-out" },
-    );
+    });
   }
   /** Subscribe before reading initial state so a concurrent challenge cannot be lost. */
   watch(target: AppleSessionTarget, listener: (state: State) => void): () => void {

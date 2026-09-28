@@ -467,7 +467,14 @@ export class MacXcodeHost implements XcodeHost {
       });
     });
   }
-  async #elevated(job: XcodeJob, command: string, signal: AbortSignal, prepare = "", after = "") {
+  async #elevated(
+    job: XcodeJob,
+    command: string,
+    signal: AbortSignal,
+    prepare = "",
+    after = "",
+    cleanup = "",
+  ) {
     const directory = NodePath.join(this.root, job.id);
     await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
     const allow = NodePath.join(directory, `admin-${NodeCrypto.randomUUID()}.allow`);
@@ -480,7 +487,45 @@ export class MacXcodeHost implements XcodeHost {
     signal.addEventListener("abort", requestCancel, { once: true });
     // Each approval has its own revocable marker. A prompt from an interrupted server
     // cannot start later, even after a new attempt has been approved.
-    const script = `umask 077\n[ -f ${shellQuote(allow)} ] || exit 130\n/bin/mkdir ${shellQuote(lock)} || exit 75\ntrap ${shellQuote(`/bin/rmdir ${shellQuote(lock)}`)} EXIT\n${prepare}\n${command} &\noperation_pid=$!\n(remaining=1200; while /bin/kill -0 "$operation_pid" 2>/dev/null; do if [ ! -f ${shellQuote(allow)} ] || [ "$remaining" -le 0 ]; then /bin/kill -TERM "$operation_pid"; /bin/sleep 5; /bin/kill -KILL "$operation_pid" 2>/dev/null; exit; fi; remaining=$((remaining - 1)); /bin/sleep 1; done) &\nwatcher_pid=$!\nwait "$operation_pid"\nresult=$?\n/bin/kill "$watcher_pid" 2>/dev/null\n[ -f ${shellQuote(allow)} ] || exit 130\n[ "$result" -eq 0 ] || exit "$result"\n${after}\n`;
+    const script = `umask 077
+[ -f ${shellQuote(allow)} ] || exit 130
+/bin/mkdir ${shellQuote(lock)} || exit 75
+operation_pid=""
+watcher_pid=""
+finish() {
+  result=$?
+  trap - EXIT HUP INT TERM
+  /bin/rm -f ${shellQuote(allow)}
+  if [ -n "$operation_pid" ]; then
+    /bin/kill -TERM "$operation_pid" 2>/dev/null
+    wait "$operation_pid" 2>/dev/null
+  fi
+  if [ -n "$watcher_pid" ]; then
+    /bin/kill "$watcher_pid" 2>/dev/null
+    wait "$watcher_pid" 2>/dev/null
+  fi
+  ${cleanup}
+  /bin/rmdir ${shellQuote(lock)}
+  exit "$result"
+}
+trap finish EXIT
+trap 'exit 130' HUP INT TERM
+${prepare}
+${command} &
+operation_pid=$!
+(remaining=1200; while /bin/kill -0 "$operation_pid" 2>/dev/null; do if [ ! -f ${shellQuote(allow)} ] || [ "$remaining" -le 0 ]; then /bin/kill -TERM "$operation_pid"; /bin/sleep 5; /bin/kill -KILL "$operation_pid" 2>/dev/null; exit; fi; remaining=$((remaining - 1)); /bin/sleep 1; done) &
+watcher_pid=$!
+wait "$operation_pid"
+result=$?
+operation_pid=""
+/bin/kill "$watcher_pid" 2>/dev/null
+wait "$watcher_pid" 2>/dev/null
+watcher_pid=""
+[ -f ${shellQuote(allow)} ] || exit 130
+[ "$result" -eq 0 ] || exit "$result"
+${after}
+`;
+
     const source = `with timeout of 1500 seconds\n do shell script ${JSON.stringify(script)} with administrator privileges\nend timeout\n`;
     try {
       signal.throwIfAborted();
@@ -602,6 +647,7 @@ export class MacXcodeHost implements XcodeHost {
         signal,
         `test ! -e ${shellQuote(job.path)} || exit 1\n/bin/rm -rf ${shellQuote(stage)} || exit 1`,
         `test ! -e ${shellQuote(job.path)} && /bin/mv -n ${shellQuote(stage)} ${shellQuote(job.path)}`,
+        `/bin/rm -rf ${shellQuote(stage)}`,
       );
     } else if (step === "runtimes") {
       await this.#validatePath(job.path, signal);

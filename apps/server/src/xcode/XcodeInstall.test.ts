@@ -3,7 +3,8 @@ import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import * as Effect from "effect/Effect";
 import type { XcodeJob, XcodeStepId, XcodeStatus } from "@spiritdevs/contracts/xcode";
-import { AuthOrchestrationReadScope } from "@spiritdevs/contracts";
+import { AuthOrchestrationReadScope, AuthOrchestrationOperateScope } from "@spiritdevs/contracts";
+import { AppleError } from "@spiritdevs/contracts/apple";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { XcodeInstall, xcodeError, type XcodeHost, type XcodeJobStore } from "./XcodeInstall.ts";
 import { makeXcodeRpcHandlers } from "./xcodeRpc.ts";
@@ -76,6 +77,148 @@ describe("durable Xcode jobs", () => {
       "helpers",
     ]);
     expect(h.saved()?.state).toBe("completed");
+    await h.runtime.dispose();
+  });
+  for (const restart of [false, true]) {
+    effectIt.effect(
+      `reclaims a deleted account's paused job${restart ? " after restart" : " before a new job"}`,
+      () =>
+        Effect.gen(function* () {
+          const h = harness({ admin: true });
+          let available = true;
+          const accountAvailable = async (account: { accountId: string }) =>
+            account.accountId !== target.accountId || available;
+          let runtime = new XcodeInstall(h.host, h.store, undefined, accountAvailable);
+          const apple = {
+            authorizeCaller: async (account: { accountId: string }) => {
+              if (!(await accountAvailable(account)))
+                throw new AppleError({
+                  code: "forbidden",
+                  message: "Account removed",
+                  retryAfterSeconds: null,
+                });
+            },
+          };
+          const handlers = () =>
+            makeXcodeRpcHandlers(
+              runtime,
+              apple,
+              [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+              Effect.succeed({ clerkSubject: "owner" }),
+            );
+          const job = yield* handlers()["xcode.select"]({
+            ...target,
+            path: "/Applications/Xcode.app",
+          });
+          yield* Effect.promise(() => runtime.drained());
+          expect(h.saved()?.state).toBe("needs-admin");
+          expect(
+            yield* Effect.result(
+              handlers()["xcode.select"]({
+                ...target,
+                accountId: "available-account",
+                path: "/Applications/Xcode.app",
+              }),
+            ),
+          ).toMatchObject({ _tag: "Failure", failure: { code: "busy" } });
+          expect(h.saved()?.state).toBe("needs-admin");
+          available = false;
+          expect(
+            yield* Effect.result(handlers()["xcode.cancel"]({ ...target, jobId: job.id })),
+          ).toMatchObject({ _tag: "Failure", failure: { code: "forbidden" } });
+          if (restart) {
+            yield* Effect.promise(() => runtime.dispose());
+            runtime = new XcodeInstall(h.host, h.store, undefined, accountAvailable);
+          }
+          const other = { ...target, accountId: "available-account" };
+          const writes = vi.mocked(h.store.save);
+          if (restart) {
+            expect((yield* handlers()["xcode.status"](other)).job).toBeNull();
+            expect(h.saved()).toMatchObject({ id: job.id, state: "cancelled" });
+          }
+          const next = yield* handlers()["xcode.select"]({
+            ...other,
+            path: "/Applications/Xcode.app",
+          });
+          expect(next.account).toEqual(other);
+          expect(writes.mock.calls.map(([value]) => value)).toContainEqual(
+            expect.objectContaining({
+              id: job.id,
+              state: "cancelled",
+              steps: expect.arrayContaining([
+                expect.objectContaining({
+                  id: "select",
+                  state: "cancelled",
+                  error: {
+                    code: "cancelled",
+                    message:
+                      "The Apple account was removed or this environment no longer has access. Start a new Xcode job with an available account.",
+                  },
+                }),
+              ]),
+            }),
+          );
+          yield* Effect.promise(() => runtime.drained());
+          yield* Effect.promise(() => runtime.dispose());
+          yield* Effect.promise(() => h.runtime.dispose());
+        }),
+    );
+  }
+  it("waits for an orphaned running worker to exit before starting another account's job", async () => {
+    const h = harness();
+    const entered = receipt<void>();
+    const aborted = receipt<void>();
+    const release = receipt<void>();
+    let available = true;
+    const runtime = new XcodeInstall(
+      h.host,
+      h.store,
+      undefined,
+      async (account) => account.accountId !== target.accountId || available,
+    );
+    h.host.run = async (step, _job, signal) => {
+      h.calls.push(step);
+      if (step === "download") {
+        signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+        entered.resolve();
+        await release.promise;
+      }
+    };
+    const original = await runtime.install(target, "27A1", []);
+    await entered.promise;
+    available = false;
+    const next = runtime.select(
+      { ...target, accountId: "available-account" },
+      "/Applications/Xcode.app",
+    );
+    await aborted.promise;
+    expect(h.saved()).toMatchObject({ id: original.id, state: "cancelling" });
+    expect(h.calls).not.toContain("select");
+    release.resolve();
+    expect((await next).account.accountId).toBe("available-account");
+    await runtime.drained();
+    expect(h.calls).not.toContain("expand");
+    expect(vi.mocked(h.store.save).mock.calls.map(([job]) => job)).toContainEqual(
+      expect.objectContaining({ id: original.id, state: "cancelled" }),
+    );
+    await runtime.dispose();
+    await h.runtime.dispose();
+  });
+  it("preserves a paused job when its account check has a transient failure", async () => {
+    const h = harness({ admin: true });
+    let failure = false;
+    const runtime = new XcodeInstall(h.host, h.store, undefined, async () => {
+      if (failure) throw new Error("Cloud unavailable");
+      return true;
+    });
+    const job = await runtime.select(target, "/Applications/Xcode.app");
+    await runtime.drained();
+    failure = true;
+    await expect(
+      runtime.select({ ...target, accountId: "another" }, "/Applications/Xcode.app"),
+    ).rejects.toThrow("Cloud unavailable");
+    expect(h.saved()).toMatchObject({ id: job.id, state: "needs-admin" });
+    await runtime.dispose();
     await h.runtime.dispose();
   });
   it("fails before downloading when disk space is insufficient, then retries", async () => {

@@ -1,6 +1,6 @@
 import { HostProcessPlatform, HostProcessArchitecture } from "@spiritdevs/shared/hostProcess";
 import * as Path from "effect/Path";
-import type { AppleSessionBackend } from "@spiritdevs/backend/appleSession";
+import type { AppleSessionBackend, AppleSessionTarget } from "@spiritdevs/backend/appleSession";
 import { ServerConfig } from "../config.ts";
 import { AppleIdSession } from "./AppleIdSession.ts";
 import { XcodeInstall } from "../xcode/XcodeInstall.ts";
@@ -118,6 +118,28 @@ export function makeAppleBackend(
   };
 }
 
+/** A confirmed custody denial can release an orphaned host job. Network/auth outages cannot. */
+export const makeXcodeAccountCheck =
+  (backend: Pick<AppleBackend, "accountStatus">) =>
+  async (target: AppleSessionTarget): Promise<boolean> => {
+    try {
+      await backend.accountStatus({ companyId: target.companyId, accountId: target.accountId });
+      return true;
+    } catch (error) {
+      if (
+        [
+          "entity-not-found",
+          "company-not-found",
+          "permission-denied",
+          "environment-not-registered",
+          "environment-key-mismatch",
+        ].includes(convexErrorCode(error) ?? "")
+      )
+        return false;
+      throw error;
+    }
+  };
+
 /** Initialization is shared by callers and retried after failure, only when Apple is used. */
 function lazyBackend(
   initialize: () => Promise<AppleBackend & { sessions: AppleSessionBackend }>,
@@ -188,6 +210,8 @@ export const makeConfiguredAppleServices = Effect.fn("apple.runtime.make")(funct
   const xcode = new XcodeInstall(
     new MacXcodeHost(root, sessions, { platform, arch }),
     fileXcodeJobStore(path.join(root, "job.json")),
+    undefined,
+    makeXcodeAccountCheck(backend),
   );
   yield* Effect.addFinalizer(() => Effect.promise(() => xcode.dispose()));
   yield* Effect.addFinalizer(() => Effect.sync(() => sessions.dispose()));

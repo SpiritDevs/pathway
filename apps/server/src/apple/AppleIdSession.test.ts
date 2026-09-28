@@ -148,6 +148,35 @@ describe("Apple ID sessions", () => {
     h.sessions.dispose();
     restored.dispose();
   });
+  it("status reads wait for committed sign-in saves without revoking the session", async () => {
+    const h = harness();
+    const committed = receipt<void>();
+    const deliver = receipt<void>();
+    const save = h.backend.save;
+    h.backend.save = async (account, input) => {
+      const metadata = await save(account, input);
+      committed.resolve();
+      await deliver.promise;
+      return metadata;
+    };
+    const states: (typeof AppleIdSessionState.Type)[] = [];
+    h.sessions.watch(target, (state) => states.push(state));
+    const challenge = await h.sessions.start(target, "TEST-PASSWORD");
+    if (challenge.state !== "challenge") throw new Error("Expected challenge");
+    const completion = h.sessions.complete(target, challenge.flowId, "123456");
+    const completed = expect(completion).resolves.toEqual({
+      state: "authenticated",
+      expiresAt: authenticated.expiresAt,
+    });
+    await committed.promise;
+    const reading = h.sessions.status(target);
+    deliver.resolve();
+    await completed;
+    expect(await reading).toEqual({ state: "authenticated", expiresAt: authenticated.expiresAt });
+    expect(states.some((state) => state.state === "expired")).toBe(false);
+    expect(h.backend.revoke).not.toHaveBeenCalled();
+    h.sessions.dispose();
+  });
   it("cancellation aborts an in-flight login and fences its late response", async () => {
     const h = harness();
     const held = receipt<AppleAuthenticated>();
