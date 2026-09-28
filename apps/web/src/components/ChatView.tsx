@@ -373,6 +373,7 @@ import {
 import { useEnvironmentShellBootstrapped } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { IssueDetailSheet } from "./issues/IssueDetailSheet";
+import { IssueMentionOpenContext } from "./chat/IssueMentionText";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ImageLightbox } from "./media/ImageLightbox";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -10059,83 +10060,89 @@ function ChatViewContent(props: ChatViewProps) {
             <div className="relative flex min-h-0 flex-1 flex-col">
               {activeThreadRef ? <ComputerPreviewRail threadRef={activeThreadRef} /> : null}
               {/* Messages — LegendList handles virtualization and scrolling internally */}
-              <MessagesTimeline
-                key={activeThread.id}
-                isWorking={isWorking && !threadHistory?.hasNewer}
-                workingPresentation={resolveThreadProjectionWorkingPresentation({
-                  projectionPending: isThreadProjectionPending,
-                  loadingStopped: threadLoadStopped,
-                  isWorking,
-                  latestRun: activeLatestRun,
-                })}
-                activeTurnInProgress={(isWorking || !latestRunSettled) && !threadHistory?.hasNewer}
-                activeTurnStartedAt={activeWorkStartedAt}
-                allowanceHold={allowanceHold}
-                pendingBackgroundTasks={threadHistory?.hasNewer ? null : pendingBackgroundTasks}
-                listRef={legendListRef}
-                asyncQuestions={timelineAsyncQuestions}
-                timelineEntries={timelineEntries}
-                history={threadHistory}
-                latestRun={activeActivityRun}
-                turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-                queuedMessageControls={queuedMessageControls}
-                onCancelQueuedMessage={(messageId) => {
-                  void queuedChat.mutateMessage(messageId, "cancel");
-                }}
-                editableUserMessageId={editableUserMessageId}
-                canSubmitUserMessageEdit={editableUserMessageId !== null && latestRunSettled}
-                onRequestEditUserMessage={onRequestEditUserMessage}
-                onSubmitUserMessageEdit={onSubmitUserMessageEdit}
-                retryableUserMessageId={retryableUserMessageId}
-                onRetryUserMessage={onRetryUserMessage}
-                activeThreadEnvironmentId={activeThread.environmentId}
-                routeThreadKey={routeThreadKey}
-                onOpenTurnDiff={onOpenTurnDiff}
-                onOpenFilePreview={openFileSurface}
-                onOpenIssueContext={openIssueContext}
-                onPanelSurfaceOpen={revealPanelThreadAsPage}
-                onStopConnecting={handleStopThreadLoading}
-                onResumeConnecting={resumeThreadLoading}
-                onRemoveMissingThread={handleRemoveMissingThread}
-                removingMissingThread={isRemovingMissingThread}
-                onControlWorkspacePreparation={onControlWorkspacePreparation}
-                computerControlEnabled={composerComputerControlOn}
-                onEnableComputerControl={handleEnableComputerControlFromDenial}
-                onOpenThread={onOpenRelatedThread}
-                parentThreadLink={parentThreadLink}
-                onContinueFromRun={onContinueFromRun}
-                onRecoverUsageLimit={onRecoverUsageLimit}
-                onWaitUntilUsageReset={onWaitUntilUsageResetForTimeline}
-                usageLimitRecoveryPending={
-                  continuationPending || usageLimitWaitPending || usageRecovery.busy
-                }
-                canWaitUntilUsageReset={
-                  supportsSnooze ||
-                  (serverConfig?.usageRecovery === true && usageRecovery.supportedProvider)
-                }
-                canResumeUsageNow={usageRecovery.canResumeNow}
-                onRollbackCheckpoint={onRollbackCheckpointForTimeline}
-                revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-                onRevertUserMessage={onRevertUserMessage}
-                isRevertingCheckpoint={isRevertingCheckpoint}
-                onImageExpand={onExpandTimelineImage}
-                markdownCwd={gitCwd ?? undefined}
-                resolvedTheme={resolvedTheme}
-                timestampFormat={timestampFormat}
-                workspaceRoot={activeWorkspaceRoot}
-                skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
-                providerStatuses={providerStatuses}
-                runs={serverProjection?.runs ?? EMPTY_PROJECTION_RUNS}
-                subagents={serverProjection?.subagents ?? EMPTY_PROJECTION_SUBAGENTS}
-                anchorMessageId={timelineAnchorMessageId}
-                onAnchorReady={onTimelineAnchorReady}
-                onAnchorSizeChanged={onTimelineAnchorSizeChanged}
-                contentInsetEndAdjustment={composerOverlayHeight}
-                liveFollowEnabled={timelineLiveFollowEnabled}
-                onIsAtEndChange={onIsAtEndChange}
-                onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
-                topFadeEnabled={!hasTimelineTopBanner}
-              />
+              <IssueMentionOpenContext
+                value={props.onOpenIssueContext === undefined ? setLocalIssueDetailKey : null}
+              >
+                <MessagesTimeline
+                  key={activeThread.id}
+                  isWorking={isWorking && !threadHistory?.hasNewer}
+                  workingPresentation={resolveThreadProjectionWorkingPresentation({
+                    projectionPending: isThreadProjectionPending,
+                    loadingStopped: threadLoadStopped,
+                    isWorking,
+                    latestRun: activeLatestRun,
+                  })}
+                  activeTurnInProgress={
+                    (isWorking || !latestRunSettled) && !threadHistory?.hasNewer
+                  }
+                  activeTurnStartedAt={activeWorkStartedAt}
+                  allowanceHold={allowanceHold}
+                  pendingBackgroundTasks={threadHistory?.hasNewer ? null : pendingBackgroundTasks}
+                  listRef={legendListRef}
+                  asyncQuestions={timelineAsyncQuestions}
+                  timelineEntries={timelineEntries}
+                  history={threadHistory}
+                  latestRun={activeActivityRun}
+                  turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                  queuedMessageControls={queuedMessageControls}
+                  onCancelQueuedMessage={(messageId) => {
+                    void queuedChat.mutateMessage(messageId, "cancel");
+                  }}
+                  editableUserMessageId={editableUserMessageId}
+                  canSubmitUserMessageEdit={editableUserMessageId !== null && latestRunSettled}
+                  onRequestEditUserMessage={onRequestEditUserMessage}
+                  onSubmitUserMessageEdit={onSubmitUserMessageEdit}
+                  retryableUserMessageId={retryableUserMessageId}
+                  onRetryUserMessage={onRetryUserMessage}
+                  activeThreadEnvironmentId={activeThread.environmentId}
+                  routeThreadKey={routeThreadKey}
+                  onOpenTurnDiff={onOpenTurnDiff}
+                  onOpenFilePreview={openFileSurface}
+                  onOpenIssueContext={openIssueContext}
+                  onPanelSurfaceOpen={revealPanelThreadAsPage}
+                  onStopConnecting={handleStopThreadLoading}
+                  onResumeConnecting={resumeThreadLoading}
+                  onRemoveMissingThread={handleRemoveMissingThread}
+                  removingMissingThread={isRemovingMissingThread}
+                  onControlWorkspacePreparation={onControlWorkspacePreparation}
+                  computerControlEnabled={composerComputerControlOn}
+                  onEnableComputerControl={handleEnableComputerControlFromDenial}
+                  onOpenThread={onOpenRelatedThread}
+                  parentThreadLink={parentThreadLink}
+                  onContinueFromRun={onContinueFromRun}
+                  onRecoverUsageLimit={onRecoverUsageLimit}
+                  onWaitUntilUsageReset={onWaitUntilUsageResetForTimeline}
+                  usageLimitRecoveryPending={
+                    continuationPending || usageLimitWaitPending || usageRecovery.busy
+                  }
+                  canWaitUntilUsageReset={
+                    supportsSnooze ||
+                    (serverConfig?.usageRecovery === true && usageRecovery.supportedProvider)
+                  }
+                  canResumeUsageNow={usageRecovery.canResumeNow}
+                  onRollbackCheckpoint={onRollbackCheckpointForTimeline}
+                  revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+                  onRevertUserMessage={onRevertUserMessage}
+                  isRevertingCheckpoint={isRevertingCheckpoint}
+                  onImageExpand={onExpandTimelineImage}
+                  markdownCwd={gitCwd ?? undefined}
+                  resolvedTheme={resolvedTheme}
+                  timestampFormat={timestampFormat}
+                  workspaceRoot={activeWorkspaceRoot}
+                  skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
+                  providerStatuses={providerStatuses}
+                  runs={serverProjection?.runs ?? EMPTY_PROJECTION_RUNS}
+                  subagents={serverProjection?.subagents ?? EMPTY_PROJECTION_SUBAGENTS}
+                  anchorMessageId={timelineAnchorMessageId}
+                  onAnchorReady={onTimelineAnchorReady}
+                  onAnchorSizeChanged={onTimelineAnchorSizeChanged}
+                  contentInsetEndAdjustment={composerOverlayHeight}
+                  liveFollowEnabled={timelineLiveFollowEnabled}
+                  onIsAtEndChange={onIsAtEndChange}
+                  onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
+                  topFadeEnabled={!hasTimelineTopBanner}
+                />
+              </IssueMentionOpenContext>
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
               {(showScrollToBottom || threadHistory?.hasNewer) && (
@@ -10714,6 +10721,9 @@ function ChatViewContent(props: ChatViewProps) {
         <IssueDetailSheet
           issueKey={localIssueDetailKey}
           onClose={() => setLocalIssueDetailKey(null)}
+          onOpenInIssues={(key) => {
+            void navigate({ to: "/issues", search: { issue: key } });
+          }}
           onOpenIssueKey={setLocalIssueDetailKey}
         />
       ) : null}

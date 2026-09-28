@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -7,28 +7,44 @@ import { describe, expect, it, vi } from "vite-plus/test";
 // The real Link needs a live router. This stand-in records where it was asked to go, which is the
 // whole point of using it: modifier and middle clicks, and the href the current history spells, are
 // the router's job rather than something this file hand-rolls.
+const renderedLink = vi.hoisted(() => ({
+  onClick: undefined as ((event: MouseEventLike) => void) | undefined,
+}));
+
+interface MouseEventLike {
+  readonly button: number;
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+  readonly shiftKey: boolean;
+  preventDefault(): void;
+}
+
 vi.mock("@tanstack/react-router", () => ({
   Link: ({
     to,
     search,
     children,
+    onClick,
     ...props
   }: {
     readonly to: string;
     readonly search: { readonly issue?: string };
     readonly children: ReactNode;
-  }) => (
-    <a data-to={to} data-issue={search.issue} {...props}>
-      {children}
-    </a>
-  ),
+    readonly onClick?: (event: MouseEventLike) => void;
+  }) => {
+    renderedLink.onClick = onClick;
+    return (
+      <a data-to={to} data-issue={search.issue} {...props}>
+        {children}
+      </a>
+    );
+  },
 }));
-
-import { Link } from "@tanstack/react-router";
 
 import { renderSkillInlineMarkdownChildren } from "./SkillInlineText";
 import {
   IssueMentionLink,
+  IssueMentionOpenContext,
   issueMentionSignature,
   parseIssueMentionSignature,
   renderIssueMentionMarkdownChildren,
@@ -209,37 +225,29 @@ describe("renderIssueMentionMarkdownChildren", () => {
 });
 
 describe("IssueMentionLink", () => {
-  function renderLink(issueKey: string, title: string) {
-    return IssueMentionLink({ issueKey, title }) as ReactElement<{
-      readonly to: string;
-      readonly search: { readonly issue: string };
-      readonly onClick?: unknown;
-      readonly "aria-label": string;
-      readonly "data-markdown-copy": string;
-    }>;
-  }
+  const renderLink = (issueKey: string, title: string) =>
+    renderToStaticMarkup(<IssueMentionLink issueKey={issueKey} title={title} />);
 
   // Navigation is declared to the router rather than intercepted: an onClick that unconditionally
   // calls preventDefault swallows Cmd/Ctrl/Shift and middle clicks, and a hand-built href is wrong
   // wherever the app runs on hash history.
   it("declares the issue route to the router instead of intercepting the click", () => {
-    const link = renderLink("ISS-30", "Link issue mentions in chat");
+    const markup = renderLink("ISS-30", "Link issue mentions in chat");
 
-    expect(link.type).toBe(Link);
-    expect(link.props.to).toBe("/issues");
-    expect(link.props.search).toEqual({ issue: "ISS-30" });
-    expect(link.props.onClick).toBeUndefined();
+    expect(markup).toContain('data-to="/issues"');
+    expect(markup).toContain('data-issue="ISS-30"');
+    expect(renderedLink.onClick).toBeUndefined();
   });
 
   it("names the issue for screen readers and re-emits the raw key on copy", () => {
-    const link = renderLink("ISS-30", "Link issue mentions in chat");
+    const markup = renderLink("ISS-30", "Link issue mentions in chat");
 
-    expect(link.props["aria-label"]).toBe("Task ISS-30: Link issue mentions in chat");
-    expect(link.props["data-markdown-copy"]).toBe("ISS-30");
+    expect(markup).toContain('aria-label="Task ISS-30: Link issue mentions in chat"');
+    expect(markup).toContain('data-markdown-copy="ISS-30"');
   });
 
   it("falls back to the key alone when the issue has no title", () => {
-    expect(renderLink("PAT-9", "").props["aria-label"]).toBe("Task PAT-9");
+    expect(renderLink("PAT-9", "")).toContain('aria-label="Task PAT-9"');
   });
 });
 
@@ -293,5 +301,39 @@ describe("issueMentionSignature", () => {
     expect(parseIssueMentionSignature(issueMentionSignature(["ISS-99"], store))).toBe(
       parseIssueMentionSignature(issueMentionSignature([], store)),
     );
+  });
+});
+
+describe("IssueMentionLink in a surface that opens tasks in place", () => {
+  const click = (overrides: Partial<MouseEventLike> = {}) => {
+    const preventDefault = vi.fn();
+    renderedLink.onClick?.({
+      button: 0,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      preventDefault,
+      ...overrides,
+    });
+    return preventDefault;
+  };
+
+  it("opens the task in place on a plain click and leaves modified clicks to the router", () => {
+    const open = vi.fn();
+    const markup = renderToStaticMarkup(
+      <IssueMentionOpenContext value={open}>
+        <IssueMentionLink issueKey="ISS-30" title="Link issue mentions in chat" />
+      </IssueMentionOpenContext>,
+    );
+    // The href still names the task, so a new tab or a copied link lands on it.
+    expect(markup).toContain('data-issue="ISS-30"');
+
+    expect(click()).toHaveBeenCalled();
+    expect(open).toHaveBeenCalledWith("ISS-30");
+
+    open.mockClear();
+    expect(click({ metaKey: true })).not.toHaveBeenCalled();
+    expect(click({ button: 1 })).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
   });
 });

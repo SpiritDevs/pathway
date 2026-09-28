@@ -1,6 +1,13 @@
 import { Link } from "@tanstack/react-router";
 import { findIssueKeyMentions, type Issue } from "@spiritdevs/contracts";
-import { Children, cloneElement, isValidElement, type ReactNode } from "react";
+import {
+  Children,
+  cloneElement,
+  createContext,
+  isValidElement,
+  type ReactNode,
+  useContext,
+} from "react";
 
 /** Key → issue, narrowed to the keys one message mentions. Only keys present here become links. */
 export type IssueMentionIndex = ReadonlyMap<string, Pick<Issue, "key" | "title">>;
@@ -15,6 +22,12 @@ export interface IssueMentionContext {
 }
 
 const EMPTY_ISSUE_MENTION_INDEX: IssueMentionIndex = new Map();
+
+/**
+ * Opens a task where the mention was clicked, such as the chat's task sheet, so reading one does
+ * not leave the thread. Without a provider a mention navigates to Tasks.
+ */
+export const IssueMentionOpenContext = createContext<((issueKey: string) => void) | null>(null);
 
 /**
  * Everything a message's mentions render from, as one string. The caller memoises its index on
@@ -47,13 +60,24 @@ export function parseIssueMentionSignature(signature: string): IssueMentionIndex
  * makes it — the desktop app runs on hash history, where `/issues?issue=KEY` is a dead URL — and so
  * Cmd/Ctrl/Shift and middle clicks still open a tab instead of being swallowed. `data-markdown-copy`
  * gives the copy handler the raw key back, so copying rendered chat text yields what was written.
+ * Under an {@link IssueMentionOpenContext} a plain click opens the task in place instead.
  */
 export function IssueMentionLink(props: { readonly issueKey: string; readonly title: string }) {
   const issueKey = props.issueKey;
+  const openInPlace = useContext(IssueMentionOpenContext);
   return (
     <Link
       to="/issues"
       search={{ issue: issueKey }}
+      onClick={
+        openInPlace === null
+          ? undefined
+          : (event) => {
+              if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
+              event.preventDefault();
+              openInPlace(issueKey);
+            }
+      }
       aria-label={props.title.length > 0 ? `Task ${issueKey}: ${props.title}` : `Task ${issueKey}`}
       data-markdown-copy={issueKey}
     >
