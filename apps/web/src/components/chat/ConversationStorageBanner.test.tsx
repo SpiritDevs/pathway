@@ -17,7 +17,7 @@ describe("conversationStorageBanner", () => {
     const state = storage();
     const input = { storage: state, environmentLabel: "Macbook Pro M1", hasMessages: false };
     const banner = conversationStorageBanner(input);
-    expect(banner?.presentation).toBe("lip");
+    expect(banner).not.toBeNull();
     expect(renderToStaticMarkup(<>{banner?.title}</>)).toContain(
       "Macbook Pro M1 - Critical Storage",
     );

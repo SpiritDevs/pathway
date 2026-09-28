@@ -33,10 +33,25 @@ const stackCapBorderClass: Record<ComposerBannerStackItem["variant"], string> = 
   warning: "border-warning/24",
 };
 
+// Every notice is a compact lip. The front one tucks into the composer below
+// it, stacked ones sit behind it, and a detached stack (no composer beneath)
+// rounds all four corners.
+type LipPlacement = "front" | "stacked" | "detached";
+
+function lipShapeClass(placement: LipPlacement) {
+  return cn(
+    "min-h-8 px-2.5 text-[11px] shadow-none",
+    placement === "detached"
+      ? "rounded-[14px] py-1"
+      : "rounded-b-none rounded-t-[14px] border-b-0 pt-1",
+    placement === "front" && "pb-3",
+    placement === "stacked" && "pb-1",
+  );
+}
+
 export interface ComposerBannerStackItem {
   readonly id: string;
   readonly variant: "default" | "error" | "info" | "success" | "warning";
-  readonly presentation?: "banner" | "lip";
   // Ordering hint for stack assemblers: front this banner even though its
   // variant is calm (e.g. live update progress). The stack itself ignores it.
   readonly urgent?: boolean;
@@ -54,12 +69,20 @@ interface ComposerBannerStackProps {
   readonly className?: string;
   readonly items: ReadonlyArray<ComposerBannerStackItem>;
   readonly behindContextStrip?: boolean;
+  // For stacks with no composer beneath them (e.g. the browser preview footer).
+  readonly detached?: boolean;
+  // Mounts a card beside the front banner, shaped like it, for content that
+  // is portaled in from elsewhere (the composer's prompt stash). The banners
+  // give up the width it takes, and nothing stacks above it.
+  readonly trailingSlotRef?: ((element: HTMLDivElement | null) => void) | undefined;
 }
 
 export function ComposerBannerStack({
   className,
   items,
   behindContextStrip = false,
+  detached = false,
+  trailingSlotRef,
 }: ComposerBannerStackProps) {
   const [requestedExitingItemId, setExitingItemId] = useState<string | null>(null);
   const dismissTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -76,18 +99,14 @@ export function ComposerBannerStack({
     };
   }, []);
 
-  if (items.length === 0) {
-    return null;
-  }
-
-  const frontItem = items[0];
-  if (!frontItem) {
+  const frontItem = items.at(0);
+  if (!frontItem && !trailingSlotRef) {
     return null;
   }
   const stackedItems = items.slice(1);
   const hasStack = stackedItems.length > 0;
-  const frontItemIsLip = frontItem.presentation === "lip";
-  const showCollapsedStackCap = hasStack && exitingItemId !== frontItem.id;
+  const frontPlacement: LipPlacement = detached ? "detached" : "front";
+  const showCollapsedStackCap = hasStack && exitingItemId !== frontItem?.id;
   const peekingItems = stackedItems.slice(0, 2);
 
   const requestDismiss = (item: ComposerBannerStackItem) => {
@@ -109,61 +128,75 @@ export function ComposerBannerStack({
       className={cn(
         "group/banner-stack mx-auto w-full min-w-0 max-w-3xl",
         "px-[1.375rem]",
-        frontItemIsLip ? "-mb-2 pt-1" : "mb-2",
+        detached ? "mb-2" : "-mb-2 pt-1",
         hasStack ? "pt-5" : null,
         className,
       )}
     >
       <div
         className={cn(
-          "relative mx-auto flex flex-col-reverse transition-transform duration-150 ease-out group-hover/banner-stack:-translate-y-1 group-focus-within/banner-stack:-translate-y-1 motion-reduce:transition-none",
+          "relative mx-auto grid transition-transform duration-150 ease-out group-hover/banner-stack:-translate-y-1 group-focus-within/banner-stack:-translate-y-1 motion-reduce:transition-none",
           behindContextStrip ? "w-[96%]" : "w-full",
+          trailingSlotRef ? "grid-cols-[minmax(0,1fr)_auto] gap-x-1.5" : "grid-cols-1",
           hasStack ? "group-hover/banner-stack:z-50 group-focus-within/banner-stack:z-50" : null,
         )}
       >
-        {showCollapsedStackCap
-          ? peekingItems.map((item, index) => (
-              <div
-                key={item.id}
-                data-composer-banner-stack-peek={index + 1}
-                className={cn(
-                  "pointer-events-none absolute inset-x-0 mx-auto h-8 rounded-t-[14px] border border-b-0 bg-background shadow-sm",
-                  stackCapBorderClass[item.variant],
-                  "transition-opacity duration-150 ease-out motion-reduce:transition-none",
-                  "group-hover/banner-stack:opacity-0 group-focus-within/banner-stack:opacity-0",
-                )}
-                style={{
-                  width: `${100 * 0.96 ** (index + 1)}%`,
-                  top: -(index + 1) * 8,
-                  zIndex: 2 - index,
-                }}
-                aria-hidden="true"
+        {frontItem ? (
+          <div className="relative col-start-1 row-start-2">
+            {showCollapsedStackCap
+              ? peekingItems.map((item, index) => (
+                  <div
+                    key={item.id}
+                    data-composer-banner-stack-peek={index + 1}
+                    className={cn(
+                      "pointer-events-none absolute inset-x-0 mx-auto h-8 rounded-t-[14px] border border-b-0 bg-background shadow-sm",
+                      stackCapBorderClass[item.variant],
+                      "transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                      "group-hover/banner-stack:opacity-0 group-focus-within/banner-stack:opacity-0",
+                    )}
+                    style={{
+                      width: `${100 * 0.96 ** (index + 1)}%`,
+                      top: -(index + 1) * 8,
+                      zIndex: 2 - index,
+                    }}
+                    aria-hidden="true"
+                  />
+                ))
+              : null}
+            <div
+              className={cn(
+                "relative z-10",
+                exitingItemId === frontItem.id ? "pointer-events-none" : null,
+              )}
+              style={{
+                ...exitTransitionStyle,
+                ...(exitingItemId === frontItem.id ? frontExitStyle : restingStyle),
+              }}
+            >
+              <ComposerBannerStackAlert
+                item={frontItem}
+                placement={frontPlacement}
+                exiting={exitingItemId === frontItem.id}
+                onDismissRequest={() => requestDismiss(frontItem)}
               />
-            ))
-          : null}
-        <div
-          className={cn(
-            "relative z-10",
-            exitingItemId === frontItem.id ? "pointer-events-none" : null,
-          )}
-          style={{
-            ...exitTransitionStyle,
-            ...(exitingItemId === frontItem.id ? frontExitStyle : restingStyle),
-          }}
-        >
-          <ComposerBannerStackAlert
-            item={frontItem}
-            attachedToComposer={frontItemIsLip}
-            presentation={frontItemIsLip ? "lip" : "banner"}
-            exiting={exitingItemId === frontItem.id}
-            onDismissRequest={() => requestDismiss(frontItem)}
+            </div>
+          </div>
+        ) : null}
+        {trailingSlotRef ? (
+          <div
+            ref={trailingSlotRef}
+            data-composer-banner-stack-trailing="true"
+            className={cn(
+              "alert-glass relative z-10 col-start-2 row-start-2 flex border text-card-foreground",
+              lipShapeClass(frontPlacement),
+            )}
           />
-        </div>
+        ) : null}
         {hasStack ? (
           <div
             data-composer-banner-stack-expanded-items="true"
             className={cn(
-              "relative z-20 grid grid-rows-[0fr] transition-[grid-template-rows] duration-150 ease-out motion-reduce:transition-none",
+              "relative z-20 col-start-1 row-start-1 grid grid-rows-[0fr] transition-[grid-template-rows] duration-150 ease-out motion-reduce:transition-none",
               "group-hover/banner-stack:grid-rows-[1fr] group-focus-within/banner-stack:grid-rows-[1fr]",
             )}
           >
@@ -192,7 +225,7 @@ export function ComposerBannerStack({
                     >
                       <ComposerBannerStackAlert
                         item={item}
-                        presentation="lip"
+                        placement="stacked"
                         exiting={exitingItemId === item.id}
                         onDismissRequest={() => requestDismiss(item)}
                       />
@@ -209,15 +242,13 @@ export function ComposerBannerStack({
 }
 
 function ComposerBannerStackAlert({
-  attachedToComposer = false,
   item,
-  presentation,
+  placement,
   exiting,
   onDismissRequest,
 }: {
-  readonly attachedToComposer?: boolean;
   readonly item: ComposerBannerStackItem;
-  readonly presentation: "banner" | "lip";
+  readonly placement: LipPlacement;
   readonly exiting: boolean;
   readonly onDismissRequest: () => void;
 }) {
@@ -226,17 +257,8 @@ function ComposerBannerStackAlert({
   return (
     <Alert
       variant={item.variant}
-      className={cn(
-        "alert-glass",
-        presentation === "lip"
-          ? "min-h-8 rounded-b-none rounded-t-[14px] border-b-0 px-2.5 pt-1 text-[11px] shadow-none"
-          : item.presentation === "lip"
-            ? "min-h-8 rounded-[14px] px-2.5 py-1 text-[11px] shadow-none"
-            : "rounded-[22px]",
-        presentation === "lip" && (attachedToComposer ? "pb-3" : "pb-1"),
-        item.className,
-      )}
-      data-presentation={presentation}
+      className={cn("alert-glass", lipShapeClass(placement), item.className)}
+      data-placement={placement}
       data-variant={item.variant}
     >
       {item.icon}

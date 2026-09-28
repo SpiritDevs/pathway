@@ -146,6 +146,7 @@ import { onOpenThreadWorkspaceMove } from "../threadWorkspaceMoveBus";
 import { activeCompanyIdAtom } from "../cloud/activeCompany";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
+import { usePromptStashStore } from "../promptStashStore";
 import {
   collapseExpandedComposerCursor,
   parseStandaloneComposerSlashCommand,
@@ -2944,7 +2945,6 @@ function ChatViewContent(props: ChatViewProps) {
       items.push({
         id: `server-version:${serverUpdateEnvironmentId}`,
         variant: updateFailed ? "error" : "warning",
-        presentation: "lip",
         urgent: updateInProgress || updateFailed,
         icon: updateInProgress ? (
           <Spinner className="motion-reduce:animate-none" aria-hidden="true" />
@@ -6490,6 +6490,9 @@ function ChatViewContent(props: ChatViewProps) {
     resumeCompactionPermanentlyDismissed,
     selectedProvider,
   ]);
+  // The stash card sits in the banner stack but is filled by the composer.
+  const hasPromptStash = usePromptStashStore((state) => state.entries.length > 0);
+  const [stashSlot, setStashSlot] = useState<HTMLDivElement | null>(null);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     const browserTakeoverItems =
@@ -9609,6 +9612,7 @@ function ChatViewContent(props: ChatViewProps) {
             browserTakeoverBannerInPreview ? (
               <ComposerBannerStack
                 className="mb-0 px-3 pt-2 pb-3"
+                detached
                 items={[browserTakeoverBannerInPreview]}
               />
             ) : null
@@ -10197,6 +10201,7 @@ function ChatViewContent(props: ChatViewProps) {
                         className="relative z-0"
                         items={composerBannerItems}
                         behindContextStrip={showComposerContextStrip}
+                        trailingSlotRef={hasPromptStash ? setStashSlot : undefined}
                       />
                     </div>
                   ) : (
@@ -10206,6 +10211,7 @@ function ChatViewContent(props: ChatViewProps) {
                         className="relative z-0"
                         items={composerBannerItems}
                         behindContextStrip={showComposerContextStrip}
+                        trailingSlotRef={hasPromptStash ? setStashSlot : undefined}
                       />
                     </>
                   )}
@@ -10309,6 +10315,7 @@ function ChatViewContent(props: ChatViewProps) {
                               ) : undefined
                             }
                             composerRef={composerRef}
+                            stashSlot={stashSlot}
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}
                             maxFileAttachmentBytes={maxFileAttachmentBytes}

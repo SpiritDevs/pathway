@@ -283,7 +283,6 @@ export function useUsageRecovery(input: {
     !monitoring
       ? {
           id: `usage-low:${lowUsageKey}`,
-          presentation: "lip",
           variant: "warning",
           icon: <GaugeIcon />,
           title: `Usage almost used up · ${tightest.remainingPercent < 1 ? "<1" : Math.floor(tightest.remainingPercent)}% left`,
@@ -309,7 +308,6 @@ export function useUsageRecovery(input: {
     input.supported && !promptDismissed && (canSchedule || urgent || error?.key === key)
       ? {
           id: `usage-recovery:${key}`,
-          presentation: "lip",
           urgent,
           variant: failed || visibleError ? "error" : scheduled || monitoring ? "info" : "warning",
           icon: paused ? <PauseIcon /> : <AlarmClockIcon />,

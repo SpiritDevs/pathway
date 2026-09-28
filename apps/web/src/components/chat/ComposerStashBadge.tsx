@@ -4,8 +4,9 @@ import { memo } from "react";
 import { cn } from "~/lib/utils";
 
 /**
- * Bookmark pill perched on the composer's top-right shoulder. Shows the
- * stash count and doubles as the click target for opening the stash menu.
+ * Content of the stash card that sits beside the composer's front banner.
+ * Shows the stash count, and the whole card is the click target for opening
+ * the stash menu. The card's shape comes from the banner stack's slot.
  *
  * On save the badge gives one quiet acknowledgement: it lifts to full
  * opacity and the count ticks over. `pulseKey` changes per stash, remounting
@@ -27,11 +28,12 @@ export const ComposerStashBadge = memo(function ComposerStashBadge(props: {
       aria-label={`Stashed prompts: ${props.count}. Open stash.`}
       aria-expanded={props.menuOpen}
       className={cn(
-        "absolute -top-3 right-4 z-10 inline-flex cursor-pointer items-center gap-1.5 rounded-full border bg-popover px-2.5 py-0.5 text-xs shadow-sm",
-        "transition-[color,border-color,opacity] duration-200",
+        "flex cursor-pointer items-center gap-1.5 whitespace-nowrap font-medium outline-none transition-colors duration-200",
+        // Stretch the hit area over the whole card, padding included.
+        "after:absolute after:inset-0 after:rounded-[inherit] focus-visible:after:ring-2 focus-visible:after:ring-ring",
         props.menuOpen || props.pulsing
-          ? "border-border text-foreground opacity-100"
-          : "border-border/70 text-muted-foreground opacity-70 hover:opacity-100 hover:text-foreground",
+          ? "text-foreground"
+          : "text-muted-foreground hover:text-foreground",
       )}
       onPointerDown={(event) => {
         // Keep composer focus so Escape/typing flows stay intact.
@@ -39,8 +41,8 @@ export const ComposerStashBadge = memo(function ComposerStashBadge(props: {
       }}
       onClick={props.onToggleMenu}
     >
-      <BookmarkIcon className="size-3" aria-hidden="true" />
-      Stash
+      <BookmarkIcon className="size-3.5" aria-hidden="true" />
+      <span className="max-sm:sr-only">Stash</span>
       <span
         key={props.pulseKey}
         className={cn(

@@ -46,7 +46,6 @@ export function conversationStorageBanner({
   return {
     id: "storage-critical",
     variant: "warning",
-    presentation: "lip",
     icon: <HardDriveIcon />,
     title: (
       <span className="block truncate" title={`${environmentLabel} - Critical Storage`}>

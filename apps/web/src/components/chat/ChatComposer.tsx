@@ -610,6 +610,8 @@ export interface ChatComposerProps {
   composerTerminalContextsRef: React.RefObject<TerminalContextDraft[]>;
   composerElementContextsRef: React.RefObject<ElementContextDraft[]>;
   composerRef: React.RefObject<ChatComposerHandle | null>;
+  /** Banner-stack card the stash badge portals into; no badge without it. */
+  stashSlot: HTMLElement | null;
 
   // Scroll
   shouldAutoScrollRef: React.RefObject<boolean>;
@@ -747,6 +749,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     gitCwd,
     promptRef,
     composerRef,
+    stashSlot,
     composerImagesRef,
     composerTerminalContextsRef,
     composerElementContextsRef,
@@ -3204,13 +3207,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           ) : null}
 
           <div ref={setComposerMenuAnchor} className="relative px-3 py-3 sm:px-4">
-            <ComposerStashBadge
-              count={stashQueue.length}
-              pulseKey={stashPulse.key}
-              pulsing={stashPulse.active}
-              menuOpen={isStashMenuOpen}
-              onToggleMenu={toggleStashMenu}
-            />
+            {stashSlot
+              ? createPortal(
+                  <ComposerStashBadge
+                    count={stashQueue.length}
+                    pulseKey={stashPulse.key}
+                    pulsing={stashPulse.active}
+                    menuOpen={isStashMenuOpen}
+                    onToggleMenu={toggleStashMenu}
+                  />,
+                  stashSlot,
+                )
+              : null}
 
             {isStashMenuOpen && !composerMenuOpen && !isComposerApprovalState && (
               <ComposerCommandMenuLayer anchor={composerMenuAnchor} shortcutScope={shortcutScope}>

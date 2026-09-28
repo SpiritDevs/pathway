@@ -73,28 +73,35 @@ describe("ComposerBannerStack", () => {
     expect(markup).toContain("branch-actions");
   });
 
-  it("renders a lone lip as a compact surface attached to the composer", () => {
+  it("renders a lone notice as a compact lip attached to the composer", () => {
     const markup = renderToStaticMarkup(
-      <ComposerBannerStack
-        items={[{ ...banner("version"), presentation: "lip", onDismiss: () => {} }]}
-      />,
+      <ComposerBannerStack items={[{ ...banner("version"), onDismiss: () => {} }]} />,
     );
 
     expect(markup).toContain("px-[1.375rem]");
     expect(markup).toContain("-mb-2 pt-1");
-    expect(markup).toContain('data-presentation="lip"');
-    expect(markup).toContain("min-h-8 rounded-b-none rounded-t-[14px]");
+    expect(markup).toContain('data-placement="front"');
+    expect(markup).toContain("rounded-b-none rounded-t-[14px]");
+    expect(markup).not.toContain("rounded-[22px]");
+  });
+
+  it("rounds a detached lip on every corner", () => {
+    const markup = renderToStaticMarkup(
+      <ComposerBannerStack detached items={[banner("takeover")]} />,
+    );
+
+    expect(markup).toContain('data-placement="detached"');
+    expect(markup).toContain("rounded-[14px] py-1");
+    expect(markup).not.toContain("rounded-b-none");
     expect(markup).not.toContain("rounded-[22px]");
   });
 
   it("keeps the front lip attached when notices are stacked", () => {
     const markup = renderToStaticMarkup(
-      <ComposerBannerStack
-        items={[{ ...banner("version"), presentation: "lip" }, banner("connection")]}
-      />,
+      <ComposerBannerStack items={[banner("version"), banner("connection")]} />,
     );
 
-    expect(markup).toContain('data-presentation="lip"');
+    expect(markup).toContain('data-placement="front"');
     expect(markup).toContain("rounded-b-none");
     expect(markup).not.toContain("rounded-[22px]");
     expect(markup).not.toContain("space-y-2 pb-2");
@@ -110,5 +117,23 @@ describe("ComposerBannerStack", () => {
     expect(markup).toContain("width:92.16%;top:-16px");
     expect(markup).toContain("fourth warning");
     expect(markup.indexOf("fourth warning")).toBeLessThan(markup.indexOf("second warning"));
+  });
+  it("gives a trailing card its own column, shaped like the front banner", () => {
+    const withBanner = renderToStaticMarkup(
+      <ComposerBannerStack items={[banner("front")]} trailingSlotRef={() => {}} />,
+    );
+    expect(withBanner).toContain("grid-cols-[minmax(0,1fr)_auto]");
+    expect(withBanner).toMatch(
+      /data-composer-banner-stack-trailing="true" class="[^"]*col-start-2[^"]*rounded-t-\[14px\]/,
+    );
+
+    const alone = renderToStaticMarkup(
+      <ComposerBannerStack items={[]} trailingSlotRef={() => {}} />,
+    );
+    expect(alone).toContain("-mb-2 pt-1");
+    expect(alone).toMatch(
+      /data-composer-banner-stack-trailing="true" class="[^"]*rounded-t-\[14px\]/,
+    );
+    expect(renderToStaticMarkup(<ComposerBannerStack items={[]} />)).toBe("");
   });
 });
