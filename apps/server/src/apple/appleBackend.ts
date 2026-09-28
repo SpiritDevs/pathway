@@ -130,6 +130,7 @@ export const makeXcodeAccountCheck =
         [
           "entity-not-found",
           "company-not-found",
+          "company-unavailable",
           "permission-denied",
           "environment-not-registered",
           "environment-key-mismatch",

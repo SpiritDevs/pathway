@@ -11,6 +11,7 @@ describe("Xcode account custody checks", () => {
   for (const code of [
     "entity-not-found",
     "company-not-found",
+    "company-unavailable",
     "permission-denied",
     "environment-not-registered",
     "environment-key-mismatch",

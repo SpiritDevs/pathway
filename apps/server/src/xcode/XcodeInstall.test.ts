@@ -2,12 +2,14 @@ import { it as effectIt } from "@effect/vitest";
 // @effect-diagnostics globalDate:off -- Fake timers test snapshot cadence; workers are awaited through drain receipts.
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import * as Effect from "effect/Effect";
+import { ConvexError } from "convex/values";
 import type { XcodeJob, XcodeStepId, XcodeStatus } from "@spiritdevs/contracts/xcode";
 import { AuthOrchestrationReadScope, AuthOrchestrationOperateScope } from "@spiritdevs/contracts";
 import { AppleError } from "@spiritdevs/contracts/apple";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { XcodeInstall, xcodeError, type XcodeHost, type XcodeJobStore } from "./XcodeInstall.ts";
 import { makeXcodeRpcHandlers } from "./xcodeRpc.ts";
+import { makeXcodeAccountCheck } from "../apple/appleBackend.ts";
 const target = {
   accountId: "apple",
   companyId: CompanyId.make("01990000-0000-7000-8000-000000000011"),
@@ -161,6 +163,94 @@ describe("durable Xcode jobs", () => {
           yield* Effect.promise(() => runtime.drained());
           yield* Effect.promise(() => runtime.dispose());
           yield* Effect.promise(() => h.runtime.dispose());
+        }),
+    );
+  }
+  for (const readStatus of [true, false]) {
+    effectIt.effect(
+      `reclaims an interrupted job from a company scheduled for deletion before ${readStatus ? "status" : "a new job"}`,
+      () =>
+        Effect.gen(function* () {
+          const h = harness({ admin: true });
+          const original: XcodeJob = {
+            id: "orphan",
+            kind: "select",
+            account: target,
+            versionId: null,
+            path: "/Applications/Xcode.app",
+            platforms: [],
+            state: "interrupted",
+            steps: [
+              {
+                id: "select",
+                state: "failed",
+                error: { code: "interrupted", message: "Restarted" },
+                progress: null,
+              },
+            ],
+            createdAt: 1,
+            updatedAt: 1,
+          };
+          yield* Effect.promise(() => h.store.save(original));
+          const other = {
+            ...target,
+            companyId: CompanyId.make("01990000-0000-7000-8000-000000000099"),
+          };
+          const accountStatus = vi.fn(async (account: { companyId: string }) => {
+            if (account.companyId === target.companyId)
+              // requireCompanyByDomainId returns this while deletionScheduled records remain.
+              throw new ConvexError({
+                code: "company-unavailable",
+                message: "This company is scheduled for deletion and cannot be accessed.",
+              });
+            return { verifiedAt: null };
+          });
+          const runtime = new XcodeInstall(
+            h.host,
+            h.store,
+            undefined,
+            makeXcodeAccountCheck({ accountStatus }),
+          );
+          const authorizeCaller = vi.fn(async (account: { companyId: string }) => {
+            if (account.companyId !== other.companyId)
+              throw new AppleError({
+                code: "forbidden",
+                message: "Company unavailable",
+                retryAfterSeconds: null,
+              });
+          });
+          const handlers = makeXcodeRpcHandlers(
+            runtime,
+            { authorizeCaller },
+            [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+            Effect.succeed({ clerkSubject: "owner" }),
+          );
+          try {
+            expect(
+              yield* Effect.result(handlers["xcode.cancel"]({ ...target, jobId: original.id })),
+            ).toMatchObject({ _tag: "Failure", failure: { code: "forbidden" } });
+            expect(h.saved()?.state).toBe("interrupted");
+            if (readStatus) {
+              expect((yield* handlers["xcode.status"](other)).job).toBeNull();
+              expect(h.saved()).toMatchObject({ id: original.id, state: "cancelled" });
+            }
+            const next = yield* handlers["xcode.select"]({ ...other, path: original.path });
+            expect(next.account).toEqual(other);
+            expect(vi.mocked(h.store.save).mock.calls.map(([job]) => job)).toContainEqual(
+              expect.objectContaining({ id: original.id, state: "cancelled" }),
+            );
+            expect(accountStatus).toHaveBeenCalledWith(target);
+            expect(
+              authorizeCaller.mock.calls.some(([account]) => account.companyId === other.companyId),
+            ).toBe(true);
+            yield* Effect.promise(() => runtime.drained());
+            expect(h.saved()).toMatchObject({ id: next.id, state: "needs-admin" });
+            expect(h.calls).toEqual(["check"]);
+            expect(vi.mocked(h.host.run).mock.calls[0]?.[1].account).toEqual(other);
+          } finally {
+            yield* Effect.promise(() => runtime.dispose());
+            yield* Effect.promise(() => h.runtime.dispose());
+          }
         }),
     );
   }
