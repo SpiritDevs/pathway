@@ -5,6 +5,7 @@ import type {
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
   DesktopSnapShotEvent,
+  DesktopWindowInfo,
 } from "@spiritdevs/contracts";
 import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer } from "electron";
@@ -221,6 +222,26 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () => {
       ipcRenderer.removeListener(IpcChannels.UPDATE_STATE_CHANNEL, wrappedListener);
     };
+  },
+  windows: {
+    open: (input) => ipcRenderer.invoke(IpcChannels.WINDOWS_OPEN_CHANNEL, input),
+    close: (id) => ipcRenderer.invoke(IpcChannels.WINDOWS_CLOSE_CHANNEL, id),
+    closeAll: () => ipcRenderer.invoke(IpcChannels.WINDOWS_CLOSE_ALL_CHANNEL),
+    list: () => ipcRenderer.invoke(IpcChannels.WINDOWS_LIST_CHANNEL),
+    onChanged: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, windows: unknown) => {
+        if (!Array.isArray(windows)) return;
+        listener(windows as ReadonlyArray<DesktopWindowInfo>);
+      };
+      ipcRenderer.on(IpcChannels.WINDOWS_CHANGED_CHANNEL, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(IpcChannels.WINDOWS_CHANGED_CHANNEL, wrappedListener);
+      };
+    },
+    getCursorScreenPoint: () =>
+      ipcRenderer.invoke(IpcChannels.WINDOWS_GET_CURSOR_SCREEN_POINT_CHANNEL),
+    getCurrentWindowBounds: () =>
+      ipcRenderer.invoke(IpcChannels.WINDOWS_GET_CURRENT_WINDOW_BOUNDS_CHANNEL),
   },
   preview: {
     createTab: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_CREATE_TAB_CHANNEL, { tabId }),

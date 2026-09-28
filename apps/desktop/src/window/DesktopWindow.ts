@@ -1,5 +1,6 @@
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -8,10 +9,17 @@ import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 
 import * as Electron from "electron";
-import type { DesktopSnapShotEvent } from "@spiritdevs/contracts";
+import type {
+  DesktopScreenPoint,
+  DesktopSnapShotEvent,
+  DesktopWindowInfo,
+  DesktopWindowOpenInput,
+  DesktopWindowOpenResult,
+} from "@spiritdevs/contracts";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopState from "../app/DesktopState.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import { getDesktopUrl } from "../electron/ElectronProtocol.ts";
@@ -22,9 +30,11 @@ import {
   MENU_ACTION_CHANNEL,
   SNAP_SHOT_EVENT_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
+  WINDOWS_CHANGED_CHANNEL,
 } from "../ipc/channels.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import * as DesktopChildWindows from "./DesktopChildWindows.ts";
 
 const TITLEBAR_HEIGHT = 40;
 const TITLEBAR_COLOR = "#01000000"; // #00000000 does not work correctly on Linux
@@ -57,6 +67,8 @@ type DesktopWindowRuntimeServices =
   | DesktopEnvironment.DesktopEnvironment
   | DesktopAssets.DesktopAssets
   | DesktopAppSettings.DesktopAppSettings
+  | DesktopState.DesktopState
+  | Crypto.Crypto
   | ElectronMenu.ElectronMenu
   | ElectronShell.ElectronShell
   | ElectronTheme.ElectronTheme
@@ -94,7 +106,9 @@ export class DesktopWindow extends Context.Service<
     // window so a "macOS dock click" while the backend is down doesn't
     // produce a stranded window pointing at nothing.
     readonly handleBackendNotReady: Effect.Effect<void>;
-    readonly flushMainWindowBounds: Effect.Effect<void>;
+    // Persists main and torn-out window state ahead of shutdown. Windows closed
+    // after this (the quit itself) no longer change what reopens next launch.
+    readonly flushWindowState: Effect.Effect<void>;
     readonly prepareCaptureReveal: Effect.Effect<void>;
     readonly cancelPreparedCaptureReveal: Effect.Effect<void>;
     readonly dispatchMenuAction: (
@@ -115,6 +129,14 @@ export class DesktopWindow extends Context.Service<
     // the main window.
     readonly zoomMain: (direction: MainWindowZoomDirection) => Effect.Effect<void>;
     readonly syncAppearance: Effect.Effect<void>;
+    // Torn-out windows: one rail page per window, rendered by the same bundle
+    // in window mode. The agent browser (PreviewManager) stays on the main window.
+    readonly openChild: (
+      input: DesktopWindowOpenInput,
+    ) => Effect.Effect<DesktopWindowOpenResult, DesktopWindowError>;
+    readonly closeChild: (id: string) => Effect.Effect<void>;
+    readonly closeAllChildren: Effect.Effect<void>;
+    readonly listChildren: Effect.Effect<ReadonlyArray<DesktopWindowInfo>>;
   }
 >()("@spiritdevs/desktop/window/DesktopWindow") {}
 
@@ -174,6 +196,41 @@ export function resolveInitialMainWindowBounds(
     return persistedBounds;
   }
   return DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE;
+}
+
+// Normal (unmaximized, non-fullscreen) bounds, which is what a restore reopens at.
+function readRestorableBounds(window: Electron.BrowserWindow): DisplayBounds | null {
+  if (window.isDestroyed()) {
+    return null;
+  }
+  const bounds =
+    window.isFullScreen() || window.isMaximized() || window.isMinimized()
+      ? window.getNormalBounds()
+      : window.getBounds();
+  return {
+    x: Math.round(bounds.x),
+    y: Math.round(bounds.y),
+    width: Math.round(bounds.width),
+    height: Math.round(bounds.height),
+  };
+}
+
+type WindowRole =
+  | { readonly kind: "main" }
+  | {
+      readonly kind: "child";
+      readonly id: string;
+      readonly path: string;
+      readonly bounds: DisplayBounds | null;
+      // Restored windows appear without stealing focus from the main window.
+      readonly focus: boolean;
+    };
+
+interface ChildWindowEntry {
+  readonly window: Electron.BrowserWindow;
+  path: string;
+  title: string;
+  bounds: DisplayBounds | null;
 }
 
 // A self-contained boot splash, shown immediately while the backend (which
@@ -280,6 +337,8 @@ export const make = Effect.gen(function* () {
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const previewManager = yield* PreviewManager.PreviewManager;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
+  const desktopState = yield* DesktopState.DesktopState;
+  const crypto = yield* Crypto.Crypto;
   // Window-side latch for the primary backend's readiness. Set by
   // handleBackendReady (driven by the pool's onReady callback), cleared
   // by handleBackendNotReady (driven by onShutdown). Only consumed by
@@ -294,6 +353,7 @@ export const make = Effect.gen(function* () {
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
+  const runSync = Effect.runSyncWith(context);
   let preparedCaptureReveal:
     | {
         readonly window: Electron.BrowserWindow;
@@ -301,6 +361,13 @@ export const make = Effect.gen(function* () {
       }
     | undefined;
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
+  // Torn-out windows, keyed by the id the renderer reads from `?pathwayWindow=`.
+  const childWindows = new Map<string, ChildWindowEntry>();
+  let childWindowsPersistFiber: Fiber.Fiber<void, never> | undefined;
+  // Set when closing main takes the children with it (Windows/Linux), before the
+  // quit itself begins, so their closing does not empty the list that reopens.
+  let childWindowsLeavingWithApp = false;
+  let childWindowsRestored = false;
 
   const dismissConnectingSplash = Effect.gen(function* () {
     const splash = yield* Ref.getAndSet(splashWindowRef, Option.none());
@@ -313,17 +380,92 @@ export const make = Effect.gen(function* () {
   // Only a window registered by createMain can satisfy main-window operations.
   const currentMainWindow = electronWindow.main;
 
-  const createWindow = Effect.fn("desktop.window.createWindow")(function* (): Effect.fn.Return<
-    Electron.BrowserWindow,
-    DesktopWindowError
-  > {
-    yield* previewManager.getBrowserSession();
-    const applicationUrl = getDesktopUrl(environment.desktopScheme);
-    const iconPaths = yield* assets.iconPaths;
-    const iconOption = getIconOption(iconPaths, environment.platform);
-    const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
-    const persistedSettings = yield* desktopSettings.get;
-    const persistedBounds = persistedSettings.mainWindowBounds;
+  const listChildWindows = (): DesktopWindowInfo[] =>
+    Array.from(childWindows, ([id, entry]) => ({ id, path: entry.path, title: entry.title }));
+
+  const broadcastChildWindows = () => {
+    runFork(electronWindow.sendAll(WINDOWS_CHANGED_CHANNEL, listChildWindows()));
+  };
+
+  // Reads the set synchronously so callers can persist it before mutating the map.
+  const writeChildWindows = (): Effect.Effect<void> => {
+    const states = DesktopAppSettings.normalizeChildWindows(
+      Array.from(childWindows, ([id, entry]) => ({ id, path: entry.path, bounds: entry.bounds })),
+    );
+    return desktopSettings.setChildWindows(states).pipe(
+      Effect.asVoid,
+      Effect.catch((error) =>
+        logWindowWarning("failed to persist torn-out windows", { message: error.message }),
+      ),
+    );
+  };
+
+  // Windows close by the dozen while the app quits; only a close that happens
+  // while the app keeps running changes what reopens next launch. The quit itself
+  // writes the set once, through `flushWindowState`.
+  const persistChildWindows = (): Effect.Effect<void> =>
+    Effect.suspend(() =>
+      childWindowsLeavingWithApp || runSync(Ref.get(desktopState.quitting))
+        ? Effect.void
+        : writeChildWindows(),
+    );
+
+  const cancelChildWindowsPersist = () => {
+    if (childWindowsPersistFiber === undefined) {
+      return;
+    }
+    const fiber = childWindowsPersistFiber;
+    childWindowsPersistFiber = undefined;
+    runFork(Fiber.interrupt(fiber));
+  };
+
+  const scheduleChildWindowsPersist = () => {
+    cancelChildWindowsPersist();
+    childWindowsPersistFiber = runFork(
+      Effect.sleep(MAIN_WINDOW_BOUNDS_PERSIST_DEBOUNCE_MS).pipe(
+        Effect.andThen(
+          Effect.suspend(() => {
+            childWindowsPersistFiber = undefined;
+            return persistChildWindows();
+          }),
+        ),
+      ),
+    );
+  };
+
+  // Writes the current set now, dropping any pending debounced write.
+  const flushChildWindows = (): Effect.Effect<void> => {
+    cancelChildWindowsPersist();
+    return writeChildWindows();
+  };
+
+  const handleChildWindowClosed = (id: string) => {
+    const entry = childWindows.get(id);
+    if (entry === undefined) {
+      return;
+    }
+    childWindows.delete(id);
+    broadcastChildWindows();
+    scheduleChildWindowsPersist();
+  };
+
+  const handleMainWindowClosed = () => {
+    // macOS keeps torn-out windows open; the Dock icon brings main back. On
+    // Windows/Linux closing main quits, so children go with it but stay
+    // persisted for the next launch.
+    if (environment.platform === "darwin" || childWindows.size === 0) {
+      return;
+    }
+    runFork(flushChildWindows());
+    childWindowsLeavingWithApp = true;
+    for (const entry of childWindows.values()) {
+      if (!entry.window.isDestroyed()) {
+        entry.window.destroy();
+      }
+    }
+  };
+
+  const readDisplayBounds = Effect.fn("desktop.window.readDisplayBounds")(function* () {
     const displayBoundsResult = yield* Effect.sync(() => {
       try {
         return {
@@ -334,64 +476,26 @@ export const make = Effect.gen(function* () {
         return { _tag: "Failure" as const, cause };
       }
     });
-    const displayBounds =
-      displayBoundsResult._tag === "Success"
-        ? displayBoundsResult.bounds
-        : yield* logWindowWarning("failed to read connected displays; using defaults", {
-            cause: displayBoundsResult.cause,
-          }).pipe(Effect.as<readonly Electron.Rectangle[]>([]));
-    const initialBounds = resolveInitialMainWindowBounds(persistedBounds, displayBounds);
-    const restoredPersistedBounds = persistedBounds !== null && initialBounds === persistedBounds;
-    if (persistedBounds !== null && initialBounds === DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE) {
-      yield* logWindowWarning("saved main window bounds could not be restored; using defaults");
-    }
-    const window = yield* electronWindow.create({
-      ...initialBounds,
-      minWidth: 840,
-      minHeight: 620,
-      show: false,
-      autoHideMenuBar: true,
-      ...(environment.platform === "darwin" ? { disableAutoHideCursor: true } : {}),
-      backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors),
-      ...iconOption,
-      title: environment.displayName,
-      ...getWindowTitleBarOptions(shouldUseDarkColors, environment.platform),
-      webPreferences: {
-        preload: environment.preloadPath,
-        // The window boots hidden (show: false until ready-to-show), and
-        // Chromium throttles hidden renderers: timers coalesce and rAF stops,
-        // which stalls first paint. Boot unthrottled; the first-reveal trigger
-        // re-enables throttling so a hidden or minimized window goes back to
-        // being cheap after it has been shown once.
-        backgroundThrottling: false,
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        webviewTag: true,
-      },
-    });
+    return displayBoundsResult._tag === "Success"
+      ? displayBoundsResult.bounds
+      : yield* logWindowWarning("failed to read connected displays; using defaults", {
+          cause: displayBoundsResult.cause,
+        }).pipe(Effect.as<readonly Electron.Rectangle[]>([]));
+  });
 
-    if (environment.platform === "darwin") {
-      window.setAutoHideCursor(false);
-    }
+  // Owns the main window's debounced bounds persistence. Returns the cleanup
+  // to run once the window is closed.
+  const trackMainWindowBounds = (
+    window: Electron.BrowserWindow,
+    persistedSettings: DesktopAppSettings.DesktopSettings,
+    restoredPersistedBounds: boolean,
+  ) => {
     let boundsPersistFiber: Fiber.Fiber<void, never> | undefined;
     let pendingBoundsPersistFiber: Fiber.Fiber<void, never> | undefined;
-    let boundsPersistenceEnabled = persistedBounds === null || restoredPersistedBounds;
-    const readPersistableBounds = (): DesktopAppSettings.DesktopWindowBounds | null => {
-      if (window.isDestroyed()) {
-        return null;
-      }
-      const bounds =
-        window.isFullScreen() || window.isMaximized() || window.isMinimized()
-          ? window.getNormalBounds()
-          : window.getBounds();
-      return DesktopAppSettings.normalizeMainWindowBounds({
-        x: Math.round(bounds.x),
-        y: Math.round(bounds.y),
-        width: Math.round(bounds.width),
-        height: Math.round(bounds.height),
-      });
-    };
+    let boundsPersistenceEnabled =
+      persistedSettings.mainWindowBounds === null || restoredPersistedBounds;
+    const readPersistableBounds = (): DesktopAppSettings.DesktopWindowBounds | null =>
+      DesktopAppSettings.normalizeMainWindowBounds(readRestorableBounds(window));
     const fallbackWindowBounds = boundsPersistenceEnabled ? null : readPersistableBounds();
     const fallbackWindowMaximized = persistedSettings.mainWindowMaximized;
     const persistCurrentBounds = (): Fiber.Fiber<void, never> | undefined => {
@@ -461,7 +565,107 @@ export const make = Effect.gen(function* () {
     );
     flushMainWindowBounds = flushBoundsPersist;
 
-    yield* previewManager.setMainWindow(window);
+    window.on("resize", scheduleBoundsPersist);
+    window.on("move", scheduleBoundsPersist);
+    window.on("maximize", scheduleBoundsPersist);
+    window.on("unmaximize", scheduleBoundsPersist);
+    return {
+      onClose: () => {
+        runFork(flushBoundsPersist);
+      },
+      onClosed: clearBoundsPersist,
+    };
+  };
+
+  const createWindow = Effect.fn("desktop.window.createWindow")(function* (
+    role: WindowRole,
+  ): Effect.fn.Return<Electron.BrowserWindow, DesktopWindowError> {
+    yield* previewManager.getBrowserSession();
+    const applicationUrl = getDesktopUrl(environment.desktopScheme);
+    const iconPaths = yield* assets.iconPaths;
+    const iconOption = getIconOption(iconPaths, environment.platform);
+    const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
+    const persistedSettings = yield* desktopSettings.get;
+    let restoredPersistedBounds = false;
+    let placementOptions: Electron.BrowserWindowConstructorOptions;
+    if (role.kind === "main") {
+      const persistedBounds = persistedSettings.mainWindowBounds;
+      const initialBounds = resolveInitialMainWindowBounds(
+        persistedBounds,
+        yield* readDisplayBounds(),
+      );
+      restoredPersistedBounds = persistedBounds !== null && initialBounds === persistedBounds;
+      if (
+        persistedBounds !== null &&
+        initialBounds === DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE
+      ) {
+        yield* logWindowWarning("saved main window bounds could not be restored; using defaults");
+      }
+      placementOptions = { ...initialBounds, minWidth: 840, minHeight: 620 };
+    } else {
+      placementOptions = {
+        ...(role.bounds ?? DesktopChildWindows.DEFAULT_CHILD_WINDOW_SIZE),
+        minWidth: DesktopAppSettings.MIN_CHILD_WINDOW_SIZE.width,
+        minHeight: DesktopAppSettings.MIN_CHILD_WINDOW_SIZE.height,
+      };
+    }
+    const window = yield* electronWindow.create({
+      ...placementOptions,
+      show: false,
+      autoHideMenuBar: true,
+      ...(environment.platform === "darwin" ? { disableAutoHideCursor: true } : {}),
+      backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors),
+      ...iconOption,
+      title: environment.displayName,
+      ...getWindowTitleBarOptions(shouldUseDarkColors, environment.platform),
+      webPreferences: {
+        preload: environment.preloadPath,
+        // The window boots hidden (show: false until ready-to-show), and
+        // Chromium throttles hidden renderers: timers coalesce and rAF stops,
+        // which stalls first paint. Boot unthrottled; the first-reveal trigger
+        // re-enables throttling so a hidden or minimized window goes back to
+        // being cheap after it has been shown once.
+        backgroundThrottling: false,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        webviewTag: true,
+      },
+    });
+
+    if (environment.platform === "darwin") {
+      window.setAutoHideCursor(false);
+    }
+
+    let mainBounds: ReturnType<typeof trackMainWindowBounds> | undefined;
+    if (role.kind === "main") {
+      mainBounds = trackMainWindowBounds(window, persistedSettings, restoredPersistedBounds);
+      yield* previewManager.setMainWindow(window);
+    } else {
+      const entry: ChildWindowEntry = {
+        window,
+        path: role.path,
+        title: environment.displayName,
+        bounds: readRestorableBounds(window) ?? role.bounds,
+      };
+      childWindows.set(role.id, entry);
+      const trackChildBounds = () => {
+        entry.bounds = readRestorableBounds(window) ?? entry.bounds;
+        scheduleChildWindowsPersist();
+      };
+      window.on("resize", trackChildBounds);
+      window.on("move", trackChildBounds);
+      // Hash-history navigation inside the window; restore reopens here.
+      window.webContents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
+        if (!isMainFrame) return;
+        const path = DesktopChildWindows.childWindowPathFromUrl(url);
+        if (path === null || path === entry.path) return;
+        entry.path = path;
+        broadcastChildWindows();
+        scheduleChildWindowsPersist();
+      });
+    }
+
     window.webContents.on("will-attach-webview", (event, webPreferences, params) => {
       if (
         typeof params.partition !== "string" ||
@@ -560,16 +764,23 @@ export const make = Effect.gen(function* () {
       }
     });
 
-    window.on("page-title-updated", (event) => {
+    window.on("page-title-updated", (event, title) => {
+      if (role.kind === "child") {
+        // Torn-out windows take the renderer's document.title ("Email - Pathway").
+        const entry = childWindows.get(role.id);
+        if (entry !== undefined && entry.title !== title) {
+          entry.title = title;
+          broadcastChildWindows();
+        }
+        return;
+      }
       event.preventDefault();
       window.setTitle(environment.displayName);
     });
-    window.on("resize", scheduleBoundsPersist);
-    window.on("move", scheduleBoundsPersist);
-    window.on("maximize", scheduleBoundsPersist);
-    window.on("unmaximize", scheduleBoundsPersist);
     window.on("close", () => {
-      runFork(flushBoundsPersist);
+      if (role.kind === "main") {
+        mainBounds?.onClose();
+      }
     });
 
     if (environment.platform === "darwin") {
@@ -600,7 +811,15 @@ export const make = Effect.gen(function* () {
       if (window.isDestroyed()) {
         return;
       }
-      void window.loadURL(applicationUrl).catch(() => undefined);
+      const url =
+        role.kind === "main"
+          ? applicationUrl
+          : DesktopChildWindows.buildChildWindowUrl(
+              applicationUrl,
+              role.id,
+              childWindows.get(role.id)?.path ?? role.path,
+            );
+      void window.loadURL(url).catch(() => undefined);
     };
     const scheduleDevelopmentLoadRetry = () => {
       if (developmentLoadRetryFiber !== undefined || window.isDestroyed()) {
@@ -640,7 +859,9 @@ export const make = Effect.gen(function* () {
       }
       clearDevelopmentLoadRetry();
       developmentLoadRetryIndex = 0;
-      window.setTitle(environment.displayName);
+      if (role.kind === "main") {
+        window.setTitle(environment.displayName);
+      }
     });
     window.webContents.on(
       "did-fail-load",
@@ -659,7 +880,7 @@ export const make = Effect.gen(function* () {
             ? scheduleDevelopmentLoadRetry()
             : undefined;
         void runPromise(
-          logWindowWarning("main window failed to load", {
+          logWindowWarning(`${role.kind === "main" ? "main" : "torn-out"} window failed to load`, {
             errorCode,
             errorDescription,
             url: validatedURL,
@@ -689,11 +910,14 @@ export const make = Effect.gen(function* () {
             recoverable &&
             !window.isDestroyed() &&
             rendererRecoveryTimestamps.length < RENDERER_RECOVERY_MAX_ATTEMPTS;
-          yield* logWindowWarning("main window render process gone", {
-            reason: details.reason,
-            exitCode: details.exitCode,
-            recovering: shouldRecover,
-          });
+          yield* logWindowWarning(
+            `${role.kind === "main" ? "main" : "torn-out"} window render process gone`,
+            {
+              reason: details.reason,
+              exitCode: details.exitCode,
+              recovering: shouldRecover,
+            },
+          );
           if (!shouldRecover) {
             return;
           }
@@ -716,6 +940,14 @@ export const make = Effect.gen(function* () {
       if (!window.isDestroyed()) {
         window.webContents.setBackgroundThrottling(true);
       }
+      if (role.kind === "child") {
+        if (role.focus) {
+          void runPromise(electronWindow.reveal(window));
+        } else if (!window.isDestroyed()) {
+          window.showInactive();
+        }
+        return;
+      }
       // Reveal the real window, then close the connecting splash (if any) so the
       // two don't overlap and there's no blank gap between them.
       if (persistedSettings.mainWindowMaximized) {
@@ -725,25 +957,107 @@ export const make = Effect.gen(function* () {
     });
 
     loadApplication();
-    if (environment.isDevelopment) {
+    if (environment.isDevelopment && role.kind === "main") {
       window.webContents.openDevTools({ mode: "detach" });
     }
 
     window.on("closed", () => {
       clearDevelopmentLoadRetry();
-      clearBoundsPersist();
+      if (role.kind === "child") {
+        handleChildWindowClosed(role.id);
+        return;
+      }
+      mainBounds?.onClosed();
       void runPromise(electronWindow.clearMain(Option.some(window)));
+      handleMainWindowClosed();
     });
 
+    if (role.kind === "child") {
+      broadcastChildWindows();
+    }
     return window;
   });
 
+  const createChildWindow = (role: Omit<Extract<WindowRole, { kind: "child" }>, "kind">) =>
+    createWindow({ kind: "child", ...role });
+
+  // Reopens last session's torn-out windows once, after the first main window.
+  const restoreChildWindows = Effect.gen(function* () {
+    if (childWindowsRestored) return;
+    childWindowsRestored = true;
+    const { childWindows: persisted } = yield* desktopSettings.get;
+    if (persisted.length === 0) return;
+    const displays = yield* readDisplayBounds();
+    for (const state of persisted) {
+      yield* createChildWindow({
+        id: state.id,
+        path: state.path,
+        bounds: DesktopChildWindows.resolveRestoredChildWindowBounds(state.bounds, displays),
+        focus: false,
+      }).pipe(
+        Effect.catch((error) =>
+          logWindowWarning("failed to restore torn-out window", { message: error.message }),
+        ),
+      );
+    }
+    yield* logWindowInfo("torn-out windows restored", { count: childWindows.size });
+  }).pipe(Effect.withSpan("desktop.window.restoreChildWindows"));
+
   const createMain = Effect.gen(function* () {
-    const window = yield* createWindow();
+    const window = yield* createWindow({ kind: "main" });
     yield* electronWindow.setMain(window);
     yield* logWindowInfo("main window created");
+    yield* restoreChildWindows;
     return window;
   }).pipe(Effect.withSpan("desktop.window.createMain"));
+
+  const readWorkArea = (
+    anchor: { readonly point: DesktopScreenPoint } | { readonly bounds: Electron.Rectangle },
+  ): Electron.Rectangle | null => {
+    try {
+      return "point" in anchor
+        ? Electron.screen.getDisplayNearestPoint(anchor.point).workArea
+        : Electron.screen.getDisplayMatching(anchor.bounds).workArea;
+    } catch {
+      return null;
+    }
+  };
+
+  const openChild = Effect.fn("desktop.window.openChild")(function* (
+    input: DesktopWindowOpenInput,
+  ) {
+    const path = DesktopChildWindows.normalizeChildWindowPath(input.path);
+    const id = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+    const main = yield* currentMainWindow;
+    const anchorBounds =
+      Option.isSome(main) && !main.value.isDestroyed() ? main.value.getBounds() : null;
+    const workArea =
+      input.screenPoint !== undefined
+        ? readWorkArea({ point: input.screenPoint })
+        : anchorBounds !== null
+          ? readWorkArea({ bounds: anchorBounds })
+          : null;
+    yield* createChildWindow({
+      id,
+      path,
+      bounds: DesktopChildWindows.resolveNewChildWindowBounds({
+        screenPoint: input.screenPoint,
+        anchorBounds,
+        workArea,
+      }),
+      focus: true,
+    });
+    scheduleChildWindowsPersist();
+    yield* logWindowInfo("torn-out window opened", { path, count: childWindows.size });
+    return childWindows.size > DesktopChildWindows.CHILD_WINDOW_SOFT_CAP
+      ? { id, overSoftCap: true }
+      : { id };
+  });
+
+  const closeChildWindow = (entry: ChildWindowEntry) => {
+    if (entry.window.isDestroyed()) return;
+    entry.window.close();
+  };
 
   const ensureMain = Effect.gen(function* () {
     const existingWindow = yield* currentMainWindow;
@@ -901,11 +1215,13 @@ export const make = Effect.gen(function* () {
     handleBackendNotReady: Ref.set(backendReadyRef, false).pipe(
       Effect.withSpan("desktop.window.handleBackendNotReady"),
     ),
-    flushMainWindowBounds: Effect.suspend(() => flushMainWindowBounds).pipe(
-      Effect.withSpan("desktop.window.flushMainWindowBounds"),
-    ),
+    flushWindowState: Effect.suspend(() =>
+      Effect.andThen(flushMainWindowBounds, flushChildWindows()),
+    ).pipe(Effect.withSpan("desktop.window.flushWindowState")),
     dispatchMenuAction: Effect.fn("desktop.window.dispatchMenuAction")(function* (action, options) {
       yield* Effect.annotateCurrentSpan({ action });
+      // Every menu action acts on the main window, even when a torn-out window
+      // has focus.
       yield* dispatchRendererEvent(MENU_ACTION_CHANNEL, action, options);
     }),
     dispatchSnapShotEvent: Effect.fn("desktop.window.dispatchSnapShotEvent")(function* (event) {
@@ -919,6 +1235,7 @@ export const make = Effect.gen(function* () {
     }),
     zoomMain: Effect.fn("desktop.window.zoomMain")(function* (direction) {
       yield* Effect.annotateCurrentSpan({ direction });
+      // Chromium keeps one zoom level per origin, so this zooms every Pathway window.
       const window = yield* currentMainWindow;
       if (Option.isNone(window) || window.value.isDestroyed()) {
         return;
@@ -935,6 +1252,16 @@ export const make = Effect.gen(function* () {
         syncWindowAppearance(window, shouldUseDarkColors, environment.platform),
       );
     }).pipe(Effect.withSpan("desktop.window.syncAppearance")),
+    openChild,
+    closeChild: (id) =>
+      Effect.sync(() => {
+        const entry = childWindows.get(id);
+        if (entry !== undefined) closeChildWindow(entry);
+      }),
+    closeAllChildren: Effect.sync(() => {
+      for (const entry of childWindows.values()) closeChildWindow(entry);
+    }),
+    listChildren: Effect.sync(listChildWindows),
   });
 });
 

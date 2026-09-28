@@ -15,6 +15,14 @@ export const MENU_ACTION_CHANNEL = "desktop:menu-action";
 export const SNAP_SHOT_EVENT_CHANNEL = "desktop:snap-shot-event";
 export const GET_WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:get-window-fullscreen-state";
 export const WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:window-fullscreen-state";
+export const WINDOWS_OPEN_CHANNEL = "desktop:windows-open";
+export const WINDOWS_CLOSE_CHANNEL = "desktop:windows-close";
+export const WINDOWS_CLOSE_ALL_CHANNEL = "desktop:windows-close-all";
+export const WINDOWS_LIST_CHANNEL = "desktop:windows-list";
+export const WINDOWS_CHANGED_CHANNEL = "desktop:windows-changed";
+export const WINDOWS_GET_CURSOR_SCREEN_POINT_CHANNEL = "desktop:windows-get-cursor-screen-point";
+export const WINDOWS_GET_CURRENT_WINDOW_BOUNDS_CHANNEL =
+  "desktop:windows-get-current-window-bounds";
 export const UPDATE_STATE_CHANNEL = "desktop:update-state";
 export const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 export const UPDATE_SET_CHANNEL_CHANNEL = "desktop:update-set-channel";

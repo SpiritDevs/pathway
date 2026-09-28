@@ -28,6 +28,8 @@ export interface DesktopSettings {
   readonly linuxPasswordStore: LinuxPasswordStorePreference;
   readonly mainWindowBounds: DesktopWindowBounds | null;
   readonly mainWindowMaximized: boolean;
+  // Torn-out windows reopened on next launch. Closing one drops it; quitting keeps it.
+  readonly childWindows: ReadonlyArray<DesktopChildWindowState>;
   readonly serverExposureMode: DesktopServerExposureMode;
   readonly updateChannel: DesktopUpdateChannel;
   readonly updateChannelConfiguredByUser: boolean;
@@ -68,11 +70,27 @@ export const DEFAULT_MAIN_WINDOW_SIZE = {
   width: 1100,
   height: 780,
 } as const;
+export const MIN_CHILD_WINDOW_SIZE = {
+  width: 480,
+  height: 360,
+} as const;
+export const DesktopChildWindowStateSchema = Schema.Struct({
+  id: Schema.String.check(Schema.isNonEmpty()),
+  path: Schema.String.check(Schema.isStartsWith("/")),
+  bounds: Schema.Struct({
+    x: Schema.Int,
+    y: Schema.Int,
+    width: Schema.Int.check(Schema.isGreaterThanOrEqualTo(MIN_CHILD_WINDOW_SIZE.width)),
+    height: Schema.Int.check(Schema.isGreaterThanOrEqualTo(MIN_CHILD_WINDOW_SIZE.height)),
+  }),
+});
+export type DesktopChildWindowState = typeof DesktopChildWindowStateSchema.Type;
 
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
   mainWindowBounds: null,
   mainWindowMaximized: false,
+  childWindows: [],
   serverExposureMode: "network-accessible",
   updateChannel: "latest",
   updateChannelConfiguredByUser: false,
@@ -92,6 +110,7 @@ const DesktopSettingsDocument = Schema.Struct({
   linuxPasswordStore: Schema.optionalKey(Schema.Unknown),
   mainWindowBounds: Schema.optionalKey(Schema.NullOr(DesktopWindowBoundsDocument)),
   mainWindowMaximized: Schema.optionalKey(Schema.Boolean),
+  childWindows: Schema.optionalKey(Schema.Array(Schema.Unknown)),
   serverExposureMode: Schema.optionalKey(DesktopServerExposureModeSchema),
   updateChannel: Schema.optionalKey(DesktopUpdateChannelSchema),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
@@ -112,6 +131,10 @@ const decodeDesktopSettingsJson = Schema.decodeEffect(DesktopSettingsJson);
 const encodeDesktopSettingsJson = Schema.encodeEffect(DesktopSettingsJson);
 const decodeDesktopWindowBounds = Schema.decodeUnknownOption(DesktopWindowBoundsSchema);
 const desktopWindowBoundsEquivalence = Schema.toEquivalence(DesktopWindowBoundsSchema);
+const decodeDesktopChildWindowState = Schema.decodeUnknownOption(DesktopChildWindowStateSchema);
+const desktopChildWindowsEquivalence = Schema.toEquivalence(
+  Schema.Array(DesktopChildWindowStateSchema),
+);
 
 const settingsChange = (settings: DesktopSettings, changed: boolean): DesktopSettingsChange => ({
   settings,
@@ -148,6 +171,9 @@ export class DesktopAppSettings extends Context.Service<
     readonly setMainWindowBounds: (
       bounds: DesktopWindowBounds,
       isMaximized: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setChildWindows: (
+      childWindows: ReadonlyArray<DesktopChildWindowState>,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setServerExposureMode: (
       mode: DesktopServerExposureMode,
@@ -187,6 +213,21 @@ export function normalizeMainWindowBounds(value: unknown): DesktopWindowBounds |
   return Option.getOrNull(decodeDesktopWindowBounds(value));
 }
 
+// Drops malformed entries and duplicate ids so one bad record cannot block the rest.
+export function normalizeChildWindows(
+  value: ReadonlyArray<unknown> | undefined,
+): ReadonlyArray<DesktopChildWindowState> {
+  const seen = new Set<string>();
+  const windows: DesktopChildWindowState[] = [];
+  for (const entry of value ?? []) {
+    const decoded = decodeDesktopChildWindowState(entry);
+    if (Option.isNone(decoded) || seen.has(decoded.value.id)) continue;
+    seen.add(decoded.value.id);
+    windows.push(decoded.value);
+  }
+  return windows;
+}
+
 function normalizeDesktopSettingsDocument(
   parsed: DesktopSettingsDocument,
   appVersion: string,
@@ -210,6 +251,7 @@ function normalizeDesktopSettingsDocument(
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
     mainWindowBounds,
     mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
+    childWindows: normalizeChildWindows(parsed.childWindows),
     // Network access is an always-on product capability. Existing settings that explicitly
     // disabled it are migrated back to the network-accessible desired state on load.
     serverExposureMode: "network-accessible",
@@ -237,6 +279,9 @@ function toDesktopSettingsDocument(
   }
   if (settings.mainWindowMaximized) {
     document.mainWindowMaximized = true;
+  }
+  if (settings.childWindows.length > 0) {
+    document.childWindows = settings.childWindows;
   }
   if (settings.serverExposureMode !== defaults.serverExposureMode) {
     document.serverExposureMode = settings.serverExposureMode;
@@ -286,6 +331,15 @@ function setMainWindowBounds(
         mainWindowBounds: bounds,
         mainWindowMaximized: isMaximized,
       };
+}
+
+function setChildWindows(
+  settings: DesktopSettings,
+  childWindows: ReadonlyArray<DesktopChildWindowState>,
+): DesktopSettings {
+  return desktopChildWindowsEquivalence(settings.childWindows, childWindows)
+    ? settings
+    : { ...settings, childWindows };
 }
 
 function setUpdateChannel(
@@ -477,6 +531,12 @@ export const make = Effect.gen(function* () {
           },
         }),
       ),
+    setChildWindows: (childWindows) =>
+      persist((settings) => setChildWindows(settings, childWindows)).pipe(
+        Effect.withSpan("desktop.settings.setChildWindows", {
+          attributes: { count: childWindows.length },
+        }),
+      ),
     setServerExposureMode: (mode) =>
       persist((settings) => setServerExposureMode(settings, mode)).pipe(
         Effect.withSpan("desktop.settings.setServerExposureMode", { attributes: { mode } }),
@@ -532,6 +592,8 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         load: SynchronizedRef.get(settingsRef),
         setMainWindowBounds: (bounds, isMaximized) =>
           update((settings) => setMainWindowBounds(settings, bounds, isMaximized)),
+        setChildWindows: (childWindows) =>
+          update((settings) => setChildWindows(settings, childWindows)),
         setServerExposureMode: (mode) =>
           update((settings) => setServerExposureMode(settings, mode)),
         setUpdateChannel: (channel) => update((settings) => setUpdateChannel(settings, channel)),

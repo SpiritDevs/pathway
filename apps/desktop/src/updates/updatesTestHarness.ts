@@ -194,6 +194,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
                     }),
                   ),
                 ),
+          setChildWindows: () => Effect.die("unexpected child windows update"),
           setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
           setWslDistro: () => Effect.die("unexpected WSL distro change"),
           setWslOnly: () => Effect.die("unexpected WSL-only toggle"),

@@ -79,13 +79,17 @@ describe("DesktopLifecycle", () => {
         handleRendererReady: () => Effect.void,
         handleBackendReady: () => Effect.void,
         handleBackendNotReady: Effect.void,
-        flushMainWindowBounds: Effect.void,
+        flushWindowState: Effect.void,
         prepareCaptureReveal: Effect.void,
         cancelPreparedCaptureReveal: Effect.void,
         dispatchMenuAction: () => Effect.void,
         dispatchSnapShotEvent: () => Effect.void,
         zoomMain: () => Effect.void,
         syncAppearance: Effect.void,
+        openChild: () => Effect.die("unexpected torn-out window"),
+        closeChild: () => Effect.void,
+        closeAllChildren: Effect.void,
+        listChildren: Effect.succeed([]),
       });
 
       const environmentLayer = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {

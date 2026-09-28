@@ -89,7 +89,7 @@ const requestDesktopShutdownAndWait = Effect.fn("desktop.lifecycle.requestShutdo
   > {
     const shutdown = yield* DesktopShutdown.DesktopShutdown;
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
-    yield* desktopWindow.flushMainWindowBounds;
+    yield* desktopWindow.flushWindowState;
     yield* shutdown.request;
     yield* shutdown.awaitComplete;
   },

@@ -63,9 +63,13 @@ export const getAppBranding = DesktopIpc.makeSyncIpcMethod({
 export const getWindowFullscreenState = DesktopIpc.makeSyncIpcMethod({
   channel: IpcChannels.GET_WINDOW_FULLSCREEN_STATE_CHANNEL,
   result: Schema.Boolean,
-  handler: Effect.fn("desktop.ipc.window.getWindowFullscreenState")(function* () {
+  handler: Effect.fn("desktop.ipc.window.getWindowFullscreenState")(function* (event) {
     const electronWindow = yield* ElectronWindow.ElectronWindow;
-    const window = yield* electronWindow.currentMainOrFirst;
+    // A torn-out window asks about itself, not the main window.
+    const window = yield* ElectronWindow.senderWindowOr(
+      event?.sender,
+      electronWindow.currentMainOrFirst,
+    );
     return Option.isSome(window) && window.value.isFullScreen();
   }),
 });
@@ -157,7 +161,7 @@ export const pickFolder = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PICK_FOLDER_CHANNEL,
   payload: Schema.UndefinedOr(PickFolderOptionsSchema),
   result: Schema.NullOr(Schema.String),
-  handler: Effect.fn("desktop.ipc.window.pickFolder")(function* (options) {
+  handler: Effect.fn("desktop.ipc.window.pickFolder")(function* (options, event) {
     const dialog = yield* ElectronDialog.ElectronDialog;
     const electronWindow = yield* ElectronWindow.ElectronWindow;
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -197,7 +201,7 @@ export const pickFolder = DesktopIpc.makeIpcMethod({
         )
       : environment.resolvePickFolderDefaultPath(options);
     const selectedPath = yield* dialog.pickFolder({
-      owner: yield* electronWindow.focusedMainOrFirst,
+      owner: yield* ElectronWindow.senderWindowOr(event?.sender, electronWindow.focusedMainOrFirst),
       defaultPath,
     });
     if (Option.isNone(selectedPath)) {
@@ -224,11 +228,14 @@ export const setWindowButtonsVisible = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.SET_WINDOW_BUTTONS_VISIBLE_CHANNEL,
   payload: Schema.Boolean,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.window.setWindowButtonsVisible")(function* (visible) {
+  handler: Effect.fn("desktop.ipc.window.setWindowButtonsVisible")(function* (visible, event) {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     if (environment.platform !== "darwin") return;
     const electronWindow = yield* ElectronWindow.ElectronWindow;
-    const window = yield* electronWindow.currentMainOrFirst;
+    const window = yield* ElectronWindow.senderWindowOr(
+      event?.sender,
+      electronWindow.currentMainOrFirst,
+    );
     if (Option.isSome(window) && !window.value.isDestroyed()) {
       window.value.setWindowButtonVisibility(visible);
     }
@@ -249,10 +256,13 @@ export const showContextMenu = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.CONTEXT_MENU_CHANNEL,
   payload: ContextMenuInput,
   result: Schema.NullOr(Schema.String),
-  handler: Effect.fn("desktop.ipc.window.showContextMenu")(function* (input) {
+  handler: Effect.fn("desktop.ipc.window.showContextMenu")(function* (input, event) {
     const electronMenu = yield* ElectronMenu.ElectronMenu;
     const electronWindow = yield* ElectronWindow.ElectronWindow;
-    const window = yield* electronWindow.focusedMainOrFirst;
+    const window = yield* ElectronWindow.senderWindowOr(
+      event?.sender,
+      electronWindow.focusedMainOrFirst,
+    );
     if (Option.isNone(window)) {
       return null;
     }
@@ -284,7 +294,7 @@ export const pickThemeFiles = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PICK_THEME_FILES_CHANNEL,
   payload: Schema.Undefined,
   result: Schema.NullOr(Schema.Array(PickedThemeFileSchema)),
-  handler: Effect.fn("desktop.ipc.window.pickThemeFiles")(function* () {
+  handler: Effect.fn("desktop.ipc.window.pickThemeFiles")(function* (_input, event) {
     const dialog = yield* ElectronDialog.ElectronDialog;
     const electronWindow = yield* ElectronWindow.ElectronWindow;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -297,7 +307,7 @@ export const pickThemeFiles = DesktopIpc.makeIpcMethod({
       .exists(extensionsDir)
       .pipe(Effect.orElseSucceed(() => false));
     const paths = yield* dialog.pickFiles({
-      owner: yield* electronWindow.focusedMainOrFirst,
+      owner: yield* ElectronWindow.senderWindowOr(event?.sender, electronWindow.focusedMainOrFirst),
       defaultPath: defaultPath ? Option.some(extensionsDir) : Option.none(),
       filters: [{ name: "JSON", extensions: ["json"] }],
     });

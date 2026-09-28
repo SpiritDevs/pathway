@@ -49,6 +49,11 @@ const dispatchMenuAction = Effect.fn("desktop.menu.dispatchMenuAction")(function
   yield* desktopWindow.dispatchMenuAction(action);
 });
 
+const closeAllChildWindows = Effect.fn("desktop.menu.closeAllChildWindows")(function* () {
+  const desktopWindow = yield* DesktopWindow.DesktopWindow;
+  yield* desktopWindow.closeAllChildren;
+});
+
 const zoomMainWindow = Effect.fn("desktop.menu.zoomMainWindow")(function* (
   direction: DesktopWindow.MainWindowZoomDirection,
 ): Effect.fn.Return<void, never, DesktopWindow.DesktopWindow> {
@@ -142,6 +147,9 @@ export const make = Effect.gen(function* () {
     const settingsClick = () => {
       runMenuEffect("open-settings", dispatchMenuAction("open-settings"));
     };
+    const closeAllWindowsClick = () => {
+      runMenuEffect("close-all-windows", closeAllChildWindows());
+    };
     const reloadClick = () => {
       runMenuEffect("reload-app", reloadMainWindow());
     };
@@ -228,7 +236,21 @@ export const make = Effect.gen(function* () {
           { role: "togglefullscreen" },
         ],
       },
-      { role: "windowMenu" },
+      {
+        role: "windowMenu",
+        // Electron's default Window menu, plus closing every torn-out window.
+        submenu: [
+          { role: "minimize" },
+          ...(environment.platform === "darwin"
+            ? [{ role: "zoom" as const }]
+            : [{ role: "close" as const }]),
+          { type: "separator" },
+          { label: "Close All Pathway Windows", click: closeAllWindowsClick },
+          ...(environment.platform === "darwin"
+            ? [{ type: "separator" as const }, { role: "front" as const }]
+            : []),
+        ],
+      },
       {
         role: "help",
         submenu: [

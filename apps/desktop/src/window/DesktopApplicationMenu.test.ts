@@ -89,7 +89,7 @@ const makeDesktopWindowLayer = (selectedActions: Array<string>) =>
     handleRendererReady: () => Effect.void,
     handleBackendReady: () => Effect.void,
     handleBackendNotReady: Effect.void,
-    flushMainWindowBounds: Effect.void,
+    flushWindowState: Effect.void,
     prepareCaptureReveal: Effect.void,
     cancelPreparedCaptureReveal: Effect.void,
     dispatchSnapShotEvent: () => Effect.void,
@@ -102,6 +102,12 @@ const makeDesktopWindowLayer = (selectedActions: Array<string>) =>
         selectedActions.push(`zoom-${direction}`);
       }),
     syncAppearance: Effect.void,
+    openChild: () => Effect.die("unexpected torn-out window"),
+    closeChild: () => Effect.void,
+    closeAllChildren: Effect.sync(() => {
+      selectedActions.push("close-all-windows");
+    }),
+    listChildren: Effect.succeed([]),
   } satisfies DesktopWindow.DesktopWindow["Service"]);
 
 const makeElectronMenuLayer = (
@@ -204,6 +210,30 @@ describe("DesktopApplicationMenu", () => {
 
       zoomIn.click({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
       assert.deepEqual(selectedActions, ["zoom-in"]);
+    }),
+  );
+
+  it.effect("closes every torn-out window from the Window menu", () =>
+    Effect.gen(function* () {
+      const selectedActions: Array<string> = [];
+      const applicationMenuTemplate =
+        yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
+
+      yield* configureMenu(selectedActions, applicationMenuTemplate);
+
+      const template = yield* Deferred.await(applicationMenuTemplate);
+      const click = (menu: Electron.MenuItemConstructorOptions | undefined, label: string) => {
+        if (!Array.isArray(menu?.submenu)) throw new Error("Expected a submenu array.");
+        const item = menu.submenu.find((entry) => entry.label === label);
+        if (typeof item?.click !== "function") throw new Error(`Expected "${label}" to click.`);
+        item.click({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
+      };
+      click(
+        template.find((item) => item.role === "windowMenu"),
+        "Close All Pathway Windows",
+      );
+
+      assert.deepEqual(selectedActions, ["close-all-windows"]);
     }),
   );
 
