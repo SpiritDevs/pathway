@@ -21,64 +21,63 @@ export function DeviceToolDriftBanner({
 }) {
   const updateTools = useAtomCommand(deviceEnvironment.updateTools, { reportFailure: false });
   const restartTools = useAtomCommand(deviceEnvironment.restartTools, { reportFailure: false });
-  // Remembers which request is in flight or failed, since a new snapshot can switch the banner kind.
-  const [pending, setPending] = useState<DeviceToolOperation | null>(null);
-  const [error, setError] = useState<{ operation: DeviceToolOperation; message: string } | null>(
-    null,
-  );
+  // The request in flight or last failed. It keeps its own operation and hosts, since a new
+  // snapshot can switch the banner between update and restart while it runs.
+  const [request, setRequest] = useState<{
+    operation: DeviceToolOperation;
+    hostIds: ReadonlyArray<string>;
+    error: string | null;
+  } | null>(null);
   const banner = deviceToolBanner(state);
   if (!banner) return null;
   const run = async (operation: DeviceToolOperation, hostIds: ReadonlyArray<string>) => {
     const command = operation === "restart" ? restartTools : updateTools;
-    setPending(operation);
-    setError(null);
-    try {
-      const results = await Promise.all(
-        hostIds.map((hostId) => command({ environmentId, input: { hostId } })),
-      );
-      const failure = results.find((result) => result._tag === "Failure");
-      if (failure?._tag === "Failure")
-        setError({ operation, message: formatEnvironmentQueryError(failure.cause) });
-    } finally {
-      setPending(null);
-    }
+    setRequest({ operation, hostIds, error: null });
+    const results = await Promise.all(
+      hostIds.map((hostId) => command({ environmentId, input: { hostId } })),
+    );
+    const failure = results.find((result) => result._tag === "Failure");
+    setRequest(
+      failure?._tag === "Failure"
+        ? { operation, hostIds, error: formatEnvironmentQueryError(failure.cause) }
+        : null,
+    );
   };
+  const action =
+    banner.kind === "behind" && banner.canUpdate
+      ? { operation: "update" as const, label: "Update" }
+      : banner.kind === "restart" && banner.canRestart
+        ? { operation: "restart" as const, label: "Restart" }
+        : null;
   return (
     <div role="status" className="flex items-start gap-3 border-b px-3 py-2 text-xs">
       <div className="min-w-0 flex-1">
         <p className="text-muted-foreground">{banner.message}</p>
-        {error ? (
+        {request?.error ? (
           <p role="alert" className="mt-1 text-destructive">
-            {error.message}
+            {request.error}
           </p>
         ) : null}
       </div>
-      {banner.kind === "behind" && banner.canUpdate ? (
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={pending !== null}
-          onClick={() => void run("update", banner.hostIds)}
-        >
-          {pending === "update"
-            ? deviceToolProgressLabel(pending)
-            : error?.operation === "update"
-              ? "Retry"
-              : "Update"}
+      {request && request.error === null ? (
+        <Button size="xs" variant="outline" disabled>
+          {deviceToolProgressLabel(request.operation)}
         </Button>
-      ) : null}
-      {banner.kind === "restart" && banner.canRestart ? (
+      ) : request ? (
         <Button
           size="xs"
           variant="outline"
-          disabled={pending !== null}
-          onClick={() => void run("restart", banner.hostIds)}
+          onClick={() => void run(request.operation, request.hostIds)}
         >
-          {pending === "restart"
-            ? deviceToolProgressLabel(pending)
-            : error?.operation === "restart"
-              ? "Retry"
-              : "Restart"}
+          Retry
+        </Button>
+      ) : action ? (
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() => void run(action.operation, banner.hostIds)}
+        >
+          {action.label}
         </Button>
       ) : null}
     </div>

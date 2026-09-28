@@ -169,8 +169,7 @@ export function DeviceToolSyncSettings() {
                   key={row.key}
                   row={row}
                   outcome={outcomes.get(row.key)}
-                  onUpdate={() => void update(row)}
-                  onRestart={() => void update(row, "restart")}
+                  onRun={(operation) => void update(row, operation)}
                 />
               ))}
             </tbody>
@@ -197,13 +196,11 @@ const HELPER_BADGE = {
 function DeviceToolSyncTableRow({
   row,
   outcome,
-  onUpdate,
-  onRestart,
+  onRun,
 }: {
   row: DeviceToolSyncRow;
   outcome: DeviceToolUpdateOutcome | undefined;
-  onUpdate: () => void;
-  onRestart: () => void;
+  onRun: (operation: DeviceToolOperation) => void;
 }) {
   const badge = HELPER_BADGE[row.helperState];
   return (
@@ -241,13 +238,22 @@ function DeviceToolSyncTableRow({
           </span>
         ) : outcome?.status === "success" && !row.canUpdate && !row.canRestart ? (
           <CheckIcon aria-label="Done" className="ml-auto size-4 text-success" />
+        ) : outcome?.status === "failed" && (row.canUpdate || row.canRestart) ? (
+          // Retry repeats the request that failed, whatever the latest snapshot recommends.
+          <Button size="xs" variant="outline" onClick={() => onRun(outcome.operation)}>
+            Retry
+          </Button>
         ) : row.canUpdate ? (
-          <Button size="xs" variant={outcome ? "outline" : "default"} onClick={onUpdate}>
-            {outcome?.status === "failed" ? "Retry" : "Update"}
+          <Button
+            size="xs"
+            variant={outcome ? "outline" : "default"}
+            onClick={() => onRun("update")}
+          >
+            Update
           </Button>
         ) : row.canRestart ? (
-          <Button size="xs" variant="outline" onClick={onRestart}>
-            {outcome?.status === "failed" ? "Retry" : "Restart"}
+          <Button size="xs" variant="outline" onClick={() => onRun("restart")}>
+            Restart
           </Button>
         ) : null}
         {outcome?.status === "failed" ? (
