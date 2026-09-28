@@ -53,7 +53,7 @@ Every agent device tool rechecks both the invocation capability and current envi
 The two PRs' implemented behavior is internally consistent. Important upstream release gaps remain:
 
 - Duo requires a patched native helper that is not in the pinned official hub release. Pathway keeps the default hub pinned to `0.9.0` and accepts the experimental archive only through an explicit local environment configuration. SSH hosts use the official build.
-- Redistribution rights for the Apple model assets were not established. Those assets are excluded. Pathway uses original procedural phone/foldable geometry; no Apple GLB or proprietary logo path is bundled. The foldable enclosure uses rounded display corners, beveled metal, inset glass and articulated hinge leaves. Each inner leaf samples exactly half of the native framebuffer, so the physical seam cannot crop image content.
+- Asset licence risk accepted by maintainers 2026-09-28. Pathway bundles t3code's Apple AR-derived GLBs (iPhone, iPhone Pro Max, iPad Pro, iPad Magic Keyboard, iPhone Duo) under `apps/web/src/components/device/models/`; no redistribution licence is established. Provenance is in `models/sources.json` and `scripts/convert-device-model.py`. Procedural geometry remains the fallback for devices without a model.
 - The native prototype needs broader hardware, orientation and CPU qualification. Cover-display orientation is a known upstream concern. Native acknowledgement and a fresh matching display frame gate input; a failed handoff rolls back rather than sending touches to an unconfirmed display.
 - A live Android verification pass requires an Android SDK and emulator. Automated Android transport/control coverage is retained.
 - The pinned hub deliberately filters out simulators that have never been used. Start a new simulator once in Xcode before refreshing Pathway's device list. Empty-state guidance reflects this limitation.
@@ -73,4 +73,4 @@ Pathway adaptations:
 
 Native archive instructions and verification limits are recorded in [the device runbook](../operations/device-workspace.md). Product behavior is documented in [Devices](../user/devices.md).
 
-Adapted TypeScript and helper code originates from the MIT-licensed [pingdotgg/t3code](https://github.com/pingdotgg/t3code) repository. The native helper retains its upstream LICENSE and NOTICE in the generated archive. Third-party model assets are not included.
+Adapted TypeScript and helper code originates from the MIT-licensed [pingdotgg/t3code](https://github.com/pingdotgg/t3code) repository. The native helper retains its upstream LICENSE and NOTICE in the generated archive. Apple-derived model assets are bundled under the accepted licence risk noted above.

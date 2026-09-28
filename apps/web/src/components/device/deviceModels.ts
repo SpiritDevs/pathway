@@ -4,24 +4,40 @@ import {
   type DeviceModelSource,
 } from "@spiritdevs/client-runtime/device/model";
 import type { DevicePlatform } from "@spiritdevs/contracts";
+import iphoneDuo from "./models/iphone-duo.glb?url";
+import iphone18Pro from "./models/iphone-18-pro.glb?url";
+import iphone18ProMax from "./models/iphone-18-pro-max.glb?url";
+import magicKeyboard from "./models/ipad-pro-13-m5-magic-keyboard.glb?url";
+import ipadPro13M5 from "./models/ipad-pro-13-m5.glb?url";
 
-const duo: DeviceModelSource = { id: "iphone-duo", url: "procedural:duo" };
+// Bundled URLs follow the client origin in local, desktop, hosted and remote sessions.
+const models: Record<DeviceModelSource["id"], DeviceModelSource> = {
+  "iphone-duo": { id: "iphone-duo", url: iphoneDuo },
+  "iphone-18-pro": { id: "iphone-18-pro", url: iphone18Pro },
+  "iphone-18-pro-max": { id: "iphone-18-pro-max", url: iphone18ProMax },
+  "ipad-pro-13-m5": { id: "ipad-pro-13-m5", url: ipadPro13M5 },
+};
 
-/** Phone/tablet bodies use the viewer's procedural fallback; Duo uses our original hinge rig. */
+/** A renamed Duo is recognized from its hinge capability rather than the user's label. */
 export function deviceModel(
   platform: DevicePlatform,
   name: string,
   supportsHingeAngle = false,
 ): DeviceModelSource | null {
-  return platform === "ios" &&
-    (supportsHingeAngle || resolveDeviceModelId(platform, name) === "iphone-duo")
-    ? duo
-    : null;
+  const id =
+    platform === "ios" && supportsHingeAngle ? "iphone-duo" : resolveDeviceModelId(platform, name);
+  return id ? models[id] : null;
 }
 
+const keyboard: DeviceAccessorySource = {
+  id: "ipad-pro-13-m5-magic-keyboard",
+  modelId: "ipad-pro-13-m5",
+  url: magicKeyboard,
+};
+
 export function deviceKeyboard(
-  _platform: DevicePlatform,
-  _name: string,
+  platform: DevicePlatform,
+  name: string,
 ): DeviceAccessorySource | null {
-  return null;
+  return resolveDeviceModelId(platform, name) === keyboard.modelId ? keyboard : null;
 }
