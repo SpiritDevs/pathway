@@ -41,16 +41,20 @@ The state union is:
 
 Challenge `kind` is `trusted-device`, `sms` or `sms-choice`. `phoneNumbers` contains `{ id, destination }`; the destination is Apple's masked phone label. All watching clients see the challenge. One client's submission completes it for everyone. A stale flow ID is rejected. Challenges expire after ten minutes, aborting their worker. No password, code, cookies or challenge headers appear in stream values.
 
-| RPC                     | Input                                            | Result                                                             |
-| ----------------------- | ------------------------------------------------ | ------------------------------------------------------------------ |
-| `xcode.status`          | `{}`                                             | `XcodeStatus`                                                      |
-| `xcode.subscribe`       | `{}`                                             | Initial `XcodeStatus`, then coalesced snapshots                    |
-| `xcode.install`         | `{ companyId, accountId, versionId, platforms }` | Accepted `XcodeJob`                                                |
-| `xcode.cancel`          | `{ jobId }`                                      | Current job; may be `cancelling` until the worker exits            |
-| `xcode.retry`           | `{ jobId }`                                      | Resumes the first unfinished step                                  |
-| `xcode.approve`         | `{ jobId }`                                      | Starts the current admin step and opens macOS approval on the host |
-| `xcode.select`          | `{ path }`                                       | Job selecting an installed Xcode                                   |
-| `xcode.installRuntimes` | `{ path, platforms }`                            | Job downloading runtimes for that Xcode                            |
+Every Xcode RPC also takes `{ companyId, accountId }` as its authorization context. This applies to selecting an existing Xcode and installing runtimes, even though those operations do not need an Apple download session.
+
+| RPC                     | Additional input         | Result                                                             |
+| ----------------------- | ------------------------ | ------------------------------------------------------------------ |
+| `xcode.status`          | None                     | `XcodeStatus`                                                      |
+| `xcode.subscribe`       | None                     | `XcodeUpdate`: initial inventory, then coalesced job snapshots     |
+| `xcode.install`         | `versionId`, `platforms` | Accepted `XcodeJob`                                                |
+| `xcode.cancel`          | `jobId`                  | Current job; may be `cancelling` until the worker exits            |
+| `xcode.retry`           | `jobId`                  | Resumes the first unfinished step                                  |
+| `xcode.approve`         | `jobId`                  | Starts the current admin step and opens macOS approval on the host |
+| `xcode.select`          | `path`                   | Job selecting an installed Xcode                                   |
+| `xcode.installRuntimes` | `path`, `platforms`      | Job downloading runtimes for that Xcode                            |
+
+`XcodeUpdate` is `{ kind: "status", status: XcodeStatus }` initially and after job completion, or `{ kind: "job", job: XcodeJob | null }` for progress. Keep the last inventory when receiving a job update. This keeps the release and runtime catalogues out of download ticks.
 
 `platforms` is an array of `iOS`, `watchOS`, and `tvOS`. Duplicates are removed. `versionId` is the catalogue's build ID, not a version label guessed by a client. `path` comes from `status.installed`. Runtime installation asks `xcodebuild` for its current compatible platform download; this API does not select arbitrary old runtime builds.
 
@@ -61,16 +65,18 @@ Challenge `kind` is `trusted-device`, `sms` or `sms-choice`. `phoneNumbers` cont
 - `available`: `{ id, version, build, beta, downloadBytes, requiredBytes }[]`. Unknown archive size is `null`.
 - `runtimes`: `{ id, platform, version, build, installed, available, downloadBytes }[]`. Apple catalogue candidates are filtered by host OS requirements. `xcodebuild` decides compatibility with the chosen Xcode.
 - `disk`: `{ freeBytes, requiredBytes }`. Free space is the smaller of scratch and Applications volume availability. Required space includes the active job's runtime choices.
-- `job`: the last accepted job, or `null`.
+- `job`: the last accepted job in the requested account context, or `null`. Another account's job is never returned. The environment has one worker, so starting a job can return `busy` while another account's job runs.
 - `error`: a safe inventory/catalogue error, or `null`. Useful inventory is retained when a catalogue cannot be loaded.
 
-`XcodeJob` is `{ id, kind, account, versionId, path, platforms, state, steps, createdAt, updatedAt }`. `kind` is `install`, `select` or `runtimes`; `account` and `versionId` are null for jobs that do not need an Apple download session. Times are epoch milliseconds.
+`XcodeJob` is `{ id, kind, account, versionId, path, platforms, state, steps, createdAt, updatedAt }`. `kind` is `install`, `select` or `runtimes`; `account` is always `{ companyId, accountId }`; `versionId` is null for jobs that do not need an Apple download session. Times are epoch milliseconds.
 
 Job states are `running`, `needs-admin`, `needs-reauth`, `interrupted`, `failed`, `cancelling`, `cancelled`, and `completed`. Render `needs-admin` as **Needs admin approval on the Mac**. Calling `xcode.approve` is explicit consent to show the host prompt for that step. Remote clients never send an administrator password. The state stays `needs-admin` while the OS prompt and privileged operation are active. A second approval is rejected while one is in flight. After `needs-reauth`, complete Apple sign-in and call `xcode.retry`.
 
 Every job has the same ordered step IDs: `check`, `download`, `expand`, `move`, `license`, `select`, `first-launch`, `runtimes`, `helpers`. Irrelevant steps are `skipped`. A step is `{ id, state, error, progress }`. Step states are `pending`, `running`, `needs-admin`, `completed`, `skipped`, `failed`, and `cancelled`. Download progress is `{ bytes, total, bytesPerSecond }`; progress is null for other steps. `total` may be null. Errors are `{ code, message }`, never raw process output or Apple response bodies.
 
-All reads and subscriptions require `orchestration:read`. Every mutation, including approvals and cancellations, requires `orchestration:operate`. Cloud independently checks the Apple account's environment registration and owner link before issuing or renewing a session lease.
+All reads and subscriptions require `orchestration:read`. Every mutation, including approvals and cancellations, requires `orchestration:operate`. Both RPC groups use `auth/appleCaller.ts` to resolve the authenticated session identity and the same Cloud `authorizeRuntimeCaller` check before an operation and before returning data. Personal accounts are owner-only. Company accounts require current `integrations.read` or `integrations.manage` permission. Each streamed snapshot repeats this check; revocation ends the stream with an `AppleError`. Bootstrap sessions and old owner sessions without the verified Clerk subject fail closed. Job controls also match the persisted account context inside the serialized state transition, so another accessible account cannot authorize a guessed job ID. Cloud independently checks the environment registration and owner link before issuing or renewing a session lease.
+
+RPC failures may be `EnvironmentAuthorizationError` (missing environment scope), `AppleError` (caller/account authorization or Cloud availability), or `XcodeError` (host/job failure). Step and inventory errors use the smaller `{ code, message }` shape.
 
 ## Host work and recovery
 
@@ -88,7 +94,7 @@ On restart, running, cancelling and admin jobs become `interrupted`, with a retr
 
 Privileged commands use a bounded root supervisor that records the child PID it spawned. Cancellation revokes a per-attempt approval marker and terminates the owned `osascript` process. The supervisor terminates its captured child; a filesystem notification waits for its lock to clear. On restart the old approval markers are revoked, so an old dialog cannot authorize a later attempt. A lock prevents a second privileged operation while an earlier operation drains. There are no process-name searches or password-fed `sudo` commands. Cancellation cannot roll back a completed license acceptance, selection, installed runtime, or OS package operation.
 
-Snapshot notifications are coalesced at 350 ms, fewer than three per second. Each socket has a sliding one-item queue, so a slow client receives current state instead of a backlog. Status calls share a five-second host inventory cache and an hour-long release catalogue cache.
+Job snapshot notifications are coalesced at 350 ms, fewer than three per second. The stream sends inventory initially and after completion; download ticks contain only the job. Each socket has a sliding one-item queue, so a slow client receives current state instead of a backlog. Status calls share a five-second host inventory cache and an hour-long release catalogue cache.
 
 ## Validation and remaining limits
 
@@ -96,4 +102,4 @@ Focused tests inject HTTP and process runners. They cover SRP requests, concurre
 
 Real Apple sign-in, Xcode archive installation, macOS authorization prompts and device-package behavior still need a maintainer's integrated Mac pass. Apple uses undocumented authentication and Developer portal endpoints; upstream protocol changes can require an adapter update. Runtime catalogue availability does not establish compatibility with every Xcode version. A hard host crash during privileged work can leave an Applications staging sibling or admin lock that requires host inspection before retry. These paths must never be cleaned by pattern or by deleting unrelated Xcodes.
 
-Deploy the additive Cloud schema/function changes before using the session RPCs. No Cloud or relay deployment is part of this implementation. `apple.createApp` remains explicitly unsupported; it is separate from the `apple.id.*` download-session implementation.
+Deploy the additive Cloud schema/function changes before using the session RPCs. COR-100 migration 076 supplies the persisted Clerk subject used by these handlers; COR-101 adds no SQLite migration. No Cloud or relay deployment is part of this implementation. `apple.createApp` remains explicitly unsupported; it is separate from the `apple.id.*` download-session implementation.

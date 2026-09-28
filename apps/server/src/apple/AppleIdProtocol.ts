@@ -17,6 +17,9 @@ const optionsSchema = Schema.Struct({
   fsaChallenge: Schema.optional(Schema.Unknown),
 });
 const decodeServiceKey = Schema.decodeUnknownSync(Schema.Struct({ authServiceKey: Schema.String }));
+const decodeSession = Schema.decodeUnknownSync(
+  Schema.Struct({ user: Schema.Record(Schema.String, Schema.Unknown) }),
+);
 const decodeOptions = Schema.decodeUnknownSync(optionsSchema);
 const decodeTeams = Schema.decodeUnknownSync(
   Schema.Struct({
@@ -245,26 +248,32 @@ export class LiveAppleIdProtocol implements AppleIdProtocol {
     );
     if (!response.ok)
       throw appleError("unauthorized", "Apple rejected the session. Sign in again.");
+    decodeSession(await response.json());
     // ASC provider IDs are not Developer team IDs. Discovery uses the Developer portal.
     let teams: readonly DiscoveredAppleTeam[] = [];
-    const discovery = await this.#client.request(
-      "https://developer.apple.com/services-account/QH65B2/account/listTeams.action",
-      { method: "POST", signal },
-    );
-    if (discovery.ok) {
-      const data = decodeTeams(await discovery.json());
-      teams = (data.teams ?? []).map((t) => ({
-        teamId: t.teamId,
-        name: t.name,
-        type:
-          t.type === "Company/Organization"
-            ? "organization"
-            : t.type === "Individual"
-              ? "individual"
-              : t.type === "In-House"
-                ? "enterprise"
-                : "unknown",
-      }));
+    try {
+      const discovery = await this.#client.request(
+        "https://developer.apple.com/services-account/QH65B2/account/listTeams.action",
+        { method: "POST", signal },
+      );
+      if (discovery.ok) {
+        const data = decodeTeams(await discovery.json());
+        teams = (data.teams ?? []).map((t) => ({
+          teamId: t.teamId,
+          name: t.name,
+          type:
+            t.type === "Company/Organization"
+              ? "organization"
+              : t.type === "Individual"
+                ? "individual"
+                : t.type === "In-House"
+                  ? "enterprise"
+                  : "unknown",
+        }));
+      }
+    } catch {
+      // Developer team membership is optional for an authenticated download session.
+      signal.throwIfAborted();
     }
     const credential = this.#client.credential();
     if (!credential.cookies.length)

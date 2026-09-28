@@ -147,7 +147,7 @@ function harness(http?: AscHttp) {
 
 describe("environment Apple runtime", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(NOW);
   });
   afterEach(() => vi.useRealTimers());

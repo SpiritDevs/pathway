@@ -11,6 +11,9 @@ import {
 } from "@spiritdevs/contracts/xcode";
 import type { AppleSessionTarget } from "@spiritdevs/backend/appleSession";
 
+export const sameXcodeAccount = (a: AppleSessionTarget, b: AppleSessionTarget) =>
+  a.companyId === b.companyId && a.accountId === b.accountId;
+
 export const xcodeError = (code: XcodeError["code"], message: string) =>
   new XcodeError({ code, message });
 export interface XcodeJobStore {
@@ -163,7 +166,7 @@ export class XcodeInstall {
     kind: XcodeJob["kind"],
     path: string,
     versionId: string | null,
-    account: AppleSessionTarget | null,
+    account: AppleSessionTarget,
     platforms: readonly XcodePlatform[],
   ) {
     if (!this.host.supported) throw xcodeError("needs-mac", "Xcode needs a Mac host.");
@@ -181,7 +184,10 @@ export class XcodeInstall {
       kind,
       path,
       versionId,
-      account: account as XcodeJob["account"],
+      account: {
+        companyId: account.companyId,
+        accountId: account.accountId,
+      } as XcodeJob["account"],
       platforms: [...new Set(platforms)],
       state: "running",
       createdAt: this.now(),
@@ -209,20 +215,20 @@ export class XcodeInstall {
       );
     });
   }
-  select(path: string) {
-    return this.#serial(() => this.#start("select", path, null, null, []));
+  select(account: AppleSessionTarget, path: string) {
+    return this.#serial(() => this.#start("select", path, null, account, []));
   }
-  installRuntimes(path: string, platforms: readonly XcodePlatform[]) {
-    return this.#serial(() => this.#start("runtimes", path, null, null, platforms));
+  installRuntimes(account: AppleSessionTarget, path: string, platforms: readonly XcodePlatform[]) {
+    return this.#serial(() => this.#start("runtimes", path, null, account, platforms));
   }
-  #require(jobId: string) {
-    if (!this.#job || this.#job.id !== jobId)
+  #require(account: AppleSessionTarget, jobId: string) {
+    if (!this.#job || this.#job.id !== jobId || !sameXcodeAccount(this.#job.account, account))
       throw xcodeError("not-found", "This Xcode job is no longer current.");
     return this.#job;
   }
-  retry(jobId: string) {
+  retry(account: AppleSessionTarget, jobId: string) {
     return this.#serial(async () => {
-      const job = this.#require(jobId);
+      const job = this.#require(account, jobId);
       if (
         this.#worker ||
         !["failed", "cancelled", "interrupted", "needs-reauth"].includes(job.state)
@@ -241,18 +247,18 @@ export class XcodeInstall {
       return this.#job!;
     });
   }
-  approve(jobId: string) {
+  approve(account: AppleSessionTarget, jobId: string) {
     return this.#serial(async () => {
-      const job = this.#require(jobId);
+      const job = this.#require(account, jobId);
       if (this.#worker || job.state !== "needs-admin")
         throw xcodeError("busy", "This Xcode job is not waiting for admin approval.");
       this.#launch(true);
       return job;
     });
   }
-  async cancel(jobId: string) {
+  async cancel(account: AppleSessionTarget, jobId: string) {
     await this.#serial(async () => {
-      const job = this.#require(jobId);
+      const job = this.#require(account, jobId);
       if (job.state === "completed" || job.state === "cancelled") return;
       if (this.#worker) {
         await this.#save({ ...job, state: "cancelling" });
@@ -267,7 +273,7 @@ export class XcodeInstall {
         });
     });
     // Return immediately; the worker publishes cancelled only after its child has exited.
-    return this.#require(jobId);
+    return this.#require(account, jobId);
   }
   #launch(approved: boolean) {
     const controller = new AbortController();

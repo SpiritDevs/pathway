@@ -82,6 +82,20 @@ describe("Apple ID HTTP protocol", () => {
     expect(JSON.stringify(result)).not.toContain("123456");
     protocol.dispose();
   });
+  it("retains a verified session when optional Developer team discovery is unavailable", async () => {
+    const h = fakeApple();
+    const protocol = new LiveAppleIdProtocol((url, init) =>
+      url.endsWith("/listTeams.action")
+        ? Promise.resolve(new Response("Developer enrollment required"))
+        : h.http(url, init),
+    );
+    const signal = new AbortController().signal;
+    await protocol.start("owner@apple.test", "PASSWORD", signal);
+    const result = await protocol.complete("123456", signal);
+    expect(result.teams).toEqual([]);
+    expect(result.credential.cookies).toHaveLength(1);
+    protocol.dispose();
+  });
   it("supports explicit SMS selection and rejects unrelated phone IDs", async () => {
     const h = fakeApple();
     const protocol = new LiveAppleIdProtocol(h.http);
@@ -139,10 +153,11 @@ describe("Apple ID HTTP protocol", () => {
       ],
     });
     await client.request("https://idmsa.apple.com/test", {
-      headers: { scnt: "private", "X-Apple-ID-Session-Id": "private" },
+      headers: { scnt: "private", "X-Apple-ID-Session-Id": "private", Range: "bytes=8-15" },
     });
     expect(new Headers(calls[1]?.headers).get("scnt")).toBeNull();
     expect(new Headers(calls[1]?.headers).get("cookie")).toBeNull();
+    expect(new Headers(calls[1]?.headers).get("range")).toBe("bytes=8-15");
     const blocked = new AppleCookieHttp(
       async () =>
         new Response(null, { status: 302, headers: { location: "https://attacker.test" } }),

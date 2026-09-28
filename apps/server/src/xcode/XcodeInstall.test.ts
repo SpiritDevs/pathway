@@ -60,7 +60,7 @@ describe("durable Xcode jobs", () => {
       expect((await h.runtime.status()).job?.steps.find((s) => s.state === "needs-admin")?.id).toBe(
         id,
       );
-      await h.runtime.approve(job.id);
+      await h.runtime.approve(target, job.id);
       await h.runtime.drained();
     }
     expect((await h.runtime.status()).job?.state).toBe("completed");
@@ -90,7 +90,7 @@ describe("durable Xcode jobs", () => {
     expect(h.calls).toEqual([]);
     expect(h.saved()?.steps[0]).toMatchObject({ state: "failed", error: { code: "disk-space" } });
     diskLow = false;
-    await h.runtime.retry(job.id);
+    await h.runtime.retry(target, job.id);
     await h.runtime.drained();
     expect(h.saved()?.state).toBe("completed");
     await h.runtime.dispose();
@@ -121,7 +121,7 @@ describe("durable Xcode jobs", () => {
     };
     const restarted = new XcodeInstall(h.host, h.store);
     expect((await restarted.status()).job?.state).toBe("interrupted");
-    await restarted.retry(job.id);
+    await restarted.retry(target, job.id);
     await restarted.drained();
     expect(h.calls).not.toContain("download");
     expect(h.calls[0]).toBe("expand");
@@ -143,12 +143,12 @@ describe("durable Xcode jobs", () => {
     };
     const job = await h.runtime.install(target, "27A1", []);
     await entered.promise;
-    await expect(h.runtime.select("/Applications/Xcode.app")).rejects.toMatchObject({
+    await expect(h.runtime.select(target, "/Applications/Xcode.app")).rejects.toMatchObject({
       code: "busy",
     });
-    expect((await h.runtime.cancel(job.id)).state).toBe("cancelling");
+    expect((await h.runtime.cancel(target, job.id)).state).toBe("cancelling");
     await exited.promise;
-    await expect(h.runtime.retry(job.id)).rejects.toMatchObject({ code: "busy" });
+    await expect(h.runtime.retry(target, job.id)).rejects.toMatchObject({ code: "busy" });
     release.resolve();
     await h.runtime.drained();
     expect(h.saved()?.state).toBe("cancelled");
@@ -189,7 +189,7 @@ describe("durable Xcode jobs", () => {
     await expect(h.runtime.install(target, "27A1", [])).rejects.toMatchObject({
       code: "needs-mac",
     });
-    await expect(h.runtime.select("/Applications/Xcode.app")).rejects.toMatchObject({
+    await expect(h.runtime.select(target, "/Applications/Xcode.app")).rejects.toMatchObject({
       code: "needs-mac",
     });
     expect(h.host.run).not.toHaveBeenCalled();
@@ -201,13 +201,15 @@ describe("durable Xcode jobs", () => {
     () =>
       Effect.gen(function* () {
         const h = harness();
-        const rpc = makeXcodeRpcHandlers(h.runtime, [AuthOrchestrationReadScope]);
+        const rpc = makeXcodeRpcHandlers(h.runtime, { authorizeCaller: async () => null }, [
+          AuthOrchestrationReadScope,
+        ]);
         const effects = [
           rpc["xcode.install"]({ ...target, versionId: "27A1", platforms: [] }),
-          rpc["xcode.select"]({ path: "x" }),
-          rpc["xcode.installRuntimes"]({ path: "x", platforms: [] }),
+          rpc["xcode.select"]({ ...target, path: "x" }),
+          rpc["xcode.installRuntimes"]({ ...target, path: "x", platforms: [] }),
           ...["xcode.approve", "xcode.cancel", "xcode.retry"].map((method) =>
-            rpc[method as "xcode.cancel"]({ jobId: "job" }),
+            rpc[method as "xcode.cancel"]({ ...target, jobId: "job" }),
           ),
         ];
         for (const effect of effects)

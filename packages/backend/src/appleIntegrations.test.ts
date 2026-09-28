@@ -683,6 +683,7 @@ describe("Apple account cloud custody", () => {
         const storedAccount = (await ctx.db.query("appleAccounts").collect())[0]!;
         await ctx.db.insert("appleAccountSessions", {
           accountId: storedAccount._id,
+          accountRevision: storedAccount.revision,
           revision: 1,
           expiresAt: NOW + 30_000,
           keyId: "test-seal",

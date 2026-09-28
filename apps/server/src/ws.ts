@@ -3340,7 +3340,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             makeWsRpcLayer(session, previewAutomationBroker, providerUsageUpdates),
             makeWsComputerRpcLayer(session),
             makeAppleRpcLayer(appleServices.runtime, session.scopes, appleServices.sessions),
-            makeXcodeRpcLayer(appleServices.xcode, session.scopes),
+            makeXcodeRpcLayer(appleServices.xcode, appleServices.runtime, session.scopes),
             usageRecoveryRpcLayer,
           ).pipe(
             Layer.provideMerge(RpcSerialization.layerJson),

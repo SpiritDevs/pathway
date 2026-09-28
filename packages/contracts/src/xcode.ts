@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { EnvironmentAuthorizationError } from "./auth.ts";
-import { AppleEnvironmentAccountInput } from "./apple.ts";
+import { AppleEnvironmentAccountInput, AppleError } from "./apple.ts";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const XcodePlatform = Schema.Literals(["iOS", "watchOS", "tvOS"]);
@@ -93,7 +93,7 @@ export type XcodeStep = typeof XcodeStep.Type;
 export const XcodeJob = Schema.Struct({
   id: Schema.String,
   kind: Schema.Literals(["install", "select", "runtimes"]),
-  account: Schema.NullOr(AppleEnvironmentAccountInput),
+  account: AppleEnvironmentAccountInput,
   versionId: Schema.NullOr(Schema.String),
   path: Schema.String,
   platforms: Schema.Array(XcodePlatform),
@@ -122,13 +122,25 @@ export const XcodeStatus = Schema.Struct({
   error: Schema.NullOr(XcodeFailure),
 });
 export type XcodeStatus = typeof XcodeStatus.Type;
+/** Inventory is sent initially and after completion, not alongside each download tick. */
+export const XcodeUpdate = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("status"), status: XcodeStatus }),
+  Schema.Struct({ kind: Schema.Literal("job"), job: Schema.NullOr(XcodeJob) }),
+]);
+export type XcodeUpdate = typeof XcodeUpdate.Type;
 export const XcodeInstallInput = Schema.Struct({
   ...AppleEnvironmentAccountInput.fields,
   versionId: TrimmedNonEmptyString,
   platforms: Schema.Array(XcodePlatform),
 });
-export const XcodeJobInput = Schema.Struct({ jobId: Schema.String });
-export const XcodeSelectInput = Schema.Struct({ path: TrimmedNonEmptyString });
+export const XcodeJobInput = Schema.Struct({
+  ...AppleEnvironmentAccountInput.fields,
+  jobId: Schema.String,
+});
+export const XcodeSelectInput = Schema.Struct({
+  ...AppleEnvironmentAccountInput.fields,
+  path: TrimmedNonEmptyString,
+});
 export const XcodeRuntimesInput = Schema.Struct({
   ...XcodeSelectInput.fields,
   platforms: Schema.Array(XcodePlatform),
@@ -143,12 +155,16 @@ export const XCODE_WS_METHODS = {
   installRuntimes: "xcode.installRuntimes",
   approve: "xcode.approve",
 } as const;
-const error = Schema.Union([XcodeError, EnvironmentAuthorizationError]);
+const error = Schema.Union([XcodeError, AppleError, EnvironmentAuthorizationError]);
 export const XcodeRpcs = RpcGroup.make(
-  Rpc.make(XCODE_WS_METHODS.status, { payload: Schema.Struct({}), success: XcodeStatus, error }),
-  Rpc.make(XCODE_WS_METHODS.subscribe, {
-    payload: Schema.Struct({}),
+  Rpc.make(XCODE_WS_METHODS.status, {
+    payload: AppleEnvironmentAccountInput,
     success: XcodeStatus,
+    error,
+  }),
+  Rpc.make(XCODE_WS_METHODS.subscribe, {
+    payload: AppleEnvironmentAccountInput,
+    success: XcodeUpdate,
     error,
     stream: true,
   }),

@@ -9,6 +9,8 @@ import { AppleRuntime } from "./AppleRuntime.ts";
 import { makeAppleRpcHandlers } from "./appleRpc.ts";
 import type { AppleIdProtocol, AppleAuthenticated } from "./AppleIdProtocol.ts";
 import type { AppleSessionBackend, AppleSessionMetadata } from "@spiritdevs/backend/appleSession";
+import { AppleError, type AppleIdSessionState } from "@spiritdevs/contracts/apple";
+import type { AppleBackend } from "./AppleRuntime.ts";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { AuthOrchestrationReadScope, AuthOrchestrationOperateScope } from "@spiritdevs/contracts";
 const target = {
@@ -90,6 +92,22 @@ function harness() {
     },
   };
 }
+const makeRuntime = (authorizeCaller: AppleBackend["authorizeCaller"] = async () => null) => {
+  const unused = async (): Promise<never> => {
+    throw new Error("Unused ASC path");
+  };
+  return new AppleRuntime({
+    environmentId: "test",
+    backend: {
+      authorizeCaller,
+      accountStatus: unused,
+      status: unused,
+      heartbeat: unused,
+      credential: unused,
+      health: unused,
+    },
+  });
+};
 afterEach(() => vi.useRealTimers());
 describe("Apple ID sessions", () => {
   it("fans out 2FA to every watcher, seals cookies only, and restores without a password", async () => {
@@ -200,23 +218,7 @@ describe("Apple ID sessions", () => {
   effectIt.effect("streams live challenges through the actual RPC to two clients", () =>
     Effect.gen(function* () {
       const h = harness();
-      const runtime = new AppleRuntime({
-        environmentId: "test",
-        backend: {
-          authorizeCaller: async () => null,
-          accountStatus: async () => ({}),
-          status: async () => {
-            throw new Error("unused");
-          },
-          heartbeat: async () => {
-            throw new Error("unused");
-          },
-          credential: async () => {
-            throw new Error("unused");
-          },
-          health: async () => undefined,
-        },
-      });
+      const runtime = makeRuntime();
       const rpc = makeAppleRpcHandlers(
         runtime,
         [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
@@ -244,6 +246,110 @@ describe("Apple ID sessions", () => {
           expect(yield* Fiber.join(a)).toEqual(yield* Fiber.join(b));
         }),
       );
+      h.sessions.dispose();
+      runtime.dispose();
+    }),
+  );
+  it("accepts only one of two concurrent challenge submissions", async () => {
+    const h = harness();
+    const entered = receipt<void>();
+    const release = receipt<void>();
+    h.protocol.complete = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+      return authenticated;
+    });
+    const state = await h.sessions.start(target, "SECRET");
+    if (state.state !== "challenge") throw new Error("Expected challenge");
+    const first = h.sessions.complete(target, state.flowId, "123456");
+    await entered.promise;
+    await expect(h.sessions.complete(target, state.flowId, "123456")).rejects.toMatchObject({
+      code: "request-failed",
+    });
+    expect(h.protocol.complete).toHaveBeenCalledOnce();
+    release.resolve();
+    expect(await first).toMatchObject({ state: "authenticated" });
+    h.sessions.dispose();
+  });
+  effectIt.effect(
+    "denies all Apple ID mutations before reading or changing the account session",
+    () =>
+      Effect.gen(function* () {
+        const h = harness();
+        const authorize = vi.fn<AppleBackend["authorizeCaller"]>(async () => {
+          throw new AppleError({
+            code: "forbidden",
+            message: "Account denied",
+            retryAfterSeconds: null,
+          });
+        });
+        const runtime = makeRuntime(authorize);
+        const rpc = makeAppleRpcHandlers(
+          runtime,
+          [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+          h.sessions,
+          Effect.succeed({ userId: "not-owner" }),
+        );
+        const calls = [
+          rpc["apple.id.start"]({ ...target, password: "SECRET" }),
+          rpc["apple.id.complete"]({ ...target, flowId: "flow", code: "123456" }),
+          rpc["apple.id.requestCode"]({ ...target, flowId: "flow", phoneNumberId: 1 }),
+          rpc["apple.id.cancel"]({ ...target, flowId: "flow" }),
+          rpc["apple.id.signOut"](target),
+        ];
+        for (const call of calls)
+          expect(yield* Effect.result(call)).toMatchObject({
+            _tag: "Failure",
+            failure: { code: "forbidden" },
+          });
+        expect(h.backend.status).not.toHaveBeenCalled();
+        expect(h.protocol.start).not.toHaveBeenCalled();
+        expect(h.backend.save).not.toHaveBeenCalled();
+        for (const [input] of authorize.mock.calls)
+          expect(input).toEqual({ ...target, caller: { userId: "not-owner" }, manage: true });
+        h.sessions.dispose();
+        runtime.dispose();
+      }),
+  );
+  effectIt.effect("closes a live 2FA subscription before emitting after access is revoked", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const authorize = vi.fn<AppleBackend["authorizeCaller"]>(async () => null);
+      const runtime = makeRuntime(authorize);
+      const rpc = makeAppleRpcHandlers(
+        runtime,
+        [AuthOrchestrationReadScope],
+        h.sessions,
+        Effect.succeed({ clerkSubject: "owner" }),
+      );
+      const ready = receipt<void>();
+      const values: (typeof AppleIdSessionState.Type)[] = [];
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(
+            Stream.runForEach(rpc["apple.id.subscribe"](target), (s) =>
+              Effect.sync(() => {
+                values.push(s);
+                ready.resolve();
+              }),
+            ).pipe(Effect.result),
+          );
+          yield* Effect.promise(() => ready.promise);
+          authorize.mockRejectedValue(
+            new AppleError({
+              code: "forbidden",
+              message: "Access revoked",
+              retryAfterSeconds: null,
+            }),
+          );
+          yield* Effect.promise(() => h.sessions.start(target, "SECRET"));
+          expect(yield* Fiber.join(fiber)).toMatchObject({
+            _tag: "Failure",
+            failure: { code: "forbidden" },
+          });
+        }),
+      );
+      expect(values.every((s) => s.state === "signed-out")).toBe(true);
       h.sessions.dispose();
       runtime.dispose();
     }),
