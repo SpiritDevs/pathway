@@ -38,6 +38,13 @@ export function createDeviceEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    /** Installs the server's pinned helpers on one host; clients fan out across environments. */
+    updateTools: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:device:update-tools",
+      tag: WS_METHODS.deviceUpdateTools,
+      scheduler,
+      concurrency,
+    }),
     open: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:device:open",
       tag: WS_METHODS.deviceOpen,

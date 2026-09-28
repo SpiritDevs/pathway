@@ -4,6 +4,7 @@ import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { deviceEnvironment, useDeviceState } from "~/state/device";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { DeviceHostsSettings } from "./DeviceHostsSettings";
+import { DeviceToolSyncSettings } from "./DeviceToolSyncSettings";
 import { SettingsSection, SettingsRow } from "./settingsLayout";
 import { Switch } from "../ui/switch";
 import { Button } from "../ui/button";
@@ -24,6 +25,7 @@ export function DeviceSettings() {
     environment.serverConfig?.deviceWorkspace === true;
   return (
     <SettingsSection title="Devices">
+      <DeviceToolSyncSettings />
       <label className="mb-4 flex items-center gap-3 text-sm">
         Environment
         <select

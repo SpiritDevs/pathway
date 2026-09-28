@@ -749,6 +749,12 @@ export const SETTINGS_SEARCH_ITEMS = [
   { id: "agent-device-access", title: "Agent device access", to: "/settings/integrations" },
   { id: "device-hosts", title: "Remote device hosts", to: "/settings/integrations" },
   {
+    id: "device-tool-sync",
+    title: "Device tool versions across environments",
+    to: "/settings/integrations",
+    searchTerms: ["xcode", "sdk", "runtime", "device hub", "agent-device", "drift", "update all"],
+  },
+  {
     id: "slack-bot-token",
     title: "Slack bot token",
     to: "/settings/integrations",
