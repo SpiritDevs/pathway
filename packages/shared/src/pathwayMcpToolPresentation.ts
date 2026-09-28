@@ -72,6 +72,7 @@ const PATHWAY_MCP_TOOL_DISPLAY_NAMES: Record<string, string> = {
   issues_cycle_create: "Create a Pathway cycle",
   issues_cycle_update: "Update a Pathway cycle",
   issues_cycle_delete: "Delete a Pathway cycle",
+  issues_members_list: "List Pathway members",
   issues_labels_list: "List Pathway labels",
   issues_label_create: "Create a Pathway label",
   issues_label_update: "Update a Pathway label",

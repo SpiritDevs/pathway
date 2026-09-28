@@ -51,6 +51,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import {
+  type IssueCompanyMember,
   IssueTrackerService,
   type IssueTrackerServiceShape,
 } from "../../../issues/IssueTrackerService.ts";
@@ -135,15 +136,22 @@ export const normalizeIssueKey = (raw: string): string => raw.trim().toUpperCase
 
 const normalizeName = (raw: string): string => raw.trim().toLowerCase();
 
-/** How an actor reads in a tool result: `user`, `member:<id>`, `agent:codex`, `system:import`. */
-export const formatIssueActor = (actor: IssueActor | null): string | null => {
+/**
+ * How an actor reads in a tool result: `user`, `member:<id> (Ada Lovelace)`, `agent:codex`,
+ * `system:import`. The name rides along so a person can be recognised; the id is what stays exact.
+ */
+export const formatIssueActor = (
+  actor: IssueActor | null,
+  members?: Pick<TrackerIndex, "memberById">,
+): string | null => {
   if (actor === null) return null;
   switch (actor.kind) {
     case "user":
       return "user";
-    // The membership id is the only identity a member carries; there is no name to print yet.
-    case "member":
-      return `member:${actor.membershipId}`;
+    case "member": {
+      const name = members?.memberById.get(actor.membershipId)?.displayName;
+      return name ? `member:${actor.membershipId} (${name})` : `member:${actor.membershipId}`;
+    }
     case "agent":
       return `agent:${actor.provider}`;
     case "system":
@@ -182,7 +190,8 @@ export const parseIssueAssignee = (
     return { kind: "agent", provider: self };
   }
   if (lowered.startsWith("member:")) {
-    const membershipId = token.slice("member:".length).trim();
+    // Results print `member:<id> (Name)`; reading one back takes just the id.
+    const membershipId = token.slice("member:".length).trim().split(/\s/)[0] ?? "";
     return membershipId.length === 0
       ? undefined
       : { kind: "member", membershipId: MembershipId.make(membershipId) };
@@ -209,11 +218,13 @@ interface TrackerIndex {
   readonly cycles: ReadonlyArray<IssueCycle>;
   readonly projects: ReadonlyArray<ProjectionProject>;
   readonly projectById: ReadonlyMap<string, ProjectionProject>;
+  readonly memberById: ReadonlyMap<string, IssueCompanyMember>;
 }
 
 const buildIndex = (
   snapshot: IssuesSnapshot,
   projects: ReadonlyArray<ProjectionProject>,
+  members: ReadonlyArray<IssueCompanyMember> = [],
 ): TrackerIndex => {
   const issuesByKey = new Map<string, Issue>();
   const issuesById = new Map<IssueId, Issue>();
@@ -241,6 +252,7 @@ const buildIndex = (
     cycles: snapshot.cycles,
     projects: projects.filter((project) => project.deletedAt === null),
     projectById: new Map(projects.map((project) => [project.projectId, project])),
+    memberById: new Map(members.map((member) => [member.membershipId, member])),
   };
 };
 
@@ -251,7 +263,8 @@ const readIndex = Effect.fn("issues_mcp.readIndex")(function* () {
   const projects = yield* projectRepository
     .listAll()
     .pipe(Effect.mapError(() => storage("Failed to read the project list.")));
-  return buildIndex(snapshot, projects);
+  const members = yield* tracker.companyMembers;
+  return buildIndex(snapshot, projects, members);
 });
 
 /** The agent behind this MCP credential, as the tracker records it. */
@@ -388,19 +401,66 @@ const resolveCycle = (
       );
 };
 
+/** How a member reads in a hint: enough to pick the right person and copy their assignee. */
+const describeMember = (member: IssueCompanyMember): string =>
+  `${member.displayName} <${member.email}> → "member:${member.membershipId}"`;
+
+const activeMembersHint = (members: ReadonlyArray<IssueCompanyMember>): string => {
+  const active = members.filter((member) => member.active);
+  return active.length === 0
+    ? "This company has no active members to choose from."
+    : `Active members: ${active.map(describeMember).join("; ")}.`;
+};
+
+/**
+ * A person's name or email, matched case-insensitively against active members. People say
+ * "assign it to Corey", never a membership id, so a unique first name is enough.
+ */
+const matchMembersByName = (
+  members: ReadonlyArray<IssueCompanyMember>,
+  raw: string,
+): ReadonlyArray<IssueCompanyMember> => {
+  const wanted = normalizeName(raw);
+  const active = members.filter((member) => member.active);
+  const exact = active.filter(
+    (member) =>
+      normalizeName(member.displayName) === wanted || normalizeName(member.email) === wanted,
+  );
+  if (exact.length > 0) return exact;
+  return active.filter((member) => normalizeName(member.displayName).split(/\s+/).includes(wanted));
+};
+
 export const resolveIssueAssignee = (
   tracker: Pick<
     IssueTrackerServiceShape,
-    "replicaRoutable" | "linkedMemberActor" | "activeMemberActor"
+    "replicaRoutable" | "linkedMemberActor" | "activeMemberActor" | "companyMembers"
   >,
   value: string,
   self: ProviderDriverKind,
 ): Effect.Effect<IssueAssignee | null, IssueTrackerError> =>
   Effect.gen(function* () {
     const parsed = parseIssueAssignee(value, self);
+    // Any slug parses as a provider, so a bare word like "corey" is a person first when it names
+    // one; `agent:<driver>` and the keywords stay unambiguous.
+    const bareWord =
+      parsed === undefined ||
+      (parsed?.kind === "agent" && !/^(agent|self|you)(:|$)/i.test(value.trim()));
+    const members =
+      bareWord && (yield* tracker.replicaRoutable) ? yield* tracker.companyMembers : [];
+    const matches = bareWord ? matchMembersByName(members, value) : [];
+    const [only] = matches;
+    if (matches.length === 1 && only !== undefined) {
+      return { kind: "member", membershipId: MembershipId.make(only.membershipId) };
+    }
+    if (matches.length > 1) {
+      return yield* invalid(
+        `"${value.trim()}" matches more than one member: ${matches.map(describeMember).join("; ")}. Pass the full name, the email, or the member:<id>.`,
+        value.trim(),
+      );
+    }
     if (parsed === undefined) {
       return yield* invalid(
-        `Cannot read "${value.trim()}" as an assignee. Use "user" for the bound company member, "member:<membership-id>" for an explicit member, "agent" for yourself, "agent:<driver>" for another provider such as "agent:codex", or "none" to leave it unassigned.`,
+        `Cannot read "${value.trim()}" as an assignee. Use a member's name or email, "user" for the bound company member, "member:<membership-id>", "agent" for yourself, "agent:<driver>" for another provider such as "agent:codex", or "none" to leave it unassigned.${members.length === 0 ? "" : ` ${activeMembersHint(members)}`}`,
         value.trim(),
       );
     }
@@ -408,21 +468,17 @@ export const resolveIssueAssignee = (
     if (!(yield* tracker.replicaRoutable)) return parsed;
     if (parsed.kind === "member") {
       const active = yield* tracker.activeMemberActor(parsed.membershipId);
-      return (
-        active ??
-        (yield* invalid(
-          `No active company member has membership id "${parsed.membershipId}".`,
-          value.trim(),
-        ))
+      if (active !== null) return active;
+      return yield* invalid(
+        `No active company member has membership id "${parsed.membershipId}". ${activeMembersHint(yield* tracker.companyMembers)}`,
+        value.trim(),
       );
     }
     const member = yield* tracker.linkedMemberActor;
-    return (
-      member ??
-      (yield* invalid(
-        'This environment has no active bound company membership. Pass an explicit "member:<membership-id>" assignee.',
-        value.trim(),
-      ))
+    if (member !== null) return member;
+    return yield* invalid(
+      `This environment has no active bound company membership, so "${value.trim()}" names nobody. Pass a member's name or email instead. ${activeMembersHint(yield* tracker.companyMembers)}`,
+      value.trim(),
     );
   });
 
@@ -466,6 +522,7 @@ const labelNamesOf = (index: TrackerIndex, issue: Issue): ReadonlyArray<string> 
 
 const formatIssueAttachments = (
   comments: IssueDetail["comments"],
+  members?: Pick<TrackerIndex, "memberById">,
 ): ReadonlyArray<IssuesMcpAttachment> => {
   const seen = new Set<string>();
   const attachments: Array<IssuesMcpAttachment> = [];
@@ -476,7 +533,7 @@ const formatIssueAttachments = (
       attachments.push({
         attachmentId,
         commentNumber: commentIndex + 1,
-        author: formatIssueActor(comment.author) ?? "unknown",
+        author: formatIssueActor(comment.author, members) ?? "unknown",
         commentBody: comment.body,
         commentCreatedAt: comment.createdAt,
       });
@@ -485,8 +542,11 @@ const formatIssueAttachments = (
   return attachments;
 };
 
-const formatMcpComment = (comment: IssueDetail["comments"][number]) => ({
-  author: formatIssueActor(comment.author) ?? "unknown",
+const formatMcpComment = (
+  comment: IssueDetail["comments"][number],
+  members?: Pick<TrackerIndex, "memberById">,
+) => ({
+  author: formatIssueActor(comment.author, members) ?? "unknown",
   body: comment.body,
   attachmentIds: comment.attachmentIds,
   createdAt: comment.createdAt,
@@ -511,7 +571,7 @@ export const formatIssueRow = (index: TrackerIndex, issue: Issue): IssuesMcpRow 
     status: status?.name ?? "unknown",
     statusCategory: status?.category ?? "backlog",
     priority: issue.priority,
-    assignee: formatIssueActor(issue.assignee),
+    assignee: formatIssueActor(issue.assignee, index),
     project: project?.title ?? null,
     parentKey: parent?.key ?? null,
     dueDate: issue.dueDate,
@@ -568,8 +628,8 @@ const formatIssueDetail = (
       .map((child) => child.key),
     todos: detail.todos.map((todo) => ({ text: todo.text, done: todo.done })),
     relations: formatRelations(index, detail.relations),
-    comments: detail.comments.map(formatMcpComment),
-    attachments: formatIssueAttachments(detail.comments),
+    comments: detail.comments.map((comment) => formatMcpComment(comment, index)),
+    attachments: formatIssueAttachments(detail.comments, index),
     threads: threads.map((link) => ({
       threadId: link.threadId,
       origin: link.origin,
@@ -848,7 +908,7 @@ const handlers = {
       const issue = yield* resolveIssue(index, input.key);
       const detail = yield* tracker.getDetail({ issueId: issue.id });
       const attachmentId = input.attachmentId.trim();
-      const attachment = formatIssueAttachments(detail.comments).find(
+      const attachment = formatIssueAttachments(detail.comments, index).find(
         (candidate) => candidate.attachmentId === attachmentId,
       );
       if (attachment === undefined) {
@@ -1293,7 +1353,10 @@ const handlers = {
       const detail = yield* tracker.getDetail({ issueId: issue.id });
       const comment = yield* numbered(detail.comments, input.comment, "comment", issue.key);
       const remaining = yield* tracker.commentDelete({ commentId: comment.id }, actor);
-      return { key: issue.key, comments: remaining.comments.map(formatMcpComment) };
+      return {
+        key: issue.key,
+        comments: remaining.comments.map((comment) => formatMcpComment(comment)),
+      };
     }).pipe(withinPinnedRoute),
 
   issues_todo_create: (input) =>
@@ -1417,7 +1480,8 @@ const handlers = {
   issues_history: (input) =>
     Effect.gen(function* () {
       const tracker = yield* IssueTrackerService;
-      const issue = yield* resolveIssue(yield* readIndex(), input.key);
+      const index = yield* readIndex();
+      const issue = yield* resolveIssue(index, input.key);
       const { events } = yield* tracker.getEvents({ issueId: issue.id });
       return {
         key: issue.key,
@@ -1425,7 +1489,7 @@ const handlers = {
           .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
           .map((event) => ({
             at: event.createdAt,
-            actor: formatIssueActor(event.actor),
+            actor: formatIssueActor(event.actor, index),
             kind: event.kind,
             field: event.field,
             before: event.before,
@@ -1557,6 +1621,21 @@ const handlers = {
       const milestone = yield* resolveMilestone(index, input.milestone, project.projectId);
       const history = yield* tracker.milestoneHistory({ milestoneId: milestone.id });
       return { milestone: milestone.name, ...history };
+    }).pipe(withinPinnedRoute),
+
+  issues_members_list: () =>
+    Effect.gen(function* () {
+      const index = yield* readIndex();
+      return {
+        members: [...index.memberById.values()]
+          .filter((member) => member.active)
+          .sort((left, right) => left.displayName.localeCompare(right.displayName))
+          .map((member) => ({
+            name: member.displayName,
+            email: member.email,
+            assignee: `member:${member.membershipId}`,
+          })),
+      };
     }).pipe(withinPinnedRoute),
 
   issues_labels_list: () =>

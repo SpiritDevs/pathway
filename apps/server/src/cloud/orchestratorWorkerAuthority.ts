@@ -40,6 +40,7 @@ const ISSUES_READ_TOOL_NAMES = new Set([
   "issues_milestones_list",
   "issues_milestone_history",
   "issues_cycles_list",
+  "issues_members_list",
   "issues_labels_list",
   "issues_statuses_list",
 ]);

@@ -69,6 +69,7 @@ it("marks the read tools read-only and the delete destructive", () => {
     "issues_milestones_list",
     "issues_milestone_history",
     "issues_cycles_list",
+    "issues_members_list",
     "issues_labels_list",
     "issues_statuses_list",
   ] as const) {
