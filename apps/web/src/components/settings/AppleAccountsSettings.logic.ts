@@ -106,7 +106,8 @@ export const APPLE_CONFLICT_MESSAGE =
 
 /**
  * `conflictMessage` replaces the server's text for stale-revision conflicts. Omit it where
- * `entity-conflict` carries a specific reason, such as a duplicate Apple ID or linked projects.
+ * `entity-conflict` carries a specific reason, such as a duplicate Apple ID. Linked projects
+ * arrive as `apple-account-linked-projects` and keep the server's text.
  */
 export function describeAppleError(
   error: unknown,

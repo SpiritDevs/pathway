@@ -84,12 +84,20 @@ describe("describeAppleError", () => {
   it("uses the stale-revision message only when the caller asks for it", () => {
     const conflict = new ConvexError({
       code: "entity-conflict",
-      message: "Unlink projects before changing this Apple account's scope.",
+      message: "An Apple account with this email already exists here.",
     });
     expect(
       describeAppleError(conflict, { fallback: "x", conflictMessage: APPLE_CONFLICT_MESSAGE }),
     ).toEqual({ code: "entity-conflict", message: APPLE_CONFLICT_MESSAGE });
-    expect(describeAppleError(conflict, { fallback: "x" }).message).toMatch(/^Unlink projects/);
+    expect(describeAppleError(conflict, { fallback: "x" }).message).toMatch(/already exists/);
+    const linked = new ConvexError({
+      code: "apple-account-linked-projects",
+      message: "Unlink projects before changing this Apple account's scope.",
+    });
+    expect(
+      describeAppleError(linked, { fallback: "x", conflictMessage: APPLE_CONFLICT_MESSAGE })
+        .message,
+    ).toMatch(/^Unlink projects/);
   });
 
   it("keeps server messages for other codes and falls back for unknown errors", () => {
