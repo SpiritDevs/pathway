@@ -20,17 +20,36 @@ export {
   type IssueDetailProjection,
 } from "@spiritdevs/backend/sync/issueLegacyProjection";
 
-/** Builds the exact legacy list-store surface while retaining stream-owned local configuration. */
+/**
+ * Builds the exact legacy list-store surface while retaining stream-owned local configuration.
+ *
+ * An archived project takes its tasks and milestones out of the tracker with it: they stay in the
+ * replica untouched, so restoring the project brings every one of them back as it was.
+ */
 export function issuesStoreFromReplica(
   readModel: SyncedIssueDomainReadModel,
   legacyStore: IssuesStore,
 ): IssuesStore {
   const projected: IssueCollectionProjection = issueCollectionProjectionFromReplica(readModel);
+  const archivedProjectIds = new Set<string>(
+    readModel.cloudProjects
+      .filter((project) => project.archivedAt !== null)
+      .map((project) => project.id),
+  );
+  const archived = (projectId: string | null) =>
+    projectId !== null && archivedProjectIds.has(projectId);
   return {
-    issuesById: new Map(projected.issues.map((issue) => [issue.id, issue])),
+    issuesById: new Map(
+      projected.issues
+        .filter((issue) => !archived(issue.projectId))
+        .map((issue) => [issue.id, issue]),
+    ),
     statuses: projected.statuses,
     labels: projected.labels,
-    milestones: projected.milestones,
+    milestones:
+      archivedProjectIds.size === 0
+        ? projected.milestones
+        : projected.milestones.filter((milestone) => !archived(milestone.projectId)),
     cycles: projected.cycles,
     views: projected.views,
     config: legacyStore.config,

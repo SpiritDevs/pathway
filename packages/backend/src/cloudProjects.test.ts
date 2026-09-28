@@ -1804,3 +1804,37 @@ describe("thread alert policy cleanup", () => {
     },
   );
 });
+
+describe("project archiving", () => {
+  it("archives and restores a company project, and a republish does not undo the archive", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    await registerEnvironment(t, ids.companyId);
+
+    await asOwner(t).mutation(api.cloudProjects.setCompanyProjectArchived, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PROJECT_ID,
+      archived: true,
+    });
+    const archivedAt = (await t.run(async (ctx) => ctx.db.get(ids.projectId)))?.archivedAt;
+    expect(archivedAt).not.toBeNull();
+
+    await asOwner(t).mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: LOCAL_PROJECT_ID,
+      localWorkspaceRoot: "/work/pathway",
+      name: "Pathway renamed",
+    });
+    const republished = await t.run(async (ctx) => ctx.db.get(ids.projectId));
+    expect(republished?.name).toBe("Pathway renamed");
+    expect(republished?.archivedAt).toBe(archivedAt);
+
+    await asOwner(t).mutation(api.cloudProjects.setCompanyProjectArchived, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PROJECT_ID,
+      archived: false,
+    });
+    expect((await t.run(async (ctx) => ctx.db.get(ids.projectId)))?.archivedAt).toBeNull();
+  });
+});

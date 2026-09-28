@@ -226,6 +226,14 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
     },
     null
   >("cloudProjects:releaseEnvironmentProject"),
+  setCompanyProjectArchived: mutationReference<
+    {
+      readonly companyId: CompanyId;
+      readonly cloudProjectId: string;
+      readonly archived: boolean;
+    },
+    null
+  >("cloudProjects:setCompanyProjectArchived"),
   deleteCompanyProject: mutationReference<
     {
       readonly companyId: CompanyId;
@@ -395,6 +403,12 @@ export interface EnvironmentControlClient {
     readonly companyId: CompanyId;
     readonly environmentId: EnvironmentId;
     readonly localProjectId: string;
+  }) => Promise<void>;
+  /** Archiving takes the project and its tasks out of the tracker; restoring brings them back. */
+  readonly setCompanyProjectArchived: (args: {
+    readonly companyId: CompanyId;
+    readonly cloudProjectId: string;
+    readonly archived: boolean;
   }) => Promise<void>;
   /** Resolves `deleted: false` when this company had no live project with that id to remove. */
   readonly deleteCompanyProject: (args: {
@@ -613,6 +627,8 @@ export function makeEnvironmentControlClient(options: {
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.setPreferredEnvironmentBinding, args),
     releaseEnvironmentProject: (args) =>
       cloudProjectMutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.releaseEnvironmentProject, args),
+    setCompanyProjectArchived: (args) =>
+      cloudProjectMutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.setCompanyProjectArchived, args),
     deleteCompanyProject: (args) =>
       cloudProjectMutationResult<{ readonly deleted: boolean }>(
         ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.deleteCompanyProject,

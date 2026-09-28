@@ -111,6 +111,18 @@ describe("buildIssueProjectOptions", () => {
     expect(options[0]?.environmentProjects).toHaveLength(2);
   });
 
+  it("keeps an archived project on its checkout rather than splitting the checkout off", () => {
+    const options = buildIssueProjectOptions({
+      groups: [group("Pathway", "pathway-local", "pathway-local")],
+      cloudProjects: [{ ...cloudProject("pathway-local", "Pathway"), archivedAt: 1 }],
+      environmentBindings: [],
+    });
+
+    expect(options).toMatchObject([
+      { id: "pathway-local", isCompanyProject: true, archived: true },
+    ]);
+  });
+
   it("keeps a company project with no currently connected checkout", () => {
     const options = buildIssueProjectOptions({
       groups: [],

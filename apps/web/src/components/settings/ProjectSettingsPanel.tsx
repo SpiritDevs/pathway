@@ -100,6 +100,11 @@ import {
   markWorkspaceProjectRemovalPending,
 } from "../projects/projectRemovalState";
 import {
+  clearRemovedProjectDrafts,
+  companyProjectRemovalFailure,
+  removeCompanyProjectFromOwners,
+} from "../projects/projectRemoval";
+import {
   buildProjectConnectionCatalog,
   deriveProjectConnectionMetadata,
   type ProjectConnectionMetadata,
@@ -257,61 +262,6 @@ interface ProjectCompanyContext {
 
 function owningCompanyIds(workspaceProject: WorkspaceProject): ReadonlyArray<CompanyId> {
   return [...new Set(workspaceProject.companyIds)].map((companyId) => companyId as CompanyId);
-}
-
-/** What one "remove this project everywhere" attempt actually accomplished. */
-interface CompanyProjectRemoval {
-  /** How many owning workspaces reported that they removed a live project. */
-  readonly removed: number;
-  /** One message per workspace whose delete threw, in the order they were asked. */
-  readonly failures: ReadonlyArray<string>;
-}
-
-/**
- * Deletes one cloud project from every workspace listed as an owner.
- *
- * Two rules matter here, and both come from the same failure: a project that stayed on screen
- * after the user removed it.
- *
- * Every owner is asked even after one of them fails. Stopping at the first error is what leaves a
- * project deleted in the workspaces asked before it and alive in the ones after it — and the one
- * still holding it is the one that keeps rendering it in the list.
- *
- * The count of *actual* removals is what the caller reports on, not the absence of an exception. A
- * workspace that has no live project with this id answers `deleted: false` rather than throwing,
- * because asking the wrong owner is a normal part of this loop; treating that quiet answer as
- * success is what let the UI navigate away from a project it had not removed.
- */
-async function removeCompanyProjectFromOwners(input: {
-  readonly environmentControl: EnvironmentControlClient;
-  readonly companyIds: ReadonlyArray<CompanyId>;
-  readonly cloudProjectId: string;
-}): Promise<CompanyProjectRemoval> {
-  let removed = 0;
-  const failures: string[] = [];
-  for (const companyId of input.companyIds) {
-    try {
-      const result = await input.environmentControl.deleteCompanyProject({
-        companyId,
-        cloudProjectId: input.cloudProjectId,
-      });
-      if (result.deleted) removed += 1;
-    } catch (error) {
-      failures.push(
-        error instanceof Error ? error.message : "The cloud project could not be removed.",
-      );
-    }
-  }
-  return { removed, failures };
-}
-
-/** The message for a removal that finished without deleting the project the user was looking at. */
-function companyProjectRemovalFailure(removal: CompanyProjectRemoval): string | null {
-  if (removal.failures.length > 0) return removal.failures[0]!;
-  if (removal.removed === 0) {
-    return "No workspace you can manage still owns this project. Reload to refresh the list.";
-  }
-  return null;
 }
 
 /** The company-owned settings that still apply when no environment has a local checkout. */
@@ -1011,26 +961,7 @@ export function ProjectDetail({
       );
       if (confirmed._tag === "Failure" || !confirmed.value) return;
 
-      const draftStore = useComposerDraftStore.getState();
-      const clearMemberDrafts = () => {
-        for (const member of members) {
-          const projectRef = scopeProjectRef(member.environmentId, member.id);
-          releaseProjectDraftUploads(
-            projectRef,
-            projectThreads
-              .filter(
-                (thread) =>
-                  thread.environmentId === member.environmentId && thread.projectId === member.id,
-              )
-              .map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
-          );
-          const projectDraftThread = draftStore.getDraftThreadByProjectRef(projectRef);
-          if (projectDraftThread) {
-            draftStore.clearDraftThread(projectDraftThread.draftId);
-          }
-          draftStore.clearProjectDraftThreadId(projectRef);
-        }
-      };
+      const clearMemberDrafts = () => clearRemovedProjectDrafts(members, projectThreads);
 
       if (workspaceProject?.cloudProjectId != null) {
         const companyIds = owningCompanyIds(workspaceProject);

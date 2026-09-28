@@ -169,6 +169,43 @@ const LEGACY_STORE: IssuesStore = {
 };
 
 describe("issuesStoreFromReplica", () => {
+  it("leaves an archived project's tasks and milestones out of the tracker", () => {
+    const project = (id: string, archivedAt: number | null) =>
+      decoded("cloudProject", {
+        id,
+        name: id,
+        description: "",
+        teamIds: [],
+        defaultWorkflowOwner: null,
+        preferredBindingId: null,
+        archivedAt,
+        createdAt: JAN_1,
+        updatedAt: JAN_1,
+      });
+    const readModel = syncedIssueDomainFromReplica(
+      replica(
+        project("project-live", null),
+        project("project-archived", JAN_2),
+        issue({ id: "live", key: "P-1", keyNumber: 1, statusId: "s", projectId: "project-live" }),
+        issue({
+          id: "archived",
+          key: "P-2",
+          keyNumber: 2,
+          statusId: "s",
+          projectId: "project-archived",
+        }),
+        issue({ id: "loose", key: "P-3", keyNumber: 3, statusId: "s" }),
+        milestone("milestone-live", "project-live", 0),
+        milestone("milestone-archived", "project-archived", 0),
+      ),
+    );
+
+    const projected = issuesStoreFromReplica(readModel, LEGACY_STORE);
+
+    expect([...projected.issuesById.keys()]).toEqual(["live", "loose"]);
+    expect(projected.milestones.map(({ id }) => id)).toEqual(["milestone-live"]);
+  });
+
   it("merges every team workflow into the flat status catalog", () => {
     const readModel = syncedIssueDomainFromReplica(
       replica(
