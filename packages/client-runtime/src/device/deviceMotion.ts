@@ -24,6 +24,11 @@ const damping = 0.78;
 const frequency = (2 * Math.PI) / response;
 const decay = frequency * damping;
 const stepSeconds = 1 / 120;
+// Fast releases combine exponential friction with a critically damped correction.
+const flickThreshold = 4.5;
+const flickLimit = 22;
+const spinDecay = 1.1;
+const settleFrequency = 2;
 
 /** A moving spring target follows cumulative camera-space gestures; release latches the nearest useful view. */
 export function createDeviceMotion(options: { choose: (rotation: Quaternion) => Quaternion }) {
@@ -32,6 +37,8 @@ export function createDeviceMotion(options: { choose: (rotation: Quaternion) => 
   const velocity = new Vector3();
   const gestureVelocity = new Vector3();
   let spring: { at: number; rotation: Quaternion; velocity: Vector3; steps: number } | null = null;
+  let spin: { at: number; rotation: Quaternion; velocity: Vector3; correction: Vector3 } | null =
+    null;
   let drag: {
     start: Quaternion;
     rest: Quaternion;
@@ -40,7 +47,6 @@ export function createDeviceMotion(options: { choose: (rotation: Quaternion) => 
     error: Vector3;
     at: number;
   } | null = null;
-  let pointer = false;
   let held = false;
   let interruptedDrag = false;
   let lastInput = -Infinity;
@@ -60,16 +66,54 @@ export function createDeviceMotion(options: { choose: (rotation: Quaternion) => 
     const prediction = target
       .clone()
       .premultiply(fromVector(gestureVelocity.clone().multiplyScalar(0.085)));
-    velocity.multiplyScalar(0.35).addScaledVector(gestureVelocity, 0.65).clampLength(0, 9);
+    velocity.multiplyScalar(0.2).addScaledVector(gestureVelocity, 0.8).clampLength(0, flickLimit);
     const moved = drag.x !== 0 || drag.y !== 0;
     const rest = drag.rest;
     drag = null;
+    if (moved && velocity.length() >= flickThreshold) {
+      // Choose where the free spin would finish, then correct toward that view
+      // throughout the coast rather than handing off to a spring at low speed.
+      const projected = rotation
+        .clone()
+        .premultiply(fromVector(velocity.clone().multiplyScalar(1 / spinDecay)));
+      target.copy(options.choose(projected)).normalize();
+      spin = {
+        at: now,
+        rotation: rotation.clone(),
+        velocity: velocity.clone(),
+        correction: rotationVector(target.clone().multiply(projected.invert())),
+      };
+      return;
+    }
     if (moved) beginSpring(options.choose(prediction), now);
     else beginSpring(rest, now);
   };
   const advance = (now: number, reduced = false) => {
     if (held || !Number.isFinite(now)) return false;
-    if (drag && !pointer && now >= lastInput + 140) release(lastInput + 140);
+    if (spin) {
+      const seconds = Math.max(0, (now - spin.at) / 1000);
+      const coast = Math.exp(-spinDecay * seconds);
+      const settle = Math.exp(-settleFrequency * seconds);
+      const correction = fromVector(
+        spin.correction.clone().multiplyScalar(1 - (1 + settleFrequency * seconds) * settle),
+      );
+      rotation
+        .copy(spin.rotation)
+        .premultiply(fromVector(spin.velocity.clone().multiplyScalar((1 - coast) / spinDecay)))
+        .premultiply(correction)
+        .normalize();
+      velocity
+        .copy(spin.velocity)
+        .multiplyScalar(coast)
+        .applyQuaternion(correction)
+        .addScaledVector(spin.correction, settleFrequency ** 2 * seconds * settle);
+      if (reduced || (rotation.angleTo(target) < 0.01 && velocity.length() < 0.08)) {
+        spin = null;
+        rotation.copy(target);
+        velocity.set(0, 0, 0);
+      }
+      return true;
+    }
     if (drag) {
       // Follow the target during the gesture. Retain the logarithm's winding so
       // a long drag cannot reverse its spring force when crossing a half turn.
@@ -93,7 +137,10 @@ export function createDeviceMotion(options: { choose: (rotation: Quaternion) => 
         velocity.addScaledVector(acceleration, dt).clampLength(0, 9);
         rotation.premultiply(fromVector(velocity.clone().multiplyScalar(dt))).normalize();
       }
-      if (reduced) rotation.copy(target);
+      if (reduced) {
+        rotation.copy(target);
+        velocity.set(0, 0, 0);
+      }
       return steps > 0 || reduced;
     }
     if (!spring) return false;
@@ -146,13 +193,14 @@ export function createDeviceMotion(options: { choose: (rotation: Quaternion) => 
     gestureVelocity.set(0, 0, 0);
     lastInput = -Infinity;
     spring = null;
+    spin = null;
   };
   return {
     rotation,
     setPose(next: Quaternion, now: number, immediate = false) {
       advance(now);
       drag = null;
-      pointer = false;
+      spin = null;
       beginSpring(next, now);
       if (immediate) {
         rotation.copy(target);
@@ -162,11 +210,16 @@ export function createDeviceMotion(options: { choose: (rotation: Quaternion) => 
     },
     dragActive(active: boolean, now: number) {
       if (active) {
+        // A pointer takes over at the displayed pose, even if a wheel gesture
+        // was paused with its target still ahead of the spring.
+        if (drag || spin) {
+          advance(now);
+          drag = null;
+          spin = null;
+        }
         beginDrag(now);
-        pointer = true;
       } else {
         advance(now);
-        pointer = false;
         release(now);
       }
     },
@@ -185,7 +238,8 @@ export function createDeviceMotion(options: { choose: (rotation: Quaternion) => 
         .normalize();
       const seconds = (now - lastInput) / 1000;
       gestureVelocity.copy(rotationVector(target.clone().multiply(previous.invert())));
-      if (seconds > 0 && seconds < 0.1) gestureVelocity.divideScalar(seconds).clampLength(0, 7.5);
+      if (seconds > 0 && seconds < 0.1)
+        gestureVelocity.divideScalar(seconds).clampLength(0, flickLimit);
       else gestureVelocity.set(0, 0, 0);
       lastInput = now;
     },
@@ -193,15 +247,15 @@ export function createDeviceMotion(options: { choose: (rotation: Quaternion) => 
     hold(active: boolean, now: number) {
       if (held === active) return;
       if (active) {
-        interruptedDrag = drag !== null;
+        interruptedDrag = drag !== null || spin !== null;
         drag = null;
-        pointer = false;
+        spin = null;
         spring = null;
         velocity.set(0, 0, 0);
       }
       held = active;
       if (!active) {
-        if (interruptedDrag) beginSpring(options.choose(target.clone()), now);
+        if (interruptedDrag) beginSpring(options.choose(rotation.clone()), now);
         else if (rotation.angleTo(target) > 0.0005) beginSpring(target, now);
         interruptedDrag = false;
       }
@@ -211,14 +265,14 @@ export function createDeviceMotion(options: { choose: (rotation: Quaternion) => 
       return (
         !held &&
         (spring !== null ||
-          (drag !== null &&
-            (!pointer || rotation.angleTo(target) > 0.0005 || velocity.length() > 0.005)))
+          spin !== null ||
+          (drag !== null && (rotation.angleTo(target) > 0.0005 || velocity.length() > 0.005)))
       );
     },
     reset(next: Quaternion, now: number) {
       advance(now);
       drag = null;
-      pointer = false;
+      spin = null;
       beginSpring(next, now);
     },
   };

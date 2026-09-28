@@ -1,4 +1,3 @@
-import { createProceduralDuo } from "./proceduralDuo.ts";
 // @effect-diagnostics globalTimers:off - Native display handoff has a bounded acknowledgement window.
 import {
   AmbientLight,
@@ -274,10 +273,7 @@ export function createDuoViewer(options: {
     }
   });
   const slot = createDeviceModelSlot({
-    load: (source, signal) =>
-      source.url === "procedural:duo"
-        ? Promise.resolve(createProceduralDuo())
-        : loadDeviceModel(source, signal),
+    load: loadDeviceModel,
     onError(cause) {
       options.onModelError?.(cause);
       options.onUnavailable();
@@ -473,10 +469,12 @@ export function createDuoViewer(options: {
       context.fillStyle = "#080a10";
       context.fillRect(0, 0, canvas.width, canvas.height);
       context.translate(canvas.width / 2, canvas.height / 2);
-      if (id === 3) context.rotate(Math.PI / 2);
+      // The inner panel is mounted a quarter turn from the native framebuffer.
+      const rotate = id === 3;
+      if (rotate) context.rotate(Math.PI / 2);
       const scale = Math.min(
-        canvas.width / (id === 3 ? source.height : source.width),
-        canvas.height / (id === 3 ? source.width : source.height),
+        canvas.width / (rotate ? source.height : source.width),
+        canvas.height / (rotate ? source.width : source.height),
       );
       context.drawImage(
         source,

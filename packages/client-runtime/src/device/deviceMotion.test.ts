@@ -66,6 +66,33 @@ it("selects the predicted nearest view once and preserves velocity when interrup
   expect(motion.needsFrame()).toBe(false);
 });
 
+it("lets a hard flick coast through multiple turns before settling on a visible view", () => {
+  const choose = vi.fn(() => new Quaternion());
+  const motion = createDeviceMotion({ choose });
+  motion.dragActive(true, 0);
+  motion.orbit(0, 80, 16);
+  motion.advance(16);
+  motion.orbit(0, 80, 32);
+  motion.advance(32);
+  motion.dragActive(false, 32);
+
+  let previous = motion.rotation.clone();
+  let travel = 0;
+  let lateSpeed = 0;
+  for (let time = 40; time <= 8500; time += 8) {
+    motion.advance(time);
+    const distance = motion.rotation.angleTo(previous);
+    travel += distance;
+    if (time >= 2500) lateSpeed = Math.max(lateSpeed, distance / 0.008);
+    previous = motion.rotation.clone();
+  }
+  expect(travel).toBeGreaterThan(4 * Math.PI);
+  expect(lateSpeed).toBeLessThan(2.5);
+  expect(choose).toHaveBeenCalledOnce();
+  expect(motion.rotation.angleTo(new Quaternion())).toBeLessThan(1e-6);
+  expect(motion.needsFrame()).toBe(false);
+});
+
 it("release uses elapsed time equally at different frame rates and a captured contact freezes projection", () => {
   const run = (step: number) => {
     const motion = createDeviceMotion({ choose: () => new Quaternion() });
@@ -92,7 +119,7 @@ it("release uses elapsed time equally at different frame rates and a captured co
   expect(fast.needsFrame()).toBe(false);
 });
 
-it("waits for trackpad quiet, handles reduced motion and invalid deltas, and settles without idle frames", () => {
+it("holds a trackpad orbit through a pause and snaps only when the gesture ends", () => {
   const choose = vi.fn(() => new Quaternion());
   const motion = createDeviceMotion({ choose });
   motion.orbit(NaN, 0, 0);
@@ -102,6 +129,17 @@ it("waits for trackpad quiet, handles reduced motion and invalid deltas, and set
   expect(choose).not.toHaveBeenCalled();
   expect(motion.rotation.angleTo(new Quaternion())).toBeGreaterThan(0);
   motion.advance(140, true);
+  expect(choose).not.toHaveBeenCalled();
+  const held = motion.rotation.clone();
+  expect(held.angleTo(new Quaternion())).toBeGreaterThan(0.5);
+  expect(motion.needsFrame()).toBe(false);
+  motion.orbit(80, 0, 200);
+  motion.advance(340, true);
+  expect(motion.rotation.angleTo(held)).toBeGreaterThan(0.1);
+  expect(choose).not.toHaveBeenCalled();
+  expect(motion.needsFrame()).toBe(false);
+  motion.dragActive(false, 340);
+  motion.advance(2500);
   expect(choose).toHaveBeenCalledOnce();
   expect(motion.rotation.angleTo(new Quaternion())).toBeLessThan(1e-6);
   expect(motion.needsFrame()).toBe(false);
