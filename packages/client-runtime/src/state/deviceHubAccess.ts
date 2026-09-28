@@ -37,6 +37,8 @@ export const resolveDeviceHubAccess = Effect.fn("clientRuntime.state.resolveDevi
       return { httpBase, wsBase, query: {}, credentials: true };
     }
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+    // TODO(integration): mint through the backend's final device-hub ticket API once it lands.
+    // Until then this reuses the session-bound `/ws` ticket, which the hub proxy accepts as `wsTicket`.
     const ticketUrl = environmentEndpointUrl(
       input.prepared.httpBaseUrl,
       "/api/auth/websocket-ticket",

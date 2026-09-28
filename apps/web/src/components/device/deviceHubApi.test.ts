@@ -5,19 +5,18 @@ describe("foreground app events", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("clears the last app when it exits and ignores malformed events", () => {
-    let listener: ((event: { data: string }) => void) | null = null;
-    const source = {
-      addEventListener(_type: string, callback: (event: { data: string }) => void) {
-        listener = callback;
-      },
-      close: vi.fn(),
-    };
-    vi.stubGlobal(
-      "EventSource",
-      vi.fn(function () {
-        return source;
-      }),
-    );
+    let source: FakeEventSource;
+    class FakeEventSource {
+      onmessage: ((event: { data: string }) => void) | null = null;
+      addEventListener(_type: string, listener: (event: { data: string }) => void) {
+        this.onmessage = listener;
+      }
+      close = vi.fn();
+      constructor() {
+        source = this;
+      }
+    }
+    vi.stubGlobal("EventSource", FakeEventSource);
     const onChange = vi.fn();
     const stop = subscribeDeviceForeground(
       {
@@ -27,7 +26,7 @@ describe("foreground app events", () => {
       },
       onChange,
     );
-    const emit = (data: unknown) => listener?.({ data: JSON.stringify(data) });
+    const emit = (data: unknown) => source.onmessage?.({ data: JSON.stringify(data) });
     emit({ bundleId: "com.example.app", pid: 123 });
     emit({ bundleId: null });
     emit({ bundleId: "com.example.other" });
@@ -40,6 +39,6 @@ describe("foreground app events", () => {
       null,
     ]);
     stop();
-    expect(source.close).toHaveBeenCalledOnce();
+    expect(source!.close).toHaveBeenCalledOnce();
   });
 });

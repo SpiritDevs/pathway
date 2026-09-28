@@ -33,8 +33,7 @@ export function DeviceDuoControls(props: {
               <TooltipTrigger
                 render={
                   <Button
-                    size="icon-sm"
-                    className="size-9 shrink-0 [--control-icon-color:currentColor] data-pressed:text-primary sm:size-9"
+                    size="icon"
                     variant={selected(pose.id) ? "secondary" : "ghost"}
                     disabled={!props.enabled}
                     aria-label={`${pose.label} stand`}
@@ -62,7 +61,7 @@ export function DeviceDuoControls(props: {
                 tabIndex={0}
                 role="alert"
                 aria-label={props.state.error}
-                className="text-xs text-destructive"
+                className="pointer-events-auto text-xs text-destructive"
               >
                 !
               </span>

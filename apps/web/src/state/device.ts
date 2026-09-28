@@ -58,6 +58,8 @@ const deviceHubAccessAtom = Atom.family((environmentId: EnvironmentId) =>
         get(environmentSession.preparedConnectionValueAtom(environmentId)),
       );
       if (prepared === null) return Effect.never;
+      // TODO(integration): take `hubBasePath` from the server's DeviceServiceState if the
+      // backend stops serving the hub at the fixed `/api/device-hub` path.
       return resolveDeviceHubAccess({ prepared, hubBasePath: EMPTY_DEVICE_STATE.hubBasePath });
     })
     .pipe(Atom.setIdleTTL(60_000), Atom.withLabel(`device-hub-access:${environmentId}`)),
@@ -73,7 +75,8 @@ export function useDeviceHubAccess(
   return useMemo(
     () =>
       AsyncResult.isSuccess(result)
-        ? { ...result.value, query: { ...result.value.query, hostId } }
+        ? // TODO(integration): confirm the backend proxy still routes SSH hosts by the `hostId` query.
+          { ...result.value, query: { ...result.value.query, hostId } }
         : null,
     [result, hostId],
   );

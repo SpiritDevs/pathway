@@ -10,6 +10,8 @@ import { Button } from "../ui/button";
 import { Dialog } from "../ui/dialog";
 import { WizardPopup } from "../ui/wizard";
 import { DeviceSetup } from "../device/DeviceSetup";
+import { DeviceHostUpdates } from "../device/DeviceHostUpdates";
+import { DeviceToolVersions } from "../device/DeviceToolVersions";
 
 export function DeviceSettings() {
   const { environments } = useEnvironments();
@@ -56,6 +58,7 @@ export function DeviceSettings() {
 function ConnectedDeviceSettings({ environmentId }: { environmentId: EnvironmentId }) {
   const { state, loaded, error, refresh } = useDeviceState(environmentId);
   const configure = useAtomCommand(deviceEnvironment.configure);
+  const list = useAtomCommand(deviceEnvironment.list);
   const [setup, setSetup] = useState(false);
   const [busy, setBusy] = useState(false);
   const update = async (input: { enabled?: boolean; agentAccessEnabled?: boolean }) => {
@@ -65,6 +68,64 @@ function ConnectedDeviceSettings({ environmentId }: { environmentId: Environment
     } finally {
       setBusy(false);
     }
+  };
+  const [versionPending, setVersionPending] = useState<"check" | "hub" | "agent" | null>(null);
+  const [updateError, setUpdateError] = useState<{ tool: "hub" | "agent"; message: string } | null>(
+    null,
+  );
+  const localTools = state.hosts.find((host) => host.kind === "local")?.tools;
+  // Checking reads installed versions; updating installs the server's pinned tool without starting it.
+  const versionActions = (tool: "hub" | "agent") => {
+    const version = localTools?.[tool];
+    const needsUpdate = version && !version.installedVersions.includes(version.requiredVersion);
+    return (
+      <div className="space-y-2">
+        <div className="flex flex-wrap gap-2">
+          {state.supportsToolUpdate && needsUpdate ? (
+            <Button
+              size="sm"
+              disabled={versionPending !== null || busy}
+              onClick={() => {
+                setUpdateError(null);
+                setVersionPending(tool);
+                void list({ environmentId, input: { updateTool: tool } })
+                  .then((result) => {
+                    if (result._tag === "Failure")
+                      setUpdateError({
+                        tool,
+                        message:
+                          "Update failed. Check this host's network connection and try again.",
+                      });
+                  })
+                  .finally(() => setVersionPending(null));
+              }}
+            >
+              {versionPending === tool ? "Updating…" : `Update to v${version.requiredVersion}`}
+            </Button>
+          ) : null}
+          {state.supportsToolInspection ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={versionPending !== null || busy}
+              onClick={() => {
+                setVersionPending("check");
+                void list({ environmentId, input: { inspectOnly: true } }).finally(() =>
+                  setVersionPending(null),
+                );
+              }}
+            >
+              {versionPending === "check" ? "Checking…" : "Check versions"}
+            </Button>
+          ) : null}
+        </div>
+        {updateError?.tool === tool ? (
+          <p role="alert" className="text-xs text-destructive">
+            {updateError.message}
+          </p>
+        ) : null}
+      </div>
+    );
   };
   return (
     <>
@@ -81,14 +142,17 @@ function ConnectedDeviceSettings({ environmentId }: { environmentId: Environment
         title="Device support"
         description="Install and run device tools only when enabled. Disabling stops Pathway’s device helpers."
         control={
-          <Switch
-            aria-label="Device support"
-            checked={state.hostStatus !== "disabled"}
-            disabled={!loaded || busy}
-            onCheckedChange={(enabled) =>
-              void update({ enabled, ...(!enabled ? { agentAccessEnabled: false } : {}) })
-            }
-          />
+          <>
+            <DeviceToolVersions action={versionActions("hub")} kind="hub" tools={localTools} />
+            <Switch
+              aria-label="Device support"
+              checked={state.hostStatus !== "disabled"}
+              disabled={!loaded || busy}
+              onCheckedChange={(enabled) =>
+                void update({ enabled, ...(!enabled ? { agentAccessEnabled: false } : {}) })
+              }
+            />
+          </>
         }
       />
       <SettingsRow
@@ -96,12 +160,15 @@ function ConnectedDeviceSettings({ environmentId }: { environmentId: Environment
         title="Agent device access"
         description="Allow agents to open and control devices. Turning this off revokes access for current sessions too."
         control={
-          <Switch
-            aria-label="Agent device access"
-            checked={state.agentAccessEnabled}
-            disabled={!loaded || busy || state.hostStatus === "disabled"}
-            onCheckedChange={(agentAccessEnabled) => void update({ agentAccessEnabled })}
-          />
+          <>
+            <DeviceToolVersions action={versionActions("agent")} kind="agent" tools={localTools} />
+            <Switch
+              aria-label="Agent device access"
+              checked={state.agentAccessEnabled}
+              disabled={!loaded || busy || state.hostStatus === "disabled"}
+              onCheckedChange={(agentAccessEnabled) => void update({ agentAccessEnabled })}
+            />
+          </>
         }
       />
       {state.hostStatusDetail ? (
@@ -112,6 +179,10 @@ function ConnectedDeviceSettings({ environmentId }: { environmentId: Environment
       <Button variant="outline" size="sm" onClick={() => setSetup(true)}>
         Device setup
       </Button>
+      <DeviceHostUpdates
+        state={{ ...state, hosts: state.hosts.filter((host) => host.kind === "local") }}
+        environmentId={environmentId}
+      />
       <DeviceHostsSettings environmentId={environmentId} />
       <Dialog open={setup} onOpenChange={setSetup}>
         <WizardPopup>

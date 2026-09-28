@@ -2,13 +2,15 @@ import type { DevicePlatform, EnvironmentId } from "@spiritdevs/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
+import { Button } from "~/components/ui/button";
 import { refreshDeviceHubAccess, useDeviceHubAccess } from "~/state/device";
 import { createCanvasFrameSink } from "@spiritdevs/client-runtime/device/frame";
 import { resolveDeviceShape } from "@spiritdevs/client-runtime/device/shape-profile";
-import { Button } from "~/components/ui/button";
 import { deviceKeyboard, deviceModel } from "./deviceModels";
+import { fitDeviceFrame } from "./deviceFrameLayout";
 import { DeviceDuoViewport } from "./DeviceDuoViewport";
 import { DeviceDuoControls } from "./DeviceDuoControls";
+import { DeviceAndroidFoldControls } from "./DeviceAndroidFoldControls";
 import type { DuoControlState } from "@spiritdevs/client-runtime/device/duo-control";
 import { DevicePhoneViewport } from "./DevicePhoneViewport";
 import { DeviceLoadingView } from "./DeviceLoadingView";
@@ -22,6 +24,7 @@ import {
 } from "@spiritdevs/client-runtime/device/stream";
 
 const AX_POLL_INTERVAL_MS = 2_000;
+const CONTROLS_RAIL_WIDTH = 56;
 
 export interface DeviceViewControls {
   readonly phone: boolean;
@@ -75,7 +78,6 @@ export function DeviceStreamView(props: {
   const cancelPhoneInputRef = useRef<(() => void) | null>(null);
   const cancelPhoneInput = useCallback(() => cancelPhoneInputRef.current?.(), []);
   const resetViewRef = useRef<(() => void) | null>(null);
-  const resetView = useCallback(() => resetViewRef.current?.(), []);
   const onResetReady = useCallback((reset: (() => void) | null) => {
     resetViewRef.current = reset;
   }, []);
@@ -91,6 +93,7 @@ export function DeviceStreamView(props: {
   const clientRef = useRef<DeviceStreamClient | null>(null);
   const [status, setStatus] = useState<DeviceStreamStatus>("connecting");
   const [detail, setDetail] = useState<string | undefined>(undefined);
+  const [showRestartNotice, setShowRestartNotice] = useState(false);
   const [screen, setScreen] = useState<DeviceScreenSize | null>(null);
   const model = deviceModel(
     props.platform,
@@ -98,8 +101,12 @@ export function DeviceStreamView(props: {
     screen?.supportsHingeAngle === true,
   );
   const isDuo = model?.id === "iphone-duo";
+  const [foldAngle, setFoldAngle] = useState<number | null>(null);
   const [mjpegUrl, setMjpegUrl] = useState<string | null>(null);
   const [mjpegGeneration, setMjpegGeneration] = useState(0);
+  const attachMjpegImage = useCallback((image: HTMLImageElement | null) => {
+    clientRef.current?.setMjpegImage(image);
+  }, []);
   const [inputState, setInputState] = useState<{ connected: boolean; detail?: string }>({
     connected: false,
   });
@@ -121,6 +128,7 @@ export function DeviceStreamView(props: {
         onStatus: (next, nextDetail) => {
           setStatus(next);
           setDetail(nextDetail);
+          if (next !== "connecting") setShowRestartNotice(false);
         },
         onScreen: (next) => {
           setScreen(next);
@@ -136,6 +144,7 @@ export function DeviceStreamView(props: {
         },
         onInputConnected: (connected, detail) => {
           setInputState({ connected, ...(detail ? { detail } : {}) });
+          if (!connected) setShowRestartNotice(false);
           onHandle?.({
             pressButton: client.pressButton,
             rotate: client.rotate,
@@ -183,6 +192,29 @@ export function DeviceStreamView(props: {
     return w / h;
   }, [props.platform, screen]);
 
+  // Android restarts its encoder when a fold changes the framebuffer size.
+  // Keep the last decoded frame and viewer mounted while the next keyframe arrives.
+  const retainingAndroidFrame =
+    props.platform === "android" &&
+    status === "connecting" &&
+    inputState.connected &&
+    screen !== null;
+  const showPhone =
+    props.allowPhoneView &&
+    (status === "streaming" || retainingAndroidFrame) &&
+    props.visible &&
+    presentation === "phone" &&
+    !phoneUnavailable &&
+    !mjpegUrl &&
+    !props.axOverlay &&
+    (!isDuo || screen?.supportsHingeAngle === true);
+  useEffect(() => {
+    if (!retainingAndroidFrame || !showPhone) return;
+    const timeout = window.setTimeout(() => setShowRestartNotice(true), 2_000);
+    return () => window.clearTimeout(timeout);
+  }, [retainingAndroidFrame, showPhone]);
+  const controlsInset = props.renderControls && !showPhone ? CONTROLS_RAIL_WIDTH : 0;
+
   // The frame is the largest box at `aspect` that fits the container, so a
   // narrow panel shows a shorter phone rather than a squeezed one. CSS
   // `aspect-ratio` alone cannot do this: with the height pinned to 100% the
@@ -206,12 +238,8 @@ export function DeviceStreamView(props: {
     return () => observer.disconnect();
   }, []);
   const frame = useMemo(() => {
-    if (host.width === 0 || host.height === 0) return { width: 0, height: 0 };
-    const byHeight = { width: host.height * aspect, height: host.height };
-    return byHeight.width <= host.width
-      ? byHeight
-      : { width: host.width, height: host.width / aspect };
-  }, [aspect, host]);
+    return fitDeviceFrame(aspect, host.width, host.height, controlsInset);
+  }, [aspect, controlsInset, host]);
 
   // serve-sim streams the raw framebuffer; rotate the display for a device
   // that reports landscape while its frames stay portrait.
@@ -275,15 +303,6 @@ export function DeviceStreamView(props: {
     };
   }, [access, props.axOverlay, props.deviceId, props.platform, props.visible]);
 
-  const showPhone =
-    props.allowPhoneView &&
-    status === "streaming" &&
-    props.visible &&
-    presentation === "phone" &&
-    !phoneUnavailable &&
-    !mjpegUrl &&
-    !props.axOverlay &&
-    (!isDuo || screen?.supportsHingeAngle === true);
   const pointerActive = useRef(false);
   const normalizedPoint = (event: React.PointerEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -294,7 +313,7 @@ export function DeviceStreamView(props: {
 
   const phoneUnavailableReason =
     isDuo && !screen?.supportsHingeAngle
-      ? "iPhone Duo 3D requires the pinned experimental Device Hub build"
+      ? "iPhone Duo 3D requires Device Hub 0.11.0 or newer"
       : phoneUnavailable
         ? "3D is unavailable on this browser"
         : mjpegUrl
@@ -304,6 +323,13 @@ export function DeviceStreamView(props: {
             : null;
 
   const keyboardSource = deviceKeyboard(props.platform, props.deviceName ?? "");
+  const resetView = useCallback(() => {
+    if (!isDuo) {
+      const orientation = keyboardAttached ? "landscape_right" : "portrait";
+      if (screen?.orientation !== orientation) clientRef.current?.setOrientation(orientation);
+    }
+    resetViewRef.current?.();
+  }, [isDuo, keyboardAttached, screen?.orientation]);
   const profile = resolveDeviceShape({
     platform: props.platform,
     name: props.deviceName ?? "",
@@ -325,7 +351,18 @@ export function DeviceStreamView(props: {
             streaming: status === "streaming",
             phoneUnavailableReason,
             foldingControls:
-              showPhone && isDuo && screen?.supportsHingeAngle ? (
+              props.platform === "android" && access ? (
+                <DeviceAndroidFoldControls
+                  key={`${props.hostId}:${props.deviceId}`}
+                  access={access}
+                  deviceId={props.deviceId}
+                  visible={props.visible}
+                  enabled={status === "streaming"}
+                  screenWidth={screen?.width}
+                  screenHeight={screen?.height}
+                  onFoldAngle={setFoldAngle}
+                />
+              ) : showPhone && isDuo && screen?.supportsHingeAngle ? (
                 <DeviceDuoControls
                   screen={screen}
                   state={duoControl}
@@ -342,8 +379,8 @@ export function DeviceStreamView(props: {
                     attached: keyboardAttached,
                     toggle: () => {
                       cancelPhoneInput();
-                      if (!keyboardAttached && screen?.orientation.startsWith("portrait"))
-                        clientRef.current?.rotate();
+                      if (!keyboardAttached && screen?.orientation !== "landscape_right")
+                        clientRef.current?.setOrientation("landscape_right");
                       setKeyboardAttached(!keyboardAttached);
                     },
                   }
@@ -356,7 +393,10 @@ export function DeviceStreamView(props: {
       ) : null}
       <div
         ref={hostRef}
-        className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+        className={cn(
+          "relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden outline-none",
+          controlsInset && "pr-14",
+        )}
         tabIndex={0}
         role="application"
         aria-label={`${props.platform === "ios" ? "iOS Simulator" : "Android Emulator"} screen`}
@@ -407,7 +447,7 @@ export function DeviceStreamView(props: {
           {props.visible && access && mjpegUrl ? (
             <img
               key={mjpegGeneration}
-              src={mjpegUrl}
+              ref={attachMjpegImage}
               alt=""
               draggable={false}
               className="absolute top-0 left-0 object-contain"
@@ -419,7 +459,7 @@ export function DeviceStreamView(props: {
               {axElements.map((element) => (
                 <div
                   key={element.id}
-                  className="absolute border border-sky-400/80 bg-sky-400/10"
+                  className="absolute border border-info/80 bg-info/10"
                   style={{
                     left: `${element.x * 100}%`,
                     top: `${element.y * 100}%`,
@@ -428,7 +468,7 @@ export function DeviceStreamView(props: {
                   }}
                 >
                   {element.label ? (
-                    <span className="absolute -top-3.5 left-0 max-w-full truncate rounded-sm bg-sky-500 px-1 text-[9px] leading-3.5 text-white">
+                    <span className="absolute -top-3.5 left-0 max-w-full truncate rounded-sm bg-info px-1 text-[9px] leading-3.5 text-white">
                       {element.label}
                     </span>
                   ) : null}
@@ -463,6 +503,7 @@ export function DeviceStreamView(props: {
             onInputCancel={onInputCancel}
             onResetReady={onResetReady}
             screen={screen}
+            foldAngle={foldAngle}
             onUnavailable={onPhoneUnavailable}
           />
         ) : null}
@@ -495,15 +536,37 @@ export function DeviceStreamView(props: {
             </span>
           </div>
         ) : null}
-        {status !== "streaming" ? (
-          <div className="pointer-events-none absolute inset-0">
+        {retainingAndroidFrame && showPhone && showRestartNotice ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2">
+            <span className="rounded-md bg-background/85 px-2 py-1 text-xs text-muted-foreground">
+              Waiting for device video…
+            </span>
+          </div>
+        ) : null}
+        {status !== "streaming" && !(retainingAndroidFrame && showPhone) ? (
+          <div className="absolute inset-0">
             <DeviceLoadingView
               name={props.deviceName ?? "Device"}
               description={props.deviceDescription ?? ""}
               stage="stream"
               message={status === "error" ? (detail ?? "Stream failed.") : "Connecting video…"}
               error={status === "error"}
-            />
+            >
+              {status === "error" ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    // An expired ticket surfaces as unauthorized on restart and
+                    // refreshes access through the effect; no need to mint one here.
+                    clientRef.current?.stop();
+                    clientRef.current?.start();
+                  }}
+                >
+                  Reconnect
+                </Button>
+              ) : null}
+            </DeviceLoadingView>
           </div>
         ) : null}
       </div>

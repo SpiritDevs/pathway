@@ -1,3 +1,4 @@
+import { DeviceHostUpdates } from "./DeviceHostUpdates";
 import type { DevicePlatform, DeviceServiceState, EnvironmentId } from "@spiritdevs/contracts";
 import { Check, CircleAlert } from "lucide-react";
 import { useState } from "react";
@@ -16,7 +17,7 @@ const platformName = (platform: DevicePlatform) => (platform === "ios" ? "iOS" :
 export const deviceHubDescription =
   "Enable this environment to open simulators and emulators, whether they run here or on a remote device host.";
 export const agentDeviceDescription =
-  "Allow agent sessions in this environment to start and control local and remote devices, with required tools set up automatically.";
+  "Allow new agent sessions in this environment to start and control local and remote devices, with required tools set up automatically.";
 
 export function platformSetupStatus(state: DeviceServiceState, platform: DevicePlatform) {
   const availability = state.hosts
@@ -36,7 +37,7 @@ export function platformSetupStatus(state: DeviceServiceState, platform: DeviceP
       ready: false,
       message:
         platform === "ios"
-          ? "No recently used iOS Simulator was found. Start one in Xcode’s Simulator app, then check again. Install a runtime in Xcode Settings → Components if needed."
+          ? "Xcode is installed, but no iOS Simulator is available. Install a runtime in Xcode Settings → Components."
           : "The Android SDK is installed, but no virtual device exists. Create one in Android Studio → Device Manager.",
     };
   }
@@ -89,6 +90,7 @@ export function DeviceSetup(props: {
       </WizardHeader>
 
       <WizardPanel>
+        <DeviceHostUpdates state={props.state} environmentId={props.environmentId} />
         {step === 0 ? (
           <section className="space-y-3 text-sm">
             <h3 className="font-medium">Enable the device hub</h3>

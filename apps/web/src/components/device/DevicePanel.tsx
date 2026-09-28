@@ -1,3 +1,4 @@
+import { DeviceHostUpdates } from "./DeviceHostUpdates";
 import type {
   DevicePlatform,
   DeviceServiceState,
@@ -5,7 +6,7 @@ import type {
   ScopedThreadRef,
 } from "@spiritdevs/contracts";
 import { Smartphone, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { useRightPanelStore, type RightPanelSurface } from "~/rightPanelStore";
 import { Button } from "~/components/ui/button";
@@ -28,6 +29,12 @@ const platformLabel = (platform: DevicePlatform) =>
 const deviceKey = (device: Pick<DeviceSummary, "hostId" | "id">) =>
   `${device.hostId}\u0000${device.id}`;
 
+const subscribePageVisibility = (onChange: () => void) => {
+  document.addEventListener("visibilitychange", onChange);
+  return () => document.removeEventListener("visibilitychange", onChange);
+};
+const isPageVisible = () => document.visibilityState === "visible";
+
 /** Each surface owns one host/device; only the visible surface streams. */
 export function DevicePanel(props: {
   readonly mode: PreviewPanelMode;
@@ -37,6 +44,8 @@ export function DevicePanel(props: {
   readonly onDismissSetup: () => void;
 }) {
   const { environmentId, threadId } = props.threadRef;
+  // A background tab or minimized window stops decoding video; the device keeps running.
+  const pageVisible = useSyncExternalStore(subscribePageVisibility, isPageVisible, () => true);
   const { state, loaded, error: stateError, refresh } = useDeviceState(environmentId);
   const list = useAtomCommand(deviceEnvironment.list, { reportFailure: false });
   const open = useAtomCommand(deviceEnvironment.open);
@@ -169,6 +178,7 @@ export function DevicePanel(props: {
           {state.hostStatusDetail}
         </div>
       ) : null}
+      <DeviceHostUpdates state={state} environmentId={environmentId} />
       {bootingDevices.length > 0 ? (
         <div role="status" className="border-b px-3 py-2 text-xs text-muted-foreground">
           Starting {bootingDevices.map((device) => device.name).join(", ")}… This can take a minute.
@@ -200,7 +210,7 @@ export function DevicePanel(props: {
               state.hosts.find((host) => host.id === activeDevice.hostId)?.label ?? "Device host"
             }
             hostDiagnostics={state.hostStatusDetail}
-            visible={props.visible}
+            visible={props.visible && pageVisible}
             onClose={() => closeActive(false)}
             onPowerOff={() => closeActive(true)}
           />
@@ -219,7 +229,7 @@ export function DevicePanel(props: {
                   ? "Opening device…"
                   : "Starting device…"
                 : state.hostStatus === "installing"
-                  ? "Installing device support…"
+                  ? (state.hostStatusDetail ?? "Installing device support…")
                   : "Finding devices…"
             }
           />
