@@ -1116,6 +1116,7 @@ struct AgentThreadConversationView: View {
     @State private var showsGitReview = false
     @State private var showsAlternateEnvironment = false
     @State private var showsBrowser = false
+    @State private var showsComputer = false
     @State private var newThreadDefaults: PathwayNewThreadDefaults?
     @State private var showsQueueMove = false
     @State private var isCancelingQueuedThread = false
@@ -1238,7 +1239,10 @@ struct AgentThreadConversationView: View {
             .safeAreaInset(edge: .bottom, spacing: 4) {
                 VStack(spacing: 8) {
                     if let computer {
-                        AgentThreadComputerPreview(computer: computer)
+                        AgentThreadComputerPreview(computer: computer) {
+                            isComposerFocused = false
+                            showsComputer = true
+                        }
                         AgentThreadComputerEffortHint(computer: computer, model: model)
                     }
                     AgentThreadRemoteBrowserPreview(model: model) {
@@ -1368,6 +1372,11 @@ struct AgentThreadConversationView: View {
             if let root = currentWorkspaceRoot, let connect = model.connect {
                 PathwayWorkspaceDestination(thread: model.thread, environment: model.environment,
                     projectRoot: root, connect: connect, storageDirectory: model.storageDirectory, initialSection: "changes")
+            }
+        }
+        .navigationDestination(isPresented: $showsComputer) {
+            if let connect = model.connect {
+                AgentThreadComputerSurface(threadID: model.threadID, environment: model.environment, connect: connect)
             }
         }
         .navigationDestination(isPresented: $showsBrowser) {
@@ -1546,6 +1555,13 @@ struct AgentThreadConversationView: View {
             showsBrowser = true
         }
         .accessibilityIdentifier("agent-thread-browser")
+        if model.connect != nil, model.servesComputer {
+            Button("Computer", systemImage: "desktopcomputer") {
+                isComposerFocused = false
+                showsComputer = true
+            }
+            .accessibilityIdentifier("agent-thread-computer")
+        }
         Button("Fork thread", systemImage: "arrow.triangle.branch") { fork() }.disabled(isForking || actionThread.shell.isTemporary)
         if actionThread.shell.isTemporary { Text("Keep conversation before forking or starting a side chat.") }
         Button("Copy conversation", systemImage: "doc.on.doc") {

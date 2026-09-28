@@ -102,6 +102,8 @@ struct AgentThreadComputerWatch: ViewModifier {
 /// It appears with its first still, or with the reason there is none.
 struct AgentThreadComputerPreview: View {
     let computer: PathwayThreadComputerModel
+    /// Opens the persistent computer view.
+    let open: () -> Void
 
     var body: some View {
         let frames = computer.frames
@@ -111,6 +113,9 @@ struct AgentThreadComputerPreview: View {
                     Label(computer.session.statusLabel ?? "Computer", systemImage: "desktopcomputer")
                         .font(.caption).lineLimit(1)
                     Spacer()
+                    Button("Open computer view", systemImage: "display", action: open)
+                        .labelStyle(.iconOnly).font(.caption)
+                        .accessibilityIdentifier("thread-computer-preview-open")
                     Button("Hide", systemImage: "xmark") { computer.hide() }
                         .labelStyle(.iconOnly).font(.caption)
                         .accessibilityIdentifier("thread-computer-preview-hide")

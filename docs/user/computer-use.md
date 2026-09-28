@@ -134,8 +134,26 @@ agent still works on the host Mac; nothing runs on your phone.
   it is open, the chat is on screen and the app is in the foreground. Hiding it, leaving the chat
   or leaving the app stops the stream at once. If the connection drops, the last image stays and
   streaming resumes once the app has reconnected and confirmed the computer. Hide it with the close
-  button; it comes back on the next task. The computer view is not in the iPhone and iPad app yet. You can't click through the preview from a phone. If the
-  stream drops and cannot recover, the preview reads **Live view unavailable**.
+  button; it comes back on the next task. You can't click through the preview itself; open the
+  computer view with its monitor button to take control. If the stream drops and cannot recover,
+  the preview reads **Live view unavailable**.
+- **The computer view.** Choose **Computer** from a chat's **⋯** menu, or the monitor button on
+  the preview, to keep the host's screen open, before, during and after a task. Go back to return
+  to the chat. The header says who has the screen: the agent, you, another device, or nobody. The
+  view streams only while it is open and the app is in the foreground. If the screen can't be
+  shared, it says so; if the stream drops, **Reconnect** starts it again.
+  - **Take control** hands you the mouse and keyboard; **Release** gives it up. Other devices can
+    watch but not act.
+  - With control, tap to click, double-tap to double-click, touch and hold to right-click, and
+    drag with two fingers to scroll. Dragging with one finger does nothing, so you can't hold a
+    mouse button down.
+  - Type in **Type on the computer** to enter text on the host. The key bar sends Return, Escape,
+    Tab, Delete and the arrow keys, and **⌘** offers shortcuts such as copy, paste, undo and
+    Spotlight. Escape stops your control and the agent's current action.
+  - **Hand back** gives control back. If you wrote a message in **Tell the agent what's next…**, it
+    goes to the agent with a screenshot and a summary of what you did, after the agent's current
+    reply. If it can't be sent, **Retry** sends it again without losing the screenshot.
+  - Leaving the view or switching away from the app releases control.
 - **Approving and stopping.** Approval, setup and control-off cards work as they do on the desktop.
   Grant macOS permissions on the host Mac itself. To stop the agent, tap **Stop** in the chat;
   Escape works only on the host's keyboard.

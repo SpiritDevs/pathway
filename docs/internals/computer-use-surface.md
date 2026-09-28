@@ -213,8 +213,17 @@ waiting click and drain the send queue first. Unmounting or hiding the page
 releases held control, and a takeover still in flight is released when it lands.
 While in control the canvas carries `data-keybinding-capture` and stops key
 propagation, so window-level shortcuts and type-to-focus leave its keys alone;
-the remote browser canvas does the same. The mobile clients do not have this view
-yet.
+the remote browser canvas does the same.
+
+The iOS app renders it as a pushed destination (`AgentThreadComputerSurface.swift`), opened
+from the thread menu or the chat preview when the server serves Computer events. One
+`PathwayRPCClient` carries the state subscription, control, input and hand-back, since control
+belongs to that socket's client id. `PathwayComputerSurfaceStream` speaks the surface socket
+directly (`ready`, `ping`/`pong`, 24-byte header) with the prepared RPC URL's ticket. Taps map
+to clicks, double taps to `clickCount: 2`, long presses to right clicks and two-finger pans to
+wheel events coalesced to one send per frame. It never sends pointer phases. The view task ends
+when the destination disappears or the scene leaves the foreground, releasing control and closing
+both sockets. Hand-back dispatches the same `message.dispatch` with `creationSource: "mobile"`.
 
 ## Host support and verification
 
