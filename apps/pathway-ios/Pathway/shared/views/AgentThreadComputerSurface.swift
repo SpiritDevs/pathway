@@ -54,16 +54,8 @@ private struct ComputerSurfaceControls: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if let notice = surface.notice {
-                HStack {
-                    Text(notice).font(.caption)
-                    Spacer()
-                    Button("Dismiss", systemImage: "xmark") { surface.notice = nil }.labelStyle(.iconOnly).font(.caption)
-                }
-                .padding(.horizontal, 12).padding(.vertical, 6)
-                .background(Color(uiColor: .secondarySystemBackground))
-                .accessibilityElement(children: .combine)
-            }
+            if let notice = surface.notice { noticeRow(notice) { surface.notice = nil } }
+            if let restored = surface.drafts.restored { noticeRow(restored) { surface.drafts.restored = nil } }
             ComputerSurfaceScreen(surface: surface, interactive: interactive)
             if let error = surface.error {
                 Text(error).font(.caption).foregroundStyle(.red).lineLimit(2)
@@ -72,6 +64,17 @@ private struct ComputerSurfaceControls: View {
             if interactive { keyboard }
             footer
         }
+    }
+
+    private func noticeRow(_ text: String, dismiss: @escaping () -> Void) -> some View {
+        HStack {
+            Text(text).font(.caption)
+            Spacer()
+            Button("Dismiss", systemImage: "xmark", action: dismiss).labelStyle(.iconOnly).font(.caption)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(Color(uiColor: .secondarySystemBackground))
+        .accessibilityElement(children: .combine)
     }
 
     private var header: some View {

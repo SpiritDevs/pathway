@@ -210,7 +210,7 @@ struct PathwayComputerSurfaceTests {
         #expect(model.typing.isEmpty)
         model.typing = " world"
         model.receive(.object(["_pathwayTransport": .string("disconnected")]))
-        #expect(model.typing == "hello world" && model.error != nil)
+        #expect(model.typing == "hello world" && model.drafts.restored != nil)
         rpc.release()
     }
 
@@ -239,6 +239,46 @@ struct PathwayComputerSurfaceTests {
         reopened.typing = ""
         reopened.draft = ""
         #expect(surfaceModel(rpc, threadID: threadID).draft.isEmpty)
+    }
+
+    @MainActor @Test func aClosedViewsLateFailureMergesIntoNewerDrafts() async {
+        let rpc = SurfaceRPC()
+        rpc.rejectsTyping = true
+        let threadID = UUID().uuidString
+        let closed = surfaceModel(rpc, threadID: threadID)
+        closed.receive(session(controller: ["kind": .string("client"), "clientId": .string("me")]))
+        var started = rpc.started.makeAsyncIterator()
+        closed.typing = "held "
+        closed.sendTyping()
+        #expect(await started.next() == "input:held ")
+        closed.draft = "old agent draft"
+        let reopened = surfaceModel(rpc, threadID: threadID)
+        reopened.typing = "new host draft"
+        reopened.draft = "new agent draft"
+        rpc.release()
+        // The closed view's hand-back waits for its failed Type to settle.
+        #expect(await closed.handBack("finish"))
+        #expect(reopened.typing == "held new host draft" && reopened.draft == "new agent draft")
+        #expect(reopened.drafts.restored != nil)
+        #expect(surfaceModel(rpc, threadID: threadID).typing == "held new host draft")
+    }
+
+    @MainActor @Test func anOlderInputSucceedingKeepsTheRestoredTextWarning() async {
+        let rpc = SurfaceRPC()
+        let model = surfaceModel(rpc)
+        model.receive(session(controller: ["kind": .string("client"), "clientId": .string("me")]))
+        var started = rpc.started.makeAsyncIterator()
+        model.sendKey("A")
+        #expect(await started.next() == "input:A")
+        model.typing = "hello"
+        model.sendTyping()
+        model.sendKey("Escape")
+        #expect(await started.next() == "input:Escape")
+        #expect(model.typing == "hello" && model.drafts.restored != nil)
+        rpc.release()
+        #expect(await model.handBack("finish"))
+        #expect(rpc.log.contains("input:A") && !rpc.log.contains("input:hello"))
+        #expect(model.typing == "hello" && model.drafts.restored != nil)
     }
 
     @MainActor private func surfaceModel(_ rpc: SurfaceRPC, threadID: String = UUID().uuidString) -> PathwayComputerSurfaceModel {

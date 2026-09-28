@@ -346,6 +346,27 @@ struct PathwayComputerSurfaceViewport: Equatable, Sendable {
     }
 }
 
+/// A thread's unsent computer view text, kept in memory for the life of the app. Every view of
+/// the thread edits the same instance, so there is no copy for a closed view to write back.
+@MainActor
+@Observable
+final class PathwayComputerSurfaceDrafts {
+    var typing = ""
+    var draft = ""
+    /// Says typed text came back undelivered. Only sending the field again or dismissing clears
+    /// it, so an unrelated input succeeding cannot hide it.
+    var restored: String?
+
+    private static var threads: [String: PathwayComputerSurfaceDrafts] = [:]
+
+    static func thread(_ threadID: String) -> PathwayComputerSurfaceDrafts {
+        if let drafts = threads[threadID] { return drafts }
+        let drafts = PathwayComputerSurfaceDrafts()
+        threads[threadID] = drafts
+        return drafts
+    }
+}
+
 /// The persistent computer view's connection. One RPC socket carries the state subscription,
 /// control, input and hand-back, because the server ties control to that socket's client id.
 @MainActor
@@ -362,11 +383,16 @@ final class PathwayComputerSurfaceModel {
     private(set) var busy = false
     var error: String?
     var notice: String?
-    /// Unsent text for the host and the hand-back message. They live here, not in the controls,
-    /// so a dropped connection that hides the controls keeps them, and are kept per thread in
-    /// memory so closing and reopening the view keeps them too.
-    var typing = "" { didSet { keepDrafts() } }
-    var draft = "" { didSet { keepDrafts() } }
+    /// This thread's unsent text, shared with any other computer view of it.
+    let drafts: PathwayComputerSurfaceDrafts
+    var typing: String {
+        get { drafts.typing }
+        set { drafts.typing = newValue }
+    }
+    var draft: String {
+        get { drafts.draft }
+        set { drafts.draft = newValue }
+    }
     private(set) var pendingFollowUp: PathwayComputerHandBackFollowUp?
     let frames: PathwayComputerSurfaceStream
 
@@ -391,8 +417,7 @@ final class PathwayComputerSurfaceModel {
 
     init(threadID: String, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient) {
         self.threadID = threadID
-        typing = Self.drafts[threadID]?.typing ?? ""
-        draft = Self.drafts[threadID]?.draft ?? ""
+        drafts = PathwayComputerSurfaceDrafts.thread(threadID)
         self.connect = connect
         self.environment = environment
         let viewport = OSAllocatedUnfairLock(initialState: (
@@ -569,7 +594,7 @@ final class PathwayComputerSurfaceModel {
     }
 
     /// Types the host field's text. The field clears only once the text is queued; text the
-    /// queue refuses, or later drops, stays in the field and the error says so.
+    /// queue refuses stays, and text it later drops comes back with `drafts.restored` set.
     func sendTyping() {
         let text = String(typing.prefix(PathwayComputerSurfaceInput.textLimit))
         guard !text.isEmpty else { return }
@@ -579,6 +604,7 @@ final class PathwayComputerSurfaceModel {
             return
         }
         typing.removeFirst(text.count)
+        drafts.restored = nil
     }
 
     func sendKey(_ key: String, modifiers: [String] = []) {
@@ -651,7 +677,8 @@ final class PathwayComputerSurfaceModel {
         wheel = nil
     }
 
-    /// Puts text from undelivered `type` inputs back in front of the host field.
+    /// Puts text from undelivered `type` inputs back in front of the host field. It merges into
+    /// the thread's current drafts, so a late failure from a closed view never replaces newer text.
     private func restoreTyping(_ events: [JSONValue]) {
         let text = events.compactMap { event -> String? in
             guard let fields = event.objectValue, fields["type"] == .string("type") else { return nil }
@@ -659,14 +686,7 @@ final class PathwayComputerSurfaceModel {
         }.joined()
         guard !text.isEmpty else { return }
         typing = text + typing
-        error = "Some of your text wasn't typed on the computer. It's back in the text field."
-    }
-
-    /// Drafts by thread, for the life of the app.
-    private static var drafts: [String: (typing: String, draft: String)] = [:]
-
-    private func keepDrafts() {
-        Self.drafts[threadID] = typing.isEmpty && draft.isEmpty ? nil : (typing, draft)
+        drafts.restored = "Some of your text wasn't typed on the computer. It's back in the text field."
     }
 
     private static func message(_ error: Error, _ fallback: String) -> String {
