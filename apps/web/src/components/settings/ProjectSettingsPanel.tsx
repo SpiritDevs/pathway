@@ -154,6 +154,7 @@ import {
   SettingsSection,
   SettingsSurfaceProvider,
 } from "./settingsLayout";
+import { ProjectAppStoreConnectSection } from "./ProjectAppStoreConnectSection";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
 import { projectGroupTitleNeedsUpdate } from "./ProjectSettingsPanel.logic";
 import { useCompanySettings, type CompanySettings } from "./company/useCompanySettings";
@@ -1347,6 +1348,19 @@ export function ProjectDetail({
             />
           </SettingsSection>
         ) : null}
+
+        {owningCompany !== null && workspaceProject?.cloudProjectId ? (
+          <ProjectAppStoreConnectSection
+            companyId={owningCompany.id as CompanyId}
+            projectId={workspaceProject.cloudProjectId}
+          />
+        ) : (
+          <SettingsSection title="App Store Connect">
+            <p className="px-4 py-3 text-sm text-muted-foreground">
+              Apps can be linked once this project syncs to a company.
+            </p>
+          </SettingsSection>
+        )}
 
         {mergeProject !== null &&
         mergeCompanyId !== undefined &&

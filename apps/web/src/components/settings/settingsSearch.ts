@@ -26,6 +26,7 @@ export type SettingsPath =
   | "/settings/company-roles"
   | "/settings/calendars"
   | "/settings/environments"
+  | "/settings/apple"
   | "/settings/integrations"
   | "/settings/providers"
   | "/settings/scheduled-tasks"
@@ -117,6 +118,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/company-roles": "Roles",
   "/settings/calendars": "Calendars",
   "/settings/environments": "Environments",
+  "/settings/apple": "Apple accounts",
   "/settings/dictation": "Set up dictation",
   "/settings/dictation/models": "Models",
   "/settings/dictation/history": "History",
@@ -178,6 +180,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/company-roles",
       "/settings/calendars",
       "/settings/environments",
+      "/settings/apple",
     ],
   },
   {
@@ -836,6 +839,26 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "email-trigger-rules",
     title: "Mail trigger rules",
     to: "/settings/email",
+  },
+  {
+    id: "apple-add-account",
+    title: "Add Apple ID",
+    to: "/settings/apple",
+    targetId: "apple-accounts",
+    searchTerms: ["apple", "xcode", "accounts"],
+  },
+  {
+    id: "apple-api-key",
+    title: "App Store Connect API key",
+    to: "/settings/apple",
+    targetId: "apple-accounts",
+    searchTerms: ["asc", "p8", "issuer", "testflight"],
+  },
+  {
+    id: "apple-developer-teams",
+    title: "Apple Developer teams",
+    to: "/settings/apple",
+    targetId: "apple-accounts",
   },
   {
     id: "add-environment",
