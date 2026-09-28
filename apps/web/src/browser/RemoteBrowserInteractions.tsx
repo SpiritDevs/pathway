@@ -65,10 +65,10 @@ export function RemoteBrowserInteractions({
     if (outcome._tag === "Failure") {
       const failure = squashAtomCommandFailure(outcome);
       setError(failure instanceof Error ? failure.message : "The browser did not respond.");
-      return null;
+      return false;
     }
     setError(undefined);
-    return outcome.value;
+    return true;
   };
   const interactRef = useRef(interact);
   interactRef.current = interact;
@@ -170,7 +170,8 @@ function promptKey(tab: PreviewRemoteInteractionState) {
   return tab.dialog?.dialogId ?? tab.select?.selectId ?? tab.fileChooser?.chooserId ?? "none";
 }
 
-type Interact = (input: Interaction) => Promise<PreviewRemoteInteractionState | null>;
+/** Resolves false when the environment rejected the input; the error pill shows why. */
+type Interact = (input: Interaction) => Promise<boolean>;
 
 function PromptCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
