@@ -18,7 +18,7 @@ One panel has focus at a time. It has a thin outline and a small bar at its top 
 - **Open in window** moves the panel into its own window.
 - **Close** closes the panel.
 
-Click anywhere in a panel to focus it. The navigation rail, the sidebar, and the back and forward buttons all act on the focused panel, and so do keyboard shortcuts. Move focus with `Mod+Alt+Left` and `Mod+Alt+Right`, and close the focused panel with `Mod+Alt+W`.
+Each panel has its own sidebar, which you can collapse without affecting the others. Click anywhere in a panel to focus it. The navigation rail and the back and forward buttons act on the focused panel, and so do keyboard shortcuts. Move focus with `Mod+Alt+Left` and `Mod+Alt+Right`, and close the focused panel with `Mod+Alt+W`.
 
 Drag the line between two panels to resize them. Double-click it to give every panel an equal share. Double-clicking the edge of a thread's side panel works the same way: it takes half the width.
 

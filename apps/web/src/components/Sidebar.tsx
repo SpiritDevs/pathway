@@ -141,6 +141,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
+import { isPaneFocused, useIsFocusedPane, usePaneId } from "../panes/usePaneFocus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
@@ -4170,7 +4171,10 @@ export default function Sidebar() {
   );
 
   // Thread jump (cmd+1..9) and prev/next traversal reuse the same commands as
-  // v1 — the keybinding layer is shared, only the ordered list differs.
+  // v1 — the keybinding layer is shared, only the ordered list differs. Split,
+  // only the focused pane's sidebar answers them or shows their hints.
+  const paneId = usePaneId();
+  const isFocusedPane = useIsFocusedPane();
   const routeTerminalOpen = useTerminalUiStateStore((state) =>
     routeThreadRef
       ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
@@ -4178,7 +4182,7 @@ export default function Sidebar() {
   );
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat) return;
+      if (event.defaultPrevented || event.repeat || !isPaneFocused(paneId)) return;
       const command = resolveShortcutCommand(event, keybindings, {
         platform: navigator.platform,
         context: {
@@ -4217,6 +4221,7 @@ export default function Sidebar() {
     keybindings,
     navigateToThread,
     orderedThreadKeys,
+    paneId,
     routeTerminalOpen,
     routeThreadKey,
     threadByKey,
@@ -4240,8 +4245,8 @@ export default function Sidebar() {
     },
   );
   useEffect(() => {
-    updateThreadJumpHintsVisibility(shouldShowJumpHintsNow);
-  }, [shouldShowJumpHintsNow, updateThreadJumpHintsVisibility]);
+    updateThreadJumpHintsVisibility(shouldShowJumpHintsNow && isFocusedPane);
+  }, [isFocusedPane, shouldShowJumpHintsNow, updateThreadJumpHintsVisibility]);
 
   // New threads open directly in the current thread's project, falling back
   // to the current draft and then the first project in the user's ordering.

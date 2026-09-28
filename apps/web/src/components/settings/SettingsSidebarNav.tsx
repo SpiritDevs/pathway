@@ -75,6 +75,7 @@ import { permissionGate } from "./company/companySettings.logic";
 import { useCompanyIntegrationsClient } from "~/cloud/useCompanyIntegrationsClient";
 import { SETTINGS_AUTO_SCOPE, SETTINGS_PROFILE_SCOPE } from "~/cloud/settingsCompany";
 import { scrollToSettingsTarget } from "./settingsLayout";
+import { isPaneFocused, usePaneId } from "../../panes/usePaneFocus";
 import {
   searchSettings,
   settingsPathIsVisibleForWorkspace,
@@ -178,6 +179,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const currentHash = useLocation({ select: (location) => location.hash });
   const canGoBack = useCanGoBack();
   const { isMobile, setOpenMobile, open, setOpen } = useSidebar();
+  const paneId = usePaneId();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [activeResultIndex, setActiveResultIndex] = useState(0);
@@ -206,6 +208,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (!isPaneFocused(paneId)) return;
 
       const target = event.target;
       if (
@@ -233,7 +236,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isMobile, open, setOpen, setOpenMobile]);
+  }, [isMobile, open, paneId, setOpen, setOpenMobile]);
 
   const handleSectionClick = useCallback(
     (to: SettingsPath) => {

@@ -7,6 +7,7 @@
  * Listeners should check `isPaneFocused(paneId)` when the event arrives rather
  * than subscribe, so moving focus between panes never re-renders a page.
  */
+import { useRouterState } from "@tanstack/react-router";
 import { useLayoutEffect, useState } from "react";
 
 import type { AppRouter } from "../router";
@@ -59,12 +60,23 @@ export function useFocusedPaneRouter(appRouter: AppRouter): AppRouter {
       ? null
       : state.layout.focusedPaneId,
   );
-  if (focusedSidePaneId === null) return appRouter;
   // The href only seeds a router the pane row has not created yet.
-  const initialHref =
-    usePaneStore.getState().layout.panes.find((entry) => entry.id === focusedSidePaneId)?.href ??
-    "";
-  return getSidePaneRouter(focusedSidePaneId, initialHref);
+  const sideRouter =
+    focusedSidePaneId === null
+      ? null
+      : getSidePaneRouter(
+          focusedSidePaneId,
+          usePaneStore.getState().layout.panes.find((entry) => entry.id === focusedSidePaneId)
+            ?.href ?? "",
+        );
+  // A side router has no matches until its first load commits, and match hooks
+  // in the chrome throw against an empty router. Until then the chrome stays on
+  // the app router, which is always loaded by the time the shell renders.
+  const sideRouterLoaded = useRouterState({
+    router: sideRouter ?? appRouter,
+    select: (state) => state.matches.length > 0,
+  });
+  return sideRouter !== null && sideRouterLoaded ? sideRouter : appRouter;
 }
 
 export function useIsSplitWindow(): boolean {
