@@ -80,7 +80,7 @@ function PreviewPanelShellFrame(
 ) {
   const useDragRegion = isElectron && props.mode !== "sheet" && props.mode !== "embedded";
   const isInline = props.mode === "inline";
-  const { width, handlers } = props.inlineSize;
+  const { width, handlers, resizeTo } = props.inlineSize;
 
   return (
     <div
@@ -99,7 +99,9 @@ function PreviewPanelShellFrame(
       data-preview-panel-mode={props.mode}
       data-preview-panel-maximized={props.maximized ? "true" : "false"}
     >
-      {isInline && !props.maximized ? <RightPanelResizeHandle handlers={handlers} /> : null}
+      {isInline && !props.maximized ? (
+        <RightPanelResizeHandle handlers={handlers} resizeTo={resizeTo} />
+      ) : null}
       {isInline ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[inherit]">
           {useDragRegion ? <div className="electron-drag-region h-0 w-full" aria-hidden /> : null}
