@@ -46,6 +46,7 @@ import {
   MENU_ACTION_CHANNEL,
   SNAP_SHOT_EVENT_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
+  WINDOWS_CHANGED_CHANNEL,
 } from "../ipc/channels.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
@@ -84,15 +85,17 @@ function makeFakeBrowserWindow() {
 
   const window = {
     close: vi.fn(),
+    destroy: vi.fn(),
     focus: vi.fn(),
     getBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
     getNormalBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
     isDestroyed: vi.fn(() => false),
+    isFocused: vi.fn(() => false),
     isFullScreen: vi.fn(() => false),
     isMaximized: vi.fn(() => false),
     isMinimized: vi.fn(() => false),
     isVisible: vi.fn(() => true),
-    loadURL: vi.fn(() => Promise.resolve()),
+    loadURL: vi.fn((_url: string) => Promise.resolve()),
     maximize: vi.fn(),
     on: vi.fn((eventName: string, listener: (...args: readonly unknown[]) => void) => {
       windowListeners.set(eventName, listener);
@@ -107,6 +110,7 @@ function makeFakeBrowserWindow() {
     setTitleBarOverlay: vi.fn(),
     setWindowButtonVisibility: vi.fn(),
     show: vi.fn(),
+    showInactive: vi.fn(),
     webContents,
   };
 
@@ -120,6 +124,10 @@ function makeFakeBrowserWindow() {
     isMinimized: window.isMinimized,
     loadURL: window.loadURL,
     maximize: window.maximize,
+    close: window.close,
+    destroy: window.destroy,
+    isFocused: window.isFocused,
+    showInactive: window.showInactive,
     openDevTools: webContents.openDevTools,
     reload: webContents.reload,
     send: webContents.send,
@@ -193,6 +201,11 @@ function makeTestLayer(input: {
   ) => Effect.Effect<void>;
   readonly openedExternalUrls?: unknown[];
   readonly onReveal?: (window: Electron.BrowserWindow) => void;
+  // Windows handed out by create() in order; afterwards `window` is reused.
+  readonly createQueue?: Electron.BrowserWindow[];
+  readonly childWindowsUpdates?: ReadonlyArray<DesktopAppSettings.DesktopChildWindowState>[];
+  readonly sentToAll?: Array<readonly [string, ...unknown[]]>;
+  readonly desktopState?: DesktopState.DesktopState["Service"];
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
   const desktopAppSettingsLayer = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
@@ -218,6 +231,13 @@ function makeTestLayer(input: {
         }
         return { settings: desktopSettings, changed };
       }),
+    setChildWindows: (childWindows) =>
+      Effect.sync(() => {
+        const changed = desktopSettings.childWindows !== childWindows;
+        desktopSettings = { ...desktopSettings, childWindows };
+        input.childWindowsUpdates?.push(childWindows);
+        return { settings: desktopSettings, changed };
+      }),
     setServerExposureMode: () => Effect.die("unexpected server exposure update"),
     setUpdateChannel: () => Effect.die("unexpected update channel change"),
     setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
@@ -231,10 +251,8 @@ function makeTestLayer(input: {
     create: (options) =>
       Effect.sync(() => {
         input.createdWindowOptions?.push(options);
-      }).pipe(
-        Effect.andThen(Ref.update(input.createCount, (count) => count + 1)),
-        Effect.as(input.window),
-      ),
+        return input.createQueue?.shift() ?? input.window;
+      }).pipe(Effect.tap(() => Ref.update(input.createCount, (count) => count + 1))),
     main: Ref.get(input.mainWindow),
     currentMainOrFirst: Ref.get(input.mainWindow),
     focusedMainOrFirst: Ref.get(input.mainWindow),
@@ -243,7 +261,7 @@ function makeTestLayer(input: {
     prepareReveal: () => Effect.succeed(false),
     cancelPreparedReveal: () => Effect.void,
     reveal: (window) => Effect.sync(() => input.onReveal?.(window)),
-    sendAll: () => Effect.void,
+    sendAll: (channel, ...args) => Effect.sync(() => input.sentToAll?.push([channel, ...args])),
     destroyAll: Effect.void,
     syncAllAppearance: (sync) => sync(input.window),
   } satisfies ElectronWindow.ElectronWindow["Service"]);
@@ -255,7 +273,10 @@ function makeTestLayer(input: {
         desktopEnvironmentLayer,
         desktopAppSettingsLayer,
         desktopServerExposureLayer,
-        DesktopState.layer,
+        input.desktopState === undefined
+          ? DesktopState.layer
+          : Layer.succeed(DesktopState.DesktopState, input.desktopState),
+        NodeServices.layer,
         electronMenuLayer,
         Layer.succeed(ElectronShell.ElectronShell, {
           openExternal: (url) =>
@@ -359,6 +380,8 @@ const makeSplashScenario = (
           desktopEnvironmentLayer,
           DesktopAppSettings.layerTest(),
           desktopServerExposureLayer,
+          DesktopState.layer,
+          NodeServices.layer,
           electronMenuLayer,
           Layer.succeed(ElectronShell.ElectronShell, {
             openExternal: () => Effect.succeed(true),
@@ -846,7 +869,7 @@ describe("DesktopWindow", () => {
         yield* TestClock.adjust(250);
         fakeWindow.isFullScreen.mockReturnValue(true);
 
-        yield* desktopWindow.flushMainWindowBounds;
+        yield* desktopWindow.flushWindowState;
 
         assert.deepEqual(mainWindowBoundsUpdates, [{ x: 200, y: 130, width: 1400, height: 940 }]);
         assert.equal(fakeWindow.getBounds.mock.calls.length, 0);
@@ -882,7 +905,7 @@ describe("DesktopWindow", () => {
         yield* TestClock.adjust(250);
         fakeWindow.isMinimized.mockReturnValue(true);
 
-        yield* desktopWindow.flushMainWindowBounds;
+        yield* desktopWindow.flushWindowState;
 
         assert.deepEqual(mainWindowBoundsUpdates, [{ x: 180, y: 120, width: 1440, height: 960 }]);
         assert.equal(fakeWindow.getBounds.mock.calls.length, 0);
@@ -973,7 +996,7 @@ describe("DesktopWindow", () => {
         yield* Deferred.await(writeStarted);
         fakeWindow.isDestroyed.mockReturnValue(true);
 
-        const flushFiber = yield* desktopWindow.flushMainWindowBounds.pipe(
+        const flushFiber = yield* desktopWindow.flushWindowState.pipe(
           Effect.andThen(Deferred.succeed(flushCompleted, undefined)),
           Effect.forkChild({ startImmediately: true }),
         );
@@ -1399,6 +1422,230 @@ describe("DesktopWindow", () => {
         assert.equal(onReveal.mock.calls.length, 0);
         assert.equal(yield* Ref.get(createCount), 0);
       }).pipe(Effect.provide(layer));
+    }),
+  );
+});
+
+describe("DesktopWindow torn-out windows", () => {
+  const makeChildScenario = (input: {
+    readonly childCount: number;
+    readonly desktopSettings?: DesktopAppSettings.DesktopSettings;
+  }) =>
+    Effect.gen(function* () {
+      const main = makeFakeBrowserWindow();
+      main.getBounds.mockReturnValue({ x: 100, y: 80, width: 1100, height: 780 });
+      const children = Array.from({ length: input.childCount }, () => makeFakeBrowserWindow());
+      const quitting = yield* Ref.make(false);
+      const childWindowsUpdates: ReadonlyArray<DesktopAppSettings.DesktopChildWindowState>[] = [];
+      const sentToAll: Array<readonly [string, ...unknown[]]> = [];
+      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+      const layer = makeTestLayer({
+        window: main.window,
+        createCount: yield* Ref.make(0),
+        mainWindow: yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none()),
+        createQueue: [main.window, ...children.map((child) => child.window)],
+        createdWindowOptions,
+        childWindowsUpdates,
+        sentToAll,
+        desktopState: { backendReady: yield* Ref.make(false), quitting },
+        ...(input.desktopSettings === undefined ? {} : { desktopSettings: input.desktopSettings }),
+      });
+      const lastBroadcast = () =>
+        sentToAll.findLast(([channel]) => channel === WINDOWS_CHANGED_CHANNEL)?.[1];
+      return {
+        main,
+        children,
+        quitting,
+        childWindowsUpdates,
+        createdWindowOptions,
+        lastBroadcast,
+        layer,
+      } as const;
+    });
+
+  const listener = (
+    listeners: Map<string, (...args: readonly unknown[]) => void>,
+    name: string,
+  ) => {
+    const found = listeners.get(name);
+    if (!found) throw new Error(`${name} listener was not registered`);
+    return found;
+  };
+
+  it.effect("opens a window-mode child, tracks its route and title, and persists it", () =>
+    Effect.gen(function* () {
+      const scenario = yield* makeChildScenario({ childCount: 1 });
+      const [child] = scenario.children;
+      if (!child) return yield* Effect.die("missing child");
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        const { id, overSoftCap } = yield* desktopWindow.openChild({ path: "email" });
+
+        assert.isUndefined(overSoftCap);
+        const url = new URL(String(child.loadURL.mock.calls[0]?.[0]));
+        assert.equal(url.searchParams.get("pathwayWindow"), id);
+        assert.equal(url.hash, "#/email");
+        // Cascades off the main window; the main window keeps the agent browser.
+        assert.include(scenario.createdWindowOptions[1], { x: 132, y: 112, width: 900 });
+        assert.deepEqual(yield* desktopWindow.listChildren, [
+          { id, path: "/email", title: "Pathway (Dev)" },
+        ]);
+
+        listener(child.webContentsListeners, "did-navigate-in-page")(
+          {},
+          `pathway-dev://app/?pathwayWindow=${id}#/email/inbox`,
+          true,
+        );
+        listener(child.windowListeners, "page-title-updated")(
+          { preventDefault: () => assert.fail("child titles follow the renderer") },
+          "Inbox - Pathway",
+        );
+        const expected = [{ id, path: "/email/inbox", title: "Inbox - Pathway" }];
+        assert.deepEqual(yield* desktopWindow.listChildren, expected);
+        assert.deepEqual(scenario.lastBroadcast(), expected);
+
+        yield* TestClock.adjust(500);
+        assert.deepEqual(scenario.childWindowsUpdates.at(-1), [
+          { id, path: "/email/inbox", bounds: { x: 0, y: 0, width: 1100, height: 780 } },
+        ]);
+      }).pipe(Effect.provide(scenario.layer));
+    }),
+  );
+
+  it.effect("drops a child closed while running, and keeps the set a quit started with", () =>
+    Effect.gen(function* () {
+      const scenario = yield* makeChildScenario({ childCount: 3 });
+      const [closed, kept, third] = scenario.children;
+      if (!closed || !kept || !third) return yield* Effect.die("missing children");
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        yield* desktopWindow.openChild({ path: "/email" });
+        const { id: keptId } = yield* desktopWindow.openChild({ path: "/calendar" });
+
+        listener(closed.windowListeners, "close")();
+        listener(closed.windowListeners, "closed")();
+        yield* TestClock.adjust(500);
+        assert.deepEqual(
+          scenario.childWindowsUpdates.at(-1)?.map((window) => window.path),
+          ["/calendar"],
+        );
+        assert.deepEqual(scenario.lastBroadcast(), [
+          { id: keptId, path: "/calendar", title: "Pathway (Dev)" },
+        ]);
+
+        // A quit writes the set once; the windows it closes change nothing.
+        yield* Ref.set(scenario.quitting, true);
+        yield* desktopWindow.flushWindowState;
+        const updatesAfterFlush = scenario.childWindowsUpdates.length;
+        assert.deepEqual(
+          scenario.childWindowsUpdates.at(-1)?.map((window) => window.path),
+          ["/calendar"],
+        );
+        listener(kept.windowListeners, "close")();
+        listener(kept.windowListeners, "closed")();
+        yield* TestClock.adjust(500);
+        assert.equal(scenario.childWindowsUpdates.length, updatesAfterFlush);
+        assert.deepEqual(yield* desktopWindow.listChildren, []);
+
+        // A quit that is called off (a failed update install) saves again.
+        yield* Ref.set(scenario.quitting, false);
+        yield* desktopWindow.openChild({ path: "/contacts" });
+        yield* TestClock.adjust(500);
+        assert.deepEqual(
+          scenario.childWindowsUpdates.at(-1)?.map((window) => window.path),
+          ["/contacts"],
+        );
+      }).pipe(Effect.provide(scenario.layer));
+    }),
+  );
+
+  it.effect("restores persisted children once, after the first main window", () =>
+    Effect.gen(function* () {
+      const persisted = {
+        id: "window-a",
+        path: "/calendar",
+        bounds: { x: 40, y: 60, width: 900, height: 700 },
+      };
+      const scenario = yield* makeChildScenario({
+        childCount: 1,
+        desktopSettings: {
+          ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+          childWindows: [persisted],
+        },
+      });
+      const [child] = scenario.children;
+      if (!child) return yield* Effect.die("missing child");
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        assert.include(scenario.createdWindowOptions[1], persisted.bounds);
+        assert.equal(
+          String(child.loadURL.mock.calls[0]?.[0]),
+          "pathway-dev://app/?pathwayWindow=window-a#/calendar",
+        );
+        listener(child.windowListeners, "ready-to-show")();
+        // Restored windows must not steal focus from the main window.
+        assert.equal(child.showInactive.mock.calls.length, 1);
+        assert.deepEqual(yield* desktopWindow.listChildren, [
+          { id: "window-a", path: "/calendar", title: "Pathway (Dev)" },
+        ]);
+
+        // Closing and reopening main (macOS Dock) must not duplicate children.
+        listener(scenario.main.windowListeners, "closed")();
+        yield* desktopWindow.activate;
+        assert.equal(scenario.createdWindowOptions.length, 3);
+        assert.equal((yield* desktopWindow.listChildren).length, 1);
+      }).pipe(Effect.provide(scenario.layer));
+    }),
+  );
+
+  it.effect("flags windows opened past the soft cap and closes them all on request", () =>
+    Effect.gen(function* () {
+      const scenario = yield* makeChildScenario({ childCount: 7 });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        const results = [];
+        for (let index = 0; index < 7; index += 1) {
+          results.push(yield* desktopWindow.openChild({ path: `/page-${index}` }));
+        }
+        assert.deepEqual(
+          results.map((result) => result.overSoftCap === true),
+          [false, false, false, false, false, false, true],
+        );
+
+        yield* desktopWindow.closeAllChildren;
+        for (const child of scenario.children) {
+          assert.equal(child.close.mock.calls.length, 1);
+        }
+        assert.equal(scenario.main.close.mock.calls.length, 0);
+      }).pipe(Effect.provide(scenario.layer));
+    }),
+  );
+
+  it.effect("sends menu actions to the main window even when a torn-out window has focus", () =>
+    Effect.gen(function* () {
+      const scenario = yield* makeChildScenario({ childCount: 1 });
+      const [child] = scenario.children;
+      if (!child) return yield* Effect.die("missing child");
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        yield* desktopWindow.openChild({ path: "/email" });
+        child.isFocused.mockReturnValue(true);
+
+        yield* desktopWindow.dispatchMenuAction("open-settings");
+        assert.equal(child.send.mock.calls.length, 0);
+        assert.deepEqual(scenario.main.send.mock.calls, [[MENU_ACTION_CHANNEL, "open-settings"]]);
+      }).pipe(Effect.provide(scenario.layer));
     }),
   );
 });

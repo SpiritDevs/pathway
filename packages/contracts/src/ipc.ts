@@ -641,6 +641,69 @@ export const PickedThemeFileSchema = Schema.Struct({
   text: Schema.String,
 });
 
+export const DesktopScreenPointSchema = Schema.Struct({
+  x: Schema.Number,
+  y: Schema.Number,
+});
+export type DesktopScreenPoint = typeof DesktopScreenPointSchema.Type;
+
+export const DesktopScreenRectSchema = Schema.Struct({
+  x: Schema.Number,
+  y: Schema.Number,
+  width: Schema.Number,
+  height: Schema.Number,
+});
+export type DesktopScreenRect = typeof DesktopScreenRectSchema.Type;
+
+/**
+ * A torn-out desktop window showing one rail page. `path` is the renderer
+ * route (hash-history path such as "/email"); `title` mirrors the renderer's
+ * document.title.
+ */
+export const DesktopWindowInfoSchema = Schema.Struct({
+  id: Schema.String,
+  path: Schema.String,
+  title: Schema.String,
+});
+export type DesktopWindowInfo = typeof DesktopWindowInfoSchema.Type;
+
+/**
+ * Query parameter, ahead of the hash route, that marks a desktop renderer as a
+ * torn-out window and carries its id: `<app url>?pathwayWindow=<id>#/email`.
+ */
+export const DESKTOP_CHILD_WINDOW_QUERY_PARAM = "pathwayWindow";
+
+export const DesktopWindowOpenInputSchema = Schema.Struct({
+  path: Schema.String,
+  /** Screen point to place the new window's top-left near (drag-out). */
+  screenPoint: Schema.optionalKey(DesktopScreenPointSchema),
+});
+export type DesktopWindowOpenInput = typeof DesktopWindowOpenInputSchema.Type;
+
+export const DesktopWindowOpenResultSchema = Schema.Struct({
+  id: Schema.String,
+  /** Present when the window opened past the soft cap, so the renderer can warn. */
+  overSoftCap: Schema.optionalKey(Schema.Boolean),
+});
+export type DesktopWindowOpenResult = typeof DesktopWindowOpenResultSchema.Type;
+
+/**
+ * Tear-out windows. Present only in the Electron desktop build. A torn-out
+ * window loads the same bundle with `?pathwayWindow=<id>` before the hash.
+ */
+export interface DesktopWindowsBridge {
+  open: (input: DesktopWindowOpenInput) => Promise<DesktopWindowOpenResult>;
+  close: (id: string) => Promise<void>;
+  /** Closes every torn-out window; the main window stays. */
+  closeAll: () => Promise<void>;
+  list: () => Promise<ReadonlyArray<DesktopWindowInfo>>;
+  /** Fires in every window whenever the set, paths, or titles change. */
+  onChanged: (listener: (windows: ReadonlyArray<DesktopWindowInfo>) => void) => () => void;
+  getCursorScreenPoint: () => Promise<DesktopScreenPoint>;
+  /** Bounds of the calling window, in screen coordinates. */
+  getCurrentWindowBounds: () => Promise<DesktopScreenRect>;
+}
+
 export interface DesktopWslDistro {
   name: string;
   isDefault: boolean;
@@ -1441,6 +1504,8 @@ export interface DesktopBridge {
    * build; feature-detect it, because web and remote clients never have it.
    */
   computer?: DesktopComputerBridge;
+  /** Tear-out windows. Desktop-only; web builds have `windows === undefined`. */
+  windows?: DesktopWindowsBridge;
 }
 
 export interface DesktopPreviewBridge {

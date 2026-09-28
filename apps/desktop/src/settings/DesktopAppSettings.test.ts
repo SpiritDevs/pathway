@@ -25,6 +25,7 @@ const DesktopSettingsPatch = Schema.Struct({
     ),
   ),
   mainWindowMaximized: Schema.optionalKey(Schema.Boolean),
+  childWindows: Schema.optionalKey(Schema.Array(Schema.Unknown)),
   serverExposureMode: Schema.optionalKey(Schema.Literals(["local-only", "network-accessible"])),
   updateChannel: Schema.optionalKey(Schema.Literals(["latest", "nightly"])),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
@@ -106,6 +107,7 @@ describe("DesktopSettings", () => {
         linuxPasswordStore: "auto",
         mainWindowBounds: null,
         mainWindowMaximized: false,
+        childWindows: [],
         serverExposureMode: "network-accessible",
         updateChannel: "nightly",
         updateChannelConfiguredByUser: false,
@@ -130,6 +132,7 @@ describe("DesktopSettings", () => {
           linuxPasswordStore: "gnome-libsecret",
           mainWindowBounds: null,
           mainWindowMaximized: false,
+          childWindows: [],
           serverExposureMode: "network-accessible",
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
@@ -220,6 +223,7 @@ describe("DesktopSettings", () => {
           linuxPasswordStore: "auto",
           mainWindowBounds: { x: 120, y: 80, width: 1280, height: 900 },
           mainWindowMaximized: false,
+          childWindows: [],
           serverExposureMode: "network-accessible",
           updateChannel: "latest",
           updateChannelConfiguredByUser: false,
@@ -238,6 +242,7 @@ describe("DesktopSettings", () => {
         yield* writeSettingsPatch({
           mainWindowBounds: { x: 10.5, y: 20, width: 839, height: 620 },
           mainWindowMaximized: true,
+          childWindows: [],
           serverExposureMode: "network-accessible",
         });
 
@@ -272,6 +277,7 @@ describe("DesktopSettings", () => {
             linuxPasswordStore: "auto",
             mainWindowBounds: null,
             mainWindowMaximized: false,
+            childWindows: [],
             serverExposureMode: "network-accessible",
             updateChannel: "nightly",
             updateChannelConfiguredByUser: true,
@@ -304,6 +310,36 @@ describe("DesktopSettings", () => {
     ),
   );
 
+  it.effect("persists torn-out windows and drops malformed entries on load", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        const email = {
+          id: "window-a",
+          path: "/email",
+          bounds: { x: 40, y: 60, width: 900, height: 700 },
+        };
+        yield* writeSettingsPatch({
+          childWindows: [
+            email,
+            { ...email, path: "/duplicate-id" },
+            { id: "window-b", path: "no-leading-slash", bounds: email.bounds },
+            { id: "window-c", path: "/calendar", bounds: { ...email.bounds, width: 100 } },
+            "garbage",
+          ],
+        });
+
+        assert.deepEqual((yield* settings.load).childWindows, [email]);
+
+        const calendar = { ...email, id: "window-d", path: "/calendar" };
+        assert.isTrue((yield* settings.setChildWindows([email, calendar])).changed);
+        assert.isFalse((yield* settings.setChildWindows([email, calendar])).changed);
+        assert.isTrue((yield* settings.setChildWindows([])).changed);
+        assert.deepEqual((yield* settings.load).childWindows, []);
+      }),
+    ),
+  );
+
   it.effect("migrates legacy implicit update channels to the runtime default", () =>
     withSettings(
       Effect.gen(function* () {
@@ -317,6 +353,7 @@ describe("DesktopSettings", () => {
           linuxPasswordStore: "auto",
           mainWindowBounds: null,
           mainWindowMaximized: false,
+          childWindows: [],
           serverExposureMode: "network-accessible",
           updateChannel: "nightly",
           updateChannelConfiguredByUser: false,
@@ -343,6 +380,7 @@ describe("DesktopSettings", () => {
           linuxPasswordStore: "auto",
           mainWindowBounds: null,
           mainWindowMaximized: false,
+          childWindows: [],
           serverExposureMode: "network-accessible",
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,

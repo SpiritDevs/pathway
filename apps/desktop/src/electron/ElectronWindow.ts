@@ -379,4 +379,27 @@ export const make = Effect.gen(function* () {
   });
 });
 
+/**
+ * The BrowserWindow that sent an IPC request, so replies and popups land in the
+ * window the user is working in (main or torn-out). Falls back when the sender
+ * is unknown or has no window of its own.
+ */
+export const senderWindowOr = <E, R>(
+  sender: { readonly id: number } | undefined,
+  fallback: Effect.Effect<Option.Option<Electron.BrowserWindow>, E, R>,
+): Effect.Effect<Option.Option<Electron.BrowserWindow>, E, R> =>
+  Effect.suspend(() => {
+    if (sender === undefined) return fallback;
+    let window: Electron.BrowserWindow | null = null;
+    try {
+      const contents = Electron.webContents.fromId(sender.id);
+      window = contents === undefined ? null : Electron.BrowserWindow.fromWebContents(contents);
+    } catch {
+      window = null;
+    }
+    return window !== null && !window.isDestroyed()
+      ? Effect.succeed(Option.some(window))
+      : fallback;
+  });
+
 export const layer = Layer.effect(ElectronWindow, make);
