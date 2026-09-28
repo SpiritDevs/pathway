@@ -1215,11 +1215,22 @@ export function XcodeSetupFlow({
       </>
     );
   } else if (ready) {
+    // Xcode alone is not enough for simulators; offer the selected Xcode's missing platforms here.
     body = (
-      <p className="flex items-center gap-1.5 text-sm">
-        <CircleCheckIcon className="size-4 text-success" aria-hidden />
-        Xcode {usableXcode(status)?.version} is ready on {hostName}.
-      </p>
+      <>
+        <p className="flex items-center gap-1.5 text-sm">
+          <CircleCheckIcon className="size-4 text-success" aria-hidden />
+          Xcode {usableXcode(status)?.version} is ready on {hostName}.
+        </p>
+        {missingXcodePlatforms(status).includes("iOS") ? (
+          <XcodeRuntimes
+            environmentId={environmentId}
+            target={account.target}
+            status={status}
+            busy={false}
+          />
+        ) : null}
+      </>
     );
   } else if (session.data?.state !== "authenticated") {
     body = (
