@@ -64,6 +64,12 @@ struct PathwayEnvironmentSurfaceTests {
         let offline = PathwaySurfaceIndicator(state: .failed, quality: nil)
         #expect(offline.label == "Offline · retrying")
         #expect(offline.tone == .offline)
+        // A refusal is not retried, so it must not claim to be.
+        let refused = PathwaySurfaceIndicator(state: .stopped, quality: nil)
+        #expect(refused.label == "Disconnected")
+        #expect(refused.tone == .offline)
+        #expect(PathwaySurfaceState.stopped.isDown && PathwaySurfaceState.failed.isDown)
+        #expect(!PathwaySurfaceState.stale.isDown)
         #expect(PathwaySurfaceIndicator(state: .live, quality: .init(fps: 0, latencyMs: 900)).label == "Live")
         let live = PathwaySurfaceIndicator(state: .live, quality: .init(fps: 24, latencyMs: 83))
         #expect(live.label == "24 fps · 80 ms")

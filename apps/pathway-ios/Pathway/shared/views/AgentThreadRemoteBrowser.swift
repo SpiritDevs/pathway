@@ -122,6 +122,9 @@ final class PathwayRemoteBrowserModel {
     let surface: PathwayEnvironmentSurfaceStream
     @ObservationIgnored private let thread: PathwayAgentThreadModel
     @ObservationIgnored private let injectedRequest: PathwayAgentThreadModel.Request?
+    @ObservationIgnored private let injectedSubscribe: Subscribe?
+    /// Advances for each `watchInteractions`; only the newest may write or clear prompts.
+    @ObservationIgnored private var interactionsWatcher = 0
     @ObservationIgnored private var commandRPC: PathwayRPCClient?
     @ObservationIgnored private var httpBaseURL: URL?
     @ObservationIgnored private var metadataRevision: Double?
@@ -152,9 +155,14 @@ final class PathwayRemoteBrowserModel {
     var interaction: PathwayRemoteBrowserInteraction? { selected.flatMap { interactions[$0.id] } }
     var threadID: String { thread.threadID }
 
-    init(thread: PathwayAgentThreadModel, request: PathwayAgentThreadModel.Request? = nil) {
+    /// Opens one subscription: its values, and how to stop it.
+    typealias Subscribe = @MainActor (_ method: String, _ payload: JSONValue) async
+        -> (values: AsyncThrowingStream<JSONValue, Error>, stop: @MainActor () async -> Void)
+
+    init(thread: PathwayAgentThreadModel, request: PathwayAgentThreadModel.Request? = nil, subscribe: Subscribe? = nil) {
         self.thread = thread
         injectedRequest = request
+        injectedSubscribe = subscribe
         surface = PathwayEnvironmentSurfaceStream.forThread(thread, sizing: .active)
         // Open on the page the agent is using, so watching it is one tap.
         selectedID = thread.agentRemoteBrowserTabID
@@ -283,34 +291,51 @@ final class PathwayRemoteBrowserModel {
 
     /// Follows the page's prompts and downloads. Subscribing is what asks the environment to
     /// present them here instead of auto-dismissing them.
+    /// A watcher replaced by a newer one (say, on returning to the foreground) may still be
+    /// unwinding; it must not overwrite or clear the prompts its replacement installed.
     func watchInteractions() async {
-        guard isHostReady, let connect = thread.connect else { return }
-        let environment = thread.environment
+        guard isHostReady else { return }
+        interactionsWatcher += 1
+        let watcher = interactionsWatcher
+        var isCurrent: Bool { watcher == interactionsWatcher }
+        let payload: JSONValue = .object(["threadId": .string(thread.threadID)])
         for delay in [1.0, 2.0, 4.0, nil] {
-            let rpc = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+            guard let subscription = await subscribe("preview.remote.interactions", payload) else { return }
             do {
-                let payload: JSONValue = .object(["threadId": .string(thread.threadID)])
-                for try await value in await rpc.subscribe("preview.remote.interactions", payload: payload, bufferingPolicy: .bufferingNewest(1)) {
+                for try await value in subscription.values {
+                    guard isCurrent else { break }
                     guard let tabValues = value.objectValue?["tabs"],
                           let states = try? JSONDecoder().decode([PathwayRemoteBrowserInteraction].self, from: JSONEncoder().encode(tabValues)) else { continue }
                     interactions = Dictionary(states.map { ($0.tabId, $0) }, uniquingKeysWith: { $1 })
                 }
-                await rpc.stop()
-                releaseInteractions()
+                await subscription.stop()
+                releaseInteractions(watcher)
                 return
             } catch {
-                await rpc.stop()
-                if Task.isCancelled { releaseInteractions(); return }
+                await subscription.stop()
+                if Task.isCancelled { releaseInteractions(watcher); return }
             }
-            guard let delay else { return }
+            guard let delay, isCurrent else { return }
             try? await Task.sleep(for: .seconds(delay))
-            if Task.isCancelled { return }
+            if Task.isCancelled || !isCurrent { return }
         }
     }
 
     /// Unsubscribed, the environment stops holding prompts for this client; stale ones must not
-    /// present when it subscribes again.
-    private func releaseInteractions() { interactions = [:] }
+    /// present when it subscribes again. Only the newest watcher's prompts are its to clear.
+    private func releaseInteractions(_ watcher: Int) {
+        if watcher == interactionsWatcher { interactions = [:] }
+    }
+
+    private func subscribe(_ method: String, _ payload: JSONValue) async
+        -> (values: AsyncThrowingStream<JSONValue, Error>, stop: @MainActor () async -> Void)? {
+        if let injectedSubscribe { return await injectedSubscribe(method, payload) }
+        guard let connect = thread.connect else { return nil }
+        let environment = thread.environment
+        let rpc = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+        let values = await rpc.subscribe(method, payload: payload, bufferingPolicy: .bufferingNewest(1))
+        return (values, { await rpc.stop() })
+    }
 
     func respond(to dialog: PathwayRemoteBrowserInteraction.Dialog, accept: Bool, text: String, tabID: String) async -> Bool {
         var fields: [String: JSONValue] = ["dialogId": .string(dialog.dialogId), "accept": .bool(accept)]
@@ -814,7 +839,7 @@ struct AgentThreadRemoteBrowserPreview: View {
                         .accessibilityIdentifier("thread-remote-browser-preview-hide")
                 }
                 if let stream {
-                    // The surface stays mounted while failed: its task keeps retrying on its own.
+                    // The surface stays mounted while down: a failed one keeps retrying on its own.
                     Button(action: open) {
                         RemoteBrowserSurfaceView(stream: stream, threadID: model.threadID, tabID: tabID, compact: true)
                             .frame(maxWidth: .infinity).frame(height: 200)
@@ -823,10 +848,12 @@ struct AgentThreadRemoteBrowserPreview: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Live view of the agent's browser. Opens the remote browser.")
                     .overlay {
-                        if stream.state == .failed && !stream.hasFrame {
+                        if stream.state.isDown && !stream.hasFrame {
+                            let retrying = stream.state == .failed
                             VStack(spacing: 8) {
-                                Text("The remote browser disconnected. Retrying…").font(.caption).foregroundStyle(.secondary)
-                                Button("Reconnect now") { stream.reconnect() }.font(.caption.bold())
+                                Text(retrying ? "The remote browser disconnected. Retrying…" : "The remote browser disconnected.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Button(retrying ? "Reconnect now" : "Reconnect") { stream.reconnect() }.font(.caption.bold())
                             }
                             .padding(12)
                             .background(.regularMaterial, in: .rect(cornerRadius: 12))

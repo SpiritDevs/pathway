@@ -19,12 +19,12 @@ struct RemoteBrowserSurfaceView: View {
             .overlay {
                 if !stream.hasFrame {
                     // A compact surface's owner shows its own failure, outside any tap target.
-                    if stream.state == .failed && !compact {
+                    if stream.state.isDown && !compact {
                         VStack(spacing: 8) {
                             Text(PathwaySurfaceIndicator(state: stream.state, quality: nil).label)
                             Button("Reconnect") { stream.reconnect() }.font(.caption.bold())
                         }.font(.caption).foregroundStyle(.secondary)
-                    } else if stream.state != .failed {
+                    } else if !stream.state.isDown {
                         ProgressView(compact ? "" : "Connecting…").font(.caption)
                     }
                 }

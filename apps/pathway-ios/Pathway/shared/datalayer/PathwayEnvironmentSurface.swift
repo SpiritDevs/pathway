@@ -57,7 +57,13 @@ struct PathwaySurfaceViewport: Equatable, Sendable {
 /// a small preview that must not shrink the page the agent is using.
 enum PathwaySurfaceSizing: String, Sendable { case active, passive }
 
-enum PathwaySurfaceState: Equatable, Sendable { case connecting, live, stale, failed }
+/// `failed` keeps retrying in the background; `stopped` was refused and waits for Reconnect.
+enum PathwaySurfaceState: Equatable, Sendable {
+    case connecting, live, stale, failed, stopped
+
+    /// No frames are coming, so the viewer should offer Reconnect.
+    var isDown: Bool { self == .failed || self == .stopped }
+}
 
 struct PathwaySurfaceQuality: Equatable, Sendable {
     let fps: Int
@@ -74,6 +80,7 @@ struct PathwaySurfaceIndicator: Equatable {
     init(state: PathwaySurfaceState, quality: PathwaySurfaceQuality?) {
         switch state {
         case .failed: (tone, label) = (.offline, "Offline · retrying")
+        case .stopped: (tone, label) = (.offline, "Disconnected")
         case .stale: (tone, label) = (.degraded, "Reconnecting…")
         case .connecting: (tone, label) = (.degraded, "Connecting…")
         case .live:
@@ -250,10 +257,10 @@ final class PathwayEnvironmentSurfaceStream {
     }
 
     /// Asks the view to start a fresh `run`, after a refusal or when the user retries.
-    /// Clears a failure first, so a view that only mounts the stream while it is not failed
+    /// Clears a failure first, so a view that only mounts the stream while it is not down
     /// mounts it again.
     func reconnect() {
-        if state == .failed { state = .connecting }
+        if state.isDown { state = .connecting }
         reconnects += 1
     }
 
@@ -296,7 +303,7 @@ final class PathwayEnvironmentSurfaceStream {
             if reopening { reopening = false; continue }
             switch reconnect.closed(close, jitter: Double.random(in: 0.8...1.2)) {
             case .stop:
-                state = .failed
+                state = .stopped
                 return
             case let .retry(delay, next, remint):
                 state = next

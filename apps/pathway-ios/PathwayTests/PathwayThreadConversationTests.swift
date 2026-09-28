@@ -1,4 +1,5 @@
 import Foundation
+import os
 @testable import Pathway
 import Testing
 
@@ -289,6 +290,60 @@ struct PathwayThreadConversationTests {
         let sent = try #require(interactions.first?.objectValue)
         #expect(sent["tabId"]?.stringValue == "a")
         #expect(sent["chooserId"]?.stringValue == "chooser-a")
+        await browser.stop()
+    }
+
+    @Test func anUnwindingInteractionsWatcherLeavesItsReplacementsPromptsAlone() async throws {
+        let thread = makeModel { _, _ in .object([:]) }
+        let prompt = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {"tabs":[{"tabId":"a","dialog":{"dialogId":"d","kind":"confirm","message":"Sure?","defaultValue":""},
+                  "fileChooser":null,"select":null,"downloads":[]}]}
+        """#.utf8))
+        let signals = AsyncStream<String>.makeStream()
+        var signal = signals.stream.makeAsyncIterator()
+        let (first, firstContinuation) = AsyncThrowingStream<JSONValue, Error>.makeStream()
+        var releaseFirstStop: CheckedContinuation<Void, Never>?
+        let pulls = OSAllocatedUnfairLock(initialState: 0)
+        // The replacement delivers one prompt, says so once it has been applied, then idles.
+        let second = AsyncThrowingStream<JSONValue, Error> {
+            let pull = pulls.withLock { $0 += 1; return $0 }
+            if pull == 1 { return prompt }
+            signals.continuation.yield("applied")
+            try await Task.sleep(for: .seconds(3_600))
+            return nil
+        }
+        var subscriptions = 0
+        let browser = PathwayRemoteBrowserModel(thread: thread, request: { _, _ in
+            .object(["tabs": .array([]), "selectedTabId": .null])
+        }, subscribe: { _, _ in
+            subscriptions += 1
+            if subscriptions == 1 {
+                signals.continuation.yield("subscribed")
+                return (first, {
+                    await withCheckedContinuation { releaseFirstStop = $0; signals.continuation.yield("stopping") }
+                })
+            }
+            return (second, {})
+        })
+        await browser.start()
+
+        let old = Task { await browser.watchInteractions() }
+        #expect(await signal.next() == "subscribed")
+        let replacement = Task { await browser.watchInteractions() }
+        #expect(await signal.next() == "applied")
+        #expect(browser.interactions["a"]?.dialog?.dialogId == "d")
+
+        // The old watcher ends and waits on its unsubscribe while the replacement is live.
+        firstContinuation.finish()
+        #expect(await signal.next() == "stopping")
+        releaseFirstStop?.resume()
+        await old.value
+        #expect(browser.interactions["a"]?.dialog?.dialogId == "d")
+
+        replacement.cancel()
+        await replacement.value
+        #expect(browser.interactions.isEmpty)
+        signals.continuation.finish()
         await browser.stop()
     }
 
