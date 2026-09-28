@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import { SessionStore } from "../auth/SessionStore.ts";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   AuthOrchestrationReadScope,
@@ -69,7 +70,8 @@ const fixture = (
   );
   disposers.push(dispose);
   return {
-    handler: (request: Request) => handler(request, Context.empty()),
+    handler: (request: Request) =>
+      handler(request, Context.make(SessionStore, {} as SessionStore["Service"])),
     requests,
     finalized: () => finalized,
   };
@@ -116,17 +118,40 @@ describe("device hub proxy", () => {
     await response.text();
   });
 
-  it("never forwards the vendor shell endpoint", async () => {
-    const { handler, requests } = fixture([AuthOrchestrationOperateScope]);
-    expect(
-      (
-        await handler(
-          new Request("http://t3.test/api/device-hub/vendor/serve-sim/exec", { method: "POST" }),
-        )
-      ).status,
-    ).toBe(404);
-    expect(requests).toEqual([]);
+  it("reads Android fold state but requires operate scope to change it", async () => {
+    const path = "http://t3.test/api/device-hub/vendor/serve-emu/api/fold?device=emulator-5554";
+    const reader = fixture([AuthOrchestrationReadScope]);
+    const read = await reader.handler(new Request(path));
+    expect(read.status).toBe(200);
+    await read.text();
+    expect(reader.requests).toEqual([
+      "http://hub.test/vendor/serve-emu/api/fold?device=emulator-5554",
+    ]);
+    const denied = await reader.handler(
+      new Request(path, { method: "POST", body: '{"posture":"closed"}' }),
+    );
+    expect(denied.status).toBe(403);
+    expect(reader.requests).toHaveLength(1);
+
+    const operator = fixture([AuthOrchestrationOperateScope]);
+    const changed = await operator.handler(
+      new Request(path, { method: "POST", body: '{"posture":"closed"}' }),
+    );
+    expect(changed.status).toBe(200);
+    await changed.text();
+    expect(operator.requests).toEqual([
+      "http://hub.test/vendor/serve-emu/api/fold?device=emulator-5554",
+    ]);
   });
+
+  it.each(["/vendor/serve-sim/exec", "/vendor/serve-sim/api"])(
+    "never forwards vendor bootstrap or shell endpoint %s",
+    async (path) => {
+      const { handler, requests } = fixture([AuthOrchestrationOperateScope]);
+      expect((await handler(new Request(`http://t3.test/api/device-hub${path}`))).status).toBe(404);
+      expect(requests).toEqual([]);
+    },
+  );
 });
 
 it.each([
