@@ -230,7 +230,12 @@ function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-sidebar surface-grain">
         <WorkspaceTopBar />
         <div
-          className="mt-11 flex min-h-0 min-w-0 flex-1 flex-col gap-2 md:mt-0 md:mr-2 md:mb-2"
+          className={cn(
+            "mt-11 flex min-h-0 min-w-0 flex-1 flex-col gap-2 md:mt-0 md:mr-2 md:mb-2",
+            // The rail is the frame's left gutter; a torn-out window has none, so it
+            // gets the same gap as the right and bottom edges.
+            isChildWindow && "md:ml-2",
+          )}
           data-app-workspace-row=""
         >
           <div className="flex min-h-0 min-w-0 flex-1 gap-2" data-app-workspace-main-row="">

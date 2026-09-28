@@ -45,6 +45,7 @@ import {
   useState,
   type ComponentProps,
   type MouseEvent,
+  type Ref,
 } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate, useRouterState } from "@tanstack/react-router";
@@ -55,6 +56,7 @@ import { cn } from "../../lib/utils";
 import { readLocalApi } from "../../localApi";
 import {
   canOpenPageWindows,
+  canTearOutByDrag,
   closeAllPageWindows,
   closePageWindow,
   usePageWindows,
@@ -68,6 +70,12 @@ import {
   readPaneHref,
 } from "../../panes/paneActions";
 import type { PaneDestination } from "../../panes/paneDestinations";
+import {
+  describeDragGhost,
+  endDragGhost,
+  prepareDragGhost,
+  setDragGhostOutside,
+} from "../../panes/dragGhost";
 import { isSplit, PRIMARY_PANE_ID } from "../../panes/paneLayout";
 import { getPaneRouter } from "../../panes/paneRouters";
 import { usePaneStore } from "../../panes/paneStore";
@@ -443,10 +451,30 @@ function DraggableNavigationRailButton({
   );
 }
 
-/** Follows the pointer once a drag leaves the rail, where the rail's own overflow would clip the button. */
-function RailDragChip({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+/**
+ * Follows the pointer once a drag leaves the rail, where the rail's own overflow
+ * would clip the button. Past the window's edge the desktop shell draws a copy of
+ * it instead, so this one steps aside there.
+ */
+function RailDragChip({
+  icon: Icon,
+  label,
+  ref,
+  outside,
+}: {
+  icon: LucideIcon;
+  label: string;
+  ref: Ref<HTMLDivElement>;
+  outside: boolean;
+}) {
   return (
-    <div className="pointer-events-none inline-flex items-center gap-2 rounded-lg border border-border bg-popover px-2.5 py-1.5 text-sm text-popover-foreground shadow-lg">
+    <div
+      ref={ref}
+      className={cn(
+        "pointer-events-none inline-flex items-center gap-2 rounded-lg border border-border bg-popover px-2.5 py-1.5 text-sm text-popover-foreground shadow-lg",
+        outside && "opacity-0",
+      )}
+    >
       <Icon className="size-4" />
       {label}
     </div>
@@ -704,6 +732,11 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   const splitDragDestination = useRailDragStore((state) =>
     state.phase === "rail" ? null : state.destination,
   );
+  // Only a desktop build draws the chip outside the window, so only there does it hide.
+  const splitDragOutside = useRailDragStore(
+    (state) => canTearOutByDrag && state.phase === "outside",
+  );
+  const dragChipRef = useRef<HTMLDivElement>(null);
   const rememberedThreadRouteRef = useRef<RememberedThreadRoute | null>(
     resolveRememberedThreadRoute(pathname, null),
   );
@@ -936,12 +969,18 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   }, []);
 
   const handleDragMove = useCallback((event: DragMoveEvent) => {
-    updateRailDragTarget(
-      resolveDragTarget(dragGeometryRef.current, event.activatorEvent, event.delta),
-    );
+    const target = resolveDragTarget(dragGeometryRef.current, event.activatorEvent, event.delta);
+    updateRailDragTarget(target);
+    const chip = dragChipRef.current;
+    const origin = event.activatorEvent ? getEventCoordinates(event.activatorEvent) : null;
+    if (!canTearOutByDrag || target.kind === "rail" || !chip || !origin) return;
+    const pointer = { x: origin.x + event.delta.x, y: origin.y + event.delta.y };
+    prepareDragGhost(() => describeDragGhost(chip, pointer));
+    setDragGhostOutside(target.kind === "outside");
   }, []);
 
   const handleDragCancel = useCallback(() => {
+    endDragGhost();
     dragGeometryRef.current = null;
     endRailDrag();
     clearDraggedDestinationAfterClick();
@@ -951,6 +990,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
     (event: DragEndEvent) => {
       const destination = event.active.id as PaneDestination;
       const target = resolveDragTarget(dragGeometryRef.current, event.activatorEvent, event.delta);
+      endDragGhost();
       dragGeometryRef.current = null;
       endRailDrag();
       clearDraggedDestinationAfterClick();
@@ -1099,7 +1139,12 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
             {splitDragItem
               ? createPortal(
                   <DragOverlay dropAnimation={null}>
-                    <RailDragChip icon={splitDragItem.icon} label={splitDragItem.label} />
+                    <RailDragChip
+                      ref={dragChipRef}
+                      icon={splitDragItem.icon}
+                      label={splitDragItem.label}
+                      outside={splitDragOutside}
+                    />
                   </DragOverlay>,
                   document.body,
                 )
