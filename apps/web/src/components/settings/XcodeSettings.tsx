@@ -166,7 +166,7 @@ function XcodeEnvironmentSettings({ environmentId }: { environmentId: Environmen
                   <p className="text-sm text-muted-foreground">
                     Finish or cancel the current job to install another version.
                   </p>
-                ) : session.data?.state === "authenticated" ? (
+                ) : session.data?.state === "authenticated" && !session.error ? (
                   <XcodeInstallChooser
                     environmentId={environmentId}
                     target={target}

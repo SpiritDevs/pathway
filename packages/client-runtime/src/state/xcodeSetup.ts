@@ -142,8 +142,9 @@ export function xcodeRuntimeMajor(xcodeVersion: string, platform: XcodePlatform)
 }
 
 /**
- * Platforms whose runtime for the selected Xcode is not installed. An older runtime (iOS 18 beside
- * Xcode 26) does not count; when the version is unknown any installed runtime does.
+ * Platforms whose runtime for the selected Xcode is not installed and usable. An older runtime (iOS
+ * 18 beside Xcode 26) or one simctl marks unavailable does not count; when the version is unknown
+ * any available runtime does.
  */
 export function missingXcodePlatforms(status: XcodeStatus): ReadonlyArray<XcodePlatform> {
   const selected = usableXcode(status);
@@ -154,6 +155,7 @@ export function missingXcodePlatforms(status: XcodeStatus): ReadonlyArray<XcodeP
       (runtime) =>
         runtime.platform === platform &&
         runtime.installed &&
+        runtime.available &&
         (major === null || Number.parseInt(runtime.version, 10) === major),
     );
   });

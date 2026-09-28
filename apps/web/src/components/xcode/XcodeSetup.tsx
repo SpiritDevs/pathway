@@ -1136,9 +1136,9 @@ function HostUnsupported({ label }: { label: string }) {
 }
 
 /**
- * The Devices pending screen: Apple ID first, then the Xcode version, then a live install. Mount it
- * only while the panel is visible; `onReady` fires each time the Mac gains a selected Xcode with no
- * job running.
+ * The guided setup for a screen that needs Xcode: Apple ID first, then the Xcode version, then a
+ * live install. Mount it only while its screen is visible; `onReady` fires each time the Mac gains
+ * a selected Xcode with no job running.
  */
 export function XcodeSetupFlow({
   environmentId,
@@ -1161,6 +1161,8 @@ export function XcodeSetupFlow({
   const status = data?.status ?? null;
   const job = data?.job ?? null;
   const ready = status !== null && usableXcode(status) !== null && !isXcodeJobActive(job);
+  // A retained session snapshot is stale once its stream fails; the sign-in shows the error.
+  const signedIn = session.data?.state === "authenticated" && !session.error;
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
   useEffect(() => {
@@ -1197,7 +1199,7 @@ export function XcodeSetupFlow({
           email={account.account?.email ?? "your Apple ID"}
           hostName={hostName}
         />
-        {isXcodeJobActive(job) ? null : session.data?.state === "authenticated" ? (
+        {isXcodeJobActive(job) ? null : signedIn ? (
           <XcodeInstallChooser
             environmentId={environmentId}
             target={account.target}
@@ -1232,7 +1234,7 @@ export function XcodeSetupFlow({
         ) : null}
       </>
     );
-  } else if (session.data?.state !== "authenticated") {
+  } else if (!signedIn) {
     body = (
       <>
         {status.installed.length > 0 ? (

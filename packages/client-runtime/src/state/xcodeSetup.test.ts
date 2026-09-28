@@ -282,13 +282,18 @@ describe("xcodeJobAnnouncement", () => {
 });
 
 describe("runtime coverage", () => {
-  const runtime = (platform: XcodePlatform, version: string, installed = true) => ({
+  const runtime = (
+    platform: XcodePlatform,
+    version: string,
+    installed = true,
+    available = true,
+  ) => ({
     id: `${platform}-${version}`,
     platform,
     version,
     build: null,
     installed,
-    available: true,
+    available,
     downloadBytes: null,
   });
   const selected = (version: string) => [
@@ -314,5 +319,17 @@ describe("runtime coverage", () => {
       ),
     ).toEqual(["watchOS", "tvOS"]);
     expect(missingXcodePlatforms(status({ installed: [], runtimes: [] }))).toEqual([]);
+  });
+
+  it("still offers a platform whose matching runtime simctl marks unavailable", () => {
+    const broken = status({
+      installed: selected("26.1"),
+      runtimes: [
+        runtime("iOS", "26.1", true, false),
+        runtime("watchOS", "26.1"),
+        runtime("tvOS", "26.1"),
+      ],
+    });
+    expect(missingXcodePlatforms(broken)).toEqual(["iOS"]);
   });
 });
