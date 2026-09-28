@@ -13,11 +13,16 @@ import {
   diskShortfall,
   formatXcodeBytes,
   isXcodeJobActive,
+  missingXcodePlatforms,
+  nextXcodeAdminApproval,
   orderAvailableXcodes,
   summarizeXcodeJob,
   usableXcode,
   XCODE_JOB_STATE_LABELS,
   XCODE_PLATFORMS,
+  XCODE_STEP_STATE_LABELS,
+  xcodeAdminStepKey,
+  xcodeJobAnnouncement,
   xcodeInstallRequiredBytes,
   xcodeJobTitle,
   xcodeRuntimesRequiredBytes,
@@ -43,7 +48,7 @@ import {
 import { cn } from "~/lib/utils";
 import { appleEnvironment } from "~/state/apple";
 import { useEnvironment } from "~/state/environments";
-import { useEnvironmentQuery } from "~/state/query";
+import { useEnvironmentQuery, type EnvironmentQueryView } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { xcodeEnvironment } from "~/state/xcode";
 import { appleRpcCompanyId } from "../settings/AppleAccountsSettings.logic";
@@ -54,6 +59,8 @@ import { Input } from "../ui/input";
 import { Progress } from "../ui/progress";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import {
+  appleIdPasswordFormKey,
+  appleIdSignInStage,
   describeMac,
   describeXcodeFailure,
   pickXcodeAccountId,
@@ -68,6 +75,7 @@ export interface XcodeTarget {
 }
 
 type AppleIdSessionState = typeof AppleIdSessionSchema.Type;
+export type AppleIdSessionView = EnvironmentQueryView<AppleIdSessionState>;
 
 /** Runs one environment command, keeping its pending flag and safe error message. */
 function useXcodeAction() {
@@ -247,6 +255,8 @@ function formatClockTime(epochMs: number): string {
 /**
  * Signs the environment in to an Apple ID: password, then Apple's two-factor code. The password
  * goes to the environment for this attempt only; every watching client sees the same challenge.
+ * `signInAgain` asks for a password even though the session reads as signed in, for a session Apple
+ * has already rejected.
  */
 export function AppleIdSignIn({
   environmentId,
@@ -254,22 +264,35 @@ export function AppleIdSignIn({
   email,
   session,
   hostName,
+  signInAgain = false,
+  onCancelSignInAgain,
 }: {
   environmentId: EnvironmentId;
   target: XcodeTarget;
   email: string;
-  session: AppleIdSessionState | null;
+  session: AppleIdSessionView;
   hostName: string;
+  signInAgain?: boolean;
+  onCancelSignInAgain?: () => void;
 }) {
-  const start = useAtomCommand(appleEnvironment.idStart, { reportFailure: false });
-  const cancel = useAtomCommand(appleEnvironment.idCancel, { reportFailure: false });
-  const action = useXcodeAction();
-  const [password, setPassword] = useState("");
-
-  if (session === null) {
+  const stage = appleIdSignInStage(session, signInAgain);
+  const data = session.data;
+  if (stage === "unavailable") {
+    return (
+      <div className="space-y-2 text-sm">
+        <p role="alert" className="text-destructive">
+          Could not read the Apple ID session on {hostName}. {session.error}
+        </p>
+        <Button size="sm" variant="outline" onClick={session.refresh}>
+          Try again
+        </Button>
+      </div>
+    );
+  }
+  if (data === null) {
     return <p className="text-sm text-muted-foreground">Checking Apple ID…</p>;
   }
-  if (session.state === "authenticated") {
+  if (stage === "authenticated") {
     return (
       <p className="flex items-center gap-1.5 text-sm">
         <ShieldCheckIcon className="size-4 text-success" aria-hidden />
@@ -277,42 +300,92 @@ export function AppleIdSignIn({
       </p>
     );
   }
-  if (session.state === "authenticating") {
+  if (data.state === "authenticating") {
     return (
-      <div className="flex items-center gap-3 text-sm">
-        <span className="text-muted-foreground">Signing in to Apple…</span>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={action.pending !== null}
-          onClick={() =>
-            void action.run("cancel", "Could not cancel sign-in.", () =>
-              cancel({ environmentId, input: { ...target, flowId: session.flowId } }),
-            )
-          }
-        >
-          Cancel
-        </Button>
-        <ActionError message={action.error} />
-      </div>
+      <AppleIdAuthenticating environmentId={environmentId} target={target} flowId={data.flowId} />
     );
   }
-  if (session.state === "challenge") {
+  if (data.state === "challenge") {
     return (
       <AppleIdChallenge
-        key={session.flowId}
+        key={data.flowId}
         environmentId={environmentId}
         target={target}
-        challenge={session}
+        challenge={data}
       />
     );
   }
   const notice =
-    session.state === "expired"
+    data.state === "expired"
       ? "Your Apple ID session expired. Sign in again to continue."
-      : session.state === "failed"
-        ? describeXcodeFailure({ _tag: "AppleError", ...session.error }, "Apple sign-in failed.")
+      : data.state === "failed"
+        ? describeXcodeFailure({ _tag: "AppleError", ...data.error }, "Apple sign-in failed.")
         : null;
+  return (
+    <AppleIdPasswordForm
+      // A password typed for one Apple ID must never be submitted for another.
+      key={appleIdPasswordFormKey(environmentId, target)}
+      environmentId={environmentId}
+      target={target}
+      email={email}
+      hostName={hostName}
+      notice={notice}
+      onCancel={signInAgain ? onCancelSignInAgain : undefined}
+    />
+  );
+}
+
+/** Cancel stays usable while `apple.id.start` is still waiting on Apple. */
+function AppleIdAuthenticating({
+  environmentId,
+  target,
+  flowId,
+}: {
+  environmentId: EnvironmentId;
+  target: XcodeTarget;
+  flowId: string;
+}) {
+  const cancel = useAtomCommand(appleEnvironment.idCancel, { reportFailure: false });
+  const action = useXcodeAction();
+  return (
+    <div className="flex flex-wrap items-center gap-3 text-sm">
+      <span className="text-muted-foreground">Signing in to Apple…</span>
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={action.pending !== null}
+        onClick={() =>
+          void action.run("cancel", "Could not cancel sign-in.", () =>
+            cancel({ environmentId, input: { ...target, flowId } }),
+          )
+        }
+      >
+        {action.pending === "cancel" ? "Cancelling…" : "Cancel"}
+      </Button>
+      <ActionError message={action.error} />
+    </div>
+  );
+}
+
+/** Mounted only while a password is wanted, so leaving this stage discards anything typed. */
+function AppleIdPasswordForm({
+  environmentId,
+  target,
+  email,
+  hostName,
+  notice,
+  onCancel,
+}: {
+  environmentId: EnvironmentId;
+  target: XcodeTarget;
+  email: string;
+  hostName: string;
+  notice: string | null;
+  onCancel: (() => void) | undefined;
+}) {
+  const start = useAtomCommand(appleEnvironment.idStart, { reportFailure: false });
+  const action = useXcodeAction();
+  const [password, setPassword] = useState("");
   return (
     <form
       className="space-y-3"
@@ -348,9 +421,16 @@ export function AppleIdSignIn({
         />
       </label>
       <ActionError message={action.error} />
-      <Button type="submit" size="sm" disabled={action.pending !== null || !password}>
-        {action.pending === "start" ? "Signing in…" : "Sign in"}
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" size="sm" disabled={action.pending !== null || !password}>
+          {action.pending === "start" ? "Signing in…" : "Sign in"}
+        </Button>
+        {onCancel ? (
+          <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        ) : null}
+      </div>
     </form>
   );
 }
@@ -554,7 +634,7 @@ export function XcodeJobCard({
   target: XcodeTarget;
   job: XcodeJob;
   status: XcodeStatus | null;
-  session: AppleIdSessionState | null;
+  session: AppleIdSessionView;
   email: string;
   hostName: string;
 }) {
@@ -564,12 +644,21 @@ export function XcodeJobCard({
   const action = useXcodeAction();
   const summary = summarizeXcodeJob(job);
   const input = { ...target, jobId: job.id };
-  // The host stays in needs-admin while its prompt is open; remember which step was approved.
+  // The host stays in needs-admin while its prompt is open; remember which step was approved,
+  // and forget it once that attempt ends so a retried step can be approved again.
   const [approvedStep, setApprovedStep] = useState<string | null>(null);
-  const adminStep = job.state === "needs-admin" ? summary.current : null;
-  const adminKey = adminStep ? `${job.id}:${adminStep.id}` : null;
-  const awaitingPrompt = adminKey !== null && approvedStep === adminKey;
+  const keptApproval = nextXcodeAdminApproval(approvedStep, job);
+  if (keptApproval !== approvedStep) setApprovedStep(keptApproval);
+  const adminKey = xcodeAdminStepKey(job);
+  const awaitingPrompt = adminKey !== null && keptApproval === adminKey;
   const failure = summary.current?.error?.message ?? null;
+  // Apple can reject a session before it expires. Signing in again replaces the session that read
+  // as signed in when the user asked; a fresh session has a new expiry and ends this mode.
+  const [replacingSession, setReplacingSession] = useState<number | null>(null);
+  const sessionData = session.data;
+  const signInAgain =
+    sessionData?.state === "authenticated" && replacingSession === sessionData.expiresAt;
+  const signedIn = sessionData?.state === "authenticated" && !signInAgain && !session.error;
 
   return (
     <div className="space-y-3 rounded-md border p-3">
@@ -584,11 +673,16 @@ export function XcodeJobCard({
       ) : null}
       <ol className="space-y-1.5" aria-label="Steps">
         {summary.steps.map((step) => (
-          <li key={step.id} className="flex items-start gap-2 text-xs">
+          <li
+            key={step.id}
+            className="flex items-start gap-2 text-xs"
+            aria-current={step.id === summary.current?.id ? "step" : undefined}
+          >
             <span className="mt-px">{STEP_ICONS[step.state]}</span>
             <div className="min-w-0 flex-1 space-y-1">
               <p className={cn(step.state === "pending" && "text-muted-foreground")}>
                 {step.label}
+                <span className="sr-only">: {XCODE_STEP_STATE_LABELS[step.state]}</span>
               </p>
               {step.id === "download" && step.state === "running" && step.progress ? (
                 <DownloadProgress progress={step.progress} />
@@ -636,7 +730,24 @@ export function XcodeJobCard({
             email={email}
             session={session}
             hostName={hostName}
+            signInAgain={signInAgain}
+            onCancelSignInAgain={() => setReplacingSession(null)}
           />
+          {signedIn && sessionData?.state === "authenticated" ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs text-muted-foreground">
+                If Apple keeps asking, the saved session no longer works. Sign in again for a fresh
+                one.
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setReplacingSession(sessionData.expiresAt)}
+              >
+                Sign in again
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -656,13 +767,11 @@ export function XcodeJobCard({
         {canRetryXcodeJob(job) ? (
           <Button
             size="sm"
-            disabled={
-              action.pending !== null ||
-              (job.state === "needs-reauth" && session?.state !== "authenticated")
-            }
-            onClick={() =>
-              void action.run("retry", "Could not retry.", () => retry({ environmentId, input }))
-            }
+            disabled={action.pending !== null || (job.state === "needs-reauth" && !signedIn)}
+            onClick={() => {
+              setApprovedStep(null);
+              void action.run("retry", "Could not retry.", () => retry({ environmentId, input }));
+            }}
           >
             {action.pending === "retry"
               ? "Retrying…"
@@ -934,10 +1043,7 @@ export function XcodeRuntimes({
   });
   const action = useXcodeAction();
   const selected = usableXcode(status);
-  const missing = XCODE_PLATFORMS.filter(
-    (platform) =>
-      !status.runtimes.some((runtime) => runtime.platform === platform && runtime.installed),
-  );
+  const missing = missingXcodePlatforms(status);
   const [platforms, setPlatforms] = useState<ReadonlyArray<XcodePlatform>>([]);
   const chosen = platforms.filter((platform) => missing.includes(platform));
   const required = xcodeRuntimesRequiredBytes(chosen);
@@ -1002,6 +1108,21 @@ export function XcodeRuntimes({
         </form>
       ) : null}
     </div>
+  );
+}
+
+/** Speaks job states that need the user or end the job. Keep it mounted so changes are announced. */
+export function XcodeJobAnnouncer({
+  job,
+  status,
+}: {
+  job: XcodeJob | null;
+  status: XcodeStatus | null;
+}) {
+  return (
+    <p role="status" aria-live="polite" className="sr-only">
+      {xcodeJobAnnouncement(job, status)}
+    </p>
   );
 }
 
@@ -1072,7 +1193,7 @@ export function XcodeSetupFlow({
           target={account.target}
           job={job}
           status={status}
-          session={session.data}
+          session={session}
           email={account.account?.email ?? "your Apple ID"}
           hostName={hostName}
         />
@@ -1087,7 +1208,7 @@ export function XcodeSetupFlow({
             environmentId={environmentId}
             target={account.target}
             email={account.account?.email ?? "your Apple ID"}
-            session={session.data}
+            session={session}
             hostName={hostName}
           />
         )}
@@ -1115,7 +1236,7 @@ export function XcodeSetupFlow({
           environmentId={environmentId}
           target={account.target}
           email={account.account?.email ?? "your Apple ID"}
-          session={session.data}
+          session={session}
           hostName={hostName}
         />
       </>
@@ -1155,6 +1276,7 @@ export function XcodeSetupFlow({
           <p className="text-xs text-muted-foreground">Waiting for {host.label} to connect…</p>
         ) : null}
       </header>
+      <XcodeJobAnnouncer job={job} status={status} />
       {account.target && account.accounts.length > 1 ? (
         <XcodeAccountPicker selection={account} />
       ) : null}

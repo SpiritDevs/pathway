@@ -16,6 +16,8 @@ import {
   useXcodeAccount,
   useXcodeHost,
   useXcodeLive,
+  XcodeJobAnnouncer,
+  type AppleIdSessionView,
   type XcodeTarget,
 } from "../xcode/XcodeSetup";
 import { describeXcodeFailure } from "../xcode/XcodeSetup.logic";
@@ -86,6 +88,7 @@ function XcodeEnvironmentSettings({ environmentId }: { environmentId: Environmen
   const target = account.target;
   return (
     <>
+      <XcodeJobAnnouncer job={job} status={status} />
       <SettingsSection title="Apple ID" id="xcode-apple-id">
         <div className="space-y-3 px-4 py-3">
           <p className="text-xs text-muted-foreground">
@@ -98,7 +101,7 @@ function XcodeEnvironmentSettings({ environmentId }: { environmentId: Environmen
               environmentId={environmentId}
               target={target}
               email={email}
-              session={session.data}
+              session={session}
               hostName={hostName}
             />
           ) : null}
@@ -130,7 +133,7 @@ function XcodeEnvironmentSettings({ environmentId }: { environmentId: Environmen
                     target={target}
                     job={job}
                     status={status}
-                    session={session.data}
+                    session={session}
                     email={email}
                     hostName={hostName}
                   />
@@ -193,7 +196,7 @@ function AppleIdSessionControls({
   environmentId: EnvironmentId;
   target: XcodeTarget;
   email: string;
-  session: Parameters<typeof AppleIdSignIn>[0]["session"];
+  session: AppleIdSessionView;
   hostName: string;
 }) {
   const signOut = useAtomCommand(appleEnvironment.idSignOut, { reportFailure: false });
@@ -208,7 +211,7 @@ function AppleIdSessionControls({
         session={session}
         hostName={hostName}
       />
-      {session?.state === "authenticated" ? (
+      {session.data?.state === "authenticated" && !session.error ? (
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-xs text-muted-foreground">
             Pathway keeps this Apple session sealed in your account so {hostName} can resume

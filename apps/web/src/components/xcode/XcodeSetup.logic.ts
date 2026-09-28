@@ -73,3 +73,35 @@ export function rememberXcodeAccount(environmentId: string, accountId: string): 
     // Storage can be unavailable in private windows; the picker still works for this visit.
   }
 }
+
+export type AppleIdSignInStage =
+  | "unavailable"
+  | "checking"
+  | "authenticated"
+  | "authenticating"
+  | "challenge"
+  | "password";
+
+/**
+ * Which part of Apple ID sign-in to show. A stream error wins over stale data so it can be retried;
+ * `signInAgain` replaces an authenticated session Apple has already rejected.
+ */
+export function appleIdSignInStage(
+  session: { readonly data: { readonly state: string } | null; readonly error: string | null },
+  signInAgain = false,
+): AppleIdSignInStage {
+  if (session.error !== null) return "unavailable";
+  const state = session.data?.state;
+  if (state === undefined) return "checking";
+  if (state === "authenticated") return signInAgain ? "password" : "authenticated";
+  if (state === "authenticating" || state === "challenge") return state;
+  return "password";
+}
+
+/** A password belongs to one Apple ID on one environment; any other target gets a fresh form. */
+export function appleIdPasswordFormKey(
+  environmentId: string,
+  target: { readonly companyId: string; readonly accountId: string },
+): string {
+  return `${environmentId}\u0000${target.companyId}\u0000${target.accountId}`;
+}

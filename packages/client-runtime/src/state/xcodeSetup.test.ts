@@ -1,4 +1,4 @@
-import type { XcodeJob, XcodeStatus, XcodeStep } from "@spiritdevs/contracts/xcode";
+import type { XcodeJob, XcodePlatform, XcodeStatus, XcodeStep } from "@spiritdevs/contracts/xcode";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -11,7 +11,12 @@ import {
   formatXcodeBytes,
   formatXcodeEta,
   isXcodeJobActive,
+  missingXcodePlatforms,
+  nextXcodeAdminApproval,
   orderAvailableXcodes,
+  xcodeAdminStepKey,
+  xcodeJobAnnouncement,
+  xcodeRuntimeMajor,
   summarizeXcodeJob,
   usableXcode,
   xcodeInstallRequiredBytes,
@@ -233,5 +238,81 @@ describe("xcodeJobTitle", () => {
         status(),
       ),
     ).toBe("Adding iOS, tvOS to Xcode-26.1");
+  });
+});
+
+describe("admin approval", () => {
+  const waiting = job({
+    state: "needs-admin",
+    steps: [step("check", "completed"), step("move", "needs-admin")],
+  });
+
+  it("keeps an approval while the same step waits, and drops it once the attempt ends", () => {
+    const approved = xcodeAdminStepKey(waiting);
+    expect(approved).toBe("job-1:move");
+    expect(nextXcodeAdminApproval(approved, waiting)).toBe(approved);
+    // The Mac prompt was dismissed: the step fails, so the retried step is approvable again.
+    const dismissed = job({
+      state: "failed",
+      steps: [step("check", "completed"), step("move", "failed")],
+    });
+    expect(nextXcodeAdminApproval(approved, dismissed)).toBeNull();
+    expect(nextXcodeAdminApproval(null, waiting)).toBeNull();
+    expect(nextXcodeAdminApproval(approved, { ...waiting, id: "job-2" })).toBeNull();
+  });
+});
+
+describe("xcodeJobAnnouncement", () => {
+  it("speaks only for states that need the user or end the job", () => {
+    expect(xcodeJobAnnouncement(job({ state: "needs-admin" }), status())).toBe(
+      "Installing Xcode 26.1: needs admin approval on the Mac.",
+    );
+    expect(xcodeJobAnnouncement(job({ state: "needs-reauth" }), status())).toBe(
+      "Installing Xcode 26.1: sign in to your Apple ID again to continue.",
+    );
+    expect(xcodeJobAnnouncement(job({ state: "failed" }), status())).toBe(
+      "Installing Xcode 26.1 failed.",
+    );
+    expect(xcodeJobAnnouncement(job({ state: "completed" }), status())).toBe(
+      "Installed Xcode 26.1.",
+    );
+    expect(xcodeJobAnnouncement(job(), status())).toBe("");
+    expect(xcodeJobAnnouncement(null, status())).toBe("");
+  });
+});
+
+describe("runtime coverage", () => {
+  const runtime = (platform: XcodePlatform, version: string, installed = true) => ({
+    id: `${platform}-${version}`,
+    platform,
+    version,
+    build: null,
+    installed,
+    available: true,
+    downloadBytes: null,
+  });
+  const selected = (version: string) => [
+    { path: "/Applications/Xcode.app", version, build: "x", beta: false, selected: true },
+  ];
+
+  it("maps Xcode versions to their runtime majors", () => {
+    expect(xcodeRuntimeMajor("26.1", "watchOS")).toBe(26);
+    expect(xcodeRuntimeMajor("16.4", "iOS")).toBe(18);
+    expect(xcodeRuntimeMajor("16.4", "watchOS")).toBe(11);
+    expect(xcodeRuntimeMajor("10.3", "iOS")).toBeNull();
+  });
+
+  it("still offers a platform whose only installed runtime belongs to an older Xcode", () => {
+    const covered = status({
+      installed: selected("26.1"),
+      runtimes: [runtime("iOS", "18.5"), runtime("iOS", "26.1", false), runtime("tvOS", "26.0")],
+    });
+    expect(missingXcodePlatforms(covered)).toEqual(["iOS", "watchOS"]);
+    expect(
+      missingXcodePlatforms(
+        status({ installed: selected("26.1"), runtimes: [runtime("iOS", "26.0")] }),
+      ),
+    ).toEqual(["watchOS", "tvOS"]);
+    expect(missingXcodePlatforms(status({ installed: [], runtimes: [] }))).toEqual([]);
   });
 });

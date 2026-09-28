@@ -49,6 +49,56 @@ export const XCODE_JOB_STATE_LABELS: Readonly<Record<XcodeJob["state"], string>>
   completed: "Done",
 };
 
+/** Spoken with each step, since the step icons are decorative. */
+export const XCODE_STEP_STATE_LABELS: Readonly<Record<XcodeStep["state"], string>> = {
+  pending: "Not started",
+  running: "In progress",
+  "needs-admin": "Needs admin approval",
+  completed: "Done",
+  skipped: "Skipped",
+  failed: "Failed",
+  cancelled: "Cancelled",
+};
+
+/**
+ * What a polite live region says when a job reaches a state that needs the user or ends it. Other
+ * states, including download ticks, stay silent.
+ */
+export function xcodeJobAnnouncement(job: XcodeJob | null, status: XcodeStatus | null): string {
+  if (job === null) return "";
+  const title = xcodeJobTitle(job, status);
+  switch (job.state) {
+    case "needs-admin":
+      return `${title}: needs admin approval on the Mac.`;
+    case "needs-reauth":
+      return `${title}: sign in to your Apple ID again to continue.`;
+    case "failed":
+      return `${title} failed.`;
+    case "completed":
+      return `${title}.`;
+    default:
+      return "";
+  }
+}
+
+/** Identifies one admin step of one job, so an approval is not mistaken for another step's. */
+export function xcodeAdminStepKey(job: XcodeJob | null): string | null {
+  if (job === null || job.state !== "needs-admin") return null;
+  const step = job.steps.find((candidate) => candidate.state === "needs-admin");
+  return step ? `${job.id}:${step.id}` : null;
+}
+
+/**
+ * Keeps an approval only while its job is still waiting on that step. A dismissed prompt fails the
+ * job, so a retried step asks for approval again instead of waiting forever.
+ */
+export function nextXcodeAdminApproval(
+  approved: string | null,
+  job: XcodeJob | null,
+): string | null {
+  return approved !== null && approved === xcodeAdminStepKey(job) ? approved : null;
+}
+
 /** The host holds one job at a time; these states block starting another. */
 export function isXcodeJobActive(job: XcodeJob | null): boolean {
   return (
@@ -77,6 +127,36 @@ export function canCancelXcodeJob(job: XcodeJob): boolean {
 /** The selected Xcode; an installed but unselected one still needs a select step. */
 export function usableXcode(status: XcodeStatus): InstalledXcode | null {
   return status.installed.find((xcode) => xcode.selected) ?? null;
+}
+
+/**
+ * The simulator runtime major version an Xcode ships with. Since Xcode 26 the platforms share its
+ * number; before that iOS and tvOS ran two ahead and watchOS five behind. Null for versions this
+ * table does not know.
+ */
+export function xcodeRuntimeMajor(xcodeVersion: string, platform: XcodePlatform): number | null {
+  const major = Number.parseInt(xcodeVersion, 10);
+  if (!Number.isFinite(major) || major < 11) return null;
+  if (major >= 26) return major;
+  return platform === "watchOS" ? major - 5 : major + 2;
+}
+
+/**
+ * Platforms whose runtime for the selected Xcode is not installed. An older runtime (iOS 18 beside
+ * Xcode 26) does not count; when the version is unknown any installed runtime does.
+ */
+export function missingXcodePlatforms(status: XcodeStatus): ReadonlyArray<XcodePlatform> {
+  const selected = usableXcode(status);
+  if (selected === null) return [];
+  return XCODE_PLATFORMS.filter((platform) => {
+    const major = xcodeRuntimeMajor(selected.version, platform);
+    return !status.runtimes.some(
+      (runtime) =>
+        runtime.platform === platform &&
+        runtime.installed &&
+        (major === null || Number.parseInt(runtime.version, 10) === major),
+    );
+  });
 }
 
 /** Numeric dotted-version comparison; "26.1" sorts after "26.0.1". */
