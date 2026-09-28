@@ -7,6 +7,7 @@ import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { useWorkspaceProjects } from "../components/projects/useWorkspaceProjects";
 import { workspaceThreadStartAvailability } from "../components/projects/workspaceProjects.logic";
 import { dispatchPreviewAction } from "../components/preview/previewActionBus";
+import { useComputerEventsServed } from "../hooks/useComputerSupport";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { isPaneFocused, usePaneId } from "../panes/usePaneFocus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -30,6 +31,7 @@ function ChatRouteGlobalShortcuts() {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const computerServed = useComputerEventsServed(routeThreadRef?.environmentId ?? null);
   const paneId = usePaneId();
   const terminalOpen = useTerminalUiStateStore((state) =>
     routeThreadRef
@@ -115,6 +117,14 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
+      if (command === "computer.toggle") {
+        if (!routeThreadRef || !computerServed) return;
+        event.preventDefault();
+        event.stopPropagation();
+        useRightPanelStore.getState().toggle(routeThreadRef, "computer");
+        return;
+      }
+
       // The remaining preview commands only fire when the panel is the
       // currently-focused tenant. The `when: previewFocus` rule already
       // gates this, but defend against the keybinding being misconfigured.
@@ -149,6 +159,7 @@ function ChatRouteGlobalShortcuts() {
     activeDraftThread,
     activeThread,
     clearSelection,
+    computerServed,
     handleNewThread,
     keybindings,
     defaultProjectRef,

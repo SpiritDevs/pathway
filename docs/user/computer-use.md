@@ -53,8 +53,9 @@ dimmed and marked **Stale frame** in place of the activity label.
 ## The computer view
 
 The computer view keeps the host's screen open beside the chat, before, during and after a task.
-Open it from the right panel's **+** menu, from the command menu with **Open computer view**, or
-with the monitor button on the chat preview. The header says who has the screen: the agent,
+Open it from the right panel's **+** menu, from the command menu with **Open computer view**, with
+**⌘⌥C** (**Ctrl+Alt+C** on Windows and Linux), or with the monitor button on the chat preview. The
+shortcut closes the view again. The header says who has the screen: the agent,
 you, another device, or nobody.
 
 - **Take control** hands you the mouse and keyboard. Click, double-click, right-click, scroll, type

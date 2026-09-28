@@ -2177,6 +2177,7 @@ function OpenCommandPaletteDialog(props: {
       searchTerms: ["computer", "screen", "desktop", "take control", "computer use"],
       title: "Open computer view",
       icon: <MonitorIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "computer.toggle",
       run: async () => {
         useRightPanelStore
           .getState()
