@@ -60,3 +60,5 @@ export * from "./rpc.ts";
 export * from "./mail.ts";
 export * from "./threadAlerts.ts";
 export * from "./storage.ts";
+
+export * from "./device.ts";
