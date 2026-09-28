@@ -1,3 +1,4 @@
+import { DeviceToolkit } from "./toolkits/device/tools.ts";
 import * as Context from "effect/Context";
 import { Tool } from "effect/unstable/ai";
 
@@ -11,6 +12,7 @@ import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 /** The complete provider-facing tool catalog served by Pathway's production MCP endpoint. */
 export const PATHWAY_MCP_TOOLS = [
   ...Object.values(PreviewToolkit.tools),
+  ...Object.values(DeviceToolkit.tools),
   ...Object.values(IssuesToolkit.tools),
   ...Object.values(ProjectsToolkit.tools),
   ...Object.values(OrchestratorToolkit.tools),

@@ -429,6 +429,8 @@ export const ServerSignalProcessResult = Schema.Struct({
 export type ServerSignalProcessResult = typeof ServerSignalProcessResult.Type;
 
 export const ServerConfig = Schema.Struct({
+  /** Device RPCs and authenticated streams are available on this server. */
+  deviceWorkspace: Schema.optionalKey(Schema.Boolean),
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
   cwd: TrimmedNonEmptyString,
