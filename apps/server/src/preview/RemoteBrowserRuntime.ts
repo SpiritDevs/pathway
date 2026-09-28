@@ -1,3 +1,8 @@
+import { RemoteBrowserInteractions } from "./RemoteBrowserInteractions.ts";
+import type {
+  PreviewRemoteInteractionCommand,
+  PreviewRemoteInteractionEvent,
+} from "@spiritdevs/contracts";
 import { EnvironmentSurfaceStream, type SurfaceSink } from "../surface/EnvironmentSurfaceStream.ts";
 import { jpegDimensions } from "@spiritdevs/shared/environmentSurface";
 import type { EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
@@ -72,6 +77,7 @@ interface Recording {
   finalization: Promise<BrowserArtifact> | null;
 }
 interface Tab {
+  interactions: RemoteBrowserInteractions;
   owner: BrowserSession;
   id: PreviewTabId;
   page: Page;
@@ -104,6 +110,7 @@ interface BrowserSession {
   metadataTail: Promise<void>;
 }
 export interface BrowserArtifact {
+  downloadName?: string | undefined;
   id: string;
   path: string;
   mimeType: string;
@@ -121,7 +128,8 @@ const BrowserCaptureIndex = Schema.Struct({
     Schema.Struct({
       id: Schema.String,
       fileName: Schema.String,
-      mimeType: Schema.Literals(["image/png", "video/mp4"]),
+      mimeType: Schema.Literals(["image/png", "video/mp4", "application/octet-stream"]),
+      downloadName: Schema.optional(Schema.String),
       sizeBytes: Schema.Number,
       createdAt: Schema.String,
     }),
@@ -140,6 +148,10 @@ export class RemoteBrowserRuntime {
   private artifactWrites = new Map<string, Promise<void>>();
   private artifacts = new Map<string, BrowserArtifact>();
   private artifactOwners = new Map<string, string>();
+  private interactionWatchers = new Map<
+    string,
+    Set<(event: PreviewRemoteInteractionEvent) => void>
+  >();
   private watchers = new Map<string, Set<(frame: PreviewRemoteFrame) => void>>();
   private readonly directory: string;
   private readonly attachmentsDirectory: string;
@@ -227,6 +239,7 @@ export class RemoteBrowserRuntime {
     });
     context.on("close", () => {
       for (const tab of session.tabs.values()) {
+        void tab.interactions.close();
         tab.surface.close();
         if (tab.surfaceTimer) clearInterval(tab.surfaceTimer);
         if (tab.publishTimer) clearTimeout(tab.publishTimer);
@@ -234,6 +247,7 @@ export class RemoteBrowserRuntime {
         if (tab.recording) void this.stopRecording(tab).catch(() => undefined);
       }
       session.tabs.clear();
+      this.publishInteractions(session);
       session.selectedTabId = null;
       void this.forgetSession(session);
       void this.publishMetadata(session).catch(() => undefined);
@@ -246,9 +260,19 @@ export class RemoteBrowserRuntime {
     const existing = [...session.tabs.values()].find((tab) => tab.page === page);
     if (existing) return existing;
     // Insert before awaiting opener/title so simultaneous page events cannot duplicate the tab.
+    const id = PreviewTabId.make(`remote-${NodeCrypto.randomUUID()}`);
+    const interactions = new RemoteBrowserInteractions(
+      page,
+      session.threadId,
+      id,
+      this.attachmentsDirectory,
+      () => this.publishInteractions(session),
+      (artifact) => this.rememberArtifact(session.threadId, artifact),
+    );
     const tab: Tab = {
+      interactions,
       owner: session,
-      id: PreviewTabId.make(`remote-${NodeCrypto.randomUUID()}`),
+      id,
       page,
       openerTabId: null,
       session: null,
@@ -271,9 +295,11 @@ export class RemoteBrowserRuntime {
     session.tabs.set(tab.id, tab);
     session.selectedTabId ??= tab.id;
     page.on("close", () => {
+      void tab.interactions.close();
       tab.surface.close();
       if (tab.surfaceTimer) clearInterval(tab.surfaceTimer);
       session.tabs.delete(tab.id);
+      this.publishInteractions(session);
       if (tab.publishTimer) clearTimeout(tab.publishTimer);
       tab.publishTimer = null;
       if (session.selectedTabId === tab.id)
@@ -298,25 +324,58 @@ export class RemoteBrowserRuntime {
     page.on("domcontentloaded", () => {
       void this.publishMetadata(session).catch(() => undefined);
     });
-    page.on("dialog", (dialog) => {
-      void dialog.dismiss().catch(() => undefined);
-    });
-    page.on("download", (download) => {
-      // Keep downloads on the environment; never silently write into the user's checkout.
-      const file = NodePath.join(
-        this.directory,
-        "downloads",
-        `${NodeCrypto.randomUUID()}-${download.suggestedFilename().replace(/[^a-zA-Z0-9._-]/g, "_")}`,
-      );
-      void NodeFSP.mkdir(NodePath.join(this.directory, "downloads"), { recursive: true })
-        .then(() => download.saveAs(file))
-        .catch(() => undefined);
-    });
+    await interactions.install();
+    await interactions.watch((this.interactionWatchers.get(session.threadId)?.size ?? 0) > 0);
     const opener = await page.opener().catch(() => null);
     tab.openerTabId =
       [...session.tabs.values()].find((candidate) => candidate.page === opener)?.id ?? null;
     await this.publishMetadata(session);
+    this.publishInteractions(session);
     return tab;
+  }
+
+  private publishInteractions(session: BrowserSession) {
+    const event: PreviewRemoteInteractionEvent = {
+      type: "state",
+      tabs: [...session.tabs.values()].map((tab) => tab.interactions.state),
+    };
+    for (const listener of this.interactionWatchers.get(session.threadId) ?? []) listener(event);
+  }
+
+  async subscribeInteractions(
+    threadId: string,
+    listener: (event: PreviewRemoteInteractionEvent) => void,
+  ) {
+    this.assertThreadOpen(threadId);
+    const watchers = this.interactionWatchers.get(threadId) ?? new Set();
+    watchers.add(listener);
+    this.interactionWatchers.set(threadId, watchers);
+    const unsubscribe = async () => {
+      watchers.delete(listener);
+      if (!watchers.size && this.interactionWatchers.get(threadId) === watchers) {
+        this.interactionWatchers.delete(threadId);
+        const current = await this.sessions.get(threadId)?.catch(() => undefined);
+        if (current)
+          await Promise.all([...current.tabs.values()].map((tab) => tab.interactions.watch(false)));
+      }
+    };
+    try {
+      const session = await this.sessions.get(threadId);
+      if (session) {
+        await Promise.all([...session.tabs.values()].map((tab) => tab.interactions.watch(true)));
+        this.publishInteractions(session);
+      } else listener({ type: "state", tabs: [] });
+      return unsubscribe;
+    } catch (error) {
+      await unsubscribe();
+      throw error;
+    }
+  }
+
+  async interact(input: PreviewRemoteInteractionCommand, authorize: () => Promise<void>) {
+    const { tab } = await this.getTab(input.threadId, input.tabId);
+    // Replies must run while a navigation/click is waiting for its dialog to close.
+    return tab.interactions.command(input, authorize);
   }
 
   private async forgetSession(session: BrowserSession) {
@@ -327,7 +386,10 @@ export class RemoteBrowserRuntime {
 
   private closeSession(session: BrowserSession): Promise<void> {
     session.closing ??= Promise.resolve()
-      .then(() => session.context.close())
+      .then(async () => {
+        await Promise.all([...session.tabs.values()].map((tab) => tab.interactions.close()));
+        await session.context.close();
+      })
       .finally(() => this.forgetSession(session));
     return session.closing;
   }
@@ -392,15 +454,15 @@ export class RemoteBrowserRuntime {
   }
 
   async list(threadId: string) {
+    // Legacy capture UIs label every non-video artifact as a screenshot. Downloads
+    // use the interaction stream until those UIs adopt the new contract.
+    const artifacts = (await this.getArtifacts(threadId)).filter(
+      (artifact) => artifact.mimeType !== "application/octet-stream",
+    );
     const pending = this.sessions.get(threadId);
-    if (!pending)
-      return { tabs: [], selectedTabId: null, artifacts: await this.getArtifacts(threadId) };
+    if (!pending) return { tabs: [], selectedTabId: null, artifacts };
     const session = await pending;
-    return {
-      tabs: await this.tabs(session),
-      selectedTabId: session.selectedTabId,
-      artifacts: await this.getArtifacts(threadId),
-    };
+    return { tabs: await this.tabs(session), selectedTabId: session.selectedTabId, artifacts };
   }
 
   private captureIndexPath(threadId: string) {
@@ -427,7 +489,12 @@ export class RemoteBrowserRuntime {
         throw new Error("Browser capture index ownership does not match this task.");
       const recovered: BrowserArtifact[] = [];
       for (const capture of index.captures) {
-        const extension = capture.mimeType === "image/png" ? "png" : "mp4";
+        const extension =
+          capture.mimeType === "image/png"
+            ? "png"
+            : capture.mimeType === "video/mp4"
+              ? "mp4"
+              : "bin";
         if (
           capture.fileName !== `${capture.id}.${extension}` ||
           NodePath.basename(capture.fileName) !== capture.fileName
@@ -504,7 +571,7 @@ export class RemoteBrowserRuntime {
   private async writeCaptureIndex(threadId: string, artifacts: BrowserArtifact[]) {
     const captures = artifacts.map(({ path, ...metadata }) => ({
       ...metadata,
-      mimeType: metadata.mimeType as "image/png" | "video/mp4",
+      mimeType: metadata.mimeType as "image/png" | "video/mp4" | "application/octet-stream",
       fileName: NodePath.basename(path),
     }));
     const path = this.captureIndexPath(threadId);
@@ -984,7 +1051,14 @@ export class RemoteBrowserRuntime {
         tab.page.viewportSize() ?? { width: 1280, height: 800 },
       );
       const key = JSON.stringify(config);
-      if (tab.session && tab.captureConfig === key) return;
+      const currentViewport = tab.page.viewportSize();
+      if (
+        tab.session &&
+        tab.captureConfig === key &&
+        (!tab.surface.size ||
+          (currentViewport?.width === config.width && currentViewport.height === config.height))
+      )
+        return;
       const cdp = tab.session ?? (await tab.page.context().newCDPSession(tab.page));
       if (!tab.session) {
         tab.session = cdp;
@@ -1106,6 +1180,15 @@ export class RemoteBrowserRuntime {
     };
     try {
       await this.startCapture(tab);
+      // An unchanged RPC-owned screencast may be static, with no new CDP frame forthcoming.
+      if (!tab.jpeg && tab.surface.size) {
+        const data =
+          tab.frame?.data ||
+          (await tab.page.screenshot({ type: "jpeg", quality: 75, timeout: 5000 })).toString(
+            "base64",
+          );
+        if (tab.surface.size) this.publishCapture(tab, data);
+      }
     } catch (error) {
       await unsubscribe();
       throw error;
@@ -1178,6 +1261,7 @@ export class RemoteBrowserRuntime {
       listeners.delete(listener);
       if (!listeners.size && this.watchers.get(threadId) === listeners)
         this.watchers.delete(threadId);
+      this.interactionWatchers.delete(threadId);
     };
   }
 
@@ -1392,6 +1476,7 @@ export class RemoteBrowserRuntime {
         this.replaceArtifacts(threadId, []);
       } finally {
         this.watchers.delete(threadId);
+        this.interactionWatchers.delete(threadId);
       }
     };
     const completion = close();
@@ -1406,10 +1491,12 @@ export class RemoteBrowserRuntime {
         const session = await pending;
         for (const tab of session.tabs.values())
           if (tab.recording) await this.stopRecording(tab).catch(() => undefined);
+        await Promise.all([...session.tabs.values()].map((tab) => tab.interactions.close()));
         await session.context.close();
       }),
     );
     this.sessions.clear();
     this.watchers.clear();
+    this.interactionWatchers.clear();
   }
 }

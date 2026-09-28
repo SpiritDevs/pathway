@@ -1,6 +1,12 @@
 import { XcodeRpcs } from "./xcode.ts";
 import { AppleRpcs } from "./apple.ts";
 import {
+  PreviewRemoteInteractionCommand,
+  PreviewRemoteInteractionState,
+  PreviewRemoteInteractionEvent,
+  PreviewRemoteInteractionInput,
+} from "./previewRemoteInteractions.ts";
+import {
   UsageRecoveryThreadInput,
   UsageRecoveryScheduleInput,
   UsageRecoveryPauseInput,
@@ -517,6 +523,8 @@ export const WS_METHODS = {
 
   // Preview methods
   previewRemoteCommand: "preview.remote.command",
+  previewRemoteInteract: "preview.remote.interact",
+  subscribePreviewRemoteInteractions: "preview.remote.interactions",
   subscribePreviewRemoteFrames: "preview.remote.frames",
   previewOpen: "preview.open",
   previewNavigate: "preview.navigate",
@@ -1246,6 +1254,20 @@ export const WsPreviewOpenRpc = Rpc.make(WS_METHODS.previewOpen, {
   error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
 });
 
+export const WsPreviewRemoteInteractRpc = Rpc.make(WS_METHODS.previewRemoteInteract, {
+  payload: PreviewRemoteInteractionCommand,
+  success: PreviewRemoteInteractionState,
+  error: Schema.Union([PreviewRemoteError, EnvironmentAuthorizationError]),
+});
+export const WsPreviewRemoteInteractionsRpc = Rpc.make(
+  WS_METHODS.subscribePreviewRemoteInteractions,
+  {
+    payload: PreviewRemoteInteractionInput,
+    success: PreviewRemoteInteractionEvent,
+    error: Schema.Union([PreviewRemoteError, EnvironmentAuthorizationError]),
+    stream: true,
+  },
+);
 export const WsPreviewRemoteCommandRpc = Rpc.make(WS_METHODS.previewRemoteCommand, {
   payload: PreviewRemoteCommand,
   success: PreviewRemoteResult,
@@ -2507,6 +2529,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeTerminalMetadataRpc,
   WsPreviewOpenRpc,
   WsPreviewRemoteCommandRpc,
+  WsPreviewRemoteInteractRpc,
+  WsPreviewRemoteInteractionsRpc,
   WsPreviewRemoteFramesRpc,
   WsPreviewNavigateRpc,
   WsPreviewResizeRpc,

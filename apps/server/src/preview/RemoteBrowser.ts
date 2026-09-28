@@ -1,3 +1,9 @@
+import type {
+  PreviewRemoteInteractionCommand,
+  PreviewRemoteInteractionState,
+  PreviewRemoteInteractionEvent,
+} from "@spiritdevs/contracts";
+import * as Clock from "effect/Clock";
 import type { EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
 import type { SurfaceSink } from "../surface/EnvironmentSurfaceStream.ts";
 import type * as Scope from "effect/Scope";
@@ -28,6 +34,12 @@ import { issueAssetUrl } from "../assets/AssetAccess.ts";
 import { type BrowserArtifact, RemoteBrowserRuntime } from "./RemoteBrowserRuntime.ts";
 
 export interface RemoteBrowserService {
+  readonly interact: (
+    input: PreviewRemoteInteractionCommand,
+  ) => Effect.Effect<PreviewRemoteInteractionState, PreviewRemoteError>;
+  readonly interactions: (input: {
+    threadId: ThreadId;
+  }) => Stream.Stream<PreviewRemoteInteractionEvent, PreviewRemoteError>;
   readonly subscribeSurface: (
     input: { threadId: ThreadId; tabId: string; viewport: EnvironmentSurfaceViewport },
     sink: SurfaceSink,
@@ -44,6 +56,10 @@ export const RemoteBrowser = Context.Reference<RemoteBrowserService>(
   "@spiritdevs/pathway/RemoteBrowser",
   {
     defaultValue: () => ({
+      interact: () =>
+        Effect.fail(new PreviewRemoteError({ detail: "Browser interactions are unavailable." })),
+      interactions: () =>
+        Stream.fail(new PreviewRemoteError({ detail: "Browser interactions are unavailable." })),
       subscribeSurface: () =>
         Effect.fail(new PreviewRemoteError({ detail: "Surface streaming is unavailable." })),
       command: () =>
@@ -73,7 +89,13 @@ const operation = <A>(run: () => Promise<A>) =>
 interface RemoteBrowserDependencies {
   readonly runtime: Pick<
     RemoteBrowserRuntime,
-    "command" | "automate" | "subscribe" | "subscribeSurface" | "closeThread"
+    | "command"
+    | "automate"
+    | "subscribe"
+    | "subscribeSurface"
+    | "interact"
+    | "subscribeInteractions"
+    | "closeThread"
   >;
   readonly broker: PreviewAutomationBroker["Service"];
   readonly environmentId: EnvironmentId;
@@ -110,9 +132,16 @@ export const makeRemoteBrowser = Effect.fn("RemoteBrowser.make")(function* ({
     ThreadId,
     Set<Queue.Enqueue<PreviewRemoteFrame, PreviewRemoteError>>
   >();
+  const interactionQueues = new Map<
+    ThreadId,
+    Set<Queue.Enqueue<PreviewRemoteInteractionEvent, PreviewRemoteError>>
+  >();
   const closeThread = Effect.fn("RemoteBrowser.closeDeletedThread")(function* (threadId: ThreadId) {
     for (const queue of frameQueues.get(threadId) ?? []) yield* Queue.fail(queue, unavailable());
     frameQueues.delete(threadId);
+    for (const queue of interactionQueues.get(threadId) ?? [])
+      yield* Queue.fail(queue, unavailable());
+    interactionQueues.delete(threadId);
     yield* operation(() => runtime.closeThread(threadId)).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Failed to close deleted task browser", { threadId, error }),
@@ -211,8 +240,111 @@ export const makeRemoteBrowser = Effect.fn("RemoteBrowser.make")(function* ({
     };
   });
 
+  const signState = Effect.fn("RemoteBrowser.signInteractionState")(function* (
+    state: PreviewRemoteInteractionState,
+    cache: Map<string, { url: string; expires: number }>,
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    const downloads = yield* Effect.forEach(state.downloads, (download) =>
+      Effect.gen(function* () {
+        if (download.status !== "ready" || !download.attachmentId) return download;
+        const cached = cache.get(download.attachmentId);
+        if (cached && cached.expires > now) return { ...download, url: cached.url };
+        const signed = yield* signArtifact({
+          id: download.attachmentId,
+          path: "",
+          mimeType: "application/octet-stream",
+          sizeBytes: download.sizeBytes ?? 0,
+          createdAt: "",
+          downloadName: download.name,
+        });
+        cache.set(download.attachmentId, { url: signed.url, expires: now + 30 * 60 * 1000 });
+        return { ...download, url: signed.url };
+      }).pipe(
+        Effect.catch(() =>
+          Effect.succeed({
+            ...download,
+            status: "failed" as const,
+            error: "The retained download is no longer available.",
+          }),
+        ),
+      ),
+    );
+    return { ...state, downloads };
+  });
+
   return {
     command,
+    interact: Effect.fn("RemoteBrowser.interact")(function* (input) {
+      const authorize = Effect.gen(function* () {
+        const projection = yield* checkAvailable(input.threadId);
+        if (
+          projection.runs.some((run) =>
+            ["preparing", "starting", "running"].includes(run.status),
+          ) &&
+          projection.thread.browserTakeover?.status !== "active"
+        )
+          return yield* new PreviewRemoteError({
+            detail: "Take browser control before interacting while the agent is working.",
+          });
+      });
+      yield* authorize;
+      yield* broker
+        .selectHostForThread({ environmentId, threadId: input.threadId, clientId })
+        .pipe(Effect.mapError((error) => new PreviewRemoteError({ detail: error.message })));
+      const state = yield* operation(() =>
+        runtime.interact(input, () => Effect.runPromise(authorize)),
+      );
+      return yield* signState(state, new Map());
+    }),
+    interactions: (input) =>
+      Stream.unwrap(
+        Effect.sync(() => {
+          const cache = new Map<string, { url: string; expires: number }>();
+          return Stream.callback<PreviewRemoteInteractionEvent, PreviewRemoteError>(
+            (queue) =>
+              Effect.gen(function* () {
+                yield* checkAvailable(input.threadId);
+                yield* Effect.acquireRelease(
+                  Effect.sync(() => {
+                    const queues = interactionQueues.get(input.threadId) ?? new Set();
+                    queues.add(queue);
+                    interactionQueues.set(input.threadId, queues);
+                  }),
+                  () =>
+                    Effect.sync(() => {
+                      const queues = interactionQueues.get(input.threadId);
+                      queues?.delete(queue);
+                      if (!queues?.size) interactionQueues.delete(input.threadId);
+                    }),
+                );
+                yield* Effect.acquireRelease(
+                  operation(() =>
+                    runtime.subscribeInteractions(input.threadId, (event) => {
+                      Queue.offerUnsafe(queue, event);
+                    }),
+                  ),
+                  (unsubscribe) => Effect.promise(unsubscribe),
+                );
+                yield* checkAvailable(input.threadId);
+              }).pipe(Effect.catch((error) => Queue.fail(queue, error))),
+            { bufferSize: 1, strategy: "sliding" },
+          ).pipe(
+            Stream.mapEffect((event) =>
+              Effect.gen(function* () {
+                const tabs = yield* Effect.forEach(event.tabs, (tab) => signState(tab, cache));
+                const retained = new Set(
+                  tabs.flatMap((tab) =>
+                    tab.downloads.flatMap((d) => (d.attachmentId ? [d.attachmentId] : [])),
+                  ),
+                );
+                for (const id of cache.keys()) if (!retained.has(id)) cache.delete(id);
+                return { ...event, tabs };
+              }),
+            ),
+          );
+        }),
+      ),
     subscribeSurface: Effect.fn("RemoteBrowser.subscribeSurface")(function* (input, sink) {
       yield* checkAvailable(input.threadId);
       yield* Effect.acquireRelease(
@@ -301,7 +433,12 @@ export const layer = Layer.effect(
       deletedThreads,
       signArtifact: (capture) =>
         issueAssetUrl({
-          resource: { _tag: "attachment", attachmentId: capture.id, mimeType: capture.mimeType },
+          resource: {
+            _tag: "attachment",
+            attachmentId: capture.id,
+            mimeType: capture.mimeType,
+            ...(capture.downloadName ? { fileName: capture.downloadName } : {}),
+          },
         }).pipe(
           Effect.provide(assetContext),
           Effect.map((asset) => ({ ...capture, url: asset.relativeUrl })),

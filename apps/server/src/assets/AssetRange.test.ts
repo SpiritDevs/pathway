@@ -143,3 +143,48 @@ it.effect("streams workspace video previews with seeking and exact file access",
     expect(altered.status).toBe(404);
   }).pipe(Effect.provide(dependencies)),
 );
+
+it.effect(
+  "fetches a signed browser download with its original filename and rejects tampering",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const settings = yield* ServerConfig.ServerConfig;
+      yield* fs.makeDirectory(settings.attachmentsDir, { recursive: true });
+      const id = "browser-download";
+      yield* fs.writeFileString(path.join(settings.attachmentsDir, `${id}.bin`), "download bytes");
+      const asset = yield* issueAssetUrl({
+        resource: {
+          _tag: "attachment",
+          attachmentId: id,
+          fileName: "report.csv",
+          mimeType: "application/octet-stream",
+        },
+      });
+      const context = yield* Effect.context<Layer.Success<typeof dependencies>>();
+      const server = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          HttpRouter.toWebHandler(
+            assetRouteLayer.pipe(Layer.provideMerge(Layer.succeedContext(context))),
+            { disableLogger: true },
+          ),
+        ),
+        (server) => Effect.promise(() => server.dispose()),
+      );
+      const response = yield* Effect.promise(() =>
+        server.handler(new Request(`http://localhost${asset.relativeUrl}`)),
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-disposition")).toContain("report.csv");
+      expect(yield* Effect.promise(() => response.text())).toBe("download bytes");
+      const denied = yield* Effect.promise(() =>
+        server.handler(
+          new Request(
+            `http://localhost${asset.relativeUrl.replace("/api/assets/", "/api/assets/altered")}`,
+          ),
+        ),
+      );
+      expect(denied.status).toBe(404);
+    }).pipe(Effect.provide(dependencies)),
+);
