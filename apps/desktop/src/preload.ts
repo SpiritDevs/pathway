@@ -242,6 +242,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.WINDOWS_GET_CURSOR_SCREEN_POINT_CHANNEL),
     getCurrentWindowBounds: () =>
       ipcRenderer.invoke(IpcChannels.WINDOWS_GET_CURRENT_WINDOW_BOUNDS_CHANNEL),
+    startDragGhost: (ghost) =>
+      ipcRenderer.invoke(IpcChannels.WINDOWS_START_DRAG_GHOST_CHANNEL, ghost),
+    setDragGhostVisible: (visible) =>
+      ipcRenderer.invoke(IpcChannels.WINDOWS_SET_DRAG_GHOST_VISIBLE_CHANNEL, visible),
+    stopDragGhost: () => ipcRenderer.invoke(IpcChannels.WINDOWS_STOP_DRAG_GHOST_CHANNEL),
   },
   preview: {
     createTab: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_CREATE_TAB_CHANNEL, { tabId }),

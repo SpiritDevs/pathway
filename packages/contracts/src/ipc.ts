@@ -688,6 +688,28 @@ export const DesktopWindowOpenResultSchema = Schema.Struct({
 export type DesktopWindowOpenResult = typeof DesktopWindowOpenResultSchema.Type;
 
 /**
+ * What a drag looks like while it is outside every Pathway window: a copy of the
+ * in-page drag chip, drawn by the shell in a click-through window that follows
+ * the cursor. Sizes are CSS pixels; colors and font are computed CSS values.
+ */
+export const DesktopDragGhostSchema = Schema.Struct({
+  label: Schema.String,
+  /** The chip's icon as SVG markup, or empty for none. */
+  iconSvg: Schema.String,
+  width: Schema.Number,
+  height: Schema.Number,
+  /** Where the cursor sits inside the chip, so it keeps its grip. */
+  offsetX: Schema.Number,
+  offsetY: Schema.Number,
+  background: Schema.String,
+  foreground: Schema.String,
+  border: Schema.String,
+  fontFamily: Schema.String,
+  fontSize: Schema.String,
+});
+export type DesktopDragGhost = typeof DesktopDragGhostSchema.Type;
+
+/**
  * Tear-out windows. Present only in the Electron desktop build. A torn-out
  * window loads the same bundle with `?pathwayWindow=<id>` before the hash.
  */
@@ -702,6 +724,12 @@ export interface DesktopWindowsBridge {
   getCursorScreenPoint: () => Promise<DesktopScreenPoint>;
   /** Bounds of the calling window, in screen coordinates. */
   getCurrentWindowBounds: () => Promise<DesktopScreenRect>;
+  /** Prepares the drag ghost, hidden, and starts it following the cursor. */
+  startDragGhost: (ghost: DesktopDragGhost) => Promise<void>;
+  /** Shows the ghost while a drag is outside the window, and hides it inside. */
+  setDragGhostVisible: (visible: boolean) => Promise<void>;
+  /** Removes the ghost when the drag ends. */
+  stopDragGhost: () => Promise<void>;
 }
 
 export interface DesktopWslDistro {

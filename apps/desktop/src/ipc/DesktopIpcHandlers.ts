@@ -142,6 +142,9 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(WindowsIpc.listWindows);
   yield* ipc.handle(WindowsIpc.getCursorScreenPoint);
   yield* ipc.handle(WindowsIpc.getCurrentWindowBounds);
+  yield* ipc.handle(WindowsIpc.startDragGhost);
+  yield* ipc.handle(WindowsIpc.setDragGhostVisible);
+  yield* ipc.handle(WindowsIpc.stopDragGhost);
   yield* ipc.handle(ComputerIpc.getComputerState);
   yield* ipc.handle(ComputerIpc.requestComputerPermissions);
   yield* ipc.handle(ComputerIpc.startComputerPermissionSetup);

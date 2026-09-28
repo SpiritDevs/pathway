@@ -4,6 +4,12 @@
  */
 import type { PointerEvent as ReactPointerEvent } from "react";
 
+import {
+  describeDragGhost,
+  endDragGhost,
+  prepareDragGhost,
+  setDragGhostOutside,
+} from "./dragGhost";
 import { canTearOutByDrag } from "./pageWindows";
 import { popOutPane } from "./paneActions";
 
@@ -29,7 +35,8 @@ export async function readCursorScreenPoint(fallback: Point): Promise<Point> {
 
 /**
  * Pointer-down on a pane pill's label. Releasing past the window's edge opens the
- * pane in its own window there; releasing inside does nothing. Inert where
+ * pane in its own window there; releasing inside does nothing. Past the edge the
+ * label keeps following the cursor, drawn by the desktop shell. Inert where
  * drag-out is unsupported.
  */
 export function startPaneTearOut(event: ReactPointerEvent<HTMLElement>, paneId: string): void {
@@ -38,10 +45,26 @@ export function startPaneTearOut(event: ReactPointerEvent<HTMLElement>, paneId: 
   const pointerId = event.pointerId;
   handle.setPointerCapture(pointerId);
   document.body.style.setProperty("cursor", "grabbing");
+  const pill = handle.closest<HTMLElement>("[data-pane-chrome]") ?? handle;
+  const grip = { x: event.clientX, y: event.clientY };
 
+  const onMove = (moveEvent: PointerEvent) => {
+    // A click is not a drag: the ghost is prepared only once the pointer really moves.
+    if (Math.hypot(moveEvent.clientX - grip.x, moveEvent.clientY - grip.y) < 4) return;
+    // The pill stays put while the pointer drags, so the grab point still describes it.
+    prepareDragGhost(() => describeDragGhost(handle, grip, pill));
+    setDragGhostOutside(
+      isOutsideViewport(
+        { x: moveEvent.clientX, y: moveEvent.clientY },
+        { width: window.innerWidth, height: window.innerHeight },
+      ),
+    );
+  };
   const onEnd = (endEvent: PointerEvent) => {
+    handle.removeEventListener("pointermove", onMove);
     handle.removeEventListener("pointerup", onEnd);
     handle.removeEventListener("pointercancel", onEnd);
+    endDragGhost();
     if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
     document.body.style.removeProperty("cursor");
     if (endEvent.type !== "pointerup") return;
@@ -53,6 +76,7 @@ export function startPaneTearOut(event: ReactPointerEvent<HTMLElement>, paneId: 
       popOutPane(paneId, { screenPoint }),
     );
   };
+  handle.addEventListener("pointermove", onMove);
   handle.addEventListener("pointerup", onEnd);
   handle.addEventListener("pointercancel", onEnd);
 }

@@ -28,6 +28,8 @@ A torn-out window is the same bundle in **window mode**: no rail, no split, and 
 
 On desktop, the main process owns a registry of child windows (`apps/desktop/src/window/DesktopWindow.ts`, `DesktopChildWindows.ts`). It tracks each window's route from `did-navigate-in-page`, saves `{id, path, bounds}` next to the main window's bounds, and restores them at launch. The renderer reaches it through `desktopBridge.windows`. Each window is a separate renderer with its own WebSocket connection and state, so it costs more than a pane; opening past six windows shows a toast suggesting panes.
 
+A page cannot draw outside its own window, so a tear-out drag that leaves the window would lose its chip. The renderer describes the chip (icon, label, colors, grab point) to `desktopBridge.windows.startDragGhost`, and the main process draws a copy in a click-through, script-free window that follows the cursor (`DesktopDragGhost.ts`). It shows only while the pointer is outside the window; inside, the page's own chip takes over.
+
 On web, `panes/pageWindows.ts` opens popups with `window.open`, and popups report their page and closing on a `BroadcastChannel`.
 
 All entry points (rail menu and drag, pane pill, command palette, keybindings, desktop menus) go through `panes/paneActions.ts` and `panes/pageWindows.ts`.

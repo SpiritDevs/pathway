@@ -1,4 +1,5 @@
 import {
+  DesktopDragGhostSchema,
   DesktopScreenPointSchema,
   DesktopScreenRectSchema,
   DesktopWindowInfoSchema,
@@ -11,7 +12,9 @@ import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
 
+import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
+import * as DesktopDragGhost from "../../window/DesktopDragGhost.ts";
 import * as DesktopWindow from "../../window/DesktopWindow.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
@@ -82,5 +85,39 @@ export const getCurrentWindowBounds = DesktopIpc.makeIpcMethod({
       onNone: () => ({ x: 0, y: 0, width: 0, height: 0 }),
       onSome: (window) => window.getBounds(),
     });
+  }),
+});
+
+// The drag ghost follows a tear-out drag outside every window. It goes away with
+// the drag, or with the renderer that started it if that closes mid-drag.
+export const startDragGhost = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.WINDOWS_START_DRAG_GHOST_CHANNEL,
+  payload: DesktopDragGhostSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.windows.startDragGhost")(function* (ghost, event) {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    yield* Effect.sync(() => {
+      DesktopDragGhost.startDragGhost(ghost, environment.platform);
+      const sender = event ? Electron.webContents.fromId(event.sender.id) : undefined;
+      sender?.once("destroyed", DesktopDragGhost.stopDragGhost);
+    });
+  }),
+});
+
+export const setDragGhostVisible = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.WINDOWS_SET_DRAG_GHOST_VISIBLE_CHANNEL,
+  payload: Schema.Boolean,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.windows.setDragGhostVisible")(function* (visible) {
+    yield* Effect.sync(() => DesktopDragGhost.setDragGhostVisible(visible));
+  }),
+});
+
+export const stopDragGhost = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.WINDOWS_STOP_DRAG_GHOST_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.windows.stopDragGhost")(function* () {
+    yield* Effect.sync(DesktopDragGhost.stopDragGhost);
   }),
 });

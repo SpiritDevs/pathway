@@ -23,6 +23,9 @@ export const WINDOWS_CHANGED_CHANNEL = "desktop:windows-changed";
 export const WINDOWS_GET_CURSOR_SCREEN_POINT_CHANNEL = "desktop:windows-get-cursor-screen-point";
 export const WINDOWS_GET_CURRENT_WINDOW_BOUNDS_CHANNEL =
   "desktop:windows-get-current-window-bounds";
+export const WINDOWS_START_DRAG_GHOST_CHANNEL = "desktop:windows-start-drag-ghost";
+export const WINDOWS_SET_DRAG_GHOST_VISIBLE_CHANNEL = "desktop:windows-set-drag-ghost-visible";
+export const WINDOWS_STOP_DRAG_GHOST_CHANNEL = "desktop:windows-stop-drag-ghost";
 export const UPDATE_STATE_CHANNEL = "desktop:update-state";
 export const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 export const UPDATE_SET_CHANNEL_CHANNEL = "desktop:update-set-channel";
