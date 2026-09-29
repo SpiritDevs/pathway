@@ -21,12 +21,20 @@ import {
   generateConnectGrantToken,
   hashConnectGrantToken,
 } from "../src/connectGrants.ts";
+import { isRegisteredProofKey, tokenProofKeyThumbprint } from "../src/environmentRegistrations.ts";
 import { hasCompanyPermission, isPermissionKey } from "../src/permissions.ts";
 import { internal } from "./_generated/api.js";
-import { action, internalMutation, mutation } from "./_generated/server.js";
+import type { Id } from "./_generated/dataModel.js";
+import { action, internalMutation, mutation, type MutationCtx } from "./_generated/server.js";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { backendError } from "./lib/errors.ts";
-import { membershipAuthorization, requireCompanyActor, requirePermission } from "./lib/identity.ts";
+import {
+  isEnvironmentIdentity,
+  membershipAuthorization,
+  requireCompanyActor,
+  requireIdentity,
+  requirePermission,
+} from "./lib/identity.ts";
 import { requireRelayControlPlane } from "./lib/relayIdentity.ts";
 import { domainIdArg } from "./lib/validators.ts";
 
@@ -160,6 +168,127 @@ export const record = internalMutation({
       issuedAt,
       expiresAt,
     };
+  },
+});
+
+const THREAD_READ_PERMISSION = "environments.read";
+
+const issuedThreadReadGrant = v.union(
+  v.object({ token: v.string(), environmentId: v.string() }),
+  v.null(),
+);
+
+/**
+ * Mints a single-use grant that lets the calling environment read one thread on the environment
+ * that published it. The grant acts as the account that registered the caller, in any company where
+ * that account may read environments. `null` means no readable environment publishes the thread.
+ */
+export const issueThreadRead = action({
+  args: { threadId: v.string() },
+  returns: issuedThreadReadGrant,
+  handler: async (ctx, args): Promise<{ token: string; environmentId: string } | null> => {
+    const token = generateConnectGrantToken();
+    const tokenHash = await hashConnectGrantToken(token);
+    const environmentId: string | null = await ctx.runMutation(
+      internal.connectGrants.recordThreadRead,
+      { threadId: args.threadId, tokenHash },
+    );
+    return environmentId === null ? null : { token, environmentId };
+  },
+});
+
+/** The one user whose registrations vouch for the calling environment's key. */
+async function environmentAccountUser(ctx: MutationCtx): Promise<{
+  readonly environmentId: string;
+  readonly userId: Id<"users">;
+}> {
+  const identity = await requireIdentity(ctx);
+  if (!isEnvironmentIdentity(identity)) {
+    throw backendError("permission-denied", "Only an environment may request a thread read.");
+  }
+  const tokenThumbprint = tokenProofKeyThumbprint(identity);
+  const registrations = await ctx.db
+    .query("environmentRegistrations")
+    .withIndex("by_environment", (q) => q.eq("environmentId", identity.subject))
+    .collect();
+  const users = new Set<Id<"users">>();
+  for (const registration of registrations) {
+    if (
+      registration.state !== "active" ||
+      registration.registeredByMembershipId === null ||
+      !isRegisteredProofKey({
+        tokenThumbprint,
+        registeredThumbprint: registration.publicKeyThumbprint,
+      })
+    )
+      continue;
+    const membership = await ctx.db.get(registration.registeredByMembershipId);
+    if (membership?.state === "active") users.add(membership.userId);
+  }
+  const [userId, ...others] = users;
+  if (userId === undefined || others.length > 0) {
+    throw backendError(
+      "permission-denied",
+      "This environment is not registered to exactly one Pathway account.",
+    );
+  }
+  return { environmentId: identity.subject, userId };
+}
+
+/** Authorization and storage half of {@link issueThreadRead}. */
+export const recordThreadRead = internalMutation({
+  args: { threadId: v.string(), tokenHash: v.string() },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, args) => {
+    const caller = await environmentAccountUser(ctx);
+    const published = await ctx.db
+      .query("agentThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .collect();
+    for (const row of published.toSorted((left, right) => right.updatedAt - left.updatedAt)) {
+      if (row.environmentId === caller.environmentId) continue;
+      const company = await ctx.db.get(row.companyId);
+      if (company?.lifecycleState !== "active") continue;
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_company_and_user", (q) =>
+          q.eq("companyId", row.companyId).eq("userId", caller.userId),
+        )
+        .unique();
+      if (membership?.state !== "active") continue;
+      const registration = await ctx.db
+        .query("environmentRegistrations")
+        .withIndex("by_company_and_environment", (q) =>
+          q.eq("companyId", row.companyId).eq("environmentId", row.environmentId),
+        )
+        .unique();
+      if (registration?.state !== "active") continue;
+      const owner = await ctx.db
+        .query("companyOwners")
+        .withIndex("by_company_and_membership", (q) =>
+          q.eq("companyId", row.companyId).eq("membershipId", membership._id),
+        )
+        .unique();
+      const { permissions } = await membershipAuthorization(ctx, membership, owner !== null);
+      if (!hasCompanyPermission(permissions, THREAD_READ_PERMISSION)) continue;
+
+      const issuedAt = Date.now();
+      await ctx.db.insert("connectGrants", {
+        id: mintDomainId(issuedAt),
+        companyId: row.companyId,
+        environmentId: row.environmentId,
+        targetRegistrationId: registration._id,
+        grantedMembershipId: membership._id,
+        permission: THREAD_READ_PERMISSION,
+        tokenHash: args.tokenHash,
+        issuedAt,
+        expiresAt: connectGrantExpiresAt(issuedAt),
+        consumedAt: null,
+        consumer: null,
+      });
+      return row.environmentId;
+    }
+    return null;
   },
 });
 

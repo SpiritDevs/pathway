@@ -78,6 +78,8 @@ import {
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
 import { RemoteDispatch } from "../cloud/remoteDispatch.ts";
+import { RemoteThreadReader } from "../cloud/remoteThreadRead.ts";
+import { ProjectionStoreThreadNotFoundError } from "../orchestration-v2/ProjectionStore.ts";
 import { ProviderAllowanceRuntime } from "../providerUsage/AllowanceRuntime.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 
@@ -701,6 +703,7 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const scheduledTasks = yield* ScheduledTaskService;
   const remoteDispatch = yield* Effect.serviceOption(RemoteDispatch);
+  const remoteThreads = yield* Effect.serviceOption(RemoteThreadReader);
   const allowanceRuntime = yield* Effect.serviceOption(ProviderAllowanceRuntime);
   const inheritAllowance = (parent: ThreadId, environment: EnvironmentId, child: ThreadId) =>
     Option.isSome(allowanceRuntime)
@@ -750,6 +753,47 @@ const make = Effect.gen(function* () {
       const target =
         threadId === scope.threadId ? parent : yield* loadProjectThread(parent.thread, threadId);
       return { parent, target } as const;
+    });
+
+  // Reads reach any thread the account can see: first this environment, regardless of project or
+  // company, then the account's other environments. Company AI assignments stay scoped because
+  // other members can direct them.
+  const loadReadableThread = (scope: McpInvocationScope, threadId: ThreadId) =>
+    Effect.gen(function* () {
+      if (scope.orchestratorOrigin)
+        return { ...(yield* loadScopedThread(scope, threadId)), remoteSources: null };
+      yield* requireCapability(scope);
+      const parent = yield* loadProjection(scope.threadId);
+      if (threadId === scope.threadId) return { parent, target: parent, remoteSources: null };
+      const local = yield* threadManagement.getThreadProjection(threadId).pipe(
+        Effect.map(Option.some),
+        Effect.catchIf(
+          (error) =>
+            error._tag === "OrchestratorProjectionError" &&
+            error.cause instanceof ProjectionStoreThreadNotFoundError,
+          () => Effect.succeedNone,
+        ),
+        Effect.mapError((error) =>
+          failure(
+            "orchestration_error",
+            `Unable to read thread ${threadId}: ${errorMessage(error)}`,
+          ),
+        ),
+      );
+      const notFound = failure(
+        "thread_not_found",
+        `Thread ${threadId} was not found on this environment or any environment your account can read.`,
+      );
+      if (Option.isSome(local))
+        return local.value.thread.deletedAt === null
+          ? { parent, target: local.value, remoteSources: null }
+          : yield* notFound;
+      if (Option.isNone(remoteThreads)) return yield* notFound;
+      const remote = yield* remoteThreads.value
+        .read(threadId)
+        .pipe(Effect.mapError((error) => failure("remote_dispatch_unavailable", error.message)));
+      if (remote === null || remote.projection.thread.deletedAt !== null) return yield* notFound;
+      return { parent, target: remote.projection, remoteSources: remote.sources };
     });
 
   const loadProviders = providerRegistry.getProviders;
@@ -1673,7 +1717,7 @@ const make = Effect.gen(function* () {
       }),
     readThread: (scope, input) =>
       Effect.gen(function* () {
-        const { parent, target } = yield* loadScopedThread(scope, input.threadId);
+        const { parent, target, remoteSources } = yield* loadReadableThread(scope, input.threadId);
         const view = input.view ?? "messages";
         const afterPosition = input.afterPosition ?? -1;
         const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
@@ -1698,18 +1742,20 @@ const make = Effect.gen(function* () {
               .filter((threadId) => threadId !== target.thread.id),
           ),
         ];
-        const sourceProjections = yield* Effect.forEach(
-          sourceThreadIds,
-          (sourceThreadId) => loadProjectThread(target.thread, sourceThreadId),
-          { concurrency: 8 },
-        );
+        const sourceProjections =
+          remoteSources ??
+          (yield* Effect.forEach(
+            sourceThreadIds,
+            (sourceThreadId) => loadProjectThread(target.thread, sourceThreadId),
+            { concurrency: 8 },
+          ));
         const messagesByThreadId = new Map<ThreadId, OrchestrationV2ThreadProjection["messages"]>([
           [target.thread.id, target.messages],
           ...sourceProjections.map(
             (projection) => [projection.thread.id, projection.messages] as const,
           ),
         ]);
-        const task = directAppOwnedChildTask(parent, target);
+        const task = remoteSources === null ? directAppOwnedChildTask(parent, target) : undefined;
         if (
           task !== undefined &&
           pageIncludesTerminalTaskResult({ page, task, target, maxChars })

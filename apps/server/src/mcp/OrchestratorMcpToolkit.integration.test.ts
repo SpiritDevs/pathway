@@ -1882,10 +1882,10 @@ describe("orchestrator MCP toolkit", () => {
             const foreignReadCall = yield* invoke("pathway_thread_read", {
               threadId: foreignThreadId,
             });
-            expect(foreignReadCall.structuredContent).toMatchObject({
-              _tag: "OrchestratorMcpFailure",
-              code: "thread_not_found",
-            });
+            const foreignRead = yield* decodeThreadReadResult(
+              foreignReadCall.structuredContent,
+            ).pipe(Effect.orDie);
+            expect(foreignRead.thread.threadId).toBe(foreignThreadId);
             const listCall = yield* invoke("pathway_thread_list", {
               includeSubagents: false,
               limit: 100,

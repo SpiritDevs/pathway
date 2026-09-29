@@ -7,6 +7,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  type OrchestrationV2ThreadProjection,
   type OrchestratorMcpFailure,
   type ServerProvider,
 } from "@spiritdevs/contracts";
@@ -14,6 +15,7 @@ import { CompanyId } from "@spiritdevs/contracts/company";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import { RemoteThreadReader } from "../cloud/remoteThreadRead.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import { makeLayer as makeProviderAdapterRegistryLayer } from "../orchestration-v2/ProviderAdapterRegistry.ts";
@@ -71,11 +73,27 @@ const orchestratorLayer = makeOrchestratorV2ReplayLayerWithRegistry(
     }),
   ),
 );
+const remoteThreadId = ThreadId.make("thread-on-another-environment");
+const remoteEnvironmentId = EnvironmentId.make("mcp-conversation-remote-environment");
+// Filled by the test with a real projection so the stub can serve it as another environment's.
+let remoteProjection: OrchestrationV2ThreadProjection | null = null;
+const remoteThreadsLayer = Layer.succeed(
+  RemoteThreadReader,
+  RemoteThreadReader.of({
+    read: (threadId) =>
+      Effect.succeed(
+        threadId === remoteThreadId && remoteProjection !== null
+          ? { environmentId: remoteEnvironmentId, projection: remoteProjection, sources: [] }
+          : null,
+      ),
+  }),
+);
 const testLayer = mcpServiceLayer.pipe(
   Layer.provideMerge(threadManagementLayer.pipe(Layer.provideMerge(orchestratorLayer))),
   Layer.provide(
     Layer.mergeAll(
       NodeServices.layer,
+      remoteThreadsLayer,
       Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([provider]) }),
       Layer.mock(ScheduledTaskService)({}),
     ),
@@ -117,7 +135,7 @@ const createConversation = Effect.fn("test.createConversation")(function* (
 
 it.layer(testLayer)("MCP conversation company scope", (it) => {
   it.effect(
-    "limits listing, reading, sending, waiting, and interruption to the caller's company",
+    "limits listing, sending, waiting, and interruption to the caller's company but reads any thread",
     () =>
       Effect.gen(function* () {
         const orchestrator = yield* OrchestratorV2;
@@ -149,8 +167,11 @@ it.layer(testLayer)("MCP conversation company scope", (it) => {
           (yield* service.interruptThread(scope, { threadId: sameCompanyId })).status,
           "no_active_run",
         );
+        assert.equal(
+          (yield* service.readThread(scope, { threadId: foreignId })).thread.threadId,
+          foreignId,
+        );
         const deniedOperations: ReadonlyArray<Effect.Effect<unknown, OrchestratorMcpFailure>> = [
-          service.readThread(scope, { threadId: foreignId }),
           service.sendToThread(scope, { threadId: foreignId, message: "Wrong company" }),
           service.waitForThread(scope, { threadId: foreignId }),
           service.interruptThread(scope, { threadId: foreignId }),
@@ -228,6 +249,25 @@ it.layer(testLayer)("MCP conversation company scope", (it) => {
         (yield* service.createThreads(invocation(parentId), input)).threads[0]?.threadId,
         createdId,
       );
+    }),
+  );
+
+  it.effect("reads threads from the account's other environments when they are not local", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const service = yield* OrchestratorMcpService;
+      const parentId = yield* createConversation("remote-read-parent", companyA);
+      const standInId = yield* createConversation("remote-read-stand-in", companyB);
+      const standIn = yield* orchestrator.getThreadProjection(standInId);
+      remoteProjection = { ...standIn, thread: { ...standIn.thread, id: remoteThreadId } };
+
+      const read = yield* service.readThread(invocation(parentId), { threadId: remoteThreadId });
+      assert.equal(read.thread.threadId, remoteThreadId);
+
+      const missing = yield* service
+        .readThread(invocation(parentId), { threadId: ThreadId.make("thread-nowhere") })
+        .pipe(Effect.flip);
+      assert.equal(missing.code, "thread_not_found");
     }),
   );
 });

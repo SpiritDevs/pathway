@@ -1403,7 +1403,8 @@ export default defineSchema({
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_environment", ["companyId", "environmentId"])
     .index("by_company_and_environment_and_thread", ["companyId", "environmentId", "threadId"])
-    .index("by_company_and_project", ["companyId", "cloudProjectId"]),
+    .index("by_company_and_project", ["companyId", "cloudProjectId"])
+    .index("by_thread", ["threadId"]),
 
   /** Parsed local SMTP captures. Raw source and attachment bytes remain environment-owned. */
   capturedEmails: defineTable({

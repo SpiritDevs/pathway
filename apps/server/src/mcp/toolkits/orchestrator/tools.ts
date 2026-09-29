@@ -224,7 +224,7 @@ export const ThreadListTool = Tool.make("pathway_thread_list", {
 
 export const ThreadReadTool = Tool.make("pathway_thread_read", {
   description:
-    "Read durable state and a paginated timeline from a Pathway thread in the calling project. The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this parent thread's direct app-owned child acknowledges that child's automatic completion delivery. Continue with afterPosition=nextPosition.",
+    "Read durable state and a paginated timeline from any Pathway thread your account can see, by thread ID: any project or company on this environment, or a thread on another of your environments. The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this parent thread's direct app-owned child acknowledges that child's automatic completion delivery. Continue with afterPosition=nextPosition.",
   parameters: OrchestratorMcpThreadReadInput,
   success: OrchestratorMcpThreadReadResult,
   failure: OrchestratorMcpFailure,
