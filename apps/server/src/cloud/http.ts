@@ -3,6 +3,7 @@ import {
   AuthPeerEnvironmentScopes,
   AuthPeerReadGrantPermission,
   AuthPeerReadScopes,
+  AuthPeerSendScopes,
   AuthRelayReadScope,
   AuthRelayWriteScope,
   AuthStandardClientScopes,
@@ -25,6 +26,7 @@ import {
   type RelayEnvironmentHealthResponse as RelayEnvironmentHealthResponseShape,
   RelayEnvironmentConfigRequest,
   RelayEnvironmentConnectReadScope,
+  RelayEnvironmentConnectSendScope,
   RelayEnvironmentLinkChallengeResponse,
   RelayEnvironmentLinkResponse,
   RelayEnvironmentMintResponseProofPayload,
@@ -1145,11 +1147,15 @@ export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCrede
       !hasBoundedCloudProofLifetime({ ...proofOption.value, nowSeconds }) ||
       !(
         hasExactScope({ scopes: proofOption.value.scope, expected: "environment:connect" }) ||
-        (hasExactScope({
-          scopes: proofOption.value.scope,
-          expected: RelayEnvironmentConnectReadScope,
-        }) &&
-          proofOption.value.initiatingEnvironmentId !== undefined)
+        (proofOption.value.initiatingEnvironmentId !== undefined &&
+          (hasExactScope({
+            scopes: proofOption.value.scope,
+            expected: RelayEnvironmentConnectReadScope,
+          }) ||
+            hasExactScope({
+              scopes: proofOption.value.scope,
+              expected: RelayEnvironmentConnectSendScope,
+            })))
       )
     ) {
       return yield* new EnvironmentHttpUnauthorizedError({
@@ -1213,15 +1219,17 @@ export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCrede
 
     const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(dependencies.secrets);
     const issued = yield* dependencies.environmentAuth.createPairingLink({
-      // A peer environment is an agent host, never a hand on this desktop. A read mint scope or
-      // thread-read grant (the latter from relays predating the read scope) only reads.
+      // A peer environment is an agent host, never a hand on this desktop. Thread-access mint
+      // scopes only read, or read and dispatch; read-permission grants only read.
       scopes:
         proof.initiatingEnvironmentId === undefined
           ? AuthStandardClientScopes
           : proof.scope.includes(RelayEnvironmentConnectReadScope) ||
               proof.connectGrant?.permission === AuthPeerReadGrantPermission
             ? AuthPeerReadScopes
-            : AuthPeerEnvironmentScopes,
+            : proof.scope.includes(RelayEnvironmentConnectSendScope)
+              ? AuthPeerSendScopes
+              : AuthPeerEnvironmentScopes,
       ...sessionIdentity,
       ttl: Duration.minutes(2),
       label: "Pathway Connect connect",

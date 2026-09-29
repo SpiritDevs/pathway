@@ -9,9 +9,9 @@
  * @module cloud/remoteThreads
  */
 import {
-  AuthPeerEnvironmentScopes,
   AuthPeerReadScopes,
-  AuthPeerReadUnsupportedCode,
+  AuthPeerSendScopes,
+  AuthPeerThreadAccessUnsupportedCode,
   type CommandId,
   EnvironmentId,
   type MessageId,
@@ -56,8 +56,8 @@ const issueThreadAccessRef = makeFunctionReference<
 
 /** Why Pathway Cloud refused a thread grant, in words an agent can act on. */
 export function grantFailureMessage(threadId: ThreadId, cause: unknown): string {
-  return convexErrorCode(cause) === AuthPeerReadUnsupportedCode
-    ? `Thread ${threadId} is on an environment running an older Pathway that cannot limit remote reads. Update Pathway there to read it remotely.`
+  return convexErrorCode(cause) === AuthPeerThreadAccessUnsupportedCode
+    ? `Thread ${threadId} is on an environment running an older Pathway that cannot limit remote thread access. Update Pathway there to reach it remotely.`
     : `Pathway could not reach thread ${threadId} on its environment.`;
 }
 
@@ -253,7 +253,7 @@ export const layer = Layer.effect(
             .connect({
               targetEnvironmentId: environmentId,
               connectGrantToken: grant.token,
-              scopes: access === "read" ? AuthPeerReadScopes : AuthPeerEnvironmentScopes,
+              scopes: access === "read" ? AuthPeerReadScopes : AuthPeerSendScopes,
             })
             .pipe(unreachable(threadId));
           return yield* use(environmentId, handle.session.client);

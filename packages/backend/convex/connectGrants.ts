@@ -15,7 +15,7 @@
  */
 import {
   AuthPeerReadGrantPermission,
-  AuthPeerReadUnsupportedCode,
+  AuthPeerThreadAccessUnsupportedCode,
   AuthPeerSendGrantPermission,
 } from "@spiritdevs/contracts";
 import { v } from "convex/values";
@@ -62,6 +62,7 @@ const validationResult = v.union(
     membershipId: domainIdArg,
     permission: v.string(),
     expiresAt: v.number(),
+    threadAccess: v.optional(v.union(v.literal("read"), v.literal("send"))),
   }),
   v.object({
     status: v.literal("refused"),
@@ -183,17 +184,17 @@ const THREAD_ACCESS_PERMISSIONS = {
 const threadAccess = v.union(v.literal("read"), v.literal("send"));
 
 /**
- * Whether the target issues read-only scopes for read grants. Older targets would turn a read
- * grant into a full peer session, so anything but an explicit `true` fails closed.
+ * Whether the target honours the thread-access mint scopes. Older targets reject those mints, so a
+ * thread grant for them is useless; anything but an explicit `true` counts as unsupported.
  */
-function enforcesPeerReadGrants(registration: Doc<"environmentRegistrations">): boolean {
+function enforcesPeerThreadGrants(registration: Doc<"environmentRegistrations">): boolean {
   const descriptor: unknown = registration.descriptor;
   if (typeof descriptor !== "object" || descriptor === null) return false;
   const capabilities = (descriptor as Record<string, unknown>)["capabilities"];
   return (
     typeof capabilities === "object" &&
     capabilities !== null &&
-    (capabilities as Record<string, unknown>)["peerReadGrants"] === true
+    (capabilities as Record<string, unknown>)["peerThreadGrants"] === true
   );
 }
 
@@ -303,7 +304,7 @@ export const recordThreadAccess = internalMutation({
         )
         .unique();
       if (registration?.state !== "active") continue;
-      if (args.access === "read" && !enforcesPeerReadGrants(registration)) {
+      if (!enforcesPeerThreadGrants(registration)) {
         unsupportedTarget = true;
         continue;
       }
@@ -335,8 +336,8 @@ export const recordThreadAccess = internalMutation({
     }
     if (unsupportedTarget)
       throw backendError(
-        AuthPeerReadUnsupportedCode,
-        "The environment holding this thread runs a Pathway version that cannot limit remote reads. Update Pathway there to read it remotely.",
+        AuthPeerThreadAccessUnsupportedCode,
+        "The environment holding this thread runs a Pathway version that cannot limit remote thread access. Update Pathway there to reach it remotely.",
       );
     return null;
   },
@@ -350,11 +351,11 @@ export const validate = mutation({
   args: {
     tokenHash: v.string(),
     /**
-     * Asserted by relays that sign peer thread-read mints with `RelayEnvironmentConnectReadScope`.
-     * Thread-read grants are refused without it, so an older relay can never carry one to a target
-     * as an ordinary full-access connect.
+     * Asserted by relays that sign peer thread-access mints with the read or send mint scope, which
+     * older targets reject. Thread grants are refused without it, so an older relay can never carry
+     * one to a target as an ordinary full-access connect.
      */
-    signsReadMintScope: v.optional(v.literal(true)),
+    signsThreadAccessMintScopes: v.optional(v.literal(true)),
   },
   returns: validationResult,
   handler: async (ctx, args) => {
@@ -408,13 +409,13 @@ export const validate = mutation({
       now,
     );
     if (invalid !== null || membership === null) return REFUSED;
-    // Read grants need a relay that signs the read mint scope, which older targets reject. The
-    // capability check also catches a target downgraded since issue.
+    // Thread grants need a relay that signs the thread-access mint scopes, which older targets
+    // reject. The capability check also catches a target downgraded since issue.
     if (
-      grant.threadAccess === "read" &&
-      (args.signsReadMintScope !== true ||
+      grant.threadAccess !== undefined &&
+      (args.signsThreadAccessMintScopes !== true ||
         registration === null ||
-        !enforcesPeerReadGrants(registration))
+        !enforcesPeerThreadGrants(registration))
     )
       return REFUSED;
 
@@ -425,6 +426,7 @@ export const validate = mutation({
       membershipId: membership.id,
       permission: grant.permission,
       expiresAt: grant.expiresAt,
+      ...(grant.threadAccess === undefined ? {} : { threadAccess: grant.threadAccess }),
     };
   },
 });

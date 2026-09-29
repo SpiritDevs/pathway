@@ -80,7 +80,7 @@ const executionEnvironmentDescriptor = v.object({
     repositoryIdentity: v.boolean(),
     projectDirectoryInspection: v.optional(v.boolean()),
     connectionProbe: v.optional(v.boolean()),
-    peerReadGrants: v.optional(v.boolean()),
+    peerThreadGrants: v.optional(v.boolean()),
     attachmentUploads: v.optional(v.boolean()),
     questionAttachments: v.optional(v.boolean()),
     userInputDismissal: v.optional(v.boolean()),

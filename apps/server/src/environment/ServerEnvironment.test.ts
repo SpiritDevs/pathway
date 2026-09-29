@@ -69,7 +69,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.repositoryIdentity).toBe(true);
       expect(second.capabilities.projectDirectoryInspection).toBe(true);
       expect(second.capabilities.connectionProbe).toBe(true);
-      expect(second.capabilities.peerReadGrants).toBe(true);
+      expect(second.capabilities.peerThreadGrants).toBe(true);
       expect(second.capabilities.pullRequests).toBe(true);
       expect(second.capabilities.threadTitleRegeneration).toBe(true);
       expect(second.capabilities.threadSettleAfterCompletion).toBe(true);

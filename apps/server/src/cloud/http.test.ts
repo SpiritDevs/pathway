@@ -24,6 +24,9 @@ import {
   AuthPeerReadGrantPermission,
   AuthPeerReadScopes,
   AuthPeerSendGrantPermission,
+  AuthPeerSendScopes,
+  AuthReviewWriteScope,
+  AuthTerminalOperateScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
   AuthSessionId,
@@ -34,6 +37,7 @@ import {
 import {
   type RelayCloudMintCredentialProofPayload,
   RelayEnvironmentConnectReadScope,
+  RelayEnvironmentConnectSendScope,
   type RelayValidatedConnectGrantIdentity,
 } from "@spiritdevs/contracts/relay";
 import { RelayClientTracer } from "@spiritdevs/shared/relayTracing";
@@ -372,7 +376,7 @@ describe("cloud mint credential handler", () => {
       yield* reader.run;
       expect(reader.pairingInputs[0]?.scopes).toEqual(AuthPeerReadScopes);
 
-      // A send grant keeps the ordinary peer scopes.
+      // A remote-dispatch grant signed with the ordinary connect scope keeps the ordinary peer scopes.
       const sender = yield* makeMintHarness({
         environmentSubject: true,
         connectGrant: { ...connectGrant, permission: AuthPeerSendGrantPermission },
@@ -398,13 +402,33 @@ describe("cloud mint credential handler", () => {
     }),
   );
 
-  it("is rejected by targets that predate the read mint scope", () => {
+  it.effect("mints read-and-dispatch scopes for the send mint scope and only for peers", () =>
+    Effect.gen(function* () {
+      const sender = yield* makeMintHarness({
+        environmentSubject: true,
+        scope: [RelayEnvironmentConnectSendScope],
+      });
+      yield* sender.run;
+      expect(sender.pairingInputs[0]?.scopes).toEqual(AuthPeerSendScopes);
+      expect(sender.pairingInputs[0]?.scopes).not.toContain(AuthTerminalOperateScope);
+      expect(sender.pairingInputs[0]?.scopes).not.toContain(AuthReviewWriteScope);
+
+      const person = yield* makeMintHarness({ scope: [RelayEnvironmentConnectSendScope] });
+      expect(yield* Effect.flip(person.run)).toMatchObject({
+        _tag: "EnvironmentHttpUnauthorizedError",
+      });
+      expect(person.pairingInputs).toEqual([]);
+    }),
+  );
+
+  it("is rejected by targets that predate the thread-access mint scopes", () => {
     // The mint-proof scope schema before the read scope existed. Such a target can never mint a
     // full peer session from a read grant signed by a current relay.
     const decodePreReadScope = Schema.decodeUnknownOption(
       Schema.Array(Schema.Literal("environment:connect")),
     );
     expect(Option.isNone(decodePreReadScope([RelayEnvironmentConnectReadScope]))).toBe(true);
+    expect(Option.isNone(decodePreReadScope([RelayEnvironmentConnectSendScope]))).toBe(true);
     expect(Option.isSome(decodePreReadScope(["environment:connect"]))).toBe(true);
   });
 

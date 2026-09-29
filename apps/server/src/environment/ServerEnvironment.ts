@@ -175,7 +175,7 @@ export const make = Effect.gen(function* () {
       repositoryIdentity: true,
       projectDirectoryInspection: true,
       connectionProbe: true,
-      peerReadGrants: true,
+      peerThreadGrants: true,
       attachmentUploads: true,
       questionAttachments: true,
       userInputDismissal: true,

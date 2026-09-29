@@ -705,6 +705,8 @@ export const RelayEnvironmentConnectScope = "environment:connect" as const;
  * on an older server, whatever its stored registration claims.
  */
 export const RelayEnvironmentConnectReadScope = "environment:connect-read" as const;
+/** Mint-proof scope for a peer environment presenting a thread-send grant; same contract as read. */
+export const RelayEnvironmentConnectSendScope = "environment:connect-send" as const;
 export const RelayEnvironmentStatusScope = "environment:status" as const;
 export const RelayMobileRegistrationScope = "mobile:registration" as const;
 export const RelayDpopAccessTokenScope = Schema.Literals([
@@ -922,6 +924,8 @@ export const RelayValidatedConnectGrantIdentity = Schema.Struct({
   environmentId: EnvironmentId,
   membershipId: MembershipId,
   permission: CompanyPermission,
+  /** Set for grants an environment requested to read or message one thread. */
+  threadAccess: Schema.optional(Schema.Literals(["read", "send"])),
 });
 export type RelayValidatedConnectGrantIdentity = typeof RelayValidatedConnectGrantIdentity.Type;
 
@@ -994,7 +998,13 @@ export const RelayCloudMintCredentialProofPayload = Schema.Struct({
   deviceId: Schema.optional(TrimmedNonEmptyString),
   connectGrant: Schema.optional(RelayValidatedConnectGrantIdentity),
   nonce: TrimmedNonEmptyString,
-  scope: Schema.Array(Schema.Literals(["environment:connect", RelayEnvironmentConnectReadScope])),
+  scope: Schema.Array(
+    Schema.Literals([
+      "environment:connect",
+      RelayEnvironmentConnectReadScope,
+      RelayEnvironmentConnectSendScope,
+    ]),
+  ),
 });
 export type RelayCloudMintCredentialProofPayload = typeof RelayCloudMintCredentialProofPayload.Type;
 

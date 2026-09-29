@@ -55,7 +55,7 @@ describe("ConvexConnectGrants", () => {
       expect(functionName).toBe("connectGrants:validate");
       expect(received).toEqual({
         tokenHash: NodeCrypto.createHash("sha256").update("opaque-connect-grant").digest("hex"),
-        signsReadMintScope: true,
+        signsThreadAccessMintScopes: true,
       });
     }).pipe(
       Effect.provide(
@@ -69,6 +69,23 @@ describe("ConvexConnectGrants", () => {
       ),
     );
   });
+
+  it.effect("carries a thread grant's access so the mint scope can be chosen", () =>
+    Effect.gen(function* () {
+      const grants = yield* ConvexConnectGrants.ConvexConnectGrants;
+      expect(
+        yield* grants.validateConnectGrant({
+          grant: "thread-send-grant",
+          environmentId: "environment-1",
+        }),
+      ).toEqual({
+        environmentId: "environment-1",
+        membershipId: "membership-1",
+        permission: "remoteAgents.control",
+        threadAccess: "send",
+      });
+    }).pipe(Effect.provide(testLayer(() => Effect.succeed({ ...accepted, threadAccess: "send" })))),
+  );
 
   it.effect("fails closed when Convex refuses the grant", () =>
     Effect.gen(function* () {

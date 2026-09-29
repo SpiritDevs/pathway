@@ -938,6 +938,22 @@ describe("mintScope", () => {
     ).toBe("environment:connect-read");
   });
 
+  it("signs thread-send grants from peer environments with the send mint scope", () => {
+    expect(
+      EnvironmentConnector.mintScope({
+        initiatingEnvironmentId: "env-initiator" as never,
+        connectGrant: { ...grant("remoteAgents.control"), threadAccess: "send" },
+      }),
+    ).toBe("environment:connect-send");
+    // A person redeeming a thread grant gets no thread-access mint scope; the target's ordinary
+    // user path applies instead.
+    expect(
+      EnvironmentConnector.mintScope({
+        connectGrant: { ...grant("remoteAgents.control"), threadAccess: "send" },
+      }),
+    ).toBe("environment:connect");
+  });
+
   it("keeps the ordinary connect scope for other grants and for people", () => {
     expect(
       EnvironmentConnector.mintScope({

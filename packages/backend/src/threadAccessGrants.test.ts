@@ -58,7 +58,7 @@ async function seed(
   targetPermissions: string[],
   options: {
     readonly linkedTo?: "owner" | "manager" | null;
-    /** The target's `peerReadGrants` capability; `"absent"` models a pre-capability server. */
+    /** The target's `peerThreadGrants` capability; `"absent"` models a pre-capability server. */
     readonly targetReadGrants?: unknown;
   } = {},
 ) {
@@ -134,7 +134,7 @@ async function seed(
           label: environmentId,
           capabilities:
             environmentId === TARGET && options.targetReadGrants !== "absent"
-              ? { repositoryIdentity: true, peerReadGrants: options.targetReadGrants ?? true }
+              ? { repositoryIdentity: true, peerThreadGrants: options.targetReadGrants ?? true }
               : { repositoryIdentity: true },
         },
         relayLinkState: "linked",
@@ -310,18 +310,17 @@ describe("thread access grants", () => {
       ["false", false],
       ["not a boolean", "yes"],
     ] as const) {
-      it(`fails closed when the target's read-grant support is ${label}`, async () => {
+      it(`fails closed for reads and sends when the target's support is ${label}`, async () => {
         const t = harness();
         await seed(t, ["environments.read", "remoteAgents.control"], { targetReadGrants });
-        await expect(issueGrant(t, "read")).rejects.toThrow(/cannot limit remote reads/u);
+        for (const access of ["read", "send"] as const)
+          await expect(issueGrant(t, access)).rejects.toThrow(/cannot limit remote thread access/u);
         const stored = await t.run(async (ctx) => ctx.db.query("connectGrants").collect());
         expect(stored).toEqual([]);
-        // Sends already carry full peer access on every version, so they are unaffected.
-        await expect(issueGrant(t, "send")).resolves.toMatchObject({ environmentId: TARGET });
       });
     }
 
-    it("refuses to redeem a read grant after its target stops enforcing read-only access", async () => {
+    it("refuses to redeem thread grants after their target stops honouring the mint scopes", async () => {
       const t = harness();
       const { targetRegistrationId } = await seed(t, ["environments.read", "remoteAgents.control"]);
       const read = await issueGrant(t, "read");
@@ -332,40 +331,36 @@ describe("thread access grants", () => {
           descriptor: { ...registration!.descriptor, capabilities: { repositoryIdentity: true } },
         });
       });
-      const validate = async (token: string) =>
-        await asRelay(t).mutation(api.connectGrants.validate, {
-          tokenHash: await hashConnectGrantToken(token),
-          signsReadMintScope: true,
-        });
-
-      await expect(validate(read!.token)).resolves.toEqual(CONNECT_GRANT_REFUSED);
-      await expect(validate(send!.token)).resolves.toMatchObject({
-        status: "accepted",
-        permission: "remoteAgents.control",
-      });
+      for (const grant of [read, send])
+        await expect(
+          asRelay(t).mutation(api.connectGrants.validate, {
+            tokenHash: await hashConnectGrantToken(grant!.token),
+            signsThreadAccessMintScopes: true,
+          }),
+        ).resolves.toEqual(CONNECT_GRANT_REFUSED);
     });
 
-    it("redeems a read grant only through a relay that signs the read mint scope", async () => {
+    it("redeems thread grants only through a relay that signs the thread-access mint scopes", async () => {
       const t = harness();
       await seed(t, ["environments.read", "remoteAgents.control"]);
-      const read = await issueGrant(t, "read");
-      const tokenHash = await hashConnectGrantToken(read!.token);
-      // A relay predating the read mint scope would present it as an ordinary connect, which an
-      // older target with a stale capability would turn into a full peer session.
-      await expect(asRelay(t).mutation(api.connectGrants.validate, { tokenHash })).resolves.toEqual(
-        CONNECT_GRANT_REFUSED,
-      );
-      await expect(
-        asRelay(t).mutation(api.connectGrants.validate, { tokenHash, signsReadMintScope: true }),
-      ).resolves.toMatchObject({ status: "accepted", permission: "environments.read" });
-
-      // Send grants and human grants still redeem through any relay.
-      const send = await issueGrant(t, "send");
-      await expect(
-        asRelay(t).mutation(api.connectGrants.validate, {
-          tokenHash: await hashConnectGrantToken(send!.token),
-        }),
-      ).resolves.toMatchObject({ status: "accepted", permission: "remoteAgents.control" });
+      for (const [access, permission] of [
+        ["read", "environments.read"],
+        ["send", "remoteAgents.control"],
+      ] as const) {
+        const grant = await issueGrant(t, access);
+        const tokenHash = await hashConnectGrantToken(grant!.token);
+        // A relay predating the thread-access mint scopes would present it as an ordinary connect,
+        // which an older target would turn into a full peer session.
+        await expect(
+          asRelay(t).mutation(api.connectGrants.validate, { tokenHash }),
+        ).resolves.toEqual(CONNECT_GRANT_REFUSED);
+        await expect(
+          asRelay(t).mutation(api.connectGrants.validate, {
+            tokenHash,
+            signsThreadAccessMintScopes: true,
+          }),
+        ).resolves.toMatchObject({ status: "accepted", permission, threadAccess: access });
+      }
     });
   });
 });

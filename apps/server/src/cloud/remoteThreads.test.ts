@@ -1,6 +1,10 @@
 import { it } from "@effect/vitest";
 import {
-  AuthPeerReadUnsupportedCode,
+  AuthPeerReadScopes,
+  AuthPeerSendScopes,
+  AuthPeerThreadAccessUnsupportedCode,
+  AuthReviewWriteScope,
+  AuthTerminalOperateScope,
   CommandId,
   EnvironmentId,
   MessageId,
@@ -12,18 +16,19 @@ import { ConvexError } from "convex/values";
 import * as Effect from "effect/Effect";
 import { describe, expect } from "vite-plus/test";
 
+import { RPC_REQUIRED_SCOPES } from "../auth/RpcAuthorization.ts";
 import { grantFailureMessage, planRemoteSend, sendOnTarget } from "./remoteThreads.ts";
 
 const threadId = ThreadId.make("thread-elsewhere");
 
 describe("grantFailureMessage", () => {
-  it("asks for an update when the thread's environment cannot limit remote reads", () => {
+  it("asks for an update when the thread's environment cannot limit remote thread access", () => {
     expect(
       grantFailureMessage(
         threadId,
-        new ConvexError({ code: AuthPeerReadUnsupportedCode, message: "update" }),
+        new ConvexError({ code: AuthPeerThreadAccessUnsupportedCode, message: "update" }),
       ),
-    ).toMatch(/older Pathway that cannot limit remote reads/u);
+    ).toMatch(/older Pathway that cannot limit remote thread access/u);
   });
 
   it("fails closed with a generic message for other refusals and older Pathway Cloud", () => {
@@ -183,4 +188,26 @@ describe("sendOnTarget", () => {
       expect(dispatched).toEqual([]);
     }),
   );
+});
+
+describe("thread session scopes", () => {
+  const allowed = (scopes: ReadonlyArray<string>, method: keyof typeof RPC_REQUIRED_SCOPES) =>
+    scopes.includes(RPC_REQUIRED_SCOPES[method]);
+
+  it("let read sessions read threads but not dispatch", () => {
+    expect(allowed(AuthPeerReadScopes, ORCHESTRATION_V2_WS_METHODS.getThreadProjection)).toBe(true);
+    expect(allowed(AuthPeerReadScopes, ORCHESTRATION_V2_WS_METHODS.dispatchCommand)).toBe(false);
+  });
+
+  it("let send sessions read and dispatch but nothing broader", () => {
+    expect(allowed(AuthPeerSendScopes, ORCHESTRATION_V2_WS_METHODS.getThreadProjection)).toBe(true);
+    expect(allowed(AuthPeerSendScopes, ORCHESTRATION_V2_WS_METHODS.dispatchCommand)).toBe(true);
+    // Terminal and review RPCs exist and are all out of reach.
+    const excluded = Object.entries(RPC_REQUIRED_SCOPES).filter(
+      ([, scope]) => scope === AuthTerminalOperateScope || scope === AuthReviewWriteScope,
+    );
+    expect(excluded.length).toBeGreaterThan(0);
+    for (const [method] of excluded)
+      expect(allowed(AuthPeerSendScopes, method as keyof typeof RPC_REQUIRED_SCOPES)).toBe(false);
+  });
 });
