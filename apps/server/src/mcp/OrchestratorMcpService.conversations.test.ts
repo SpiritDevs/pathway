@@ -15,7 +15,7 @@ import { CompanyId } from "@spiritdevs/contracts/company";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import { RemoteThreadReader } from "../cloud/remoteThreadRead.ts";
+import { RemoteThreads } from "../cloud/remoteThreads.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import { makeLayer as makeProviderAdapterRegistryLayer } from "../orchestration-v2/ProviderAdapterRegistry.ts";
@@ -78,14 +78,25 @@ const remoteEnvironmentId = EnvironmentId.make("mcp-conversation-remote-environm
 // Filled by the test with a real projection so the stub can serve it as another environment's.
 let remoteProjection: OrchestrationV2ThreadProjection | null = null;
 const requestedRemoteSources: Array<ReadonlyArray<ThreadId>> = [];
+const remoteSends: Array<string> = [];
 const remoteThreadsLayer = Layer.succeed(
-  RemoteThreadReader,
-  RemoteThreadReader.of({
+  RemoteThreads,
+  RemoteThreads.of({
     read: (threadId, sourcesFor) =>
       Effect.sync(() => {
         if (threadId !== remoteThreadId || remoteProjection === null) return null;
         requestedRemoteSources.push(sourcesFor(remoteProjection));
         return { environmentId: remoteEnvironmentId, projection: remoteProjection, sources: [] };
+      }),
+    send: (input) =>
+      Effect.gen(function* () {
+        if (input.threadId !== remoteThreadId || remoteProjection === null) return null;
+        yield* input.authorize(remoteProjection);
+        remoteSends.push(input.text);
+        const run = remoteProjection.runs.at(-1);
+        return run === undefined
+          ? yield* Effect.die("The remote stand-in needs a run")
+          : { environmentId: remoteEnvironmentId, run, delivery: "started" as const };
       }),
   }),
 );
@@ -113,6 +124,7 @@ const invocation = (threadId: ThreadId): McpInvocationScope => ({
 const createConversation = Effect.fn("test.createConversation")(function* (
   id: string,
   companyId: CompanyId,
+  runtimeMode: "full-access" | "approval-required" = "full-access",
 ) {
   const orchestrator = yield* OrchestratorV2;
   const threadId = ThreadId.make(id);
@@ -124,7 +136,7 @@ const createConversation = Effect.fn("test.createConversation")(function* (
     conversationCompanyId: companyId,
     title: id,
     modelSelection,
-    runtimeMode: "full-access",
+    runtimeMode,
     interactionMode: "default",
     branch: null,
     worktreePath: null,
@@ -136,7 +148,7 @@ const createConversation = Effect.fn("test.createConversation")(function* (
 
 it.layer(testLayer)("MCP conversation company scope", (it) => {
   it.effect(
-    "limits listing, sending, waiting, and interruption to the caller's company but reads any thread",
+    "limits listing, waiting, and interruption to the caller's company but reads and sends anywhere",
     () =>
       Effect.gen(function* () {
         const orchestrator = yield* OrchestratorV2;
@@ -172,8 +184,12 @@ it.layer(testLayer)("MCP conversation company scope", (it) => {
           (yield* service.readThread(scope, { threadId: foreignId })).thread.threadId,
           foreignId,
         );
+        assert.equal(
+          (yield* service.sendToThread(scope, { threadId: foreignId, message: "Other company" }))
+            .delivery,
+          "started",
+        );
         const deniedOperations: ReadonlyArray<Effect.Effect<unknown, OrchestratorMcpFailure>> = [
-          service.sendToThread(scope, { threadId: foreignId, message: "Wrong company" }),
           service.waitForThread(scope, { threadId: foreignId }),
           service.interruptThread(scope, { threadId: foreignId }),
         ];
@@ -181,7 +197,10 @@ it.layer(testLayer)("MCP conversation company scope", (it) => {
           const error = yield* denied.pipe(Effect.asVoid, Effect.flip);
           assert.equal(error.code, "thread_not_found");
         }
-        assert.deepEqual((yield* orchestrator.getThreadProjection(foreignId)).messages, []);
+        assert.equal(
+          (yield* orchestrator.getThreadProjection(foreignId)).messages[0]?.text,
+          "Other company",
+        );
         const sent = yield* service.sendToThread(scope, {
           threadId: sameCompanyId,
           message: "Same company",
@@ -269,6 +288,48 @@ it.layer(testLayer)("MCP conversation company scope", (it) => {
 
       const missing = yield* service
         .readThread(invocation(parentId), { threadId: ThreadId.make("thread-nowhere") })
+        .pipe(Effect.flip);
+      assert.equal(missing.code, "thread_not_found");
+    }),
+  );
+
+  it.effect("sends to threads on the account's other environments without escalating access", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const service = yield* OrchestratorMcpService;
+      const parentId = yield* createConversation("remote-send-parent", companyA);
+      const standInId = yield* createConversation("remote-send-stand-in", companyB);
+      yield* service.sendToThread(invocation(parentId), {
+        threadId: standInId,
+        message: "Warm up",
+      });
+      const standIn = yield* orchestrator.getThreadProjection(standInId);
+      remoteProjection = { ...standIn, thread: { ...standIn.thread, id: remoteThreadId } };
+
+      const sent = yield* service.sendToThread(invocation(parentId), {
+        threadId: remoteThreadId,
+        message: "Kick off",
+      });
+      assert.equal(sent.delivery, "started");
+      assert.deepEqual(remoteSends, ["Kick off"]);
+
+      // A thread with approval-required access may not kick off a full-access one elsewhere.
+      const restrictedId = yield* createConversation(
+        "remote-send-restricted",
+        companyA,
+        "approval-required",
+      );
+      const denied = yield* service
+        .sendToThread(invocation(restrictedId), { threadId: remoteThreadId, message: "Escalate" })
+        .pipe(Effect.flip);
+      assert.equal(denied.code, "runtime_mode_escalation_denied");
+      assert.deepEqual(remoteSends, ["Kick off"]);
+
+      const missing = yield* service
+        .sendToThread(invocation(parentId), {
+          threadId: ThreadId.make("thread-nowhere"),
+          message: "Hello?",
+        })
         .pipe(Effect.flip);
       assert.equal(missing.code, "thread_not_found");
     }),

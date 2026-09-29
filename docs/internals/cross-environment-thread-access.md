@@ -1,0 +1,24 @@
+# Cross-environment thread access
+
+`pathway_thread_read` and `pathway_thread_send` resolve a thread ID in two steps. `pathway_thread_wait`, `pathway_thread_interrupt`, and `pathway_thread_list` keep their project or company scope.
+
+1. **This environment.** Any non-deleted thread, whatever its project or company (`findLocalThread` in `apps/server/src/mcp/OrchestratorMcpService.ts`). Invocations with an `orchestratorOrigin` (AI contact assignments) keep the old project or company scope, because other company members can direct them.
+2. **The account's other environments.** On a local miss, `RemoteThreads` (`apps/server/src/cloud/remoteThreads.ts`) calls the Convex action `connectGrants:issueThreadAccess` with the environment's own service token and `access: "read" | "send"`.
+
+`issueThreadAccess` authorizes and routes the request:
+
+- The caller must be an environment identity whose `cnf.jkt` matches one of its active registrations. That only authenticates the caller. "The account" is the single user with an unrevoked `relayEnvironmentLinks` row for the environment. It is never taken from `registeredByMembershipId`, because a manager may have created the registration.
+- It looks up the thread in `agentThreads.by_thread`. It picks the most recently updated row on another environment, in an active company where the account has an active membership holding the access's permission, and whose target registration is active. Reads need `AuthPeerReadGrantPermission` (`environments.read`). Sends need `AuthPeerSendGrantPermission` (`remoteAgents.control`), the same permission the environment-command path requires for `sendMessage`.
+- It records a single-use connect grant for that membership. It returns the token and the target environment ID.
+
+The server then connects with `PeerEnvironments.connect` over the relay. The target authorizes the grant against its own replica, as it does for any peer connect.
+
+- **Read grants** get read-only scopes (`orchestration:read`, `relay:read`), and the caller requests only those. The server fetches the thread and only the fork sources that the requested page shows.
+- **Send grants** get the ordinary peer scopes. The server loads the target projection and applies the caller's runtime and interaction mode ceiling. It then derives the dispatch mode with `sendDispatchMode` and dispatches `message.dispatch`, and reads the result with `sendOutcome`. These are the same helpers `ThreadManagementService.sendToThread` uses locally.
+
+Transcripts and messages move between environments and never enter Convex.
+
+Limits:
+
+- Discovery depends on the published `agentThreads` shells, so threads in unbound local projects are invisible.
+- The target restricts a read grant to read-only scopes only once it runs a version that knows `AuthPeerReadGrantPermission`.

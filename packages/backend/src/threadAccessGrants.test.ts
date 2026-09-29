@@ -1,4 +1,4 @@
-/** Environment-issued, account-scoped connect grants for reading one thread on another environment. */
+/** Environment-issued, account-scoped connect grants for reading or messaging a thread elsewhere. */
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -165,13 +165,14 @@ async function seed(
   });
 }
 
-describe("thread read grants", () => {
+describe("thread access grants", () => {
   it("grants the caller's account a single read of a thread in another company", async () => {
     const t = harness();
     const { targetMembershipId } = await seed(t, ["environments.read"]);
 
-    const grant = await asEnvironment(t).action(api.connectGrants.issueThreadRead, {
+    const grant = await asEnvironment(t).action(api.connectGrants.issueThreadAccess, {
       threadId: THREAD,
+      access: "read",
     });
     expect(grant?.environmentId).toBe(TARGET);
 
@@ -190,15 +191,44 @@ describe("thread read grants", () => {
     });
   });
 
+  it("grants sends only where the account may control remote agents", async () => {
+    const readOnly = harness();
+    await seed(readOnly, ["environments.read"]);
+    await expect(
+      asEnvironment(readOnly).action(api.connectGrants.issueThreadAccess, {
+        threadId: THREAD,
+        access: "send",
+      }),
+    ).resolves.toBeNull();
+
+    const t = harness();
+    await seed(t, ["remoteAgents.control"]);
+    const grant = await asEnvironment(t).action(api.connectGrants.issueThreadAccess, {
+      threadId: THREAD,
+      access: "send",
+    });
+    const tokenHash = await hashConnectGrantToken(grant!.token);
+    const stored = await t.run(async (ctx) =>
+      ctx.db
+        .query("connectGrants")
+        .withIndex("by_token_hash", (q) => q.eq("tokenHash", tokenHash))
+        .unique(),
+    );
+    expect(stored?.permission).toBe("remoteAgents.control");
+  });
+
   it("finds nothing for unknown threads or companies where the account cannot read environments", async () => {
     const t = harness();
     await seed(t, ["issues.read"]);
     const environment = asEnvironment(t);
     await expect(
-      environment.action(api.connectGrants.issueThreadRead, { threadId: THREAD }),
+      environment.action(api.connectGrants.issueThreadAccess, { threadId: THREAD, access: "read" }),
     ).resolves.toBeNull();
     await expect(
-      environment.action(api.connectGrants.issueThreadRead, { threadId: "thread-missing" }),
+      environment.action(api.connectGrants.issueThreadAccess, {
+        threadId: "thread-missing",
+        access: "read",
+      }),
     ).resolves.toBeNull();
   });
 
@@ -206,8 +236,9 @@ describe("thread read grants", () => {
     const t = harness();
     await seed(t, ["environments.read"]);
     await expect(
-      asEnvironment(t, "thumb-stolen").action(api.connectGrants.issueThreadRead, {
+      asEnvironment(t, "thumb-stolen").action(api.connectGrants.issueThreadAccess, {
         threadId: THREAD,
+        access: "read",
       }),
     ).rejects.toThrow(/exactly one Pathway account/u);
   });
@@ -217,7 +248,10 @@ describe("thread read grants", () => {
     // The manager has no membership in the target company, so a grant proves the link owner won.
     await seed(t, ["environments.read"], { linkedTo: "manager" });
     await expect(
-      asEnvironment(t).action(api.connectGrants.issueThreadRead, { threadId: THREAD }),
+      asEnvironment(t).action(api.connectGrants.issueThreadAccess, {
+        threadId: THREAD,
+        access: "read",
+      }),
     ).resolves.toBeNull();
   });
 
@@ -225,7 +259,10 @@ describe("thread read grants", () => {
     const t = harness();
     await seed(t, ["environments.read"], { linkedTo: null });
     await expect(
-      asEnvironment(t).action(api.connectGrants.issueThreadRead, { threadId: THREAD }),
+      asEnvironment(t).action(api.connectGrants.issueThreadAccess, {
+        threadId: THREAD,
+        access: "read",
+      }),
     ).rejects.toThrow(/exactly one Pathway account/u);
   });
 
@@ -235,7 +272,7 @@ describe("thread read grants", () => {
     await expect(
       t
         .withIdentity({ issuer: "https://clerk.example.test", subject: "owner" })
-        .action(api.connectGrants.issueThreadRead, { threadId: THREAD }),
+        .action(api.connectGrants.issueThreadAccess, { threadId: THREAD, access: "read" }),
     ).rejects.toThrow(/Only an environment/u);
   });
 });

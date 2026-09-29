@@ -13,7 +13,7 @@
  *
  * @module connectGrants
  */
-import { AuthPeerReadGrantPermission } from "@spiritdevs/contracts";
+import { AuthPeerReadGrantPermission, AuthPeerSendGrantPermission } from "@spiritdevs/contracts";
 import { v } from "convex/values";
 
 import {
@@ -172,27 +172,33 @@ export const record = internalMutation({
   },
 });
 
-const THREAD_READ_PERMISSION = AuthPeerReadGrantPermission;
+const THREAD_ACCESS_PERMISSIONS = {
+  read: AuthPeerReadGrantPermission,
+  send: AuthPeerSendGrantPermission,
+} as const;
+const threadAccess = v.union(v.literal("read"), v.literal("send"));
 
-const issuedThreadReadGrant = v.union(
+const issuedThreadAccessGrant = v.union(
   v.object({ token: v.string(), environmentId: v.string() }),
   v.null(),
 );
 
 /**
- * Mints a single-use grant that lets the calling environment read one thread on the environment
- * that published it. The grant acts as the account that registered the caller, in any company where
- * that account may read environments. `null` means no readable environment publishes the thread.
+ * Mints a single-use grant that lets the calling environment read, or send a message to, one
+ * thread on the environment that published it. The grant acts as the account that linked the
+ * caller, in any company where that account holds the access's permission: `environments.read` to
+ * read, `remoteAgents.control` to send. `null` means no environment the account may reach
+ * publishes the thread.
  */
-export const issueThreadRead = action({
-  args: { threadId: v.string() },
-  returns: issuedThreadReadGrant,
+export const issueThreadAccess = action({
+  args: { threadId: v.string(), access: threadAccess },
+  returns: issuedThreadAccessGrant,
   handler: async (ctx, args): Promise<{ token: string; environmentId: string } | null> => {
     const token = generateConnectGrantToken();
     const tokenHash = await hashConnectGrantToken(token);
     const environmentId: string | null = await ctx.runMutation(
-      internal.connectGrants.recordThreadRead,
-      { threadId: args.threadId, tokenHash },
+      internal.connectGrants.recordThreadAccess,
+      { ...args, tokenHash },
     );
     return environmentId === null ? null : { token, environmentId };
   },
@@ -208,7 +214,7 @@ async function environmentAccountUser(ctx: MutationCtx): Promise<{
 }> {
   const identity = await requireIdentity(ctx);
   if (!isEnvironmentIdentity(identity)) {
-    throw backendError("permission-denied", "Only an environment may request a thread read.");
+    throw backendError("permission-denied", "Only an environment may request thread access.");
   }
   const tokenThumbprint = tokenProofKeyThumbprint(identity);
   const registrations = await ctx.db
@@ -248,12 +254,13 @@ async function environmentAccountUser(ctx: MutationCtx): Promise<{
   return { environmentId: identity.subject, userId: user._id };
 }
 
-/** Authorization and storage half of {@link issueThreadRead}. */
-export const recordThreadRead = internalMutation({
-  args: { threadId: v.string(), tokenHash: v.string() },
+/** Authorization and storage half of {@link issueThreadAccess}. */
+export const recordThreadAccess = internalMutation({
+  args: { threadId: v.string(), access: threadAccess, tokenHash: v.string() },
   returns: v.union(v.string(), v.null()),
   handler: async (ctx, args) => {
     const caller = await environmentAccountUser(ctx);
+    const permission = THREAD_ACCESS_PERMISSIONS[args.access];
     const published = await ctx.db
       .query("agentThreads")
       .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
@@ -283,7 +290,7 @@ export const recordThreadRead = internalMutation({
         )
         .unique();
       const { permissions } = await membershipAuthorization(ctx, membership, owner !== null);
-      if (!hasCompanyPermission(permissions, THREAD_READ_PERMISSION)) continue;
+      if (!hasCompanyPermission(permissions, permission)) continue;
 
       const issuedAt = Date.now();
       await ctx.db.insert("connectGrants", {
@@ -292,7 +299,7 @@ export const recordThreadRead = internalMutation({
         environmentId: row.environmentId,
         targetRegistrationId: registration._id,
         grantedMembershipId: membership._id,
-        permission: THREAD_READ_PERMISSION,
+        permission,
         tokenHash: args.tokenHash,
         issuedAt,
         expiresAt: connectGrantExpiresAt(issuedAt),
