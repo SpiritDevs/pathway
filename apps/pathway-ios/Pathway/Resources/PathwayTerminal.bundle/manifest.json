@@ -92,7 +92,7 @@
     "packages/contracts/src/providerRuntime.ts": "af8f50af5c87204919c0bc80cbea60320994cafee86d42da515755f669c6e9ea",
     "packages/contracts/src/providerUsage.ts": "f4cc388abf5c4b192a5c9e42a3fbcc52593fb92f495f730c62a17db1c828c66d",
     "packages/contracts/src/pullRequest.ts": "3260e759e3a66b74321b1571b3f1818832e317532c7d4e507e4651e8840de326",
-    "packages/contracts/src/relay.ts": "77250e787acf34c96d89ac270c2b3d3bc42a3390f6c87903e09c1249ef5790be",
+    "packages/contracts/src/relay.ts": "4d7ed155904c96b5dc050828d590b877ade7c940fd37f1785e97a9f6ff614c8b",
     "packages/contracts/src/relayClient.ts": "3b93278059420c5dc2a7f41675eea6737fc6b1e38661ea981eecce4287b1ced7",
     "packages/contracts/src/remoteAccess.ts": "58fd3de36dbc88de20acefb8146c9b4444e5f87b7b1062a0eb6814b766fcbc58",
     "packages/contracts/src/resourceTelemetry.ts": "a3aeb86bf7068af6de5533d205e210aa4614772d373d892d85909959bd541948",

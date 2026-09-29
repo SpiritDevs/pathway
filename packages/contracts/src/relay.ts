@@ -699,6 +699,12 @@ export const RelayEnvironmentConnectRequest = Schema.Struct({
 export type RelayEnvironmentConnectRequest = typeof RelayEnvironmentConnectRequest.Type;
 
 export const RelayEnvironmentConnectScope = "environment:connect" as const;
+/**
+ * Mint-proof scope the relay signs for a peer environment presenting a thread-read grant. Targets
+ * that predate it reject the proof outright, so a read grant can never become a full peer session
+ * on an older server, whatever its stored registration claims.
+ */
+export const RelayEnvironmentConnectReadScope = "environment:connect-read" as const;
 export const RelayEnvironmentStatusScope = "environment:status" as const;
 export const RelayMobileRegistrationScope = "mobile:registration" as const;
 export const RelayDpopAccessTokenScope = Schema.Literals([
@@ -988,7 +994,7 @@ export const RelayCloudMintCredentialProofPayload = Schema.Struct({
   deviceId: Schema.optional(TrimmedNonEmptyString),
   connectGrant: Schema.optional(RelayValidatedConnectGrantIdentity),
   nonce: TrimmedNonEmptyString,
-  scope: Schema.Array(Schema.Literal("environment:connect")),
+  scope: Schema.Array(Schema.Literals(["environment:connect", RelayEnvironmentConnectReadScope])),
 });
 export type RelayCloudMintCredentialProofPayload = typeof RelayCloudMintCredentialProofPayload.Type;
 

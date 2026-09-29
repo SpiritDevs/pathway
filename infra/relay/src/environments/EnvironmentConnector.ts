@@ -1,4 +1,5 @@
 import {
+  AuthPeerReadGrantPermission,
   EnvironmentHttpBadRequestError,
   EnvironmentHttpConflictError,
   EnvironmentHttpForbiddenError,
@@ -14,6 +15,7 @@ import {
   RelayEnvironmentMintResponseProofPayload,
   RelayCloudMintCredentialProofPayload,
   RelayEnvironmentConnectNotAuthorizedReason,
+  RelayEnvironmentConnectReadScope,
   type RelayEnvironmentConnectResponse,
   type RelayEnvironmentStatusResponse,
   type RelayValidatedConnectGrantIdentity,
@@ -152,6 +154,19 @@ type EnvironmentConnectInput = EnvironmentConnectIdentity & {
   readonly deviceId?: string;
   readonly connectGrant?: RelayValidatedConnectGrantIdentity;
 };
+
+/**
+ * A peer environment presenting a thread-read grant gets a read-only mint scope, which targets that
+ * cannot enforce read-only peers reject. Everything else keeps the ordinary connect scope.
+ */
+export function mintScope(
+  input: Pick<EnvironmentConnectInput, "initiatingEnvironmentId" | "connectGrant">,
+): RelayCloudMintCredentialProofPayload["scope"][number] {
+  return input.initiatingEnvironmentId !== undefined &&
+    input.connectGrant?.permission === AuthPeerReadGrantPermission
+    ? RelayEnvironmentConnectReadScope
+    : "environment:connect";
+}
 
 export class EnvironmentConnector extends Context.Service<
   EnvironmentConnector,
@@ -693,7 +708,7 @@ const make = Effect.gen(function* () {
         ...(input.deviceId ? { deviceId: input.deviceId } : {}),
         ...(input.connectGrant ? { connectGrant: input.connectGrant } : {}),
         nonce,
-        scope: ["environment:connect"],
+        scope: [mintScope(input)],
       } satisfies RelayCloudMintCredentialProofPayload;
       const proof = yield* signRelayJwt({
         privateKey: Redacted.value(settings.cloudMintPrivateKey),

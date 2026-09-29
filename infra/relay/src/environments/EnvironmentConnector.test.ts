@@ -921,3 +921,35 @@ describe("EnvironmentConnector", () => {
     }).pipe(Effect.provide(Layer.merge(TestClock.layer(), connectorTestLayer(execute))));
   });
 });
+
+describe("mintScope", () => {
+  const grant = (permission: "environments.read" | "remoteAgents.control") => ({
+    environmentId: "env-target" as never,
+    membershipId: "membership-1" as never,
+    permission,
+  });
+
+  it("signs thread-read grants from peer environments with the read mint scope", () => {
+    expect(
+      EnvironmentConnector.mintScope({
+        initiatingEnvironmentId: "env-initiator" as never,
+        connectGrant: grant("environments.read"),
+      }),
+    ).toBe("environment:connect-read");
+  });
+
+  it("keeps the ordinary connect scope for other grants and for people", () => {
+    expect(
+      EnvironmentConnector.mintScope({
+        initiatingEnvironmentId: "env-initiator" as never,
+        connectGrant: grant("remoteAgents.control"),
+      }),
+    ).toBe("environment:connect");
+    expect(EnvironmentConnector.mintScope({ connectGrant: grant("environments.read") })).toBe(
+      "environment:connect",
+    );
+    expect(
+      EnvironmentConnector.mintScope({ initiatingEnvironmentId: "env-initiator" as never }),
+    ).toBe("environment:connect");
+  });
+});

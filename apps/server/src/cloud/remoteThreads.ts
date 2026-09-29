@@ -117,6 +117,54 @@ export interface RemoteSendResult {
   readonly delivery: ThreadManagementSendResult["delivery"];
 }
 
+/**
+ * Sends one message through an open session to the environment holding the thread. `null` means
+ * the thread is deleted there.
+ */
+export const sendOnTarget = <E>(
+  client: Pick<
+    RpcSession["client"],
+    | typeof ORCHESTRATION_V2_WS_METHODS.getThreadProjection
+    | typeof ORCHESTRATION_V2_WS_METHODS.dispatchCommand
+  >,
+  environmentId: EnvironmentId,
+  input: RemoteSendInput<E>,
+) =>
+  Effect.gen(function* () {
+    const getProjection = client[ORCHESTRATION_V2_WS_METHODS.getThreadProjection]({
+      threadId: input.threadId,
+    }).pipe(unreachable(input.threadId));
+    const target = yield* getProjection;
+    const plan = yield* planRemoteSend(target, input.messageId, input.mode);
+    if (plan._tag === "Missing") return null;
+    // An already-landed message was authorized when it was sent; re-checking the target's
+    // current modes could turn a successful retry into a failure.
+    if (plan._tag === "Dispatch") {
+      yield* input.authorize(target);
+      yield* client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand]({
+        type: "message.dispatch",
+        commandId: input.commandId,
+        threadId: input.threadId,
+        messageId: input.messageId,
+        text: input.text,
+        attachments: [],
+        dispatchMode: plan.dispatchMode,
+        createdBy: "agent",
+        creationSource: "mcp",
+      }).pipe(unreachable(input.threadId));
+    }
+    const { run, delivery } = yield* sendOutcome(yield* getProjection, input.messageId, input.mode);
+    return { environmentId, run, delivery } satisfies RemoteSendResult;
+  });
+
+const unreachable = (threadId: ThreadId) =>
+  Effect.mapError(
+    () =>
+      new RemoteThreadError({
+        message: `Pathway could not reach thread ${threadId} on its environment.`,
+      }),
+  );
+
 export class RemoteThreads extends Context.Service<
   RemoteThreads,
   {
@@ -169,14 +217,6 @@ export const layer = Layer.effect(
         };
       }),
     );
-
-    const unreachable = (threadId: ThreadId) =>
-      Effect.mapError(
-        () =>
-          new RemoteThreadError({
-            message: `Pathway could not reach thread ${threadId} on its environment.`,
-          }),
-      );
 
     // Opens a relay session to the environment publishing `threadId`, or returns null when the
     // account cannot reach one. Read grants yield read-only sessions.
@@ -236,33 +276,7 @@ export const layer = Layer.effect(
 
     const send: RemoteThreads["Service"]["send"] = (input) =>
       withThreadSession(input.threadId, "send", (environmentId, client) =>
-        Effect.gen(function* () {
-          const getProjection = client[ORCHESTRATION_V2_WS_METHODS.getThreadProjection]({
-            threadId: input.threadId,
-          }).pipe(unreachable(input.threadId));
-          const target = yield* getProjection;
-          const plan = yield* planRemoteSend(target, input.messageId, input.mode);
-          if (plan._tag === "Missing") return null;
-          yield* input.authorize(target);
-          if (plan._tag === "Dispatch")
-            yield* client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand]({
-              type: "message.dispatch",
-              commandId: input.commandId,
-              threadId: input.threadId,
-              messageId: input.messageId,
-              text: input.text,
-              attachments: [],
-              dispatchMode: plan.dispatchMode,
-              createdBy: "agent",
-              creationSource: "mcp",
-            }).pipe(unreachable(input.threadId));
-          const { run, delivery } = yield* sendOutcome(
-            yield* getProjection,
-            input.messageId,
-            input.mode,
-          );
-          return { environmentId, run, delivery } satisfies RemoteSendResult;
-        }),
+        sendOnTarget(client, environmentId, input),
       );
 
     return RemoteThreads.of({ read, send });

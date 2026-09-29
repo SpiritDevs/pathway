@@ -24,6 +24,7 @@ import {
   RelayEnvironmentHealthResponseProofPayload,
   type RelayEnvironmentHealthResponse as RelayEnvironmentHealthResponseShape,
   RelayEnvironmentConfigRequest,
+  RelayEnvironmentConnectReadScope,
   RelayEnvironmentLinkChallengeResponse,
   RelayEnvironmentLinkResponse,
   RelayEnvironmentMintResponseProofPayload,
@@ -1142,7 +1143,14 @@ export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCrede
       proofOption.value.environmentId !== environmentId ||
       proofOption.value.cnf.jkt !== proofOption.value.clientProofKeyThumbprint ||
       !hasBoundedCloudProofLifetime({ ...proofOption.value, nowSeconds }) ||
-      !hasExactScope({ scopes: proofOption.value.scope, expected: "environment:connect" })
+      !(
+        hasExactScope({ scopes: proofOption.value.scope, expected: "environment:connect" }) ||
+        (hasExactScope({
+          scopes: proofOption.value.scope,
+          expected: RelayEnvironmentConnectReadScope,
+        }) &&
+          proofOption.value.initiatingEnvironmentId !== undefined)
+      )
     ) {
       return yield* new EnvironmentHttpUnauthorizedError({
         message: "Invalid cloud mint request.",
@@ -1205,12 +1213,13 @@ export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCrede
 
     const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(dependencies.secrets);
     const issued = yield* dependencies.environmentAuth.createPairingLink({
-      // A peer environment is an agent host, never a hand on this desktop. A thread-read grant
-      // only reads.
+      // A peer environment is an agent host, never a hand on this desktop. A read mint scope or
+      // thread-read grant (the latter from relays predating the read scope) only reads.
       scopes:
         proof.initiatingEnvironmentId === undefined
           ? AuthStandardClientScopes
-          : proof.connectGrant?.permission === AuthPeerReadGrantPermission
+          : proof.scope.includes(RelayEnvironmentConnectReadScope) ||
+              proof.connectGrant?.permission === AuthPeerReadGrantPermission
             ? AuthPeerReadScopes
             : AuthPeerEnvironmentScopes,
       ...sessionIdentity,

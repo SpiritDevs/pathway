@@ -6,6 +6,7 @@ import * as DateTime from "effect/DateTime";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Tracer from "effect/Tracer";
@@ -30,9 +31,10 @@ import {
   EnvironmentId,
   type EnvironmentSessionPrincipalShape,
 } from "@spiritdevs/contracts";
-import type {
-  RelayCloudMintCredentialProofPayload,
-  RelayValidatedConnectGrantIdentity,
+import {
+  type RelayCloudMintCredentialProofPayload,
+  RelayEnvironmentConnectReadScope,
+  type RelayValidatedConnectGrantIdentity,
 } from "@spiritdevs/contracts/relay";
 import { RelayClientTracer } from "@spiritdevs/shared/relayTracing";
 import {
@@ -179,6 +181,7 @@ describe("cloud mint credential handler", () => {
     readonly includeConnectGrant?: boolean;
     readonly resolvedActor?: string | null;
     readonly connectGrant?: RelayValidatedConnectGrantIdentity;
+    readonly scope?: RelayCloudMintCredentialProofPayload["scope"];
   }
 
   const makeMintHarness = Effect.fn("CloudHttpTest.makeMintHarness")(function* (
@@ -275,7 +278,7 @@ describe("cloud mint credential handler", () => {
       cnf: { jkt: "client-proof-thumbprint" },
       ...(includeConnectGrant ? { connectGrant: options.connectGrant ?? connectGrant } : {}),
       nonce: "mint-proof-nonce",
-      scope: ["environment:connect"],
+      scope: options.scope ?? ["environment:connect"],
     } satisfies RelayCloudMintCredentialProofPayload;
     const proof = yield* signRelayJwt({
       privateKey: relayKeys.privateKey,
@@ -378,6 +381,32 @@ describe("cloud mint credential handler", () => {
       expect(sender.pairingInputs[0]?.scopes).toEqual(AuthPeerEnvironmentScopes);
     }),
   );
+
+  it.effect("mints read-only scopes for the read mint scope and only for peers", () =>
+    Effect.gen(function* () {
+      const reader = yield* makeMintHarness({
+        environmentSubject: true,
+        scope: [RelayEnvironmentConnectReadScope],
+      });
+      yield* reader.run;
+      expect(reader.pairingInputs[0]?.scopes).toEqual(AuthPeerReadScopes);
+
+      const person = yield* makeMintHarness({ scope: [RelayEnvironmentConnectReadScope] });
+      const refused = yield* Effect.flip(person.run);
+      expect(refused).toMatchObject({ _tag: "EnvironmentHttpUnauthorizedError" });
+      expect(person.pairingInputs).toEqual([]);
+    }),
+  );
+
+  it("is rejected by targets that predate the read mint scope", () => {
+    // The mint-proof scope schema before the read scope existed. Such a target can never mint a
+    // full peer session from a read grant signed by a current relay.
+    const decodePreReadScope = Schema.decodeUnknownOption(
+      Schema.Array(Schema.Literal("environment:connect")),
+    );
+    expect(Option.isNone(decodePreReadScope([RelayEnvironmentConnectReadScope]))).toBe(true);
+    expect(Option.isSome(decodePreReadScope(["environment:connect"]))).toBe(true);
+  });
 
   it.effect("never lets a peer environment drive this desktop", () =>
     Effect.gen(function* () {
