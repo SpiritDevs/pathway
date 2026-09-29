@@ -88,7 +88,9 @@ it("compiles Opus 5.5 defaults and keeps adaptive thinking enabled", () => {
 });
 
 it("executes options for models supplied only by a refreshed manifest", () => {
-  const entry = BUNDLED_MODEL_MANIFEST.claudeModels![0]!;
+  const entry = BUNDLED_MODEL_MANIFEST.claudeModels!.find(
+    (candidate) => candidate.model.slug === "claude-opus-5-5",
+  )!;
   const remote = {
     ...BUNDLED_MODEL_MANIFEST,
     claudeModels: [{ ...entry, model: { ...entry.model, slug: "claude-future" } }],
