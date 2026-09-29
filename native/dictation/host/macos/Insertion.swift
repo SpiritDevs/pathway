@@ -163,14 +163,20 @@ final class TextInsertion {
         return confirmed ? result("inserted") : result("unconfirmed", "Paste was sent once; the application did not confirm it.")
     }
     private func confirm(_ target: FocusedField, text: String, allowed: () -> Bool) -> Bool {
-        // Async application paste handlers need time to consume the clipboard lease. Only this worker waits.
-        for attempt in 0..<8 {
+        // Async application paste handlers and Chromium's batched AX updates need time to land.
+        // Only this worker waits.
+        for attempt in 0..<15 {
             guard allowed() else { return false }
             if attempt > 0 { Thread.sleep(forTimeInterval: 0.1) }
             guard allowed() else { return false }
             guard matches(target, caret: false), let current = selection(target.element) else { continue }
-            if current.length == 0, current.location == target.selection.location + text.utf16.count { return true }
+            if TextInsertion.pasteLanded(before: target.selection, after: current) { return true }
         }
         return false
+    }
+    /// Rich editors normalize pasted spaces and paragraphs, so the caret rarely advances by exactly
+    /// the text length. A collapsed caret past the old selection start means the paste landed.
+    static func pasteLanded(before: CFRange, after: CFRange) -> Bool {
+        after.length == 0 && after.location > before.location
     }
 }

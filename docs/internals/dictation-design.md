@@ -150,7 +150,9 @@ remain in place.
 When capture starts, the Mac helper requests `AXManualAccessibility` from the frontmost app so
 Electron editors expose their focused DOM controls before delivery. A text field with a usable
 selection can accept paste even when its text attributes are not directly writable. Confirmation
-checks focus identity and selection rather than repeating the complete editability scan.
+checks focus identity and selection rather than repeating the complete editability scan. On macOS, a
+collapsed caret past the original selection start confirms the paste. Rich editors normalize
+paragraphs and spaces, so the caret rarely moves by exactly the pasted length.
 
 Automatic insertion preserves the clipboard. Temporary paste restoration must not overwrite a newer
 user copy. Result and History Copy actions replace the clipboard. Insertion errors and history-save
