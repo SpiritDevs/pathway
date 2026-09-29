@@ -74,6 +74,7 @@ async function setup(
       prepare: async () => {},
       transcribeWithLanguage: async () => ({ text: "Hello from path way." }),
       cleanup: async () => "Hello from Pathway.",
+      interrupt: () => {},
       unload: async () => {},
       ...overrides,
     },
@@ -555,6 +556,141 @@ describe("desktop dictation lifecycle", () => {
     expect(await controller.listHistory()).toEqual([]);
     await controller.execute({ type: "dismiss" });
     expect(controller.getState()).toMatchObject({ phase: "idle", mode: "hold", result: null });
+  });
+});
+
+describe("processing long recordings during capture", () => {
+  const cleanupLoaded = {
+    getStates: () => [
+      {
+        id: "qwen-cleanup" as const,
+        name: "Qwen",
+        kind: "cleanup" as const,
+        bytes: 1,
+        status: "installed" as const,
+        downloadedBytes: 1,
+        loaded: true,
+        error: null,
+      },
+    ],
+  };
+
+  it("transcribes and cleans finished speech while recording, leaving only the tail", async () => {
+    const cleanedDuringCapture = deferred<string>();
+    const transcribeWithLanguage = vi.fn<DictationInferencePort["transcribeWithLanguage"]>(
+      async ({ partial }) =>
+        partial
+          ? { text: "um first part.", language: "en", end: 240_000 }
+          : { text: "and the tail.", language: "en", end: 400_000 },
+    );
+    const cleanup = vi.fn<DictationInferencePort["cleanup"]>(async ({ text }) => {
+      if (text === "um first part.") cleanedDuringCapture.resolve(controller.getState().phase);
+      return text.replace("um ", "").replace(/^./, (letter) => letter.toUpperCase());
+    });
+    const { controller, insert, captureId } = await setup(
+      { transcribeWithLanguage, cleanup },
+      { models: cleanupLoaded, native: { stop: async () => ({ durationMs: 25_000 }) } },
+    );
+    await controller.start("hold");
+    controller.meter(captureId(), 5_000, 0.5);
+    expect(transcribeWithLanguage).not.toHaveBeenCalled();
+    controller.meter(captureId(), 16_000, 0.5);
+    expect(await cleanedDuringCapture.promise).toBe("recording");
+    await controller.stop();
+
+    expect(
+      transcribeWithLanguage.mock.calls.map(([input]) => [
+        input.start,
+        input.partial,
+        input.context,
+      ]),
+    ).toEqual([
+      [0, true, undefined],
+      [240_000, false, "um first part."],
+    ]);
+    expect(cleanup).toHaveBeenCalledTimes(2);
+    expect(insert).toHaveBeenCalledWith("First part. And the tail.");
+    expect((await controller.listHistory())[0]).toMatchObject({
+      originalText: "um first part. and the tail.",
+      text: "First part. And the tail.",
+      cleanup: "applied",
+    });
+  });
+
+  it("interrupts background transcription when recording stops", async () => {
+    const running = deferred<void>();
+    const yielded = deferred<{ text: string; end: number }>();
+    const transcribeWithLanguage = vi.fn<DictationInferencePort["transcribeWithLanguage"]>(
+      async ({ partial }) => {
+        if (!partial) return { text: "All of it." };
+        running.resolve();
+        return yielded.promise;
+      },
+    );
+    const interrupt = vi.fn(() => yielded.resolve({ text: "", end: 0 }));
+    const { controller, insert, captureId } = await setup(
+      { transcribeWithLanguage, interrupt, cleanup: async (input) => input.text },
+      { models: cleanupLoaded },
+    );
+    await controller.start("hold");
+    controller.meter(captureId(), 16_000, 0.5);
+    await running.promise;
+    await controller.stop();
+    expect(interrupt).toHaveBeenCalledWith("whisper-turbo");
+    expect(transcribeWithLanguage.mock.calls.at(-1)?.[0]).toMatchObject({
+      start: 0,
+      partial: false,
+    });
+    expect(insert).toHaveBeenCalledWith("All of it.");
+  });
+
+  it("cleans a sentence split across chunks as one text", async () => {
+    const committed = deferred<void>();
+    const cleanup = vi.fn<DictationInferencePort["cleanup"]>(async ({ text }) => text);
+    const { controller, insert, captureId } = await setup(
+      {
+        transcribeWithLanguage: async ({ partial }) => {
+          if (!partial) return { text: "on Friday." };
+          committed.resolve();
+          return { text: "we should ship", end: 240_000 };
+        },
+        cleanup,
+      },
+      { models: cleanupLoaded },
+    );
+    await controller.start("hold");
+    controller.meter(captureId(), 16_000, 0.5);
+    await committed.promise;
+    await controller.stop();
+    expect(cleanup.mock.calls.map(([input]) => input.text)).toEqual(["we should ship on Friday."]);
+    expect(insert).toHaveBeenCalledWith("we should ship on Friday.");
+  });
+
+  it("transcribes the whole recording at stop after a partial step fails", async () => {
+    const attempted = deferred<void>();
+    const transcribeWithLanguage = vi.fn<DictationInferencePort["transcribeWithLanguage"]>(
+      async ({ partial }) => {
+        if (!partial) return { text: "Everything I said." };
+        attempted.resolve();
+        throw new Error("The recording is not a readable WAV file.");
+      },
+    );
+    const { controller, insert, captureId } = await setup(
+      { transcribeWithLanguage, cleanup: async (input) => input.text },
+      { models: cleanupLoaded },
+    );
+    await controller.start("hold");
+    controller.meter(captureId(), 16_000, 0.5);
+    await attempted.promise;
+    controller.meter(captureId(), 30_000, 0.5);
+    await controller.stop();
+    expect(
+      transcribeWithLanguage.mock.calls.map(([input]) => [input.start, input.partial]),
+    ).toEqual([
+      [0, true],
+      [0, false],
+    ]);
+    expect(insert).toHaveBeenCalledWith("Everything I said.");
   });
 });
 

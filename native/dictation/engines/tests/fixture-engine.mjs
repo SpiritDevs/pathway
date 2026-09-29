@@ -6,8 +6,14 @@ if (process.argv.includes("--fixture-cold")) {
   process.stderr.write("cold\n");
 } else emit({ type: "ready", engineVersion: "fixture" });
 
+let hungPartial;
 for await (const line of NodeReadline.createInterface({ input: process.stdin })) {
   const request = JSON.parse(line);
+  if (request.type === "interrupt") {
+    if (hungPartial) emit({ type: "result", id: hungPartial.id, text: "", end: hungPartial.start });
+    hungPartial = undefined;
+    continue;
+  }
   if (request.type === "fixture-ready") {
     emit({ type: "ready", engineVersion: "fixture" });
     continue;
@@ -18,7 +24,20 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
     emit({ type: "result", id: request.id, text: request.language });
     continue;
   }
-  if (mode === "hang") continue;
+  if (mode === "echo-timeout") {
+    emit({ type: "result", id: request.id, text: String(request.timeoutMs) });
+    continue;
+  }
+  if (mode === "echo-offset") {
+    const start = request.start ?? 0;
+    const text = `${start} ${request.partial ?? false}`;
+    emit({ type: "result", id: request.id, text, end: start + 160000 });
+    continue;
+  }
+  if (mode === "hang") {
+    if (request.partial) hungPartial = request;
+    continue;
+  }
   if (mode === "crash") process.exit(4);
   if (mode === "oversized") {
     process.stdout.write("x".repeat(65537));

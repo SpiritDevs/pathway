@@ -125,9 +125,48 @@ describe("DictationInference", () => {
     const cleanup = inference.cleanup({ text: "hang", terms: [] });
     const rejected = expect(cleanup).rejects.toThrow("time limit");
     await received.promise;
+    // The engine owns the five-second deadline; the process is killed only after a grace period.
     await vi.advanceTimersByTimeAsync(5000);
+    expect(inference.warmed).toBe(!cold);
+    await vi.advanceTimersByTimeAsync(2000);
     await rejected;
     expect(inference.warmed).toBe(false);
+  });
+
+  it("asks cleanup to stop at its deadline and keeps the worker after it does", async () => {
+    const { inference } = setup();
+    expect(await inference.cleanup({ text: "echo-timeout", terms: [] })).toBe("5000");
+    await expect(inference.cleanup({ text: "error", terms: [] })).rejects.toThrow("Fixture");
+    expect(inference.getLoadedModelIds()).toEqual(["qwen-cleanup"]);
+  });
+
+  it("interrupts a partial transcription without replacing the worker", async () => {
+    const { inference, received, childSpawn } = setup();
+    const partial = inference.transcribeWithLanguage({
+      ...request("hang"),
+      start: 80000,
+      partial: true,
+    });
+    await received.promise;
+    inference.interrupt("whisper-base");
+    expect(await partial).toEqual({ text: "", end: 80000 });
+    expect(await inference.transcribe(request())).toBe("Olá, 世界!");
+    expect(childSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards live-capture offsets and returns where transcription stopped", async () => {
+    const { inference } = setup();
+    expect(
+      await inference.transcribeWithLanguage({
+        ...request("echo-offset"),
+        start: 240000,
+        partial: true,
+      }),
+    ).toEqual({ text: "240000 true", end: 400000 });
+    expect(await inference.transcribeWithLanguage(request("echo-offset"))).toEqual({
+      text: "0 false",
+      end: 160000,
+    });
   });
 
   it("passes an explicit cleanup language and defaults to auto for older callers", async () => {
@@ -222,7 +261,7 @@ describe("DictationInference", () => {
     expect(inference.warmed).toBe(false);
   });
 
-  it("rejects overlapping work and does not spawn for a pre-cancelled request", async () => {
+  it("rejects overlapping work on one worker and does not spawn for a pre-cancelled request", async () => {
     const { inference, received, childSpawn } = setup();
     const cancelled = new AbortController();
     cancelled.abort();
@@ -233,7 +272,9 @@ describe("DictationInference", () => {
     const operation = inference.transcribe(request("hang"));
     const rejected = expect(operation).rejects.toMatchObject({ name: "AbortError" });
     await received.promise;
-    await expect(inference.cleanup({ text: "hi", terms: [] })).rejects.toThrow("busy");
+    await expect(inference.transcribe(request())).rejects.toThrow("busy");
+    // Cleanup has its own process and may run while speech is busy.
+    expect(await inference.cleanup({ text: "hi", terms: [] })).toBe("Olá, 世界!");
     await inference.unload();
     await rejected;
     await inference.dispose();
