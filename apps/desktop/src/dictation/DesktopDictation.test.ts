@@ -340,7 +340,11 @@ describe("dictation overlay placement", () => {
       expect(native.setBounds).toHaveBeenLastCalledWith(native.bounds, false);
       expect(native.setAlwaysOnTop).toHaveBeenCalledWith(true, "pop-up-menu");
       expect(native.windowOptions).toHaveBeenCalledWith(
-        expect.objectContaining({ focusable: false }),
+        expect.objectContaining({
+          focusable: false,
+          transparent: true,
+          backgroundColor: "#00000000",
+        }),
       );
       resize(80, 32);
       expect(native.bounds).toEqual(idle);
