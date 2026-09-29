@@ -36,7 +36,11 @@ function asEnvironment(t: Harness, thumbprint = "thumb-caller") {
   });
 }
 
-async function seed(t: Harness, targetPermissions: string[]) {
+async function seed(
+  t: Harness,
+  targetPermissions: string[],
+  options: { readonly linkedTo?: "owner" | "manager" | null } = {},
+) {
   return await t.run(async (ctx) => {
     const userId = await ctx.db.insert("users", {
       clerkSubject: "owner",
@@ -116,6 +120,33 @@ async function seed(t: Harness, targetPermissions: string[]) {
         updatedAt: NOW,
       });
 
+    const linkedTo = options.linkedTo === undefined ? "owner" : options.linkedTo;
+    if (linkedTo !== null)
+      await ctx.db.insert("relayEnvironmentLinks", {
+        userId: linkedTo,
+        environmentId: CALLER,
+        environmentLabel: CALLER,
+        environmentPublicKey: "link-key-caller",
+        endpointHttpBaseUrl: "https://caller.example.test",
+        endpointWsBaseUrl: "wss://caller.example.test",
+        endpointProviderKind: "pathway_relay",
+        notificationsEnabled: false,
+        liveActivitiesEnabled: false,
+        managedTunnelsEnabled: false,
+        createdByDeviceId: null,
+        revokedAt: null,
+        createdAt: "2026-09-29T00:00:00.000Z",
+        updatedAt: "2026-09-29T00:00:00.000Z",
+      });
+    await ctx.db.insert("users", {
+      clerkSubject: "manager",
+      email: "manager@example.test",
+      displayName: "Manager",
+      imageUrl: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+
     const home = await company("1", ["environments.read"]);
     const other = await company("2", targetPermissions);
     await register("1", home.companyId, CALLER, home.membershipId);
@@ -178,6 +209,23 @@ describe("thread read grants", () => {
       asEnvironment(t, "thumb-stolen").action(api.connectGrants.issueThreadRead, {
         threadId: THREAD,
       }),
+    ).rejects.toThrow(/exactly one Pathway account/u);
+  });
+
+  it("acts as the account that linked the environment, not whoever registered it", async () => {
+    const t = harness();
+    // The manager has no membership in the target company, so a grant proves the link owner won.
+    await seed(t, ["environments.read"], { linkedTo: "manager" });
+    await expect(
+      asEnvironment(t).action(api.connectGrants.issueThreadRead, { threadId: THREAD }),
+    ).resolves.toBeNull();
+  });
+
+  it("refuses environments that no account has linked", async () => {
+    const t = harness();
+    await seed(t, ["environments.read"], { linkedTo: null });
+    await expect(
+      asEnvironment(t).action(api.connectGrants.issueThreadRead, { threadId: THREAD }),
     ).rejects.toThrow(/exactly one Pathway account/u);
   });
 

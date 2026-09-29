@@ -7,11 +7,11 @@
 
 `issueThreadRead` authorizes and routes the request:
 
-- The caller must be an environment identity whose `cnf.jkt` matches its active registrations. Those registrations must resolve, through `registeredByMembershipId`, to exactly one user. That user is "the account".
+- The caller must be an environment identity whose `cnf.jkt` matches one of its active registrations. That only authenticates the caller. "The account" is the single user with an unrevoked `relayEnvironmentLinks` row for the environment. It is never taken from `registeredByMembershipId`, because a manager may have created the registration.
 - It looks up the thread in `agentThreads.by_thread`. It picks the most recently updated row on another environment, in an active company where the account has an active membership with `environments.read`, and whose target registration is active.
-- It records a normal single-use connect grant for that membership and returns the token and target environment ID.
+- It records a single-use connect grant for that membership with permission `AuthPeerReadGrantPermission` (`environments.read`). It returns the token and the target environment ID.
 
-The server then uses `PeerEnvironments.connect` to call `getThreadProjection` over the relay for the thread and for any fork sources in its timeline. The target authorizes the grant against its own replica, as it does for any peer connect. Transcripts move between environments and never enter Convex.
+The server then uses `PeerEnvironments.connect` with `AuthPeerReadScopes` to call `getThreadProjection` over the relay. It fetches the thread and only the fork sources that the requested page shows. The target authorizes the grant against its own replica, as it does for any peer connect. For a grant carrying `AuthPeerReadGrantPermission`, the target mints read-only scopes (`orchestration:read`, `relay:read`), so the session cannot write, run terminals, or drive the desktop. Transcripts move between environments and never enter Convex.
 
 Limits:
 

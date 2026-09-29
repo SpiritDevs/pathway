@@ -8,6 +8,7 @@
  * @module cloud/remoteThreadRead
  */
 import {
+  AuthPeerReadScopes,
   EnvironmentId,
   ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationV2ThreadProjection,
@@ -41,16 +42,20 @@ export class RemoteThreadReadError extends Data.TaggedError("RemoteThreadReadErr
 export interface RemoteThread {
   readonly environmentId: EnvironmentId;
   readonly projection: OrchestrationV2ThreadProjection;
-  /** Threads whose messages the projection's timeline shows, such as a fork's source. */
+  /** The source threads, such as a fork's origin, that `sourcesFor` asked for. */
   readonly sources: ReadonlyArray<OrchestrationV2ThreadProjection>;
 }
 
 export class RemoteThreadReader extends Context.Service<
   RemoteThreadReader,
   {
-    /** `null` when no other environment the account can read publishes the thread. */
+    /**
+     * `null` when no other environment the account can read publishes the thread. `sourcesFor`
+     * picks which source threads to fetch in the same connection.
+     */
     readonly read: (
       threadId: ThreadId,
+      sourcesFor: (projection: OrchestrationV2ThreadProjection) => ReadonlyArray<ThreadId>,
     ) => Effect.Effect<RemoteThread | null, RemoteThreadReadError>;
   }
 >()("@spiritdevs/pathway/cloud/remoteThreadRead") {}
@@ -95,7 +100,10 @@ export const layer = Layer.effect(
         );
       });
 
-    const read = (threadId: ThreadId) =>
+    const read = (
+      threadId: ThreadId,
+      sourcesFor: (projection: OrchestrationV2ThreadProjection) => ReadonlyArray<ThreadId>,
+    ) =>
       Effect.gen(function* () {
         const grant = yield* issueGrant(threadId);
         if (grant === null) return null;
@@ -105,22 +113,16 @@ export const layer = Layer.effect(
             const handle = yield* peers.connect({
               targetEnvironmentId: environmentId,
               connectGrantToken: grant.token,
+              scopes: AuthPeerReadScopes,
             });
             const getProjection = (id: ThreadId) =>
               handle.session.client[ORCHESTRATION_V2_WS_METHODS.getThreadProjection]({
                 threadId: id,
               });
             const projection = yield* getProjection(threadId);
-            const sourceIds = new Set(
-              projection.visibleTurnItems
-                .filter(
-                  (row) =>
-                    row.item.type === "user_message" || row.item.type === "assistant_message",
-                )
-                .map((row) => row.sourceThreadId)
-                .filter((id) => id !== threadId),
-            );
-            const sources = yield* Effect.forEach(sourceIds, getProjection, { concurrency: 4 });
+            const sources = yield* Effect.forEach(sourcesFor(projection), getProjection, {
+              concurrency: 4,
+            });
             return { environmentId, projection, sources } satisfies RemoteThread;
           }),
         );

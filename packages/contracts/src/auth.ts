@@ -119,6 +119,10 @@ export const AuthAdministrativeScopes = [
 export const AuthPeerEnvironmentScopes = AuthStandardClientScopes.filter(
   (scope) => scope !== AuthComputerOperateScope,
 );
+/** Company permission carried by a connect grant that only reads threads on the target. */
+export const AuthPeerReadGrantPermission = "environments.read" as const;
+/** What a peer environment holding an {@link AuthPeerReadGrantPermission} grant is issued. */
+export const AuthPeerReadScopes = [AuthOrchestrationReadScope, AuthRelayReadScope] as const;
 
 export const AuthTokenExchangeGrantType =
   "urn:ietf:params:oauth:grant-type:token-exchange" as const;

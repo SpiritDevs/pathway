@@ -77,15 +77,16 @@ const remoteThreadId = ThreadId.make("thread-on-another-environment");
 const remoteEnvironmentId = EnvironmentId.make("mcp-conversation-remote-environment");
 // Filled by the test with a real projection so the stub can serve it as another environment's.
 let remoteProjection: OrchestrationV2ThreadProjection | null = null;
+const requestedRemoteSources: Array<ReadonlyArray<ThreadId>> = [];
 const remoteThreadsLayer = Layer.succeed(
   RemoteThreadReader,
   RemoteThreadReader.of({
-    read: (threadId) =>
-      Effect.succeed(
-        threadId === remoteThreadId && remoteProjection !== null
-          ? { environmentId: remoteEnvironmentId, projection: remoteProjection, sources: [] }
-          : null,
-      ),
+    read: (threadId, sourcesFor) =>
+      Effect.sync(() => {
+        if (threadId !== remoteThreadId || remoteProjection === null) return null;
+        requestedRemoteSources.push(sourcesFor(remoteProjection));
+        return { environmentId: remoteEnvironmentId, projection: remoteProjection, sources: [] };
+      }),
   }),
 );
 const testLayer = mcpServiceLayer.pipe(
@@ -263,6 +264,8 @@ it.layer(testLayer)("MCP conversation company scope", (it) => {
 
       const read = yield* service.readThread(invocation(parentId), { threadId: remoteThreadId });
       assert.equal(read.thread.threadId, remoteThreadId);
+      // Only the returned page's sources are fetched; this thread has none.
+      assert.deepEqual(requestedRemoteSources, [[]]);
 
       const missing = yield* service
         .readThread(invocation(parentId), { threadId: ThreadId.make("thread-nowhere") })

@@ -13,6 +13,7 @@
  *
  * @module connectGrants
  */
+import { AuthPeerReadGrantPermission } from "@spiritdevs/contracts";
 import { v } from "convex/values";
 
 import {
@@ -171,7 +172,7 @@ export const record = internalMutation({
   },
 });
 
-const THREAD_READ_PERMISSION = "environments.read";
+const THREAD_READ_PERMISSION = AuthPeerReadGrantPermission;
 
 const issuedThreadReadGrant = v.union(
   v.object({ token: v.string(), environmentId: v.string() }),
@@ -197,7 +198,10 @@ export const issueThreadRead = action({
   },
 });
 
-/** The one user whose registrations vouch for the calling environment's key. */
+/**
+ * The one account that linked the calling environment through the relay. Registrations only
+ * authenticate the caller's key; whoever created them may be a manager, not the environment's owner.
+ */
 async function environmentAccountUser(ctx: MutationCtx): Promise<{
   readonly environmentId: string;
   readonly userId: Id<"users">;
@@ -211,28 +215,37 @@ async function environmentAccountUser(ctx: MutationCtx): Promise<{
     .query("environmentRegistrations")
     .withIndex("by_environment", (q) => q.eq("environmentId", identity.subject))
     .collect();
-  const users = new Set<Id<"users">>();
-  for (const registration of registrations) {
-    if (
-      registration.state !== "active" ||
-      registration.registeredByMembershipId === null ||
-      !isRegisteredProofKey({
+  const authenticated = registrations.some(
+    (registration) =>
+      registration.state === "active" &&
+      isRegisteredProofKey({
         tokenThumbprint,
         registeredThumbprint: registration.publicKeyThumbprint,
-      })
-    )
-      continue;
-    const membership = await ctx.db.get(registration.registeredByMembershipId);
-    if (membership?.state === "active") users.add(membership.userId);
-  }
-  const [userId, ...others] = users;
-  if (userId === undefined || others.length > 0) {
+      }),
+  );
+  const links = authenticated
+    ? await ctx.db
+        .query("relayEnvironmentLinks")
+        .withIndex("by_environment", (q) => q.eq("environmentId", identity.subject))
+        .collect()
+    : [];
+  const [subject, ...others] = new Set(
+    links.filter((link) => link.revokedAt === null).map((link) => link.userId),
+  );
+  const user =
+    subject === undefined || others.length > 0
+      ? null
+      : await ctx.db
+          .query("users")
+          .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", subject))
+          .unique();
+  if (user === null) {
     throw backendError(
       "permission-denied",
-      "This environment is not registered to exactly one Pathway account.",
+      "This environment is not linked to exactly one Pathway account.",
     );
   }
-  return { environmentId: identity.subject, userId };
+  return { environmentId: identity.subject, userId: user._id };
 }
 
 /** Authorization and storage half of {@link issueThreadRead}. */

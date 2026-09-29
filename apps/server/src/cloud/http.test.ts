@@ -19,6 +19,8 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   AuthComputerOperateScope,
+  AuthPeerReadGrantPermission,
+  AuthPeerReadScopes,
   AuthRelayReadScope,
   AuthRelayWriteScope,
   AuthSessionId,
@@ -174,6 +176,7 @@ describe("cloud mint credential handler", () => {
     readonly clientEnvironmentId?: EnvironmentId;
     readonly includeConnectGrant?: boolean;
     readonly resolvedActor?: string | null;
+    readonly connectGrant?: RelayValidatedConnectGrantIdentity;
   }
 
   const makeMintHarness = Effect.fn("CloudHttpTest.makeMintHarness")(function* (
@@ -268,7 +271,7 @@ describe("cloud mint credential handler", () => {
       ...(options.clientEnvironmentId ? { clientEnvironmentId: options.clientEnvironmentId } : {}),
       clientProofKeyThumbprint: "client-proof-thumbprint",
       cnf: { jkt: "client-proof-thumbprint" },
-      ...(includeConnectGrant ? { connectGrant } : {}),
+      ...(includeConnectGrant ? { connectGrant: options.connectGrant ?? connectGrant } : {}),
       nonce: "mint-proof-nonce",
       scope: ["environment:connect"],
     } satisfies RelayCloudMintCredentialProofPayload;
@@ -352,6 +355,17 @@ describe("cloud mint credential handler", () => {
       expect(harness.pairingInputs[0]?.subject).toBe("cloud-connect");
       expect(harness.pairingInputs[0]?.initiatingEnvironmentId).toBeUndefined();
       expect(harness.secretReads).toContain(CLOUD_LINKED_USER_ID);
+    }),
+  );
+
+  it.effect("issues only read scopes to a peer holding a thread-read grant", () =>
+    Effect.gen(function* () {
+      const reader = yield* makeMintHarness({
+        environmentSubject: true,
+        connectGrant: { ...connectGrant, permission: AuthPeerReadGrantPermission },
+      });
+      yield* reader.run;
+      expect(reader.pairingInputs[0]?.scopes).toEqual(AuthPeerReadScopes);
     }),
   );
 

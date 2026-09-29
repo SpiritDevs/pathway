@@ -1,6 +1,8 @@
 import * as NodeCrypto from "node:crypto";
 import {
   AuthPeerEnvironmentScopes,
+  AuthPeerReadGrantPermission,
+  AuthPeerReadScopes,
   AuthRelayReadScope,
   AuthRelayWriteScope,
   AuthStandardClientScopes,
@@ -1203,11 +1205,14 @@ export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCrede
 
     const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(dependencies.secrets);
     const issued = yield* dependencies.environmentAuth.createPairingLink({
-      // A peer environment is an agent host, never a hand on this desktop.
+      // A peer environment is an agent host, never a hand on this desktop. A thread-read grant
+      // only reads.
       scopes:
         proof.initiatingEnvironmentId === undefined
           ? AuthStandardClientScopes
-          : AuthPeerEnvironmentScopes,
+          : proof.connectGrant?.permission === AuthPeerReadGrantPermission
+            ? AuthPeerReadScopes
+            : AuthPeerEnvironmentScopes,
       ...sessionIdentity,
       ttl: Duration.minutes(2),
       label: "Pathway Connect connect",

@@ -662,6 +662,34 @@ function turnItemText(item: OrchestrationV2TurnItem): string | null {
   }
 }
 
+/** The requested timeline page and the source threads whose messages it shows. */
+function threadReadPage(
+  target: OrchestrationV2ThreadProjection,
+  input: Pick<OrchestratorMcpThreadReadInput, "view" | "afterPosition" | "limit">,
+) {
+  const view = input.view ?? "messages";
+  const afterPosition = input.afterPosition ?? -1;
+  const matching = target.visibleTurnItems
+    .filter((row) => row.position > afterPosition)
+    .filter(
+      (row) =>
+        view === "activity" ||
+        row.item.type === "user_message" ||
+        row.item.type === "assistant_message" ||
+        row.item.type === "proposed_plan",
+    );
+  const page = matching.slice(0, input.limit ?? DEFAULT_THREAD_READ_LIMIT);
+  const sourceThreadIds = [
+    ...new Set(
+      page
+        .filter((row) => row.item.type === "user_message" || row.item.type === "assistant_message")
+        .map((row) => row.sourceThreadId)
+        .filter((threadId) => threadId !== target.thread.id),
+    ),
+  ];
+  return { matching, page, sourceThreadIds };
+}
+
 function timelineItem(input: {
   readonly row: OrchestrationV2ThreadProjection["visibleTurnItems"][number];
   readonly maxChars: number;
@@ -758,7 +786,11 @@ const make = Effect.gen(function* () {
   // Reads reach any thread the account can see: first this environment, regardless of project or
   // company, then the account's other environments. Company AI assignments stay scoped because
   // other members can direct them.
-  const loadReadableThread = (scope: McpInvocationScope, threadId: ThreadId) =>
+  const loadReadableThread = (
+    scope: McpInvocationScope,
+    threadId: ThreadId,
+    sourcesFor: (projection: OrchestrationV2ThreadProjection) => ReadonlyArray<ThreadId>,
+  ) =>
     Effect.gen(function* () {
       if (scope.orchestratorOrigin)
         return { ...(yield* loadScopedThread(scope, threadId)), remoteSources: null };
@@ -790,7 +822,7 @@ const make = Effect.gen(function* () {
           : yield* notFound;
       if (Option.isNone(remoteThreads)) return yield* notFound;
       const remote = yield* remoteThreads.value
-        .read(threadId)
+        .read(threadId, sourcesFor)
         .pipe(Effect.mapError((error) => failure("remote_dispatch_unavailable", error.message)));
       if (remote === null || remote.projection.thread.deletedAt !== null) return yield* notFound;
       return { parent, target: remote.projection, remoteSources: remote.sources };
@@ -1717,31 +1749,13 @@ const make = Effect.gen(function* () {
       }),
     readThread: (scope, input) =>
       Effect.gen(function* () {
-        const { parent, target, remoteSources } = yield* loadReadableThread(scope, input.threadId);
-        const view = input.view ?? "messages";
-        const afterPosition = input.afterPosition ?? -1;
-        const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
+        const { parent, target, remoteSources } = yield* loadReadableThread(
+          scope,
+          input.threadId,
+          (projection) => threadReadPage(projection, input).sourceThreadIds,
+        );
         const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
-        const matching = target.visibleTurnItems
-          .filter((row) => row.position > afterPosition)
-          .filter(
-            (row) =>
-              view === "activity" ||
-              row.item.type === "user_message" ||
-              row.item.type === "assistant_message" ||
-              row.item.type === "proposed_plan",
-          );
-        const page = matching.slice(0, limit);
-        const sourceThreadIds = [
-          ...new Set(
-            page
-              .filter(
-                (row) => row.item.type === "user_message" || row.item.type === "assistant_message",
-              )
-              .map((row) => row.sourceThreadId)
-              .filter((threadId) => threadId !== target.thread.id),
-          ),
-        ];
+        const { matching, page, sourceThreadIds } = threadReadPage(target, input);
         const sourceProjections =
           remoteSources ??
           (yield* Effect.forEach(
