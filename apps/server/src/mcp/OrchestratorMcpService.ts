@@ -78,6 +78,8 @@ import {
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
 import { RemoteDispatch } from "../cloud/remoteDispatch.ts";
+import { RemoteThreads } from "../cloud/remoteThreads.ts";
+import { ProjectionStoreThreadNotFoundError } from "../orchestration-v2/ProjectionStore.ts";
 import { ProviderAllowanceRuntime } from "../providerUsage/AllowanceRuntime.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 
@@ -660,6 +662,34 @@ function turnItemText(item: OrchestrationV2TurnItem): string | null {
   }
 }
 
+/** The requested timeline page and the source threads whose messages it shows. */
+function threadReadPage(
+  target: OrchestrationV2ThreadProjection,
+  input: Pick<OrchestratorMcpThreadReadInput, "view" | "afterPosition" | "limit">,
+) {
+  const view = input.view ?? "messages";
+  const afterPosition = input.afterPosition ?? -1;
+  const matching = target.visibleTurnItems
+    .filter((row) => row.position > afterPosition)
+    .filter(
+      (row) =>
+        view === "activity" ||
+        row.item.type === "user_message" ||
+        row.item.type === "assistant_message" ||
+        row.item.type === "proposed_plan",
+    );
+  const page = matching.slice(0, input.limit ?? DEFAULT_THREAD_READ_LIMIT);
+  const sourceThreadIds = [
+    ...new Set(
+      page
+        .filter((row) => row.item.type === "user_message" || row.item.type === "assistant_message")
+        .map((row) => row.sourceThreadId)
+        .filter((threadId) => threadId !== target.thread.id),
+    ),
+  ];
+  return { matching, page, sourceThreadIds };
+}
+
 function timelineItem(input: {
   readonly row: OrchestrationV2ThreadProjection["visibleTurnItems"][number];
   readonly maxChars: number;
@@ -701,6 +731,7 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const scheduledTasks = yield* ScheduledTaskService;
   const remoteDispatch = yield* Effect.serviceOption(RemoteDispatch);
+  const remoteThreads = yield* Effect.serviceOption(RemoteThreads);
   const allowanceRuntime = yield* Effect.serviceOption(ProviderAllowanceRuntime);
   const inheritAllowance = (parent: ThreadId, environment: EnvironmentId, child: ThreadId) =>
     Option.isSome(allowanceRuntime)
@@ -750,6 +781,64 @@ const make = Effect.gen(function* () {
       const target =
         threadId === scope.threadId ? parent : yield* loadProjectThread(parent.thread, threadId);
       return { parent, target } as const;
+    });
+
+  const threadNotFound = (threadId: ThreadId) =>
+    failure(
+      "thread_not_found",
+      `Thread ${threadId} was not found on this environment or any environment your account can reach.`,
+    );
+
+  // Any thread on this environment regardless of project or company; None when it lives elsewhere.
+  const findLocalThread = (threadId: ThreadId) =>
+    threadManagement.getThreadProjection(threadId).pipe(
+      Effect.map(Option.some),
+      Effect.catchIf(
+        (error) =>
+          error._tag === "OrchestratorProjectionError" &&
+          error.cause instanceof ProjectionStoreThreadNotFoundError,
+        () => Effect.succeedNone,
+      ),
+      Effect.mapError((error) =>
+        failure("orchestration_error", `Unable to read thread ${threadId}: ${errorMessage(error)}`),
+      ),
+      Effect.flatMap((found) =>
+        Option.isSome(found) && found.value.thread.deletedAt !== null
+          ? Effect.fail(threadNotFound(threadId))
+          : Effect.succeed(found),
+      ),
+    );
+
+  const remoteFailure = (error: { readonly _tag: string; readonly message: string }) =>
+    error._tag === "RemoteThreadError"
+      ? failure("remote_dispatch_unavailable", error.message)
+      : isThreadManagementError(error)
+        ? threadManagementFailure(error)
+        : failure("orchestration_error", error.message);
+
+  // Reads and sends reach any thread the account can see: first this environment, regardless of
+  // project or company, then the account's other environments. Company AI assignments stay scoped
+  // because other members can direct them.
+  const loadReadableThread = (
+    scope: McpInvocationScope,
+    threadId: ThreadId,
+    sourcesFor: (projection: OrchestrationV2ThreadProjection) => ReadonlyArray<ThreadId>,
+  ) =>
+    Effect.gen(function* () {
+      if (scope.orchestratorOrigin)
+        return { ...(yield* loadScopedThread(scope, threadId)), remoteSources: null };
+      yield* requireCapability(scope);
+      const parent = yield* loadProjection(scope.threadId);
+      if (threadId === scope.threadId) return { parent, target: parent, remoteSources: null };
+      const local = yield* findLocalThread(threadId);
+      if (Option.isSome(local)) return { parent, target: local.value, remoteSources: null };
+      if (Option.isNone(remoteThreads)) return yield* threadNotFound(threadId);
+      const remote = yield* remoteThreads.value
+        .read(threadId, sourcesFor)
+        .pipe(Effect.mapError(remoteFailure));
+      if (remote === null || remote.projection.thread.deletedAt !== null)
+        return yield* threadNotFound(threadId);
+      return { parent, target: remote.projection, remoteSources: remote.sources };
     });
 
   const loadProviders = providerRegistry.getProviders;
@@ -1673,43 +1762,27 @@ const make = Effect.gen(function* () {
       }),
     readThread: (scope, input) =>
       Effect.gen(function* () {
-        const { parent, target } = yield* loadScopedThread(scope, input.threadId);
-        const view = input.view ?? "messages";
-        const afterPosition = input.afterPosition ?? -1;
-        const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
-        const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
-        const matching = target.visibleTurnItems
-          .filter((row) => row.position > afterPosition)
-          .filter(
-            (row) =>
-              view === "activity" ||
-              row.item.type === "user_message" ||
-              row.item.type === "assistant_message" ||
-              row.item.type === "proposed_plan",
-          );
-        const page = matching.slice(0, limit);
-        const sourceThreadIds = [
-          ...new Set(
-            page
-              .filter(
-                (row) => row.item.type === "user_message" || row.item.type === "assistant_message",
-              )
-              .map((row) => row.sourceThreadId)
-              .filter((threadId) => threadId !== target.thread.id),
-          ),
-        ];
-        const sourceProjections = yield* Effect.forEach(
-          sourceThreadIds,
-          (sourceThreadId) => loadProjectThread(target.thread, sourceThreadId),
-          { concurrency: 8 },
+        const { parent, target, remoteSources } = yield* loadReadableThread(
+          scope,
+          input.threadId,
+          (projection) => threadReadPage(projection, input).sourceThreadIds,
         );
+        const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
+        const { matching, page, sourceThreadIds } = threadReadPage(target, input);
+        const sourceProjections =
+          remoteSources ??
+          (yield* Effect.forEach(
+            sourceThreadIds,
+            (sourceThreadId) => loadProjectThread(target.thread, sourceThreadId),
+            { concurrency: 8 },
+          ));
         const messagesByThreadId = new Map<ThreadId, OrchestrationV2ThreadProjection["messages"]>([
           [target.thread.id, target.messages],
           ...sourceProjections.map(
             (projection) => [projection.thread.id, projection.messages] as const,
           ),
         ]);
-        const task = directAppOwnedChildTask(parent, target);
+        const task = remoteSources === null ? directAppOwnedChildTask(parent, target) : undefined;
         if (
           task !== undefined &&
           pageIncludesTerminalTaskResult({ page, task, target, maxChars })
@@ -1729,17 +1802,37 @@ const make = Effect.gen(function* () {
       }),
     sendToThread: (scope, input) =>
       Effect.gen(function* () {
-        const { parent, target } = yield* loadScopedThread(scope, input.threadId);
-        if (
-          scope.orchestratorOrigin &&
-          target.thread.orchestratorOrigin?.commandId !== scope.orchestratorOrigin.commandId
-        )
-          return yield* failure(
-            "invalid_request",
-            "Ask the coordinating orchestrator to direct work outside this assignment.",
-          );
-        yield* resolveRuntimeMode(parent.thread.runtimeMode, target.thread.runtimeMode);
-        yield* resolveInteractionMode(parent.thread.interactionMode, target.thread.interactionMode);
+        let parent: OrchestrationV2ThreadProjection;
+        let target: Option.Option<OrchestrationV2ThreadProjection>;
+        if (scope.orchestratorOrigin) {
+          const scoped = yield* loadScopedThread(scope, input.threadId);
+          if (
+            scoped.target.thread.orchestratorOrigin?.commandId !==
+            scope.orchestratorOrigin.commandId
+          )
+            return yield* failure(
+              "invalid_request",
+              "Ask the coordinating orchestrator to direct work outside this assignment.",
+            );
+          parent = scoped.parent;
+          target = Option.some(scoped.target);
+        } else {
+          yield* requireCapability(scope);
+          parent = yield* loadProjection(scope.threadId);
+          target =
+            input.threadId === scope.threadId
+              ? Option.some(parent)
+              : yield* findLocalThread(input.threadId);
+        }
+        // A sender may not start work with broader access than it has itself.
+        const authorize = (projection: OrchestrationV2ThreadProjection) =>
+          Effect.all([
+            resolveRuntimeMode(parent.thread.runtimeMode, projection.thread.runtimeMode),
+            resolveInteractionMode(
+              parent.thread.interactionMode,
+              projection.thread.interactionMode,
+            ),
+          ]).pipe(Effect.asVoid);
 
         const mode = input.mode ?? "auto";
         const key = yield* requestKey(input.clientRequestId);
@@ -1748,15 +1841,44 @@ const make = Effect.gen(function* () {
           requestKey: key,
           operation: "thread-send",
         });
+        const commandId = stableCommandId({
+          scope,
+          requestKey: key,
+          operation: "thread-send",
+        });
+
+        if (Option.isNone(target)) {
+          if (Option.isNone(remoteThreads)) return yield* threadNotFound(input.threadId);
+          const remote = yield* remoteThreads.value
+            .send({
+              threadId: input.threadId,
+              commandId,
+              messageId,
+              text: input.message,
+              mode,
+              authorize,
+            })
+            .pipe(
+              Effect.mapError((error) =>
+                error._tag === "OrchestratorMcpFailure" ? error : remoteFailure(error),
+              ),
+            );
+          if (remote === null) return yield* threadNotFound(input.threadId);
+          return {
+            threadId: input.threadId,
+            messageId,
+            runId: remote.run.id,
+            status: remote.run.status,
+            delivery: remote.delivery,
+          } satisfies OrchestratorMcpThreadSendResult;
+        }
+
+        yield* authorize(target.value);
         const result = yield* threadManagement
           .sendToThread({
-            projectId: parent.thread.projectId,
-            conversationCompanyId: parent.thread.conversationCompanyId,
-            commandId: stableCommandId({
-              scope,
-              requestKey: key,
-              operation: "thread-send",
-            }),
+            projectId: target.value.thread.projectId,
+            conversationCompanyId: target.value.thread.conversationCompanyId,
+            commandId,
             threadId: input.threadId,
             messageId,
             text: input.message,

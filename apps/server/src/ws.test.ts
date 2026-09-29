@@ -18,6 +18,7 @@ import {
   ChatAttachment,
   ChatAttachmentId,
   CommandId,
+  EnvironmentId,
   MessageId,
   ProjectId,
   type SnapShotSource,
@@ -44,6 +45,7 @@ import {
   resolveAvailableEditorsForConfig,
   refreshLocalGitStatusAfterMutation,
   requireThreadResumeTarget,
+  dispatchActor,
   resolveIssueConnectionActor,
   serverSettingsRpcHandlers,
   wsProjectUpdateInputFromMutation,
@@ -221,6 +223,14 @@ it.effect(
       );
     }),
 );
+
+it("attributes commands from peer environment sessions to agents", () => {
+  const peer = EnvironmentId.make("environment-peer");
+  assert.equal(dispatchActor({ subject: "user-1", initiatingEnvironmentId: peer }), "agent");
+  // A person's desktop client hosted in an environment is still a person.
+  assert.equal(dispatchActor({ subject: "cloud-connect", initiatingEnvironmentId: peer }), "user");
+  assert.equal(dispatchActor({ subject: "user-1" }), "user");
+});
 
 const decodeChatAttachment = Schema.decodeUnknownEffect(ChatAttachment);
 

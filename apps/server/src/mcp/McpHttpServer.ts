@@ -51,6 +51,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as PeerEnvironments from "../cloud/peerEnvironments.ts";
 import * as CloudProjectIcons from "../cloud/cloudProjectIcons.ts";
+import * as RemoteThreads from "../cloud/remoteThreads.ts";
 import * as OrchestratorWorkerAuthority from "../cloud/orchestratorWorkerAuthority.ts";
 import * as RemoteDispatch from "../cloud/remoteDispatch.ts";
 import * as ServerConfig from "../config.ts";
@@ -1277,16 +1278,16 @@ const WebSocketConstructorLive = Layer.unwrap(
   ),
 );
 
-const RemoteDispatchLive = RemoteDispatch.layer.pipe(
-  Layer.provide(
-    PeerEnvironments.layer.pipe(
-      Layer.provide(rpcSessionLayer.pipe(Layer.provide(WebSocketConstructorLive))),
-    ),
-  ),
+const PeerEnvironmentsLive = PeerEnvironments.layer.pipe(
+  Layer.provide(rpcSessionLayer.pipe(Layer.provide(WebSocketConstructorLive))),
 );
 
 const OrchestratorMcpServiceLive = OrchestratorMcpService.layer.pipe(
-  Layer.provide(RemoteDispatchLive),
+  Layer.provide(
+    Layer.mergeAll(RemoteDispatch.layer, RemoteThreads.layer).pipe(
+      Layer.provide(PeerEnvironmentsLive),
+    ),
+  ),
 );
 
 const ToolkitHandlersLive = Layer.mergeAll(

@@ -1,6 +1,8 @@
 import * as NodeCrypto from "node:crypto";
 import {
   AuthPeerEnvironmentScopes,
+  AuthPeerReadScopes,
+  AuthPeerSendScopes,
   AuthRelayReadScope,
   AuthRelayWriteScope,
   AuthStandardClientScopes,
@@ -22,6 +24,8 @@ import {
   RelayEnvironmentHealthResponseProofPayload,
   type RelayEnvironmentHealthResponse as RelayEnvironmentHealthResponseShape,
   RelayEnvironmentConfigRequest,
+  RelayEnvironmentConnectReadScope,
+  RelayEnvironmentConnectSendScope,
   RelayEnvironmentLinkChallengeResponse,
   RelayEnvironmentLinkResponse,
   RelayEnvironmentMintResponseProofPayload,
@@ -1140,7 +1144,18 @@ export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCrede
       proofOption.value.environmentId !== environmentId ||
       proofOption.value.cnf.jkt !== proofOption.value.clientProofKeyThumbprint ||
       !hasBoundedCloudProofLifetime({ ...proofOption.value, nowSeconds }) ||
-      !hasExactScope({ scopes: proofOption.value.scope, expected: "environment:connect" })
+      !(
+        hasExactScope({ scopes: proofOption.value.scope, expected: "environment:connect" }) ||
+        (proofOption.value.initiatingEnvironmentId !== undefined &&
+          (hasExactScope({
+            scopes: proofOption.value.scope,
+            expected: RelayEnvironmentConnectReadScope,
+          }) ||
+            hasExactScope({
+              scopes: proofOption.value.scope,
+              expected: RelayEnvironmentConnectSendScope,
+            })))
+      )
     ) {
       return yield* new EnvironmentHttpUnauthorizedError({
         message: "Invalid cloud mint request.",
@@ -1203,11 +1218,16 @@ export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCrede
 
     const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(dependencies.secrets);
     const issued = yield* dependencies.environmentAuth.createPairingLink({
-      // A peer environment is an agent host, never a hand on this desktop.
+      // A peer environment is an agent host, never a hand on this desktop. Thread-access mint
+      // scopes only read, or read and dispatch; other peer grants keep the ordinary peer scopes.
       scopes:
         proof.initiatingEnvironmentId === undefined
           ? AuthStandardClientScopes
-          : AuthPeerEnvironmentScopes,
+          : proof.scope.includes(RelayEnvironmentConnectReadScope)
+            ? AuthPeerReadScopes
+            : proof.scope.includes(RelayEnvironmentConnectSendScope)
+              ? AuthPeerSendScopes
+              : AuthPeerEnvironmentScopes,
       ...sessionIdentity,
       ttl: Duration.minutes(2),
       label: "Pathway Connect connect",

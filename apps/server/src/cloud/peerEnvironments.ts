@@ -1,7 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off -- the server reuses its Node-backed DPoP and relay-JWT helpers so peer credentials are byte-for-byte compatible with the existing relay and client-runtime verifiers
 import * as NodeCrypto from "node:crypto";
 
-import { AuthPeerEnvironmentScopes, type EnvironmentId } from "@spiritdevs/contracts";
+import {
+  AuthPeerEnvironmentScopes,
+  type AuthEnvironmentScope,
+  type EnvironmentId,
+} from "@spiritdevs/contracts";
 import {
   RELAY_ENVIRONMENT_DPOP_ACCESS_ASSERTION_TYP,
   RelayAccessTokenType,
@@ -141,6 +145,8 @@ export interface PeerEnvironmentHandle {
 export interface PeerEnvironmentConnectInput {
   readonly targetEnvironmentId: EnvironmentId;
   readonly connectGrantToken: string;
+  /** Must not exceed what the target issues for the grant; defaults to full peer scopes. */
+  readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
 }
 
 export class PeerEnvironments extends Context.Service<
@@ -376,7 +382,7 @@ export const make = Effect.gen(function* () {
         httpBaseUrl: connected.endpoint.httpBaseUrl,
         credential: connected.credential,
         dpopProof: bootstrapProof,
-        scopes: AuthPeerEnvironmentScopes,
+        scopes: input.scopes ?? AuthPeerEnvironmentScopes,
         clientMetadata: {
           label: "Pathway peer environment",
           deviceType: "bot",

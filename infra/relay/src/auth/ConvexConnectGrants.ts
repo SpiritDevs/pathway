@@ -36,7 +36,11 @@ const make = Effect.gen(function* () {
     return yield* Effect.gen(function* () {
       yield* Effect.annotateCurrentSpan("relay.environment_id", input.environmentId);
       const tokenHash = yield* Effect.tryPromise(() => hashConnectGrantToken(input.grant));
-      const result = yield* client.mutation(api.connectGrants.validate, { tokenHash });
+      // This relay signs peer thread-access mints with the read or send mint scope (`mintScope`).
+      const result = yield* client.mutation(api.connectGrants.validate, {
+        tokenHash,
+        signsThreadAccessMintScopes: true,
+      });
       if (result.status !== "accepted" || result.environmentId !== input.environmentId) {
         yield* Effect.annotateCurrentSpan("relay.convex.connect_grant_rejected", true);
         return null;
@@ -45,6 +49,7 @@ const make = Effect.gen(function* () {
         environmentId: result.environmentId,
         membershipId: result.membershipId,
         permission: result.permission,
+        ...(result.threadAccess === undefined ? {} : { threadAccess: result.threadAccess }),
       });
     }).pipe(
       Effect.catch(() =>

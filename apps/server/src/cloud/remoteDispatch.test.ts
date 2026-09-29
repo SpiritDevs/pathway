@@ -7,6 +7,7 @@ import {
   type StoredSyncState,
 } from "@spiritdevs/client-runtime/sync";
 import {
+  AuthPeerReadScopes,
   MessageId,
   CloudProjectId,
   EnvironmentCommandId,
@@ -190,6 +191,39 @@ describe("RemoteDispatch", () => {
       assert.equal(result.delivery, "direct");
       assert.deepEqual(directCommandIds, [COMMAND_ID]);
       assert.isEmpty(issuerCalls);
+    }),
+  );
+
+  it.effect("requests only read scopes for a direct status query", () =>
+    Effect.gen(function* () {
+      const requestedScopes: Array<unknown> = [];
+      const client = {
+        [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: () => Effect.succeed(projection),
+        [ORCHESTRATION_V2_WS_METHODS.launchThread]: () =>
+          Effect.succeed({ threadId: THREAD_ID, projection, resumed: false }),
+      } as unknown as RpcSession["client"];
+      const remote = yield* makeHarness({
+        connect: (input) =>
+          Effect.sync(() => {
+            requestedScopes.push(input.scopes);
+            return peerHandle(client);
+          }),
+        issue: () => Effect.void,
+      });
+
+      const result = yield* remote.dispatch({
+        ...commandInput("single-use-grant"),
+        kind: "statusQuery",
+        args: { kind: "statusQuery", threadId: THREAD_ID },
+      });
+
+      assert.equal(result.delivery, "direct");
+      assert.deepEqual(requestedScopes, [AuthPeerReadScopes]);
+
+      // Other commands keep the ordinary peer scopes.
+      requestedScopes.length = 0;
+      yield* remote.dispatch({ ...commandInput("single-use-grant-2") });
+      assert.deepEqual(requestedScopes, [undefined]);
     }),
   );
 

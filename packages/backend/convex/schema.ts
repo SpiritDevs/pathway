@@ -837,6 +837,8 @@ export default defineSchema({
     expiresAt: v.number(),
     consumedAt: v.union(v.number(), v.null()),
     consumer: v.union(v.string(), v.null()),
+    /** Set on grants an environment requested to read or message one thread. */
+    threadAccess: v.optional(v.union(v.literal("read"), v.literal("send"))),
   })
     .index("by_token_hash", ["tokenHash"])
     .index("by_company", ["companyId"])
@@ -1403,7 +1405,8 @@ export default defineSchema({
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_environment", ["companyId", "environmentId"])
     .index("by_company_and_environment_and_thread", ["companyId", "environmentId", "threadId"])
-    .index("by_company_and_project", ["companyId", "cloudProjectId"]),
+    .index("by_company_and_project", ["companyId", "cloudProjectId"])
+    .index("by_thread", ["threadId"]),
 
   /** Parsed local SMTP captures. Raw source and attachment bytes remain environment-owned. */
   capturedEmails: defineTable({

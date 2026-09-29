@@ -14,6 +14,8 @@ import {
   RelayEnvironmentMintResponseProofPayload,
   RelayCloudMintCredentialProofPayload,
   RelayEnvironmentConnectNotAuthorizedReason,
+  RelayEnvironmentConnectReadScope,
+  RelayEnvironmentConnectSendScope,
   type RelayEnvironmentConnectResponse,
   type RelayEnvironmentStatusResponse,
   type RelayValidatedConnectGrantIdentity,
@@ -152,6 +154,25 @@ type EnvironmentConnectInput = EnvironmentConnectIdentity & {
   readonly deviceId?: string;
   readonly connectGrant?: RelayValidatedConnectGrantIdentity;
 };
+
+/**
+ * Peer environments presenting thread grants (tagged with `threadAccess` by Pathway Cloud) get a
+ * thread-access mint scope, which targets that cannot limit thread access reject. Untagged grants,
+ * including caller-supplied remote-dispatch grants, keep the ordinary connect scope.
+ */
+export function mintScope(
+  input: Pick<EnvironmentConnectInput, "initiatingEnvironmentId" | "connectGrant">,
+): RelayCloudMintCredentialProofPayload["scope"][number] {
+  if (input.initiatingEnvironmentId === undefined) return "environment:connect";
+  switch (input.connectGrant?.threadAccess) {
+    case "read":
+      return RelayEnvironmentConnectReadScope;
+    case "send":
+      return RelayEnvironmentConnectSendScope;
+    case undefined:
+      return "environment:connect";
+  }
+}
 
 export class EnvironmentConnector extends Context.Service<
   EnvironmentConnector,
@@ -693,7 +714,7 @@ const make = Effect.gen(function* () {
         ...(input.deviceId ? { deviceId: input.deviceId } : {}),
         ...(input.connectGrant ? { connectGrant: input.connectGrant } : {}),
         nonce,
-        scope: ["environment:connect"],
+        scope: [mintScope(input)],
       } satisfies RelayCloudMintCredentialProofPayload;
       const proof = yield* signRelayJwt({
         privateKey: Redacted.value(settings.cloudMintPrivateKey),

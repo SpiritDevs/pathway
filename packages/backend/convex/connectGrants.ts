@@ -13,6 +13,11 @@
  *
  * @module connectGrants
  */
+import {
+  AuthPeerReadGrantPermission,
+  AuthPeerThreadAccessUnsupportedCode,
+  AuthPeerSendGrantPermission,
+} from "@spiritdevs/contracts";
 import { v } from "convex/values";
 
 import {
@@ -21,12 +26,20 @@ import {
   generateConnectGrantToken,
   hashConnectGrantToken,
 } from "../src/connectGrants.ts";
+import { isRegisteredProofKey, tokenProofKeyThumbprint } from "../src/environmentRegistrations.ts";
 import { hasCompanyPermission, isPermissionKey } from "../src/permissions.ts";
 import { internal } from "./_generated/api.js";
-import { action, internalMutation, mutation } from "./_generated/server.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
+import { action, internalMutation, mutation, type MutationCtx } from "./_generated/server.js";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { backendError } from "./lib/errors.ts";
-import { membershipAuthorization, requireCompanyActor, requirePermission } from "./lib/identity.ts";
+import {
+  isEnvironmentIdentity,
+  membershipAuthorization,
+  requireCompanyActor,
+  requireIdentity,
+  requirePermission,
+} from "./lib/identity.ts";
 import { requireRelayControlPlane } from "./lib/relayIdentity.ts";
 import { domainIdArg } from "./lib/validators.ts";
 
@@ -49,6 +62,7 @@ const validationResult = v.union(
     membershipId: domainIdArg,
     permission: v.string(),
     expiresAt: v.number(),
+    threadAccess: v.optional(v.union(v.literal("read"), v.literal("send"))),
   }),
   v.object({
     status: v.literal("refused"),
@@ -163,12 +177,186 @@ export const record = internalMutation({
   },
 });
 
+const THREAD_ACCESS_PERMISSIONS = {
+  read: AuthPeerReadGrantPermission,
+  send: AuthPeerSendGrantPermission,
+} as const;
+const threadAccess = v.union(v.literal("read"), v.literal("send"));
+
+/**
+ * Whether the target honours the thread-access mint scopes. Older targets reject those mints, so a
+ * thread grant for them is useless; anything but an explicit `true` counts as unsupported.
+ */
+function enforcesPeerThreadGrants(registration: Doc<"environmentRegistrations">): boolean {
+  const descriptor: unknown = registration.descriptor;
+  if (typeof descriptor !== "object" || descriptor === null) return false;
+  const capabilities = (descriptor as Record<string, unknown>)["capabilities"];
+  return (
+    typeof capabilities === "object" &&
+    capabilities !== null &&
+    (capabilities as Record<string, unknown>)["peerThreadGrants"] === true
+  );
+}
+
+const issuedThreadAccessGrant = v.union(
+  v.object({ token: v.string(), environmentId: v.string() }),
+  v.null(),
+);
+
+/**
+ * Mints a single-use grant that lets the calling environment read, or send a message to, one
+ * thread on the environment that published it. The grant acts as the account that linked the
+ * caller, in any company where that account holds the access's permission: `environments.read` to
+ * read, `remoteAgents.control` to send. `null` means no environment the account may reach
+ * publishes the thread.
+ */
+export const issueThreadAccess = action({
+  args: { threadId: v.string(), access: threadAccess },
+  returns: issuedThreadAccessGrant,
+  handler: async (ctx, args): Promise<{ token: string; environmentId: string } | null> => {
+    const token = generateConnectGrantToken();
+    const tokenHash = await hashConnectGrantToken(token);
+    const environmentId: string | null = await ctx.runMutation(
+      internal.connectGrants.recordThreadAccess,
+      { ...args, tokenHash },
+    );
+    return environmentId === null ? null : { token, environmentId };
+  },
+});
+
+/**
+ * The one account that linked the calling environment through the relay. Registrations only
+ * authenticate the caller's key; whoever created them may be a manager, not the environment's owner.
+ */
+async function environmentAccountUser(ctx: MutationCtx): Promise<{
+  readonly environmentId: string;
+  readonly userId: Id<"users">;
+}> {
+  const identity = await requireIdentity(ctx);
+  if (!isEnvironmentIdentity(identity)) {
+    throw backendError("permission-denied", "Only an environment may request thread access.");
+  }
+  const tokenThumbprint = tokenProofKeyThumbprint(identity);
+  const registrations = await ctx.db
+    .query("environmentRegistrations")
+    .withIndex("by_environment", (q) => q.eq("environmentId", identity.subject))
+    .collect();
+  const authenticated = registrations.some(
+    (registration) =>
+      registration.state === "active" &&
+      isRegisteredProofKey({
+        tokenThumbprint,
+        registeredThumbprint: registration.publicKeyThumbprint,
+      }),
+  );
+  const links = authenticated
+    ? await ctx.db
+        .query("relayEnvironmentLinks")
+        .withIndex("by_environment", (q) => q.eq("environmentId", identity.subject))
+        .collect()
+    : [];
+  const [subject, ...others] = new Set(
+    links.filter((link) => link.revokedAt === null).map((link) => link.userId),
+  );
+  const user =
+    subject === undefined || others.length > 0
+      ? null
+      : await ctx.db
+          .query("users")
+          .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", subject))
+          .unique();
+  if (user === null) {
+    throw backendError(
+      "permission-denied",
+      "This environment is not linked to exactly one Pathway account.",
+    );
+  }
+  return { environmentId: identity.subject, userId: user._id };
+}
+
+/** Authorization and storage half of {@link issueThreadAccess}. */
+export const recordThreadAccess = internalMutation({
+  args: { threadId: v.string(), access: threadAccess, tokenHash: v.string() },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, args) => {
+    const caller = await environmentAccountUser(ctx);
+    const permission = THREAD_ACCESS_PERMISSIONS[args.access];
+    let unsupportedTarget = false;
+    const published = await ctx.db
+      .query("agentThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .collect();
+    for (const row of published.toSorted((left, right) => right.updatedAt - left.updatedAt)) {
+      if (row.environmentId === caller.environmentId) continue;
+      const company = await ctx.db.get(row.companyId);
+      if (company?.lifecycleState !== "active") continue;
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_company_and_user", (q) =>
+          q.eq("companyId", row.companyId).eq("userId", caller.userId),
+        )
+        .unique();
+      if (membership?.state !== "active") continue;
+      const registration = await ctx.db
+        .query("environmentRegistrations")
+        .withIndex("by_company_and_environment", (q) =>
+          q.eq("companyId", row.companyId).eq("environmentId", row.environmentId),
+        )
+        .unique();
+      if (registration?.state !== "active") continue;
+      if (!enforcesPeerThreadGrants(registration)) {
+        unsupportedTarget = true;
+        continue;
+      }
+      const owner = await ctx.db
+        .query("companyOwners")
+        .withIndex("by_company_and_membership", (q) =>
+          q.eq("companyId", row.companyId).eq("membershipId", membership._id),
+        )
+        .unique();
+      const { permissions } = await membershipAuthorization(ctx, membership, owner !== null);
+      if (!hasCompanyPermission(permissions, permission)) continue;
+
+      const issuedAt = Date.now();
+      await ctx.db.insert("connectGrants", {
+        id: mintDomainId(issuedAt),
+        companyId: row.companyId,
+        environmentId: row.environmentId,
+        targetRegistrationId: registration._id,
+        grantedMembershipId: membership._id,
+        permission,
+        tokenHash: args.tokenHash,
+        issuedAt,
+        expiresAt: connectGrantExpiresAt(issuedAt),
+        consumedAt: null,
+        consumer: null,
+        threadAccess: args.access,
+      });
+      return row.environmentId;
+    }
+    if (unsupportedTarget)
+      throw backendError(
+        AuthPeerThreadAccessUnsupportedCode,
+        "The environment holding this thread runs a Pathway version that cannot limit remote thread access. Update Pathway there to reach it remotely.",
+      );
+    return null;
+  },
+});
+
 /**
  * Validates and consumes one hashed grant for the relay control plane. Any token, expiry, or live
  * authorization failure returns the same refusal so this surface cannot be used as an oracle.
  */
 export const validate = mutation({
-  args: { tokenHash: v.string() },
+  args: {
+    tokenHash: v.string(),
+    /**
+     * Asserted by relays that sign peer thread-access mints with the read or send mint scope, which
+     * older targets reject. Thread grants are refused without it, so an older relay can never carry
+     * one to a target as an ordinary full-access connect.
+     */
+    signsThreadAccessMintScopes: v.optional(v.literal(true)),
+  },
   returns: validationResult,
   handler: async (ctx, args) => {
     const relay = await requireRelayControlPlane(ctx);
@@ -221,6 +409,15 @@ export const validate = mutation({
       now,
     );
     if (invalid !== null || membership === null) return REFUSED;
+    // Thread grants need a relay that signs the thread-access mint scopes, which older targets
+    // reject. The capability check also catches a target downgraded since issue.
+    if (
+      grant.threadAccess !== undefined &&
+      (args.signsThreadAccessMintScopes !== true ||
+        registration === null ||
+        !enforcesPeerThreadGrants(registration))
+    )
+      return REFUSED;
 
     await ctx.db.patch(grant._id, { consumedAt: now, consumer: relay.subject });
     return {
@@ -229,6 +426,7 @@ export const validate = mutation({
       membershipId: membership.id,
       permission: grant.permission,
       expiresAt: grant.expiresAt,
+      ...(grant.threadAccess === undefined ? {} : { threadAccess: grant.threadAccess }),
     };
   },
 });

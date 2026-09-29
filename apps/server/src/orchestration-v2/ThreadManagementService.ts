@@ -310,6 +310,73 @@ export function latestActiveRun(
     .toSorted((left, right) => right.ordinal - left.ordinal)[0];
 }
 
+/**
+ * How a message sent with `mode` enters the target thread. Shared by local sends and sends to a
+ * thread on another environment.
+ */
+export function sendDispatchMode(
+  target: OrchestrationV2ThreadProjection,
+  mode: ThreadManagementSendMode,
+): Effect.Effect<
+  Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>["dispatchMode"],
+  ThreadManagementThreadArchivedError | ThreadManagementNoSteerableRunError
+> {
+  if (target.thread.archivedAt !== null)
+    return Effect.fail(new ThreadManagementThreadArchivedError({ threadId: target.thread.id }));
+  const steerableRun = latestSteerableRun(target);
+  if (mode === "steer" || mode === "restart") {
+    return steerableRun === undefined
+      ? Effect.fail(new ThreadManagementNoSteerableRunError({ threadId: target.thread.id, mode }))
+      : Effect.succeed({
+          type: mode === "steer" ? "steer_active" : "restart_active",
+          targetRunId: steerableRun.id,
+        });
+  }
+  if (mode === "auto" && steerableRun !== undefined)
+    return Effect.succeed({ type: "steer_active", targetRunId: steerableRun.id });
+  return Effect.succeed({ type: mode === "queue" ? "queue_after_active" : "start_immediately" });
+}
+
+/** The run and delivery a dispatched message produced, read from the post-dispatch projection. */
+export function sendOutcome(
+  projection: OrchestrationV2ThreadProjection,
+  messageId: MessageId,
+  mode: ThreadManagementSendMode,
+): Effect.Effect<
+  Pick<ThreadManagementSendResult, "message" | "run" | "turnItem" | "delivery">,
+  ThreadManagementDurableRunProjectionError
+> {
+  const message = projection.messages.find((candidate) => candidate.id === messageId);
+  const run =
+    message?.runId === null || message?.runId === undefined
+      ? undefined
+      : projection.runs.find((candidate) => candidate.id === message.runId);
+  const turnItem =
+    projection.turnItems.find(
+      (
+        candidate,
+      ): candidate is Extract<OrchestrationV2TurnItem, { readonly type: "user_message" }> =>
+        candidate.type === "user_message" && candidate.messageId === messageId,
+    ) ?? null;
+  // A queued message's user turn item is deliberately not emitted at
+  // dispatch time — it materializes when the queued turn actually starts,
+  // so it can map onto the provider turn. Every other dispatch mode still
+  // produces its turn item transactionally with the run.
+  if (message === undefined || run === undefined || (turnItem === null && run.status !== "queued"))
+    return Effect.fail(
+      new ThreadManagementDurableRunProjectionError({ threadId: projection.thread.id, messageId }),
+    );
+  const delivery: ThreadManagementSendResult["delivery"] =
+    turnItem === null || turnItem.inputIntent === "queued_turn"
+      ? "queued"
+      : turnItem.inputIntent === "turn_start"
+        ? "started"
+        : mode === "restart"
+          ? "restarted"
+          : "steered";
+  return Effect.succeed({ message, run, turnItem, delivery });
+}
+
 export function latestSteerableRun(
   projection: OrchestrationV2ThreadProjection,
 ): OrchestrationV2Run | undefined {
@@ -400,36 +467,7 @@ const make = Effect.gen(function* () {
   const sendToThread: ThreadManagementServiceShape["sendToThread"] = (input) =>
     Effect.gen(function* () {
       const target = yield* getProjectThread(input);
-      if (target.thread.archivedAt !== null) {
-        return yield* new ThreadManagementThreadArchivedError({
-          threadId: input.threadId,
-        });
-      }
-
-      const steerableRun = latestSteerableRun(target);
-      let dispatchMode: Extract<
-        OrchestrationV2Command,
-        { readonly type: "message.dispatch" }
-      >["dispatchMode"];
-      if (input.mode === "steer" || input.mode === "restart") {
-        if (steerableRun === undefined) {
-          return yield* new ThreadManagementNoSteerableRunError({
-            threadId: input.threadId,
-            mode: input.mode,
-          });
-        }
-        dispatchMode = {
-          type: input.mode === "steer" ? "steer_active" : "restart_active",
-          targetRunId: steerableRun.id,
-        };
-      } else if (input.mode === "auto" && steerableRun !== undefined) {
-        dispatchMode = { type: "steer_active", targetRunId: steerableRun.id };
-      } else {
-        dispatchMode = {
-          type: input.mode === "queue" ? "queue_after_active" : "start_immediately",
-        };
-      }
-
+      const dispatchMode = yield* sendDispatchMode(target, input.mode);
       const dispatch = yield* orchestrator.dispatch({
         type: "message.dispatch",
         commandId: input.commandId,
@@ -443,40 +481,11 @@ const make = Effect.gen(function* () {
         creationSource: input.creationSource,
       });
       const projection = yield* getProjectThread(input);
-      const message = projection.messages.find((candidate) => candidate.id === input.messageId);
-      const run =
-        message?.runId === null || message?.runId === undefined
-          ? undefined
-          : projection.runs.find((candidate) => candidate.id === message.runId);
-      const turnItem =
-        projection.turnItems.find(
-          (
-            candidate,
-          ): candidate is Extract<OrchestrationV2TurnItem, { readonly type: "user_message" }> =>
-            candidate.type === "user_message" && candidate.messageId === input.messageId,
-        ) ?? null;
-      // A queued message's user turn item is deliberately not emitted at
-      // dispatch time — it materializes when the queued turn actually starts,
-      // so it can map onto the provider turn. Every other dispatch mode still
-      // produces its turn item transactionally with the run.
-      if (
-        message === undefined ||
-        run === undefined ||
-        (turnItem === null && run.status !== "queued")
-      ) {
-        return yield* new ThreadManagementDurableRunProjectionError({
-          threadId: input.threadId,
-          messageId: input.messageId,
-        });
-      }
-      const delivery: ThreadManagementSendResult["delivery"] =
-        turnItem === null || turnItem.inputIntent === "queued_turn"
-          ? "queued"
-          : turnItem.inputIntent === "turn_start"
-            ? "started"
-            : input.mode === "restart"
-              ? "restarted"
-              : "steered";
+      const { message, run, turnItem, delivery } = yield* sendOutcome(
+        projection,
+        input.messageId,
+        input.mode,
+      );
       return { dispatch, projection, message, run, turnItem, delivery };
     });
 

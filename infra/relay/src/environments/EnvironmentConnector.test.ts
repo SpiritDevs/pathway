@@ -921,3 +921,58 @@ describe("EnvironmentConnector", () => {
     }).pipe(Effect.provide(Layer.merge(TestClock.layer(), connectorTestLayer(execute))));
   });
 });
+
+describe("mintScope", () => {
+  const grant = (permission: "environments.read" | "remoteAgents.control") => ({
+    environmentId: "env-target" as never,
+    membershipId: "membership-1" as never,
+    permission,
+  });
+
+  it("signs thread-read grants from peer environments with the read mint scope", () => {
+    expect(
+      EnvironmentConnector.mintScope({
+        initiatingEnvironmentId: "env-initiator" as never,
+        connectGrant: { ...grant("environments.read"), threadAccess: "read" },
+      }),
+    ).toBe("environment:connect-read");
+  });
+
+  it("keeps the connect scope for untagged grants so released targets still accept them", () => {
+    // A caller-supplied status-query grant carries environments.read but is not a thread grant.
+    for (const permission of ["environments.read", "remoteAgents.control"] as const)
+      expect(
+        EnvironmentConnector.mintScope({
+          initiatingEnvironmentId: "env-initiator" as never,
+          connectGrant: grant(permission),
+        }),
+      ).toBe("environment:connect");
+  });
+
+  it("signs thread-send grants from peer environments with the send mint scope", () => {
+    expect(
+      EnvironmentConnector.mintScope({
+        initiatingEnvironmentId: "env-initiator" as never,
+        connectGrant: { ...grant("remoteAgents.control"), threadAccess: "send" },
+      }),
+    ).toBe("environment:connect-send");
+    // A person redeeming a thread grant gets no thread-access mint scope; the target's ordinary
+    // user path applies instead.
+    expect(
+      EnvironmentConnector.mintScope({
+        connectGrant: { ...grant("remoteAgents.control"), threadAccess: "send" },
+      }),
+    ).toBe("environment:connect");
+  });
+
+  it("keeps the ordinary connect scope for other grants and for people", () => {
+    expect(
+      EnvironmentConnector.mintScope({
+        connectGrant: { ...grant("environments.read"), threadAccess: "read" },
+      }),
+    ).toBe("environment:connect");
+    expect(
+      EnvironmentConnector.mintScope({ initiatingEnvironmentId: "env-initiator" as never }),
+    ).toBe("environment:connect");
+  });
+});

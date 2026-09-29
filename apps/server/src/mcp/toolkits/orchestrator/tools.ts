@@ -224,7 +224,7 @@ export const ThreadListTool = Tool.make("pathway_thread_list", {
 
 export const ThreadReadTool = Tool.make("pathway_thread_read", {
   description:
-    "Read durable state and a paginated timeline from a Pathway thread in the calling project. The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this parent thread's direct app-owned child acknowledges that child's automatic completion delivery. Continue with afterPosition=nextPosition.",
+    "Read durable state and a paginated timeline from any Pathway thread your account can see, by thread ID: any project or company on this environment, or a thread on another of your environments. The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this parent thread's direct app-owned child acknowledges that child's automatic completion delivery. Continue with afterPosition=nextPosition.",
   parameters: OrchestratorMcpThreadReadInput,
   success: OrchestratorMcpThreadReadResult,
   failure: OrchestratorMcpFailure,
@@ -238,7 +238,7 @@ export const ThreadReadTool = Tool.make("pathway_thread_read", {
 
 export const ThreadSendTool = Tool.make("pathway_thread_send", {
   description:
-    "Send a message to a Pathway thread in the calling project. mode='auto' starts an idle thread, steers a fully active turn, or queues behind a turn that is not yet steerable. Use queue for a separate follow-up turn, steer for an in-flight update, or restart to interrupt-and-restart the active turn. clientRequestId makes retries idempotent.",
+    "Send a message to any Pathway thread your account can reach, by thread ID: any project or company on this environment, or a thread on another of your environments. The target may not run with broader runtime or interaction access than the caller. mode='auto' starts an idle thread, steers a fully active turn, or queues behind a turn that is not yet steerable. Use queue for a separate follow-up turn, steer for an in-flight update, or restart to interrupt-and-restart the active turn. clientRequestId makes retries idempotent.",
   parameters: OrchestratorMcpThreadSendInput,
   success: OrchestratorMcpThreadSendResult,
   failure: OrchestratorMcpFailure,

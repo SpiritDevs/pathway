@@ -119,6 +119,23 @@ export const AuthAdministrativeScopes = [
 export const AuthPeerEnvironmentScopes = AuthStandardClientScopes.filter(
   (scope) => scope !== AuthComputerOperateScope,
 );
+/** Company permission carried by a connect grant that only reads threads on the target. */
+export const AuthPeerReadGrantPermission = "environments.read" as const;
+/** Error code Pathway Cloud returns when a thread's environment cannot limit thread-access grants. */
+export const AuthPeerThreadAccessUnsupportedCode = "environment-update-required" as const;
+/** Company permission carried by a connect grant that sends messages to threads on the target. */
+export const AuthPeerSendGrantPermission = "remoteAgents.control" as const;
+/** What a peer environment holding an {@link AuthPeerReadGrantPermission} grant is issued. */
+export const AuthPeerReadScopes = [AuthOrchestrationReadScope, AuthRelayReadScope] as const;
+/**
+ * What a peer environment holding a thread-send grant is issued: enough to read a thread and
+ * dispatch into it, but no terminal, review, or desktop access.
+ */
+export const AuthPeerSendScopes = [
+  AuthOrchestrationReadScope,
+  AuthOrchestrationOperateScope,
+  AuthRelayReadScope,
+] as const;
 
 export const AuthTokenExchangeGrantType =
   "urn:ietf:params:oauth:grant-type:token-exchange" as const;
