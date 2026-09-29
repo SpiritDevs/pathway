@@ -132,11 +132,13 @@ Overlay panels keep a fixed bottom edge above the bottom of the current display 
 upward. Work area and display removal events refresh placement without moving a recording to the
 pointer's display. On macOS, the panel's window level keeps a revealed Dock from covering controls.
 
-The recording view shows microphone levels. Locked recording adds Cancel and Accept. Processing,
-result, and error views are distinct. Meter messages update the overlay separately from the main
-window; microphone tests receive meter updates in Settings. The overlay stays on the chosen display
-for the recording and processing cycle and does not take focus from a text field. On macOS its
-all-workspaces configuration skips the process-type transformation, which would hide the entire
+The recording view shows microphone levels as a scrolling waveform. Each meter event becomes one
+bar, normalized between the quietest and loudest recent windows so the meter reads speech on any
+microphone gain and stays flat for steady room noise. Locked recording adds Cancel and Accept.
+Processing, result, and error views are distinct. Meter messages update the overlay separately from
+the main window; microphone tests receive meter updates in Settings. The overlay stays on the chosen
+display for the recording and processing cycle and does not take focus from a text field. On macOS
+its all-workspaces configuration skips the process-type transformation, which would hide the entire
 application when the overlay is created. Main-window selection uses the registered main window
 and does not fall back to an auxiliary overlay.
 

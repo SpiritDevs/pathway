@@ -354,7 +354,7 @@ describe("dictation overlay", () => {
     overlay.click("Cancel recording");
     expect(overlay.bridge.execute).toHaveBeenCalledWith({ type: "cancel" });
   });
-  it("keeps the meter flat for room noise and moves it for speech", async () => {
+  it("keeps the meter flat for steady room noise and scrolls speech through the bars", async () => {
     const state = makeDictationFixture("recording-locked");
     const overlay = await mount(state);
     const scales = () =>
@@ -362,10 +362,28 @@ describe("dictation overlay", () => {
         .all()
         .filter((node) => node.className === "wave-bar")
         .map((node) => Number(node.style.transform?.match(/scaleY\(([\d.]+)\)/)?.[1]));
-    overlay.emit({ ...state, level: 0.2 });
+    for (let frame = 1; frame <= 10; frame++)
+      overlay.emit({ ...state, durationMs: frame * 50, level: 0.2 });
     expect(Math.max(...scales())).toBeLessThanOrEqual(0.16);
-    overlay.emit({ ...state, level: 0.65 });
-    expect(Math.max(...scales())).toBeGreaterThan(0.4);
+    overlay.emit({ ...state, durationMs: 550, level: 0.5 });
+    expect(scales().at(-1)).toBeGreaterThan(0.5);
+    overlay.emit({ ...state, durationMs: 600, level: 0.2 });
+    expect(scales().at(-1)).toBeLessThanOrEqual(0.16);
+    expect(scales().at(-2)).toBeGreaterThan(0.5);
+  });
+  it("moves for speech on a quiet microphone", async () => {
+    const state = makeDictationFixture("recording-locked");
+    const overlay = await mount(state);
+    const scales = () =>
+      overlay.root
+        .all()
+        .filter((node) => node.className === "wave-bar")
+        .map((node) => Number(node.style.transform?.match(/scaleY\(([\d.]+)\)/)?.[1]));
+    for (let frame = 1; frame <= 10; frame++)
+      overlay.emit({ ...state, durationMs: frame * 50, level: 0.05 });
+    expect(Math.max(...scales())).toBeLessThanOrEqual(0.16);
+    overlay.emit({ ...state, durationMs: 550, level: 0.2 });
+    expect(scales().at(-1)).toBeGreaterThan(0.4);
   });
   it("shows only the label and cancel while transcribing", async () => {
     const overlay = await mount(makeDictationFixture("processing"));

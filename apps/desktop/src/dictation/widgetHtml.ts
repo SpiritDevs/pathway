@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDate:off globalTimers:off globalRandom:off - This script runs in the isolated overlay without an Effect runtime.
+// @effect-diagnostics globalDate:off globalTimers:off - This script runs in the isolated overlay without an Effect runtime.
 import type {
   DictationBridge,
   DictationCommand,
@@ -38,7 +38,7 @@ function mountDictationOverlay() {
   let dismissAfterCopy = false;
   let collapseTimer: ReturnType<typeof setTimeout> | undefined;
   let shownView = "";
-  let meter = 0;
+  let levels: number[] = [];
   function stopDismissTimer() {
     clearInterval(dismissTimer);
     dismissTimer = undefined;
@@ -324,15 +324,18 @@ function mountDictationOverlay() {
           : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
       if (duration.textContent !== label) duration.textContent = label;
     }
-    // Level maps -60..0 dBFS to 0..1. Speech sits around 0.5-0.75, so gate room noise and
-    // stretch that range. Rise fast and fall slower so syllables read as movement.
-    const target = Math.min(1, Math.max(0, (state.level - 0.3) / 0.42));
-    meter = target > meter ? target : meter * 0.55 + target * 0.45;
+    // Level maps -60..0 dBFS to 0..1, but microphone gain varies too much for a fixed speech
+    // threshold. Meter events arrive every 50ms once audio flows; each becomes one bar and the
+    // history scrolls right to left, normalized between the quietest recent window and the
+    // loudest, so silence stays flat and speech fills the range on any microphone.
+    if (state.durationMs === 0) return;
+    levels = [...levels.slice(-39), state.level];
+    const floor = Math.min(...levels.slice(-12));
+    const peak = Math.max(...levels, floor + 0.2);
     const bars = Array.from(document.querySelectorAll<HTMLElement>(".wave-bar"));
-    const middle = (bars.length - 1) / 2;
     for (const [index, bar] of bars.entries()) {
-      const envelope = 1 - (Math.abs(index - middle) / (middle + 1)) * 0.55;
-      const scale = Math.max(0.16, meter * envelope * (0.55 + Math.random() * 0.45));
+      const level = levels[index - bars.length + levels.length] ?? floor;
+      const scale = Math.max(0.16, Math.min(1, (level - floor) / (peak - floor)));
       bar.style.transform = `scaleY(${scale.toFixed(2)})`;
     }
   }
@@ -367,7 +370,7 @@ function mountDictationOverlay() {
           ? "recording"
           : state.phase;
     root.className = view === shownView ? "" : "enter";
-    if (view !== shownView) meter = 0;
+    if (view !== shownView) levels = [];
     shownView = view;
     root.replaceChildren();
     if (!state.authenticated || !state.supported || !state.preferences.enabled) {
