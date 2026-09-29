@@ -335,6 +335,7 @@ describe("thread access grants", () => {
       const validate = async (token: string) =>
         await asRelay(t).mutation(api.connectGrants.validate, {
           tokenHash: await hashConnectGrantToken(token),
+          signsReadMintScope: true,
         });
 
       await expect(validate(read!.token)).resolves.toEqual(CONNECT_GRANT_REFUSED);
@@ -344,15 +345,27 @@ describe("thread access grants", () => {
       });
     });
 
-    it("redeems a read grant for a target that enforces read-only access", async () => {
+    it("redeems a read grant only through a relay that signs the read mint scope", async () => {
       const t = harness();
-      await seed(t, ["environments.read"]);
+      await seed(t, ["environments.read", "remoteAgents.control"]);
       const read = await issueGrant(t, "read");
+      const tokenHash = await hashConnectGrantToken(read!.token);
+      // A relay predating the read mint scope would present it as an ordinary connect, which an
+      // older target with a stale capability would turn into a full peer session.
+      await expect(asRelay(t).mutation(api.connectGrants.validate, { tokenHash })).resolves.toEqual(
+        CONNECT_GRANT_REFUSED,
+      );
+      await expect(
+        asRelay(t).mutation(api.connectGrants.validate, { tokenHash, signsReadMintScope: true }),
+      ).resolves.toMatchObject({ status: "accepted", permission: "environments.read" });
+
+      // Send grants and human grants still redeem through any relay.
+      const send = await issueGrant(t, "send");
       await expect(
         asRelay(t).mutation(api.connectGrants.validate, {
-          tokenHash: await hashConnectGrantToken(read!.token),
+          tokenHash: await hashConnectGrantToken(send!.token),
         }),
-      ).resolves.toMatchObject({ status: "accepted", permission: "environments.read" });
+      ).resolves.toMatchObject({ status: "accepted", permission: "remoteAgents.control" });
     });
   });
 });

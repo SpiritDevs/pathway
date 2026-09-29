@@ -7,6 +7,7 @@ import {
   type StoredSyncState,
 } from "@spiritdevs/client-runtime/sync";
 import {
+  AuthPeerReadScopes,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -326,6 +327,8 @@ const executeDirect = Effect.fn("cloud.remote_dispatch.execute_direct")(function
       const handle = yield* peers.connect({
         targetEnvironmentId: input.targetEnvironmentId,
         connectGrantToken: input.connectGrantToken!,
+        // A status query only reads, and a read-only grant cannot redeem more.
+        ...(input.args.kind === "statusQuery" ? { scopes: AuthPeerReadScopes } : {}),
       });
       const client = handle.session.client;
       const commandId = CommandId.make(input.idempotencyId);

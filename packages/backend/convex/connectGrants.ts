@@ -347,7 +347,15 @@ export const recordThreadAccess = internalMutation({
  * authorization failure returns the same refusal so this surface cannot be used as an oracle.
  */
 export const validate = mutation({
-  args: { tokenHash: v.string() },
+  args: {
+    tokenHash: v.string(),
+    /**
+     * Asserted by relays that sign peer thread-read mints with `RelayEnvironmentConnectReadScope`.
+     * Thread-read grants are refused without it, so an older relay can never carry one to a target
+     * as an ordinary full-access connect.
+     */
+    signsReadMintScope: v.optional(v.literal(true)),
+  },
   returns: validationResult,
   handler: async (ctx, args) => {
     const relay = await requireRelayControlPlane(ctx);
@@ -400,10 +408,13 @@ export const validate = mutation({
       now,
     );
     if (invalid !== null || membership === null) return REFUSED;
-    // The target may have been downgraded since issue; never hand an old target a read grant.
+    // Read grants need a relay that signs the read mint scope, which older targets reject. The
+    // capability check also catches a target downgraded since issue.
     if (
       grant.threadAccess === "read" &&
-      (registration === null || !enforcesPeerReadGrants(registration))
+      (args.signsReadMintScope !== true ||
+        registration === null ||
+        !enforcesPeerReadGrants(registration))
     )
       return REFUSED;
 

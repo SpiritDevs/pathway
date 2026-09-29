@@ -55,6 +55,7 @@ describe("ConvexConnectGrants", () => {
       expect(functionName).toBe("connectGrants:validate");
       expect(received).toEqual({
         tokenHash: NodeCrypto.createHash("sha256").update("opaque-connect-grant").digest("hex"),
+        signsReadMintScope: true,
       });
     }).pipe(
       Effect.provide(
