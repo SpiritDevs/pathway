@@ -1,8 +1,9 @@
 {
   "version": 1,
-  "updatedAt": "2026-09-23T00:00:00Z",
+  "updatedAt": "2026-09-30T00:00:00Z",
   "models": {
     "codex": {
+      "gpt-6.1-sol": "current",
       "gpt-6-astra": "current",
       "gpt-5.6-sol": "current",
       "gpt-5.6-terra": "current",
@@ -18,6 +19,7 @@
       "gpt-5.2-codex": "legacy"
     },
     "claudeAgent": {
+      "claude-sonnet-5-5": "current",
       "claude-opus-5-5": "current",
       "claude-fable-5-1": "current",
       "claude-fable-5": "current",
@@ -26,6 +28,68 @@
     }
   },
   "claudeModels": [
+    {
+      "model": {
+        "slug": "claude-sonnet-5-5",
+        "name": "Claude Sonnet 5.5",
+        "isCustom": false,
+        "capabilities": {
+          "optionDescriptors": [
+            {
+              "id": "effort",
+              "label": "Reasoning",
+              "type": "select",
+              "currentValue": "high",
+              "options": [
+                {
+                  "id": "low",
+                  "label": "Low"
+                },
+                {
+                  "id": "medium",
+                  "label": "Medium"
+                },
+                {
+                  "id": "high",
+                  "label": "High",
+                  "isDefault": true
+                },
+                {
+                  "id": "xhigh",
+                  "label": "Extra High"
+                },
+                {
+                  "id": "max",
+                  "label": "Max"
+                },
+                {
+                  "id": "ultrathink",
+                  "label": "Ultrathink"
+                }
+              ],
+              "promptInjectedValues": ["ultrathink"]
+            },
+            {
+              "id": "contextWindow",
+              "label": "Context Window",
+              "type": "select",
+              "currentValue": "200k",
+              "options": [
+                {
+                  "id": "200k",
+                  "label": "200k",
+                  "isDefault": true
+                },
+                {
+                  "id": "1m",
+                  "label": "1M"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
     {
       "minimumVersion": "2.1.280",
       "model": {

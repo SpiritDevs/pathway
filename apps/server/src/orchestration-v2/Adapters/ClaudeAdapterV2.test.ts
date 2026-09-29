@@ -5903,7 +5903,9 @@ describe("ClaudeAdapterV2 query message stream", () => {
 });
 
 it("uses refreshed model capabilities at the Claude SDK boundary", () => {
-  const entry = BUNDLED_MODEL_MANIFEST.claudeModels![0]!;
+  const entry = BUNDLED_MODEL_MANIFEST.claudeModels!.find(
+    (candidate) => candidate.model.slug === "claude-opus-5-5",
+  )!;
   const options = makeClaudeQueryOptions({
     modelManifest: {
       ...BUNDLED_MODEL_MANIFEST,
