@@ -61,6 +61,35 @@ export function grantFailureMessage(threadId: ThreadId, cause: unknown): string 
     : `Pathway could not reach thread ${threadId} on its environment.`;
 }
 
+/**
+ * What a remote send does with the target it found. A deleted thread is missing. A message already
+ * on the thread means an earlier attempt landed but its reply was lost, so the retry reports that
+ * outcome instead of re-checking whether a fresh send would still be allowed.
+ */
+export type RemoteSendPlan =
+  | { readonly _tag: "Missing" }
+  | { readonly _tag: "AlreadySent" }
+  | {
+      readonly _tag: "Dispatch";
+      readonly dispatchMode: Effect.Success<ReturnType<typeof sendDispatchMode>>;
+    };
+
+export function planRemoteSend(
+  target: OrchestrationV2ThreadProjection,
+  messageId: MessageId,
+  mode: ThreadManagementSendMode,
+): Effect.Effect<
+  RemoteSendPlan,
+  ThreadManagementThreadArchivedError | ThreadManagementNoSteerableRunError
+> {
+  if (target.thread.deletedAt !== null) return Effect.succeed({ _tag: "Missing" } as const);
+  if (target.messages.some((message) => message.id === messageId))
+    return Effect.succeed({ _tag: "AlreadySent" } as const);
+  return sendDispatchMode(target, mode).pipe(
+    Effect.map((dispatchMode) => ({ _tag: "Dispatch", dispatchMode }) as const),
+  );
+}
+
 export class RemoteThreadError extends Data.TaggedError("RemoteThreadError")<{
   readonly message: string;
 }> {}
@@ -151,47 +180,46 @@ export const layer = Layer.effect(
 
     // Opens a relay session to the environment publishing `threadId`, or returns null when the
     // account cannot reach one. Read grants yield read-only sessions.
-    const withThreadSession = <A, E>(
+    const withThreadSession = Effect.fn("RemoteThreads.withThreadSession")(function* <A, E>(
       threadId: ThreadId,
       access: ThreadAccess,
       use: (environmentId: EnvironmentId, client: RpcSession["client"]) => Effect.Effect<A, E>,
-    ) =>
-      Effect.gen(function* () {
-        const cloud = yield* connectCloud.pipe(
-          Effect.mapError((error) =>
-            error instanceof RemoteThreadError
-              ? error
-              : new RemoteThreadError({
-                  message: "Pathway could not authenticate this environment with Pathway Cloud.",
-                }),
-          ),
-        );
-        const token = yield* cloud.tokens.token.pipe(unreachable(threadId));
-        const grant = yield* cloud.lock.withPermits(1)(
-          Effect.tryPromise({
-            try: () => {
-              cloud.client.setAuth(token);
-              return cloud.client.action!(issueThreadAccessRef, { threadId, access });
-            },
-            catch: (cause) =>
-              new RemoteThreadError({ message: grantFailureMessage(threadId, cause) }),
-          }),
-        );
-        if (grant === null) return null;
-        const environmentId = EnvironmentId.make(grant.environmentId);
-        return yield* Effect.scoped(
-          Effect.gen(function* () {
-            const handle = yield* peers
-              .connect({
-                targetEnvironmentId: environmentId,
-                connectGrantToken: grant.token,
-                scopes: access === "read" ? AuthPeerReadScopes : AuthPeerEnvironmentScopes,
-              })
-              .pipe(unreachable(threadId));
-            return yield* use(environmentId, handle.session.client);
-          }),
-        );
-      });
+    ) {
+      const cloud = yield* connectCloud.pipe(
+        Effect.mapError((error) =>
+          error instanceof RemoteThreadError
+            ? error
+            : new RemoteThreadError({
+                message: "Pathway could not authenticate this environment with Pathway Cloud.",
+              }),
+        ),
+      );
+      const token = yield* cloud.tokens.token.pipe(unreachable(threadId));
+      const grant = yield* cloud.lock.withPermits(1)(
+        Effect.tryPromise({
+          try: () => {
+            cloud.client.setAuth(token);
+            return cloud.client.action!(issueThreadAccessRef, { threadId, access });
+          },
+          catch: (cause) =>
+            new RemoteThreadError({ message: grantFailureMessage(threadId, cause) }),
+        }),
+      );
+      if (grant === null) return null;
+      const environmentId = EnvironmentId.make(grant.environmentId);
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          const handle = yield* peers
+            .connect({
+              targetEnvironmentId: environmentId,
+              connectGrantToken: grant.token,
+              scopes: access === "read" ? AuthPeerReadScopes : AuthPeerEnvironmentScopes,
+            })
+            .pipe(unreachable(threadId));
+          return yield* use(environmentId, handle.session.client);
+        }),
+      );
+    });
 
     const read: RemoteThreads["Service"]["read"] = (threadId, sourcesFor) =>
       withThreadSession(threadId, "read", (environmentId, client) =>
@@ -213,19 +241,21 @@ export const layer = Layer.effect(
             threadId: input.threadId,
           }).pipe(unreachable(input.threadId));
           const target = yield* getProjection;
+          const plan = yield* planRemoteSend(target, input.messageId, input.mode);
+          if (plan._tag === "Missing") return null;
           yield* input.authorize(target);
-          const dispatchMode = yield* sendDispatchMode(target, input.mode);
-          yield* client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand]({
-            type: "message.dispatch",
-            commandId: input.commandId,
-            threadId: input.threadId,
-            messageId: input.messageId,
-            text: input.text,
-            attachments: [],
-            dispatchMode,
-            createdBy: "agent",
-            creationSource: "mcp",
-          }).pipe(unreachable(input.threadId));
+          if (plan._tag === "Dispatch")
+            yield* client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand]({
+              type: "message.dispatch",
+              commandId: input.commandId,
+              threadId: input.threadId,
+              messageId: input.messageId,
+              text: input.text,
+              attachments: [],
+              dispatchMode: plan.dispatchMode,
+              createdBy: "agent",
+              creationSource: "mcp",
+            }).pipe(unreachable(input.threadId));
           const { run, delivery } = yield* sendOutcome(
             yield* getProjection,
             input.messageId,

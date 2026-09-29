@@ -206,6 +206,18 @@ export const resolveAvailableEditorsForConfig = <A, E, R>(
     Effect.map(Option.getOrElse(() => [])),
   );
 
+/**
+ * Who a client-dispatched command is attributed to. A peer environment session is an agent host
+ * acting through a connect grant, never a person at a client, so its commands are agent-authored.
+ */
+export function dispatchActor(
+  session: Pick<EnvironmentAuth.AuthenticatedSession, "subject" | "initiatingEnvironmentId">,
+): "user" | "agent" {
+  return session.initiatingEnvironmentId !== undefined && session.subject !== "cloud-connect"
+    ? "agent"
+    : "user";
+}
+
 export const resolveIssueConnectionActor = Effect.fn("ws.issues.resolveActor")(function* (
   session: Pick<EnvironmentAuth.AuthenticatedSession, "subject">,
   tracker: Pick<
@@ -1452,7 +1464,7 @@ const makeWsRpcLayer = (
               .enqueueCommand(
                 threadManagement.dispatch(
                   ThreadManagementService.withCreationProvenance(command, {
-                    createdBy: "user",
+                    createdBy: dispatchActor(currentSession),
                     creationSource: "creationSource" in command ? command.creationSource : "web",
                   }),
                 ),

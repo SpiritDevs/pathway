@@ -14,7 +14,7 @@
 The server then connects with `PeerEnvironments.connect` over the relay. The target authorizes the grant against its own replica, as it does for any peer connect.
 
 - **Read grants** get read-only scopes (`orchestration:read`, `relay:read`), and the caller requests only those. The server fetches the thread and only the fork sources that the requested page shows.
-- **Send grants** get the ordinary peer scopes. The server loads the target projection and applies the caller's runtime and interaction mode ceiling. It then derives the dispatch mode with `sendDispatchMode` and dispatches `message.dispatch`, and reads the result with `sendOutcome`. These are the same helpers `ThreadManagementService.sendToThread` uses locally.
+- **Send grants** get the ordinary peer scopes. The server loads the target projection. `planRemoteSend` treats a deleted thread as not found. If the message ID is already on the thread (an earlier attempt landed but its reply was lost), the retry reports that outcome without dispatching again. Otherwise the server applies the caller's runtime and interaction mode ceiling, derives the dispatch mode with `sendDispatchMode`, dispatches `message.dispatch`, and reads the result with `sendOutcome`. These are the same helpers `ThreadManagementService.sendToThread` uses locally. The target's `dispatchCommand` handler attributes commands from peer environment sessions to `agent` (`dispatchActor` in `apps/server/src/ws.ts`), so remote MCP messages keep agent provenance.
 
 Transcripts and messages move between environments and never enter Convex.
 
@@ -45,3 +45,5 @@ A read grant must never reach a target that would turn it into a full peer sessi
 
 - Discovery depends on the published `agentThreads` shells, so threads in unbound local projects are invisible.
 - The capability is self-reported by the target's key-bound registration, or by a manager with `environments.manage`. It is not a signed attestation.
+- A send grant is an environment-wide peer credential, the same trust model as other peer connects. The target thread and the caller's mode ceiling are enforced by the caller, not bound into the grant.
+- Local sends still re-check steerability on a retry after a lost reply; only the remote path recognizes an already-landed message.
