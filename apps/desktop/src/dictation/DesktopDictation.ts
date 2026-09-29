@@ -160,6 +160,8 @@ const make = Effect.gen(function* () {
       ...widgetSize,
       frame: false,
       transparent: true,
+      // Electron paints the default white window background unless the color is cleared explicitly.
+      backgroundColor: "#00000000",
       resizable: false,
       minimizable: false,
       maximizable: false,
