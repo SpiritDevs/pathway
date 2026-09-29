@@ -29,7 +29,7 @@ constexpr int contextSize = 8192;
 constexpr int maxOutputTokens = 2048;
 constexpr int batchSize = 512;
 constexpr auto inferenceLimit = std::chrono::seconds(60);
-constexpr auto engineVersion = "llama.cpp-b10516-b95502ba-pathway5";
+constexpr auto engineVersion = "llama.cpp-b10516-b95502ba-pathway6";
 
 void emit(const json &event) {
     std::cout << event.dump(-1, ' ', false, json::error_handler_t::replace) << '\n' << std::flush;
@@ -301,8 +301,17 @@ void correct(llama_context *context, const llama_vocab *vocab, PrefixCache &cach
         }
     }
 
+    // Callers waiting on a person pass a shorter limit. Stopping here, rather than
+    // being killed, keeps the weights and the trusted prefix loaded for the next request.
+    const auto timeout = request.find("timeoutMs");
+    if (timeout != request.end() && (!timeout->is_number_unsigned() || timeout->get<std::uint64_t>() == 0)) {
+        emitError("The correction time limit must be a positive number of milliseconds.", *id); return;
+    }
+    std::chrono::milliseconds limit = inferenceLimit;
+    if (timeout != request.end())
+        limit = std::chrono::milliseconds(std::min<std::uint64_t>(timeout->get<std::uint64_t>(), limit.count()));
     const auto start = Clock::now();
-    Deadline deadline{start + inferenceLimit};
+    Deadline deadline{start + limit};
     std::string sourceLanguage = *language;
     if (sourceLanguage == "auto") {
         // Separate identification from editing: a request to translate in the

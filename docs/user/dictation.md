@@ -77,6 +77,9 @@ still loading, your recognized text is delivered immediately while the model get
 recordings. Once loaded, cleanup has a five-second limit so a slow pass does not leave your
 transcript waiting indefinitely.
 
+Long recordings are transcribed and cleaned up sentence by sentence while you speak, so the wait
+after you stop stays short even when you dictate for a minute or more.
+
 Cleanup runs after speech recognition. For the fastest delivery, open **Settings > Dictation >
 Settings** and turn off **Clean up dictation** under **Text cleanup**. Your dictionary corrections
 still apply, but the cleanup model will no longer remove fillers, repetitions or spoken

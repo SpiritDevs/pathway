@@ -18,6 +18,7 @@
 #include <io.h>
 #else
 #include <cerrno>
+#include <poll.h>
 #include <sys/event.h>
 #include <unistd.h>
 #endif
@@ -68,6 +69,18 @@ inline void watchParent(unsigned long expectedPid) {
         close(queue);
         std::_Exit(0);
     }).detach();
+#endif
+}
+
+// True when the app has written another line that the engine has not read yet.
+// Callers must also check their own stream buffer; this sees only the pipe.
+inline bool inputPending() {
+#ifdef _WIN32
+    DWORD available = 0;
+    return PeekNamedPipe(GetStdHandle(STD_INPUT_HANDLE), nullptr, 0, nullptr, &available, nullptr) && available > 0;
+#else
+    pollfd input{STDIN_FILENO, POLLIN, 0};
+    return poll(&input, 1, 0) > 0 && (input.revents & POLLIN);
 #endif
 }
 

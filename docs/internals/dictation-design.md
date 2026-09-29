@@ -74,7 +74,18 @@ cleanup workers are reused after preparation, with cancellation and unload inval
 loads. The detected speech language is forwarded to cleanup when automatic language selection is
 enabled, avoiding a second classification pass. If cleanup preparation is still running, desktop
 delivery immediately uses recognized text while the worker finishes loading for later recordings.
-Loaded cleanup has a five-second deadline; timeout falls back to recognized text.
+Loaded cleanup has a five-second deadline that the worker enforces itself, so a timeout falls back
+to recognized text without unloading the model. The desktop kills the worker only if it overruns
+that deadline by two seconds.
+
+Recordings longer than 15 seconds are processed while capture continues. The speech worker reads
+the growing capture file and commits through the last sentence Whisper ends at least 1.5 seconds
+before the live edge, cutting at a Silero pause near that sentence's end timestamp. Cleanup runs
+on whole sentences as they are committed; a sentence split across chunks is cleaned as one text.
+Stopping transcribes only the uncommitted tail, with the preceding words as Whisper's prompt, then
+cleans the remaining sentences. A partial step still running at stop is interrupted rather than
+awaited, since the tail transcription redoes its uncommitted audio. If a partial step fails,
+stopping transcribes everything not yet committed. Speech and cleanup run in separate workers, one request each, so they can overlap.
 
 ## Capture and state transitions
 

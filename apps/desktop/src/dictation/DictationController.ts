@@ -52,7 +52,10 @@ export interface DictationInferencePort {
     language: string;
     terms: readonly string[];
     signal: AbortSignal;
-  }): Promise<{ text: string; language?: string }>;
+    start?: number;
+    partial?: boolean;
+    context?: string;
+  }): Promise<{ text: string; language?: string; end?: number }>;
   cleanup(input: {
     requireLoaded: boolean;
     text: string;
@@ -60,7 +63,16 @@ export interface DictationInferencePort {
     language: string;
     signal: AbortSignal;
   }): Promise<string>;
+  interrupt(modelId: DictationModelId): void;
   unload(): void | Promise<void>;
+}
+/** Recognized speech from one stretch of a recording. Cleanup merges chunks into whole sentences. */
+interface Chunk {
+  original: string;
+  text: string;
+  language: string | undefined;
+  /** Null until cleanup has been attempted. */
+  cleaned: boolean | null;
 }
 interface Session {
   id: string;
@@ -72,7 +84,22 @@ interface Session {
   mode: DictationState["mode"];
   durationMs: number;
   interrupted: boolean;
+  chunks: Chunk[];
+  /** 16 kHz sample where the next transcription starts. */
+  committed: number;
+  /** Capture duration at the last partial transcription attempt. */
+  attemptedMs: number;
+  /** Speech and cleanup steps running while recording, one per worker. Never reject. */
+  speaking: Promise<void> | null;
+  cleaning: Promise<void> | null;
+  /** Cleared when a partial step fails; stopping then transcribes from committed. */
+  incremental: boolean;
 }
+/** Long recordings are transcribed while capture continues once this much is pending. */
+const partialPendingMs = 15_000;
+/** Minimum new audio before retrying a partial transcription that committed nothing. */
+const partialRetryMs = 2_000;
+const sentenceEnd = /[.!?…。！？]["'”’)\]]*$/;
 const busy = (phase: DictationState["phase"]) =>
   phase === "starting" || phase === "recording" || phase === "processing";
 
@@ -394,6 +421,12 @@ export class DictationController {
       mode,
       durationMs: 0,
       interrupted: false,
+      chunks: [],
+      committed: 0,
+      attemptedMs: 0,
+      speaking: null,
+      cleaning: null,
+      incremental: true,
     };
     this.sessionGeneration++;
     this.session = session;
@@ -456,6 +489,120 @@ export class DictationController {
     this.session.durationMs = durationMs;
     this.state = { ...this.state, durationMs, level: Math.max(0, Math.min(1, level)) };
     this.options.onMeter({ durationMs, level: this.state.level, mode: this.state.mode });
+    this.advance(this.session);
+  }
+
+  /**
+   * Transcribes and cleans finished sentences while the microphone is still
+   * recording, so stopping leaves only the tail. Speech and cleanup each run one
+   * step at a time in their own worker.
+   */
+  private advance(session: Session) {
+    if (!session.incremental || this.state.phase !== "recording" || !this.current(session)) return;
+    if (
+      !session.cleaning &&
+      this.cleanupRange(session, false) &&
+      this.options.models.getStates().some((model) => model.id === "qwen-cleanup" && model.loaded)
+    )
+      session.cleaning = this.clean(session, false).finally(() => {
+        session.cleaning = null;
+        this.advance(session);
+      });
+    if (
+      !session.speaking &&
+      session.durationMs - session.committed / 16 >= partialPendingMs &&
+      session.durationMs - session.attemptedMs >= partialRetryMs
+    ) {
+      session.attemptedMs = session.durationMs;
+      session.speaking = this.transcribe(session, true)
+        .catch(() => {
+          session.incremental = false;
+        })
+        .finally(() => {
+          session.speaking = null;
+          this.advance(session);
+        });
+    }
+  }
+
+  private async transcribe(session: Session, partial: boolean) {
+    const previous = session.chunks.at(-1);
+    const transcription = await this.options.inference.transcribeWithLanguage({
+      audioPath: session.audioPath,
+      modelId: session.preferences.speechModel,
+      language: session.preferences.language,
+      terms: dictationModelHints(session.dictionary),
+      signal: session.abort.signal,
+      start: session.committed,
+      partial,
+      ...(previous ? { context: previous.original } : {}),
+    });
+    if (partial) {
+      if (transcription.end === undefined || transcription.end < session.committed)
+        throw new Error("The speech engine did not report its progress.");
+      session.committed = transcription.end;
+    }
+    const original = cleanRecognizedText(transcription.text);
+    if (original)
+      session.chunks.push({
+        original,
+        text: applyDictationDictionary(original, session.dictionary),
+        language: transcription.language,
+        cleaned:
+          session.preferences.cleanupEnabled && this.options.models.isInstalled("qwen-cleanup")
+            ? null
+            : false,
+      });
+  }
+
+  /**
+   * The uncleaned chunks through the next sentence end. Cleaning a sentence split
+   * across chunks as one text keeps the model from ending each piece with a period.
+   */
+  private cleanupRange(session: Session, final: boolean) {
+    const first = session.chunks.findIndex((chunk) => chunk.cleaned === null);
+    if (first < 0) return undefined;
+    const end = session.chunks.findIndex(
+      (chunk, index) => index >= first && sentenceEnd.test(chunk.original),
+    );
+    if (end >= 0) return { first, count: end - first + 1 };
+    return final ? { first, count: session.chunks.length - first } : undefined;
+  }
+
+  private async clean(session: Session, final: boolean) {
+    const range = this.cleanupRange(session, final);
+    if (!range) return;
+    const parts = session.chunks.slice(range.first, range.first + range.count);
+    const chunk: Chunk = {
+      original: parts.map((part) => part.original).join(" "),
+      text: parts.map((part) => part.text).join(" "),
+      language: parts[0]?.language,
+      cleaned: false,
+    };
+    session.chunks.splice(range.first, range.count, chunk);
+    if (chunk.text.length > 6000) return;
+    const terms = dictationModelHints(session.dictionary);
+    try {
+      const candidate = applyDictationDictionary(
+        await this.options.inference.cleanup({
+          requireLoaded: true,
+          text: chunk.text,
+          terms,
+          language:
+            session.preferences.language === "auto"
+              ? (chunk.language ?? "auto")
+              : session.preferences.language,
+          signal: session.abort.signal,
+        }),
+        session.dictionary,
+      );
+      if (acceptableDictationCleanup(chunk.text, candidate, terms)) {
+        chunk.text = candidate.trim();
+        chunk.cleaned = true;
+      }
+    } catch {
+      /* Usable recognition survives a failed cleanup step. */
+    }
   }
 
   shortcutEvent(edge: "down" | "up" | "cancel", now: number) {
@@ -488,52 +635,27 @@ export class DictationController {
         await this.cancel();
         return;
       }
-      const terms = dictationModelHints(session.dictionary);
-      const transcription = await this.options.inference.transcribeWithLanguage({
-        audioPath: session.audioPath,
-        modelId: session.preferences.speechModel,
-        language: session.preferences.language,
-        terms,
-        signal: session.abort.signal,
-      });
-      const originalText = cleanRecognizedText(transcription.text);
+      // Background speech work would be redone for the tail; stop it rather than wait.
+      if (session.speaking) this.options.inference.interrupt(session.preferences.speechModel);
+      await session.speaking;
       if (!this.current(session)) return;
-      if (!originalText) {
+      // The tail may transcribe while cleanup finishes an earlier sentence.
+      await this.transcribe(session, false);
+      await session.cleaning;
+      if (!this.current(session)) return;
+      if (!session.chunks.length) {
         this.publish({ phase: "error", error: "No speech detected. Try recording again." });
         return;
       }
-      let text = applyDictationDictionary(originalText, session.dictionary);
-      let cleanup: DictationHistoryEntry["cleanup"] = session.preferences.cleanupEnabled
-        ? "unavailable"
-        : "disabled";
-      if (
-        session.preferences.cleanupEnabled &&
-        this.options.models.isInstalled("qwen-cleanup") &&
-        text.length <= 6000
-      ) {
-        try {
-          const candidate = applyDictationDictionary(
-            await this.options.inference.cleanup({
-              requireLoaded: true,
-              text,
-              terms,
-              language:
-                session.preferences.language === "auto"
-                  ? (transcription.language ?? "auto")
-                  : session.preferences.language,
-              signal: session.abort.signal,
-            }),
-            session.dictionary,
-          );
-          if (acceptableDictationCleanup(text, candidate, terms)) {
-            text = candidate.trim();
-            cleanup = "applied";
-          }
-        } catch {
-          /* Usable recognition survives a failed cleanup step. */
-        }
-      }
+      while (this.cleanupRange(session, true)) await this.clean(session, true);
       if (!this.current(session)) return;
+      const originalText = session.chunks.map((chunk) => chunk.original).join(" ");
+      const text = session.chunks.map((chunk) => chunk.text).join(" ");
+      const cleanup: DictationHistoryEntry["cleanup"] = !session.preferences.cleanupEnabled
+        ? "disabled"
+        : session.chunks.some((chunk) => chunk.cleaned)
+          ? "applied"
+          : "unavailable";
       let delivery: DictationHistoryEntry["delivery"] = session.mode === "test" ? "test" : "manual";
       let deliveryError: string | null = null;
       if (!interrupted && session.mode !== "test") {

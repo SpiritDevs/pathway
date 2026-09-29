@@ -27,11 +27,19 @@ export interface DictationTranscriptionRequest {
   language: string;
   terms: readonly string[];
   signal?: AbortSignal;
+  /** First sample to read. Later requests start at the previous result's end. */
+  start?: number;
+  /** Read a capture still being written and commit only through a finished sentence. */
+  partial?: boolean;
+  /** Text recognized just before start, so Whisper continues its sentence. */
+  context?: string;
 }
 
 export interface DictationTranscriptionResult {
   text: string;
   language?: string;
+  /** Sample where this transcription stopped reading. */
+  end?: number;
 }
 
 export interface DictationCleanupRequest {
@@ -45,6 +53,10 @@ export interface DictationCleanupRequest {
 }
 
 const maxLineBytes = 64 * 1024;
+/** Desktop cleanup gives up after this long and keeps the recognized text. */
+const cleanupTimeoutMs = 5000;
+/** The engine stops itself at its deadline and stays loaded; killing it is only a backstop. */
+const cleanupKillGraceMs = 2000;
 const maxTextBytes = 24 * 1024;
 const abortError = () => new DOMException("Dictation was cancelled.", "AbortError");
 const deferred = <T>() => {
@@ -159,6 +171,11 @@ class EngineProcess {
     }
   }
 
+  /** Asks a running partial transcription to yield. The engine sends no reply of its own. */
+  interrupt() {
+    if (this.pending && !this.stopped) this.child.stdin.write('{"type":"interrupt"}\n');
+  }
+
   stop(error: Error = abortError()): Promise<void> {
     if (!this.stopped) {
       this.stopped = true;
@@ -235,6 +252,9 @@ class EngineProcess {
             /^[a-z]{2,3}$/.test(event.language)
               ? { language: event.language }
               : {}),
+            ...("end" in event && Number.isSafeInteger(event.end) && Number(event.end) >= 0
+              ? { end: Number(event.end) }
+              : {}),
           });
         } else if (
           event.type === "error" &&
@@ -261,7 +281,8 @@ export class DictationInference {
   private readonly workers = new Map<DictationModelId, EngineProcess>();
   private readonly closingWorkers = new Set<EngineProcess>();
   private disposed = false;
-  private busy = false;
+  /** Speech and cleanup run in separate processes, so each may take one request at once. */
+  private readonly busy = new Set<DictationModelId>();
   private generation = 0;
   private unloading: Promise<void> | undefined;
   private selecting: Promise<void> = Promise.resolve();
@@ -284,7 +305,7 @@ export class DictationInference {
     signal: AbortSignal;
   }): Promise<void> {
     if (this.disposed) throw new Error("Dictation inference has been disposed.");
-    if (this.busy || this.unloading) throw new Error("Dictation inference is busy.");
+    if (this.busy.size || this.unloading) throw new Error("Dictation inference is busy.");
     if (request.modelId === "qwen-cleanup")
       throw new Error("Select a speech model to prepare audio.");
     const ids: DictationModelId[] = request.cleanup
@@ -310,14 +331,18 @@ export class DictationInference {
   ): Promise<DictationTranscriptionResult> {
     if (request.modelId === "qwen-cleanup")
       return Promise.reject(new Error("Select a speech model to transcribe audio."));
-    const terms = this.preferredTerms(request.terms, 8192);
+    // Whisper reads its prompt as preceding speech. Recent words go last, nearest the audio.
+    const context = request.context?.split(/\s+/).slice(-40).join(" ") ?? "";
+    const terms = this.preferredTerms(request.terms, 8192 - Buffer.byteLength(context) - 1);
     return this.run(
       request.modelId,
       {
         type: "transcribe",
         path: request.audioPath,
         language: request.language,
-        prompt: terms.join(", "),
+        prompt: [terms.join(", "), context].filter(Boolean).join(" "),
+        ...(request.start ? { start: request.start } : {}),
+        ...(request.partial ? { partial: true } : {}),
       },
       request.signal,
     );
@@ -336,10 +361,16 @@ export class DictationInference {
           text: request.text,
           terms: this.preferredTerms(request.terms, 16384),
           language: request.language ?? "auto",
+          timeoutMs: cleanupTimeoutMs,
         },
         request.signal,
       )
     ).text;
+  }
+
+  /** A partial transcription in progress finishes early, committing nothing. */
+  interrupt(id: DictationModelId): void {
+    this.workers.get(id)?.interrupt();
   }
 
   unload(): Promise<void> {
@@ -445,22 +476,23 @@ export class DictationInference {
     signal: AbortSignal | undefined,
   ) {
     if (this.disposed) throw new Error("Dictation inference has been disposed.");
-    if (this.busy || this.unloading) throw new Error("Dictation inference is busy.");
+    if (this.busy.has(id) || this.unloading) throw new Error("Dictation inference is busy.");
     signal?.throwIfAborted();
-    this.busy = true;
+    this.busy.add(id);
     const generation = this.generation;
     try {
       const worker = await this.selectWorker(id, signal);
       const text = await worker.request(
         payload,
         signal,
-        this.options.inferenceTimeoutMs ?? (id === "qwen-cleanup" ? 5000 : 300000),
+        this.options.inferenceTimeoutMs ??
+          (id === "qwen-cleanup" ? cleanupTimeoutMs + cleanupKillGraceMs : 300000),
       );
       signal?.throwIfAborted();
       if (generation !== this.generation) throw abortError();
       return text;
     } finally {
-      this.busy = false;
+      this.busy.delete(id);
     }
   }
 }

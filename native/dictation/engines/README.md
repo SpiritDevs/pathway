@@ -95,8 +95,22 @@ first classifies the quoted text's language in a separate generation limited to
 weights and share one 60-second native deadline. Explicit-language requests skip
 classification. Desktop cleanup requires an already loaded worker (`requireLoaded: true`). If
 capture-time preparation is incomplete, delivery uses recognized text immediately and lets loading
-finish for subsequent recordings. Loaded cleanup has a five-second deadline and keeps the original
-transcript on expiry. Standalone cleanup calls can wait for loading within their configured deadline.
+finish for subsequent recordings. Cleanup requests carry a five-second `timeoutMs`; the worker stops
+decoding at that deadline, reports an error and stays loaded, and the desktop keeps the original
+transcript. The client kills a worker only if it overruns the deadline by two more seconds.
+Standalone cleanup calls can wait for loading within their configured deadline.
+
+`transcribe` also accepts `start` (a 16 kHz sample offset) and `partial`. A partial request reads a
+capture that is still being written: both capture hosts publish the WAV data size only on stop, so
+the worker reads PCM16 up to the file's current length. Once 15 seconds are pending it transcribes
+them with segment timestamps and commits through the last segment that ends a sentence at least
+5 seconds after `start` and 1.5 seconds before the live edge. The cut is the quietest 256 ms Silero
+window near that segment's end, before the next segment's first word. The result's `end` is the
+sample where the next request should start; it equals `start` when nothing was committed. The
+desktop passes the previous chunk's last words as `prompt` context so Whisper continues sentences
+across cuts. A partial request yields as soon as another line is waiting on stdin: the desktop
+sends `{"type":"interrupt"}` when recording stops, the partial result commits nothing, and an
+interrupt that arrives while idle is ignored without a reply.
 
 The cleanup worker evaluates its fixed instruction/demo prefix before emitting
 `ready`, then retains only that prefix between requests. Every transcript,
@@ -158,8 +172,11 @@ speech. Startup emits `ready` or `error`. Requests carry a unique `id`:
 
 ```json
 {"type":"transcribe","id":"turn-1","path":"/tmp/audio.wav","language":"auto","prompt":"Pathway, Élodie"}
-{"type":"correct","id":"turn-2","text":"dictated text","language":"auto","terms":["Pathway"]}
+{"type":"transcribe","id":"turn-2","path":"/tmp/live.wav","language":"en","start":204288,"partial":true}
+{"type":"correct","id":"turn-3","text":"dictated text","language":"auto","terms":["Pathway"],"timeoutMs":5000}
 ```
+
+Speech results include `end`, the sample offset where transcription stopped reading.
 
 Responses are `progress`, `result`, or `error`, with the same ID. Native request
 lines are bounded to 64 KiB. Speech accepts mono 16 kHz PCM16/float32 WAVs,

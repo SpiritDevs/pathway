@@ -25,7 +25,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -42,6 +44,14 @@ using Clock = std::chrono::steady_clock;
 constexpr size_t maxRequestBytes = 64 * 1024;
 constexpr size_t minSamples = WHISPER_SAMPLE_RATE / 5;
 constexpr size_t maxSamples = WHISPER_SAMPLE_RATE * 300;
+// Partial requests read a live capture once this much is pending. They commit
+// through the last sentence Whisper ends at least this far before the growing
+// tail, cutting in a 256 ms stretch that Silero rates as mostly non-speech.
+constexpr size_t partialMinPending = WHISPER_SAMPLE_RATE * 15;
+constexpr size_t partialMinChunk = WHISPER_SAMPLE_RATE * 5;
+constexpr size_t partialTailMargin = WHISPER_SAMPLE_RATE * 3 / 2;
+constexpr int partialPauseWindows = 8;
+constexpr float partialMaxPauseSpeech = 0.5f;
 
 void emit(const json &event) {
     std::cout << event.dump(-1, ' ', false, json::error_handler_t::replace) << '\n' << std::flush;
@@ -68,7 +78,23 @@ struct Audio {
     bool silent;
 };
 
-std::variant<Audio, std::string> readAudio(const std::string &path) {
+std::variant<Audio, std::string> finishAudio(std::vector<float> samples, double duration) {
+    double squareSum = 0;
+    float peak = 0;
+    for (auto &sample : samples) {
+        if (!std::isfinite(sample)) return "The recording contains invalid audio samples.";
+        sample = std::clamp(sample, -1.0f, 1.0f);
+        squareSum += static_cast<double>(sample) * sample;
+        peak = std::max(peak, std::abs(sample));
+    }
+    // This is deliberately conservative. Whisper's no-speech probability does
+    // the semantic filtering; an amplitude gate just avoids decoding silence.
+    const bool silent = samples.empty() || peak < 0.002f || std::sqrt(squareSum / samples.size()) < 0.0003;
+    return Audio{std::move(samples), duration, silent};
+}
+
+/// Reads samples [start, end) of a finished recording. Its whole length must be 0.2 s to 5 minutes.
+std::variant<Audio, std::string> readAudio(const std::string &path, size_t start) {
     std::error_code error;
     if (!std::filesystem::is_regular_file(std::filesystem::u8path(path), error)) {
         return "The recording is missing or is not a regular file.";
@@ -100,23 +126,93 @@ std::variant<Audio, std::string> readAudio(const std::string &path) {
         return "Record between 0.2 seconds and 5 minutes of audio.";
     }
 
-    std::vector<float> samples(static_cast<size_t>(wav.totalPCMFrameCount));
+    if (start > wav.totalPCMFrameCount) return "The recording offset is past its end.";
+    if (start > 0 && !ma_dr_wav_seek_to_pcm_frame(&wav, start)) return "The recording is incomplete.";
+
+    std::vector<float> samples(static_cast<size_t>(wav.totalPCMFrameCount - start));
     const auto frames = ma_dr_wav_read_pcm_frames_f32(&wav, samples.size(), samples.data());
     if (frames != samples.size()) return "The recording is incomplete.";
+    return finishAudio(std::move(samples), static_cast<double>(wav.totalPCMFrameCount) / WHISPER_SAMPLE_RATE);
+}
 
-    double squareSum = 0;
-    float peak = 0;
-    for (auto &sample : samples) {
-        if (!std::isfinite(sample)) return "The recording contains invalid audio samples.";
-        sample = std::clamp(sample, -1.0f, 1.0f);
-        squareSum += static_cast<double>(sample) * sample;
-        peak = std::max(peak, std::abs(sample));
+/// Reads samples from start through whatever a live capture has written so far.
+/// Both capture hosts write mono 16 kHz PCM16 and publish the data size only when
+/// recording stops, so the file length, not the header, bounds the samples.
+std::variant<Audio, std::string> readGrowingAudio(const std::string &path, size_t start) {
+    std::ifstream file(std::filesystem::u8path(path), std::ios::binary);
+    char riff[12];
+    if (!file || !file.read(riff, sizeof riff) || std::memcmp(riff, "RIFF", 4) != 0 || std::memcmp(riff + 8, "WAVE", 4) != 0)
+        return "The recording is not a readable WAV file.";
+    bool pcm16 = false;
+    for (int chunk = 0; chunk < 16; ++chunk) {
+        char header[8];
+        if (!file.read(header, sizeof header)) break;
+        std::uint32_t size;
+        std::memcpy(&size, header + 4, sizeof size);
+        if (std::memcmp(header, "fmt ", 4) == 0) {
+            char format[16];
+            if (size < sizeof format || !file.read(format, sizeof format)) break;
+            std::uint16_t tag, channels, bits;
+            std::uint32_t rate;
+            std::memcpy(&tag, format, 2);
+            std::memcpy(&channels, format + 2, 2);
+            std::memcpy(&rate, format + 4, 4);
+            std::memcpy(&bits, format + 14, 2);
+            pcm16 = tag == 1 && channels == 1 && rate == WHISPER_SAMPLE_RATE && bits == 16;
+            if (!pcm16) return "A live recording must be mono, 16 kHz PCM16 WAV audio.";
+            file.seekg(size - sizeof format + (size & 1), std::ios::cur);
+        } else if (std::memcmp(header, "data", 4) == 0) {
+            if (!pcm16) break;
+            const auto dataStart = static_cast<std::uint64_t>(file.tellg());
+            std::error_code error;
+            const auto bytes = std::filesystem::file_size(std::filesystem::u8path(path), error);
+            if (error || bytes < dataStart) return "The recording cannot be read.";
+            const auto written = size == 0 ? bytes - dataStart : std::min<std::uint64_t>(size, bytes - dataStart);
+            const auto available = static_cast<size_t>(std::min<std::uint64_t>(written / 2, maxSamples));
+            if (start > available) return "The recording offset is past its end.";
+            std::vector<std::int16_t> pcm(available - start);
+            file.seekg(static_cast<std::streamoff>(dataStart + start * 2));
+            if (!file.read(reinterpret_cast<char *>(pcm.data()), static_cast<std::streamsize>(pcm.size() * 2)))
+                return "The recording is incomplete.";
+            std::vector<float> samples(pcm.size());
+            for (size_t i = 0; i < pcm.size(); ++i) samples[i] = pcm[i] / 32768.0f;
+            return finishAudio(std::move(samples), static_cast<double>(available) / WHISPER_SAMPLE_RATE);
+        } else {
+            file.seekg(static_cast<std::streamoff>(size) + (size & 1), std::ios::cur);
+        }
     }
-    // This is deliberately conservative. Whisper's no-speech probability does
-    // the semantic filtering; an amplitude gate just avoids decoding silence.
-    const bool silent = peak < 0.002f || std::sqrt(squareSum / samples.size()) < 0.0003;
-    const double duration = static_cast<double>(samples.size()) / WHISPER_SAMPLE_RATE;
-    return Audio{std::move(samples), duration, silent};
+    return "The recording is not a readable WAV file.";
+}
+
+/// The middle sample of the quietest 256 ms that Silero's latest pass rated
+/// mostly non-speech between two positions, or zero when all of it is speech.
+size_t quietestPause(whisper_vad_context *vad, size_t from, size_t to) {
+    // Each probability covers 512 samples.
+    const int count = whisper_vad_n_probs(vad);
+    const float *probability = whisper_vad_probs(vad);
+    const int first = std::max(0, static_cast<int>(from / 512) - partialPauseWindows / 2);
+    const int last = std::min(count, static_cast<int>(to / 512) + partialPauseWindows / 2) - partialPauseWindows;
+    size_t cut = 0;
+    float quietest = partialMaxPauseSpeech * partialPauseWindows;
+    for (int i = first; i <= last; ++i) {
+        float sum = 0;
+        for (int j = 0; j < partialPauseWindows; ++j) sum += probability[i + j];
+        if (sum < quietest) {
+            quietest = sum;
+            cut = static_cast<size_t>(i + partialPauseWindows / 2) * 512;
+        }
+    }
+    return cut;
+}
+
+bool endsSentence(const std::string &text) {
+    auto end = text.find_last_not_of(" \t\r\n\"')]");
+    if (end == std::string::npos) return false;
+    const auto ends = [&](const char *suffix) {
+        const auto size = std::strlen(suffix);
+        return end + 1 >= size && text.compare(end + 1 - size, size, suffix) == 0;
+    };
+    return ends(".") || ends("?") || ends("!") || ends("\u2026") || ends("\u3002") || ends("\uFF1F") || ends("\uFF01");
 }
 
 std::string trim(std::string text) {
@@ -137,6 +233,11 @@ void reportProgress(whisper_context *, whisper_state *, int value, void *opaque)
     if (value <= progress.last) return;
     progress.last = value;
     emit({{"type", "progress"}, {"id", progress.id}, {"value", value / 100.0}});
+}
+
+// Partial work yields to anything the app sends next, such as an interrupt when recording stops.
+bool interrupted(void *) {
+    return std::cin.rdbuf()->in_avail() > 0 || inputPending();
 }
 
 std::optional<std::string> stringField(const json &request, const char *key) {
@@ -169,13 +270,33 @@ void transcribe(whisper_context *context, whisper_vad_context *vad, int threads,
         return;
     }
 
+    const auto offsetField = request.find("start");
+    if (offsetField != request.end() && (!offsetField->is_number_unsigned() || offsetField->get<std::uint64_t>() > maxSamples)) {
+        emitError("The recording offset must be a sample index within five minutes.", *id);
+        return;
+    }
+    const size_t offset = offsetField == request.end() ? 0 : static_cast<size_t>(offsetField->get<std::uint64_t>());
+    const auto partialField = request.find("partial");
+    if (partialField != request.end() && !partialField->is_boolean()) {
+        emitError("The partial flag must be a boolean.", *id);
+        return;
+    }
+    // A partial request reads a live capture and commits only through a finished
+    // sentence; the result's end tells the caller where the next request starts.
+    const bool partial = partialField != request.end() && partialField->get<bool>();
+
     const auto start = Clock::now();
-    auto loaded = readAudio(*path);
+    auto loaded = partial ? readGrowingAudio(*path, offset) : readAudio(*path, offset);
     if (const auto failure = std::get_if<std::string>(&loaded)) {
         emitError(*failure, *id);
         return;
     }
     auto &audio = std::get<Audio>(loaded);
+    auto end = offset + audio.samples.size();
+    if (partial && audio.samples.size() < partialMinPending) {
+        emit({{"type", "result"}, {"id", *id}, {"text", ""}, {"duration", audio.duration}, {"end", offset}});
+        return;
+    }
     Progress progress{*id};
     reportProgress(nullptr, nullptr, 0, &progress);
     std::string text;
@@ -201,11 +322,13 @@ void transcribe(whisper_context *context, whisper_vad_context *vad, int threads,
         // Keep the complete recording when there is speech; this avoids cutting
         // off quiet word boundaries or short pauses inside a sentence.
     }
+    // Commit live silence except its edge, where speech may be starting.
+    if (partial && audio.silent) end -= partialTailMargin;
     if (!audio.silent) {
         auto parameters = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
         parameters.n_threads = threads;
         parameters.no_context = true; // Never leak one dictation into the next.
-        parameters.no_timestamps = true;
+        parameters.no_timestamps = !partial; // Partial requests cut at segment ends.
         parameters.translate = false;
         parameters.print_special = false;
         parameters.print_progress = false;
@@ -222,14 +345,44 @@ void transcribe(whisper_context *context, whisper_vad_context *vad, int threads,
         parameters.no_speech_thold = 0.6f;
         parameters.progress_callback = reportProgress;
         parameters.progress_callback_user_data = &progress;
+        if (partial) parameters.abort_callback = interrupted;
 
         if (whisper_full(context, parameters, audio.samples.data(), static_cast<int>(audio.samples.size())) != 0) {
+            if (partial && interrupted(nullptr)) {
+                // Abandoned work commits nothing; the next request starts at the same offset.
+                emit({{"type", "result"}, {"id", *id}, {"text", ""}, {"duration", audio.duration}, {"end", offset}});
+                return;
+            }
             emitError("Local transcription failed. Try recording again.", *id);
             return;
         }
         const auto lang = whisper_lang_str(whisper_full_lang_id(context));
         if (lang) detectedLanguage = lang;
-        for (int i = 0; i < whisper_full_n_segments(context); ++i) {
+        int segments = whisper_full_n_segments(context);
+        if (partial) {
+            // Whisper has heard past each sentence end except the last, so its
+            // punctuation there is reliable. Commit through the last one clear of
+            // the tail, cut where Silero hears a pause near its end timestamp but
+            // before the next segment's first word.
+            const auto sample = [](int64_t centiseconds) {
+                return static_cast<size_t>(std::max<int64_t>(0, centiseconds)) * WHISPER_SAMPLE_RATE / 100;
+            };
+            const auto transcribed = segments;
+            end = offset;
+            segments = 0;
+            for (int i = 0; i + 1 < transcribed; ++i) {
+                const auto finish = sample(whisper_full_get_segment_t1(context, i));
+                const auto next = sample(whisper_full_get_segment_t0(context, i + 1));
+                if (finish < partialMinChunk || finish + partialTailMargin > audio.samples.size() ||
+                    !endsSentence(whisper_full_get_segment_text(context, i))) continue;
+                const auto pause = quietestPause(vad, finish - WHISPER_SAMPLE_RATE * 3 / 10,
+                    std::max(finish, next) + WHISPER_SAMPLE_RATE / 5);
+                if (!pause) continue;
+                end = offset + pause;
+                segments = i + 1;
+            }
+        }
+        for (int i = 0; i < segments; ++i) {
             if (whisper_full_get_segment_no_speech_prob(context, i) > parameters.no_speech_thold) continue;
             // Whisper owns punctuation and word spacing. Only trim the outside.
             text += whisper_full_get_segment_text(context, i);
@@ -239,7 +392,7 @@ void transcribe(whisper_context *context, whisper_vad_context *vad, int threads,
     reportProgress(nullptr, nullptr, 100, &progress);
     emit({{"type", "result"}, {"id", *id}, {"text", trim(std::move(text))},
           {"duration", audio.duration}, {"elapsed", std::chrono::duration<double>(Clock::now() - start).count()},
-          {"language", detectedLanguage}});
+          {"language", detectedLanguage}, {"end", end}});
 }
 
 } // namespace
@@ -330,6 +483,7 @@ int runEngine(int argc, char **argv) {
         }
         const auto type = stringField(request, "type");
         if (type == "quit") return 0;
+        if (type == "interrupt") continue; // Nothing was running, or it has already yielded.
         if (type != "transcribe") {
             emitError("Unknown request type.", stringField(request, "id").value_or(""));
             continue;
