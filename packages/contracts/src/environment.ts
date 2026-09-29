@@ -98,6 +98,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can resolve repository identity for an arbitrary directory before project creation. */
   projectDirectoryInspection: Schema.optionalKey(Schema.Boolean),
   connectionProbe: Schema.optionalKey(Schema.Boolean),
+  /** Server issues only read scopes to peers presenting a thread-read connect grant
+      (`AuthPeerReadGrantPermission`). Absent on older servers, which would issue full peer scopes,
+      so Pathway Cloud never issues or redeems read grants for them. */
+  peerReadGrants: Schema.optionalKey(Schema.Boolean),
   /** Direct attachment uploads supported by the server. */
   attachmentUploads: Schema.optionalKey(Schema.Boolean),
   /** Question responses accept saved attachments grouped by question. */

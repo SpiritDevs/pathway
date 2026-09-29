@@ -19,8 +19,10 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   AuthComputerOperateScope,
+  AuthPeerEnvironmentScopes,
   AuthPeerReadGrantPermission,
   AuthPeerReadScopes,
+  AuthPeerSendGrantPermission,
   AuthRelayReadScope,
   AuthRelayWriteScope,
   AuthSessionId,
@@ -366,6 +368,14 @@ describe("cloud mint credential handler", () => {
       });
       yield* reader.run;
       expect(reader.pairingInputs[0]?.scopes).toEqual(AuthPeerReadScopes);
+
+      // A send grant keeps the ordinary peer scopes.
+      const sender = yield* makeMintHarness({
+        environmentSubject: true,
+        connectGrant: { ...connectGrant, permission: AuthPeerSendGrantPermission },
+      });
+      yield* sender.run;
+      expect(sender.pairingInputs[0]?.scopes).toEqual(AuthPeerEnvironmentScopes);
     }),
   );
 

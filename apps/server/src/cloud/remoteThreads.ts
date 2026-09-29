@@ -11,6 +11,7 @@
 import {
   AuthPeerEnvironmentScopes,
   AuthPeerReadScopes,
+  AuthPeerReadUnsupportedCode,
   type CommandId,
   EnvironmentId,
   type MessageId,
@@ -39,6 +40,7 @@ import {
   type ThreadManagementSendResult,
   type ThreadManagementThreadArchivedError,
 } from "../orchestration-v2/ThreadManagementService.ts";
+import { convexErrorCode } from "./convexServiceToken.ts";
 import { convexHttpClientLike } from "./convexSyncTransport.ts";
 import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "./environmentKeys.ts";
 import { PeerEnvironments } from "./peerEnvironments.ts";
@@ -51,6 +53,13 @@ const issueThreadAccessRef = makeFunctionReference<
   { threadId: string; access: ThreadAccess },
   { token: string; environmentId: string } | null
 >("connectGrants:issueThreadAccess");
+
+/** Why Pathway Cloud refused a thread grant, in words an agent can act on. */
+export function grantFailureMessage(threadId: ThreadId, cause: unknown): string {
+  return convexErrorCode(cause) === AuthPeerReadUnsupportedCode
+    ? `Thread ${threadId} is on an environment running an older Pathway that cannot limit remote reads. Update Pathway there to read it remotely.`
+    : `Pathway could not reach thread ${threadId} on its environment.`;
+}
 
 export class RemoteThreadError extends Data.TaggedError("RemoteThreadError")<{
   readonly message: string;
@@ -158,14 +167,16 @@ export const layer = Layer.effect(
           ),
         );
         const token = yield* cloud.tokens.token.pipe(unreachable(threadId));
-        const grant = yield* cloud.lock
-          .withPermits(1)(
-            Effect.tryPromise(() => {
+        const grant = yield* cloud.lock.withPermits(1)(
+          Effect.tryPromise({
+            try: () => {
               cloud.client.setAuth(token);
               return cloud.client.action!(issueThreadAccessRef, { threadId, access });
-            }),
-          )
-          .pipe(unreachable(threadId));
+            },
+            catch: (cause) =>
+              new RemoteThreadError({ message: grantFailureMessage(threadId, cause) }),
+          }),
+        );
         if (grant === null) return null;
         const environmentId = EnvironmentId.make(grant.environmentId);
         return yield* Effect.scoped(

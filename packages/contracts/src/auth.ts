@@ -121,6 +121,8 @@ export const AuthPeerEnvironmentScopes = AuthStandardClientScopes.filter(
 );
 /** Company permission carried by a connect grant that only reads threads on the target. */
 export const AuthPeerReadGrantPermission = "environments.read" as const;
+/** Error code Pathway Cloud returns when a thread's environment cannot enforce read-only grants. */
+export const AuthPeerReadUnsupportedCode = "environment-update-required" as const;
 /** Company permission carried by a connect grant that sends messages to threads on the target. */
 export const AuthPeerSendGrantPermission = "remoteAgents.control" as const;
 /** What a peer environment holding an {@link AuthPeerReadGrantPermission} grant is issued. */

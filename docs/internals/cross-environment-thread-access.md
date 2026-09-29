@@ -18,7 +18,30 @@ The server then connects with `PeerEnvironments.connect` over the relay. The tar
 
 Transcripts and messages move between environments and never enter Convex.
 
-Limits:
+## Mixed-version safety
+
+A read grant must never reach a target that would turn it into a full peer session. Servers from before this change issue `AuthPeerEnvironmentScopes` for every peer grant, and a caller requesting fewer scopes does not stop another holder of the bootstrap credential from redeeming more. So read grants fail closed on the target's advertised `peerReadGrants` capability (`ExecutionEnvironmentCapabilities` in `packages/contracts/src/environment.ts`):
+
+- **Issue.** `recordThreadAccess` skips read candidates whose registration descriptor lacks `capabilities.peerReadGrants === true`. A missing, `false`, or malformed value counts as unsupported. If only unsupported targets publish the thread, it throws `AuthPeerReadUnsupportedCode` (`environment-update-required`). `RemoteThreads` turns that into an "update Pathway there" message. No grant row is written.
+- **Redeem.** Grants carry `threadAccess`. `connectGrants.validate` refuses a `threadAccess: "read"` grant, without consuming it, if the target registration no longer advertises the capability (for example, after a downgrade inside the grant's one-minute lifetime). Human-issued grants have no `threadAccess` and are unchanged.
+- **Target.** Current servers advertise `peerReadGrants: true` and mint `AuthPeerReadScopes` for peer grants carrying `AuthPeerReadGrantPermission`.
+- **Sends** already receive full peer scopes on every version, so they are not gated on the capability.
+
+| Pathway Cloud                | Caller server | Target server          | Read result                                               |
+| ---------------------------- | ------------- | ---------------------- | --------------------------------------------------------- |
+| new                          | new           | new                    | read-only session                                         |
+| new                          | new           | old (no capability)    | refused before a grant exists; update message             |
+| new                          | new           | downgraded after issue | grant refused at redeem                                   |
+| old (no `issueThreadAccess`) | new           | any                    | action missing; generic "could not reach"; nothing issued |
+| any                          | old           | any                    | caller never requests thread grants                       |
+
+### Deployment order
+
+1. Deploy the Convex backend (`packages/backend`) first. It adds `agentThreads.by_thread`, `connectGrants.threadAccess`, `connectGrants:issueThreadAccess`, the redeem check, and the `peerReadGrants` descriptor validator.
+2. Then release servers (desktop, `npx`). The registration validator is strict, so a server advertising `peerReadGrants` cannot update its registration against an older backend. This is the same ordering every new capability needs.
+3. Remote reads work once the target server is updated and has re-registered its descriptor. Until then they fail closed with the update message.
+
+## Limits
 
 - Discovery depends on the published `agentThreads` shells, so threads in unbound local projects are invisible.
-- The target restricts a read grant to read-only scopes only once it runs a version that knows `AuthPeerReadGrantPermission`.
+- The capability is self-reported by the target's key-bound registration, or by a manager with `environments.manage`. It is not a signed attestation.

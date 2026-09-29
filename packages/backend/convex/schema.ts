@@ -837,6 +837,8 @@ export default defineSchema({
     expiresAt: v.number(),
     consumedAt: v.union(v.number(), v.null()),
     consumer: v.union(v.string(), v.null()),
+    /** Set on grants an environment requested to read or message one thread. */
+    threadAccess: v.optional(v.union(v.literal("read"), v.literal("send"))),
   })
     .index("by_token_hash", ["tokenHash"])
     .index("by_company", ["companyId"])

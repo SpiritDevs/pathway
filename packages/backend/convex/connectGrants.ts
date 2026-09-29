@@ -13,7 +13,11 @@
  *
  * @module connectGrants
  */
-import { AuthPeerReadGrantPermission, AuthPeerSendGrantPermission } from "@spiritdevs/contracts";
+import {
+  AuthPeerReadGrantPermission,
+  AuthPeerReadUnsupportedCode,
+  AuthPeerSendGrantPermission,
+} from "@spiritdevs/contracts";
 import { v } from "convex/values";
 
 import {
@@ -25,7 +29,7 @@ import {
 import { isRegisteredProofKey, tokenProofKeyThumbprint } from "../src/environmentRegistrations.ts";
 import { hasCompanyPermission, isPermissionKey } from "../src/permissions.ts";
 import { internal } from "./_generated/api.js";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
 import { action, internalMutation, mutation, type MutationCtx } from "./_generated/server.js";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { backendError } from "./lib/errors.ts";
@@ -178,6 +182,21 @@ const THREAD_ACCESS_PERMISSIONS = {
 } as const;
 const threadAccess = v.union(v.literal("read"), v.literal("send"));
 
+/**
+ * Whether the target issues read-only scopes for read grants. Older targets would turn a read
+ * grant into a full peer session, so anything but an explicit `true` fails closed.
+ */
+function enforcesPeerReadGrants(registration: Doc<"environmentRegistrations">): boolean {
+  const descriptor: unknown = registration.descriptor;
+  if (typeof descriptor !== "object" || descriptor === null) return false;
+  const capabilities = (descriptor as Record<string, unknown>)["capabilities"];
+  return (
+    typeof capabilities === "object" &&
+    capabilities !== null &&
+    (capabilities as Record<string, unknown>)["peerReadGrants"] === true
+  );
+}
+
 const issuedThreadAccessGrant = v.union(
   v.object({ token: v.string(), environmentId: v.string() }),
   v.null(),
@@ -261,6 +280,7 @@ export const recordThreadAccess = internalMutation({
   handler: async (ctx, args) => {
     const caller = await environmentAccountUser(ctx);
     const permission = THREAD_ACCESS_PERMISSIONS[args.access];
+    let unsupportedTarget = false;
     const published = await ctx.db
       .query("agentThreads")
       .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
@@ -283,6 +303,10 @@ export const recordThreadAccess = internalMutation({
         )
         .unique();
       if (registration?.state !== "active") continue;
+      if (args.access === "read" && !enforcesPeerReadGrants(registration)) {
+        unsupportedTarget = true;
+        continue;
+      }
       const owner = await ctx.db
         .query("companyOwners")
         .withIndex("by_company_and_membership", (q) =>
@@ -305,9 +329,15 @@ export const recordThreadAccess = internalMutation({
         expiresAt: connectGrantExpiresAt(issuedAt),
         consumedAt: null,
         consumer: null,
+        threadAccess: args.access,
       });
       return row.environmentId;
     }
+    if (unsupportedTarget)
+      throw backendError(
+        AuthPeerReadUnsupportedCode,
+        "The environment holding this thread runs a Pathway version that cannot limit remote reads. Update Pathway there to read it remotely.",
+      );
     return null;
   },
 });
@@ -370,6 +400,12 @@ export const validate = mutation({
       now,
     );
     if (invalid !== null || membership === null) return REFUSED;
+    // The target may have been downgraded since issue; never hand an old target a read grant.
+    if (
+      grant.threadAccess === "read" &&
+      (registration === null || !enforcesPeerReadGrants(registration))
+    )
+      return REFUSED;
 
     await ctx.db.patch(grant._id, { consumedAt: now, consumer: relay.subject });
     return {

@@ -8,6 +8,7 @@ import schema from "../convex/schema.ts";
 import { hashConnectGrantToken } from "./connectGrants.ts";
 
 const RELAY_ISSUER = "https://relay.example.test";
+const CONNECT_GRANT_REFUSED = { status: "refused", code: "connect-grant-refused" } as const;
 process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
 process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY_ISSUER}/.well-known/jwks.json`;
 
@@ -27,6 +28,22 @@ function harness() {
 }
 type Harness = ReturnType<typeof harness>;
 
+function asRelay(t: Harness) {
+  return t.withIdentity({
+    issuer: RELAY_ISSUER,
+    subject: "pathway-relay",
+    tokenIdentifier: `${RELAY_ISSUER}|pathway-relay`,
+    tokenKind: "relay-control-plane",
+  });
+}
+
+async function issueGrant(t: Harness, access: "read" | "send") {
+  return await asEnvironment(t).action(api.connectGrants.issueThreadAccess, {
+    threadId: THREAD,
+    access,
+  });
+}
+
 function asEnvironment(t: Harness, thumbprint = "thumb-caller") {
   return t.withIdentity({
     issuer: RELAY_ISSUER,
@@ -39,7 +56,11 @@ function asEnvironment(t: Harness, thumbprint = "thumb-caller") {
 async function seed(
   t: Harness,
   targetPermissions: string[],
-  options: { readonly linkedTo?: "owner" | "manager" | null } = {},
+  options: {
+    readonly linkedTo?: "owner" | "manager" | null;
+    /** The target's `peerReadGrants` capability; `"absent"` models a pre-capability server. */
+    readonly targetReadGrants?: unknown;
+  } = {},
 ) {
   return await t.run(async (ctx) => {
     const userId = await ctx.db.insert("users", {
@@ -108,7 +129,14 @@ async function seed(
         companyId,
         environmentId,
         publicKeyThumbprint: environmentId === CALLER ? "thumb-caller" : "thumb-target",
-        descriptor: { environmentId, label: environmentId },
+        descriptor: {
+          environmentId,
+          label: environmentId,
+          capabilities:
+            environmentId === TARGET && options.targetReadGrants !== "absent"
+              ? { repositoryIdentity: true, peerReadGrants: options.targetReadGrants ?? true }
+              : { repositoryIdentity: true },
+        },
         relayLinkState: "linked",
         managedEndpointAvailable: true,
         lastSeenAt: NOW,
@@ -150,7 +178,7 @@ async function seed(
     const home = await company("1", ["environments.read"]);
     const other = await company("2", targetPermissions);
     await register("1", home.companyId, CALLER, home.membershipId);
-    await register("2", other.companyId, TARGET, other.membershipId);
+    const targetRegistration = await register("2", other.companyId, TARGET, other.membershipId);
     await ctx.db.insert("agentThreads", {
       id: `${TARGET}:${THREAD}`,
       companyId: other.companyId,
@@ -161,7 +189,7 @@ async function seed(
       shell: {},
       updatedAt: NOW,
     });
-    return { targetMembershipId: other.membershipId };
+    return { targetMembershipId: other.membershipId, targetRegistrationId: targetRegistration };
   });
 }
 
@@ -274,5 +302,57 @@ describe("thread access grants", () => {
         .withIdentity({ issuer: "https://clerk.example.test", subject: "owner" })
         .action(api.connectGrants.issueThreadAccess, { threadId: THREAD, access: "read" }),
     ).rejects.toThrow(/Only an environment/u);
+  });
+
+  describe("mixed-version targets", () => {
+    for (const [label, targetReadGrants] of [
+      ["absent", "absent"],
+      ["false", false],
+      ["not a boolean", "yes"],
+    ] as const) {
+      it(`fails closed when the target's read-grant support is ${label}`, async () => {
+        const t = harness();
+        await seed(t, ["environments.read", "remoteAgents.control"], { targetReadGrants });
+        await expect(issueGrant(t, "read")).rejects.toThrow(/cannot limit remote reads/u);
+        const stored = await t.run(async (ctx) => ctx.db.query("connectGrants").collect());
+        expect(stored).toEqual([]);
+        // Sends already carry full peer access on every version, so they are unaffected.
+        await expect(issueGrant(t, "send")).resolves.toMatchObject({ environmentId: TARGET });
+      });
+    }
+
+    it("refuses to redeem a read grant after its target stops enforcing read-only access", async () => {
+      const t = harness();
+      const { targetRegistrationId } = await seed(t, ["environments.read", "remoteAgents.control"]);
+      const read = await issueGrant(t, "read");
+      const send = await issueGrant(t, "send");
+      await t.run(async (ctx) => {
+        const registration = await ctx.db.get(targetRegistrationId);
+        await ctx.db.patch(targetRegistrationId, {
+          descriptor: { ...registration!.descriptor, capabilities: { repositoryIdentity: true } },
+        });
+      });
+      const validate = async (token: string) =>
+        await asRelay(t).mutation(api.connectGrants.validate, {
+          tokenHash: await hashConnectGrantToken(token),
+        });
+
+      await expect(validate(read!.token)).resolves.toEqual(CONNECT_GRANT_REFUSED);
+      await expect(validate(send!.token)).resolves.toMatchObject({
+        status: "accepted",
+        permission: "remoteAgents.control",
+      });
+    });
+
+    it("redeems a read grant for a target that enforces read-only access", async () => {
+      const t = harness();
+      await seed(t, ["environments.read"]);
+      const read = await issueGrant(t, "read");
+      await expect(
+        asRelay(t).mutation(api.connectGrants.validate, {
+          tokenHash: await hashConnectGrantToken(read!.token),
+        }),
+      ).resolves.toMatchObject({ status: "accepted", permission: "environments.read" });
+    });
   });
 });

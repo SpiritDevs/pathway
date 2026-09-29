@@ -80,6 +80,7 @@ const descriptor = (
     repositoryIdentity: true,
     projectDirectoryInspection,
     connectionProbe: true,
+    peerReadGrants: true,
     attachmentUploads: true,
     fileAttachments: { maxUploadBytes: 52_428_800 },
     threadPullRequestAttachments: true,
