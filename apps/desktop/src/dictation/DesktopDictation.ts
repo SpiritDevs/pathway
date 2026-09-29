@@ -160,6 +160,9 @@ const make = Effect.gen(function* () {
       ...widgetSize,
       frame: false,
       transparent: true,
+      backgroundColor: "#00000000",
+      // Native rounding gives the frameless panel an opaque macOS window backdrop around the pill.
+      roundedCorners: false,
       resizable: false,
       minimizable: false,
       maximizable: false,

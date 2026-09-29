@@ -58,6 +58,11 @@ func runSelfTests() {
     }
     check(!TextFieldAccess(role: kAXTextFieldRole, subrole: kAXSecureTextFieldSubrole).permitsPaste, "password fields are rejected")
     check(!TextFieldAccess(role: kAXStaticTextRole).permitsPaste, "static text cannot receive dictation")
+    check(TextInsertion.pasteLanded(before: CFRange(location: 4, length: 0), after: CFRange(location: 15, length: 0)), "caret advanced by the pasted text confirms insertion")
+    check(TextInsertion.pasteLanded(before: CFRange(location: 4, length: 0), after: CFRange(location: 12, length: 0)), "editor-normalized paste still confirms insertion")
+    check(TextInsertion.pasteLanded(before: CFRange(location: 4, length: 6), after: CFRange(location: 9, length: 0)), "replacing a selection confirms insertion")
+    check(!TextInsertion.pasteLanded(before: CFRange(location: 4, length: 0), after: CFRange(location: 4, length: 0)), "an unmoved caret is not confirmation")
+    check(!TextInsertion.pasteLanded(before: CFRange(location: 4, length: 6), after: CFRange(location: 4, length: 6)), "an untouched selection is not confirmation")
     check(!TextFieldAccess(role: kAXButtonRole, editable: true).permitsPaste, "editable flag cannot turn a button into a text field")
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pathway-host-test-\(UUID())")
     try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)

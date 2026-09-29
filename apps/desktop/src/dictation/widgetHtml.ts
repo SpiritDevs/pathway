@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDate:off globalTimers:off - This script runs in the isolated overlay without an Effect runtime.
+// @effect-diagnostics globalDate:off globalTimers:off globalRandom:off - This script runs in the isolated overlay without an Effect runtime.
 import type {
   DictationBridge,
   DictationCommand,
@@ -36,6 +36,9 @@ function mountDictationOverlay() {
   let dismissDuration = 5000;
   let dismissTick = 0;
   let dismissAfterCopy = false;
+  let collapseTimer: ReturnType<typeof setTimeout> | undefined;
+  let shownView = "";
+  let meter = 0;
   function stopDismissTimer() {
     clearInterval(dismissTimer);
     dismissTimer = undefined;
@@ -93,6 +96,7 @@ function mountDictationOverlay() {
     preferredSize = next;
     bridge.resize?.(width, height);
   }
+  /** Grows the window before the pill animates open, and shrinks it only after the pill has closed. */
   function updateIdle() {
     const pill = root.querySelector<HTMLElement>(".idle");
     const handle = root.querySelector<HTMLButtonElement>(".idle-handle");
@@ -100,12 +104,23 @@ function mountDictationOverlay() {
     if (!pill || !handle || !controls) return;
     const expanded = resultHovered || resultFocused;
     const handleFocused = document.activeElement === handle;
+    clearTimeout(collapseTimer);
     pill.className = expanded ? "pill idle" : "pill idle compact";
     handle.setAttribute("aria-expanded", String(expanded));
-    controls.hidden = !expanded;
-    if (expanded && handleFocused) controls.querySelector<HTMLButtonElement>("button")?.focus();
-    handle.hidden = expanded;
-    size(expanded ? 296 : 80, expanded ? 72 : 32);
+    if (expanded) {
+      size(296, 72);
+      controls.hidden = false;
+      if (handleFocused) controls.querySelector<HTMLButtonElement>("button")?.focus();
+      handle.hidden = true;
+      return;
+    }
+    const collapse = () => {
+      controls.hidden = true;
+      handle.hidden = false;
+      size(80, 32);
+    };
+    if (controls.hidden) collapse();
+    else collapseTimer = setTimeout(collapse, 220);
   }
   async function execute(command: DictationCommand) {
     actionError = null;
@@ -309,12 +324,16 @@ function mountDictationOverlay() {
           : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
       if (duration.textContent !== label) duration.textContent = label;
     }
-    const level = Math.round(Math.min(1, Math.max(0, state.level)) * 12);
-    for (const [index, bar] of Array.from(
-      document.querySelectorAll<HTMLElement>(".wave-bar"),
-    ).entries()) {
-      const height = `${2 + Math.round(level * (0.5 + Math.sin(index * 2.1) * 0.45))}px`;
-      if (bar.style.height !== height) bar.style.height = height;
+    // Level maps -60..0 dBFS to 0..1. Speech sits around 0.5-0.75, so gate room noise and
+    // stretch that range. Rise fast and fall slower so syllables read as movement.
+    const target = Math.min(1, Math.max(0, (state.level - 0.3) / 0.42));
+    meter = target > meter ? target : meter * 0.55 + target * 0.45;
+    const bars = Array.from(document.querySelectorAll<HTMLElement>(".wave-bar"));
+    const middle = (bars.length - 1) / 2;
+    for (const [index, bar] of bars.entries()) {
+      const envelope = 1 - (Math.abs(index - middle) / (middle + 1)) * 0.55;
+      const scale = Math.max(0.16, meter * envelope * (0.55 + Math.random() * 0.45));
+      bar.style.transform = `scaleY(${scale.toFixed(2)})`;
     }
   }
   function render(force = false) {
@@ -338,6 +357,18 @@ function mountDictationOverlay() {
       return;
     }
     signature = nextSignature;
+    clearTimeout(collapseTimer);
+    // Animate a view in when it first appears, not when an update rebuilds the same view.
+    const view = recentOpen
+      ? "recent"
+      : actionError
+        ? "error"
+        : state.phase === "starting"
+          ? "recording"
+          : state.phase;
+    root.className = view === shownView ? "" : "enter";
+    if (view !== shownView) meter = 0;
+    shownView = view;
     root.replaceChildren();
     if (!state.authenticated || !state.supported || !state.preferences.enabled) {
       size(112, 48);
@@ -427,12 +458,11 @@ function mountDictationOverlay() {
     } else if (state.phase === "processing") {
       const pill = element("div", "pill processing");
       pill.append(
-        icon("mic"),
         element("span", "processing-label", "Transcribing…"),
         button("Cancel processing", "close", () => void execute({ type: "cancel" }), "round", true),
       );
       root.append(pill);
-      size(264, 72);
+      size(176, 52);
     } else if (state.preferences.showIdleBar) {
       const pill = element("div", "pill idle");
       pill.setAttribute("aria-label", "Dictation controls");
@@ -443,6 +473,7 @@ function mountDictationOverlay() {
       handle.setAttribute("aria-controls", "idle-controls");
       const controls = element("div", "idle-controls");
       controls.id = "idle-controls";
+      controls.hidden = true;
       controls.append(
         button("Record", "mic", () => void execute({ type: "start", mode: "locked" })),
         element("span", "divider"),
@@ -560,6 +591,6 @@ export function createDictationWidgetHtml(): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pathway dictation</title>
 <style>
-*{box-sizing:border-box}[hidden]{display:none!important}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#f5f5f6;font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{display:flex;align-items:flex-end;justify-content:center;padding:12px}button{font:inherit;color:inherit;border:0;cursor:pointer;background:transparent;display:inline-flex;align-items:center;justify-content:center;gap:7px;border-radius:20px;padding:8px 10px;white-space:nowrap;-webkit-app-region:no-drag}button:hover{background:#29292d}button:focus-visible{outline:2px solid #c1b5fc;outline-offset:2px}button:disabled{opacity:.4;pointer-events:none}h2,p{margin:0}#widget{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:9px;max-width:100%;max-height:100%}.icon{display:inline-flex;width:16px;height:16px;flex-shrink:0}.icon svg{width:100%;height:100%}.pill{display:flex;align-items:center;justify-content:center;gap:10px;background:#101012;border:1px solid #323236;border-radius:99px;box-shadow:0 4px 12px #0005;flex-shrink:0;min-height:44px;padding:5px 8px}.idle{height:48px;width:272px;padding:5px 8px;gap:6px}.idle-controls{display:flex;align-items:center;gap:6px}.idle button{height:36px;font-size:12px}.idle.compact{width:44px;height:8px;min-height:8px;padding:0;background:#10101266;border-color:#ffffff60;box-shadow:none}.idle .idle-handle{width:100%;height:100%;padding:0}.idle-action{width:36px;padding:8px;flex-shrink:0}.divider{height:18px;width:1px;background:#39393e;margin:0 3px}.round{height:29px;width:29px;padding:6px;flex-shrink:0}.recording{gap:10px;padding:1px 6px;min-height:24px;height:24px}.recording .round{height:20px;width:20px;padding:3px}.recording .icon{width:12px;height:12px}.recording .wave{height:14px}.dismiss{position:relative}.dismiss-countdown{position:absolute;inset:0;pointer-events:none}.dismiss-countdown svg{width:100%;height:100%}.cutoff-reveal{animation:cutoff-reveal .25s ease-out}@keyframes cutoff-reveal{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}.accept{background:#eeedf1;color:#141416}.accept:hover{background:#fff}.wave{height:26px;display:flex;align-items:center;justify-content:center;gap:3px;width:auto}.wave-bar{display:block;width:3px;height:4px;border-radius:3px;background:#eeeeef}.duration{font-size:11px;font-variant-numeric:tabular-nums;color:#aaaab3;min-width:30px}.hint{font-size:10px;letter-spacing:.01em;background:#131315;color:#c5c5cc;border:1px solid #34343a;padding:5px 10px;border-radius:12px}.processing{padding-left:16px;gap:12px}.processing-label{font-size:12px;color:#d4d4db;padding-right:6px}.panel{width:380px;max-width:100%;max-height:100%;background:#111113;border:1px solid #35353b;box-shadow:0 4px 12px #0005;border-radius:18px;overflow:hidden;display:flex;flex-direction:column}.result,.failure{width:396px}.panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px 8px 18px;flex-shrink:0}.panel h2{font-size:13px;font-weight:600;letter-spacing:-.1px}.panel .round{color:#a3a3ad}.description{font-size:11px;line-height:1.55;color:#a8a8b2;padding:0 18px 10px}.transcript{white-space:pre-wrap;overflow-wrap:anywhere;overflow-y:auto;padding:5px 18px 14px;font-size:14px;line-height:1.6;user-select:text;min-height:44px;flex:1}.panel-footer{padding:10px 14px;border-top:1px solid #29292f;display:flex;justify-content:flex-end;gap:7px;flex-shrink:0}.primary{background:#eae9ef;color:#131315;border-radius:9px;font-size:12px;padding:8px 12px}.primary:hover{background:#fff}.subtle{color:#c8c8d1;font-size:11px;border-radius:8px}.recent-row{display:flex;gap:14px;align-items:center;padding:12px 16px;border-top:1px solid #26262c;min-height:70px}.recent-content{min-width:0;flex:1}.recent-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:12px;line-height:1.45;color:#dedee5;overflow-wrap:anywhere}.meta{display:block;margin-top:5px;color:#83838f;font-size:10px}.empty{font-size:12px;line-height:1.6;color:#9999a5;padding:22px 18px}.error{color:#ffb0b5;font-size:12px;line-height:1.55;padding:8px 18px 16px;overflow-y:auto}.recent{overflow-y:auto}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+*{box-sizing:border-box}[hidden]{display:none!important}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#f5f5f6;font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{display:flex;align-items:flex-end;justify-content:center;padding:12px}button{font:inherit;color:inherit;border:0;cursor:pointer;background:transparent;display:inline-flex;align-items:center;justify-content:center;gap:7px;border-radius:20px;padding:8px 10px;white-space:nowrap;-webkit-app-region:no-drag;transition:background-color .12s ease}button:hover{background:#29292d}button:focus-visible{outline:2px solid #c1b5fc;outline-offset:2px}button:disabled{opacity:.4;pointer-events:none}h2,p{margin:0}#widget{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:9px;max-width:100%;max-height:100%}.icon{display:inline-flex;width:16px;height:16px;flex-shrink:0}.icon svg{width:100%;height:100%}#widget.enter>*{animation:enter .22s cubic-bezier(.2,.9,.25,1)}@keyframes enter{from{opacity:0;transform:translateY(6px) scale(.97)}}.pill{display:flex;align-items:center;justify-content:center;gap:10px;background:#101012;border:1px solid #323236;border-radius:99px;box-shadow:0 2px 8px #0004;flex-shrink:0;min-height:44px;padding:5px 8px;transform-origin:50% 100%}.idle{height:48px;min-height:0;width:272px;padding:5px 8px;gap:6px;overflow:hidden;transition:width .28s cubic-bezier(.2,.9,.25,1),height .28s cubic-bezier(.2,.9,.25,1),padding .28s cubic-bezier(.2,.9,.25,1),background-color .2s,border-color .2s,box-shadow .2s;transition-delay:40ms}.idle.compact{width:44px;height:8px;padding:0;background:#16161aa6;border-color:#ffffff85;box-shadow:0 1px 3px #0003;transition-duration:.2s;transition-delay:0s;transition-timing-function:cubic-bezier(.4,0,.2,1)}.idle-controls{display:flex;align-items:center;gap:6px;flex-shrink:0;transition:opacity .16s ease-out .12s}@starting-style{.idle-controls{opacity:0}}.idle.compact .idle-controls{opacity:0;transition:opacity .08s ease-in}.idle button{height:36px;font-size:12px}.idle .idle-handle{width:100%;height:100%;padding:0;border-radius:inherit}.idle .idle-handle:hover{background:transparent}.idle-action{width:36px;padding:8px;flex-shrink:0}.divider{height:18px;width:1px;background:#39393e;margin:0 3px}.round{height:29px;width:29px;padding:6px;flex-shrink:0}.recording{gap:10px;padding:1px 6px;min-height:24px;height:24px}.recording .round{height:20px;width:20px;padding:3px}.recording .icon{width:12px;height:12px}.dismiss{position:relative}.dismiss-countdown{position:absolute;inset:0;pointer-events:none}.dismiss-countdown svg{width:100%;height:100%}.cutoff-reveal{animation:cutoff-reveal .25s ease-out}@keyframes cutoff-reveal{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}.accept{background:#eeedf1;color:#141416}.accept:hover{background:#fff}.wave{height:14px;display:flex;align-items:center;justify-content:center;gap:3px}.wave-bar{display:block;width:3px;height:100%;border-radius:2px;background:#eeeeef;transform:scaleY(.16);transition:transform 90ms ease-out}.duration{font-size:11px;font-variant-numeric:tabular-nums;color:#aaaab3;min-width:30px}.hint{font-size:10px;letter-spacing:.01em;background:#131315;color:#c5c5cc;border:1px solid #34343a;padding:5px 10px;border-radius:12px}.processing{height:28px;min-height:28px;padding:0 4px 0 12px;gap:8px}.processing .round{height:20px;width:20px;padding:3px}.processing .icon{width:12px;height:12px}.processing-label{font-size:12px;color:#d4d4db}.panel{width:380px;max-width:100%;max-height:100%;background:#111113;border:1px solid #35353b;box-shadow:0 4px 12px #0005;border-radius:18px;overflow:hidden;display:flex;flex-direction:column}.result,.failure{width:396px}.panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px 8px 18px;flex-shrink:0}.panel h2{font-size:13px;font-weight:600;letter-spacing:-.1px}.panel .round{color:#a3a3ad}.description{font-size:11px;line-height:1.55;color:#a8a8b2;padding:0 18px 10px}.transcript{white-space:pre-wrap;overflow-wrap:anywhere;overflow-y:auto;padding:5px 18px 14px;font-size:14px;line-height:1.6;user-select:text;min-height:44px;flex:1}.panel-footer{padding:10px 14px;border-top:1px solid #29292f;display:flex;justify-content:flex-end;gap:7px;flex-shrink:0}.primary{background:#eae9ef;color:#131315;border-radius:9px;font-size:12px;padding:8px 12px}.primary:hover{background:#fff}.subtle{color:#c8c8d1;font-size:11px;border-radius:8px}.recent-row{display:flex;gap:14px;align-items:center;padding:12px 16px;border-top:1px solid #26262c;min-height:70px}.recent-content{min-width:0;flex:1}.recent-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:12px;line-height:1.45;color:#dedee5;overflow-wrap:anywhere}.meta{display:block;margin-top:5px;color:#83838f;font-size:10px}.empty{font-size:12px;line-height:1.6;color:#9999a5;padding:22px 18px}.error{color:#ffb0b5;font-size:12px;line-height:1.55;padding:8px 18px 16px;overflow-y:auto}.recent{overflow-y:auto}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body><main id="widget" aria-label="Pathway dictation"></main><script>(${mountDictationOverlay.toString()})();</script></body></html>`;
 }

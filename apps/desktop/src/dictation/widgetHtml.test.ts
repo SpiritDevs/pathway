@@ -134,6 +134,8 @@ async function mount(state: DictationState) {
     document,
     setInterval,
     clearInterval,
+    setTimeout,
+    clearTimeout,
     Date,
   });
   await bridge.getState();
@@ -290,10 +292,32 @@ describe("dictation overlay", () => {
     overlay.root.trigger("pointerenter");
     expect(overlay.bridge.resize).toHaveBeenCalledTimes(1);
     overlay.root.trigger("pointerleave");
+    // The window stays large until the pill has animated closed.
+    expect(overlay.bridge.resize).toHaveBeenLastCalledWith(296, 72);
+    vi.advanceTimersByTime(220);
     expect(overlay.root.visible()).not.toContain(record);
     expect(overlay.bridge.resize).toHaveBeenLastCalledWith(80, 32);
     expect(overlay.root.replacements).toBe(replacements);
     expect(overlay.root.all()).toContain(record);
+  });
+  it("keeps the idle window open when the pointer returns mid-collapse", async () => {
+    const overlay = await mount(makeDictationFixture());
+    overlay.root.trigger("pointerenter");
+    overlay.root.trigger("pointerleave");
+    vi.advanceTimersByTime(100);
+    overlay.root.trigger("pointerenter");
+    vi.advanceTimersByTime(500);
+    expect(overlay.bridge.resize).toHaveBeenLastCalledWith(296, 72);
+  });
+  it("does not shrink a recording that starts while the idle pill is collapsing", async () => {
+    const state = makeDictationFixture();
+    const overlay = await mount(state);
+    overlay.root.trigger("pointerenter");
+    overlay.root.trigger("pointerleave");
+    overlay.emit(makeDictationFixture("recording-locked"));
+    const size = overlay.bridge.resize.mock.lastCall;
+    vi.advanceTimersByTime(500);
+    expect(overlay.bridge.resize.mock.lastCall).toEqual(size);
   });
   it("keeps controls expanded while focus moves within them and collapses on focus exit", async () => {
     const overlay = await mount(makeDictationFixture());
@@ -303,6 +327,7 @@ describe("dictation overlay", () => {
     overlay.root.trigger("focusout", overlay.root.querySelector(".idle-action")!);
     expect(overlay.bridge.resize).toHaveBeenLastCalledWith(296, 72);
     overlay.root.trigger("focusout");
+    vi.advanceTimersByTime(220);
     expect(overlay.bridge.resize).toHaveBeenLastCalledWith(80, 32);
   });
   it.each(["recording-locked", "processing"])(
@@ -328,6 +353,24 @@ describe("dictation overlay", () => {
     expect(overlay.bridge.execute).toHaveBeenCalledWith({ type: "stop" });
     overlay.click("Cancel recording");
     expect(overlay.bridge.execute).toHaveBeenCalledWith({ type: "cancel" });
+  });
+  it("keeps the meter flat for room noise and moves it for speech", async () => {
+    const state = makeDictationFixture("recording-locked");
+    const overlay = await mount(state);
+    const scales = () =>
+      overlay.root
+        .all()
+        .filter((node) => node.className === "wave-bar")
+        .map((node) => Number(node.style.transform?.match(/scaleY\(([\d.]+)\)/)?.[1]));
+    overlay.emit({ ...state, level: 0.2 });
+    expect(Math.max(...scales())).toBeLessThanOrEqual(0.16);
+    overlay.emit({ ...state, level: 0.65 });
+    expect(Math.max(...scales())).toBeGreaterThan(0.4);
+  });
+  it("shows only the label and cancel while transcribing", async () => {
+    const overlay = await mount(makeDictationFixture("processing"));
+    const pill = overlay.root.querySelector(".processing")!;
+    expect(pill.children.map((node) => node.className)).toEqual(["processing-label", "round"]);
   });
   it("does not copy a result until the user clicks Copy and renders transcript as text", async () => {
     const state = makeDictationFixture("result");
