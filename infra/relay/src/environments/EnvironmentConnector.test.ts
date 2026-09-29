@@ -933,9 +933,20 @@ describe("mintScope", () => {
     expect(
       EnvironmentConnector.mintScope({
         initiatingEnvironmentId: "env-initiator" as never,
-        connectGrant: grant("environments.read"),
+        connectGrant: { ...grant("environments.read"), threadAccess: "read" },
       }),
     ).toBe("environment:connect-read");
+  });
+
+  it("keeps the connect scope for untagged grants so released targets still accept them", () => {
+    // A caller-supplied status-query grant carries environments.read but is not a thread grant.
+    for (const permission of ["environments.read", "remoteAgents.control"] as const)
+      expect(
+        EnvironmentConnector.mintScope({
+          initiatingEnvironmentId: "env-initiator" as never,
+          connectGrant: grant(permission),
+        }),
+      ).toBe("environment:connect");
   });
 
   it("signs thread-send grants from peer environments with the send mint scope", () => {
@@ -957,13 +968,9 @@ describe("mintScope", () => {
   it("keeps the ordinary connect scope for other grants and for people", () => {
     expect(
       EnvironmentConnector.mintScope({
-        initiatingEnvironmentId: "env-initiator" as never,
-        connectGrant: grant("remoteAgents.control"),
+        connectGrant: { ...grant("environments.read"), threadAccess: "read" },
       }),
     ).toBe("environment:connect");
-    expect(EnvironmentConnector.mintScope({ connectGrant: grant("environments.read") })).toBe(
-      "environment:connect",
-    );
     expect(
       EnvironmentConnector.mintScope({ initiatingEnvironmentId: "env-initiator" as never }),
     ).toBe("environment:connect");

@@ -367,22 +367,18 @@ describe("cloud mint credential handler", () => {
     }),
   );
 
-  it.effect("issues only read scopes to a peer holding a thread-read grant", () =>
+  it.effect("keeps ordinary peer scopes for untagged grants signed with the connect scope", () =>
     Effect.gen(function* () {
-      const reader = yield* makeMintHarness({
-        environmentSubject: true,
-        connectGrant: { ...connectGrant, permission: AuthPeerReadGrantPermission },
-      });
-      yield* reader.run;
-      expect(reader.pairingInputs[0]?.scopes).toEqual(AuthPeerReadScopes);
-
-      // A remote-dispatch grant signed with the ordinary connect scope keeps the ordinary peer scopes.
-      const sender = yield* makeMintHarness({
-        environmentSubject: true,
-        connectGrant: { ...connectGrant, permission: AuthPeerSendGrantPermission },
-      });
-      yield* sender.run;
-      expect(sender.pairingInputs[0]?.scopes).toEqual(AuthPeerEnvironmentScopes);
+      // Caller-supplied remote-dispatch grants (status queries use environments.read) predate thread
+      // grants; older callers still request the ordinary peer scopes from updated targets.
+      for (const permission of [AuthPeerReadGrantPermission, AuthPeerSendGrantPermission]) {
+        const peer = yield* makeMintHarness({
+          environmentSubject: true,
+          connectGrant: { ...connectGrant, permission },
+        });
+        yield* peer.run;
+        expect(peer.pairingInputs[0]?.scopes).toEqual(AuthPeerEnvironmentScopes);
+      }
     }),
   );
 

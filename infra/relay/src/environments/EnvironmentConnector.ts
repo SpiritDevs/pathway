@@ -1,5 +1,4 @@
 import {
-  AuthPeerReadGrantPermission,
   EnvironmentHttpBadRequestError,
   EnvironmentHttpConflictError,
   EnvironmentHttpForbiddenError,
@@ -157,21 +156,22 @@ type EnvironmentConnectInput = EnvironmentConnectIdentity & {
 };
 
 /**
- * Peer environments presenting thread grants get a thread-access mint scope, which targets that
- * cannot limit thread access reject. Read grants are also recognized by permission, for grants
- * validated before `threadAccess` existed. Everything else keeps the ordinary connect scope.
+ * Peer environments presenting thread grants (tagged with `threadAccess` by Pathway Cloud) get a
+ * thread-access mint scope, which targets that cannot limit thread access reject. Untagged grants,
+ * including caller-supplied remote-dispatch grants, keep the ordinary connect scope.
  */
 export function mintScope(
   input: Pick<EnvironmentConnectInput, "initiatingEnvironmentId" | "connectGrant">,
 ): RelayCloudMintCredentialProofPayload["scope"][number] {
   if (input.initiatingEnvironmentId === undefined) return "environment:connect";
-  if (
-    input.connectGrant?.threadAccess === "read" ||
-    input.connectGrant?.permission === AuthPeerReadGrantPermission
-  )
-    return RelayEnvironmentConnectReadScope;
-  if (input.connectGrant?.threadAccess === "send") return RelayEnvironmentConnectSendScope;
-  return "environment:connect";
+  switch (input.connectGrant?.threadAccess) {
+    case "read":
+      return RelayEnvironmentConnectReadScope;
+    case "send":
+      return RelayEnvironmentConnectSendScope;
+    case undefined:
+      return "environment:connect";
+  }
 }
 
 export class EnvironmentConnector extends Context.Service<
