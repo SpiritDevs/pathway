@@ -14,6 +14,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
@@ -74,65 +75,118 @@ export const getWindowFullscreenState = DesktopIpc.makeSyncIpcMethod({
   }),
 });
 
+const readLocalEnvironmentBootstraps = Effect.gen(function* () {
+  const pool = yield* DesktopBackendPool.DesktopBackendPool;
+  const instances = yield* pool.list;
+  const bootstraps: DesktopEnvironmentBootstrap[] = [];
+  for (const instance of instances) {
+    const isPrimary = instance.id === PRIMARY_LOCAL_ENVIRONMENT_ID;
+    const config = yield* instance.currentConfig;
+    const snapshot = yield* instance.snapshot;
+    // A secondary backend (e.g. a parallel WSL backend) that hasn't produced
+    // a config yet (mid-registration, before its first start cycle) or that
+    // is retrying a *transient* preflight failure (WSL VM still booting, a
+    // not-yet-built linux server entry) is not listening on a port. We
+    // surface it as a *pending* bootstrap (null endpoints, no token) so the
+    // renderer can show a "Connecting…" indicator while it retries — null
+    // endpoints keep the renderer from dialing the dead port, avoiding the
+    // needless /api/auth/bootstrap/bearer error cycles a real endpoint would
+    // trigger.
+    if (Option.isNone(config) || Option.isSome(config.value.preflightFailure)) {
+      // Skip the primary (same-origin, no "connecting" affordance) and skip a
+      // secondary whose preflight failed *fatally* (no node, wrong version,
+      // missing build tools): it has stopped retrying, so an indefinite
+      // "Connecting…" would be misleading — its error is surfaced by the
+      // WSL-state UI instead.
+      const fatalPreflight =
+        Option.isSome(config) &&
+        Option.isSome(config.value.preflightFailure) &&
+        config.value.preflightFailure.value.fatal;
+      const stoppedPreflight =
+        Option.isSome(config) &&
+        Option.isSome(config.value.preflightFailure) &&
+        (!snapshot.desiredRunning || !snapshot.restartScheduled);
+      if (isPrimary || fatalPreflight || stoppedPreflight) continue;
+      bootstraps.push({
+        id: instance.id,
+        label: yield* instance.label,
+        runningDistro: null,
+        httpBaseUrl: null,
+        wsBaseUrl: null,
+      });
+      continue;
+    }
+    const { bootstrap, httpBaseUrl } = config.value;
+    const runningDistro = config.value.runningDistro ?? null;
+    bootstraps.push({
+      id: instance.id,
+      label: runningDistro === null ? yield* instance.label : `WSL (${runningDistro})`,
+      runningDistro,
+      httpBaseUrl: httpBaseUrl.href,
+      wsBaseUrl: toWebSocketBaseUrl(httpBaseUrl),
+      ...(bootstrap.desktopBootstrapToken
+        ? { bootstrapToken: bootstrap.desktopBootstrapToken }
+        : {}),
+    });
+  }
+  return bootstraps;
+});
+
 export const getLocalEnvironmentBootstraps = DesktopIpc.makeSyncIpcMethod({
   channel: IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL,
   result: Schema.Array(DesktopEnvironmentBootstrapSchema),
-  handler: Effect.fn("desktop.ipc.window.getLocalEnvironmentBootstraps")(function* () {
-    const pool = yield* DesktopBackendPool.DesktopBackendPool;
-    const instances = yield* pool.list;
-    const bootstraps: DesktopEnvironmentBootstrap[] = [];
-    for (const instance of instances) {
-      const isPrimary = instance.id === PRIMARY_LOCAL_ENVIRONMENT_ID;
-      const config = yield* instance.currentConfig;
-      const snapshot = yield* instance.snapshot;
-      // A secondary backend (e.g. a parallel WSL backend) that hasn't produced
-      // a config yet (mid-registration, before its first start cycle) or that
-      // is retrying a *transient* preflight failure (WSL VM still booting, a
-      // not-yet-built linux server entry) is not listening on a port. We
-      // surface it as a *pending* bootstrap (null endpoints, no token) so the
-      // renderer can show a "Connecting…" indicator while it retries — null
-      // endpoints keep the renderer from dialing the dead port, avoiding the
-      // needless /api/auth/bootstrap/bearer error cycles a real endpoint would
-      // trigger.
-      if (Option.isNone(config) || Option.isSome(config.value.preflightFailure)) {
-        // Skip the primary (same-origin, no "connecting" affordance) and skip a
-        // secondary whose preflight failed *fatally* (no node, wrong version,
-        // missing build tools): it has stopped retrying, so an indefinite
-        // "Connecting…" would be misleading — its error is surfaced by the
-        // WSL-state UI instead.
-        const fatalPreflight =
-          Option.isSome(config) &&
-          Option.isSome(config.value.preflightFailure) &&
-          config.value.preflightFailure.value.fatal;
-        const stoppedPreflight =
-          Option.isSome(config) &&
-          Option.isSome(config.value.preflightFailure) &&
-          (!snapshot.desiredRunning || !snapshot.restartScheduled);
-        if (isPrimary || fatalPreflight || stoppedPreflight) continue;
-        bootstraps.push({
-          id: instance.id,
-          label: yield* instance.label,
-          runningDistro: null,
-          httpBaseUrl: null,
-          wsBaseUrl: null,
-        });
-        continue;
-      }
-      const { bootstrap, httpBaseUrl } = config.value;
-      const runningDistro = config.value.runningDistro ?? null;
-      bootstraps.push({
-        id: instance.id,
-        label: runningDistro === null ? yield* instance.label : `WSL (${runningDistro})`,
-        runningDistro,
-        httpBaseUrl: httpBaseUrl.href,
-        wsBaseUrl: toWebSocketBaseUrl(httpBaseUrl),
-        ...(bootstrap.desktopBootstrapToken
-          ? { bootstrapToken: bootstrap.desktopBootstrapToken }
-          : {}),
-      });
+  handler: () =>
+    readLocalEnvironmentBootstraps.pipe(
+      Effect.withSpan("desktop.ipc.window.getLocalEnvironmentBootstraps"),
+    ),
+});
+
+const LOCAL_ENVIRONMENT_BOOTSTRAPS_WATCH_INTERVAL = "2 seconds";
+const localEnvironmentBootstrapsEquivalence = Schema.toEquivalence(
+  Schema.Array(DesktopEnvironmentBootstrapSchema),
+);
+
+/**
+ * Serve the local backend topology to renderers. The preload reads it synchronously once per
+ * window load; after that every change is pushed on LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL, so
+ * renderers never block on sync IPC to poll it. The sync read and the watcher publish through
+ * the same last-sent value, so a push that lands after a fresher sync read is always followed
+ * by a newer push.
+ */
+export const installLocalEnvironmentBootstraps = Effect.fn(
+  "desktop.ipc.window.installLocalEnvironmentBootstraps",
+)(function* () {
+  const ipc = yield* DesktopIpc.DesktopIpc;
+  const electronWindow = yield* ElectronWindow.ElectronWindow;
+  const published = yield* Ref.make(Option.none<ReadonlyArray<DesktopEnvironmentBootstrap>>());
+
+  // Untraced: the watcher runs every couple of seconds and must not flood the trace.
+  const publish = Effect.gen(function* () {
+    const bootstraps = yield* readLocalEnvironmentBootstraps;
+    const previous = yield* Ref.getAndSet(published, Option.some(bootstraps));
+    if (
+      Option.isNone(previous) ||
+      !localEnvironmentBootstrapsEquivalence(previous.value, bootstraps)
+    ) {
+      yield* electronWindow.sendAll(IpcChannels.LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL, bootstraps);
     }
     return bootstraps;
-  }),
+  });
+
+  yield* ipc.handleSync({
+    channel: getLocalEnvironmentBootstraps.channel,
+    handler: () =>
+      publish.pipe(Effect.withSpan("desktop.ipc.window.getLocalEnvironmentBootstraps")),
+  });
+  yield* publish.pipe(
+    Effect.tapError((error) =>
+      Effect.logWarning("Could not read the local environment topology.", { error }),
+    ),
+    Effect.ignore,
+    Effect.andThen(Effect.sleep(LOCAL_ENVIRONMENT_BOOTSTRAPS_WATCH_INTERVAL)),
+    Effect.forever,
+    Effect.forkScoped,
+  );
 });
 
 // Pull the distro selection out of a backend instance id like

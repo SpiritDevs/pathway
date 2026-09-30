@@ -20,7 +20,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import * as DesktopSavedEnvironments from "../settings/DesktopSavedEnvironments.ts";
@@ -383,6 +385,11 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const savedEnvironments = yield* DesktopSavedEnvironments.DesktopSavedEnvironments;
   const catalogPath = path.join(environment.stateDir, "connection-catalog.json");
+  // Plaintext this process last wrote, so re-saving an unchanged catalog skips the encrypt and
+  // atomic file replace. Writes are serialized (every window saves the catalog) so it always
+  // matches the file.
+  const lastWritten = yield* Ref.make(Option.none<string>());
+  const writeLock = yield* Semaphore.make(1);
   const encryptionAvailable = safeStorage.isEncryptionAvailable.pipe(
     Effect.mapError(
       (cause) =>
@@ -498,18 +505,34 @@ export const make = Effect.gen(function* () {
       if (!(yield* encryptionAvailable)) {
         return false;
       }
-      yield* writeCatalog(catalog);
-      return true;
-    }),
-    clear: fileSystem.remove(catalogPath, { force: true }).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Could not clear the desktop connection catalog.", {
-          catalogPath,
-          error,
+      return yield* writeLock.withPermits(1)(
+        Effect.gen(function* () {
+          const previous = yield* Ref.get(lastWritten);
+          if (Option.isSome(previous) && previous.value === catalog) {
+            return true;
+          }
+          yield* Ref.set(lastWritten, Option.none());
+          yield* writeCatalog(catalog);
+          yield* Ref.set(lastWritten, Option.some(catalog));
+          return true;
         }),
+      );
+    }),
+    clear: writeLock
+      .withPermits(1)(
+        Ref.set(lastWritten, Option.none()).pipe(
+          Effect.andThen(fileSystem.remove(catalogPath, { force: true })),
+        ),
+      )
+      .pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("Could not clear the desktop connection catalog.", {
+            catalogPath,
+            error,
+          }),
+        ),
+        Effect.withSpan("desktop.connectionCatalogStore.clear"),
       ),
-      Effect.withSpan("desktop.connectionCatalogStore.clear"),
-    ),
   });
 });
 

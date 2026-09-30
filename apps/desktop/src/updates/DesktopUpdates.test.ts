@@ -85,6 +85,40 @@ describe("DesktopUpdates", () => {
     }).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
+  it.effect("polls silently and backs off while checks keep failing", () => {
+    const harness = makeHarness({
+      checkForUpdates: Effect.fail(
+        new ElectronUpdater.ElectronUpdaterCheckForUpdatesError({
+          channel: "latest",
+          cause: new Error("offline"),
+        }),
+      ),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* TestClock.adjust(Duration.millis(15_000));
+        assert.equal(harness.checkCount(), 1);
+
+        // The first poll lands at 4m; each failure doubles the wait (8m, then 16m).
+        yield* TestClock.adjust(Duration.minutes(4));
+        assert.equal(harness.checkCount(), 2);
+        const sentBeforeBackoff = harness.sentStates.length;
+        yield* TestClock.adjust(Duration.minutes(7));
+        assert.equal(harness.checkCount(), 2);
+        yield* TestClock.adjust(Duration.minutes(1));
+        assert.equal(harness.checkCount(), 3);
+        yield* TestClock.adjust(Duration.minutes(16));
+        assert.equal(harness.checkCount(), 4);
+
+        const pollStates = harness.sentStates.slice(sentBeforeBackoff);
+        assert.isFalse(pollStates.some((state) => state.status === "checking"));
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it.effect("subscribe delivers the latest state plus subsequent changes", () => {
     const harness = makeHarness();
 

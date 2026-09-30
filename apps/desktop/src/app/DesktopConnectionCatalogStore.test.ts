@@ -109,6 +109,31 @@ describe("DesktopConnectionCatalogStore", () => {
     ),
   );
 
+  it.effect("skips rewriting an unchanged catalog until it is cleared", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "pathway-desktop-connection-catalog-test-",
+      });
+      const catalogPath = `${baseDir}/userdata/connection-catalog.json`;
+      const catalog = '{"schemaVersion":1,"targets":[]}';
+
+      yield* Effect.gen(function* () {
+        const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
+        assert.isTrue(yield* store.set(catalog));
+        const written = yield* fileSystem.readFileString(catalogPath);
+
+        yield* fileSystem.writeFileString(catalogPath, "sentinel");
+        assert.isTrue(yield* store.set(catalog));
+        assert.equal(yield* fileSystem.readFileString(catalogPath), "sentinel");
+
+        yield* store.clear;
+        assert.isTrue(yield* store.set(catalog));
+        assert.equal(yield* fileSystem.readFileString(catalogPath), written);
+      }).pipe(Effect.provide(makeLayer(baseDir)));
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.effect("does not persist when secure storage is unavailable", () =>
     withStore(
       Effect.gen(function* () {

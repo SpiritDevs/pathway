@@ -29,6 +29,7 @@ const SNAP_SHOT_EVENT_TYPES = new Set([
   "requested",
   "started",
   "ready",
+  "cancelled",
   "failed",
   "shortcut-changed",
 ]);
@@ -43,6 +44,23 @@ function isSnapShotEvent(value: unknown): value is DesktopSnapShotEvent {
 }
 
 exposeClerkBridge({ passkeys: true });
+
+type LocalEnvironmentBootstraps = ReturnType<DesktopBridge["getLocalEnvironmentBootstraps"]>;
+
+// The renderer resolves every primary-environment URL through this topology, synchronously.
+// Read it over sync IPC once, then keep it current from main's change pushes.
+let localEnvironmentBootstraps: LocalEnvironmentBootstraps | null = null;
+ipcRenderer.on(IpcChannels.LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL, (_event, value: unknown) => {
+  if (Array.isArray(value)) localEnvironmentBootstraps = value as LocalEnvironmentBootstraps;
+});
+
+function readLocalEnvironmentBootstraps(): LocalEnvironmentBootstraps {
+  if (localEnvironmentBootstraps !== null) return localEnvironmentBootstraps;
+  const result = ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);
+  if (!Array.isArray(result)) return [];
+  localEnvironmentBootstraps = result as LocalEnvironmentBootstraps;
+  return localEnvironmentBootstraps;
+}
 
 function unwrapEnsureSshEnvironmentResult(result: unknown) {
   if (
@@ -79,13 +97,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     }
     return result as ReturnType<DesktopBridge["getAppBranding"]>;
   },
-  getLocalEnvironmentBootstraps: () => {
-    const result = ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);
-    if (!Array.isArray(result)) {
-      return [];
-    }
-    return result as ReturnType<DesktopBridge["getLocalEnvironmentBootstraps"]>;
-  },
+  getLocalEnvironmentBootstraps: readLocalEnvironmentBootstraps,
   getLocalEnvironmentBearerToken: () =>
     ipcRenderer.invoke(IpcChannels.GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL),
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
