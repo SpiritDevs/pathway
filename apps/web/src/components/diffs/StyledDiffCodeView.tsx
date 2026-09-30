@@ -271,6 +271,25 @@ type StyledDiffCodeViewProps<LAnnotation> = (
   readonly viewerRef?: Ref<CodeViewHandle<LAnnotation>>;
 };
 
+// Module constants: Pierre compares options one level deep, so fresh nested objects would make
+// every parent render re-apply options and repaint the visible diffs.
+const DIFF_VIEW_ITEM_METRICS = {
+  diffHeaderHeight: 32,
+  hunkSeparatorHeight: 24,
+  // Pierre uses its general file spacing as a fallback in expanded-file layout paths.
+  // Keep it zero alongside the explicit paddingTop or expanding the first file can
+  // reintroduce the library's default 8px gap above its header.
+  spacing: 0,
+  paddingTop: 0,
+  // Unlike the gap above, the 8px under a file's last line is painted
+  // unconditionally by Pierre's stylesheet (`--diffs-gap-fallback`), so the metric has
+  // to count it: at zero every expanded file's virtual height ran 8px short of its
+  // rendered height, and the end of the list sat past the reachable scroll range —
+  // one clipped file row per expanded file above it.
+  paddingBottom: 8,
+};
+const DIFF_VIEW_LAYOUT = { paddingTop: 0, paddingBottom: 0, gap: 0 };
+
 /** The shared web CodeView surface: app styling and virtualized geometry stay paired here. */
 export function StyledDiffCodeView<LAnnotation = undefined>({
   options,
@@ -292,22 +311,8 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
       options={{
         ...options,
         unsafeCSS: DIFF_VIEW_UNSAFE_CSS,
-        itemMetrics: {
-          diffHeaderHeight: 32,
-          hunkSeparatorHeight: 24,
-          // Pierre uses its general file spacing as a fallback in expanded-file layout paths.
-          // Keep it zero alongside the explicit paddingTop or expanding the first file can
-          // reintroduce the library's default 8px gap above its header.
-          spacing: 0,
-          paddingTop: 0,
-          // Unlike the gap above, the 8px under a file's last line is painted
-          // unconditionally by Pierre's stylesheet (`--diffs-gap-fallback`), so the metric has
-          // to count it: at zero every expanded file's virtual height ran 8px short of its
-          // rendered height, and the end of the list sat past the reachable scroll range —
-          // one clipped file row per expanded file above it.
-          paddingBottom: 8,
-        },
-        layout: { paddingTop: 0, paddingBottom: 0, gap: 0 },
+        itemMetrics: DIFF_VIEW_ITEM_METRICS,
+        layout: DIFF_VIEW_LAYOUT,
       }}
     />
   );

@@ -4,6 +4,8 @@ import * as Option from "effect/Option";
 import type { ConvexClient } from "convex/browser";
 import type { FocusNotification } from "@spiritdevs/contracts/focus";
 import { makeFunctionReference } from "convex/server";
+import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
+import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/models";
 import {
   AlertPolicyRow,
   alertProjectScopeKey,
@@ -15,6 +17,7 @@ import { environmentProjects } from "../state/projects";
 import { environmentThreadShells } from "../state/threads";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { createOptimisticAlertPolicies } from "./optimisticPolicy";
+import { focusNotificationsAtom } from "../cloud/focusReadModel";
 
 export interface ThreadAlertMutations {
   upsert: (input: {
@@ -39,6 +42,28 @@ export const threadAlertPolicyScopesAtom = Atom.make<{
   readonly projectKeys: readonly string[];
   readonly threadKeys: readonly string[];
 } | null>(null).pipe(Atom.keepAlive);
+
+/**
+ * The local thread shells that notifications name, keyed by alert thread scope. Alert delivery
+ * reads only these, so activity on the other hundreds of threads never re-renders it.
+ */
+let previousNotifiedThreads: ReadonlyMap<string, EnvironmentThreadShell> = new Map();
+export const threadAlertNotifiedThreadsAtom = Atom.make((get) => {
+  const next = new Map<string, EnvironmentThreadShell>();
+  for (const row of get(focusNotificationsAtom)) {
+    const key = alertThreadScopeKey(row.environmentId, row.threadId);
+    if (next.has(key)) continue;
+    const thread = get(
+      environmentThreadShells.threadShellAtom(scopeThreadRef(row.environmentId, row.threadId)),
+    );
+    if (thread) next.set(key, thread);
+  }
+  const unchanged =
+    next.size === previousNotifiedThreads.size &&
+    [...next].every(([key, thread]) => previousNotifiedThreads.get(key) === thread);
+  if (!unchanged) previousNotifiedThreads = next;
+  return previousNotifiedThreads;
+});
 
 const scopesAtom = Atom.make((get) =>
   JSON.stringify({

@@ -4252,37 +4252,64 @@ export function reconcilePendingDraftSends(input: {
         !input.queuedThreadIds?.has(session.threadId) &&
         !input.queuedThreadKeys?.has(`${session.environmentId}:${session.threadId}`)
       ) {
-        const restored = toHydratedThreadDraft(
-          session.pendingSend.recoveryDraft ?? {
-            prompt: session.pendingSend.text,
-            attachments: [],
-          },
-        );
-        const current = state.draftsByThreadKey[draftKey];
-        // Reload can persist both the pending snapshot and the composer before
-        // send clears it. Keep overlapping content once while retaining new input.
-        if (composerDraftHasUserContent(current)) {
-          if (restored.prompt !== current!.prompt)
-            restored.prompt = [restored.prompt, current!.prompt].filter(Boolean).join("\n\n");
-          appendMissingDraftItems(restored.images, current!.images);
-          appendMissingDraftItems(restored.persistedAttachments, current!.persistedAttachments);
-          appendMissingDraftItems(restored.terminalContexts, current!.terminalContexts);
-          appendMissingDraftItems(restored.elementContexts, current!.elementContexts);
-          appendMissingDraftItems(restored.issueContexts, current!.issueContexts);
-          appendMissingDraftItems(restored.previewAnnotations, current!.previewAnnotations);
-          appendMissingDraftItems(restored.reviewComments, current!.reviewComments);
-        }
-        const next = edit();
-        next.draftsByThreadKey[draftKey] = restored;
-        next.draftThreadsByThreadKey[draftKey] = {
-          ...session,
-          pendingSend: null,
-          pendingSendNeedsReconciliation: false,
-          promotedTo: null,
-        };
+        restorePendingSendInto(edit(), draftKey, session.pendingSend);
       }
     }
     return state;
+  });
+}
+
+/** Moves a sent draft's message back into its composer and ends the pending send. */
+function restorePendingSendInto(
+  next: Pick<ComposerDraftStoreState, "draftsByThreadKey" | "draftThreadsByThreadKey">,
+  draftKey: string,
+  pendingSend: NonNullable<DraftSessionState["pendingSend"]>,
+) {
+  const restored = toHydratedThreadDraft(
+    pendingSend.recoveryDraft ?? {
+      prompt: pendingSend.text,
+      attachments: [],
+    },
+  );
+  const current = next.draftsByThreadKey[draftKey];
+  // Reload can persist both the pending snapshot and the composer before
+  // send clears it. Keep overlapping content once while retaining new input.
+  if (composerDraftHasUserContent(current)) {
+    if (restored.prompt !== current!.prompt)
+      restored.prompt = [restored.prompt, current!.prompt].filter(Boolean).join("\n\n");
+    appendMissingDraftItems(restored.images, current!.images);
+    appendMissingDraftItems(restored.persistedAttachments, current!.persistedAttachments);
+    appendMissingDraftItems(restored.terminalContexts, current!.terminalContexts);
+    appendMissingDraftItems(restored.elementContexts, current!.elementContexts);
+    appendMissingDraftItems(restored.issueContexts, current!.issueContexts);
+    appendMissingDraftItems(restored.previewAnnotations, current!.previewAnnotations);
+    appendMissingDraftItems(restored.reviewComments, current!.reviewComments);
+  }
+  next.draftsByThreadKey[draftKey] = restored;
+  next.draftThreadsByThreadKey[draftKey] = {
+    ...next.draftThreadsByThreadKey[draftKey]!,
+    pendingSend: null,
+    pendingSendNeedsReconciliation: false,
+    promotedTo: null,
+  };
+}
+
+/**
+ * The way out of a send that is waiting on an offline environment: the
+ * message returns to the draft's composer for editing or resending. If the
+ * environment already accepted it, the chat still appears once it connects.
+ */
+export function restorePendingDraftSend(draftKey: string): void {
+  useComposerDraftStore.setState((state) => {
+    const pendingSend = state.draftThreadsByThreadKey[draftKey]?.pendingSend;
+    if (!pendingSend) return state;
+    const next = {
+      ...state,
+      draftsByThreadKey: { ...state.draftsByThreadKey },
+      draftThreadsByThreadKey: { ...state.draftThreadsByThreadKey },
+    };
+    restorePendingSendInto(next, draftKey, pendingSend);
+    return next;
   });
 }
 

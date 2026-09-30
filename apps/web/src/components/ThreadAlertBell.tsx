@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { BellIcon, BellOffIcon } from "lucide-react";
 import {
@@ -12,6 +12,7 @@ import { ALERT_EVENT_LABELS, bulkAlertChoices, threadPolicyView } from "../threa
 import { Popover, PopoverPopup, PopoverTitle } from "./ui/popover";
 import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
+import { subscribeShortcutModifierState } from "../shortcutModifierState";
 
 export function AlertPolicyChoices({
   choices,
@@ -54,12 +55,10 @@ export function ThreadAlertBell({
   projectKey,
   threadKey,
   policies,
-  modifierHeld = false,
 }: {
   projectKey: string | null;
   threadKey: string;
   policies: readonly AlertPolicyRow[] | null;
-  modifierHeld?: boolean;
 }) {
   const mutations = useAtomValue(threadAlertMutationsAtom);
   const policiesReady = useAtomValue(threadAlertPoliciesReadyAtom);
@@ -94,10 +93,21 @@ export function ThreadAlertBell({
     // Crossing the gap from the bell into the popup must not close it.
     peekClose.current = setTimeout(closePeek, 150);
   };
-  useEffect(() => {
+  const onModifierHeldChange = useEffectEvent((modifierHeld: boolean) => {
     if (modifierHeld && anchor.current?.matches(":hover")) openMenu(true);
     else if (!modifierHeld) closePeek();
-  }, [modifierHeld]);
+  });
+  // Every sidebar row has a bell, so ⌘/Ctrl is observed here without
+  // re-rendering: pressing ⌘V in the composer must not repaint the list.
+  useEffect(() => {
+    let modifierHeld = false;
+    return subscribeShortcutModifierState((state) => {
+      const next = state.ctrlKey || state.metaKey;
+      if (next === modifierHeld) return;
+      modifierHeld = next;
+      onModifierHeldChange(next);
+    });
+  }, []);
   useEffect(() => cancelPeekClose, []);
   const longPress = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressClick = useRef(false);

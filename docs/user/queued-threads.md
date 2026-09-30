@@ -33,6 +33,17 @@ messages from every device. If a send's acknowledgement is uncertain, reconnect 
 so Pathway can confirm whether it was accepted. If a prerequisite is missing, the thread stays
 saved with the reason and a retry action. A connection failure does not discard your work.
 
+## When a send is not confirmed
+
+A message waits at most one minute for its environment, or this device's saved-message store, to
+accept it. If nothing confirms it in that time, Pathway returns the message to the composer and
+shows why, so you can check the connection and send it again.
+
+If a new thread's environment goes offline before the thread appears, the sidebar row and the
+conversation show **Waiting for** that environment instead of **Working**. The thread appears once
+the environment connects. Choose **Restore draft** to put the message back in the composer so you
+can edit it or send it again.
+
 ## Queue a follow-up during active work
 
 When connected to an existing thread, queued follow-ups appear in the message stack above the

@@ -54,6 +54,7 @@ import {
   type ScopedBranchSelection,
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
+  shouldLoadBranchRefList,
 } from "./BranchToolbar.logic";
 import { resolveThreadPr } from "./ThreadStatusIndicators";
 import { ThreadPullRequestAction } from "./ThreadPullRequestAction";
@@ -256,13 +257,19 @@ export function BranchToolbarBranchSelector({
   // from the response entirely, which would defeat the collision check below.
   // Ref names cannot contain an ASCII space, so sanitizing loses no matches.
   const branchRefQuery = deferredBranchNameQuery;
+  const needsRefList = shouldLoadBranchRefList({
+    isBranchMenuOpen,
+    effectiveEnvMode,
+    activeWorktreePath,
+    activeThreadBranch,
+  });
   const branchRefTarget = useMemo(
     () => ({
       environmentId,
-      cwd: branchCwd,
+      cwd: needsRefList ? branchCwd : null,
       query: branchRefQuery,
     }),
-    [branchCwd, branchRefQuery, environmentId],
+    [branchCwd, branchRefQuery, environmentId, needsRefList],
   );
   const branchRefState = usePaginatedBranches(branchRefTarget);
   const refs = branchRefState.refs;

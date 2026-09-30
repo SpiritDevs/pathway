@@ -140,17 +140,53 @@ describe("attached pull request lookup", () => {
       expect(registry.get(atom)).toMatchObject({ value: { state: "open" } });
       expect(read).toHaveBeenCalledTimes(1);
       state = "merged";
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(60_000);
       expect(read).toHaveBeenCalledTimes(2);
       expect(registry.get(atom)).toMatchObject({ value: { state: "merged" } });
       unsubscribeSidebar();
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(60_000);
       expect(read).toHaveBeenCalledTimes(3);
       unsubscribePanel();
-      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(180_000);
       expect(read).toHaveBeenCalledTimes(3);
     } finally {
       registry.dispose();
+    }
+  });
+
+  it("skips live refreshes while the window is hidden or unfocused", async () => {
+    vi.useFakeTimers();
+    const windowState = { visibilityState: "hidden", focused: false };
+    vi.stubGlobal("document", {
+      get visibilityState() {
+        return windowState.visibilityState;
+      },
+      hasFocus: () => windowState.focused,
+    });
+    const read = vi.fn(() => AsyncResult.success(thread.attachedPullRequest));
+    mocks.detail.mockReturnValue(Atom.make(read).pipe(Atom.setIdleTTL("5 minutes")));
+    const target = attachedPullRequestQueryTarget(thread, projects)!;
+    const atom = liveAttachedPullRequestDetail({
+      ...target,
+      input: { ...target.input, number: 999 },
+    });
+    const registry = AtomRegistry.make();
+    try {
+      const unsubscribe = registry.subscribe(atom, () => {});
+      registry.get(atom);
+      expect(read).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(read).toHaveBeenCalledTimes(1);
+      windowState.visibilityState = "visible";
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(read).toHaveBeenCalledTimes(1);
+      windowState.focused = true;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(read).toHaveBeenCalledTimes(2);
+      unsubscribe();
+    } finally {
+      registry.dispose();
+      vi.unstubAllGlobals();
     }
   });
 });
@@ -232,11 +268,11 @@ describe("attachment query subscriptions", () => {
       observe(true, 201);
       expect(reads).toHaveBeenCalledTimes(50);
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(reads).toHaveBeenCalledTimes(52);
-      expect(reads.mock.calls.slice(50)).toEqual([[201], [201]]);
+      expect(reads).toHaveBeenCalledTimes(51);
+      expect(reads.mock.calls.slice(50)).toEqual([[201]]);
       unsubscribes.pop()!();
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(reads).toHaveBeenCalledTimes(52);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(reads).toHaveBeenCalledTimes(51);
     } finally {
       unsubscribes.forEach((unsubscribe) => unsubscribe());
       registry.dispose();

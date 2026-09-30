@@ -1,10 +1,11 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 
-import { CalendarPage, parseCalendarSearch } from "../components/calendar/CalendarPage";
-import type {
-  CalendarSearch,
-  CalendarSearchPatch,
+import { CalendarPage } from "../components/calendar/CalendarPage";
+import {
+  parseCalendarSearch,
+  type CalendarSearch,
+  type CalendarSearchPatch,
 } from "../components/calendar/calendarGrid.logic";
 
 function CalendarRoute() {

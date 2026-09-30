@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { resolveComputerControlForSend } from "../hooks/useComputerControlModeChange.logic";
 import { sessionKnownToUseComputer } from "../lib/computerAccess";
 import {
+  boundSendAcknowledgement,
   cloudQueuedTurnInput,
   prepareDirectTurnAttachments,
   shouldSendTurnToEnvironment,
@@ -208,5 +209,33 @@ describe("cloud-queued Computer intent", () => {
     const queued = cloudQueuedTurnInput(turn("/computer-use open Notes"), "scoped");
     expect(queued).not.toHaveProperty("enableComputerControl");
     expect(queued.computerControlGeneration).toBe(4);
+  });
+});
+
+describe("send acknowledgement bound", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns the acknowledgement when it arrives in time", async () => {
+    vi.useFakeTimers();
+    const timedOut = vi.fn(() => "timed out");
+    const sent = boundSendAcknowledgement(Promise.resolve("accepted"), timedOut, 1_000);
+    await expect(sent).resolves.toBe("accepted");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(timedOut).not.toHaveBeenCalled();
+  });
+
+  it("settles with the timeout result when the acknowledgement never arrives", async () => {
+    vi.useFakeTimers();
+    const sent = boundSendAcknowledgement(new Promise<string>(() => {}), () => "timed out", 1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(sent).resolves.toBe("timed out");
+  });
+
+  it("keeps a rejected acknowledgement a rejection", async () => {
+    await expect(
+      boundSendAcknowledgement(Promise.reject(new Error("Connection lost")), () => "timed out"),
+    ).rejects.toThrow("Connection lost");
   });
 });

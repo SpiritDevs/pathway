@@ -9,4 +9,10 @@ export const config: VercelConfig = {
   installCommand:
     "npm install -g vite-plus && vp install --ignore-scripts --filter '@spiritdevs/scripts...' --filter '@spiritdevs/web...'",
   rewrites: [routes.rewrite("/(.*)", "/index.html")],
+  // Vite content-hashes everything under /assets, so a URL never changes meaning.
+  headers: [
+    routes.header("/assets/(.*)", [
+      { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+    ]),
+  ],
 };

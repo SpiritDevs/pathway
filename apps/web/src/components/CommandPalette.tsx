@@ -93,8 +93,9 @@ import {
   TextSearchIcon,
   XIcon,
 } from "lucide-react";
-import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -111,7 +112,7 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { environmentCatalog } from "../connection/catalog";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
-import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useHandleNewThread, useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
@@ -271,29 +272,22 @@ const PALETTE_PANE_DESTINATION_LABELS = PALETTE_PANE_DESTINATIONS.map(
 );
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 const EMPTY_REPOSITORY_CHOICE_CANDIDATES: ReadonlyArray<SidebarProjectSnapshot> = [];
-const LUCIDE_ICON_NAMES = new Set<string>(iconNames);
-
-function resolveFocusIconName(iconName: string): IconName | null {
-  const normalized = iconName
-    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
-    .replaceAll("_", "-")
-    .toLowerCase();
-  return LUCIDE_ICON_NAMES.has(normalized) ? (normalized as IconName) : null;
-}
+const LucideNamedIcon = lazy(() => import("./LucideNamedIcon"));
 
 function FocusPaletteIconFallback() {
   return <CircleDotIcon className="size-full" />;
 }
 
 function FocusPaletteIcon(props: { readonly iconName: string; readonly accentColor: string }) {
-  const iconName = resolveFocusIconName(props.iconName);
   return (
     <span className={ITEM_ICON_CLASS} style={{ color: props.accentColor }}>
-      {iconName === null ? (
-        <CircleDotIcon className="size-full" />
-      ) : (
-        <DynamicIcon name={iconName} fallback={FocusPaletteIconFallback} className="size-full" />
-      )}
+      <Suspense fallback={<FocusPaletteIconFallback />}>
+        <LucideNamedIcon
+          iconName={props.iconName}
+          fallback={FocusPaletteIconFallback}
+          className="size-full"
+        />
+      </Suspense>
     </span>
   );
 }
@@ -654,7 +648,15 @@ function FocusedPaneCommandPalette({ children }: { children: ReactNode }) {
     useState<EnvironmentId | null>(null);
   const [quickCreateProjectOwner, setQuickCreateProjectOwner] = useState<string | undefined>();
   const [quickCreateProjectOpen, setQuickCreateProjectOpen] = useState(false);
-  const { routeDraftId, handleNewThread: openCreatedProjectThread } = useHandleNewThread();
+  const routeTarget = useParams({
+    strict: false,
+    select: (params) => resolveThreadRouteTarget(params),
+  });
+  const routeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
+  const routeDraftId = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
+  // The bare handler, not useHandleNewThread: this host stays mounted while the palette is
+  // closed, and the active thread shell and draft store would re-render it on every change.
+  const openCreatedProjectThread = useNewThreadHandler();
   const creationGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const creationActiveCompanyId = useAtomValue(activeCompanyIdAtom);
   const setCreationActiveCompanyId = useAtomSet(activeCompanyIdAtom);
@@ -716,11 +718,6 @@ function FocusedPaneCommandPalette({ children }: { children: ReactNode }) {
     },
     [setOpen],
   );
-  const routeTarget = useParams({
-    strict: false,
-    select: (params) => resolveThreadRouteTarget(params),
-  });
-  const routeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
   const terminalOpen = useTerminalUiStateStore((state) =>
     routeThreadRef
       ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
@@ -1591,6 +1588,8 @@ function OpenCommandPaletteDialog(props: {
     () =>
       buildThreadActionItems({
         threads,
+        // Opening shows only recent threads; every thread becomes an item once a query searches them.
+        ...(threadSearchQuery.trim().length === 0 ? { limit: RECENT_THREAD_LIMIT } : {}),
         ...(activeThreadId ? { activeThreadId } : {}),
         projectTitleById,
         sortOrder: clientSettings.sidebarThreadSortOrder,

@@ -264,6 +264,27 @@ export default defineConfig(() => {
       outDir: "dist",
       emptyOutDir: true,
       sourcemap: buildSourcemap,
+      rolldownOptions: {
+        output: {
+          codeSplitting: {
+            // Everything the entry needs statically ships as two chunks,
+            // dependencies and app. Automatic chunking split it into ~180 files,
+            // mostly sub-kilobyte icon modules shared with lazy routes, each a
+            // modulepreload request before first paint; the local HTTP/1.1
+            // server answers those six at a time. Lazy chunks still split
+            // automatically.
+            groups: [
+              {
+                name: "vendor",
+                tags: ["$initial" as const],
+                test: /[\\/]node_modules[\\/]/,
+                priority: 1,
+              },
+              { name: "app", tags: ["$initial" as const] },
+            ],
+          },
+        },
+      },
     },
     test: {
       projects: [defineProject(unitTestProject)],

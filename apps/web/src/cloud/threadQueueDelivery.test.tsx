@@ -20,6 +20,11 @@ import {
   threadQueueRowsAtom,
 } from "./threadQueueState";
 import { useQueuedStartThreadTurn, type QueuedThreadTurnTarget } from "./threadQueue";
+import {
+  SEND_ACKNOWLEDGEMENT_TIMEOUT_MESSAGE,
+  SEND_ACKNOWLEDGEMENT_TIMEOUT_MS,
+} from "./threadTurnDelivery";
+import { squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runtime";
 
 const { startTurn, readProjection, auth } = vi.hoisted(() => ({
   startTurn: vi.fn(async (_target: QueuedThreadTurnTarget) => ({
@@ -267,6 +272,25 @@ describe("connected thread delivery without cloud queue readiness", () => {
     await expect(renderSend()(target)).rejects.toThrow("Connection lost");
     expect(startTurn).toHaveBeenCalledExactlyOnceWith(target);
     expect(appAtomRegistry.get(localThreadQueueAtom)).toEqual([]);
+  });
+
+  it("fails a direct launch whose acknowledgement never arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      startTurn.mockImplementationOnce(() => new Promise(() => {}));
+      const sent = renderSend()(target);
+      await vi.advanceTimersByTimeAsync(SEND_ACKNOWLEDGEMENT_TIMEOUT_MS);
+      const result = await sent;
+      expect(result._tag).toBe("Failure");
+      if (result._tag !== "Failure") return;
+      expect(squashAtomCommandFailure(result)).toMatchObject({
+        message: SEND_ACKNOWLEDGEMENT_TIMEOUT_MESSAGE,
+      });
+      // A launch that may still land is never resubmitted through the cloud queue.
+      expect(appAtomRegistry.get(localThreadQueueAtom)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses offline delivery when the environment is disconnected", async () => {

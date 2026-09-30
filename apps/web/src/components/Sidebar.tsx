@@ -147,7 +147,8 @@ import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
-import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+import { pendingDraftSendHold } from "../lib/pendingDraftSend";
 import {
   useProjects,
   useThreadRefs,
@@ -258,6 +259,7 @@ import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/too
 import {
   composerDraftHasUserContent,
   DraftId,
+  restorePendingDraftSend,
   useComposerDraftStore,
   type ComposerThreadDraftState,
   type DraftSessionState,
@@ -364,6 +366,8 @@ function WorkingDuration(props: { startedAt: string | null }) {
 }
 
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, ProviderInstanceEntry> = new Map();
+// Shared so rows without side chats keep a stable prop and stay memoized.
+const EMPTY_SIDE_CHATS: ReadonlyArray<SidebarThreadSummary> = [];
 
 type SidebarThreadModelDisplay = {
   readonly key: string;
@@ -665,7 +669,12 @@ function SortableThreadRow(props: {
     id: props.id,
     animateLayoutChanges: animatePinnedLayoutChanges,
   });
-  return props.children({ listeners, setNodeRef, transform, transition, isDragging });
+  // A stable bag keeps the memoized row from re-rendering on every sidebar render.
+  const bag = useMemo(
+    () => ({ listeners, setNodeRef, transform, transition, isDragging }),
+    [listeners, setNodeRef, transform, transition, isDragging],
+  );
+  return props.children(bag);
 }
 
 // One unsent draft session the user has invested content in. Two lines,
@@ -687,6 +696,8 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   onDiscard: (draftId: DraftId) => void;
 }) {
   const { composer, draftId, onDiscard, onNavigate, session } = props;
+  const environment = useEnvironment(session.pendingSend ? session.environmentId : null);
+  const sendHold = session.pendingSend ? pendingDraftSendHold(environment) : null;
   const promptPreview =
     session.pendingSend?.title ?? composer?.prompt.trim().split("\n", 1)[0] ?? "";
   // images mirrors persistedAttachments once rehydration finishes; before
@@ -722,6 +733,14 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
       onDiscard(draftId);
     },
     [draftId, onDiscard],
+  );
+  const handleRestore = useCallback(
+    (event: ReactMouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      restorePendingDraftSend(draftId);
+    },
+    [draftId],
   );
   return (
     <li className="list-none py-0.5">
@@ -761,7 +780,23 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
               {session.projectId === null ? "Conversation" : props.projectTitle}
             </span>
             <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-end">
-              {session.pendingSend ? (
+              {sendHold ? (
+                <span
+                  className="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-300/80"
+                  title={sendHold.description}
+                >
+                  <span role="status">Waiting</span>
+                  <button
+                    type="button"
+                    aria-label="Restore draft"
+                    title="Restore draft"
+                    onClick={handleRestore}
+                    className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground hover:text-foreground"
+                  >
+                    <Undo2Icon className="size-3" />
+                  </button>
+                </span>
+              ) : session.pendingSend ? (
                 // Matches a working server row so the handoff to it is seamless.
                 <span
                   className={cn(
@@ -982,11 +1017,18 @@ const SidebarThreadClassification = memo(function SidebarThreadClassification(pr
   return null;
 });
 
+function SettleActionTooltipText(props: {
+  settleAfterCompletionSupported: boolean;
+  settleAfterCompletionActive: boolean;
+}) {
+  const controlKeyHeld = useShortcutModifierState((modifiers) => modifiers.ctrlKey);
+  return settleActionLabel({ controlKeyHeld, ...props });
+}
+
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   queuedStatusLabel?: string | null;
   alertProjectKey: string | null;
   alertPolicies: readonly AlertPolicyRow[] | null;
-  alertModifierHeld: boolean;
   thread: SidebarThreadSummary;
   issue: Issue | null;
   variant: "card" | "slim";
@@ -998,7 +1040,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // the lifecycle affordances hide entirely rather than fail on click.
   settlementSupported: boolean;
   settleAfterCompletionSupported: boolean;
-  controlKeyHeld: boolean;
   // Same contract for thread.snooze/unsnooze.
   snoozeSupported: boolean;
   // Renders the pin glyph. Pinned cards keep the full settle/snooze quick
@@ -1325,11 +1366,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       threadRef,
     ],
   );
-  const settleTooltip = settleActionLabel({
-    controlKeyHeld: props.controlKeyHeld,
-    settleAfterCompletionSupported: props.settleAfterCompletionSupported,
-    settleAfterCompletionActive: thread.settleAfterCompletion,
-  });
+  // Ctrl only changes the popup text, so only an open popup subscribes to it.
+  const settleTooltip = (
+    <SettleActionTooltipText
+      settleAfterCompletionSupported={props.settleAfterCompletionSupported}
+      settleAfterCompletionActive={thread.settleAfterCompletion}
+    />
+  );
   const handleUnsettleClick = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
@@ -1523,7 +1566,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       projectKey={props.alertProjectKey}
       threadKey={alertThreadScopeKey(thread.environmentId, thread.id)}
       policies={props.alertPolicies}
-      modifierHeld={props.alertModifierHeld}
     />
   );
 
@@ -1660,7 +1702,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       render={
                         <button
                           type="button"
-                          aria-label={settleTooltip}
+                          aria-label="Settle thread"
                           onClick={handleSettleClick}
                           className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground hover:text-foreground"
                         />
@@ -1870,7 +1912,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         render={
                           <button
                             type="button"
-                            aria-label={settleTooltip}
+                            aria-label="Settle thread"
                             onClick={handleSettleClick}
                             className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
                           />
@@ -2226,12 +2268,16 @@ export default function Sidebar() {
     strict: false,
     select: (params) => resolveThreadRouteTarget(params),
   });
-  const routeDraftThread = useComposerDraftStore((store) =>
-    routeTarget?.kind === "draft" ? store.getDraftSession(routeTarget.draftId) : null,
+  // Only the promotion matters here; selecting the whole session would
+  // re-render the sidebar whenever the draft's project or settings change.
+  const routeDraftPromotedTo = useComposerDraftStore((store) =>
+    routeTarget?.kind === "draft"
+      ? (store.getDraftSession(routeTarget.draftId)?.promotedTo ?? null)
+      : null,
   );
   const routeThreadRef = useMemo(
-    () => resolveActiveThreadRouteRef(routeTarget, routeDraftThread),
-    [routeDraftThread, routeTarget],
+    () => resolveActiveThreadRouteRef(routeTarget, { promotedTo: routeDraftPromotedTo }),
+    [routeDraftPromotedTo, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
   const routeTargetRef = useRef(routeTarget);
@@ -3038,11 +3084,13 @@ export default function Sidebar() {
   const openSideChat = useCallback(
     (parentRef: ScopedThreadRef, sideChatThreadId: ThreadId) => {
       useRightPanelStore.getState().openThread(parentRef, sideChatThreadId);
-      if (routeThreadKey !== scopedThreadKey(parentRef)) {
+      // Read through the ref so a thread switch does not hand every memoized
+      // row a new callback.
+      if (routeThreadKeyRef.current !== scopedThreadKey(parentRef)) {
         navigateToThread(parentRef);
       }
     },
-    [navigateToThread, routeThreadKey],
+    [navigateToThread],
   );
 
   const navigateToDraft = useCallback(
@@ -4230,19 +4278,18 @@ export default function Sidebar() {
   // Same predicate as v1: hints show only while the held modifiers exactly
   // match a thread-jump binding. Adding Shift (screenshots) or Alt no
   // longer matches ⌘1..9, so the overlay hides for chords like ⌘⇧4.
-  const shortcutModifiers = useShortcutModifierState();
+  // Selects a boolean, so Shift/Alt/⌘ while typing in the composer only
+  // re-renders this list when the hint visibility itself flips.
   const terminalFocused = useTerminalFocus();
-  const shouldShowJumpHintsNow = shouldShowThreadJumpHintsForModifiers(
-    shortcutModifiers,
-    keybindings,
-    {
+  const shouldShowJumpHintsNow = useShortcutModifierState((modifiers) =>
+    shouldShowThreadJumpHintsForModifiers(modifiers, keybindings, {
       platform: navigator.platform,
       context: {
         terminalFocus: terminalFocused,
         terminalOpen: routeTerminalOpen,
         modelPickerOpen: isModelPickerOpen(),
       },
-    },
+    }),
   );
   useEffect(() => {
     updateThreadJumpHintsVisibility(shouldShowJumpHintsNow && isFocusedPane);
@@ -4635,7 +4682,7 @@ export default function Sidebar() {
                             environmentLabel={
                               environmentLabelById.get(thread.environmentId) ?? null
                             }
-                            sideChats={sideChatsByParentKey.get(threadKey) ?? []}
+                            sideChats={sideChatsByParentKey.get(threadKey) ?? EMPTY_SIDE_CHATS}
                             providerEntryByInstanceId={
                               providerEntriesByEnvironment.get(thread.environmentId) ??
                               EMPTY_PROVIDER_ENTRIES
@@ -4695,7 +4742,6 @@ export default function Sidebar() {
                           ) ?? null
                         }
                         alertPolicies={alertPolicies}
-                        alertModifierHeld={shortcutModifiers.ctrlKey || shortcutModifiers.metaKey}
                         alertProjectKey={
                           thread.projectId === null
                             ? null
@@ -4735,7 +4781,6 @@ export default function Sidebar() {
                           serverConfigs.get(thread.environmentId)?.environment.capabilities
                             .threadSettleAfterCompletion === true
                         }
-                        controlKeyHeld={shortcutModifiers.ctrlKey}
                         snoozeSupported={
                           serverConfigs.get(thread.environmentId)?.environment.capabilities
                             .threadSnooze === true
@@ -4778,7 +4823,7 @@ export default function Sidebar() {
                             `${thread.environmentId}:${thread.projectId}`,
                           ) ?? null
                         }
-                        sideChats={sideChatsByParentKey.get(threadKey) ?? []}
+                        sideChats={sideChatsByParentKey.get(threadKey) ?? EMPTY_SIDE_CHATS}
                         providerEntryByInstanceId={
                           providerEntriesByEnvironment.get(thread.environmentId) ??
                           EMPTY_PROVIDER_ENTRIES

@@ -16,6 +16,11 @@ import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 export { nextFocusId } from "@spiritdevs/client-runtime/state/focuses";
 
 export const RECENT_THREAD_LIMIT = 12;
+/**
+ * Best-ranked thread matches the palette renders. Every thread row mounts its own git status and
+ * pull request reads, so a one-letter query must not mount hundreds of them. Typing narrows.
+ */
+export const THREAD_SEARCH_RESULT_LIMIT = 30;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
 
@@ -385,6 +390,7 @@ export function filterCommandPaletteGroups(input: {
       });
     })
       .toSorted((left, right) => right.rank - left.rank || left.index - right.index)
+      .slice(0, group.value === "threads-search" ? THREAD_SEARCH_RESULT_LIMIT : undefined)
       .map((entry) => entry.item);
 
     if (items.length === 0) {

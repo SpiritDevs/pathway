@@ -21,6 +21,7 @@ vi.mock("react", async (original) => {
   return {
     ...actual,
     useEffect: () => {},
+    useEffectEvent: <T,>(callback: T) => callback,
     useRef: reactHookHarness.useRef,
     useState: reactHookHarness.useState,
     useMemo: reactHookHarness.useMemo,

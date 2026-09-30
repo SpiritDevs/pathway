@@ -104,13 +104,31 @@ export function currentThreadChangeRequestState(
   return cached?.source === threadChangeRequestSource(thread) ? cached.state : null;
 }
 
+/** Each tick runs `gh` on the server, so it only reads while someone is looking at the window. */
+const LIVE_DETAIL_REFRESH_MS = 60_000;
+
+function shouldTickLiveDetail(): boolean {
+  if (typeof document === "undefined") return true;
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+
 // Only focused-thread observers opt into a timer. Other rows reuse the detail cache.
 // Removing the last focused observer stops refreshes even while sidebar rows remain mounted.
+// Hidden or unfocused windows skip ticks; `useThreadPullRequestRefresh` reads on return.
 const liveDetail = Atom.family((key: string) => {
   const target = JSON.parse(key) as { environmentId: EnvironmentId; input: PullRequestRef };
-  return pullRequestEnvironment
-    .detail(target)
-    .pipe(Atom.withRefresh("30 seconds"), Atom.setIdleTTL(0));
+  const source = pullRequestEnvironment.detail(target);
+  return Atom.transform(
+    source,
+    (get) => {
+      const timer = setInterval(() => {
+        if (shouldTickLiveDetail()) get.refresh(source);
+      }, LIVE_DETAIL_REFRESH_MS);
+      get.addFinalizer(() => clearInterval(timer));
+      return get(source);
+    },
+    { initialValueTarget: source },
+  ).pipe(Atom.setIdleTTL(0));
 });
 
 export const liveAttachedPullRequestDetail = (target: {

@@ -109,7 +109,12 @@ export function useConversationStorage(input: {
   }, [pressure]);
   useEffect(() => {
     if (!enabled) return;
-    const timer = window.setInterval(snapshot.refresh, job?.status === "running" ? 2_000 : 30_000);
+    // The snapshot is the whole storage inventory, and the server re-samples it once a minute.
+    // A hidden window skips ticks; the next visible tick catches up.
+    const refresh = () => {
+      if (document.visibilityState === "visible") snapshot.refresh();
+    };
+    const timer = window.setInterval(refresh, job?.status === "running" ? 2_000 : 60_000);
     return () => window.clearInterval(timer);
   }, [enabled, job?.status, snapshot.refresh]);
 

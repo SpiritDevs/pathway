@@ -34,7 +34,7 @@ function normalizeBaseRef(baseRef: string | null): string | null {
 
 export const useDiffPanelStore = create<DiffPanelStoreState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       byThreadKey: {},
       branchBaseRefByThreadKey: {},
       diffRenderMode: "stacked",
@@ -92,25 +92,25 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
             },
           };
         }),
-      reconcileTurnSelection: (ref, availableTurnIds) =>
-        set((state) => {
-          const threadKey = scopedThreadKey(ref);
-          const previous = state.byThreadKey[threadKey];
-          const latestTurnId = availableTurnIds[0];
-          if (
-            previous?.kind !== "turn" ||
-            latestTurnId === undefined ||
-            availableTurnIds.includes(previous.turnId)
-          ) {
-            return state;
-          }
-          return {
-            byThreadKey: {
-              ...state.byThreadKey,
-              [threadKey]: { ...previous, turnId: latestTurnId },
-            },
-          };
-        }),
+      // Checked before `set`: persist writes storage on every `set`, even one that changes nothing.
+      reconcileTurnSelection: (ref, availableTurnIds) => {
+        const threadKey = scopedThreadKey(ref);
+        const previous = get().byThreadKey[threadKey];
+        const latestTurnId = availableTurnIds[0];
+        if (
+          previous?.kind !== "turn" ||
+          latestTurnId === undefined ||
+          availableTurnIds.includes(previous.turnId)
+        ) {
+          return;
+        }
+        set((state) => ({
+          byThreadKey: {
+            ...state.byThreadKey,
+            [threadKey]: { ...previous, turnId: latestTurnId },
+          },
+        }));
+      },
       removeThread: (ref) =>
         set((state) => {
           const threadKey = scopedThreadKey(ref);

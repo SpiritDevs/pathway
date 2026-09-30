@@ -106,12 +106,16 @@ export function useStoragePressure(account: string | null, poll = true) {
   useEffect(() => {
     if (!environmentKey || !poll) return;
     const refresh = () => {
+      // A hidden window shows no indicator; the next visible tick catches up.
+      if (document.visibilityState !== "visible") return;
       for (const id of environmentKey.split("\n"))
         appAtomRegistry.refresh(
           serverEnvironment.hostResources({ environmentId: EnvironmentId.make(id), input: {} }),
         );
     };
-    const timer = window.setInterval(refresh, 30_000);
+    // The server samples storage once a minute and each read spawns `vm_stat`, so a
+    // faster poll only repeats the same pressure.
+    const timer = window.setInterval(refresh, 120_000);
     return () => window.clearInterval(timer);
   }, [environmentKey, poll]);
   return useMemo(

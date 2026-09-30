@@ -5,7 +5,7 @@ import type {
   ThreadId,
 } from "@spiritdevs/contracts";
 import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "lucide-react";
-import { memo, type ReactNode, useMemo } from "react";
+import { memo, type ReactNode, useMemo, useState } from "react";
 
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
@@ -50,16 +50,39 @@ function DataField(props: { readonly label: string; readonly children: ReactNode
   );
 }
 
+/** Characters of a value shown before "Show all": the browser lays out every line of a `pre`. */
+export const STRUCTURED_VALUE_PREVIEW_CHARS = 20_000;
+
+/** The tail of a long value — where command output ends up — or the whole of a short one. */
+export function structuredValuePreview(text: string, showAll: boolean): string {
+  return showAll || text.length <= STRUCTURED_VALUE_PREVIEW_CHARS
+    ? text
+    : text.slice(-STRUCTURED_VALUE_PREVIEW_CHARS);
+}
+
 function StructuredValue({ value }: { readonly value: unknown }) {
+  const [showAll, setShowAll] = useState(false);
   const text = useMemo(
     () => (typeof value === "string" ? value : JSON.stringify(value, null, 2)),
     [value],
   );
   if (!text) return null;
+  const preview = structuredValuePreview(text, showAll);
   return (
-    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/50 bg-background/60 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground select-text">
-      {text}
-    </pre>
+    <div className="space-y-1">
+      {preview.length < text.length ? (
+        <button
+          type="button"
+          className="text-[11px] text-muted-foreground underline"
+          onClick={() => setShowAll(true)}
+        >
+          Show all {Math.ceil(text.length / 1024)} KB
+        </button>
+      ) : null}
+      <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/50 bg-background/60 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground select-text">
+        {preview}
+      </pre>
+    </div>
   );
 }
 
@@ -73,6 +96,8 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
   const duration = durationLabel(item.startedAt, item.completedAt);
   const latestAttempt = support.attempts.at(-1) ?? null;
   const runtimeRequest = support.runtimeRequest;
+  // The raw item is serialized only while its details are open: it changes on every streamed delta.
+  const [structuredDetailsOpen, setStructuredDetailsOpen] = useState(false);
 
   return (
     <div className="space-y-2 text-xs" data-v2-item-inspector={item.type}>
@@ -302,12 +327,13 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
       <details
         className="group/raw rounded-md border border-border/45 bg-background/40"
         data-v2-structured-details="true"
+        onToggle={(event) => setStructuredDetailsOpen(event.currentTarget.open)}
       >
         <summary className="flex cursor-pointer list-none items-center px-2 py-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
           Structured details
         </summary>
         <div className="border-t border-border/45 p-2">
-          <StructuredValue value={item} />
+          {structuredDetailsOpen ? <StructuredValue value={item} /> : null}
         </div>
       </details>
     </div>

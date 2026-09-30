@@ -1,13 +1,11 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 
+import { MilestonesOverviewPage } from "../components/issues/MilestonesOverviewPage";
 import {
-  MilestonesOverviewPage,
   parseMilestonesOverviewSearch,
-} from "../components/issues/MilestonesOverviewPage";
-import type {
-  MilestonesOverviewSearch,
-  MilestonesOverviewSearchPatch,
+  type MilestonesOverviewSearch,
+  type MilestonesOverviewSearchPatch,
 } from "../components/issues/milestonesOverview.logic";
 
 function MilestonesRoute() {

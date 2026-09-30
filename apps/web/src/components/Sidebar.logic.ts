@@ -991,9 +991,17 @@ function sortProjectsByActivity<TProject extends SidebarProject>(
     return [...projects];
   }
 
+  // Each timestamp scans the project's threads, so compute it once per project
+  // rather than on every comparison.
+  const timestampByProject = new Map(
+    projects.map(
+      (project) =>
+        [project, getProjectSortTimestamp(project, getProjectThreads(project), sortOrder)] as const,
+    ),
+  );
   return [...projects].toSorted((left, right) => {
-    const rightTimestamp = getProjectSortTimestamp(right, getProjectThreads(right), sortOrder);
-    const leftTimestamp = getProjectSortTimestamp(left, getProjectThreads(left), sortOrder);
+    const rightTimestamp = timestampByProject.get(right)!;
+    const leftTimestamp = timestampByProject.get(left)!;
     const byTimestamp =
       rightTimestamp === leftTimestamp ? 0 : rightTimestamp > leftTimestamp ? 1 : -1;
     return byTimestamp || compareTies(left, right);

@@ -961,7 +961,8 @@ export function TerminalViewport({
     } else {
       terminal.write(appended);
     }
-    terminal.clearSelection();
+    // Clearing forces a full repaint, so output streaming past no selection must not pay for it.
+    if (terminal.hasSelection()) terminal.clearSelection();
 
     if (current.error !== null && current.error !== previous.error) {
       writeSystemMessage(terminal, current.error);

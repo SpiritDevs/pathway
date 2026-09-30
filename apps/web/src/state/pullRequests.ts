@@ -296,7 +296,7 @@ const activeReviewKeysAtom = Atom.family((environmentId: EnvironmentId) => {
   let previous: ReadonlySet<string> = EMPTY_ACTIVE_REVIEW_KEYS;
   return Atom.make((get) => {
     const next = deriveActivePullRequestReviewKeys(
-      get(environmentThreadShells.threadShellsAtom),
+      get(environmentThreadShells.environmentThreadShellsAtom(environmentId)),
       environmentId,
     );
     if (next.size === previous.size && [...next].every((key) => previous.has(key))) {
@@ -319,9 +319,9 @@ const activeReviewKeysAcrossEnvironmentsAtom = Atom.family((key: string) => {
   let previous: ReadonlySet<string> = EMPTY_ACTIVE_REVIEW_KEYS;
   return Atom.make((get) => {
     const environmentIds = JSON.parse(key) as ReadonlyArray<EnvironmentId>;
-    const threads = get(environmentThreadShells.threadShellsAtom);
     const next = new Set<string>();
     for (const environmentId of environmentIds) {
+      const threads = get(environmentThreadShells.environmentThreadShellsAtom(environmentId));
       for (const reviewKey of deriveActivePullRequestReviewKeys(threads, environmentId)) {
         next.add(reviewKey);
       }

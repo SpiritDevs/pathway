@@ -32,7 +32,6 @@ import {
 } from "../cloud/focusReadModel";
 import { useClientSettings, useClientSettingsHydrated } from "../hooks/useSettings";
 import { environmentProjects } from "../state/projects";
-import { environmentThreadShells } from "../state/threads";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { toastManager } from "../components/ui/toast";
@@ -42,6 +41,7 @@ import {
   threadAlertAccountAtom,
   threadAlertPolicyScopesAtom,
   threadAlertConnectedAtom,
+  threadAlertNotifiedThreadsAtom,
   threadAlertNotificationsReadyAtom,
   threadAlertPoliciesAtom,
   threadAlertPoliciesReadyAtom,
@@ -60,7 +60,7 @@ export function ThreadAlertRuntime() {
   const connected = useAtomValue(threadAlertConnectedAtom);
   const account = useAtomValue(threadAlertAccountAtom);
   const policyScopes = useAtomValue(threadAlertPolicyScopesAtom);
-  const threads = useAtomValue(environmentThreadShells.threadShellsAtom);
+  const notifiedThreads = useAtomValue(threadAlertNotifiedThreadsAtom);
   const replicas = useAtomValue(companyRegistryReplicasAtom);
   const projects = useAtomValue(environmentProjects.projectsAtom);
   const mutations = useAtomValue(focusMutationsAtom);
@@ -85,9 +85,7 @@ export function ThreadAlertRuntime() {
     [rows],
   );
   const threadMap = useMemo(() => {
-    const result = new Map(
-      threads.map((thread) => [alertThreadScopeKey(thread.environmentId, thread.id), thread]),
-    );
+    const result = new Map(notifiedThreads);
     for (const environmentId of eventEnvironmentIds) {
       for (const thread of cloudEnvironmentThreadsFromReplicas(replicas, environmentId)) {
         const key = alertThreadScopeKey(environmentId, thread.id);
@@ -95,7 +93,7 @@ export function ThreadAlertRuntime() {
       }
     }
     return result;
-  }, [threads, replicas, eventEnvironmentIds]);
+  }, [notifiedThreads, replicas, eventEnvironmentIds]);
   const projectMap = useMemo(() => {
     const result = new Map(
       projects.map((project) => [`${project.environmentId}:${project.id}`, project]),

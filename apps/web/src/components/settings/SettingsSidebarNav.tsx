@@ -169,7 +169,9 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
         });
     };
     load();
-    const refresh = window.setInterval(load, 30_000);
+    const refresh = window.setInterval(() => {
+      if (document.visibilityState === "visible") load();
+    }, 30_000);
     return () => {
       active = false;
       window.clearInterval(refresh);

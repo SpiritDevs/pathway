@@ -97,15 +97,24 @@ const connectivityLayer = Connectivity.layer({
   ),
 });
 
+// Window switches flip visibility constantly; only longer absences warrant
+// resubscribing, which makes every environment reload its full snapshots.
+const BRIEF_HIDDEN_MS = 30_000;
+
 const wakeupsLayer = Wakeups.layer({
   changes: Stream.merge(
-    Stream.callback<"application-active">((queue) =>
+    Stream.callback<"application-active" | "application-active-brief">((queue) =>
       Effect.acquireRelease(
         Effect.sync(() => {
+          let hiddenAt: number | null = null;
           const listener = () => {
-            if (document.visibilityState === "visible") {
-              Queue.offerUnsafe(queue, "application-active");
+            if (document.visibilityState !== "visible") {
+              hiddenAt ??= Date.now();
+              return;
             }
+            const brief = hiddenAt !== null && Date.now() - hiddenAt < BRIEF_HIDDEN_MS;
+            hiddenAt = null;
+            Queue.offerUnsafe(queue, brief ? "application-active-brief" : "application-active");
           };
           document.addEventListener("visibilitychange", listener);
           return listener;

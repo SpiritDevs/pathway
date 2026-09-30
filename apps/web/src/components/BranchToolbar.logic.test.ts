@@ -22,6 +22,7 @@ import {
   resolveScopedBranchSelection,
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
+  shouldLoadBranchRefList,
   shouldShowComposerContextStrip,
   shouldShowEnvironmentIndicator,
   canOpenEnvironmentPicker,
@@ -928,5 +929,41 @@ describe("sanitizeNewRefName", () => {
   it("does not collapse dashes the user typed", () => {
     expect(sanitizeNewRefName("new - branch")).toBe("new---branch");
     expect(sanitizeNewRefName("foo--bar")).toBe("foo--bar");
+  });
+});
+
+describe("shouldLoadBranchRefList", () => {
+  const closedOnExistingThread = {
+    isBranchMenuOpen: false,
+    effectiveEnvMode: "worktree" as const,
+    activeWorktreePath: "/repo/.worktrees/feature",
+    activeThreadBranch: "feature",
+  };
+
+  it("skips the full ref list while the menu is closed on a thread with a branch", () => {
+    expect(shouldLoadBranchRefList(closedOnExistingThread)).toBe(false);
+    expect(
+      shouldLoadBranchRefList({
+        ...closedOnExistingThread,
+        effectiveEnvMode: "local",
+        activeWorktreePath: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("loads the list when the menu opens", () => {
+    expect(shouldLoadBranchRefList({ ...closedOnExistingThread, isBranchMenuOpen: true })).toBe(
+      true,
+    );
+  });
+
+  it("loads the list when a new worktree still needs its base branch", () => {
+    expect(
+      shouldLoadBranchRefList({
+        ...closedOnExistingThread,
+        activeWorktreePath: null,
+        activeThreadBranch: null,
+      }),
+    ).toBe(true);
   });
 });
