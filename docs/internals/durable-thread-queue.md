@@ -34,6 +34,15 @@ registration refresh must accept every field in `ExecutionEnvironmentCapabilitie
 new capability preserves stale queue-support metadata and can prevent discovery after a proof-key
 change. The Convex registration validator checks its capability keys against that shared contract.
 
+The worker runs once per registered company under the shared company supervisor. A run that
+fails is retried within a small budget, and the next successful registration listing (every 15
+seconds) starts a fresh run after that budget is spent. A failed service-token exchange never
+rejects Convex's token fetcher; Convex reports the lost authentication instead, which fails the
+heads subscription so the supervisor replaces the client. A rejected fetcher would otherwise crash
+the process or leave the socket paused with the worker silently idle. The worker logs when each
+run starts, when it accepts or blocks a message, and when a delivery retries. Each
+`cloud.thread_queue.deliver` span carries an `outcome`.
+
 `environmentHead` subscriptions wake the environment worker on changes and reconnect. Only the
 first outstanding submission in each thread is eligible. A read-only `prepare` supplies the payload
 and cloud attachment URLs so prerequisites can be checked without claiming execution ownership.

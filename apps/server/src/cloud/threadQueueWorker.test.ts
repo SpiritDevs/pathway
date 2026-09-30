@@ -24,6 +24,9 @@ import * as ServerConfig from "../config.ts";
 import { ComputerDispatchAccess } from "../orchestration-v2/ComputerDispatchAccess.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
+import type { ConvexClient } from "convex/browser";
+import * as Exit from "effect/Exit";
+import { ConvexServiceTokenError } from "./convexServiceToken.ts";
 
 import {
   makeLocalThreadQueueExecutor,
@@ -31,6 +34,7 @@ import {
   threadQueueDispatchMode,
   persistThreadQueueAttachment,
   deliverThreadQueueHead,
+  makeThreadQueueBackend,
   runThreadQueueWorker,
   type ThreadQueueBackend,
   type ThreadQueueExecutor,
@@ -571,5 +575,56 @@ it.effect("dispatches a cloud message with operate-only Computer clearance", () 
     const openDispatch = yield* open.executor.prepare(open.submission);
     if (openDispatch) yield* openDispatch;
     expect(clearances).toEqual(["refused", "any-operator"]);
+  }),
+);
+
+it.effect("answers a failed token exchange without rejecting and ends the run on lost auth", () =>
+  Effect.gen(function* () {
+    const subscribed = yield* Deferred.make<void>();
+    let fetchToken: Parameters<ConvexClient["setAuth"]>[0] | undefined;
+    let onAuthChange: Parameters<ConvexClient["setAuth"]>[1];
+    const unsubscribe = () => {};
+    const client: Pick<ConvexClient, "setAuth" | "onUpdate" | "query" | "mutation" | "close"> = {
+      setAuth: (fetcher, onChange) => {
+        fetchToken = fetcher;
+        onAuthChange = onChange;
+      },
+      onUpdate: () => {
+        Deferred.doneUnsafe(subscribed, Effect.void);
+        return Object.assign(unsubscribe, {
+          unsubscribe,
+          getCurrentValue: () => undefined,
+          getQueryLogs: () => undefined,
+        });
+      },
+      query: () => Promise.reject(new Error("unused")),
+      mutation: () => Promise.reject(new Error("unused")),
+      close: async () => {},
+    };
+    const exit = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const backend = yield* makeThreadQueueBackend({
+          convexUrl: "https://test.convex.cloud",
+          companyId: "company" as CompanyId,
+          client,
+          tokens: {
+            token: Effect.fail(
+              new ConvexServiceTokenError({
+                reason: "transport",
+                message: "token exchange returned HTTP 500",
+              }),
+            ),
+            invalidate: () => Effect.void,
+          },
+        });
+        const heads = yield* Stream.runDrain(backend.heads).pipe(Effect.forkChild);
+        yield* Deferred.await(subscribed);
+        // Convex runs the fetcher from a detached promise; a rejection would crash the process.
+        expect(yield* Effect.promise(() => fetchToken!({ forceRefreshToken: true }))).toBeNull();
+        onAuthChange?.(false);
+        return yield* Fiber.await(heads);
+      }),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
   }),
 );

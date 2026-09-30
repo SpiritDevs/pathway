@@ -18,6 +18,7 @@ import type { ThreadQueueAcceptance, ThreadQueueHead } from "@spiritdevs/contrac
 import { ConvexClient } from "convex/browser";
 import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -58,6 +59,11 @@ import {
 
 const decodeLaunchInput = Schema.decodeUnknownEffect(OrchestrationV2ThreadLaunchInput);
 const decodeQueueCommand = Schema.decodeUnknownEffect(OrchestrationV2Command);
+
+class ThreadQueueAuthLost extends Schema.TaggedErrorClass<ThreadQueueAuthLost>()(
+  "ThreadQueueAuthLost",
+  { message: Schema.String },
+) {}
 
 export interface ThreadQueueBackend {
   readonly heads: Stream.Stream<readonly ThreadQueueHead[], unknown>;
@@ -109,6 +115,23 @@ export const deliverThreadQueueHead = Effect.fn("cloud.thread_queue.deliver")(fu
     commandId: head.commandId,
     revision: head.revision,
   });
+  const block = (
+    target: ThreadQueueHead,
+    error: string,
+    phase: "preflight" | "delivery",
+    rejection?: "command" | "initial-message",
+  ) =>
+    Effect.annotateCurrentSpan({ outcome: "blocked" }).pipe(
+      Effect.andThen(
+        Effect.logWarning("Cloud thread queue blocked a message", {
+          threadId: target.threadId,
+          commandId: target.commandId,
+          phase,
+          error,
+        }),
+      ),
+      Effect.andThen(backend.reportBlocked(target, error, phase, rejection)),
+    );
   const candidate = yield* backend.prepare(head).pipe(
     Effect.catchIf(
       (error) =>
@@ -116,19 +139,17 @@ export const deliverThreadQueueHead = Effect.fn("cloud.thread_queue.deliver")(fu
           convexErrorCode(error) ?? "",
         ),
       (error) =>
-        backend
-          .reportBlocked(
-            head,
-            error instanceof Error ? error.message : String(error),
-            head.state === "accepted" ? "delivery" : "preflight",
-          )
-          .pipe(Effect.as(null)),
+        block(
+          head,
+          error instanceof Error ? error.message : String(error),
+          head.state === "accepted" ? "delivery" : "preflight",
+        ).pipe(Effect.as(null)),
     ),
   );
   if (candidate === null) return;
   const prepared = yield* Effect.exit(executor.prepare(candidate));
   if (Exit.isFailure(prepared)) {
-    yield* backend.reportBlocked(
+    yield* block(
       candidate,
       Cause.pretty(prepared.cause).slice(0, 2_000),
       candidate.state === "accepted" ? "delivery" : "preflight",
@@ -138,7 +159,7 @@ export const deliverThreadQueueHead = Effect.fn("cloud.thread_queue.deliver")(fu
     );
     return;
   }
-  if (prepared.value === null) return;
+  if (prepared.value === null) return yield* Effect.annotateCurrentSpan({ outcome: "deferred" });
   // Reassignment/edit/cancel can win while attachments download. Accept validates the same
   // revision atomically; only the winner may invoke the prepared local write.
   const accepted = yield* backend.accept(head).pipe(
@@ -148,20 +169,23 @@ export const deliverThreadQueueHead = Effect.fn("cloud.thread_queue.deliver")(fu
           convexErrorCode(error) ?? "",
         ),
       (error) =>
-        backend
-          .reportBlocked(
-            head,
-            error instanceof Error ? error.message : String(error),
-            candidate.state === "accepted" ? "delivery" : "preflight",
-          )
-          .pipe(Effect.as(null)),
+        block(
+          head,
+          error instanceof Error ? error.message : String(error),
+          candidate.state === "accepted" ? "delivery" : "preflight",
+        ).pipe(Effect.as(null)),
     ),
   );
   if (accepted === null) return;
+  yield* Effect.logInfo("Cloud thread queue accepted a message", {
+    threadId: accepted.threadId,
+    commandId: accepted.commandId,
+    kind: accepted.submission.kind,
+  });
   const persisted = yield* Effect.exit(prepared.value);
   if (Exit.isFailure(persisted)) {
     // A dispatch error can arrive after a durable write. Never let another environment take it.
-    yield* backend.reportBlocked(
+    yield* block(
       accepted,
       Cause.pretty(persisted.cause).slice(0, 2_000),
       "delivery",
@@ -174,6 +198,7 @@ export const deliverThreadQueueHead = Effect.fn("cloud.thread_queue.deliver")(fu
   // Cloud content remains retained until this acknowledgement succeeds. Replayed commands use
   // the same durable local receipt, including after a process crash or lost cloud response.
   yield* backend.acknowledge(accepted);
+  yield* Effect.annotateCurrentSpan({ outcome: "delivered" });
 });
 
 export const runThreadQueueWorker = Effect.fn("cloud.thread_queue.run")(function* (
@@ -201,6 +226,13 @@ export const runThreadQueueWorker = Effect.fn("cloud.thread_queue.run")(function
         deliverThreadQueueHead(backend, executor, head).pipe(
           // Only transport failures retry automatically. Explicit prerequisite/execution failures
           // are stored as blocked by deliverThreadQueueHead and wait for the user's retry.
+          Effect.tapError((error) =>
+            Effect.logWarning("Cloud thread queue delivery failed; retrying", {
+              threadId: head.threadId,
+              commandId: head.commandId,
+              error,
+            }),
+          ),
           Effect.retry({ schedule: Schedule.spaced("2 seconds") }),
         ),
       { concurrency: 4, discard: true },
@@ -212,18 +244,43 @@ export const makeThreadQueueBackend = Effect.fn("cloud.thread_queue.backend")(fu
   readonly convexUrl: string;
   readonly companyId: CompanyId;
   readonly tokens: ConvexServiceTokenProvider;
+  /** Test seam; production opens one realtime client per worker run. */
+  readonly client?: Pick<ConvexClient, "setAuth" | "onUpdate" | "query" | "mutation" | "close">;
 }) {
   const client = yield* Effect.acquireRelease(
-    Effect.sync(() => new ConvexClient(input.convexUrl)),
+    Effect.sync(() => input.client ?? new ConvexClient(input.convexUrl)),
     (convex) => Effect.promise(() => convex.close()),
   );
+  const authLost = yield* Deferred.make<never, ThreadQueueAuthLost>();
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-  client.setAuth(({ forceRefreshToken }) =>
-    runPromise(
-      (forceRefreshToken ? input.tokens.invalidate() : Effect.void).pipe(
-        Effect.andThen(input.tokens.token),
+  // Convex calls the fetcher from a detached promise: a rejection is unhandled (the process
+  // exits) and leaves its paused socket paused, so subscriptions go quiet forever. Answer null
+  // instead; Convex then reports the auth failure, which ends this run so the company supervisor
+  // starts a fresh client.
+  client.setAuth(
+    ({ forceRefreshToken }) =>
+      runPromise(
+        (forceRefreshToken ? input.tokens.invalidate() : Effect.void).pipe(
+          Effect.andThen(input.tokens.token),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Cloud thread queue could not get a service token", {
+              companyId: input.companyId,
+              cause,
+            }).pipe(Effect.as(null)),
+          ),
+        ),
       ),
-    ),
+    (authenticated) => {
+      if (!authenticated)
+        Deferred.doneUnsafe(
+          authLost,
+          Effect.fail(
+            new ThreadQueueAuthLost({
+              message: "Cloud thread queue lost its Convex authentication",
+            }),
+          ),
+        );
+    },
   );
   const call = <A>(issue: () => Promise<A>) =>
     Effect.tryPromise({ try: issue, catch: (error) => error });
@@ -249,7 +306,7 @@ export const makeThreadQueueBackend = Effect.fn("cloud.thread_queue.backend")(fu
           (unsubscribe) => Effect.sync(unsubscribe),
         ).pipe(Effect.asVoid),
       { bufferSize: 1, strategy: "sliding" },
-    ),
+    ).pipe(Stream.mergeEffect(Deferred.await(authLost))),
     prepare: (head) => call(() => client.query(api.threadQueue.prepare, args(head))),
     accept: (head) => call(() => client.mutation(api.threadQueue.accept, args(head))),
     acknowledge: (head) =>
@@ -515,7 +572,9 @@ export const threadQueueWorkerLayer = () =>
               attempts: DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS,
             })) === null
           )
-            return;
+            return yield* Effect.logWarning(
+              "Cloud thread queue is not running: this environment is not linked; link it, then restart the server",
+            );
           const dpopKeys = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(secrets);
           const tokens = yield* makeCloudSyncTokenProvider({ environmentId, secrets, dpopKeys });
           yield* superviseCloudSyncCompanies({
@@ -530,6 +589,7 @@ export const threadQueueWorkerLayer = () =>
                     tokens,
                   });
                   const executor = yield* makeLocalThreadQueueExecutor(companyId);
+                  yield* Effect.logInfo("Cloud thread queue worker started", { companyId });
                   yield* runThreadQueueWorker(backend, executor);
                 }),
               ),
