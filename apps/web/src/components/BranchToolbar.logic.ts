@@ -149,6 +149,26 @@ export function resolvePreviousWorktreeLabel(seed: PreviousWorktreeSeed): string
   return seed.branch ? `Previous worktree (${seed.branch})` : "Previous worktree";
 }
 
+/**
+ * Whether the branch selector needs the full ref list: the open menu shows it,
+ * and a new worktree without a branch defaults its base from it. A closed menu
+ * on a thread that already has its branch needs neither, so switching threads
+ * or projects does not list every ref of each checkout.
+ */
+export function shouldLoadBranchRefList(input: {
+  isBranchMenuOpen: boolean;
+  effectiveEnvMode: EnvMode;
+  activeWorktreePath: string | null;
+  activeThreadBranch: string | null;
+}): boolean {
+  return (
+    input.isBranchMenuOpen ||
+    (input.effectiveEnvMode === "worktree" &&
+      !input.activeWorktreePath &&
+      !input.activeThreadBranch)
+  );
+}
+
 export function resolveEffectiveEnvMode(input: {
   activeWorktreePath: string | null;
   hasServerThread: boolean;

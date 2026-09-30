@@ -4,7 +4,7 @@ import {
   buildThreadQueueSubmission,
   type StartThreadTurnInput,
 } from "@spiritdevs/client-runtime/operations";
-import { settlePromise } from "@spiritdevs/client-runtime/state/runtime";
+import { settlePromise, type AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
 import {
   ChatAttachmentId,
   OrchestrationV2ThreadLaunchInput,
@@ -23,6 +23,7 @@ import type {
 import { ConvexClient } from "convex/browser";
 import { ConvexError } from "convex/values";
 import { makeFunctionReference } from "convex/server";
+import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -42,9 +43,11 @@ import {
   uploadStandaloneFileAttachment,
 } from "../lib/attachmentUploadQueue";
 import {
+  boundSendAcknowledgement,
   cloudQueuedTurnInput,
   shouldSendTurnToEnvironment,
   prepareDirectTurnAttachments,
+  SEND_ACKNOWLEDGEMENT_TIMEOUT_MESSAGE,
 } from "./threadTurnDelivery";
 import { watchQueueConnection, awaitQueueMutation } from "./threadQueueConnection";
 import { subscribeThreadQueuePages } from "./threadQueuePages";
@@ -561,6 +564,15 @@ export async function queueThreadTurn(queued: QueuedThreadTurnTarget) {
   return { sequence: 0 };
 }
 
+function acknowledgedSend<A, E>(pending: Promise<AtomCommandResult<A, E>>) {
+  return boundSendAcknowledgement(
+    pending,
+    (): AtomCommandResult<A, E> =>
+      AsyncResult.failure(Cause.die(new Error(SEND_ACKNOWLEDGEMENT_TIMEOUT_MESSAGE))),
+  );
+}
+
+/** Every send settles: an acknowledgement that never arrives fails instead of pending forever. */
 export function useQueuedStartThreadTurn() {
   const { userId } = useAuth({ treatPendingAsSignedOut: false });
   const accountIdRef = useRef(userId);
@@ -620,7 +632,7 @@ export function useQueuedStartThreadTurn() {
           pendingCloudMessages: localPending || (queued?.queuedCount ?? 0) > 0,
         });
       };
-      if (!canSendDirectly()) return settlePromise(() => queueThreadTurn(target));
+      if (!canSendDirectly()) return acknowledgedSend(settlePromise(() => queueThreadTurn(target)));
       const attachments = await settlePromise(() =>
         target.durableAttachments
           ? prepareDirectTurnAttachments(target.durableAttachments, async ({ metadata, blob }) => {
@@ -649,16 +661,18 @@ export function useQueuedStartThreadTurn() {
             "The account changed while preparing this message. Send it again from the current account.",
           );
         });
-      if (!canSendDirectly()) return settlePromise(() => queueThreadTurn(target));
+      if (!canSendDirectly()) return acknowledgedSend(settlePromise(() => queueThreadTurn(target)));
       // Do not resubmit through cloud after a transport failure: the environment
       // may already have accepted this turn before the acknowledgement was lost.
-      return startTurn({
-        environmentId: target.environmentId,
-        input: {
-          ...target.input,
-          message: { ...target.input.message, attachments: attachments.value },
-        },
-      });
+      return acknowledgedSend(
+        startTurn({
+          environmentId: target.environmentId,
+          input: {
+            ...target.input,
+            message: { ...target.input.message, attachments: attachments.value },
+          },
+        }),
+      );
     },
     [startTurn],
   );

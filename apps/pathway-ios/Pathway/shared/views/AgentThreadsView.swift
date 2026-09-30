@@ -79,8 +79,9 @@ struct AgentThreadsView: View {
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
             }
         }
-        .task(id: "\(refresh.revision):\(providerEnvironments.map(\.id).joined(separator: "|"))") {
-            guard let connect = appModel.connect else { return }
+        .task(id: "\(refresh.revision):\(listScenePhase == .background):\(providerEnvironments.map(\.id).joined(separator: "|"))") {
+            // One socket per environment; close them in the background and reopen on return.
+            guard listScenePhase != .background, let connect = appModel.connect else { return }
             await threadProviders.observe(environments: providerEnvironments, using: connect)
         }
         .navigationDestination(item: $routedThreadID) { threadID in
@@ -169,6 +170,13 @@ struct AgentThreadsView: View {
 
     @ViewBuilder
     private var threadList: some View {
+        // Bind each shelf once per render; every pass runs Focus and search matching over all threads.
+        let pinnedThreads = self.pinnedThreads
+        let sortedUnpinnedThreads = self.sortedUnpinnedThreads
+        let snoozedThreads = self.snoozedThreads
+        let settledThreads = self.settledThreads
+        let visibleSettledThreads = Array(settledThreads.prefix(settledVisibleCount))
+        let hiddenSettledCount = settledThreads.count - visibleSettledThreads.count
         List {
             refreshResult
             ForEach(pendingQueueThreads) { queued in
@@ -337,14 +345,6 @@ struct AgentThreadsView: View {
         if !pendingQueueThreads.isEmpty { return pendingQueueThreads.count }
         if appModel.pendingThreadRoute != nil || appModel.pendingProductLink != nil { return 1 }
         return listFilter == .archived ? archivedThreads.count : activeThreads.count + snoozedThreads.count + settledThreads.count
-    }
-
-    private var visibleSettledThreads: [PathwayAgentThread] {
-        Array(settledThreads.prefix(settledVisibleCount))
-    }
-
-    private var hiddenSettledCount: Int {
-        max(0, settledThreads.count - visibleSettledThreads.count)
     }
 
     private var lifecycleRefreshKey: String {
@@ -1266,12 +1266,12 @@ struct AgentThreadConversationView: View {
                             #endif
                             .accessibilityHint("Waiting for the latest thread messages to finish syncing")
                             .accessibilityIdentifier("agent-thread-connecting")
-                    } else if !changedItems.isEmpty {
+                    } else if let changes = changedSummary {
                         Button { showsChanges = true } label: {
                             HStack(spacing: 8) {
-                                Text("\(changedFileCount) \(changedFileCount == 1 ? "file" : "files")")
-                                Text("+\(changedItems.reduce(0) { $0 + ($1.additions ?? 0) })").foregroundStyle(.green)
-                                Text("−\(changedItems.reduce(0) { $0 + ($1.deletions ?? 0) })").foregroundStyle(.red)
+                                Text("\(changes.files) \(changes.files == 1 ? "file" : "files")")
+                                Text("+\(changes.additions)").foregroundStyle(.green)
+                                Text("−\(changes.deletions)").foregroundStyle(.red)
                             }.font(.caption).monospacedDigit()
                         }
                         #if os(visionOS)
@@ -1450,7 +1450,17 @@ struct AgentThreadConversationView: View {
         .accessibilityIdentifier("agent-thread-conversation")
     }
 
-    private var changedFileCount: Int { Set(changedItems.compactMap(\.fileName)).count }
+    /// One pass over the transcript; the conversation re-renders on every streamed token.
+    private var changedSummary: (files: Int, additions: Int, deletions: Int)? {
+        var files: Set<String> = [], additions = 0, deletions = 0, found = false
+        for item in model.items where item.type == "file_change" {
+            found = true
+            if let name = item.fileName { files.insert(name) }
+            additions += item.additions ?? 0
+            deletions += item.deletions ?? 0
+        }
+        return found ? (files.count, additions, deletions) : nil
+    }
     private var currentWorkspaceRoot: String? {
         if let projectID = model.thread.shell.projectId {
             return appModel.cloud.environmentBindings.first {

@@ -45,8 +45,8 @@ import {
 } from "../lib/diffRendering";
 import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "../lib/diffCollapse";
 import { useEnsureProjectWorkspace } from "../hooks/useEnsureProjectWorkspace";
-import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
-import { useProject, useThreadProjection, useThreadShell } from "../state/entities";
+import { useThreadTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
+import { useProject, useThreadShell } from "../state/entities";
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { useClientSettings } from "../hooks/useSettings";
 import { formatShortTimestamp } from "../timestampFormat";
@@ -131,7 +131,6 @@ export default function DiffPanel({
   });
   const activeThreadId = routeThreadRef?.threadId ?? null;
   const activeThread = useThreadShell(routeThreadRef);
-  const activeThreadProjection = useThreadProjection(routeThreadRef)?.projection ?? null;
   const activeProjectId = activeThread?.projectId ?? null;
   const activeProject = useProject(
     activeThread && activeProjectId
@@ -220,7 +219,7 @@ export default function DiffPanel({
     (!reviewingConversationFolder || conversationHasOwnRepository) &&
     (gitStatusQuery.data?.isRepo ?? true);
   const { turnDiffSummaries, inferredCheckpointTurnCountByRunId } =
-    useTurnDiffSummaries(activeThreadProjection);
+    useThreadTurnDiffSummaries(routeThreadRef);
   const orderedTurnDiffSummaries = useMemo(
     () =>
       [...turnDiffSummaries].toSorted((left, right) => {

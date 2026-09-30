@@ -12,7 +12,10 @@ import {
   threadAlertPoliciesReadyAtom,
   threadAlertPoliciesErrorAtom,
   threadAlertPolicyScopesAtom,
+  threadAlertNotifiedThreadsAtom,
 } from "./state";
+import { focusNotificationsAtom } from "../cloud/focusReadModel";
+import { environmentThreadShells } from "../state/threads";
 
 vi.mock("../state/projects", async () => {
   const { Atom } = await import("effect/unstable/reactivity");
@@ -20,7 +23,14 @@ vi.mock("../state/projects", async () => {
 });
 vi.mock("../state/threads", async () => {
   const { Atom } = await import("effect/unstable/reactivity");
-  return { environmentThreadShells: { threadRefsAtom: Atom.make([]) } };
+  const shells = Atom.family((_key: string) => Atom.make<unknown>(null).pipe(Atom.keepAlive));
+  return {
+    environmentThreadShells: {
+      threadRefsAtom: Atom.make([]),
+      threadShellAtom: (ref: { environmentId: string; threadId: string }) =>
+        shells(`${ref.environmentId}:${ref.threadId}`),
+    },
+  };
 });
 
 const cleanup: Array<() => void> = [];
@@ -151,5 +161,38 @@ describe("alert policy subscription", () => {
     first.queries[0]?.error(new Error("Old query failed"));
     expect(appAtomRegistry.get(threadAlertPoliciesReadyAtom)).toBe(true);
     expect(appAtomRegistry.get(threadAlertPoliciesErrorAtom)).toBeNull();
+  });
+});
+
+describe("notified alert threads", () => {
+  const shellAtom = (threadId: string) =>
+    environmentThreadShells.threadShellAtom({
+      environmentId: notification.environmentId,
+      threadId: threadId as typeof notification.threadId,
+    }) as unknown as Atom.Writable<unknown>;
+
+  it("keeps its value when only threads without notifications change", () => {
+    appAtomRegistry.set(focusNotificationsAtom, [notification]);
+    appAtomRegistry.set(shellAtom("thread"), { id: "thread", title: "First" });
+    const seen: unknown[] = [];
+    cleanup.push(
+      appAtomRegistry.subscribe(threadAlertNotifiedThreadsAtom, (value) => seen.push(value)),
+    );
+    const initial = appAtomRegistry.get(threadAlertNotifiedThreadsAtom);
+    expect([...initial.keys()]).toEqual(["environment:env:thread:thread"]);
+    seen.length = 0;
+
+    appAtomRegistry.set(shellAtom("unrelated"), { id: "unrelated", title: "Busy" });
+    appAtomRegistry.set(focusNotificationsAtom, [
+      notification,
+      { ...notification, id: "second", eventId: "second" } as typeof notification,
+    ]);
+    expect(appAtomRegistry.get(threadAlertNotifiedThreadsAtom)).toBe(initial);
+    expect(seen.every((value) => value === initial)).toBe(true);
+
+    appAtomRegistry.set(shellAtom("thread"), { id: "thread", title: "Renamed" });
+    expect(
+      appAtomRegistry.get(threadAlertNotifiedThreadsAtom).get("environment:env:thread:thread"),
+    ).toEqual({ id: "thread", title: "Renamed" });
   });
 });

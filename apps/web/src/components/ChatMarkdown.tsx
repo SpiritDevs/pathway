@@ -37,6 +37,7 @@ import React, {
   use,
   useCallback,
   memo,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -99,6 +100,7 @@ import {
   serializeTableElementToMarkdown,
 } from "../markdown-clipboard";
 import { remarkNormalizeListItemIndentation } from "../markdown-list-indentation";
+import { splitMarkdownBlocks } from "../markdown-blocks";
 import {
   extractMarkdownLinkHrefs,
   normalizeMarkdownLinkDestination,
@@ -161,6 +163,7 @@ const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "d
 
 const EMPTY_ISSUE_MENTION_CANDIDATES: ReadonlyArray<string> = [];
 const EMPTY_MARKDOWN_FILE_LINK_META: ReadonlyMap<string, MarkdownFileLinkMeta> = new Map();
+const EMPTY_AVAILABLE_EDITORS: NonNullable<Parameters<typeof useOpenInPreferredEditor>[1]> = [];
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
@@ -1516,7 +1519,7 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
     li({ node, children, ...props }) {
       const listItemStart = node?.position?.start.offset;
       const markerOffset =
-        typeof listItemStart === "number"
+        onTaskListChange && typeof listItemStart === "number"
           ? findTaskListMarkerOffset(textRef.current, listItemStart)
           : null;
       return (
@@ -1733,10 +1736,41 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
   };
 }
 
-function ChatMarkdown({
+interface MarkdownBlockProps {
+  readonly text: string;
+  readonly remarkPlugins: ReactMarkdownOptions["remarkPlugins"];
+  readonly rehypePlugins: ReactMarkdownOptions["rehypePlugins"];
+  readonly components: Components;
+  readonly urlTransform: ReactMarkdownOptions["urlTransform"];
+}
+
+// react-markdown parses on every render. Memoised per block, a streaming message re-parses only
+// the block whose text changed, and a re-render that changes nothing it reads — an issue write, a
+// store event — skips remark and rehype entirely.
+const MarkdownBlock = memo(function MarkdownBlock({
   text,
+  remarkPlugins,
+  rehypePlugins,
+  components,
+  urlTransform,
+}: MarkdownBlockProps) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={remarkPlugins}
+      rehypePlugins={rehypePlugins}
+      skipHtml={false}
+      components={components}
+      urlTransform={urlTransform}
+    >
+      {text}
+    </ReactMarkdown>
+  );
+});
+
+function ChatMarkdown({
+  text: latestText,
   cwd,
-  threadRef,
+  threadRef: threadRefProp,
   onOpenFilePreview,
   onPanelSurfaceOpen,
   onTaskListChange,
@@ -1747,6 +1781,20 @@ function ChatMarkdown({
   parseRawHtml = true,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
+  // Streaming deltas render at transition priority: input stays responsive, and deltas that land
+  // while a render is in progress coalesce into the next one.
+  const text = useDeferredValue(latestText);
+  // Callers often build the ref inline; keying on its fields keeps every handler and the markdown
+  // components below stable across a stream's deltas.
+  const threadEnvironmentId = threadRefProp?.environmentId;
+  const threadId = threadRefProp?.threadId;
+  const threadRef = useMemo<ScopedThreadRef | undefined>(
+    () =>
+      threadEnvironmentId && threadId
+        ? { environmentId: threadEnvironmentId, threadId }
+        : undefined,
+    [threadEnvironmentId, threadId],
+  );
   const textRef = useRef(text);
   const [imageGallery, setImageGallery] = useState<{
     paths: ReadonlyArray<string>;
@@ -1828,7 +1876,7 @@ function ChatMarkdown({
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
     environmentId,
-    serverConfig?.availableEditors ?? [],
+    serverConfig?.availableEditors ?? EMPTY_AVAILABLE_EDITORS,
   );
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const markdownFileLinkMetaByHref = useMemo(() => {
@@ -2033,25 +2081,16 @@ function ChatMarkdown({
       threadRef,
     ],
   );
-  // react-markdown parses on every render, so the element is memoised rather than the components
-  // alone: a re-render that changes nothing it reads — an issue write, a store event — reuses this
-  // element, and React skips the subtree instead of re-running remark and rehype over the message.
-  const markdownElement = useMemo(
-    () => (
-      <ReactMarkdown
-        remarkPlugins={
-          lineBreaks ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS : CHAT_MARKDOWN_REMARK_PLUGINS
-        }
-        rehypePlugins={parseRawHtml ? CHAT_MARKDOWN_REHYPE_PLUGINS : undefined}
-        skipHtml={false}
-        components={markdownComponents}
-        urlTransform={markdownUrlTransform}
-      >
-        {text}
-      </ReactMarkdown>
-    ),
-    [lineBreaks, markdownComponents, markdownUrlTransform, parseRawHtml, text],
+  // Task-list toggles address the whole text by offset, so that text is parsed as one block.
+  const blocks = useMemo(
+    () => (onTaskListChange ? [text] : splitMarkdownBlocks(text)),
+    [onTaskListChange, text],
   );
+  const remarkPlugins = lineBreaks
+    ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS
+    : CHAT_MARKDOWN_REMARK_PLUGINS;
+  const rehypePlugins = parseRawHtml ? CHAT_MARKDOWN_REHYPE_PLUGINS : undefined;
+  const imageContext = useMemo(() => ({ threadRef, cwd }), [cwd, threadRef]);
 
   return (
     <div
@@ -2061,7 +2100,20 @@ function ChatMarkdown({
       )}
       onCopy={handleCopy}
     >
-      <MarkdownImageContext value={{ threadRef, cwd }}>{markdownElement}</MarkdownImageContext>
+      <MarkdownImageContext value={imageContext}>
+        {blocks.map((block, index) => (
+          <MarkdownBlock
+            // Blocks only grow at the tail, so an index keeps every settled block mounted.
+            // oxlint-disable-next-line react/no-array-index-key
+            key={index}
+            text={block}
+            remarkPlugins={remarkPlugins}
+            rehypePlugins={rehypePlugins}
+            components={markdownComponents}
+            urlTransform={markdownUrlTransform}
+          />
+        ))}
+      </MarkdownImageContext>
       {imageGallery && threadRef ? (
         <WorkspaceImageGallery
           paths={imageGallery.paths}

@@ -66,7 +66,6 @@ vi.mock("../hooks/useSettings", () => ({
   useClientSettingsHydrated: () => true,
 }));
 vi.mock("../state/projects", () => ({ environmentProjects: { projectsAtom: [] } }));
-vi.mock("../state/threads", () => ({ environmentThreadShells: { threadShellsAtom: [] } }));
 vi.mock("../rpc/atomRegistry", () => ({ appAtomRegistry: { set: callbacks.setAtom } }));
 vi.mock("../components/ui/toast", () => ({ toastManager: { add: callbacks.toast } }));
 vi.mock("./useReadThreadNotifications", () => ({ useReadThreadNotifications: () => {} }));
@@ -75,6 +74,7 @@ vi.mock("./state", () => ({
   threadAlertAccountAtom: "account",
   threadAlertPolicyScopesAtom: null,
   threadAlertConnectedAtom: true,
+  threadAlertNotifiedThreadsAtom: new Map(),
   threadAlertNotificationsReadyAtom: true,
   threadAlertPoliciesAtom: [],
   threadAlertPoliciesReadyAtom: true,

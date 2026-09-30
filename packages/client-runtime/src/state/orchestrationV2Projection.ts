@@ -5,11 +5,12 @@ import type {
 } from "@spiritdevs/contracts";
 import { isOrchestrationV2TurnItemVisible } from "@spiritdevs/shared/orchestrationV2Timeline";
 
+// Streaming updates almost always target the newest entities, so search from the tail.
 function upsertEntity<T extends { readonly id: unknown }>(
   items: ReadonlyArray<T>,
   item: T,
 ): ReadonlyArray<T> {
-  const index = items.findIndex((candidate) => candidate.id === item.id);
+  const index = items.findLastIndex((candidate) => candidate.id === item.id);
   if (index === -1) return [...items, item];
   const next = [...items];
   next[index] = item;
@@ -20,7 +21,7 @@ function removeVisibleItem(
   rows: OrchestrationV2ThreadProjection["visibleTurnItems"],
   sourceItemId: OrchestrationV2TurnItem["id"],
 ): OrchestrationV2ThreadProjection["visibleTurnItems"] {
-  const index = rows.findIndex((row) => row.sourceItemId === sourceItemId);
+  const index = rows.findLastIndex((row) => row.sourceItemId === sourceItemId);
   if (index === -1) return rows;
   return renumberVisibleItems([...rows.slice(0, index), ...rows.slice(index + 1)]);
 }
@@ -43,14 +44,35 @@ function shouldShowLocalTurnItem(
   });
 }
 
+/**
+ * Drops local rows hidden by rolled-back/cancelled runs or superseded interrupts.
+ * Only those runs, attempts, and interrupt requests can hide a row, so the
+ * per-row check runs against those small subsets instead of the whole thread.
+ */
 function activeVisibleTurnItems(
   projection: OrchestrationV2ThreadProjection,
 ): OrchestrationV2ThreadProjection["visibleTurnItems"] {
   const rows = projection.visibleTurnItems;
+  const runs = projection.runs.filter(
+    (run) => run.status === "rolled_back" || run.status === "cancelled",
+  );
+  const attempts = projection.attempts.filter((attempt) => attempt.status === "superseded");
+  if (runs.length === 0 && attempts.length === 0) return rows;
+  const items =
+    attempts.length === 0
+      ? []
+      : projection.turnItems.filter((item) => item.type === "run_interrupt_request");
+  const hidingRunIds = new Set<unknown>([
+    ...runs.map((run) => run.id),
+    ...attempts.map((attempt) => attempt.runId),
+  ]);
   let next: Array<(typeof rows)[number]> | null = null;
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]!;
-    const keep = row.visibility !== "local" || shouldShowLocalTurnItem(projection, row.item);
+    const keep =
+      row.visibility !== "local" ||
+      !hidingRunIds.has(row.item.runId) ||
+      isOrchestrationV2TurnItemVisible({ item: row.item, runs, attempts, items });
     if (!keep) {
       next ??= rows.slice(0, index);
       continue;
@@ -65,7 +87,7 @@ function upsertVisibleTurnItem(
   item: OrchestrationV2TurnItem,
 ): OrchestrationV2ThreadProjection["visibleTurnItems"] {
   const rows = projection.visibleTurnItems;
-  const index = rows.findIndex((row) => row.sourceItemId === item.id);
+  const index = rows.findLastIndex((row) => row.sourceItemId === item.id);
   const next = {
     position: 0,
     visibility: "local" as const,
@@ -83,15 +105,30 @@ function upsertVisibleTurnItem(
   ) {
     return rows;
   }
+  // A streaming update keeps its ordinal, so the row keeps its slot.
+  if (
+    previous !== undefined &&
+    previous.visibility === "local" &&
+    previous.item.ordinal === item.ordinal
+  ) {
+    const updated = [...rows];
+    updated[index] = { ...next, position: previous.position };
+    return updated;
+  }
   const updated = index === -1 ? [...rows] : [...rows.slice(0, index), ...rows.slice(index + 1)];
-  const insertionIndex = updated.findIndex(
-    (row) =>
-      row.visibility === "local" &&
-      (row.item.ordinal > item.ordinal ||
-        (row.item.ordinal === item.ordinal &&
-          String(row.item.id).localeCompare(String(item.id)) > 0)),
-  );
-  updated.splice(insertionIndex === -1 ? updated.length : insertionIndex, 0, next);
+  // Local rows are ordered by (ordinal, id); new items usually land at the tail,
+  // so scan backwards for the first local row that sorts after the item.
+  let insertionIndex = updated.length;
+  for (let position = updated.length - 1; position >= 0; position -= 1) {
+    const row = updated[position]!;
+    if (row.visibility !== "local") continue;
+    const after =
+      row.item.ordinal > item.ordinal ||
+      (row.item.ordinal === item.ordinal && String(row.item.id).localeCompare(String(item.id)) > 0);
+    if (!after) break;
+    insertionIndex = position;
+  }
+  updated.splice(insertionIndex, 0, next);
   return renumberVisibleItems(updated);
 }
 

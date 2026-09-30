@@ -184,6 +184,7 @@ import {
 } from "./userMessageTerminalContexts";
 import { SkillInlineText } from "./SkillInlineText";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
+import type { PendingDraftSendHold } from "../../lib/pendingDraftSend";
 import {
   buildReviewCommentRenderablePatch,
   formatReviewCommentFence,
@@ -211,6 +212,8 @@ const EMPTY_QUEUED_MESSAGE_CONTROLS: ReadonlyMap<string, QueuedMessageControl> =
 
 interface TimelineRowSharedState {
   allowanceHold: string | null;
+  pendingSendHold: PendingDraftSendHold | null;
+  onRestorePendingSend: (() => void) | null;
   timestampFormat: TimestampFormat;
   timestampNowMs: number;
   routeThreadKey: string;
@@ -312,6 +315,9 @@ const TimelineQuestionsCtx = createContext<AsyncQuestionsProps | null>(null);
 
 interface MessagesTimelineProps {
   allowanceHold?: string | null;
+  /** A sent draft waiting on an offline environment replaces the working indicator. */
+  pendingSendHold?: PendingDraftSendHold | null;
+  onRestorePendingSend?: () => void;
   asyncQuestions?: AsyncQuestionsProps;
   isWorking: boolean;
   workingPresentation?: WorkingPresentation;
@@ -408,6 +414,8 @@ const LOCAL_DAY_CLOCK_RECHECK_MS = 60_000;
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   allowanceHold = null,
+  pendingSendHold = null,
+  onRestorePendingSend,
   asyncQuestions,
   isWorking,
   workingPresentation = "activity",
@@ -949,6 +957,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
       allowanceHold,
+      pendingSendHold,
+      onRestorePendingSend: onRestorePendingSend ?? null,
       timestampFormat,
       timestampNowMs,
       routeThreadKey,
@@ -1003,6 +1013,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }),
     [
       allowanceHold,
+      pendingSendHold,
+      onRestorePendingSend,
       timestampFormat,
       timestampNowMs,
       routeThreadKey,
@@ -2650,6 +2662,18 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
           Your request is retained. Open Settings → Providers and manage the provider’s allowance to
           resume.
         </p>
+      </div>
+    );
+  if (ctx.pendingSendHold)
+    return (
+      <div role="status" className="space-y-1 py-2 text-xs text-muted-foreground">
+        <p className="font-medium text-foreground">{ctx.pendingSendHold.title}</p>
+        <p>{ctx.pendingSendHold.description}</p>
+        {ctx.onRestorePendingSend ? (
+          <Button size="xs" variant="outline" onClick={ctx.onRestorePendingSend}>
+            Restore draft
+          </Button>
+        ) : null}
       </div>
     );
   return (

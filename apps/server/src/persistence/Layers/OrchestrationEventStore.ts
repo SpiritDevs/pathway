@@ -367,8 +367,25 @@ const makeEventStore = Effect.gen(function* () {
     readonly commandId?: CommandId;
     readonly onlyAgentEvents?: boolean;
     readonly limit: number;
-  }) =>
-    sql<ApplicationEventRow>`
+  }) => {
+    // Without ANALYZE statistics SQLite prefers the (version, sequence) index
+    // for ordered reads and walks the whole log to find one thread or command.
+    // Unary `+` keeps the version filter off the index so thread reads use
+    // (aggregate_kind, stream_id, sequence) and command reads use command_id.
+    // Thread and command filters always read agent events.
+    const scope =
+      input.threadId !== undefined
+        ? sql`aggregate_kind = 'thread' AND stream_id = ${input.threadId} AND +application_event_version = 2`
+        : input.commandId !== undefined
+          ? sql`command_id = ${input.commandId} AND aggregate_kind = 'thread' AND +application_event_version = 2`
+          : input.onlyAgentEvents === true
+            ? sql`application_event_version = 2 AND aggregate_kind = 'thread'`
+            : sql`(aggregate_kind = 'project' OR (application_event_version = 2 AND aggregate_kind = 'thread'))`;
+    const commandFilter =
+      input.threadId !== undefined && input.commandId !== undefined
+        ? sql`AND command_id = ${input.commandId}`
+        : sql``;
+    return sql<ApplicationEventRow>`
       SELECT
         sequence,
         event_id,
@@ -383,17 +400,14 @@ const makeEventStore = Effect.gen(function* () {
         causation_event_id,
         correlation_id
       FROM orchestration_events
-      WHERE sequence > ${input.afterSequence}
+      WHERE ${scope}
+        ${commandFilter}
+        AND sequence > ${input.afterSequence}
         AND sequence <= ${input.throughSequence ?? Number.MAX_SAFE_INTEGER}
-        AND (
-          (${input.onlyAgentEvents === true ? 1 : 0} = 0 AND aggregate_kind = 'project')
-          OR (application_event_version = 2 AND aggregate_kind = 'thread')
-        )
-        AND (${input.threadId ?? null} IS NULL OR stream_id = ${input.threadId ?? null})
-        AND (${input.commandId ?? null} IS NULL OR command_id = ${input.commandId ?? null})
       ORDER BY sequence ASC
       LIMIT ${input.limit}
     `;
+  };
 
   const appendAgentEvents: OrchestrationEventStoreShape["appendAgentEvents"] = (input) =>
     Effect.forEach(
@@ -484,9 +498,11 @@ const makeEventStore = Effect.gen(function* () {
     sql<{ readonly sequence: number | null }>`
       SELECT MAX(sequence) AS sequence
       FROM orchestration_events
-      WHERE application_event_version = 2
-        AND aggregate_kind = 'thread'
-        AND (${threadId ?? null} IS NULL OR stream_id = ${threadId ?? null})
+      WHERE ${
+        threadId === undefined
+          ? sql`application_event_version = 2 AND aggregate_kind = 'thread'`
+          : sql`aggregate_kind = 'thread' AND stream_id = ${threadId} AND +application_event_version = 2`
+      }
     `.pipe(
       Effect.map((rows) => rows[0]?.sequence ?? 0),
       Effect.mapError(toPersistenceSqlError("OrchestrationEventStore.latestAgentSequence:query")),

@@ -320,8 +320,10 @@ import {
   useComposerDraftStore,
   useEffectiveComposerModelState,
   DraftId,
+  restorePendingDraftSend,
 } from "../composerDraftStore";
 import { releaseDraftAttachment, readAttachmentUpload } from "../lib/attachmentUploadQueue";
+import { pendingDraftSendHold } from "../lib/pendingDraftSend";
 import { useProvisionInternalWorkspace } from "./projects/useProjectWorkspaceCommands";
 import {
   appendTerminalContextsToPrompt,
@@ -2406,10 +2408,16 @@ function ChatViewContent(props: ChatViewProps) {
     reconcile();
   }, [activeThreadKey, existingOpenTerminalThreadKeys, terminalUiState.terminalOpen]);
   const latestRunSettled = isLatestRunSettled(activeLatestRun, activeRuntime);
-  const activeProjectRef =
-    activeThread && activeThread.projectId !== null
-      ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
-      : null;
+  // ChatView is not React-compiled, so keep refs handed to children stable by hand.
+  const activeProjectEnvironmentId = activeThread?.environmentId ?? null;
+  const activeProjectId = activeThread?.projectId ?? null;
+  const activeProjectRef = useMemo(
+    () =>
+      activeProjectEnvironmentId !== null && activeProjectId !== null
+        ? scopeProjectRef(activeProjectEnvironmentId, activeProjectId)
+        : null,
+    [activeProjectEnvironmentId, activeProjectId],
+  );
   const serverProject = useProject(activeProjectRef);
   const queuedProject = useMemo(
     () => queueDestinationProject(queueDestination, activeThread?.projectId),
@@ -2522,6 +2530,14 @@ function ChatViewContent(props: ChatViewProps) {
       connection: activeEnvironment.connection,
     };
   }, [activeEnvironment, activeEnvironmentUnavailable, activeEnvironmentUnavailableLabel]);
+  const hasPendingDraftSend = draftThread?.pendingSend != null;
+  const pendingSendHold = useMemo(
+    () => (hasPendingDraftSend ? pendingDraftSendHold(activeEnvironment) : null),
+    [activeEnvironment, hasPendingDraftSend],
+  );
+  const handleRestorePendingSend = useCallback(() => {
+    if (draftId) restorePendingDraftSend(draftId);
+  }, [draftId]);
   const handleReconnectActiveEnvironment = useCallback(
     async (environmentId: EnvironmentId) => {
       const result = await retryEnvironment(environmentId);
@@ -2538,7 +2554,10 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [retryEnvironment],
   );
-  const projectGroupingSettings = selectProjectGroupingSettings(settings);
+  const projectGroupingSettings = useMemo(
+    () => selectProjectGroupingSettings(settings),
+    [settings],
+  );
   const logicalProjectEnvironments = useMemo(() => {
     if (!activeProject) return [];
     const logicalKey = deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings);
@@ -10075,6 +10094,8 @@ function ChatViewContent(props: ChatViewProps) {
                 activeTurnInProgress={(isWorking || !latestRunSettled) && !threadHistory?.hasNewer}
                 activeTurnStartedAt={activeWorkStartedAt}
                 allowanceHold={allowanceHold}
+                pendingSendHold={pendingSendHold}
+                {...(draftId ? { onRestorePendingSend: handleRestorePendingSend } : {})}
                 pendingBackgroundTasks={threadHistory?.hasNewer ? null : pendingBackgroundTasks}
                 listRef={legendListRef}
                 asyncQuestions={timelineAsyncQuestions}

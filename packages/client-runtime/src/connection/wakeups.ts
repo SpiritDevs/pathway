@@ -4,6 +4,8 @@ import type * as Stream from "effect/Stream";
 
 export type ConnectionWakeup =
   | "application-active"
+  // Foregrounded after a short absence: probe the transport, keep live subscriptions.
+  | "application-active-brief"
   | "application-active-probe"
   | "application-active-reconnect"
   | "credentials-changed";
@@ -11,11 +13,13 @@ export type ConnectionWakeup =
 export function isApplicationActiveWakeup(reason: ConnectionWakeup): boolean {
   return (
     reason === "application-active" ||
+    reason === "application-active-brief" ||
     reason === "application-active-probe" ||
     reason === "application-active-reconnect"
   );
 }
 
+/** Resubscribing makes the server reload full snapshots, so brief absences skip it. */
 export function shouldResubscribeAfterWakeup(reason: ConnectionWakeup): boolean {
   return reason === "application-active" || reason === "application-active-probe";
 }

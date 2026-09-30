@@ -1,7 +1,9 @@
 import { assert, it, describe } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as VcsProcess from "./VcsProcess.ts";
@@ -15,6 +17,9 @@ const processOutput = (stdout: string): VcsProcess.VcsProcessOutput => ({
   stdoutTruncated: false,
   stderrTruncated: false,
 });
+
+// Cached detections are re-checked against the filesystem, so fixtures need a real cwd.
+const existingCwd = import.meta.dirname;
 
 const normalizeGitArgs = (args: ReadonlyArray<string>): ReadonlyArray<string> =>
   args[0] === "-C" && args.length >= 2 ? args.slice(2) : args;
@@ -77,8 +82,8 @@ describe("VcsDriverRegistry", () => {
 
     return Effect.gen(function* () {
       const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
-      const first = yield* registry.resolve({ cwd: "/repo", requestedKind: "git" });
-      const second = yield* registry.resolve({ cwd: "/repo", requestedKind: "git" });
+      const first = yield* registry.resolve({ cwd: existingCwd, requestedKind: "git" });
+      const second = yield* registry.resolve({ cwd: existingCwd, requestedKind: "git" });
 
       assert.equal(first.repository.rootPath, "/repo");
       assert.equal(second.repository.rootPath, "/repo");
@@ -132,9 +137,62 @@ describe("VcsDriverRegistry", () => {
     return Effect.gen(function* () {
       const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
 
-      assert.equal(yield* registry.detect({ cwd: "/repo" }), null);
-      assert.equal((yield* registry.detect({ cwd: "/repo" }))?.repository.rootPath, "/repo");
+      assert.equal(yield* registry.detect({ cwd: existingCwd }), null);
+      assert.equal((yield* registry.detect({ cwd: existingCwd }))?.repository.rootPath, "/repo");
       assert.equal(insideWorkTreeChecks, 2);
     }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps positive detection across status refresh intervals", () => {
+    let insideWorkTreeChecks = 0;
+    let configLookups = 0;
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-vcs-registry-" });
+      const cwd = `${root}/worktree`;
+      yield* fs.makeDirectory(cwd);
+      const layer = Layer.effect(VcsDriverRegistry.VcsDriverRegistry, VcsDriverRegistry.make).pipe(
+        Layer.provide(NodeServices.layer),
+        Layer.provide(
+          Layer.mock(VcsProjectConfig.VcsProjectConfig)({
+            resolveKind: (input) =>
+              Effect.sync(() => {
+                configLookups += 1;
+                return input.requestedKind ?? "auto";
+              }),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(VcsProcess.VcsProcess)({
+            run: (input) =>
+              Effect.sync(() => {
+                const command = normalizeGitArgs(input.args).join(" ");
+                if (command === "rev-parse --is-inside-work-tree") {
+                  insideWorkTreeChecks += 1;
+                  return processOutput("true\n");
+                }
+                if (command === "rev-parse --show-toplevel") return processOutput(`${cwd}\n`);
+                return processOutput("");
+              }),
+          }),
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
+        yield* registry.detect({ cwd });
+        yield* TestClock.adjust("30 seconds");
+        yield* registry.detect({ cwd });
+        yield* TestClock.adjust("2 minutes");
+        yield* registry.detect({ cwd });
+        assert.equal(insideWorkTreeChecks, 1);
+        assert.equal(configLookups, 1);
+
+        // A removed worktree is re-detected instead of routing to git.
+        yield* fs.remove(cwd, { recursive: true });
+        yield* registry.detect({ cwd });
+        assert.equal(insideWorkTreeChecks, 2);
+      }).pipe(Effect.provide(layer));
+    }).pipe(Effect.provide(Layer.merge(NodeServices.layer, TestClock.layer())), Effect.scoped);
   });
 });

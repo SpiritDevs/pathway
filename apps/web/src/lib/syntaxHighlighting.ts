@@ -1,8 +1,4 @@
-import {
-  getSharedHighlighter,
-  type DiffsHighlighter,
-  type SupportedLanguages,
-} from "@pierre/diffs";
+import type { DiffsHighlighter, SupportedLanguages } from "@pierre/diffs";
 
 import { resolveDiffThemeName } from "./diffRendering";
 
@@ -12,19 +8,25 @@ export function getSyntaxHighlighterPromise(language: string): Promise<DiffsHigh
   const cached = highlighterPromiseCache.get(language);
   if (cached) return cached;
 
-  const promise = getSharedHighlighter({
-    themes: [resolveDiffThemeName("dark"), resolveDiffThemeName("light")],
-    langs: [language as SupportedLanguages],
-    preferredHighlighter: "shiki-js",
-  }).catch((error) => {
-    if (language === "text") {
-      highlighterPromiseCache.delete(language);
-      // "text" itself failed — Shiki cannot initialize at all, surface the error
-      throw error;
-    }
-    // Language not supported by Shiki — fall back to "text"
-    return getSyntaxHighlighterPromise("text");
-  });
+  // Shiki and its regex engine load on first highlight, not with whichever
+  // eager surface (search, attachments) happens to import this module.
+  const promise = import("@pierre/diffs")
+    .then(({ getSharedHighlighter }) =>
+      getSharedHighlighter({
+        themes: [resolveDiffThemeName("dark"), resolveDiffThemeName("light")],
+        langs: [language as SupportedLanguages],
+        preferredHighlighter: "shiki-js",
+      }),
+    )
+    .catch((error) => {
+      if (language === "text") {
+        highlighterPromiseCache.delete(language);
+        // "text" itself failed — Shiki cannot initialize at all, surface the error
+        throw error;
+      }
+      // Language not supported by Shiki — fall back to "text"
+      return getSyntaxHighlighterPromise("text");
+    });
   highlighterPromiseCache.set(language, promise);
   return promise;
 }

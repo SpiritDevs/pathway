@@ -161,7 +161,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
   --color-zinc-25: oklch(99.2% 0 0);
   --animate-skeleton: skeleton 2s infinite linear;
   /* Duty-cycled indicator animations: long holds with stepped ramps, so the
-     compositor updates discrete frames instead of every vsync. */
+     compositor updates discrete frames instead of every vsync. Instances are
+     phase-locked to one clock by lib/indicatorPhaseLock.ts. Tailwind's stock
+     animate-pulse is remapped here so stray uses get the same treatment. */
+  --animate-pulse: status-pulse 2s infinite;
   --animate-status-pulse: status-pulse 2s infinite;
   --animate-ghost-pulse: ghost-pulse 2.4s infinite;
   --animate-status-ping: status-ping 2s infinite;
@@ -974,10 +977,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
     backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
   }
 
+  /* A plain dim, no blur: the backdrop spans the window, and a backdrop blur
+     there re-filters every pixel whenever anything underneath repaints
+     (streaming turns, status indicators). */
   .dialog-backdrop {
-    background: color-mix(in srgb, var(--background) 60%, transparent);
-    -webkit-backdrop-filter: blur(4px);
-    backdrop-filter: blur(4px);
+    background: color-mix(in srgb, var(--background) 68%, transparent);
   }
 
   .dropdown-glass {
@@ -1023,7 +1027,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
   }
 
   .dark .dialog-backdrop {
-    background: color-mix(in srgb, var(--background) 64%, transparent);
+    background: color-mix(in srgb, var(--background) 72%, transparent);
   }
 
   .glass-opacity-slider {
@@ -1287,10 +1291,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
     backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
   }
 
+  /* A plain dim, no blur: the backdrop spans the window, and a backdrop blur
+     there re-filters every pixel whenever anything underneath repaints
+     (streaming turns, status indicators). */
   .dialog-backdrop {
-    background: color-mix(in srgb, var(--background) 60%, transparent);
-    -webkit-backdrop-filter: blur(4px);
-    backdrop-filter: blur(4px);
+    background: color-mix(in srgb, var(--background) 68%, transparent);
   }
 
   .dropdown-glass {
@@ -1336,7 +1341,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
   }
 
   .dark .dialog-backdrop {
-    background: color-mix(in srgb, var(--background) 64%, transparent);
+    background: color-mix(in srgb, var(--background) 72%, transparent);
   }
 
   .settings-slider {
@@ -1527,6 +1532,18 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
 .no-transitions *::after {
   transition-duration: 0s !important;
   animation-duration: 0s !important;
+}
+
+/* Mounted-but-unseen content never animates: `visibility: hidden` (kept-alive
+   tabs) and an off-canvas collapsed sidebar translated out of view both keep
+   CSS animations ticking otherwise. Unlayered so it outranks animate-*
+   utilities; a revealed element restarts its animation and re-joins the
+   shared indicator phase. */
+.invisible *,
+[data-slot="sidebar"][data-collapsible="offcanvas"]:not([data-hover-revealed="true"])
+  [data-slot="sidebar-container"]
+  * {
+  animation-name: none;
 }
 
 :root {
@@ -2725,6 +2742,10 @@ label:has(> select#reasoning-effort) select {
   color: var(--code-foreground) !important;
 }
 
+/* Ultrathink's spectrum drifts while the mode is armed. background-position
+   and filter repaint rather than composite, so the drift is stepped: six
+   small moves a second instead of a full repaint of the composer frame on
+   every vsync. */
 @keyframes ultrathink-rainbow {
   0% {
     background-position: 0% 50%;
@@ -2776,7 +2797,7 @@ label:has(> select#reasoning-effort) select {
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   mask-composite: exclude;
-  animation: ultrathink-rainbow 10s linear infinite;
+  animation: ultrathink-rainbow 10s steps(60) infinite;
 }
 
 .ultrathink-frame > * {
@@ -2784,32 +2805,14 @@ label:has(> select#reasoning-effort) select {
 }
 
 .ultrathink-chroma {
-  animation: ultrathink-chroma-shift 10s linear infinite;
+  animation: ultrathink-chroma-shift 10s steps(60) infinite;
 }
 
-.ultrathink-pill {
-  background:
-    linear-gradient(var(--card), var(--card)) padding-box,
-    var(--ultrathink-spectrum) border-box;
-  background-size:
-    100% 100%,
-    220% 220%;
-  background-position:
-    0 0,
-    0% 50%;
-  animation: ultrathink-rainbow 10s linear infinite;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--card) 82%, transparent);
-}
-
-.ultrathink-word {
-  display: inline-block;
-  color: transparent;
-  background-image: var(--ultrathink-spectrum);
-  background-size: 220% 220%;
-  background-position: 0% 50%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  animation: ultrathink-rainbow 10s linear infinite;
+@media (prefers-reduced-motion: reduce) {
+  .ultrathink-frame::before,
+  .ultrathink-chroma {
+    animation: none;
+  }
 }
 
 /* Composer chips are non-editable decorators, so the browser skips them when

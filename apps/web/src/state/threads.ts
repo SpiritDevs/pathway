@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import {
   createEnvironmentThreadDetailAtoms,
   createEnvironmentThreadShellAtoms,
@@ -35,7 +36,10 @@ const companyScopedThreadSnapshotAtom = Atom.family((environmentId: EnvironmentI
 );
 
 export const threadEnvironment = createThreadEnvironmentAtoms(connectionAtomRuntime);
-export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime);
+export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime, {
+  reprobeSignal: (environmentId, threadId) =>
+    environmentThreadShells.threadShellAtom(scopeThreadRef(environmentId, threadId)),
+});
 export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
   environmentThreads.stateAtom,
 );

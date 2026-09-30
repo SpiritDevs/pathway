@@ -74,8 +74,6 @@ describe("threadRoutes", () => {
 
     expect(
       resolveActiveThreadRouteRef(target, {
-        environmentId: "env-1" as never,
-        threadId: ThreadId.make("draft-thread"),
         promotedTo: scopeThreadRef("env-2" as never, ThreadId.make("server-thread")),
       }),
     ).toEqual({
@@ -87,13 +85,7 @@ describe("threadRoutes", () => {
   it("does not treat a draft's reserved thread ref as an active sidebar thread", () => {
     const target = resolveThreadRouteTarget({ draftId: "draft-1" });
 
-    expect(
-      resolveActiveThreadRouteRef(target, {
-        environmentId: "env-1" as never,
-        threadId: ThreadId.make("draft-thread"),
-        promotedTo: null,
-      }),
-    ).toBeNull();
+    expect(resolveActiveThreadRouteRef(target, { promotedTo: null })).toBeNull();
   });
 
   it("closes a promoted draft when its server thread is filtered out or deleted", () => {

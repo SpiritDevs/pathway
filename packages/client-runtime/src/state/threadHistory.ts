@@ -131,22 +131,20 @@ export function applyThreadHistoryProjectionEvent(
   event: OrchestrationV2DomainEvent,
 ): Projection {
   if (event.type === "turn-item.updated") {
-    const visible = projection.visibleTurnItems.some(
-      (row) => row.sourceItemId === event.payload.id,
-    );
+    const visible =
+      projection.visibleTurnItems.findLastIndex((row) => row.sourceItemId === event.payload.id) !==
+      -1;
     const firstLocal = projection.visibleTurnItems.find((row) => row.visibility === "local");
     const atTail =
       !history.hasNewer &&
       (firstLocal === undefined || event.payload.ordinal >= firstLocal.item.ordinal);
     if (!visible && !atTail) {
-      const index = projection.turnItems.findIndex((item) => item.id === event.payload.id);
+      const index = projection.turnItems.findLastIndex((item) => item.id === event.payload.id);
       return index === -1
         ? projection
         : {
             ...projection,
-            turnItems: projection.turnItems.map((item, position) =>
-              position === index ? event.payload : item,
-            ),
+            turnItems: projection.turnItems.with(index, event.payload),
             updatedAt: event.occurredAt,
           };
     }

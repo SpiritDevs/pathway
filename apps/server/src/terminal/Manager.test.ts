@@ -201,15 +201,24 @@ const multiTerminalHistoryLogPath = (
     }),
   );
 
+interface SubprocessInspectResult {
+  readonly hasRunningSubprocess: boolean;
+  readonly childCommand: string | null;
+  readonly processIds: ReadonlyArray<number>;
+}
+
+const inspectEvery =
+  (inspect: () => SubprocessInspectResult) => (terminalPids: ReadonlyArray<number>) =>
+    Effect.sync(() => new Map(terminalPids.map((pid) => [pid, inspect()] as const)));
+
 interface CreateManagerOptions {
   shellResolver?: () => string;
   env?: NodeJS.ProcessEnv;
-  subprocessInspector?: (terminalPid: number) => Effect.Effect<{
-    readonly hasRunningSubprocess: boolean;
-    readonly childCommand: string | null;
-    readonly processIds: ReadonlyArray<number>;
-  }>;
+  subprocessInspector?: (
+    terminalPids: ReadonlyArray<number>,
+  ) => Effect.Effect<ReadonlyMap<number, SubprocessInspectResult>>;
   subprocessPollIntervalMs?: number;
+  subprocessIdlePollIntervalMs?: number;
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
   ptyAdapter?: FakePtyAdapter;
@@ -249,6 +258,9 @@ const createManager = (
           : {}),
         ...(options.subprocessPollIntervalMs !== undefined
           ? { subprocessPollIntervalMs: options.subprocessPollIntervalMs }
+          : {}),
+        ...(options.subprocessIdlePollIntervalMs !== undefined
+          ? { subprocessIdlePollIntervalMs: options.subprocessIdlePollIntervalMs }
           : {}),
         processKillGraceMs: options.processKillGraceMs ?? 1,
         ...(options.maxRetainedInactiveSessions !== undefined
@@ -886,13 +898,13 @@ it.layer(
 
   it.effect("emits subprocess activity events when child-process state changes", () =>
     Effect.gen(function* () {
-      let inspect: {
-        readonly hasRunningSubprocess: boolean;
-        readonly childCommand: string | null;
-        readonly processIds: ReadonlyArray<number>;
-      } = { hasRunningSubprocess: false, childCommand: null, processIds: [] };
+      let inspect: SubprocessInspectResult = {
+        hasRunningSubprocess: false,
+        childCommand: null,
+        processIds: [],
+      };
       const { manager, getEvents } = yield* createManager(5, {
-        subprocessInspector: () => Effect.succeed(inspect),
+        subprocessInspector: inspectEvery(() => inspect),
         subprocessPollIntervalMs: 20,
       });
 
@@ -931,14 +943,10 @@ it.layer(
     Effect.gen(function* () {
       let checks = 0;
       const { manager } = yield* createManager(5, {
-        subprocessInspector: () => {
+        subprocessInspector: inspectEvery(() => {
           checks += 1;
-          return Effect.succeed({
-            hasRunningSubprocess: false,
-            childCommand: null,
-            processIds: [],
-          });
-        },
+          return { hasRunningSubprocess: false, childCommand: null, processIds: [] };
+        }),
         subprocessPollIntervalMs: 20,
       });
 
@@ -951,6 +959,70 @@ it.layer(
         "1200 millis",
       );
     }),
+  );
+
+  it.effect("inspects all terminals with one inspector call per tick", () =>
+    Effect.gen(function* () {
+      const batches: Array<ReadonlyArray<number>> = [];
+      const { manager } = yield* createManager(5, {
+        subprocessInspector: (terminalPids) => {
+          batches.push(terminalPids);
+          return inspectEvery(() => ({
+            hasRunningSubprocess: false,
+            childCommand: null,
+            processIds: [],
+          }))(terminalPids);
+        },
+        subprocessPollIntervalMs: 20,
+      });
+
+      yield* manager.open(openInput({ terminalId: "default" }));
+      yield* manager.open(openInput({ terminalId: "sidecar" }));
+      yield* waitFor(Effect.sync(() => batches.some((pids) => pids.length === 2)));
+    }),
+  );
+
+  it.effect("backs off subprocess inspection for idle terminals until input arrives", () =>
+    Effect.gen(function* () {
+      let checks = 0;
+      let running = false;
+      const { manager } = yield* createManager(5, {
+        subprocessInspector: inspectEvery(() => {
+          checks += 1;
+          return running
+            ? { hasRunningSubprocess: true, childCommand: "vim", processIds: [] }
+            : { hasRunningSubprocess: false, childCommand: null, processIds: [] };
+        }),
+        subprocessPollIntervalMs: 1_000,
+        subprocessIdlePollIntervalMs: 10_000,
+      });
+
+      yield* manager.open(openInput());
+      // Recent spawn keeps the fast cadence, then the shell goes idle.
+      yield* TestClock.adjust("12 seconds");
+      const idleChecks = checks;
+      yield* TestClock.adjust("5 seconds");
+      assert.equal(checks, idleChecks);
+
+      // Input restores the fast cadence on the next tick.
+      running = true;
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "vim\r",
+      });
+      yield* TestClock.adjust("1 second");
+      assert.equal(checks, idleChecks + 1);
+
+      // A running child keeps the fast cadence long after the last input.
+      yield* TestClock.adjust("20 seconds");
+      assert.equal(checks, idleChecks + 21);
+
+      const closeFiber = yield* manager.close({ threadId: "thread-1" }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 millis");
+      yield* Fiber.join(closeFiber);
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 
   it.effect("caps persisted history to configured line limit", () =>

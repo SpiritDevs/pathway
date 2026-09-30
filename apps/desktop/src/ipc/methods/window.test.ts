@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
 
 import type * as Electron from "electron";
 
@@ -11,9 +12,12 @@ import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopConfig from "../../app/DesktopConfig.ts";
+import * as IpcChannels from "../channels.ts";
+import * as DesktopIpc from "../DesktopIpc.ts";
 import {
   getLocalEnvironmentBootstraps,
   getWindowFullscreenState,
+  installLocalEnvironmentBootstraps,
   setWindowButtonsVisible,
 } from "./window.ts";
 
@@ -133,6 +137,58 @@ describe("getLocalEnvironmentBootstraps", () => {
       const result = yield* getLocalEnvironmentBootstraps.handler();
       assert.deepEqual(result, []);
     }).pipe(Effect.provide(DesktopBackendPool.layerTest([stoppedInstance])));
+  });
+});
+
+describe("installLocalEnvironmentBootstraps", () => {
+  it.effect("pushes the topology to windows only when it changes", () => {
+    let config = Option.some(readyWslConfig);
+    const instance: DesktopBackendManager.DesktopBackendInstance = {
+      ...defaultWslInstance,
+      currentConfig: Effect.sync(() => config),
+    };
+    const pushes: unknown[] = [];
+    // The registered handler reads the same pool this test provides.
+    let syncHandler: (() => Effect.Effect<unknown>) | null = null;
+
+    return Effect.gen(function* () {
+      yield* installLocalEnvironmentBootstraps();
+      yield* Effect.yieldNow;
+      assert.equal(pushes.length, 1);
+
+      yield* TestClock.adjust("6 seconds");
+      assert.equal(pushes.length, 1);
+
+      config = Option.some({ ...readyWslConfig, httpBaseUrl: new URL("http://127.0.0.1:3775") });
+      const read = (yield* syncHandler!()) as ReadonlyArray<{ httpBaseUrl: string | null }>;
+      assert.equal(read[0]?.httpBaseUrl, "http://127.0.0.1:3775/");
+      assert.equal(pushes.length, 2);
+
+      yield* TestClock.adjust("2 seconds");
+      assert.equal(pushes.length, 2);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          DesktopBackendPool.layerTest([instance]),
+          Layer.mock(DesktopIpc.DesktopIpc)({
+            handleSync: (method) =>
+              Effect.sync(() => {
+                assert.equal(method.channel, IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);
+                syncHandler = method.handler as unknown as () => Effect.Effect<unknown>;
+              }),
+          }),
+          Layer.mock(ElectronWindow.ElectronWindow)({
+            sendAll: (channel, ...args) =>
+              Effect.sync(() => {
+                assert.equal(channel, IpcChannels.LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);
+                pushes.push(args[0]);
+              }),
+          }),
+          TestClock.layer(),
+        ),
+      ),
+    );
   });
 });
 

@@ -2,6 +2,8 @@ import { ThreadQueueRuntime } from "../cloud/threadQueue";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
+  lazy,
+  Suspense,
   useEffect,
   useState,
   useSyncExternalStore,
@@ -14,19 +16,12 @@ import { getLocalStorageItem, useLocalStorage } from "../hooks/useLocalStorage";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { cn } from "../lib/utils";
+import { whenIdle } from "../lib/whenIdle";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode } from "../hooks/useSettings";
 import { useThreadVisitedMigration } from "../hooks/useThreadVisitedMigration";
 import ThreadSidebar from "./Sidebar";
-import { CalendarSidebar } from "./calendar/CalendarSidebar";
-import { EmailSidebar } from "./email/EmailSidebar";
-import { IssuesSidebar } from "./issues/IssuesSidebar";
-import { OrchestratorSidebar } from "./orchestrator/OrchestratorSidebar";
-import { OrchestratorOverlay } from "./orchestrator/OrchestratorConversation";
-import { ProjectsSidebar } from "./projects/ProjectsSidebar";
-import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { ContextualSidebarHeader } from "./sidebar/ContextualSidebarHeader";
-import { SourceControlSidebar } from "./sourceControl/SourceControlSidebar";
 import {
   PRIMARY_NAVIGATION_EXPANDED_STORAGE_KEY,
   PrimaryNavigationRail,
@@ -61,6 +56,60 @@ import {
   useSidebarVisibility,
 } from "./ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+
+// The thread sidebar is the chat route's and stays in the entry chunk. Every
+// other surface's sidebar, and the orchestrator overlay, load on demand and are
+// warmed once the app is idle so a first visit does not flash an empty panel.
+const secondarySidebarLoaders = {
+  calendar: () => import("./calendar/CalendarSidebar"),
+  email: () => import("./email/EmailSidebar"),
+  issues: () => import("./issues/IssuesSidebar"),
+  orchestrator: () => import("./orchestrator/OrchestratorSidebar"),
+  orchestratorOverlay: () => import("./orchestrator/OrchestratorConversation"),
+  projects: () => import("./projects/ProjectsSidebar"),
+  settings: () => import("./settings/SettingsSidebarNav"),
+  sourceControl: () => import("./sourceControl/SourceControlSidebar"),
+};
+const CalendarSidebar = lazy(() =>
+  secondarySidebarLoaders.calendar().then((module) => ({ default: module.CalendarSidebar })),
+);
+const EmailSidebar = lazy(() =>
+  secondarySidebarLoaders.email().then((module) => ({ default: module.EmailSidebar })),
+);
+const IssuesSidebar = lazy(() =>
+  secondarySidebarLoaders.issues().then((module) => ({ default: module.IssuesSidebar })),
+);
+const OrchestratorSidebar = lazy(() =>
+  secondarySidebarLoaders
+    .orchestrator()
+    .then((module) => ({ default: module.OrchestratorSidebar })),
+);
+const OrchestratorOverlay = lazy(() =>
+  secondarySidebarLoaders
+    .orchestratorOverlay()
+    .then((module) => ({ default: module.OrchestratorOverlay })),
+);
+const ProjectsSidebar = lazy(() =>
+  secondarySidebarLoaders.projects().then((module) => ({ default: module.ProjectsSidebar })),
+);
+const SettingsSidebarNav = lazy(() =>
+  secondarySidebarLoaders.settings().then((module) => ({ default: module.SettingsSidebarNav })),
+);
+const SourceControlSidebar = lazy(() =>
+  secondarySidebarLoaders
+    .sourceControl()
+    .then((module) => ({ default: module.SourceControlSidebar })),
+);
+
+function useWarmSecondarySidebars() {
+  useEffect(
+    () =>
+      whenIdle(() => {
+        for (const load of Object.values(secondarySidebarLoaders)) void load();
+      }),
+    [],
+  );
+}
 
 function subscribeToViewportWidth(onChange: () => void): () => void {
   window.addEventListener("resize", onChange);
@@ -183,6 +232,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
 
 function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  useWarmSecondarySidebars();
   // Seeds server-side visited tracking from this browser's localStorage the
   useThreadVisitedMigration();
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -248,7 +298,9 @@ function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
           <div className="contents" data-terminal-full-width-host="" />
         </div>
       </div>
-      <OrchestratorOverlay />
+      <Suspense fallback={null}>
+        <OrchestratorOverlay />
+      </Suspense>
     </div>
   );
 }
@@ -302,26 +354,28 @@ export function WorkspaceFrame({ children }: { children: ReactNode }) {
             onResize: setSidebarWidth,
           }}
         >
-          {secondarySidebarKind === "settings" ? (
-            <>
-              <ContextualSidebarHeader title="Settings" />
-              <SettingsSidebarNav pathname={pathname} />
-            </>
-          ) : secondarySidebarKind === "email" ? (
-            <EmailSidebar />
-          ) : secondarySidebarKind === "calendar" ? (
-            <CalendarSidebar />
-          ) : secondarySidebarKind === "orchestrator" ? (
-            <OrchestratorSidebar />
-          ) : secondarySidebarKind === "projects" ? (
-            <ProjectsSidebar />
-          ) : secondarySidebarKind === "issues" ? (
-            <IssuesSidebar />
-          ) : secondarySidebarKind === "source-control" ? (
-            <SourceControlSidebar />
-          ) : (
-            <ThreadSidebar />
-          )}
+          <Suspense fallback={null}>
+            {secondarySidebarKind === "settings" ? (
+              <>
+                <ContextualSidebarHeader title="Settings" />
+                <SettingsSidebarNav pathname={pathname} />
+              </>
+            ) : secondarySidebarKind === "email" ? (
+              <EmailSidebar />
+            ) : secondarySidebarKind === "calendar" ? (
+              <CalendarSidebar />
+            ) : secondarySidebarKind === "orchestrator" ? (
+              <OrchestratorSidebar />
+            ) : secondarySidebarKind === "projects" ? (
+              <ProjectsSidebar />
+            ) : secondarySidebarKind === "issues" ? (
+              <IssuesSidebar />
+            ) : secondarySidebarKind === "source-control" ? (
+              <SourceControlSidebar />
+            ) : (
+              <ThreadSidebar />
+            )}
+          </Suspense>
           <SidebarRail />
         </Sidebar>
       ) : null}

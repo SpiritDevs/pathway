@@ -65,6 +65,7 @@ import {
   captureComposerDraft,
   draftProjectKey,
   reconcilePendingDraftSends,
+  restorePendingDraftSend,
   finalizePromotedDraftThreadByRef,
   hydrateImagesFromPersisted,
   markPromotedDraftThread,
@@ -1435,6 +1436,35 @@ describe("composerDraftStore project draft thread mapping", () => {
       activeDraftId: otherDraftId,
     });
     expect(store.getDraftSession(draftId)).toBeNull();
+  });
+
+  it("restores a send waiting on an offline environment back into its draft", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "Waiting on the laptop");
+    store.setDraftPendingSend(draftId, {
+      messageId: MessageId.make("waiting-send"),
+      text: "Waiting on the laptop",
+      title: "Waiting on the laptop",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      recoveryDraft: captureComposerDraft(draftId),
+    });
+    store.clearComposerContent(draftId);
+    // An offline environment never produces a live shell, so reconciliation cannot finish it.
+    reconcilePendingDraftSends({
+      status: "cached",
+      environmentId: TEST_ENVIRONMENT_ID,
+      acceptedThreadIds: new Set(),
+      activeDraftId: otherDraftId,
+    });
+    expect(store.getDraftSession(draftId)?.pendingSend?.text).toBe("Waiting on the laptop");
+
+    restorePendingDraftSend(draftId);
+    expect(store.getDraftSession(draftId)?.pendingSend).toBeNull();
+    expect(store.getComposerDraft(draftId)?.prompt).toBe("Waiting on the laptop");
+    // Restoring twice is a no-op rather than duplicating the prompt.
+    restorePendingDraftSend(draftId);
+    expect(store.getComposerDraft(draftId)?.prompt).toBe("Waiting on the laptop");
   });
 
   it("finalizes an unvisited accepted send and cannot resurrect it after server deletion", () => {

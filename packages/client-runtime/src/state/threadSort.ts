@@ -3,7 +3,6 @@ import type {
   SidebarProjectSortOrder,
   SidebarThreadSortOrder,
 } from "@spiritdevs/contracts/settings";
-import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 
 export interface ThreadSortInput {
@@ -76,19 +75,17 @@ export function sortThreads<T extends { readonly id: string } & ThreadSortInput>
   threads: readonly T[],
   sortOrder: SidebarThreadSortOrder,
 ): T[] {
-  return Arr.sort(
-    threads,
-    Order.mapInput(
-      Order.Struct({
-        timestamp: Order.flip(Order.Number),
-        id: Order.flip(Order.String),
-      }),
-      (thread: T) => ({
-        timestamp: getThreadSortTimestamp(thread, sortOrder),
-        id: thread.id,
-      }),
-    ),
+  // Timestamps parse once per thread rather than once per comparison.
+  const keyed = threads.map((thread) => ({
+    thread,
+    timestamp: getThreadSortTimestamp(thread, sortOrder),
+  }));
+  keyed.sort(
+    (left, right) =>
+      Order.Number(right.timestamp, left.timestamp) ||
+      Order.String(right.thread.id, left.thread.id),
   );
+  return keyed.map((entry) => entry.thread);
 }
 
 export function getLatestThreadForProject<

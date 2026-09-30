@@ -97,7 +97,7 @@ export function resolveThreadRouteTarget(
  */
 export function resolveActiveThreadRouteRef(
   target: ThreadRouteTarget | null,
-  draftThread: DraftThreadRouteState | null,
+  draftThread: Pick<DraftThreadRouteState, "promotedTo"> | null,
 ): ScopedThreadRef | null {
   if (target?.kind === "server") {
     return target.threadRef;

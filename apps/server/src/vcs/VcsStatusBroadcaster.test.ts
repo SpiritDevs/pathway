@@ -839,6 +839,68 @@ describe("VcsStatusBroadcaster", () => {
     );
   });
 
+  it("slows unchanged remote pollers after a grace period, capped at five minutes", () => {
+    const idleDelayMs = (unchanged: number, interval: Duration.Duration) =>
+      Duration.toMillis(VcsStatusBroadcaster.remoteRefreshIdleDelay(unchanged, interval));
+    assert.equal(idleDelayMs(0, Duration.seconds(30)), 30_000);
+    assert.equal(idleDelayMs(4, Duration.seconds(30)), 30_000);
+    assert.equal(idleDelayMs(5, Duration.seconds(30)), 60_000);
+    assert.equal(idleDelayMs(7, Duration.seconds(30)), 240_000);
+    assert.equal(idleDelayMs(50, Duration.seconds(30)), 300_000);
+    assert.equal(idleDelayMs(50, Duration.minutes(10)), 600_000);
+  });
+
+  it.effect("backs off idle remote pollers and wakes them for a new subscriber", () => {
+    const state = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: baseRemoteStatus,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+    };
+    const awaitRemoteCalls = (expected: number) =>
+      Effect.yieldNow.pipe(
+        Effect.repeat({ until: () => state.remoteStatusCalls >= expected, times: 100 }),
+        Effect.andThen(Effect.sync(() => state.remoteStatusCalls)),
+      );
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      yield* broadcaster.getStatus({ cwd: "/repo" });
+      const scope = yield* Scope.make();
+      const subscribe = Effect.gen(function* () {
+        const snapshot = yield* Deferred.make<void>();
+        yield* Stream.runForEach(
+          broadcaster.streamStatus(
+            { cwd: "/repo" },
+            { automaticRemoteRefreshInterval: Effect.succeed(Duration.minutes(1)) },
+          ),
+          (event) =>
+            event._tag === "snapshot" ? Deferred.succeed(snapshot, undefined) : Effect.void,
+        ).pipe(Effect.forkIn(scope));
+        yield* Deferred.await(snapshot);
+      });
+      yield* subscribe;
+
+      // Five unchanged refreshes on the configured one-minute cadence.
+      for (let minute = 1; minute <= 5; minute++) {
+        yield* TestClock.adjust(Duration.minutes(1));
+        assert.equal(yield* awaitRemoteCalls(1 + minute), 1 + minute);
+      }
+
+      // Past the grace period the poller waits two minutes instead of one.
+      yield* TestClock.adjust(Duration.minutes(1));
+      assert.equal(yield* awaitRemoteCalls(7), 6);
+
+      // Opening the worktree elsewhere refreshes immediately.
+      yield* subscribe;
+      assert.equal(yield* awaitRemoteCalls(7), 7);
+
+      yield* Scope.close(scope, Exit.void);
+    }).pipe(Effect.provide(Layer.merge(makeTestLayer(state), TestClock.layer())));
+  });
+
   it("summarizes refresh causes without exposing nested failure details", () => {
     const nestedCause = new Error("private nested failure detail");
     const failure = new GitManagerError({

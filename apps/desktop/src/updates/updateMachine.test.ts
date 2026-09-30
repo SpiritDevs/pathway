@@ -11,6 +11,7 @@ import {
   reduceDesktopUpdateStateOnInstallFailure,
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
+  resolveUpdatePollDelayMs,
 } from "./updateMachine.ts";
 
 const runtimeInfo = {
@@ -239,5 +240,26 @@ describe("updateMachine", () => {
     );
 
     expect(state.releaseNotes).toEqual([]);
+  });
+});
+
+describe("resolveUpdatePollDelayMs", () => {
+  const minutes = (value: number) => value * 60_000;
+
+  it("polls every four minutes while nothing is pending", () => {
+    expect(resolveUpdatePollDelayMs({ status: "idle" }, 0)).toBe(minutes(4));
+    expect(resolveUpdatePollDelayMs({ status: "up-to-date" }, 0)).toBe(minutes(4));
+  });
+
+  it("backs off exponentially after consecutive failures, capped at an hour", () => {
+    expect(resolveUpdatePollDelayMs({ status: "error" }, 1)).toBe(minutes(8));
+    expect(resolveUpdatePollDelayMs({ status: "error" }, 2)).toBe(minutes(16));
+    expect(resolveUpdatePollDelayMs({ status: "error" }, 4)).toBe(minutes(60));
+    expect(resolveUpdatePollDelayMs({ status: "error" }, 40)).toBe(minutes(60));
+  });
+
+  it("slows down once an update is waiting for the user", () => {
+    expect(resolveUpdatePollDelayMs({ status: "available" }, 0)).toBe(minutes(30));
+    expect(resolveUpdatePollDelayMs({ status: "downloaded" }, 3)).toBe(minutes(30));
   });
 });

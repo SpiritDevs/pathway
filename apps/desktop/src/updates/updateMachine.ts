@@ -206,3 +206,20 @@ export function reduceDesktopUpdateStateOnInstallFailure(
     canRetry: true,
   };
 }
+
+const UPDATE_POLL_INTERVAL_MS = 4 * 60_000;
+const UPDATE_POLL_PENDING_INTERVAL_MS = 30 * 60_000;
+const UPDATE_POLL_MAX_BACKOFF_MS = 60 * 60_000;
+
+/** Delay before the next background update check. Checks back off while the feed keeps failing
+    and slow down once an update is already waiting for the user. */
+export function resolveUpdatePollDelayMs(
+  state: Pick<DesktopUpdateState, "status">,
+  consecutiveFailures: number,
+): number {
+  if (state.status === "available" || state.status === "downloaded") {
+    return UPDATE_POLL_PENDING_INTERVAL_MS;
+  }
+  if (consecutiveFailures <= 0) return UPDATE_POLL_INTERVAL_MS;
+  return Math.min(UPDATE_POLL_INTERVAL_MS * 2 ** consecutiveFailures, UPDATE_POLL_MAX_BACKOFF_MS);
+}

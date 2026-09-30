@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import packageJson from "../../package.json" with { type: "json" };
 import { EventStoreV2 } from "./EventStore.ts";
 import {
   ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
@@ -52,7 +53,27 @@ export class ProjectionMaintenanceV2 extends Context.Service<
 type ProjectionMetadataRow = {
   readonly schema_version: number;
   readonly last_sequence: number;
+  readonly decode_verified_build: string | null;
 };
+
+declare const __PATHWAY_BUILD_CHANNEL__: "nightly" | "latest" | undefined;
+
+/**
+ * Names the running packaged build. Whether a stored projection decodes only
+ * changes with the code, so once a build has decoded every projection it skips
+ * that sweep on later startups: rows written since were encoded by the same
+ * build, and another build replaces the mark with its own. Source runs change
+ * code without changing the version, so they have no name and always sweep.
+ */
+export class ProjectionDecodeBuild extends Context.Reference<string | null>(
+  "@spiritdevs/pathway/orchestration-v2/ProjectionMaintenance/ProjectionDecodeBuild",
+  {
+    defaultValue: () =>
+      typeof __PATHWAY_BUILD_CHANNEL__ === "undefined"
+        ? null
+        : `${packageJson.version}+${__PATHWAY_BUILD_CHANNEL__}`,
+  },
+) {}
 
 export const layer: Layer.Layer<
   ProjectionMaintenanceV2,
@@ -64,6 +85,7 @@ export const layer: Layer.Layer<
     const sql = yield* SqlClient.SqlClient;
     const eventStore = yield* EventStoreV2;
     const projectionStore = yield* ProjectionStoreV2;
+    const decodeBuild = yield* ProjectionDecodeBuild;
 
     /**
      * EventSink commits the event, its projection updates, and projection metadata in one SQL
@@ -73,6 +95,14 @@ export const layer: Layer.Layer<
      * evolve in lockstep with ProjectionStore.
      */
     const verify = Effect.gen(function* () {
+      const metadata = yield* sql<ProjectionMetadataRow>`
+        SELECT schema_version, last_sequence, decode_verified_build
+        FROM orchestration_v2_projection_metadata
+        WHERE projection_name = 'thread-projections'
+        LIMIT 1
+      `;
+      const decodeVerified =
+        decodeBuild !== null && metadata[0]?.decode_verified_build === decodeBuild;
       const expectedThreadRows = yield* sql<{ readonly thread_id: string }>`
         SELECT DISTINCT stream_id AS thread_id
         FROM orchestration_events
@@ -92,31 +122,37 @@ export const layer: Layer.Layer<
       const expectedSet = new Set(expectedIds);
       const missingThreadIds = expectedIds.filter((threadId) => !actualSet.has(threadId));
       const unexpectedThreadIds = actualIds.filter((threadId) => !expectedSet.has(threadId));
-      const unreadableThreadIds = (yield* Effect.forEach(
-        actualIds,
-        (threadId) =>
-          projectionStore.getThreadProjection(threadId).pipe(
-            Effect.as<ThreadId | null>(null),
-            Effect.orElseSucceed((): ThreadId | null => threadId),
-          ),
-        { concurrency: 8 },
-      )).filter((threadId): threadId is ThreadId => threadId !== null);
-      const metadata = yield* sql<ProjectionMetadataRow>`
-        SELECT schema_version, last_sequence
-        FROM orchestration_v2_projection_metadata
-        WHERE projection_name = 'thread-projections'
-        LIMIT 1
-      `;
+      // Decoding every projection reads the whole projection set, seconds on
+      // large histories, so a build that has already done it skips the sweep.
+      const unreadableThreadIds = decodeVerified
+        ? []
+        : (yield* Effect.forEach(
+            actualIds,
+            (threadId) =>
+              projectionStore.getThreadProjection(threadId).pipe(
+                Effect.as<ThreadId | null>(null),
+                Effect.orElseSucceed((): ThreadId | null => threadId),
+              ),
+            { concurrency: 8 },
+          )).filter((threadId): threadId is ThreadId => threadId !== null);
       const expectedSequence = yield* eventStore.latestSequence();
       const schemaVersion = metadata[0]?.schema_version ?? 0;
       const projectionSequence = metadata[0]?.last_sequence ?? 0;
+      const valid =
+        schemaVersion === ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION &&
+        projectionSequence === expectedSequence &&
+        missingThreadIds.length === 0 &&
+        unexpectedThreadIds.length === 0 &&
+        unreadableThreadIds.length === 0;
+      if (valid && !decodeVerified && decodeBuild !== null) {
+        yield* sql`
+          UPDATE orchestration_v2_projection_metadata
+          SET decode_verified_build = ${decodeBuild}
+          WHERE projection_name = 'thread-projections'
+        `;
+      }
       return {
-        valid:
-          schemaVersion === ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION &&
-          projectionSequence === expectedSequence &&
-          missingThreadIds.length === 0 &&
-          unexpectedThreadIds.length === 0 &&
-          unreadableThreadIds.length === 0,
+        valid,
         schemaVersion,
         expectedSequence,
         projectionSequence,

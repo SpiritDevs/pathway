@@ -304,13 +304,14 @@ export function SnapShotCoordinator() {
       void session.release();
     };
   }, [accountId]);
-  if (!binding || binding.accountId !== accountId || !binding.isCurrent()) return null;
-  return (
-    <SnapShotAccountCoordinator
-      key={accountId}
-      isAccountCurrent={() => binding.isCurrent() && currentAccountRef.current === accountId}
-    />
+  // Stable across renders so the coordinator subscribes to capture events once, not on every
+  // Clerk session refresh.
+  const isAccountCurrent = useCallback(
+    () => binding !== null && binding.isCurrent() && currentAccountRef.current === accountId,
+    [binding, accountId],
   );
+  if (!binding || binding.accountId !== accountId || !binding.isCurrent()) return null;
+  return <SnapShotAccountCoordinator key={accountId} isAccountCurrent={isAccountCurrent} />;
 }
 
 function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: () => boolean }) {
@@ -362,6 +363,8 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
     targetResolutionRef.current = null;
     targetContextVersionRef.current += 1;
   }
+  const latestRouteThreadRef = useRef(routeThreadRef);
+  latestRouteThreadRef.current = routeThreadRef;
   const currentTarget = routeThreadRef ?? routeDraftId;
   if (currentTarget) lastTargetRef.current = currentTarget;
 
@@ -555,7 +558,9 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
       switch (event.type) {
         case "requested": {
           const current = lastTargetRef.current;
-          const target = current ? resolveExistingSnapShotTarget(current, routeThreadRef) : null;
+          const target = current
+            ? resolveExistingSnapShotTarget(current, latestRouteThreadRef.current)
+            : null;
           // Creating a new draft would navigate the renderer before a self-capture finishes.
           // Pin existing drafts now; create a destination after acquisition when none exists.
           if (target) {
@@ -618,7 +623,7 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
       unsubscribe();
       dismissAllSnapShotAnimations();
     };
-  }, [drain, playCaptureSound, routeThreadRef]);
+  }, [drain, playCaptureSound]);
 
   useEffect(() => {
     const dismissOnBlur = () => {

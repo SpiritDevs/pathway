@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   areShortcutModifierStatesEqual,
+  createShortcutModifierStore,
   shortcutModifierStateAfterKeyboardEvent,
   type ShortcutModifierState,
 } from "./shortcutModifierState";
@@ -134,5 +135,98 @@ describe("shortcutModifierState", () => {
       keyboardEventLike("keydown", { key: "a", metaKey: false }),
     );
     expect(state).toEqual(emptyState());
+  });
+});
+
+function dispatchKey(target: EventTarget, type: "keydown" | "keyup", init: Partial<KeyboardEvent>) {
+  target.dispatchEvent(
+    Object.assign(new Event(type), {
+      key: "",
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      ...init,
+    }),
+  );
+}
+
+// Types text the way a keyboard does: Shift is pressed and released around
+// every uppercase letter.
+function typeText(target: EventTarget, text: string) {
+  for (const char of text) {
+    const shifted = char !== char.toLowerCase();
+    if (shifted) dispatchKey(target, "keydown", { key: "Shift", shiftKey: true });
+    dispatchKey(target, "keydown", { key: char, shiftKey: shifted });
+    dispatchKey(target, "keyup", { key: char, shiftKey: shifted });
+    if (shifted) dispatchKey(target, "keyup", { key: "Shift", shiftKey: false });
+  }
+}
+
+describe("createShortcutModifierStore", () => {
+  it("never changes a ⌘/Ctrl selection while typing text", () => {
+    const target = new EventTarget();
+    const store = createShortcutModifierStore(target);
+    const selectHeld = () => store.getState().ctrlKey || store.getState().metaKey;
+    let notifications = 0;
+    let selectionChanges = 0;
+    let selected = selectHeld();
+    const unsubscribe = store.subscribe(() => {
+      notifications += 1;
+      const next = selectHeld();
+      if (next !== selected) selectionChanges += 1;
+      selected = next;
+    });
+
+    typeText(target, "Hello World, Pathway");
+
+    // Every Shift press and release flips the raw state. Subscribing to the
+    // whole state (the old hook) re-rendered the sidebar on each of these.
+    expect(notifications).toBe(6);
+    // A selector subscriber re-renders only when its value changes.
+    expect(selectionChanges).toBe(0);
+    unsubscribe();
+  });
+
+  it("reports ⌘ presses to selectors that care about them", () => {
+    const target = new EventTarget();
+    const store = createShortcutModifierStore(target);
+    const seen: boolean[] = [];
+    const unsubscribe = store.subscribe(() => seen.push(store.getState().metaKey));
+
+    dispatchKey(target, "keydown", { key: "Meta", metaKey: true });
+    dispatchKey(target, "keydown", { key: "v", metaKey: true });
+    dispatchKey(target, "keyup", { key: "Meta", metaKey: false });
+
+    expect(seen).toEqual([true, false]);
+    unsubscribe();
+  });
+
+  it("detaches from the target and resets once the last subscriber leaves", () => {
+    const target = new EventTarget();
+    const store = createShortcutModifierStore(target);
+    const first = store.subscribe(() => {});
+    const second = store.subscribe(() => {});
+
+    dispatchKey(target, "keydown", { key: "Control", ctrlKey: true });
+    first();
+    expect(store.getState().ctrlKey).toBe(true);
+    second();
+    expect(store.getState()).toEqual(emptyState());
+
+    dispatchKey(target, "keydown", { key: "Control", ctrlKey: true });
+    expect(store.getState()).toEqual(emptyState());
+  });
+
+  it("resets held modifiers on paste", () => {
+    const target = new EventTarget();
+    const store = createShortcutModifierStore(target);
+    const unsubscribe = store.subscribe(() => {});
+
+    dispatchKey(target, "keydown", { key: "Meta", metaKey: true });
+    target.dispatchEvent(new Event("paste"));
+
+    expect(store.getState()).toEqual(emptyState());
+    unsubscribe();
   });
 });

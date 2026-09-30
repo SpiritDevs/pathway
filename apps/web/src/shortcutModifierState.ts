@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 export interface ShortcutModifierState {
   metaKey: boolean;
@@ -26,39 +26,81 @@ export function areShortcutModifierStatesEqual(
   );
 }
 
-export function useShortcutModifierState(): ShortcutModifierState {
-  const [state, setState] = useState(EMPTY_SHORTCUT_MODIFIER_STATE);
+type ModifierEventTarget = Pick<EventTarget, "addEventListener" | "removeEventListener">;
 
-  useEffect(() => {
-    const onKeyboardEvent = (event: KeyboardEvent) => {
-      setState((current) => shortcutModifierStateAfterKeyboardEvent(current, event));
-    };
-    // Dictation tools (Wispr Flow) paste with a synthetic ⌘V whose Meta keyup
-    // never reaches the page, so the tracked state stays "⌘ held" forever and
-    // the thread jump hints stick on screen. A paste is never jump intent, so
-    // treat it like a blur and reset. A physically held modifier re-registers
-    // on the next real key event.
-    const onResetEvent = () => {
-      setState((current) =>
-        areShortcutModifierStatesEqual(current, EMPTY_SHORTCUT_MODIFIER_STATE)
-          ? current
-          : EMPTY_SHORTCUT_MODIFIER_STATE,
-      );
-    };
+const CAPTURE = { capture: true } as const;
 
-    window.addEventListener("keydown", onKeyboardEvent, true);
-    window.addEventListener("keyup", onKeyboardEvent, true);
-    window.addEventListener("paste", onResetEvent, true);
-    window.addEventListener("blur", onResetEvent);
-    return () => {
-      window.removeEventListener("keydown", onKeyboardEvent, true);
-      window.removeEventListener("keyup", onKeyboardEvent, true);
-      window.removeEventListener("paste", onResetEvent, true);
-      window.removeEventListener("blur", onResetEvent);
-    };
-  }, []);
+/**
+ * Held-modifier state shared by every subscriber. Listeners attach to the
+ * target on first subscribe and detach (resetting to empty) on last
+ * unsubscribe; subscribers are notified only when a modifier actually flips.
+ */
+export function createShortcutModifierStore(target: ModifierEventTarget) {
+  let state = EMPTY_SHORTCUT_MODIFIER_STATE;
+  const listeners = new Set<() => void>();
+  const setState = (next: ShortcutModifierState) => {
+    if (areShortcutModifierStatesEqual(state, next)) return;
+    state = next;
+    for (const listener of listeners) listener();
+  };
+  const onKeyboardEvent = (event: Event) => {
+    setState(shortcutModifierStateAfterKeyboardEvent(state, event as KeyboardEvent));
+  };
+  // Dictation tools (Wispr Flow) paste with a synthetic ⌘V whose Meta keyup
+  // never reaches the page, so the tracked state stays "⌘ held" forever and
+  // the thread jump hints stick on screen. A paste is never jump intent, so
+  // treat it like a blur and reset. A physically held modifier re-registers
+  // on the next real key event.
+  const onResetEvent = () => setState(EMPTY_SHORTCUT_MODIFIER_STATE);
 
-  return state;
+  return {
+    getState: () => state,
+    subscribe: (listener: () => void) => {
+      if (listeners.size === 0) {
+        target.addEventListener("keydown", onKeyboardEvent, CAPTURE);
+        target.addEventListener("keyup", onKeyboardEvent, CAPTURE);
+        target.addEventListener("paste", onResetEvent, CAPTURE);
+        target.addEventListener("blur", onResetEvent);
+      }
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size > 0) return;
+        target.removeEventListener("keydown", onKeyboardEvent, CAPTURE);
+        target.removeEventListener("keyup", onKeyboardEvent, CAPTURE);
+        target.removeEventListener("paste", onResetEvent, CAPTURE);
+        target.removeEventListener("blur", onResetEvent);
+        state = EMPTY_SHORTCUT_MODIFIER_STATE;
+      };
+    },
+  };
+}
+
+const windowShortcutModifierStore = createShortcutModifierStore(
+  typeof window === "undefined" ? new EventTarget() : window,
+);
+
+/** Runs `listener` whenever a held modifier flips, without rendering anything. */
+export function subscribeShortcutModifierState(
+  listener: (state: ShortcutModifierState) => void,
+): () => void {
+  return windowShortcutModifierStore.subscribe(() =>
+    listener(windowShortcutModifierStore.getState()),
+  );
+}
+
+/**
+ * Reads a value derived from the held modifiers. The caller re-renders only
+ * when the selected value changes, so Shift+letter while typing never repaints
+ * a component that only cares about ⌘/Ctrl. `select` must return a primitive
+ * or otherwise stable value.
+ */
+export function useShortcutModifierState<T>(select: (state: ShortcutModifierState) => T): T {
+  return useSyncExternalStore(
+    windowShortcutModifierStore.subscribe,
+    () => select(windowShortcutModifierStore.getState()),
+    () => select(EMPTY_SHORTCUT_MODIFIER_STATE),
+  );
 }
 
 function normalizeModifierKey(key: string): keyof ShortcutModifierState | null {

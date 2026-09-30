@@ -1,4 +1,3 @@
-import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { AgentCursorDesktopSync } from "../components/settings/agentCursorDesktopSync";
 import { DictationAccountCoordinator } from "../dictation/cloud";
 import { type AuthSessionState, type ServerLifecycleWelcomePayload } from "@spiritdevs/contracts";
@@ -19,7 +18,7 @@ import {
   useNavigate,
   useRouter,
 } from "@tanstack/react-router";
-import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL } from "../branding";
 import { resolveServerBackedAppDisplayName } from "../branding.logic";
@@ -85,6 +84,14 @@ import { resolveClerkAuthGateState } from "../components/clerk/authGate.logic";
 import { useSidePaneId } from "../panes/paneScope";
 import { ChildWindowSync } from "../panes/ChildWindowSync";
 import { isChildWindow } from "../panes/windowMode";
+import { isElectron } from "../env";
+
+// Screenshot capture needs the desktop bridge, so the web entry never loads it.
+const SnapShotCoordinator = lazy(() =>
+  import("../components/desktop/SnapShotCoordinator").then((module) => ({
+    default: module.SnapShotCoordinator,
+  })),
+);
 
 // #region DEBUG
 function debugAuthGate(
@@ -426,7 +433,11 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
         {isChildWindow ? null : <ConnectOnboardingDialog />}
         <SshPasswordPromptDialog />
-        {isChildWindow ? null : <SnapShotCoordinator />}
+        {isChildWindow || !isElectron ? null : (
+          <Suspense fallback={null}>
+            <SnapShotCoordinator />
+          </Suspense>
+        )}
         {isChildWindow ? null : <DictationAccountCoordinator />}
         <ConfirmDialogHost />
         <TemporaryThreadDiscardDialog />

@@ -9,16 +9,36 @@ struct PathwayIssueMarkdownView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             ForEach(PathwayIssueMarkdownBlock.parse(markdown)) { block in
-                blockView(block)
+                PathwayIssueMarkdownBlockView(block: block, toggleTask: toggleTask, imageContext: imageContext)
+                    .equatable()
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .font(.body).lineSpacing(4)
         .textSelection(.enabled)
     }
+}
 
-    @ViewBuilder
-    private func blockView(_ block: PathwayIssueMarkdownBlock) -> some View {
+/// Streaming replies only grow their last block; unchanged blocks skip inline Markdown parsing.
+private struct PathwayIssueMarkdownBlockView: View, Equatable {
+    let block: PathwayIssueMarkdownBlock
+    let toggleTask: ((Int) -> Void)?
+    let imageContext: AgentMarkdownImageContext?
+    private let isInteractive: Bool
+
+    init(block: PathwayIssueMarkdownBlock, toggleTask: ((Int) -> Void)?, imageContext: AgentMarkdownImageContext?) {
+        self.block = block
+        self.toggleTask = toggleTask
+        self.imageContext = imageContext
+        isInteractive = toggleTask != nil
+    }
+
+    /// Task toggles capture the caller's latest state, so interactive blocks always rebuild.
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        !lhs.isInteractive && !rhs.isInteractive && lhs.block == rhs.block && lhs.imageContext == rhs.imageContext
+    }
+
+    var body: some View {
         switch block.kind {
         case .heading(let level):
             inline(block.text).font(level == 1 ? .title2.weight(.semibold) : .title3.weight(.semibold))
@@ -95,8 +115,8 @@ struct PathwayIssueMarkdownView: View {
     }
 }
 
-struct PathwayIssueMarkdownBlock: Identifiable {
-    enum Kind {
+struct PathwayIssueMarkdownBlock: Identifiable, Equatable {
+    enum Kind: Equatable {
         case heading(Int), paragraph, task(Bool, Int), list(String, Int), quote, code(String), divider
     }
     let id: Int

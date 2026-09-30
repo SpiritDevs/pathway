@@ -9,6 +9,7 @@ import {
   type ThreadId as ThreadIdType,
 } from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -53,10 +54,13 @@ export const THREAD_NOT_FOUND_MAX_ATTEMPTS = 40;
 
 // A deletion confirmed from a 404 stays provisional: shells can reference a
 // thread whose create commit takes longer than the bounded retry window (slow
-// clones, an environment that reconnects late). Keep probing at this cadence
-// so the thread can still materialize instead of staying unreachable for the
-// rest of the session.
+// clones, an environment that reconnects late). Keep probing so the thread can
+// still materialize, starting at this interval and doubling after each miss up
+// to the max, so an id that never materializes stops costing a request every
+// few seconds. A reprobe signal (such as the thread's shell changing), a
+// replacement session, or a foreground wakeup probes sooner.
 export const THREAD_DELETED_REPROBE_INTERVAL = "5 seconds";
+export const THREAD_DELETED_REPROBE_MAX_INTERVAL = "5 minutes";
 
 function statusWithoutLiveData(
   data: Option.Option<OrchestrationV2ThreadProjection>,
@@ -89,6 +93,7 @@ function snapshotHistory(history: OrchestrationV2ThreadHistory): OrchestrationV2
 
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
   threadId: ThreadIdType,
+  options?: { readonly reprobe?: Stream.Stream<unknown> },
 ) {
   const supervisor = yield* EnvironmentSupervisor;
   const cache = yield* EnvironmentCacheStore;
@@ -158,6 +163,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   );
   const awaitingCompletion = yield* Ref.make(false);
   const notFoundAttempts = yield* Ref.make(0);
+  const reprobeRequests = yield* Queue.sliding<void>(1);
+  if (options?.reprobe !== undefined) {
+    yield* options.reprobe.pipe(
+      Stream.runForEach(() => Queue.offer(reprobeRequests, undefined)),
+      Effect.forkScoped,
+    );
+  }
   const persistence = yield* Queue.sliding<OrchestrationV2ThreadDetailSnapshot>(1);
   const projectionMutex = yield* Semaphore.make(1);
 
@@ -547,8 +559,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const recoverDeletedThread = Effect.fn("EnvironmentThreadState.recoverDeletedThread")(function* (
     supportsCompletionMarker: boolean,
   ) {
+    const maxDelayMs = Duration.toMillis(THREAD_DELETED_REPROBE_MAX_INTERVAL);
+    let delayMs = Duration.toMillis(THREAD_DELETED_REPROBE_INTERVAL);
+    yield* Queue.clear(reprobeRequests);
     while (true) {
-      yield* Effect.sleep(THREAD_DELETED_REPROBE_INTERVAL);
+      yield* Effect.raceFirst(Effect.sleep(delayMs), Queue.take(reprobeRequests));
+      delayMs = Math.min(delayMs * 2, maxDelayMs);
       const prepared = yield* awaitPrepared;
       const httpSnapshot = yield* snapshotLoader.load(
         prepared,
@@ -717,25 +733,53 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   return state;
 });
 
-export function threadStateChanges(environmentId: EnvironmentIdType, threadId: ThreadIdType) {
+export function threadStateChanges(
+  environmentId: EnvironmentIdType,
+  threadId: ThreadIdType,
+  reprobe?: Stream.Stream<unknown>,
+) {
   return followStreamInEnvironment(
     environmentId,
-    Stream.unwrap(makeEnvironmentThreadState(threadId).pipe(Effect.map(SubscriptionRef.changes))),
+    Stream.unwrap(
+      makeEnvironmentThreadState(threadId, reprobe === undefined ? undefined : { reprobe }).pipe(
+        Effect.map(SubscriptionRef.changes),
+      ),
+    ),
   );
 }
 
+/**
+ * `reprobeSignal` names an atom whose changes should re-check a thread parked
+ * as deleted, typically the thread's shell, so a thread that materializes late
+ * does not wait out the reprobe backoff.
+ */
 export function createEnvironmentThreadStateAtoms<R, E>(
   runtime: Atom.AtomRuntime<
     EnvironmentRegistry | EnvironmentCacheStore | ThreadSnapshotLoader | R,
     E
   >,
+  options?: {
+    readonly reprobeSignal?: (
+      environmentId: EnvironmentIdType,
+      threadId: ThreadIdType,
+    ) => Atom.Atom<unknown>;
+  },
 ) {
   const sourceFamily = Atom.family((key: string) => {
     const { environmentId, threadId } = parseThreadKey(key);
+    const reprobeSignal = options?.reprobeSignal?.(environmentId, threadId);
     return runtime
-      .atom(threadStateChanges(environmentId, threadId), {
-        initialValue: EMPTY_ENVIRONMENT_THREAD_STATE,
-      })
+      .atom(
+        (get) =>
+          threadStateChanges(
+            environmentId,
+            threadId,
+            reprobeSignal === undefined
+              ? undefined
+              : get.stream(reprobeSignal, { withoutInitialValue: true }),
+          ),
+        { initialValue: EMPTY_ENVIRONMENT_THREAD_STATE },
+      )
       .pipe(Atom.withLabel(`environment-thread-state-source:${key}`));
   });
 

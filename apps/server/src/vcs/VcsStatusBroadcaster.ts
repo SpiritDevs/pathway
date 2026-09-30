@@ -7,8 +7,8 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
@@ -28,6 +28,8 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 const DEFAULT_VCS_STATUS_REFRESH_INTERVAL = Duration.seconds(30);
 const VCS_STATUS_REFRESH_FAILURE_BASE_DELAY = Duration.seconds(30);
 const VCS_STATUS_REFRESH_FAILURE_MAX_DELAY = Duration.minutes(15);
+const VCS_STATUS_IDLE_GRACE_REFRESHES = 4;
+const VCS_STATUS_IDLE_MAX_DELAY = Duration.minutes(5);
 const MAX_FAILURE_DIAGNOSTIC_VALUES = 8;
 const MAX_FAILURE_DIAGNOSTIC_VALUE_LENGTH = 128;
 
@@ -144,6 +146,12 @@ interface ActiveRemotePoller {
   readonly fiber: Fiber.Fiber<void, never>;
   readonly subscriberCount: number;
   readonly demandCwds: Ref.Ref<ReadonlyMap<string, number>>;
+  readonly idle: RemotePollerIdleState;
+}
+
+interface RemotePollerIdleState {
+  readonly unchangedRefreshes: Ref.Ref<number>;
+  readonly wake: Queue.Queue<void>;
 }
 
 interface StreamStatusOptions {
@@ -162,6 +170,27 @@ export function remoteRefreshFailureDelay(
     VCS_STATUS_REFRESH_FAILURE_MAX_DELAY,
   );
   return Duration.max(configuredInterval, cappedBackoff);
+}
+
+/**
+ * Pollers whose remote status stopped changing slow down after a grace
+ * period. New subscribers, published status changes, and explicit refreshes
+ * reset the count, so a worktree that is being worked on stays on the
+ * configured cadence.
+ */
+export function remoteRefreshIdleDelay(
+  unchangedRefreshes: number,
+  configuredInterval: Duration.Duration,
+) {
+  const exponent = unchangedRefreshes - VCS_STATUS_IDLE_GRACE_REFRESHES;
+  if (exponent <= 0) {
+    return configuredInterval;
+  }
+  const idleMs = Duration.toMillis(configuredInterval) * Math.pow(2, exponent);
+  return Duration.max(
+    configuredInterval,
+    Duration.min(Duration.millis(idleMs), VCS_STATUS_IDLE_MAX_DELAY),
+  );
 }
 
 export class VcsStatusBroadcaster extends Context.Service<
@@ -518,15 +547,20 @@ export const make = Effect.gen(function* () {
     return yield* publishStatusRefresh(rawCwd, cwd, refreshId, local, remote);
   });
 
+  const cachedRemoteFingerprint = (cwd: string) =>
+    Ref.get(cacheRef).pipe(Effect.map((cache) => cache.get(cwd)?.remote?.fingerprint ?? null));
+
   const makeRemoteRefreshLoop = (
     cwd: string,
     demandCwdsRef: Ref.Ref<ReadonlyMap<string, number>>,
+    idle: RemotePollerIdleState,
     automaticRemoteRefreshInterval: Effect.Effect<Duration.Duration, never>,
     refreshImmediately: boolean,
   ) => {
     return Effect.gen(function* () {
       const consecutiveFailuresRef = yield* Ref.make(0);
       const needsInitialRefreshRef = yield* Ref.make(refreshImmediately);
+      const lastSeenFingerprintRef = yield* Ref.make(yield* cachedRemoteFingerprint(cwd));
       const refreshRemoteStatusIfEnabled = Effect.gen(function* () {
         const configuredInterval = yield* automaticRemoteRefreshInterval;
         const activeInterval = Duration.isZero(configuredInterval)
@@ -559,7 +593,15 @@ export const make = Effect.gen(function* () {
         if (Exit.isSuccess(exit)) {
           yield* Ref.set(needsInitialRefreshRef, false);
           yield* Ref.set(consecutiveFailuresRef, 0);
-          return activeInterval;
+          // Compare with what this poller last saw, so changes published by
+          // explicit refreshes also restore the configured cadence.
+          const fingerprint = yield* cachedRemoteFingerprint(cwd);
+          const lastSeen = yield* Ref.getAndSet(lastSeenFingerprintRef, fingerprint);
+          const unchangedRefreshes =
+            fingerprint === lastSeen
+              ? yield* Ref.updateAndGet(idle.unchangedRefreshes, (count) => count + 1)
+              : yield* Ref.setAndGet(idle.unchangedRefreshes, 0);
+          return remoteRefreshIdleDelay(unchangedRefreshes, activeInterval);
         }
 
         const interruptionReasons = exit.cause.reasons.filter(Cause.isInterruptReason);
@@ -581,23 +623,20 @@ export const make = Effect.gen(function* () {
         return nextDelay;
       });
 
+      // A wake (new subscriber on an idle poller) cuts the current sleep short.
+      const sleepOrWake = (delay: Duration.Duration) =>
+        Effect.raceFirst(Effect.sleep(delay), Queue.take(idle.wake));
+
       if (!refreshImmediately) {
         const configuredInterval = yield* automaticRemoteRefreshInterval;
-        yield* Effect.sleep(
+        yield* sleepOrWake(
           Duration.isZero(configuredInterval)
             ? DEFAULT_VCS_STATUS_REFRESH_INTERVAL
             : configuredInterval,
         );
       }
 
-      return yield* refreshRemoteStatusIfEnabled.pipe(
-        Effect.repeat(
-          Schedule.identity<Duration.Duration>().pipe(
-            Schedule.addDelay(({ output: delay }) => Effect.succeed(delay)),
-          ),
-        ),
-        Effect.asVoid,
-      );
+      return yield* Effect.forever(refreshRemoteStatusIfEnabled.pipe(Effect.flatMap(sleepOrWake)));
     });
   };
 
@@ -615,6 +654,14 @@ export const make = Effect.gen(function* () {
           next.set(demandCwd, (next.get(demandCwd) ?? 0) + 1);
           return next;
         }).pipe(
+          // Someone just started looking at this worktree: drop any idle
+          // backoff and refresh now if the poller had slowed down.
+          Effect.andThen(Ref.getAndSet(existing.idle.unchangedRefreshes, 0)),
+          Effect.flatMap((unchangedRefreshes) =>
+            unchangedRefreshes > VCS_STATUS_IDLE_GRACE_REFRESHES
+              ? Queue.offer(existing.idle.wake, undefined)
+              : Effect.void,
+          ),
           Effect.map(() => {
             const nextPollers = new Map(activePollers);
             nextPollers.set(cwd, {
@@ -626,27 +673,28 @@ export const make = Effect.gen(function* () {
         );
       }
 
-      return Ref.make<ReadonlyMap<string, number>>(new Map([[demandCwd, 1]])).pipe(
-        Effect.flatMap((demandCwds) =>
-          makeRemoteRefreshLoop(
-            cwd,
-            demandCwds,
-            automaticRemoteRefreshInterval,
-            refreshImmediately,
-          ).pipe(
-            Effect.forkIn(broadcasterScope),
-            Effect.map((fiber) => {
-              const nextPollers = new Map(activePollers);
-              nextPollers.set(cwd, {
-                fiber,
-                subscriberCount: 1,
-                demandCwds,
-              });
-              return [undefined, nextPollers] as const;
-            }),
-          ),
-        ),
-      );
+      return Effect.gen(function* () {
+        const demandCwds = yield* Ref.make<ReadonlyMap<string, number>>(new Map([[demandCwd, 1]]));
+        const idle: RemotePollerIdleState = {
+          unchangedRefreshes: yield* Ref.make(0),
+          wake: yield* Queue.sliding<void>(1),
+        };
+        const fiber = yield* makeRemoteRefreshLoop(
+          cwd,
+          demandCwds,
+          idle,
+          automaticRemoteRefreshInterval,
+          refreshImmediately,
+        ).pipe(Effect.forkIn(broadcasterScope));
+        const nextPollers = new Map(activePollers);
+        nextPollers.set(cwd, {
+          fiber,
+          subscriberCount: 1,
+          demandCwds,
+          idle,
+        });
+        return [undefined, nextPollers] as const;
+      });
     });
   });
 

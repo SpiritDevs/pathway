@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 enum PathwayCloudConnectionState: Equatable, Sendable {
     case disconnected
@@ -317,9 +318,16 @@ func decodePathwayPayload<Value: Decodable>(
     return try JSONDecoder().decode(type, from: data)
 }
 
+/// Thread sorts, lifecycle partitions, and rows parse the same shell timestamps on every render.
+private let pathwayDateCache = Mutex<[String: Date]>([:])
+
 func pathwayDate(from value: String) -> Date? {
-    if let date = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value) {
-        return date
+    if let cached = pathwayDateCache.withLock({ $0[value] }) { return cached }
+    guard let date = (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value))
+        ?? (try? Date.ISO8601FormatStyle().parse(value)) else { return nil }
+    pathwayDateCache.withLock { cache in
+        if cache.count >= 4096 { cache.removeAll(keepingCapacity: true) }
+        cache[value] = date
     }
-    return try? Date.ISO8601FormatStyle().parse(value)
+    return date
 }

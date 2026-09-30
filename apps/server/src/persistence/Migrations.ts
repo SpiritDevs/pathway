@@ -88,6 +88,8 @@ import Migration0072 from "./Migrations/072_ScheduledTaskAllowanceOrigin.ts";
 import Migration0073 from "./Migrations/073_AllowanceHeldRuns.ts";
 import Migration0075 from "./Migrations/075_UsageRecovery.ts";
 import Migration0074 from "./Migrations/074_ShellSnapshotIndexes.ts";
+import Migration0076 from "./Migrations/076_ShellThreadItemIndexes.ts";
+import Migration0077 from "./Migrations/077_ProjectionDecodeVerifiedBuild.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -175,6 +177,8 @@ export const migrationEntries = [
   [73, "AllowanceHeldRuns", Migration0073],
   [74, "ShellSnapshotIndexes", Migration0074],
   [75, "UsageRecovery", Migration0075],
+  [76, "ShellThreadItemIndexes", Migration0076],
+  [77, "ProjectionDecodeVerifiedBuild", Migration0077],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

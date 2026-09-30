@@ -6,6 +6,7 @@ import { createHashHistory, createBrowserHistory } from "@tanstack/react-router"
 import "./index.css";
 
 import { isElectron } from "./env";
+import { installIndicatorPhaseLock } from "./lib/indicatorPhaseLock";
 import { ManagedRelayAuthProvider } from "./cloud/managedAuth";
 import { hasClerkPublicConfig, hasCloudPublicConfig } from "./cloud/publicConfig";
 import { CloudSyncRuntimeMount } from "./cloud/syncRuntimeMount";
@@ -32,6 +33,8 @@ if (isElectron) {
   syncDocumentElectronPlatformClasses(navigator.platform);
   syncDocumentWindowControlsOverlayClass();
 }
+
+installIndicatorPhaseLock(document);
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 

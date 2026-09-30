@@ -6,6 +6,19 @@ import { useAtomCommand } from "./use-atom-command";
 import { vcsActionManager } from "./vcs";
 import type { useAttachedPullRequest } from "./threadPullRequest";
 
+// Returning to a thread or window re-runs `gh` on the server. Remember the last
+// return refresh per pull request across mounts, so flipping between threads
+// does not refresh a pull request that the live poll refreshed moments ago.
+const RETURN_REFRESH_INTERVAL_MS = 30_000;
+const lastReturnRefreshAt = new Map<string, number>();
+
+export function shouldRefreshOnReturn(key: string, now = Date.now()): boolean {
+  const last = lastReturnRefreshAt.get(key);
+  if (last !== undefined && now - last < RETURN_REFRESH_INTERVAL_MS) return false;
+  lastReturnRefreshAt.set(key, now);
+  return true;
+}
+
 export function useThreadPullRequestRefresh(
   thread: EnvironmentThreadShell,
   query: ReturnType<typeof useAttachedPullRequest>,
@@ -48,10 +61,8 @@ export function useThreadPullRequestRefresh(
   // Returning to the thread/window is a freshness boundary. Initial uncached reads already run.
   useEffect(() => {
     if (!key) return;
-    let lastArrival = 0;
     const arrived = () => {
-      if (document.visibilityState !== "visible" || Date.now() - lastArrival < 10_000) return;
-      lastArrival = Date.now();
+      if (document.visibilityState !== "visible" || !shouldRefreshOnReturn(key)) return;
       void latest.current.refresh();
     };
     if (latest.current.hasData && !latest.current.pending) arrived();

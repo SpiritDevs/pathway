@@ -1,8 +1,11 @@
 import type {
   MessageId,
+  NodeId,
   OrchestrationV2ThreadHistory,
+  OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadHistoryRequest,
   OrchestrationV2TurnItem,
+  RunId,
   ThreadId,
   TurnItemId,
 } from "@spiritdevs/contracts";
@@ -17,14 +20,31 @@ export const threadHistoryNeedsSnapshot = Effect.fn("threadHistoryNeedsSnapshot"
 ) {
   if (afterSequence > throughSequence) return true;
   const sql = yield* SqlClient.SqlClient;
+  // Unary `+` keeps SQLite on the (aggregate_kind, stream_id, sequence) index.
   const backlog = yield* sql<{ sequence: number }>`
     SELECT sequence FROM orchestration_events
-    WHERE application_event_version = 2 AND aggregate_kind = 'thread'
+    WHERE +application_event_version = 2 AND aggregate_kind = 'thread'
       AND stream_id = ${threadId}
       AND sequence > ${afterSequence} AND sequence <= ${throughSequence}
     ORDER BY sequence LIMIT 251
   `;
   return backlog.length > 250;
+});
+
+/**
+ * Whether a resume can target the thread: the same rows `getThreadShell` treats
+ * as present, without assembling the shell (tens of ms on long threads).
+ */
+export const threadProjectionExists = Effect.fn("threadProjectionExists")(function* (
+  threadId: ThreadId,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{ readonly present: number }>`
+    SELECT 1 AS present FROM orchestration_v2_projection_threads
+    WHERE thread_id = ${threadId} AND deleted_at IS NULL
+    LIMIT 1
+  `;
+  return rows.length > 0;
 });
 
 /** Small projection columns used to choose a page before reading message/tool bodies. */
@@ -100,4 +120,83 @@ export function selectThreadHistory(
       index,
     },
   };
+}
+
+/** Settled run and node statuses; provider turns cannot be rolled back. */
+const SETTLED_STATUSES = new Set([
+  "completed",
+  "interrupted",
+  "failed",
+  "cancelled",
+  "rolled_back",
+]);
+const SETTLED_TURN_STATUSES = new Set(["completed", "interrupted", "failed", "cancelled"]);
+
+/**
+ * Narrows a history page's nodes, attempts and provider turns to what the
+ * page's items and the thread's live or latest work reference. Pages otherwise
+ * carry every node of the thread: 2.5 MB of a 4.7 MB page on a 2,700-item
+ * thread. Clients union these arrays by id across pages and live events
+ * upsert ids they do not hold, so older pages bring their own support.
+ */
+export function narrowHistoryPageSupport(
+  projection: OrchestrationV2ThreadProjection,
+): OrchestrationV2ThreadProjection {
+  const latestRun = projection.runs.reduce<(typeof projection.runs)[number] | undefined>(
+    (latest, run) => (latest === undefined || run.ordinal > latest.ordinal ? run : latest),
+    undefined,
+  );
+  const runIds = new Set<RunId>();
+  const nodeIds = new Set<NodeId>();
+  const providerTurnIds = new Set<string>();
+  const addRun = (runId: RunId | null) => runId !== null && runIds.add(runId);
+  const addNode = (nodeId: NodeId | null) => nodeId !== null && nodeIds.add(nodeId);
+  if (latestRun !== undefined) addRun(latestRun.id);
+  for (const run of projection.runs) {
+    if (!SETTLED_STATUSES.has(run.status)) addRun(run.id);
+  }
+  for (const item of [
+    ...projection.turnItems,
+    ...projection.visibleTurnItems.map((row) => row.item),
+  ]) {
+    if (item.threadId !== projection.thread.id) continue;
+    addRun(item.runId);
+    addNode(item.nodeId);
+    if (item.providerTurnId !== null) providerTurnIds.add(item.providerTurnId);
+  }
+  for (const message of projection.messages) addRun(message.runId);
+  for (const run of projection.runs) if (runIds.has(run.id)) addNode(run.rootNodeId);
+  const attempts = projection.attempts.filter((attempt) => runIds.has(attempt.runId));
+  for (const attempt of attempts) {
+    addNode(attempt.rootNodeId);
+    if (attempt.providerTurnId !== null) providerTurnIds.add(attempt.providerTurnId);
+  }
+  for (const subagent of projection.subagents) {
+    addNode(subagent.id);
+    addNode(subagent.parentNodeId);
+  }
+  for (const entry of [...projection.plans, ...projection.runtimeRequests]) addNode(entry.nodeId);
+  for (const node of projection.nodes) {
+    if (!SETTLED_STATUSES.has(node.status)) addNode(node.id);
+  }
+  const nodeById = new Map(projection.nodes.map((node) => [node.id, node] as const));
+  for (const nodeId of nodeIds) {
+    const node = nodeById.get(nodeId);
+    if (node === undefined) continue;
+    addNode(node.parentNodeId);
+    addNode(node.rootNodeId);
+  }
+  const nodes = projection.nodes.filter((node) => nodeIds.has(node.id));
+  for (const node of nodes) {
+    if (node.providerTurnId !== null) providerTurnIds.add(node.providerTurnId);
+  }
+  const attemptIds = new Set<string>(attempts.map((attempt) => attempt.id));
+  const providerTurns = projection.providerTurns.filter(
+    (turn) =>
+      providerTurnIds.has(turn.id) ||
+      nodeIds.has(turn.nodeId) ||
+      (turn.runAttemptId !== null && attemptIds.has(turn.runAttemptId)) ||
+      !SETTLED_TURN_STATUSES.has(turn.status),
+  );
+  return { ...projection, nodes, attempts, providerTurns };
 }

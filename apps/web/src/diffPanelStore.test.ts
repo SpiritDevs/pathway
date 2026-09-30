@@ -1,6 +1,6 @@
 import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import { EnvironmentId, ThreadId, RunId } from "@spiritdevs/contracts";
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { selectThreadDiffPanelSelection, useDiffPanelStore } from "./diffPanelStore";
 
@@ -90,5 +90,25 @@ describe("diffPanelStore", () => {
       filePath: "src/app.ts",
       revealRequestId: 1,
     });
+  });
+
+  it("leaves state and storage untouched when the selected turn is still available", () => {
+    const turnId = RunId.make("turn-1");
+    useDiffPanelStore.getState().selectTurn(THREAD_REF, turnId, "src/app.ts");
+    const storage = useDiffPanelStore.persist.getOptions().storage;
+    if (!storage) throw new Error("Expected diff panel persistence to have storage");
+    const setItem = vi.spyOn(storage, "setItem");
+    const listener = vi.fn();
+    const unsubscribe = useDiffPanelStore.subscribe(listener);
+
+    // A streaming turn reconciles on every delta; none of those may write storage.
+    for (let delta = 0; delta < 50; delta += 1) {
+      useDiffPanelStore.getState().reconcileTurnSelection(THREAD_REF, [turnId]);
+    }
+
+    unsubscribe();
+    expect(setItem).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+    setItem.mockRestore();
   });
 });

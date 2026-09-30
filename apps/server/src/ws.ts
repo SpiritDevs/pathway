@@ -93,10 +93,12 @@ import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
-import { threadHistoryNeedsSnapshot } from "./orchestration-v2/ThreadHistory.ts";
+import {
+  threadHistoryNeedsSnapshot,
+  threadProjectionExists,
+} from "./orchestration-v2/ThreadHistory.ts";
 import { ComputerDispatchAccess } from "./orchestration-v2/ComputerDispatchAccess.ts";
 import { EffectOutboxV2 } from "./orchestration-v2/EffectOutbox.ts";
-import type { OrchestratorV2Error } from "./orchestration-v2/Orchestrator.ts";
 import { issuePullRequestFromStatus } from "./orchestration-v2/RunFinalizationService.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadWorkspaceMove from "./orchestration-v2/ThreadWorkspaceMoveService.ts";
@@ -107,6 +109,8 @@ import {
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
+  enrichmentRefreshes as shellEnrichmentRefreshes,
+  makeDeliveredRepositoryIdentities,
   shellStreamItemFromEnrichmentRefresh,
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
@@ -235,9 +239,9 @@ export const resolveIssueConnectionActor = Effect.fn("ws.issues.resolveActor")(f
 });
 
 export const requireThreadResumeTarget = Effect.fn("ws.orchestrationV2.requireThreadResumeTarget")(
-  function* (
+  function* <E>(
     threadId: ThreadId,
-    lookup: Effect.Effect<unknown | null, OrchestratorV2Error>,
+    lookup: Effect.Effect<unknown | null, E>,
   ): Effect.fn.Return<void, OrchestrationV2GetThreadProjectionError> {
     const target = yield* lookup.pipe(
       Effect.mapError(
@@ -1044,7 +1048,10 @@ const makeWsRpcLayer = (
           if (input.afterSequence !== undefined) {
             yield* requireThreadResumeTarget(
               input.threadId,
-              threadManagement.getThreadShell(input.threadId),
+              threadProjectionExists(input.threadId).pipe(
+                Effect.map((exists) => (exists ? true : null)),
+                Effect.provideService(SqlClient.SqlClient, sql),
+              ),
             );
             const highWater = yield* applicationEvents.latestAgentSequence(input.threadId).pipe(
               Effect.mapError(
@@ -1195,20 +1202,19 @@ const makeWsRpcLayer = (
           const liveFrom = (afterSequence: number) =>
             toShellStream(applicationEvents.streamApplicationEvents({ afterSequence }));
 
-          const enrichmentRefreshes = Stream.fromSubscription(enrichmentChanges).pipe(
-            Stream.filter((change) => change.repositoryIdentityResolved),
-            Stream.groupedWithin(64, Duration.millis(25)),
-            Stream.mapEffect((changes) =>
+          // Only identities this subscriber does not hold yet cost a reload and
+          // a full snapshot frame; unchanged re-resolutions are dropped here.
+          const deliveredIdentities = makeDeliveredRepositoryIdentities();
+          const enrichmentRefreshes = shellEnrichmentRefreshes({
+            changes: Stream.fromSubscription(enrichmentChanges),
+            delivered: deliveredIdentities,
+            refresh: (changes) =>
               loadSnapshot().pipe(
                 Effect.map(({ snapshot }) =>
-                  shellStreamItemFromEnrichmentRefresh({
-                    snapshot,
-                    changes: Array.from(changes),
-                  }),
+                  shellStreamItemFromEnrichmentRefresh({ snapshot, changes }),
                 ),
               ),
-            ),
-          );
+          });
 
           // Always attach the enrichment subscription before the first load so
           // completions that race HTTP snapshot fetch still push a refresh.
@@ -1224,22 +1230,32 @@ const makeWsRpcLayer = (
           //
           // After the unmarked authoritative frame, emit a same-sequence
           // metadata-only frame for roots that already resolved successfully
-          // (including cached null). Cold/failed roots stay unmarked and use
-          // the PubSub enrichment path when they complete later.
+          // (including cached null); a resume sends that marked frame alone.
+          // Cold/failed roots stay unmarked and use the PubSub enrichment path
+          // when they complete later.
           const completionMarker =
             input.requestCompletionMarker === true
               ? Stream.make({ kind: "synchronized" as const })
               : Stream.empty;
-          const initialSnapshotItems = (loaded: {
-            readonly snapshot: OrchestrationV2ShellSnapshot;
-            readonly resolvedRepositoryIdentityRoots: ReadonlyArray<string>;
-          }) =>
-            Stream.fromIterable(
+          const initialSnapshotItems = (
+            loaded: {
+              readonly snapshot: OrchestrationV2ShellSnapshot;
+              readonly resolvedRepositoryIdentityRoots: ReadonlyArray<string>;
+            },
+            resume: boolean,
+          ) => {
+            deliveredIdentities.recordSnapshot(
+              loaded.snapshot,
+              loaded.resolvedRepositoryIdentityRoots,
+            );
+            return Stream.fromIterable(
               shellStreamItemsFromInitialSnapshot({
                 snapshot: loaded.snapshot,
                 resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
+                resume,
               }),
             );
+          };
           // Initial unmarked (+ optional same-load marked) always drains first.
           // Enrichment merges only with the post-prefix tail so a ready marked
           // refresh cannot interleave before the authoritative initial frame.
@@ -1248,10 +1264,9 @@ const makeWsRpcLayer = (
 
           const stream = yield* Effect.gen(function* () {
             const loaded = yield* loadSnapshot();
-            const initial = initialSnapshotItems(loaded);
             if (input.afterSequence === undefined) {
               return composeShellStreamWithEnrichment({
-                initial,
+                initial: initialSnapshotItems(loaded, false),
                 tail: completionThenLive(loaded.snapshot.snapshotSequence),
                 enrichment: enrichmentRefreshes,
               });
@@ -1261,11 +1276,12 @@ const makeWsRpcLayer = (
             const replayGap = highWater - input.afterSequence;
             if (replayGap < 0 || replayGap > SHELL_RESUME_MAX_GAP) {
               return composeShellStreamWithEnrichment({
-                initial,
+                initial: initialSnapshotItems(loaded, false),
                 tail: completionThenLive(loaded.snapshot.snapshotSequence),
                 enrichment: enrichmentRefreshes,
               });
             }
+            const initial = initialSnapshotItems(loaded, true);
 
             const replay = toShellStream(
               applicationEvents.readApplicationEvents({

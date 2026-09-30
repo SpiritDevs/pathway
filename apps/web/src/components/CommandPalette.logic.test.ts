@@ -19,6 +19,7 @@ import {
   nextFocusId,
   reduceCommandPaletteUiState,
   type CommandPaletteGroup,
+  THREAD_SEARCH_RESULT_LIMIT,
   visibleFocusesForProjectKeys,
 } from "./CommandPalette.logic";
 
@@ -324,6 +325,29 @@ describe("buildThreadActionItems", () => {
       "thread:thread-title-match",
       "thread:thread-context-match",
     ]);
+  });
+
+  it("renders only the best-ranked thread matches for a broad query", () => {
+    const threadItems = Array.from({ length: THREAD_SEARCH_RESULT_LIMIT + 20 }, (_, index) => ({
+      kind: "action" as const,
+      value: `thread:${index}`,
+      searchTerms: [index === 40 ? "a" : `about ${index}`],
+      title: `Thread ${index}`,
+      icon: null,
+      run: async () => undefined,
+    }));
+
+    const groups = filterCommandPaletteGroups({
+      activeGroups: [],
+      query: "a",
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems: threadItems,
+    });
+
+    const values = groups[0]?.items.map((item) => item.value) ?? [];
+    expect(values).toHaveLength(THREAD_SEARCH_RESULT_LIMIT);
+    expect(values[0]).toBe("thread:40");
   });
 
   it("preserves thread project-name matches when there is no stronger title match", () => {

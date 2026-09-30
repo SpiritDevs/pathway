@@ -27,9 +27,19 @@ export function ThreadAlertHost(props: ThreadAlertHostProps) {
   const latest = useRef(props);
   latest.current = props;
   const wake = useRef<(() => void) | null>(null);
+  // Each cycle is a storage transaction, so only inputs that change delivery wake it.
+  // Everything else is caught by the interval below.
+  const focusedKey = props.focusedThread ? alertDeliveryThreadKey(props.focusedThread) : null;
   useEffect(() => {
     wake.current?.();
-  });
+  }, [
+    props.notifications,
+    props.ready,
+    props.connected,
+    props.settings,
+    props.isEligible,
+    focusedKey,
+  ]);
 
   useEffect(() => {
     if (!props.userId) return;

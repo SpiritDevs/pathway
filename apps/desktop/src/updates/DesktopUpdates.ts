@@ -44,10 +44,10 @@ import {
   reduceDesktopUpdateStateOnInstallFailure,
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
+  resolveUpdatePollDelayMs,
 } from "./updateMachine.ts";
 
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
-const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
 const PREPARED_INSTALL_CHECK_WAIT = Duration.seconds(90);
 
 type UpdateAction = "check" | "download" | "install" | "install-recovery" | "channel";
@@ -411,8 +411,11 @@ export const make = Effect.gen(function* () {
     if (actionReservation === "acquire" && !(yield* tryStartUpdateAction("check"))) return false;
 
     const check = Effect.gen(function* () {
-      const checkedAt = yield* currentIsoTimestamp;
-      yield* setState(reduceDesktopUpdateStateOnCheckStart(state, checkedAt));
+      // Background polls stay invisible; only the updater's answer changes state.
+      if (reason !== "poll") {
+        const checkedAt = yield* currentIsoTimestamp;
+        yield* setState(reduceDesktopUpdateStateOnCheckStart(state, checkedAt));
+      }
       yield* logUpdaterInfo("checking for updates", { reason });
 
       return yield* electronUpdater.checkForUpdates.pipe(
@@ -673,9 +676,16 @@ export const make = Effect.gen(function* () {
       }),
       Effect.forkScoped,
     );
-    yield* Effect.sleep(AUTO_UPDATE_POLL_INTERVAL).pipe(
-      Effect.andThen(checkForUpdates("poll")),
-      Effect.forever,
+    yield* Effect.gen(function* () {
+      let consecutiveFailures = 0;
+      while (true) {
+        const before = yield* Ref.get(updateStateRef);
+        yield* Effect.sleep(Duration.millis(resolveUpdatePollDelayMs(before, consecutiveFailures)));
+        yield* checkForUpdates("poll");
+        const after = yield* Ref.get(updateStateRef);
+        consecutiveFailures = after.status === "error" ? consecutiveFailures + 1 : 0;
+      }
+    }).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.void;

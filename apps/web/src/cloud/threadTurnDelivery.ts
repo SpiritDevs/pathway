@@ -82,3 +82,28 @@ export async function prepareDirectTurnAttachments(
     }),
   );
 }
+
+/** How long a send waits for its environment, or this device's cloud outbox, to accept it. */
+export const SEND_ACKNOWLEDGEMENT_TIMEOUT_MS = 60_000;
+
+export const SEND_ACKNOWLEDGEMENT_TIMEOUT_MESSAGE =
+  "The environment did not confirm this message in time, so it was returned to the composer. Check the connection and send it again.";
+
+/**
+ * Settles a send with a failure when its acknowledgement never arrives, so the
+ * composer and the draft's pending state can never wait forever. A late result
+ * is ignored; the caller's failure path restores the draft for retry.
+ */
+export function boundSendAcknowledgement<R>(
+  pending: Promise<R>,
+  timedOut: () => R,
+  timeoutMs = SEND_ACKNOWLEDGEMENT_TIMEOUT_MS,
+): Promise<R> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    pending,
+    new Promise<R>((resolve) => {
+      timer = setTimeout(() => resolve(timedOut()), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
