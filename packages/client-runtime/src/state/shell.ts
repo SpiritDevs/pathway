@@ -49,6 +49,7 @@ function shellStatusForSnapshot(
 }
 
 const SHELL_SYNCHRONIZATION_ERROR_MESSAGE = "Could not synchronize environment data.";
+export const SHELL_PERSIST_MIN_INTERVAL = "30 seconds";
 
 export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")(function* () {
   const supervisor = yield* EnvironmentSupervisor;
@@ -117,9 +118,14 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   // those fibers first and this flush sees a stable latestLiveSnapshot.
   yield* Effect.addFinalizer(() => flushLiveShellSnapshot);
 
+  // Encoding a large shell takes milliseconds on the UI thread, and the cache
+  // only seeds first paint (new sessions reload the authoritative snapshot), so
+  // save at most once per interval. Disconnect and teardown flush the latest.
   yield* Stream.fromQueue(persistence).pipe(
     Stream.debounce("500 millis"),
-    Stream.runForEach(persist),
+    Stream.runForEach((snapshot) =>
+      persist(snapshot).pipe(Effect.andThen(Effect.sleep(SHELL_PERSIST_MIN_INTERVAL))),
+    ),
     Effect.forkScoped,
   );
 
@@ -359,6 +365,32 @@ function mapsEqual<K, V>(left: ReadonlyMap<K, V>, right: ReadonlyMap<K, V>): boo
   return true;
 }
 
+const latestSnapshotUpdates = new WeakMap<OrchestrationV2ShellSnapshot, string | null>();
+
+// Summaries recompute on every shell event in any environment; snapshots are
+// immutable, so unchanged environments reuse their result.
+function latestSnapshotUpdate(snapshot: OrchestrationV2ShellSnapshot): string | null {
+  const cached = latestSnapshotUpdates.get(snapshot);
+  if (cached !== undefined) return cached;
+  let latestThreadMs = Number.NEGATIVE_INFINITY;
+  let latestThread: DateTime.Utc | null = null;
+  for (const threads of [snapshot.threads, snapshot.archivedThreads]) {
+    for (const thread of threads) {
+      const value = DateTime.toEpochMillis(thread.updatedAt);
+      if (value > latestThreadMs) {
+        latestThreadMs = value;
+        latestThread = thread.updatedAt;
+      }
+    }
+  }
+  let latest = latestThread === null ? null : DateTime.formatIso(latestThread);
+  for (const project of snapshot.projects) {
+    if (latest === null || project.updatedAt > latest) latest = project.updatedAt;
+  }
+  latestSnapshotUpdates.set(snapshot, latest);
+  return latest;
+}
+
 export function createEnvironmentShellSummaryAtom(input: {
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
   readonly shellStateValueAtom: (environmentId: EnvironmentId) => Atom.Atom<EnvironmentShellState>;
@@ -384,16 +416,7 @@ export function createEnvironmentShellSummaryAtom(input: {
         continue;
       }
       hasSnapshot = true;
-      const snapshot = state.snapshot.value;
-      const updatedAt = snapshot.threads.concat(snapshot.archivedThreads).reduce<string | null>(
-        (latest, thread) => {
-          const value = DateTime.formatIso(thread.updatedAt);
-          return latest === null || value > latest ? value : latest;
-        },
-        snapshot.projects.reduce<string | null>((latest, project) => {
-          return latest === null || project.updatedAt > latest ? project.updatedAt : latest;
-        }, null),
-      );
+      const updatedAt = latestSnapshotUpdate(state.snapshot.value);
       if (
         updatedAt !== null &&
         (latestSnapshotUpdatedAt === null || updatedAt > latestSnapshotUpdatedAt)

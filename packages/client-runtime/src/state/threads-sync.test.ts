@@ -16,6 +16,7 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -40,6 +41,7 @@ import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
   makeEnvironmentThreadState,
   THREAD_DELETED_REPROBE_INTERVAL,
+  THREAD_DELETED_REPROBE_MAX_INTERVAL,
   THREAD_NOT_FOUND_MAX_ATTEMPTS,
   ThreadSnapshotLoader,
   type EnvironmentThreadState,
@@ -96,6 +98,24 @@ function awaitThreadState(
   );
 }
 
+// Exhausts the bounded not-found window so the thread parks as deleted.
+const confirmMissingThread = Effect.fn("TestEnvironmentThreads.confirmMissingThread")(function* (
+  harness: Effect.Success<ReturnType<typeof makeHarness>>,
+) {
+  expect(yield* Queue.take(harness.subscriptionStarts)).toBe(1);
+  for (let attempt = 2; attempt <= THREAD_NOT_FOUND_MAX_ATTEMPTS; attempt += 1) {
+    yield* harness.clearSession;
+    yield* Effect.yieldNow;
+    yield* harness.replaceSession;
+    expect(yield* Queue.take(harness.subscriptionStarts)).toBe(attempt);
+  }
+  yield* harness.clearSession;
+  yield* Effect.yieldNow;
+  yield* harness.replaceSession;
+  yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+  yield* Queue.clear(harness.loaderStarts);
+});
+
 const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (options?: {
   readonly cached?: OrchestrationV2ThreadProjection;
   readonly httpSnapshot?: Option.Option<OrchestrationV2ThreadDetailSnapshot>;
@@ -104,6 +124,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly historySupport?: boolean;
   readonly cachedHistory?: OrchestrationV2ThreadHistory;
   readonly controlledPages?: boolean;
+  readonly reprobe?: Stream.Stream<unknown>;
 }) {
   const pageLoads = yield* Queue.unbounded<{
     request: OrchestrationV2ThreadHistoryRequest;
@@ -116,6 +137,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const subscriptionCount = yield* Ref.make(0);
   const subscriptionStarts = yield* Queue.unbounded<number>();
   const loaderCalls = yield* Ref.make(0);
+  const loaderStarts = yield* Queue.unbounded<number>();
   const lastSubscribeAfterSequence = yield* Ref.make<number | undefined>(undefined);
   const lastSubscribeHistory = yield* Ref.make<OrchestrationV2ThreadHistoryRequest | undefined>(
     undefined,
@@ -169,7 +191,8 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
             yield* Queue.offer(pageLoads, { request, reply });
             return yield* Deferred.await(reply);
           })
-        : Ref.update(loaderCalls, (count) => count + 1).pipe(
+        : Ref.updateAndGet(loaderCalls, (count) => count + 1).pipe(
+            Effect.tap((count) => Queue.offer(loaderStarts, count)),
             Effect.andThen(
               Effect.all({ notFound: Ref.get(httpNotFound), snapshot: Ref.get(httpSnapshot) }),
             ),
@@ -216,7 +239,10 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     clearVcsRefs: () => Effect.void,
     clear: () => Effect.void,
   });
-  const threadState = yield* makeEnvironmentThreadState(THREAD_ID).pipe(
+  const threadState = yield* makeEnvironmentThreadState(
+    THREAD_ID,
+    options?.reprobe === undefined ? undefined : { reprobe: options.reprobe },
+  ).pipe(
     Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
     Effect.provideService(Persistence.EnvironmentCacheStore, cache),
     Effect.provideService(ThreadSnapshotLoader, snapshotLoader),
@@ -243,6 +269,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     subscriptionCount,
     subscriptionStarts,
     loaderCalls,
+    loaderStarts,
     lastSubscribeAfterSequence,
     lastRequestCompletionMarker,
     supervisorState,
@@ -486,6 +513,61 @@ describe("EnvironmentThreads", () => {
       // The socket subscription resumes from the recovered snapshot.
       expect(yield* Queue.take(harness.subscriptionStarts)).toBe(THREAD_NOT_FOUND_MAX_ATTEMPTS + 1);
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(1);
+    }),
+  );
+
+  it.effect("backs off reprobing a thread that never materializes", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ httpNotFound: true });
+      yield* confirmMissingThread(harness);
+      const expectNoProbe = Effect.gen(function* () {
+        yield* Effect.yieldNow;
+        expect(yield* Queue.size(harness.loaderStarts)).toBe(0);
+      });
+
+      // 5s, 10s, 20s, ... doubling after each miss, then holding at the cap.
+      const expectedDelays = [5, 10, 20, 40, 80, 160, 300, 300];
+      expect(Duration.toSeconds(THREAD_DELETED_REPROBE_INTERVAL)).toBe(expectedDelays[0]);
+      expect(Duration.toSeconds(THREAD_DELETED_REPROBE_MAX_INTERVAL)).toBe(300);
+      for (const seconds of expectedDelays) {
+        yield* TestClock.adjust(`${seconds - 1} seconds`);
+        yield* expectNoProbe;
+        yield* TestClock.adjust("1 second");
+        yield* Queue.take(harness.loaderStarts);
+        yield* expectNoProbe;
+      }
+      expect((yield* Ref.get(harness.latest)).status).toBe("deleted");
+    }),
+  );
+
+  it.effect("reprobes a missing thread immediately when its shell changes", () =>
+    Effect.gen(function* () {
+      const shellChanges = yield* Queue.unbounded<void>();
+      const harness = yield* makeHarness({
+        httpNotFound: true,
+        reprobe: Stream.fromQueue(shellChanges),
+      });
+      yield* confirmMissingThread(harness);
+      // Walk the backoff out to a long wait.
+      for (const seconds of [5, 10, 20, 40]) {
+        yield* TestClock.adjust(`${seconds} seconds`);
+        yield* Queue.take(harness.loaderStarts);
+      }
+
+      // The owning server commits the thread and the shell learns about it.
+      yield* Ref.set(harness.httpNotFound, false);
+      yield* Ref.set(
+        harness.httpSnapshot,
+        Option.some({ snapshotSequence: 1, projection: BASE_PROJECTION }),
+      );
+      yield* Queue.offer(shellChanges, undefined);
+      yield* Queue.take(harness.loaderStarts);
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+      expect(Option.getOrThrow(state.data).thread.id).toBe(THREAD_ID);
     }),
   );
 

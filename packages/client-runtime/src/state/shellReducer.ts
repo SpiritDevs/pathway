@@ -126,18 +126,16 @@ export function applyShellStreamEvent(
         snapshotSequence: event.sequence,
       };
     case "thread.updated": {
-      const withoutThread = (threads: OrchestrationV2ShellSnapshot["threads"]) =>
-        threads.filter((thread) => thread.id !== event.thread.id);
+      // Update in place so a thread keeps its slot; unchanged lists keep their identity.
+      const place = (threads: OrchestrationV2ShellSnapshot["threads"], included: boolean) => {
+        const index = threads.findIndex((thread) => thread.id === event.thread.id);
+        if (!included) return index === -1 ? threads : threads.toSpliced(index, 1);
+        return index === -1 ? [...threads, event.thread] : threads.with(index, event.thread);
+      };
       return {
         ...snapshot,
-        threads:
-          event.location === "active"
-            ? upsertById(withoutThread(snapshot.threads), event.thread)
-            : withoutThread(snapshot.threads),
-        archivedThreads:
-          event.location === "archive"
-            ? upsertById(withoutThread(snapshot.archivedThreads), event.thread)
-            : withoutThread(snapshot.archivedThreads),
+        threads: place(snapshot.threads, event.location === "active"),
+        archivedThreads: place(snapshot.archivedThreads, event.location === "archive"),
         snapshotSequence: event.sequence,
       };
     }

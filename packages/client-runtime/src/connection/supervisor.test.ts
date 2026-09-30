@@ -889,6 +889,28 @@ describe("EnvironmentSupervisor", () => {
     }),
   );
 
+  it.effect("probes after a brief absence without asking subscriptions to resubscribe", () =>
+    Effect.gen(function* () {
+      const probeCalled = yield* Deferred.make<void>();
+      const harness = yield* makeHarness({
+        probe: () => Deferred.succeed(probeCalled, undefined),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      yield* harness.wake("application-active-brief");
+      yield* Deferred.await(probeCalled);
+
+      expect(yield* Ref.get(harness.sessionCount)).toBe(1);
+      expect(ConnectionWakeups.shouldResubscribeAfterWakeup("application-active-brief")).toBe(
+        false,
+      );
+      expect(ConnectionWakeups.shouldResubscribeAfterWakeup("application-active")).toBe(true);
+    }),
+  );
+
   it.effect("immediately replaces a mobile session after a long background resume", () =>
     Effect.gen(function* () {
       const probeCount = yield* Ref.make(0);

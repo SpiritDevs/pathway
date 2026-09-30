@@ -288,4 +288,76 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     expect(next?.visibleTurnItems).toEqual([inheritedRow]);
     expect(next?.visibleTurnItems[0]).toBe(inheritedRow);
   });
+
+  it("inserts a new item between rows by ordinal", () => {
+    const rows = [1, 5, 9].map((ordinal, position) => {
+      const item = commandItem(`item-${ordinal}`, "done", ordinal);
+      return {
+        position,
+        visibility: "local" as const,
+        sourceThreadId: threadId,
+        sourceItemId: item.id,
+        item,
+      };
+    });
+    const inserted = commandItem("item-7", "done", 7);
+    const projection = {
+      ...emptyProjection,
+      runs: [run],
+      turnItems: rows.map((row) => row.item),
+      visibleTurnItems: rows,
+    };
+    const event = {
+      id: "event-insert",
+      type: "turn-item.updated",
+      threadId,
+      occurredAt: now,
+      payload: inserted,
+    } as OrchestrationV2DomainEvent;
+
+    const next = applyOrchestrationV2ProjectionEvent(projection, event);
+    expect(next?.visibleTurnItems.map((row) => row.item.ordinal)).toEqual([1, 5, 7, 9]);
+    expect(next?.visibleTurnItems.map((row) => row.position)).toEqual([0, 1, 2, 3]);
+    expect(next?.visibleTurnItems[0]).toBe(rows[0]);
+  });
+
+  it("hides a cancelled queued message while keeping other rows of that run", () => {
+    const cancelledRunId = RunId.make("run-cancelled");
+    const kept = commandItem("item-kept", "done", 1);
+    const queued: OrchestrationV2TurnItem = {
+      ...commandItem("item-queued", "done", 2),
+      runId: cancelledRunId,
+      type: "user_message",
+      messageId: MessageId.make("message-queued"),
+      inputIntent: "queued_turn",
+      text: "later",
+      attachments: [],
+    } as OrchestrationV2TurnItem;
+    const sibling = { ...commandItem("item-sibling", "done", 3), runId: cancelledRunId };
+    const rows = [kept, queued, sibling].map((item, position) => ({
+      position,
+      visibility: "local" as const,
+      sourceThreadId: threadId,
+      sourceItemId: item.id,
+      item,
+    }));
+    const cancelledRun = { ...run, id: cancelledRunId, ordinal: 2, status: "queued" as const };
+    const projection = {
+      ...emptyProjection,
+      runs: [run, cancelledRun],
+      turnItems: [kept, queued, sibling],
+      visibleTurnItems: rows,
+    };
+    const event = {
+      id: "event-cancel",
+      type: "run.updated",
+      threadId,
+      occurredAt: now,
+      payload: { ...cancelledRun, status: "cancelled" },
+    } as OrchestrationV2DomainEvent;
+
+    const next = applyOrchestrationV2ProjectionEvent(projection, event);
+    expect(next?.visibleTurnItems.map((row) => row.item.id)).toEqual([kept.id, sibling.id]);
+    expect(next?.visibleTurnItems[0]).toBe(rows[0]);
+  });
 });

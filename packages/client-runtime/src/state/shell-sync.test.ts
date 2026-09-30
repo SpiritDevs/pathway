@@ -5,7 +5,9 @@ import {
   type OrchestrationV2ShellStreamItem,
 } from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -15,6 +17,7 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -26,7 +29,11 @@ import * as ConnectionWakeups from "../connection/wakeups.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import { makeEnvironmentShellState, ShellSnapshotLoader } from "./shell.ts";
+import {
+  makeEnvironmentShellState,
+  SHELL_PERSIST_MIN_INTERVAL,
+  ShellSnapshotLoader,
+} from "./shell.ts";
 import { v2Project, v2ShellSnapshot } from "./orchestrationV2TestFixtures.ts";
 
 const TARGET = new PrimaryConnectionTarget({
@@ -774,6 +781,84 @@ describe("environment shell synchronization", () => {
       const state = yield* SubscriptionRef.get(shellState);
       expect(Option.getOrThrow(state.snapshot).snapshotSequence).toBe(4);
       expect(Option.getOrThrow(state.snapshot).projects[0]?.title).toBe("Server reset");
+    }),
+  );
+
+  it.effect("saves the shell cache at most once per interval while events keep arriving", () =>
+    Effect.gen(function* () {
+      const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();
+      const saved = yield* Queue.unbounded<{ readonly sequence: number; readonly at: number }>();
+      const client = {
+        [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () => Stream.fromQueue(events),
+      } as unknown as WsRpcProtocolClient;
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: TARGET,
+        state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+        session: yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(
+          Option.some(session(client)),
+        ),
+        prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+      const cache = Persistence.EnvironmentCacheStore.of({
+        loadShell: () => Effect.succeed(Option.none()),
+        saveShell: (_environmentId, snapshot) =>
+          Clock.currentTimeMillis.pipe(
+            Effect.flatMap((at) => Queue.offer(saved, { sequence: snapshot.snapshotSequence, at })),
+          ),
+        loadThread: () => Effect.succeed(Option.none()),
+        saveThread: () => Effect.void,
+        removeThread: () => Effect.void,
+        loadServerConfig: () => Effect.succeed(Option.none()),
+        saveServerConfig: () => Effect.void,
+        loadVcsRefs: () => Effect.succeed(Option.none()),
+        saveVcsRefs: () => Effect.void,
+        removeVcsRefs: () => Effect.void,
+        clearVcsRefs: () => Effect.void,
+        clear: () => Effect.void,
+      });
+      const shellState = yield* makeEnvironmentShellState().pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+        Effect.provideService(
+          ShellSnapshotLoader,
+          ShellSnapshotLoader.of({ load: () => Effect.succeed(Option.none()) }),
+        ),
+      );
+      const awaitSequence = (sequence: number) =>
+        SubscriptionRef.changes(shellState).pipe(
+          Stream.filter((state) =>
+            Option.exists(state.snapshot, (snapshot) => snapshot.snapshotSequence === sequence),
+          ),
+          Stream.runHead,
+        );
+
+      // Step the clock so each timer's follow-up work runs before time moves on.
+      const advance = (seconds: number) =>
+        Effect.forEach(Array.from({ length: seconds }), () => TestClock.adjust("1 second"), {
+          discard: true,
+        });
+
+      yield* Queue.offer(events, { kind: "snapshot", snapshot: LIVE_SHELL_SNAPSHOT });
+      yield* awaitSequence(1);
+      yield* advance(1);
+      const first = yield* Queue.take(saved);
+      expect(first.sequence).toBe(1);
+
+      yield* Queue.offer(events, {
+        kind: "project.updated",
+        sequence: 2,
+        project: { ...v2Project, title: "Renamed" },
+      });
+      yield* awaitSequence(2);
+      yield* advance(40);
+      const second = yield* Queue.take(saved);
+      expect(second.sequence).toBe(2);
+      expect(second.at - first.at).toBeGreaterThanOrEqual(
+        Duration.toMillis(SHELL_PERSIST_MIN_INTERVAL),
+      );
     }),
   );
 });

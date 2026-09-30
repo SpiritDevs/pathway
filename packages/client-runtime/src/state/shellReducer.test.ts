@@ -386,6 +386,24 @@ describe("applyShellStreamEvent", () => {
     expect(active.archivedThreads).toEqual([]);
   });
 
+  it("updates a thread in place and keeps untouched lists", () => {
+    const threads = ["thread-a", "thread-b", "thread-c"].map((id) => ({
+      ...v2ThreadShell,
+      id: ThreadId.make(id),
+    }));
+    const snapshot = { ...v2ShellSnapshot, threads, archivedThreads: [] };
+    const updated = { ...threads[0]!, title: "Renamed" };
+    const next = applyShellStreamEvent(snapshot, {
+      kind: "thread.updated",
+      sequence: 3,
+      location: "active",
+      thread: updated,
+    });
+    expect(next.threads).toEqual([updated, threads[1], threads[2]]);
+    expect(next.threads[1]).toBe(threads[1]);
+    expect(next.archivedThreads).toBe(snapshot.archivedThreads);
+  });
+
   it("removes a thread from either collection", () => {
     const next = applyShellStreamEvent(v2ShellSnapshot, {
       kind: "thread.removed",

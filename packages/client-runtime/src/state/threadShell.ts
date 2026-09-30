@@ -29,6 +29,8 @@ const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
   ReadonlyArray<ScopedThreadRef>
 > = new Map();
 
+const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = Object.freeze([]);
+
 export function createEnvironmentThreadShellAtoms(input: {
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
   readonly snapshotAtom: (
@@ -39,6 +41,26 @@ export function createEnvironmentThreadShellAtoms(input: {
     environmentId: EnvironmentId,
   ) => Atom.Atom<ReadonlyArray<OrchestrationV2ThreadShell>>;
 }) {
+  // Shell sources are immutable and keep their identity until they change, so
+  // one presentation per source is shared by the list and per-thread atoms.
+  const presentedByEnvironment = new Map<
+    EnvironmentId,
+    WeakMap<OrchestrationV2ThreadShell, EnvironmentThreadShell>
+  >();
+  const present = (environmentId: EnvironmentId, source: OrchestrationV2ThreadShell) => {
+    let cache = presentedByEnvironment.get(environmentId);
+    if (cache === undefined) {
+      cache = new WeakMap();
+      presentedByEnvironment.set(environmentId, cache);
+    }
+    let value = cache.get(source);
+    if (value === undefined) {
+      value = presentThreadShell(environmentId, source);
+      cache.set(source, value);
+    }
+    return value;
+  };
+
   const environmentThreadsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get): ReadonlyArray<OrchestrationV2ThreadShell> => {
       const snapshot = get(input.snapshotAtom(environmentId));
@@ -96,13 +118,14 @@ export function createEnvironmentThreadShellAtoms(input: {
         return previous;
       }
       const next = new Map<ProjectId, ReadonlyArray<ScopedThreadRef>>();
+      let changed = grouped.size !== previous.size;
       for (const [projectId, refs] of grouped) {
         const previousRefs = previous.get(projectId);
-        next.set(
-          projectId,
-          previousRefs !== undefined && threadRefsEqual(previousRefs, refs) ? previousRefs : refs,
-        );
+        const unchanged = previousRefs !== undefined && threadRefsEqual(previousRefs, refs);
+        changed ||= !unchanged;
+        next.set(projectId, unchanged ? previousRefs : refs);
       }
+      if (!changed) return previous;
       previous = next;
       return previous;
     }).pipe(Atom.withLabel(`environment-thread-refs-by-project:${environmentId}`));
@@ -110,17 +133,24 @@ export function createEnvironmentThreadShellAtoms(input: {
 
   const threadShellAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
-    let previousSource: OrchestrationV2ThreadShell | null = null;
-    let previousValue: EnvironmentThreadShell | null = null;
     return Atom.make((get) => {
-      const source = get(environmentThreadIndexAtom(ref.environmentId)).get(ref.threadId) ?? null;
-      if (source === previousSource) {
-        return previousValue;
-      }
-      previousSource = source;
-      previousValue = source === null ? null : presentThreadShell(ref.environmentId, source);
-      return previousValue;
+      const source = get(environmentThreadIndexAtom(ref.environmentId)).get(ref.threadId);
+      return source === undefined ? null : present(ref.environmentId, source);
     }).pipe(Atom.withLabel(`environment-thread-shell:${key}`));
+  });
+
+  const environmentThreadShellsAtom = Atom.family((environmentId: EnvironmentId) => {
+    let previous = EMPTY_THREAD_SHELLS;
+    return Atom.make((get) => {
+      const next = get(environmentThreadsAtom(environmentId)).map((thread) =>
+        present(environmentId, thread),
+      );
+      if (arrayElementsEqual(previous, next)) {
+        return previous;
+      }
+      previous = next;
+      return previous;
+    }).pipe(Atom.withLabel(`environment-thread-shells:${environmentId}`));
   });
 
   const threadShellsForProjectRefsAtomFamily = Atom.family((key: string) => {
@@ -167,12 +197,14 @@ export function createEnvironmentThreadShellAtoms(input: {
     return refs;
   }).pipe(Atom.withLabel("environment-thread-refs"));
 
+  // Concatenates per-environment lists, so a shell event rebuilds only its own
+  // environment's list instead of re-reading every per-thread atom.
   let previousThreadShells: ReadonlyArray<EnvironmentThreadShell> = [];
   const threadShellsAtom = Atom.make((get) => {
-    const next = get(threadRefsAtom).flatMap((ref) => {
-      const thread = get(threadShellAtomFamily(threadKey(ref)));
-      return thread === null ? [] : [thread];
-    });
+    const next: EnvironmentThreadShell[] = [];
+    for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
+      next.push(...get(environmentThreadShellsAtom(environmentId)));
+    }
     if (arrayElementsEqual(previousThreadShells, next)) {
       return previousThreadShells;
     }
@@ -185,6 +217,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     environmentThreadIndexAtom,
     environmentThreadRefsAtom,
     environmentThreadRefsByProjectAtom,
+    environmentThreadShellsAtom,
     threadRefsAtom,
     threadShellsAtom,
     threadShellsForProjectRefsAtom: (refs: ReadonlyArray<ScopedProjectRef>) =>
