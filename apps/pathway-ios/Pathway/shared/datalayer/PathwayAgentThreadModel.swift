@@ -943,7 +943,8 @@ final class PathwayAgentThreadModel {
             lastSequence = sequence
             if type == "turn-item.updated", let item = PathwayTimelineItem(json: payload) {
                 guard !runs.contains(where: { $0.id == item.runID && $0.status == "rolled_back" }) else { return }
-                if let index = items.firstIndex(where: { $0.id == item.id }) {
+                // Streaming updates target the newest items; search from the end.
+                if let index = items.lastIndex(where: { $0.id == item.id }) {
                     let previous = items[index]
                     items[index] = item
                     // Streaming text updates retain their position; only ordering changes sort.

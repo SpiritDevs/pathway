@@ -6,7 +6,7 @@ A status below the latest message shows when your message is sending, queued, pr
 
 When you scroll away from the latest message, a floating button above the composer returns you to it. While the agent works, it shows an orb and the current activity. When work stops, it returns to a down chevron. Tapping it resumes following new replies.
 
-Completed turns keep the final answer visible and fold intermediate work into a **Worked for…** row. Expand it to read progress updates, then expand individual search, command, tool, and file rows for details. Questions, approval requests, plans, and subagent links remain accessible in the conversation.
+Completed turns keep the final answer visible and fold intermediate work into a **Worked for…** row. Expand it to read progress updates, then expand individual search, command, tool, and file rows for details. Very long command output, tool results, and diffs show their beginning and end; hold the block and choose Copy to get the full text. Questions, approval requests, plans, and subagent links remain accessible in the conversation.
 
 When working details fold away, the conversation keeps the latest answer in view if you were following it. Reading earlier messages does not resume automatic scrolling. If the collapsed work leaves your view beyond the end of the conversation, it returns to the final answer.
 

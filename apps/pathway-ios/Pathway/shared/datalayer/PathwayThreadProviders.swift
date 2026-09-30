@@ -28,7 +28,9 @@ final class PathwayThreadProviders {
     }
 
     func observe(environments: [PathwayCompanyEnvironment], using connect: PathwayConnectClient) async {
-        providers = [:]
+        // Keep known branding across resubscription so rows do not flash their fallback icon.
+        let ids = Set(environments.map(\.id))
+        providers = providers.filter { ids.contains($0.key) }
         await withTaskGroup(of: Void.self) { group in
             for environment in environments {
                 group.addTask {
@@ -59,7 +61,8 @@ final class PathwayThreadProviders {
                 name: fields["displayName"]?.stringValue ?? driver
             )
         }
-        providers[environmentID] = updated
+        // Status pushes usually repeat the same providers; every row observes this map.
+        if providers[environmentID] != updated { providers[environmentID] = updated }
     }
 
     private func observe(environment: PathwayCompanyEnvironment, using connect: PathwayConnectClient) async {

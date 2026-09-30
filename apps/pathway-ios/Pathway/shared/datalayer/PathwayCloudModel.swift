@@ -573,8 +573,13 @@ final class PathwayCloudModel {
               let current = threads.first(where: { $0.id == resolution.threadID }),
               PathwayThreadChangeRequestSource(current.shell) == PathwayThreadChangeRequestSource(requested.shell) else { return }
         let previousState = changeRequestStatuses[resolution.threadID]?.state
-        changeRequestStatuses[resolution.threadID] = resolution.status
-        threadPullRequestStatuses[resolution.threadID] = resolution.pullRequests
+        // Every PR badge observes these dictionaries; unchanged polls must not invalidate them.
+        if changeRequestStatuses[resolution.threadID] != resolution.status {
+            changeRequestStatuses[resolution.threadID] = resolution.status
+        }
+        if threadPullRequestStatuses[resolution.threadID] != resolution.pullRequests {
+            threadPullRequestStatuses[resolution.threadID] = resolution.pullRequests
+        }
         guard previousState != resolution.status.state else { return }
         let currentThreadIDs = Set(threads.map(\.id))
         threadPullRequestStatuses = threadPullRequestStatuses.filter { currentThreadIDs.contains($0.key) }
@@ -1000,10 +1005,11 @@ extension PathwayCloudModel {
             changeRequestStates: changeRequestStatuses.compactMapValues(\.state),
             autoSettleAfterDays: PathwayGeneralPreferences.shared.autoSettleDays == 0 ? nil : PathwayGeneralPreferences.shared.autoSettleDays
         )
-        threads = partition.all
-        activeThreads = partition.active
-        snoozedThreads = partition.snoozed
-        settledThreads = partition.settled
+        // Observation invalidates on every write; an unrelated shelf keeps its readers idle.
+        if threads != partition.all { threads = partition.all }
+        if activeThreads != partition.active { activeThreads = partition.active }
+        if snoozedThreads != partition.snoozed { snoozedThreads = partition.snoozed }
+        if settledThreads != partition.settled { settledThreads = partition.settled }
     }
 
     private func updateConnectionStateIfReady() {

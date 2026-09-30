@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PathwayConversationStorageNotice: View {
     @Environment(PathwayAppModel.self) private var appModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var model: PathwayEnvironmentStorageModel
     @State private var continued = false
     @State private var showsDashboard = false
@@ -81,7 +82,9 @@ struct PathwayConversationStorageNotice: View {
         .onChange(of: blocksSending, initial: true) { _, blocked in
             onAvailabilityChanged?(!blocked)
         }
-        .task {
+        .task(id: scenePhase == .active) {
+            // Polling pauses in the background and refreshes as soon as the app returns.
+            guard scenePhase == .active else { return }
             while !Task.isCancelled {
                 model.setVisibility(cloud: appModel.cloud)
                 await model.refresh()

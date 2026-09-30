@@ -50,17 +50,19 @@ struct AgentTranscriptAttachmentImage<Content: View>: View {
             guard url.isFileURL, PathwayDecodedImageCache.image(cacheKey) == nil else { return }
             let sourceURL = url
             let pixelSize = maximumPixelSize
-            let data = await Task.detached(priority: .utility) {
+            // Decode here so the first draw does not decode on the main thread.
+            let decoded = await Task.detached(priority: .utility) {
                 guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
                       let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                           kCGImageSourceCreateThumbnailFromImageAlways: true,
                           kCGImageSourceCreateThumbnailWithTransform: true,
+                          kCGImageSourceShouldCacheImmediately: true,
                           kCGImageSourceThumbnailMaxPixelSize: pixelSize
-                      ] as CFDictionary) else { return Data?.none }
-                return UIImage(cgImage: image).pngData()
+                      ] as CFDictionary) else { return UIImage?.none }
+                return UIImage(cgImage: image)
             }.value
             guard !Task.isCancelled else { return }
-            if let data, let image = UIImage(data: data) {
+            if let image = decoded {
                 PathwayDecodedImageCache.store(image, key: cacheKey)
                 savedImage = Image(uiImage: image)
                 readFailed = false
