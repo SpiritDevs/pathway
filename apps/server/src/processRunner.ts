@@ -173,7 +173,9 @@ export const isWindowsCommandNotFound = Effect.fn("processRunner.isWindowsComman
   },
 );
 
-const collectText = Effect.fn("processRunner.collectText")(function* (input: {
+// Untraced: stdout and stderr collection live exactly as long as the process,
+// so two spans per spawn would only duplicate processRunner.runProcessCore.
+const collectText = Effect.fnUntraced(function* (input: {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly cwd?: string | undefined;

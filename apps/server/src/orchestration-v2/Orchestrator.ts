@@ -76,6 +76,7 @@ import { ProviderContinuationRequests } from "./ProviderContinuationRequests.ts"
 import { ComputerDispatchAccess } from "./ComputerDispatchAccess.ts";
 import { ServerOwnedRuntimeRequests } from "./ServerOwnedRuntimeRequests.ts";
 import { RunStopFence } from "./RunStopFence.ts";
+import { narrowHistoryPageSupport } from "./ThreadHistory.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
@@ -9532,9 +9533,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         .getThreadProjection(threadId)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
     getThreadSnapshot: (threadId, history) =>
-      projectionStore
-        .getThreadSnapshot(threadId, history)
-        .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
+      projectionStore.getThreadSnapshot(threadId, history).pipe(
+        Effect.map((snapshot) =>
+          history === undefined
+            ? snapshot
+            : { ...snapshot, projection: narrowHistoryPageSupport(snapshot.projection) },
+        ),
+        Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })),
+      ),
     getShellSnapshot: () =>
       projectionStore.getShellSnapshot().pipe(
         Effect.mapError(

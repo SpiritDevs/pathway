@@ -1,7 +1,12 @@
 import { expect, it } from "@effect/vitest";
 import { describe } from "vite-plus/test";
 
-import { assetResponseHeaders, isLoopbackHostname, resolveDevRedirectUrl } from "./http.ts";
+import {
+  assetResponseHeaders,
+  isLoopbackHostname,
+  resolveDevRedirectUrl,
+  staticFileCacheControl,
+} from "./http.ts";
 
 describe("http dev routing", () => {
   it("treats localhost and loopback addresses as local", () => {
@@ -69,5 +74,19 @@ describe("assetResponseHeaders", () => {
       "Content-Type": "application/octet-stream",
       "X-Content-Type-Options": "nosniff",
     });
+  });
+});
+
+describe("staticFileCacheControl", () => {
+  it("caches content-hashed build assets for good", () => {
+    expect(staticFileCacheControl("assets/index-DQ_IL-pM.js")).toBe(
+      "public, max-age=31536000, immutable",
+    );
+  });
+
+  it("revalidates the document and unhashed public files", () => {
+    expect(staticFileCacheControl("index.html")).toBe("no-cache");
+    expect(staticFileCacheControl("manifest.webmanifest")).toBe("no-cache");
+    expect(staticFileCacheControl("mockServiceWorker.js")).toBe("no-cache");
   });
 });

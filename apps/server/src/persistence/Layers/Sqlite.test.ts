@@ -64,3 +64,21 @@ it.effect("applies busy_timeout in the shared persistence setup", () =>
     assert.equal(rows[0]?.timeout, 5000);
   }).pipe(Effect.provide(SqlitePersistenceMemory)),
 );
+
+it.effect("opens file databases with WAL, NORMAL sync, and a 32 MB page cache", () => {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-pragmas-"));
+  const dbPath = NodePath.join(tempDir, "state.sqlite");
+
+  return Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [journal] = yield* sql<{ readonly journal_mode: string }>`PRAGMA journal_mode`;
+    const [sync] = yield* sql<{ readonly synchronous: number }>`PRAGMA synchronous`;
+    const [cache] = yield* sql<{ readonly cache_size: number }>`PRAGMA cache_size`;
+    assert.equal(journal?.journal_mode, "wal");
+    assert.equal(sync?.synchronous, 1);
+    assert.equal(cache?.cache_size, -32768);
+  }).pipe(
+    Effect.provide(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+  );
+});

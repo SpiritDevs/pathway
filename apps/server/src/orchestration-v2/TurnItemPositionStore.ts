@@ -46,6 +46,16 @@ export const layer: Layer.Layer<TurnItemPositionStoreV2, never, SqlClient.SqlCli
       runOrdinal: suppliedRunOrdinal,
     }) =>
       Effect.gen(function* () {
+        const selectOrdinal = sql<{ readonly ordinal: number }>`
+          SELECT ordinal
+          FROM orchestration_v2_turn_item_positions
+          WHERE thread_id = ${threadId} AND turn_item_id = ${turnItemId}
+          LIMIT 1
+        `;
+        // Most calls re-position an item that is already placed, such as each
+        // streamed update of the same message; answer those with one lookup.
+        const existing = (yield* selectOrdinal)[0]?.ordinal;
+        if (existing !== undefined) return existing;
         const runRows =
           runId === null
             ? []
@@ -70,13 +80,7 @@ export const layer: Layer.Layer<TurnItemPositionStoreV2, never, SqlClient.SqlCli
             AND ordinal <= ${upperBound}
           ON CONFLICT(thread_id, turn_item_id) DO NOTHING
         `;
-        const rows = yield* sql<{ readonly ordinal: number }>`
-          SELECT ordinal
-          FROM orchestration_v2_turn_item_positions
-          WHERE thread_id = ${threadId} AND turn_item_id = ${turnItemId}
-          LIMIT 1
-        `;
-        const ordinal = rows[0]?.ordinal;
+        const ordinal = (yield* selectOrdinal)[0]?.ordinal;
         if (ordinal === undefined) {
           return yield* new TurnItemPositionStoreError({
             threadId,

@@ -372,6 +372,19 @@ export const attachmentUploadRouteLayer = HttpRouter.add(
   }),
 );
 
+/**
+ * Cache policy for the bundled web client. Vite content-hashes everything it
+ * emits under `assets/`, so those files never change at a given URL and can be
+ * cached for good; without this every reload re-downloads (and re-compresses)
+ * the whole bundle, which a remote browser pays for over its link. Everything
+ * else, `index.html` above all, must revalidate so a new build is picked up.
+ */
+export function staticFileCacheControl(staticRelativePath: string): string {
+  return /^assets[/\\]/.test(staticRelativePath)
+    ? "public, max-age=31536000, immutable"
+    : "no-cache";
+}
+
 export const staticAndDevRouteLayer = HttpRouter.add(
   "GET",
   "*",
@@ -448,6 +461,7 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       return HttpServerResponse.uint8Array(indexData, {
         status: 200,
         contentType: "text/html; charset=utf-8",
+        headers: { "Cache-Control": "no-cache" },
       });
     }
 
@@ -460,6 +474,7 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     return HttpServerResponse.uint8Array(data, {
       status: 200,
       contentType,
+      headers: { "Cache-Control": staticFileCacheControl(staticRelativePath) },
     });
   }),
 );

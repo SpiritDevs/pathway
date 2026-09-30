@@ -8,6 +8,7 @@ import {
   TurnItemId,
   type OrchestrationV2AppThread,
   type OrchestrationV2Run,
+  type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
@@ -16,7 +17,11 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ProjectionStoreV2, layer as projectionStoreLayer } from "./ProjectionStore.ts";
-import { threadHistoryNeedsSnapshot } from "./ThreadHistory.ts";
+import {
+  narrowHistoryPageSupport,
+  threadHistoryNeedsSnapshot,
+  threadProjectionExists,
+} from "./ThreadHistory.ts";
 
 const TestLayer = projectionStoreLayer.pipe(Layer.provideMerge(SqlitePersistenceMemory));
 const now = DateTime.makeUnsafe("2026-09-19T01:00:00Z");
@@ -307,4 +312,93 @@ it.layer(TestLayer)("bounded thread history", (it) => {
         assert.equal(snapshot.snapshotSequence, 3000);
       }),
   );
+
+  it.effect("finds resume targets exactly where the thread shell exists", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* ProjectionStoreV2;
+      const { threadId } = yield* seedThread("resume-target", 3);
+      const missing = ThreadId.make("thread:resume-target-missing");
+      assert.isTrue(yield* threadProjectionExists(threadId));
+      assert.isFalse(yield* threadProjectionExists(missing));
+      assert.isNull(yield* store.getThreadShell(missing));
+
+      yield* sql`UPDATE orchestration_v2_projection_threads SET deleted_at = '2026-09-19T02:00:00Z' WHERE thread_id = ${threadId}`;
+      assert.isFalse(yield* threadProjectionExists(threadId));
+      assert.isNull(yield* store.getThreadShell(threadId));
+    }),
+  );
+});
+
+it("narrows a page's execution support to its items plus live and latest work", () => {
+  const threadId = ThreadId.make("thread:narrow");
+  const run = (id: string, ordinal: number, status: string) => ({
+    id,
+    ordinal,
+    status,
+    rootNodeId: `${id}:root`,
+  });
+  const node = (id: string, runId: string, status: string, parentNodeId: string | null) => ({
+    id,
+    runId,
+    status,
+    parentNodeId,
+    rootNodeId: `${runId}:root`,
+    providerTurnId: null,
+  });
+  const projection = {
+    thread: { id: threadId },
+    runs: [run("r1", 1, "completed"), run("r2", 2, "completed"), run("r3", 3, "running")],
+    attempts: ["r1", "r2", "r3"].map((runId) => ({
+      id: `${runId}:attempt`,
+      runId,
+      rootNodeId: `${runId}:root`,
+      providerTurnId: null,
+    })),
+    nodes: [
+      node("r1:root", "r1", "completed", null),
+      node("r1:tool", "r1", "completed", "r1:root"),
+      node("r2:root", "r2", "completed", null),
+      node("r2:reasoning", "r2", "completed", "r2:root"),
+      node("r2:tool", "r2", "completed", "r2:reasoning"),
+      node("r2:other", "r2", "completed", "r2:root"),
+      node("r3:root", "r3", "running", null),
+      node("r3:tool", "r3", "running", "r3:root"),
+    ],
+    providerTurns: [
+      { id: "t1", nodeId: "r1:root", runAttemptId: "r1:attempt", status: "completed" },
+      { id: "t2", nodeId: "r2:root", runAttemptId: "r2:attempt", status: "completed" },
+      { id: "t3", nodeId: "r3:root", runAttemptId: "r3:attempt", status: "running" },
+    ],
+    subagents: [],
+    plans: [],
+    runtimeRequests: [],
+    messages: [],
+    turnItems: [
+      { threadId, runId: "r2", nodeId: "r2:tool", providerTurnId: null },
+      // Inherited items belong to the source thread's own support.
+      {
+        threadId: ThreadId.make("thread:source"),
+        runId: "r1",
+        nodeId: "r1:tool",
+        providerTurnId: null,
+      },
+    ],
+    visibleTurnItems: [],
+  } as unknown as OrchestrationV2ThreadProjection;
+
+  const narrowed = narrowHistoryPageSupport(projection);
+  assert.deepEqual(
+    narrowed.nodes.map((entry) => entry.id),
+    ["r2:root", "r2:reasoning", "r2:tool", "r3:root", "r3:tool"],
+  );
+  assert.deepEqual(
+    narrowed.attempts.map((entry) => entry.id),
+    ["r2:attempt", "r3:attempt"],
+  );
+  assert.deepEqual(
+    narrowed.providerTurns.map((entry) => entry.id),
+    ["t2", "t3"],
+  );
+  assert.strictEqual(narrowed.runs, projection.runs);
 });

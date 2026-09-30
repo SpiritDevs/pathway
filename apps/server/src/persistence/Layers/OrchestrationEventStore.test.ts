@@ -234,4 +234,87 @@ layer("OrchestrationEventStore", (it) => {
       );
     }),
   );
+
+  it.effect("filters agent reads and high-water marks by thread and command", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const providerInstanceId = ProviderInstanceId.make("codex");
+      const occurredAt = DateTime.makeUnsafe("2026-01-03T00:00:00.000Z");
+      const threadCreated = (id: string, threadId: ThreadId) =>
+        ({
+          id: EventId.make(id),
+          type: "thread.created",
+          threadId,
+          providerInstanceId,
+          occurredAt,
+          payload: {
+            id: threadId,
+            projectId: ProjectId.make("project-filtered-reads"),
+            title: "Thread",
+            providerInstanceId,
+            modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: null,
+            lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+            forkedFrom: null,
+            createdBy: "user",
+            creationSource: "web",
+            createdAt: occurredAt,
+            updatedAt: occurredAt,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+        }) as const;
+      const threadA = ThreadId.make("thread-filtered-a");
+      const threadB = ThreadId.make("thread-filtered-b");
+      const commandA1 = CommandId.make("command-filtered-a1");
+      const commandA2 = CommandId.make("command-filtered-a2");
+      const commandB = CommandId.make("command-filtered-b");
+      const [a1] = yield* eventStore.appendAgentEvents({
+        commandId: commandA1,
+        events: [threadCreated("event-filtered-a1", threadA)],
+      });
+      const [b1] = yield* eventStore.appendAgentEvents({
+        commandId: commandB,
+        events: [threadCreated("event-filtered-b1", threadB)],
+      });
+      const [a2] = yield* eventStore.appendAgentEvents({
+        commandId: commandA2,
+        events: [threadCreated("event-filtered-a2", threadA)],
+      });
+      const sequences = (input: Parameters<typeof eventStore.readAgentEvents>[0]) =>
+        eventStore.readAgentEvents(input).pipe(
+          Stream.runCollect,
+          Effect.map((chunk) => Array.from(chunk, (event) => event.sequence)),
+        );
+
+      assert.deepEqual(yield* sequences({ threadId: threadA }), [a1!.sequence, a2!.sequence]);
+      assert.deepEqual(yield* sequences({ threadId: threadA, afterSequence: a1!.sequence }), [
+        a2!.sequence,
+      ]);
+      assert.deepEqual(
+        yield* sequences({ threadId: threadA, afterSequence: 0, throughSequence: b1!.sequence }),
+        [a1!.sequence],
+      );
+      assert.deepEqual(yield* sequences({ commandId: commandB }), [b1!.sequence]);
+      assert.deepEqual(yield* sequences({ threadId: threadA, commandId: commandA2 }), [
+        a2!.sequence,
+      ]);
+      assert.deepEqual(yield* sequences({ threadId: threadB, commandId: commandA2 }), []);
+
+      assert.equal(yield* eventStore.latestAgentSequence(threadA), a2!.sequence);
+      assert.equal(yield* eventStore.latestAgentSequence(threadB), b1!.sequence);
+      assert.equal(
+        yield* eventStore.latestAgentSequence(ThreadId.make("thread-filtered-missing")),
+        0,
+      );
+      assert.equal(yield* eventStore.latestAgentSequence(), a2!.sequence);
+    }),
+  );
 });

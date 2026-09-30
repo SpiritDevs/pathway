@@ -6,6 +6,8 @@ import type {
   OrchestrationV2ShellStreamItem,
   OrchestrationV2StoredEvent,
 } from "@spiritdevs/contracts";
+import * as Duration from "effect/Duration";
+import type * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
 /** Keep only the newest shell-relevant event per project/thread aggregate. */
@@ -53,12 +55,19 @@ export function shellStreamItemFromEnrichmentRefresh(input: {
 }
 
 /**
- * Initial subscribe frames: always emit the unmarked authoritative snapshot,
- * then a same-sequence enrichment frame only when some roots already resolved.
+ * Initial subscribe frames: the unmarked authoritative snapshot, then a
+ * same-sequence enrichment frame only when some roots already resolved.
+ *
+ * A `resume` (the client passed a cursor at or below this snapshot) sends the
+ * marked frame alone. Clients merge a marked snapshot newer than their cache as
+ * a replacement and one at their cache's sequence as an identity patch, which is
+ * what the unmarked-then-marked pair produced; clients that predate the marker
+ * treat it as authoritative. That saves one full shell snapshot per resume.
  */
 export function shellStreamItemsFromInitialSnapshot(input: {
   readonly snapshot: OrchestrationV2ShellSnapshot;
   readonly resolvedRepositoryIdentityRoots: ReadonlyArray<string>;
+  readonly resume?: boolean;
 }): ReadonlyArray<Extract<OrchestrationV2ShellStreamItem, { readonly kind: "snapshot" }>> {
   const authoritative = {
     kind: "snapshot" as const,
@@ -67,14 +76,86 @@ export function shellStreamItemsFromInitialSnapshot(input: {
   if (input.resolvedRepositoryIdentityRoots.length === 0) {
     return [authoritative];
   }
-  return [
-    authoritative,
-    {
-      kind: "snapshot" as const,
-      snapshot: input.snapshot,
-      resolvedRepositoryIdentityRoots: [...new Set(input.resolvedRepositoryIdentityRoots)],
+  const marked = {
+    kind: "snapshot" as const,
+    snapshot: input.snapshot,
+    resolvedRepositoryIdentityRoots: [...new Set(input.resolvedRepositoryIdentityRoots)],
+  };
+  return input.resume === true ? [marked] : [authoritative, marked];
+}
+
+/**
+ * Tracks the repository identity one shell subscriber already holds per
+ * workspace root. Enrichment re-resolves roots when its cache expires and
+ * republishes unchanged values; each of those used to reload and re-send the
+ * whole shell snapshot to every subscriber.
+ */
+export function makeDeliveredRepositoryIdentities() {
+  const delivered = new Map<string, string>();
+  const identityKey = (identity: unknown) => JSON.stringify(identity ?? null);
+  return {
+    /** Records the identities a marked snapshot frame delivered for `roots`. */
+    recordSnapshot: (snapshot: OrchestrationV2ShellSnapshot, roots: ReadonlyArray<string>) => {
+      const resolved = new Set(roots);
+      for (const project of snapshot.projects) {
+        if (project.workspaceRoot !== null && resolved.has(project.workspaceRoot)) {
+          delivered.set(project.workspaceRoot, identityKey(project.repositoryIdentity));
+        }
+      }
     },
-  ];
+    /**
+     * Keeps the newest completion per root whose identity differs from what
+     * was delivered, and records it as delivered.
+     */
+    takeUndelivered: <
+      Change extends {
+        readonly workspaceRoot: string;
+        readonly enrichment: { readonly repositoryIdentity: unknown };
+      },
+    >(
+      changes: Iterable<Change>,
+    ): ReadonlyArray<Change> => {
+      const latestByRoot = new Map<string, Change>();
+      for (const change of changes) latestByRoot.set(change.workspaceRoot, change);
+      const undelivered: Array<Change> = [];
+      for (const [root, change] of latestByRoot) {
+        const key = identityKey(change.enrichment.repositoryIdentity);
+        if (delivered.get(root) === key) continue;
+        delivered.set(root, key);
+        undelivered.push(change);
+      }
+      return undelivered;
+    },
+  };
+}
+
+/**
+ * Resolved enrichment completions, batched over 25ms, that change an identity
+ * the subscriber holds. `refresh` builds the frame for each batch.
+ */
+export function enrichmentRefreshes<
+  Change extends {
+    readonly workspaceRoot: string;
+    readonly repositoryIdentityResolved: boolean;
+    readonly enrichment: { readonly repositoryIdentity: unknown };
+  },
+  A,
+  E,
+  R,
+  E2,
+  R2,
+>(input: {
+  readonly changes: Stream.Stream<Change, E, R>;
+  readonly delivered: ReturnType<typeof makeDeliveredRepositoryIdentities>;
+  readonly refresh: (changes: ReadonlyArray<Change>) => Effect.Effect<A, E2, R2>;
+}): Stream.Stream<A, E | E2, R | R2> {
+  return input.changes.pipe(
+    Stream.filter((change) => change.repositoryIdentityResolved),
+    Stream.groupedWithin(64, Duration.millis(25)),
+    Stream.map((changes) => input.delivered.takeUndelivered(changes)),
+    Stream.filter((changes) => changes.length > 0),
+    Stream.mapEffect(input.refresh),
+  );
 }
 
 /** Keep only the newest stored event per thread within a coalescing window. */

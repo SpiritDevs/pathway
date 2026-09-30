@@ -3,6 +3,7 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 
 import type { VcsDriverKind, VcsError, VcsRepositoryIdentity } from "@spiritdevs/contracts";
@@ -12,7 +13,9 @@ import * as VcsProjectConfig from "./VcsProjectConfig.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 
 const DETECTION_CACHE_CAPACITY = 2_048;
-const DETECTION_CACHE_TTL = Duration.seconds(2);
+// A repository root rarely changes under a cwd, and every status refresh asks
+// again. Negative results stay uncached so `git init` shows up immediately.
+const DETECTION_CACHE_TTL = Duration.minutes(5);
 
 export interface VcsDriverResolveInput {
   readonly cwd: string;
@@ -61,6 +64,7 @@ function parseDetectionCacheKey(key: string): {
 }
 
 export const make = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
   const projectConfig = yield* VcsProjectConfig.VcsProjectConfig;
   const git = yield* GitVcsDriver.makeVcsDriver;
   const drivers: Partial<Record<VcsDriverKind, VcsDriver.VcsDriver["Service"]>> = {
@@ -112,7 +116,14 @@ export const make = Effect.gen(function* () {
   });
 
   const detectionCache = yield* Cache.makeWith<string, VcsDriverHandle | null, VcsError>(
-    (key) => detectResolvedKind(parseDetectionCacheKey(key)),
+    (key) => {
+      const input = parseDetectionCacheKey(key);
+      return projectConfig
+        .resolveKind(input)
+        .pipe(
+          Effect.flatMap((requestedKind) => detectResolvedKind({ cwd: input.cwd, requestedKind })),
+        );
+    },
     {
       capacity: DETECTION_CACHE_CAPACITY,
       timeToLive: Exit.match({
@@ -124,8 +135,20 @@ export const make = Effect.gen(function* () {
 
   const detect: VcsDriverRegistry["Service"]["detect"] = Effect.fn("VcsDriverRegistry.detect")(
     function* (input) {
-      const requestedKind = yield* projectConfig.resolveKind(input);
-      return yield* Cache.get(detectionCache, detectionCacheKey({ cwd: input.cwd, requestedKind }));
+      const key = detectionCacheKey({
+        cwd: input.cwd,
+        requestedKind: input.requestedKind ?? "auto",
+      });
+      const detected = yield* Cache.get(detectionCache, key);
+      // A removed worktree must not keep routing to git for the cache lifetime.
+      if (
+        detected !== null &&
+        !(yield* fileSystem.exists(input.cwd).pipe(Effect.orElseSucceed(() => false)))
+      ) {
+        yield* Cache.invalidate(detectionCache, key);
+        return yield* Cache.get(detectionCache, key);
+      }
+      return detected;
     },
   );
 

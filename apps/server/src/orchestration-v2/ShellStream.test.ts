@@ -5,14 +5,21 @@ import type {
   OrchestrationV2StoredEvent,
   OrchestrationV2ThreadShell,
 } from "@spiritdevs/contracts";
+import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
+import { mergeShellSnapshotProjects } from "@spiritdevs/client-runtime/state/shell";
 
 import {
   archivedShellStreamItemFromThreadShell,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
+  enrichmentRefreshes,
+  makeDeliveredRepositoryIdentities,
   shellStreamItemFromEnrichmentRefresh,
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
@@ -226,6 +233,154 @@ describe("shellStreamItemsFromInitialSnapshot", () => {
         resolvedRepositoryIdentityRoots: [],
       }),
     ).toEqual([{ kind: "snapshot", snapshot: emptyShellSnapshot }]);
+    expect(
+      shellStreamItemsFromInitialSnapshot({
+        snapshot: emptyShellSnapshot,
+        resolvedRepositoryIdentityRoots: [],
+        resume: true,
+      }),
+    ).toEqual([{ kind: "snapshot", snapshot: emptyShellSnapshot }]);
+  });
+
+  it("resumes with the marked frame alone and leaves clients in the same state", () => {
+    const identity = (name: string) =>
+      ({ canonicalKey: `github.com/pathway/${name}`, locator: {} }) as never;
+    const projectShell = (repositoryIdentity: unknown) =>
+      ({
+        id: "project-a",
+        workspaceRoot: "/workspace/a",
+        repositoryIdentity,
+      }) as unknown as OrchestrationV2ShellSnapshot["projects"][number];
+    const threadShell = (id: string) => ({ id }) as unknown as OrchestrationV2ThreadShell;
+    const cached = {
+      ...emptyShellSnapshot,
+      snapshotSequence: 7,
+      projects: [projectShell(identity("old"))],
+      threads: [threadShell("thread-a")],
+    } as OrchestrationV2ShellSnapshot;
+    const apply = (
+      frames: ReadonlyArray<ReturnType<typeof shellStreamItemsFromInitialSnapshot>[number]>,
+      understandsMarker: boolean,
+    ) =>
+      frames.reduce(
+        (state, frame) =>
+          mergeShellSnapshotProjects(
+            state,
+            frame.snapshot,
+            understandsMarker && frame.resolvedRepositoryIdentityRoots !== undefined
+              ? { resolvedRepositoryIdentityRoots: frame.resolvedRepositoryIdentityRoots }
+              : undefined,
+          ),
+        cached,
+      );
+
+    // The same sequence carries the same structure; a newer one adds a thread.
+    for (const snapshotSequence of [7, 9]) {
+      const snapshot = {
+        ...emptyShellSnapshot,
+        snapshotSequence,
+        projects: [projectShell(null)],
+        threads:
+          snapshotSequence === 7
+            ? cached.threads
+            : [threadShell("thread-a"), threadShell("thread-b")],
+      } as OrchestrationV2ShellSnapshot;
+      const input = { snapshot, resolvedRepositoryIdentityRoots: ["/workspace/a"] };
+      const resumed = shellStreamItemsFromInitialSnapshot({ ...input, resume: true });
+      expect(resumed).toHaveLength(1);
+      for (const understandsMarker of [true, false]) {
+        expect(apply(resumed, understandsMarker)).toEqual(
+          apply(shellStreamItemsFromInitialSnapshot(input), understandsMarker),
+        );
+      }
+    }
+  });
+});
+
+describe("enrichmentRefreshes", () => {
+  it.effect("reloads only for batches that change an identity the subscriber holds", () =>
+    Effect.gen(function* () {
+      const change = (
+        workspaceRoot: string,
+        repositoryIdentity: unknown,
+        repositoryIdentityResolved = true,
+      ) => ({ workspaceRoot, repositoryIdentityResolved, enrichment: { repositoryIdentity } });
+      const changes = yield* Queue.unbounded<ReturnType<typeof change>, Cause.Done>();
+      const delivered = makeDeliveredRepositoryIdentities();
+      delivered.recordSnapshot(
+        {
+          ...emptyShellSnapshot,
+          projects: [{ id: "a", workspaceRoot: "/workspace/a", repositoryIdentity: { key: "a" } }],
+        } as unknown as OrchestrationV2ShellSnapshot,
+        ["/workspace/a"],
+      );
+      const refreshed: Array<ReadonlyArray<string>> = [];
+      const fiber = yield* enrichmentRefreshes({
+        changes: Stream.fromQueue(changes),
+        delivered,
+        refresh: (batch) =>
+          Effect.sync(() => refreshed.push(batch.map((entry) => entry.workspaceRoot))),
+      }).pipe(Stream.runDrain, Effect.forkChild);
+
+      // A cache-expiry re-resolution and a failed probe: nothing to send.
+      yield* Queue.offerAll(changes, [
+        change("/workspace/a", { key: "a" }),
+        change("/workspace/b", null, false),
+      ]);
+      yield* TestClock.adjust("25 millis");
+      expect(refreshed).toEqual([]);
+
+      yield* Queue.offerAll(changes, [
+        change("/workspace/a", { key: "moved" }),
+        change("/workspace/c", null),
+      ]);
+      yield* TestClock.adjust("25 millis");
+      yield* Queue.end(changes);
+      yield* Fiber.join(fiber);
+      expect(refreshed).toEqual([["/workspace/a", "/workspace/c"]]);
+    }),
+  );
+});
+
+describe("makeDeliveredRepositoryIdentities", () => {
+  const change = (workspaceRoot: string, repositoryIdentity: unknown) => ({
+    workspaceRoot,
+    enrichment: { repositoryIdentity },
+  });
+
+  it("drops re-resolutions of identities the subscriber already holds", () => {
+    const delivered = makeDeliveredRepositoryIdentities();
+    delivered.recordSnapshot(
+      {
+        ...emptyShellSnapshot,
+        projects: [
+          { id: "a", workspaceRoot: "/workspace/a", repositoryIdentity: { key: "a" } },
+          { id: "b", workspaceRoot: "/workspace/b", repositoryIdentity: null },
+        ],
+      } as unknown as OrchestrationV2ShellSnapshot,
+      ["/workspace/a"],
+    );
+
+    expect(
+      delivered.takeUndelivered([
+        change("/workspace/a", { key: "a" }),
+        change("/workspace/b", null),
+      ]),
+    ).toEqual([change("/workspace/b", null)]);
+    expect(delivered.takeUndelivered([change("/workspace/b", null)])).toEqual([]);
+    expect(delivered.takeUndelivered([change("/workspace/a", { key: "moved" })])).toEqual([
+      change("/workspace/a", { key: "moved" }),
+    ]);
+  });
+
+  it("keeps only the newest completion per root in a batch", () => {
+    const delivered = makeDeliveredRepositoryIdentities();
+    expect(
+      delivered.takeUndelivered([
+        change("/workspace/a", { key: "first" }),
+        change("/workspace/a", { key: "second" }),
+      ]),
+    ).toEqual([change("/workspace/a", { key: "second" })]);
   });
 });
 

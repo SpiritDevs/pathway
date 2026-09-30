@@ -12,6 +12,7 @@ import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -65,12 +66,12 @@ export const runCloudTimeTrackingPublisher = Effect.fn("cloud.time_tracking_publ
     const settingsService = yield* ServerSettingsService;
     const summarize = Effect.fn("cloud.time_tracking.summarize")(function* () {
       const session = yield* store.nextSummary();
-      if (session === null) return;
+      if (session === null) return false;
       const context = yield* store.summaryContext(session);
       const settings = yield* settingsService.getSettings;
       if (context.length === 0) {
         yield* store.deferSummary(session);
-        return;
+        return true;
       }
       yield* generation
         .investigate({
@@ -90,15 +91,17 @@ export const runCloudTimeTrackingPublisher = Effect.fn("cloud.time_tracking_publ
             }).pipe(Effect.andThen(store.deferSummary(session))),
           ),
         );
+      return true;
     });
+    // Runs only stop through captured lifecycle changes, so each reconcile
+    // wakes the summarizer instead of it scanning the store on its own timer.
+    const summaryWake = yield* Queue.sliding<void>(1);
+    const drainSummaries = summarize().pipe(
+      Effect.repeat({ while: (handled) => handled }),
+      Effect.catchCause((cause) => Effect.logWarning("Time entry summary will retry", { cause })),
+    );
     yield* Effect.forkChild(
-      Stream.runForEach(Stream.tick(Duration.seconds(2)), () =>
-        summarize().pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("Time entry summary will retry", { cause }),
-          ),
-        ),
-      ),
+      Effect.forever(Queue.take(summaryWake).pipe(Effect.andThen(drainSummaries))),
     );
     const client = options.client ?? convexHttpClientLike(options.convexUrl);
     const publish = Effect.fn("cloud.time_tracking_publisher.publish")(function* () {
@@ -147,6 +150,7 @@ export const runCloudTimeTrackingPublisher = Effect.fn("cloud.time_tracking_publ
     });
     const reconcile = publish().pipe(
       Effect.catchCause((cause) => Effect.logWarning("Agent time capture will retry", { cause })),
+      Effect.andThen(Queue.offer(summaryWake, undefined)),
     );
     yield* reconcile;
     const changes = threads.streamDomainEvents.pipe(

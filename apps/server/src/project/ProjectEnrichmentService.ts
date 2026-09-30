@@ -18,7 +18,9 @@ import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 const DEFAULT_CACHE_CAPACITY = 512;
 const DEFAULT_MAX_PENDING = 512;
 const DEFAULT_CONCURRENCY = 4;
-const DEFAULT_SUCCESS_TTL = Duration.minutes(1);
+// Project mutations invalidate explicitly; the TTL only catches out-of-band edits
+// (a new favicon file, a changed remote) without re-probing every snapshot.
+const DEFAULT_SUCCESS_TTL = Duration.minutes(10);
 const DEFAULT_FAILURE_TTL = Duration.seconds(5);
 
 export interface ProjectEnrichment {

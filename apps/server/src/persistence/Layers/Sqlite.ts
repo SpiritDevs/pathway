@@ -37,6 +37,12 @@ const setup = Layer.effectDiscard(
     yield* sql`PRAGMA busy_timeout = 5000;`;
     yield* sql`PRAGMA foreign_keys = ON;`;
     yield* sql`PRAGMA journal_mode = WAL;`;
+    // WAL stays corruption-safe at NORMAL; only a power loss can drop the
+    // latest commits, and commits stop waiting on an fsync each.
+    yield* sql`PRAGMA synchronous = NORMAL;`;
+    // The default 2 MB page cache rereads the shell and thread indexes from
+    // the OS on every snapshot of a multi-GB database. Negative is KiB.
+    yield* sql`PRAGMA cache_size = -32768;`;
     yield* runMigrations();
   }),
 );
