@@ -64,7 +64,7 @@ export function agentDeviceQuickStart(
     `Prefer snapshot refs over coordinates. Run ${executable} help for workflow guides and ${executable} <command> --help for flags.`,
     "Commands are bound to this run and control generation. If a user takes control, wait for hand-back and call device_open again. Do not bypass a control refusal with simctl, adb, or xcrun.",
     "Call device_open again if the grant expires after 30 seconds without a command. Background jobs and CLI artifact transfer are unavailable through this gateway.",
-    "For remote hosts, arrange builds, app installation, and any Metro reverse forwarding yourself. Pathway provides discovery, streaming, and control only.",
+    "For iOS simulators on the project environment, use device_build_discover, device_run, and device_build_wait before testing with taps. SSH device hosts still require you to arrange artifact transfer and Metro forwarding.",
     "Keep the returned --config and --session flags on every command. Other hosts can be used concurrently; opening one does not switch these commands.",
     platformNotes,
   ].join("\n");

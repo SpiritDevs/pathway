@@ -1,3 +1,5 @@
+import { SimBuildToolkit } from "./toolkits/simBuild/tools.ts";
+import { SimBuildToolkitHandlersLive } from "./toolkits/simBuild/handlers.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import { DeviceToolScreenshotResult } from "@spiritdevs/contracts";
 import { DeviceStandardToolkit, DeviceScreenshotToolkit } from "./toolkits/device/tools.ts";
@@ -1321,6 +1323,7 @@ const OrchestratorMcpServiceLive = OrchestratorMcpService.layer.pipe(
 );
 
 const ToolkitHandlersLive = Layer.mergeAll(
+  SimBuildToolkitHandlersLive,
   DeviceStandardToolkitHandlersLive,
   DeviceScreenshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
@@ -1345,6 +1348,7 @@ const McpToolkitServicesLive = Layer.mergeAll(
  * Test handlers use this same effect so a toolkit cannot disappear from production unnoticed.
  */
 const buildPathwayMcpToolkits = Effect.gen(function* () {
+  const simBuild = (yield* SimBuildToolkit) as unknown as BuiltToolkit;
   const standardPreview = (yield* PreviewStandardToolkit) as unknown as BuiltToolkit;
   const snapshot = (yield* PreviewSnapshotToolkit) as unknown as BuiltToolkit;
   const issues = (yield* IssuesToolkit) as unknown as BuiltToolkit;
@@ -1364,6 +1368,7 @@ const buildPathwayMcpToolkits = Effect.gen(function* () {
       email,
       devices,
       deviceScreenshots,
+      simBuild,
     ],
     snapshot,
   };

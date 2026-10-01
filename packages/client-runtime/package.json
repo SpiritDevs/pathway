@@ -302,6 +302,10 @@
     "./surface": {
       "types": "./src/surface/index.ts",
       "import": "./src/surface/index.ts"
+    },
+    "./state/simBuild": {
+      "types": "./src/state/simBuild.ts",
+      "default": "./src/state/simBuild.ts"
     }
   },
   "scripts": {

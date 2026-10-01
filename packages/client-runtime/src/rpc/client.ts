@@ -1,3 +1,4 @@
+import { SIM_BUILD_WS_METHODS } from "@spiritdevs/contracts/simBuild";
 import {
   COMPUTER_SURFACE_METHODS,
   COMPUTER_WS_METHODS,
@@ -74,7 +75,8 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof COMPUTER_WS_METHODS.subscribeEvents
   | typeof APPLE_WS_METHODS.appleIdSubscribe
   | typeof XCODE_WS_METHODS.subscribe
-  | typeof COMPUTER_SURFACE_METHODS.subscribe;
+  | typeof COMPUTER_SURFACE_METHODS.subscribe
+  | typeof SIM_BUILD_WS_METHODS.subscribe;
 
 export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.cloudInstallRelayClient
