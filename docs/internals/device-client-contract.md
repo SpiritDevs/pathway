@@ -170,7 +170,7 @@ Paths below are appended to `hubBasePath`, with `hostId` and ticket query fields
 
 The wire formats and Android fold payload are Hub `0.12.0` vendor protocols,
 matching t3code `d15210cd3`. The proxy does not reframe video or input. Read requests
-need read scope. Input sockets, stream tuning and fold mutation need operate scope.
+need read scope. Input frames, stream tuning and fold mutation need operate scope and the control lease described below. Sockets themselves need read scope so watchers retain media access.
 Android fold controls are not `device.action` variants in this upstream revision.
 Read/config/accessibility/foreground/event-log and screenshot routes remain
 allowlisted in `DeviceHubProxy.ts`; dashboard, shell-exec, vendor bootstrap `/vendor/serve-sim/api`, and WebRTC
@@ -194,3 +194,84 @@ current device-support/agent-access consent. `device_open` returns device metada
 `agentDevice: { command, targetArgs }` and `quickStart`; execute that absolute
 launcher on the selected environment with every returned argument. Screenshot
 results contain metadata plus an MCP PNG image block, not duplicated image data.
+
+## Device control lease, COR-165
+
+Require `state.supportsDeviceControl === true` before enabling input. A missing
+control record, disconnected state, `idle`, or `draining` means the viewer is
+watch-only. Do not infer authority from the thread's run status.
+
+| RPC                     | Request                                       | Response             | Scope   |
+| ----------------------- | --------------------------------------------- | -------------------- | ------- |
+| `device.acquireControl` | `{ hostId?, deviceId, viewerId }`             | `DeviceControlState` | operate |
+| `device.renewControl`   | `{ hostId?, deviceId, viewerId, generation }` | `DeviceControlState` | operate |
+| `device.releaseControl` | `{ hostId?, deviceId, viewerId, generation }` | `DeviceControlState` | operate |
+
+```ts
+type DeviceControlState = {
+  hostId: string;
+  deviceId: string;
+  generation: number;
+  phase: "idle" | "held" | "draining";
+  owner:
+    | { kind: "viewer"; sessionId: string; viewerId: string }
+    | { kind: "agent"; threadId: string; runId: string }
+    | null;
+  expiresAt: number | null; // Environment epoch milliseconds.
+};
+// Complete device-state snapshots add:
+// supportsDeviceControl?: boolean;
+// controls?: DeviceControlState[];
+```
+
+Generate a distinct `viewerId` for each mounted viewer. The environment supplies
+the authenticated `sessionId`; the client cannot choose it in a request. Keep the
+returned generation, and enable input only after acquire succeeds and the latest
+state still identifies this viewer and generation in `held` phase. Acquisition
+can take as long as the previous managed command takes to finish. Renew every
+10 seconds while controlling; leases last 30 seconds. Renewal preserves generation.
+
+Add `viewerId` and `controlGeneration` to input WebSocket URLs and fold/tuning
+HTTP mutation URLs. They are stripped at the environment proxy. Reconnect input
+sockets after each acquire so they carry the new generation. Renewals need no
+reconnect. Media URLs may omit both fields. A socket without a valid proof remains
+a watcher, including Android's multiplexed media/input socket. Rejected input does
+not close that socket. The wire formats between clients and the environment stay
+the existing vendor formats; the iOS receipt extension is internal to the proxy.
+
+`device.action`, `device.shutdown`, and `device.close({ shutdown: true })` accept
+`control: { viewerId, generation }` and require a matching viewer lease. Closing a
+thread's device session without shutdown remains available to watchers. `device.open`
+still opens a viewing session and grants the viewer no control.
+
+Before Resume agent, await `device.releaseControl`. It finishes active input and
+invalidates the generation before acknowledging. Then dispatch the continuation
+through the existing thread API. Disable input immediately when hiding, backgrounding,
+changing devices, losing state/RPC connectivity, or beginning release. Release before
+closing media channels when possible, so the environment can finish held input on
+the live channel. A disconnected controlling socket or the RPC connection that
+acquired control releases that lease. Generation checks protect a replacement
+viewer from delayed cleanup of an older generation.
+
+`DeviceControlError` includes `hostId`, `deviceId`, `code`, and `message`:
+
+| Code                | Meaning                                                                        |
+| ------------------- | ------------------------------------------------------------------------------ |
+| `control_required`  | Acquire a viewer lease before this mutation.                                   |
+| `control_held`      | A different viewer/session or agent run owns the lease.                        |
+| `stale_generation`  | This proof expired or was superseded. Acquire again.                           |
+| `control_draining`  | Previous managed input is still finishing. Stay watch-only.                    |
+| `run_stopped`       | This agent run ended and cannot obtain another grant.                          |
+| `invalid_grant`     | The managed CLI token, command or target is invalid. Call `device_open` again. |
+| `input_unconfirmed` | Completion is unknown. Stay watch-only and restart the affected device helper. |
+
+HTTP fold/tuning failures return 409 with the control code. Scope and authentication
+errors retain their existing 403/401 behavior. Watchers need read scope; input
+requires operate scope plus the lease. Older clients that send input without a
+proof are watch-only on this backend.
+
+`packages/client-runtime` provides `acquireControl`, `renewControl`, and
+`releaseControl` commands from `createDeviceEnvironmentAtoms`,
+`currentDeviceController(state, hostId, deviceId)`, and
+`withDeviceControl(access, proof | null)` for media/input URL construction.
+Native iOS uses the same RPCs and snapshot fields. No new UI is included here.

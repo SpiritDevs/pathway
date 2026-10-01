@@ -26,6 +26,10 @@ import {
   DeviceDetail,
   DeviceDetailInput,
   DeviceError,
+  DeviceAcquireControlInput,
+  DeviceRenewControlInput,
+  DeviceReleaseControlInput,
+  DeviceControlState,
   DeviceListInput,
   DeviceUpdateToolsInput,
   DeviceRestartToolsInput,
@@ -523,6 +527,9 @@ export const WS_METHODS = {
   deviceTestHost: "device.testHost",
   deviceOpen: "device.open",
   deviceClose: "device.close",
+  deviceAcquireControl: "device.acquireControl",
+  deviceRenewControl: "device.renewControl",
+  deviceReleaseControl: "device.releaseControl",
   deviceShutdown: "device.shutdown",
   deviceDetail: "device.detail",
   deviceAction: "device.action",
@@ -2449,6 +2456,22 @@ const WsDeviceCheckRequirementsRpc = Rpc.make(WS_METHODS.deviceCheckRequirements
 });
 
 export const WsDeviceRpcGroup = RpcGroup.make(
+  Rpc.make(WS_METHODS.deviceAcquireControl, {
+    payload: DeviceAcquireControlInput,
+    success: DeviceControlState,
+    error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.deviceRenewControl, {
+    payload: DeviceRenewControlInput,
+    success: DeviceControlState,
+    error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.deviceReleaseControl, {
+    payload: DeviceReleaseControlInput,
+    success: DeviceControlState,
+    error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+  }),
+
   WsDeviceUpdateToolsRpc,
   WsDeviceRestartToolsRpc,
   WsDeviceCheckRequirementsRpc,

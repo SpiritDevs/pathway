@@ -1,3 +1,4 @@
+import { RunId } from "@spiritdevs/contracts";
 import { expect, it } from "@effect/vitest";
 import { ThreadId } from "@spiritdevs/contracts";
 import * as PubSub from "effect/PubSub";
@@ -105,7 +106,12 @@ it.effect("keeps hosts independent when serials collide and another host fails",
     expect(state.hostStatuses.a?.status).toBe("ready");
     expect(state.hostStatuses.offline?.status).toBe("failed");
     const targeting = yield* service
-      .agentTarget({ threadId, hostId: "b", deviceId: "emulator-5554" })
+      .agentTarget({
+        runId: RunId.make("run-test"),
+        threadId,
+        hostId: "b",
+        deviceId: "emulator-5554",
+      })
       .pipe(Effect.forkChild);
     yield* Deferred.await(writeStarted);
     const replacing = yield* service

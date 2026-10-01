@@ -111,13 +111,13 @@ describe("device hub proxy", () => {
   });
 
   it.each(["/vendor/serve-sim/helper/ws", "/vendor/serve-emu/ws"])(
-    "rejects input socket %s for a read-only session",
+    "requires a device selector even for a read-only media socket %s",
     async (path) => {
       const { handler, requests } = fixture([AuthOrchestrationReadScope]);
       const response = await handler(
         new Request(`http://t3.test/api/device-hub${path}`, { headers: { upgrade: "websocket" } }),
       );
-      expect(response.status).toBe(403);
+      expect(response.status).toBe(400);
       expect(requests).toEqual([]);
     },
   );
@@ -129,8 +129,8 @@ describe("device hub proxy", () => {
     expect((await readOnly.handler(new Request(path, { method: "POST" }))).status).toBe(403);
     const operator = fixture([AuthOrchestrationOperateScope]);
     const response = await operator.handler(new Request(path, { method: "POST" }));
-    expect(response.status).toBe(200);
-    await response.text();
+    expect(response.status).toBe(409);
+    expect(await response.text()).toBe("control_required");
   });
 
   it("reads Android fold state but requires operate scope to change it", async () => {
@@ -152,11 +152,9 @@ describe("device hub proxy", () => {
     const changed = await operator.handler(
       new Request(path, { method: "POST", body: '{"posture":"closed"}' }),
     );
-    expect(changed.status).toBe(200);
-    await changed.text();
-    expect(operator.requests).toEqual([
-      "http://hub.test/vendor/serve-emu/api/fold?device=emulator-5554",
-    ]);
+    expect(changed.status).toBe(409);
+    expect(await changed.text()).toBe("control_required");
+    expect(operator.requests).toEqual([]);
   });
 
   it.each(["/vendor/serve-sim/exec", "/vendor/serve-sim/api"])(

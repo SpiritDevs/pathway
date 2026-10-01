@@ -1,3 +1,5 @@
+import { ProjectionStoreV2 } from "../../../orchestration-v2/ProjectionStore.ts";
+import { DeviceControlCaller } from "../../../device/DeviceControl.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import {
   type DeviceError,
@@ -57,10 +59,11 @@ export function agentDeviceQuickStart(
     `  ${executable} snapshot -i ${target}                     # accessibility tree with @eN refs`,
     `  ${executable} click @e3 ${target}`,
     `  ${executable} fill @e5 "text" ${target}`,
-    `  ${executable} screenshot /tmp/shot.png ${target}        # or call device_screenshot`,
-    `  ${executable} install <app> <path-to-.app-or-.apk> ${target}`,
+    "  Call device_screenshot to retrieve an image through Pathway.",
+    `  ${executable} install <app> <host-local-path-to-.app-or-.apk> ${target}`,
     `Prefer snapshot refs over coordinates. Run ${executable} help for workflow guides and ${executable} <command> --help for flags.`,
-    "Prefer agent-device for driving this device. simctl, adb, and xcrun remain available for anything it does not cover.",
+    "Commands are bound to this run and control generation. If a user takes control, wait for hand-back and call device_open again. Do not bypass a control refusal with simctl, adb, or xcrun.",
+    "Call device_open again if the grant expires after 30 seconds without a command. Background jobs and CLI artifact transfer are unavailable through this gateway.",
     "For remote hosts, arrange builds, app installation, and any Metro reverse forwarding yourself. Pathway provides discovery, streaming, and control only.",
     "Keep the returned --config and --session flags on every command. Other hosts can be used concurrently; opening one does not switch these commands.",
     platformNotes,
@@ -86,6 +89,27 @@ const requireDeviceAccess = Effect.gen(function* () {
     });
   }
   return invocation;
+});
+
+const activeDeviceRun = Effect.gen(function* () {
+  const invocation = yield* requireDeviceAccess;
+  const projections = yield* ProjectionStoreV2;
+  const projection = yield* projections
+    .getThreadProjection(invocation.threadId)
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new DeviceToolUnavailableError({ reason: "Device caller thread is unavailable.", cause }),
+      ),
+    );
+  const run = projection.runs.findLast((run) =>
+    ["starting", "running", "waiting"].includes(run.status),
+  );
+  if (!run || run.providerInstanceId !== invocation.providerInstanceId)
+    return yield* new DeviceToolUnavailableError({
+      reason: "Device commands require an active agent run.",
+    });
+  return { kind: "agent" as const, threadId: invocation.threadId, runId: run.id };
 });
 
 const pickDevice = (
@@ -171,16 +195,23 @@ const handlers = {
       }
       const target = yield* pickDevice(state.devices, input);
       // Resolve consent and agent connectivity before booting or registering a session.
+      const caller = yield* activeDeviceRun;
+      yield* devices.agentReadinessIfSupported(target.hostId);
+      const session = yield* devices
+        .open({
+          threadId: scope.threadId,
+          hostId: target.hostId,
+          deviceId: target.id,
+          platform: target.platform,
+        })
+        .pipe(Effect.provideService(DeviceControlCaller, caller));
+      if (session.deviceId !== target.id)
+        yield* devices.control.invalidate({ hostId: target.hostId, deviceId: target.id });
       const agentArgs = yield* devices.agentTarget({
+        runId: caller.runId,
         threadId: scope.threadId,
-        hostId: target.hostId,
-        deviceId: target.id,
-      });
-      const session = yield* devices.open({
-        threadId: scope.threadId,
-        hostId: target.hostId,
-        deviceId: target.id,
-        platform: target.platform,
+        hostId: session.hostId,
+        deviceId: session.deviceId,
       });
       const after = yield* devices.state;
       const device =
@@ -246,12 +277,15 @@ const handlers = {
     Effect.gen(function* () {
       const scope = yield* requireDeviceAccess;
       const devices = yield* DeviceService.DeviceService;
-      yield* devices.close({
-        threadId: scope.threadId,
-        ...(input.hostId === undefined ? {} : { hostId: input.hostId }),
-        ...(input.deviceId === undefined ? {} : { deviceId: input.deviceId }),
-        ...(input.shutdown === undefined ? {} : { shutdown: input.shutdown }),
-      });
+      const caller = yield* activeDeviceRun;
+      yield* devices
+        .close({
+          threadId: scope.threadId,
+          ...(input.hostId === undefined ? {} : { hostId: input.hostId }),
+          ...(input.deviceId === undefined ? {} : { deviceId: input.deviceId }),
+          ...(input.shutdown === undefined ? {} : { shutdown: input.shutdown }),
+        })
+        .pipe(Effect.provideService(DeviceControlCaller, caller));
       return {};
     }).pipe(Effect.mapError(toolError)),
 } satisfies Parameters<typeof DeviceToolkit.toLayer>[0];

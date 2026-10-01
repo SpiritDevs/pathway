@@ -25,7 +25,7 @@ export const agentDeviceSession = (threadId: string, hostId: string, deviceId: s
 
 export const writeAgentDeviceConfig = Effect.fn("AgentDeviceTarget.writeConfig")(function* (
   file: string,
-  endpoint: AgentDeviceEndpoint,
+  endpoint: Pick<AgentDeviceEndpoint, "baseUrl" | "token"> & { readonly entryPath?: string },
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

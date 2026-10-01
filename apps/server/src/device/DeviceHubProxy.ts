@@ -1,3 +1,7 @@
+import { makeDeviceInputChannel } from "./DeviceInputChannel.ts";
+import { type DeviceControl, type DeviceControlGrant } from "./DeviceControl.ts";
+import { Schema } from "effect";
+import { DeviceControlProof } from "@spiritdevs/contracts";
 /**
  * Same-origin proxy in front of expo-device-hub.
  *
@@ -41,6 +45,8 @@ import { withSessionWebSocket } from "../auth/sessionWebSocket.ts";
 
 // The vendor bootstrap /api advertises raw helper URLs and an exec token.
 // Clients build media URLs from DeviceServiceState.hubBasePath instead.
+const decodeControlProof = Schema.decodeUnknownOption(DeviceControlProof);
+
 const ALLOWED_PATHS: ReadonlyArray<RegExp> = [
   /^\/api\/devices$/,
   /^\/vendor\/serve-sim\/api\/screenshot$/,
@@ -125,12 +131,12 @@ const forwardHeaders = (request: HttpServerRequest.HttpServerRequest, origin: st
 };
 
 /**
- * Pipe a client WebSocket to the hub's with no framing changes. Frames are
- * opaque: H.264 access units one way, input packets the other.
+ * Keep media available to watchers; input crosses the receipt-aware control channel.
  */
 const proxyWebSocket = Effect.fn("DeviceHubProxy.proxyWebSocket")(function* (
   sessionId: AuthSessionId,
   upstreamUrl: string,
+  input?: { control: DeviceControl; grant: DeviceControlGrant | null; platform: "ios" | "android" },
 ) {
   yield* withSessionWebSocket(sessionId, (client) =>
     Effect.gen(function* () {
@@ -139,8 +145,30 @@ const proxyWebSocket = Effect.fn("DeviceHubProxy.proxyWebSocket")(function* (
       }).pipe(Effect.provide(NodeSocket.layerWebSocketConstructor));
       const writeToClient = yield* client.writer;
       const writeToUpstream = yield* upstream.writer;
-      // Closing either connection tears down both; session revocation closes with 1008.
-      yield* Effect.raceFirst(upstream.runRaw(writeToClient), client.runRaw(writeToUpstream));
+      if (!input) {
+        yield* Effect.raceFirst(
+          upstream.runRaw(writeToClient),
+          client.runRaw(() => Effect.void),
+        );
+        return;
+      }
+      // A stale URL is still a media viewer. Its frames cannot acquire authority.
+      const channel = yield* makeDeviceInputChannel(
+        input.control,
+        input.grant,
+        input.platform,
+        writeToUpstream,
+      );
+      yield* Effect.raceFirst(
+        upstream
+          .runRaw((frame) =>
+            channel
+              .receipt(frame)
+              .pipe(Effect.flatMap((receipt) => (receipt ? Effect.void : writeToClient(frame)))),
+          )
+          .pipe(Effect.ensuring(channel.disconnected)),
+        client.runRaw(channel.input).pipe(Effect.ensuring(channel.release)),
+      );
     }),
   ).pipe(
     Effect.catchTag("SocketError", (error) => Effect.logDebug("device hub socket closed", error)),
@@ -152,6 +180,7 @@ const proxyHttp = Effect.fn("DeviceHubProxy.proxyHttp")(function* (
   request: HttpServerRequest.HttpServerRequest,
   upstreamUrl: string,
   hubOrigin: string,
+  buffered = false,
 ) {
   const httpClient = HttpClient.withScope(yield* HttpClient.HttpClient);
   const method = request.method;
@@ -171,6 +200,11 @@ const proxyHttp = Effect.fn("DeviceHubProxy.proxyHttp")(function* (
   }
   // Long-lived MJPEG and AVCC responses must not be buffered by compression.
   headers["cache-control"] = "no-store, no-transform";
+  if (buffered)
+    return HttpServerResponse.uint8Array(new Uint8Array(yield* response.arrayBuffer), {
+      status: response.status,
+      headers,
+    });
   return HttpServerResponse.stream(response.stream, {
     status: response.status,
     headers,
@@ -196,9 +230,7 @@ const handler = Effect.gen(function* () {
   if (!upgrade && !readOnly && !MUTABLE_PATHS.some((pattern) => pattern.test(hubPath))) {
     return HttpServerResponse.text("Method Not Allowed", { status: 405 });
   }
-  const controlsDevice =
-    (upgrade && hubPath !== "/api/devices/ws") ||
-    (!readOnly && /\/api\/(stream-(mode|settings)|fold)$/.test(hubPath));
+  const controlsDevice = !readOnly && /\/api\/(stream-(mode|settings)|fold)$/.test(hubPath);
   const session = yield* authenticate(
     controlsDevice ? AuthOrchestrationOperateScope : AuthOrchestrationReadScope,
   );
@@ -239,12 +271,43 @@ const handler = Effect.gen(function* () {
   const upstreamSearch = new URLSearchParams(url.value.search);
   upstreamSearch.delete("wsTicket");
   upstreamSearch.delete("hostId");
+  upstreamSearch.delete("viewerId");
+  upstreamSearch.delete("controlGeneration");
   const search = upstreamSearch.size > 0 ? `?${upstreamSearch.toString()}` : "";
   const upstreamPath = `${hubPath}${search}`;
+  const proof = decodeControlProof({
+    viewerId: url.value.searchParams.get("viewerId"),
+    generation: Number(url.value.searchParams.get("controlGeneration")),
+  });
+  const target = { hostId: ready.hostId, deviceId: deviceId ?? "" };
+  const grant =
+    Option.isSome(proof) && session.scopes.includes(AuthOrchestrationOperateScope)
+      ? devices.control.viewerGrant(target, session.sessionId, proof.value)
+      : null;
   if (upgrade) {
     return yield* proxyWebSocket(
       session.sessionId,
       `${ready.hub.origin.replace(/^http/, "ws")}${upstreamPath}`,
+      inventoryOnly
+        ? undefined
+        : {
+            control: devices.control,
+            grant:
+              grant && (yield* devices.control.assert(grant).pipe(Effect.result))._tag === "Success"
+                ? grant
+                : null,
+            platform: hubPath.includes("serve-emu") ? "android" : "ios",
+          },
+    );
+  }
+  if (controlsDevice) {
+    if (!grant) return HttpServerResponse.text("control_required", { status: 409 });
+    // Buffer mutation responses so the managed call covers the upstream completion.
+    return yield* devices.control.run(
+      grant,
+      proxyHttp(request, `${ready.hub.origin}${upstreamPath}`, ready.hub.origin, true).pipe(
+        Effect.onError(() => devices.control.uncertain(target)),
+      ),
     );
   }
   return yield* proxyHttp(request, `${ready.hub.origin}${upstreamPath}`, ready.hub.origin);
@@ -255,6 +318,8 @@ export const deviceHubProxyRouteLayer = HttpRouter.add(
   `${DeviceService.DEVICE_HUB_ROUTE_PREFIX}/*`,
   handler.pipe(
     Effect.catchTags({
+      DeviceControlError: (error) =>
+        Effect.succeed(HttpServerResponse.text(error.code, { status: 409 })),
       EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
       EnvironmentInternalError: HttpServerRespondable.toResponse,
       EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,

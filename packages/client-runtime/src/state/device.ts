@@ -22,6 +22,18 @@ export function createDeviceEnvironmentAtoms<R, E>(
       label: "environment-data:device:state",
       tag: WS_METHODS.subscribeDeviceState,
     }),
+    acquireControl: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:device:acquire-control",
+      tag: WS_METHODS.deviceAcquireControl,
+    }),
+    renewControl: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:device:renew-control",
+      tag: WS_METHODS.deviceRenewControl,
+    }),
+    releaseControl: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:device:release-control",
+      tag: WS_METHODS.deviceReleaseControl,
+    }),
     configure: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:device:configure",
       tag: WS_METHODS.deviceConfigure,
@@ -111,3 +123,16 @@ export function deviceToolUpdatePolicy(tools: DeviceToolVersions | undefined) {
 }
 export const deviceToolUpdateOwnership =
   "This environment's Pathway server chooses device tool versions for itself and its SSH hosts. Update that server to receive newer tool versions; updating only your browser or mobile app does not update a remote server.";
+
+/** Missing support or state is watch-only; callers never infer control from run status. */
+export function currentDeviceController(
+  state: import("@spiritdevs/contracts").DeviceServiceState | undefined,
+  hostId: string,
+  deviceId: string,
+) {
+  return state?.supportsDeviceControl === true
+    ? (state.controls?.find(
+        (control) => control.hostId === hostId && control.deviceId === deviceId,
+      ) ?? null)
+    : null;
+}
