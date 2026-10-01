@@ -190,6 +190,7 @@ const deviceHubAccessAtom = Atom.family((environmentId: EnvironmentId) =>
       if (prepared === null) return Effect.never;
       const refreshIn = (delayMs: number) =>
         Effect.sync(() => {
+          // @effect-diagnostics-next-line globalTimersInEffect:off - The atom finalizer clears this renewal timer.
           const timer = setTimeout(() => get.refreshSelf(), Math.max(0, delayMs));
           get.addFinalizer(() => clearTimeout(timer));
         });
