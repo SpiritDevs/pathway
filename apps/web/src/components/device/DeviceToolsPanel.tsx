@@ -1,5 +1,10 @@
 import type { DeviceHubAccess } from "@spiritdevs/client-runtime/state/deviceHubAccess";
-import type { DevicePermission, DeviceSummary, DeviceTextSize } from "@spiritdevs/contracts";
+import type {
+  DevicePermission,
+  DeviceSummary,
+  DeviceTextSize,
+  EnvironmentId,
+} from "@spiritdevs/contracts";
 import { ChevronDown, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -19,6 +24,8 @@ import { Toggle, ToggleGroup } from "~/components/ui/toggle-group";
 import { cn } from "~/lib/utils";
 import type { DeviceControls } from "./useDeviceControls";
 import { type DeviceEventLogEntry, subscribeDeviceEventLog } from "./deviceHubApi";
+import { deviceFamily, familyNoun } from "./deviceFamily";
+import { DeviceWatchPairing } from "./DeviceWatchPairing";
 
 const TEXT_SIZES: ReadonlyArray<{ value: DeviceTextSize; label: string }> = [
   { value: "small", label: "Small" },
@@ -85,6 +92,8 @@ export function DeviceToolsPanel(props: {
   readonly controls: DeviceControls;
   readonly hostDiagnostics: string | undefined;
   readonly device: DeviceSummary;
+  readonly devices: ReadonlyArray<DeviceSummary>;
+  readonly environmentId: EnvironmentId;
   readonly access: DeviceHubAccess | null;
   readonly axOverlay: boolean;
   readonly onAxOverlayChange: (enabled: boolean) => void;
@@ -95,6 +104,10 @@ export function DeviceToolsPanel(props: {
   const { detail, pending, error, foregroundApp, disabled, act } = controls;
   const settings = detail?.settings;
   const isIos = device.platform === "ios";
+  const family = deviceFamily(device);
+  // Watch and TV support app launch/terminate (and Watch pairing) only.
+  const appOnly = family === "watch" || family === "tv";
+  const agentCli = device.capabilities?.agentCli;
 
   return (
     <div
@@ -169,162 +182,191 @@ export function DeviceToolsPanel(props: {
           />
         </Section>
 
-        <Section title={isIos ? "Simulator" : "Emulator"}>
-          <Row label="Appearance">
-            <ToggleGroup
-              aria-label="Appearance"
-              value={settings?.appearance ? [settings.appearance] : []}
-              disabled={disabled}
-              onValueChange={(value) => {
-                const next = value[0];
-                if (next === "light" || next === "dark")
-                  void act({ type: "setAppearance", value: next });
-              }}
-            >
-              <Toggle value="light">Light</Toggle>
-              <Toggle value="dark">Dark</Toggle>
-            </ToggleGroup>
-          </Row>
-          <Row label="Text size">
-            <ChoiceSelect
-              ariaLabel="Text size"
-              value={settings?.textSize ?? null}
-              options={TEXT_SIZES}
-              disabled={disabled}
-              onChange={(value) => act({ type: "setTextSize", value })}
+        {family === "watch" ? (
+          <Section title="Paired iPhone">
+            <DeviceWatchPairing
+              environmentId={props.environmentId}
+              watch={device}
+              devices={props.devices}
             />
-          </Row>
-          {isIos ? (
-            <>
-              <Row label="Liquid Glass">
-                <ToggleGroup
-                  aria-label="Liquid Glass"
-                  value={settings?.liquidGlass ? [settings.liquidGlass] : []}
-                  disabled={disabled || settings?.liquidGlass === undefined}
-                  onValueChange={(value) => {
-                    const next = value[0];
-                    if (next === "clear" || next === "tinted") {
-                      void act({ type: "setLiquidGlass", value: next });
-                    }
-                  }}
-                >
-                  <Toggle value="clear">Clear</Toggle>
-                  <Toggle value="tinted">Tinted</Toggle>
-                </ToggleGroup>
-              </Row>
-              <Row label="Color filter">
-                <ChoiceSelect
-                  ariaLabel="Color filter"
-                  value={settings?.colorFilter ?? null}
-                  options={COLOR_FILTERS}
-                  disabled={disabled}
-                  onChange={(value) => act({ type: "setColorFilter", value })}
-                />
-              </Row>
-            </>
-          ) : (
-            <Row label="Orientation">
-              <ChoiceSelect
-                ariaLabel="Orientation"
-                value={null}
-                placeholder="Rotate to…"
-                options={ORIENTATIONS}
-                disabled={disabled}
-                onChange={(value) => act({ type: "setOrientation", value })}
-              />
-            </Row>
-          )}
-          <SwitchRow
-            label="Reduce Motion"
-            checked={settings?.reduceMotion}
-            disabled={disabled}
-            onChange={(value) => act({ type: "setToggle", setting: "reduceMotion", value })}
-          />
-          {isIos ? (
-            <>
-              <SwitchRow
-                label="Increase Contrast"
-                checked={settings?.increaseContrast}
-                disabled={disabled}
-                onChange={(value) => act({ type: "setToggle", setting: "increaseContrast", value })}
-              />
-              <SwitchRow
-                label="Reduce Transparency"
-                checked={settings?.reduceTransparency}
-                disabled={disabled}
-                onChange={(value) =>
-                  act({ type: "setToggle", setting: "reduceTransparency", value })
-                }
-              />
-              <SwitchRow
-                label="Show Borders"
-                checked={settings?.showBorders}
-                disabled={disabled}
-                onChange={(value) => act({ type: "setToggle", setting: "showBorders", value })}
-              />
-              <SwitchRow
-                label="VoiceOver"
-                checked={settings?.voiceOver}
-                disabled={disabled}
-                onChange={(value) => act({ type: "setToggle", setting: "voiceOver", value })}
-              />
-            </>
-          ) : (
-            <SwitchRow
-              label="Network"
-              checked={settings?.networkEnabled}
-              disabled={disabled}
-              onChange={(value) => act({ type: "setToggle", setting: "networkEnabled", value })}
-            />
-          )}
-        </Section>
-
-        <Section title="Accessibility">
-          <SwitchRow
-            label="Overlay element frames"
-            checked={props.axOverlay}
-            disabled={props.access === null}
-            onChange={(value) => {
-              props.onAxOverlayChange(value);
-              return Promise.resolve();
-            }}
-          />
-        </Section>
-
-        <LocationSection
-          disabled={disabled}
-          canClear={isIos}
-          onSet={(latitude, longitude) => act({ type: "setLocation", latitude, longitude })}
-          onClear={() => act({ type: "clearLocation" })}
-        />
-
-        <PermissionsSection
-          permissions={isIos ? IOS_PERMISSIONS : ANDROID_PERMISSIONS}
-          canReset={isIos}
-          defaultAppId={foregroundApp?.id ?? ""}
-          disabled={disabled}
-          onDecide={(appId, permission, decision) =>
-            act({ type: "setPermission", appId, permission, decision })
-          }
-        />
-
-        {isIos ? (
-          <Section title="Push notification">
-            <SubmitRow
-              placeholder="Alert text"
-              action="Send"
-              disabled={disabled || !foregroundApp}
-              onSubmit={(payload) =>
-                foregroundApp
-                  ? act({ type: "sendPush", appId: foregroundApp.id, payload })
-                  : Promise.resolve()
-              }
-            />
-            {!foregroundApp ? (
-              <p className="text-xs text-muted-foreground">Open an app first.</p>
-            ) : null}
           </Section>
         ) : null}
+
+        {agentCli?.status === "unsupported" ? (
+          <Section title="Agents">
+            <p className="text-xs text-muted-foreground">{agentCli.reason}</p>
+          </Section>
+        ) : null}
+
+        {appOnly ? (
+          <Section title={familyNoun(family)}>
+            <p className="text-xs text-muted-foreground">
+              Appearance, text size, accessibility settings, location, permissions and push
+              notifications aren't available for {familyNoun(family)} simulators.
+            </p>
+          </Section>
+        ) : (
+          <>
+            <Section title={isIos ? "Simulator" : "Emulator"}>
+              <Row label="Appearance">
+                <ToggleGroup
+                  aria-label="Appearance"
+                  value={settings?.appearance ? [settings.appearance] : []}
+                  disabled={disabled}
+                  onValueChange={(value) => {
+                    const next = value[0];
+                    if (next === "light" || next === "dark")
+                      void act({ type: "setAppearance", value: next });
+                  }}
+                >
+                  <Toggle value="light">Light</Toggle>
+                  <Toggle value="dark">Dark</Toggle>
+                </ToggleGroup>
+              </Row>
+              <Row label="Text size">
+                <ChoiceSelect
+                  ariaLabel="Text size"
+                  value={settings?.textSize ?? null}
+                  options={TEXT_SIZES}
+                  disabled={disabled}
+                  onChange={(value) => act({ type: "setTextSize", value })}
+                />
+              </Row>
+              {isIos ? (
+                <>
+                  <Row label="Liquid Glass">
+                    <ToggleGroup
+                      aria-label="Liquid Glass"
+                      value={settings?.liquidGlass ? [settings.liquidGlass] : []}
+                      disabled={disabled || settings?.liquidGlass === undefined}
+                      onValueChange={(value) => {
+                        const next = value[0];
+                        if (next === "clear" || next === "tinted") {
+                          void act({ type: "setLiquidGlass", value: next });
+                        }
+                      }}
+                    >
+                      <Toggle value="clear">Clear</Toggle>
+                      <Toggle value="tinted">Tinted</Toggle>
+                    </ToggleGroup>
+                  </Row>
+                  <Row label="Color filter">
+                    <ChoiceSelect
+                      ariaLabel="Color filter"
+                      value={settings?.colorFilter ?? null}
+                      options={COLOR_FILTERS}
+                      disabled={disabled}
+                      onChange={(value) => act({ type: "setColorFilter", value })}
+                    />
+                  </Row>
+                </>
+              ) : (
+                <Row label="Orientation">
+                  <ChoiceSelect
+                    ariaLabel="Orientation"
+                    value={null}
+                    placeholder="Rotate to…"
+                    options={ORIENTATIONS}
+                    disabled={disabled}
+                    onChange={(value) => act({ type: "setOrientation", value })}
+                  />
+                </Row>
+              )}
+              <SwitchRow
+                label="Reduce Motion"
+                checked={settings?.reduceMotion}
+                disabled={disabled}
+                onChange={(value) => act({ type: "setToggle", setting: "reduceMotion", value })}
+              />
+              {isIos ? (
+                <>
+                  <SwitchRow
+                    label="Increase Contrast"
+                    checked={settings?.increaseContrast}
+                    disabled={disabled}
+                    onChange={(value) =>
+                      act({ type: "setToggle", setting: "increaseContrast", value })
+                    }
+                  />
+                  <SwitchRow
+                    label="Reduce Transparency"
+                    checked={settings?.reduceTransparency}
+                    disabled={disabled}
+                    onChange={(value) =>
+                      act({ type: "setToggle", setting: "reduceTransparency", value })
+                    }
+                  />
+                  <SwitchRow
+                    label="Show Borders"
+                    checked={settings?.showBorders}
+                    disabled={disabled}
+                    onChange={(value) => act({ type: "setToggle", setting: "showBorders", value })}
+                  />
+                  <SwitchRow
+                    label="VoiceOver"
+                    checked={settings?.voiceOver}
+                    disabled={disabled}
+                    onChange={(value) => act({ type: "setToggle", setting: "voiceOver", value })}
+                  />
+                </>
+              ) : (
+                <SwitchRow
+                  label="Network"
+                  checked={settings?.networkEnabled}
+                  disabled={disabled}
+                  onChange={(value) => act({ type: "setToggle", setting: "networkEnabled", value })}
+                />
+              )}
+            </Section>
+
+            <Section title="Accessibility">
+              <SwitchRow
+                label="Overlay element frames"
+                checked={props.axOverlay}
+                disabled={props.access === null}
+                onChange={(value) => {
+                  props.onAxOverlayChange(value);
+                  return Promise.resolve();
+                }}
+              />
+            </Section>
+
+            <LocationSection
+              disabled={disabled}
+              canClear={isIos}
+              onSet={(latitude, longitude) => act({ type: "setLocation", latitude, longitude })}
+              onClear={() => act({ type: "clearLocation" })}
+            />
+
+            <PermissionsSection
+              permissions={isIos ? IOS_PERMISSIONS : ANDROID_PERMISSIONS}
+              canReset={isIos}
+              defaultAppId={foregroundApp?.id ?? ""}
+              disabled={disabled}
+              onDecide={(appId, permission, decision) =>
+                act({ type: "setPermission", appId, permission, decision })
+              }
+            />
+
+            {isIos ? (
+              <Section title="Push notification">
+                <SubmitRow
+                  placeholder="Alert text"
+                  action="Send"
+                  disabled={disabled || !foregroundApp}
+                  onSubmit={(payload) =>
+                    foregroundApp
+                      ? act({ type: "sendPush", appId: foregroundApp.id, payload })
+                      : Promise.resolve()
+                  }
+                />
+                {!foregroundApp ? (
+                  <p className="text-xs text-muted-foreground">Open an app first.</p>
+                ) : null}
+              </Section>
+            ) : null}
+          </>
+        )}
 
         {isIos && props.access ? <EventLogSection access={props.access} device={device} /> : null}
       </div>

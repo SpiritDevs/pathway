@@ -1,4 +1,11 @@
-import type { DeviceControlProof, DevicePlatform, EnvironmentId } from "@spiritdevs/contracts";
+import {
+  DEVICE_TV_KEYBOARD_MAP,
+  type DeviceControlProof,
+  type DeviceFamily,
+  type DevicePlatform,
+  type DeviceRemoteButton,
+  type EnvironmentId,
+} from "@spiritdevs/contracts";
 import { withDeviceControl } from "@spiritdevs/client-runtime/device/hub-access";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -13,6 +20,7 @@ import { createCanvasFrameSink } from "@spiritdevs/client-runtime/device/frame";
 import { resolveDeviceShape } from "@spiritdevs/client-runtime/device/shape-profile";
 import { deviceKeyboard, deviceModel } from "./deviceModels";
 import { fitDeviceFrame } from "./deviceFrameLayout";
+import { crownDeltaFromWheel, familyNoun } from "./deviceFamily";
 import { DeviceDuoViewport } from "./DeviceDuoViewport";
 import { DeviceDuoControls } from "./DeviceDuoControls";
 import { DeviceAndroidFoldControls } from "./DeviceAndroidFoldControls";
@@ -32,6 +40,8 @@ import {
 const AX_POLL_INTERVAL_MS = 2_000;
 const CONTROLS_RAIL_WIDTH = 56;
 const AUTH_RETRY_WINDOW_MS = 15_000;
+// Room for the drawn Watch/TV bezel inside the fitted box.
+const BEZEL_INSET = 24;
 
 export interface DeviceViewControls {
   readonly phone: boolean;
@@ -69,6 +79,14 @@ export function DeviceStreamView(props: {
   readonly deviceDescription?: string;
   readonly visible: boolean;
   readonly hostId: string;
+  /** Watch and TV get a drawn bezel in place of the 3D phone; absent for phones and older servers. */
+  readonly family?: DeviceFamily | null;
+  /** Server framing hint (width / height) until the stream reports its size. */
+  readonly aspectHint?: number | undefined;
+  /** TV: focus-engine presses from mapped keys, set only while input is available. */
+  readonly onRemoteButton?: ((button: DeviceRemoteButton) => void) | undefined;
+  /** Watch: Digital Crown wheel pixels from the wheel over the screen. */
+  readonly onCrown?: ((delta: number) => void) | undefined;
   /** The full panel opts into the phone spike; compact viewers retain their flat presentation. */
   readonly allowPhoneView?: boolean;
   readonly renderControls?: (view: DeviceViewControls) => ReactNode;
@@ -261,7 +279,7 @@ export function DeviceStreamView(props: {
 
   // Displayed aspect ratio (width / height) of the device as the user sees it.
   const aspect = useMemo(() => {
-    if (!screen) return props.platform === "ios" ? 9 / 19.5 : 9 / 20;
+    if (!screen) return props.aspectHint ?? (props.platform === "ios" ? 9 / 19.5 : 9 / 20);
     const landscape =
       screen.orientation === "landscape_left" || screen.orientation === "landscape_right";
     const w = landscape
@@ -271,7 +289,7 @@ export function DeviceStreamView(props: {
       ? Math.min(screen.width, screen.height)
       : Math.max(screen.width, screen.height);
     return w / h;
-  }, [props.platform, screen]);
+  }, [props.aspectHint, props.platform, screen]);
 
   // Android restarts its encoder when a fold changes the framebuffer size.
   // Keep the last decoded frame and viewer mounted while the next keyframe arrives.
@@ -280,8 +298,10 @@ export function DeviceStreamView(props: {
     status === "connecting" &&
     inputState.connected &&
     screen !== null;
+  const bezel = props.family === "watch" || props.family === "tv" ? props.family : null;
   const showPhone =
     props.allowPhoneView &&
+    !bezel &&
     (status === "streaming" || retainingAndroidFrame) &&
     props.visible &&
     presentation === "phone" &&
@@ -319,8 +339,9 @@ export function DeviceStreamView(props: {
     return () => observer.disconnect();
   }, []);
   const frame = useMemo(() => {
-    return fitDeviceFrame(aspect, host.width, host.height, controlsInset);
-  }, [aspect, controlsInset, host]);
+    const inset = bezel ? BEZEL_INSET : 0;
+    return fitDeviceFrame(aspect, host.width - inset, host.height - inset, controlsInset);
+  }, [aspect, bezel, controlsInset, host]);
 
   // serve-sim streams the raw framebuffer; rotate the display for a device
   // that reports landscape while its frames stay portrait.
@@ -392,8 +413,9 @@ export function DeviceStreamView(props: {
     return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
   };
 
-  const phoneUnavailableReason =
-    isDuo && !screen?.supportsHingeAngle
+  const phoneUnavailableReason = bezel
+    ? `There is no 3D model for ${familyNoun(bezel)} yet`
+    : isDuo && !screen?.supportsHingeAngle
       ? "iPhone Duo 3D requires Device Hub 0.11.0 or newer"
       : phoneUnavailable
         ? "3D is unavailable on this browser"
@@ -488,25 +510,54 @@ export function DeviceStreamView(props: {
         )}
         tabIndex={0}
         role="application"
-        aria-label={`${props.platform === "ios" ? "iOS Simulator" : "Android Emulator"} screen`}
+        aria-label={
+          bezel === "tv"
+            ? "Apple TV screen. Use arrow keys, Enter, Escape, Space and Home as the Siri Remote."
+            : bezel === "watch"
+              ? "Apple Watch screen. Scroll to turn the Digital Crown."
+              : `${props.platform === "ios" ? "iOS Simulator" : "Android Emulator"} screen`
+        }
         onKeyDown={(event) => {
           if (event.target !== event.currentTarget || !inputEnabled) return;
+          if (bezel) {
+            // Only mapped, unmodified keys reach a TV; other shortcuts keep theirs.
+            const button =
+              bezel === "tv" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+                ? DEVICE_TV_KEYBOARD_MAP[event.code]
+                : undefined;
+            if (!button || !props.onRemoteButton || status !== "streaming") return;
+            event.preventDefault();
+            props.onRemoteButton(button);
+            return;
+          }
           if (event.metaKey && !["r", "R"].includes(event.key)) return;
           event.preventDefault();
           clientRef.current?.sendKey(event.nativeEvent, "down");
         }}
         onKeyUp={(event) => {
-          if (event.target !== event.currentTarget) return;
+          if (event.target !== event.currentTarget || bezel) return;
           clientRef.current?.sendKey(event.nativeEvent, "up");
         }}
       >
         <div
-          className={cn("relative select-none", showPhone && "invisible pointer-events-none")}
+          className={cn(
+            "relative select-none",
+            showPhone && "invisible pointer-events-none",
+            // A clean drawn bezel from the framing hint; there is no Watch or TV model.
+            bezel && "overflow-hidden ring-[10px] ring-neutral-900 dark:ring-neutral-800",
+            bezel === "watch" && "rounded-[22%]",
+            bezel === "tv" && "rounded-sm",
+          )}
           style={{ width: frame.width, height: frame.height }}
+          onWheel={(event) => {
+            if (inputEnabled && props.onCrown && !event.ctrlKey) props.onCrown(crownDeltaFromWheel(event));
+          }}
           onPointerDown={(event) => {
             if (!inputEnabled) return;
-            event.currentTarget.setPointerCapture(event.pointerId);
             (event.currentTarget.parentElement as HTMLElement | null)?.focus();
+            // TV input is focus-engine buttons only; a click just focuses the screen.
+            if (bezel === "tv") return;
+            event.currentTarget.setPointerCapture(event.pointerId);
             pointerActive.current = true;
             const { x, y } = normalizedPoint(event);
             clientRef.current?.sendTouch("begin", x, y);
