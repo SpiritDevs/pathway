@@ -2930,6 +2930,39 @@ label:has(> select#reasoning-effort) select {
   background: var(--chat-composer-glass-surface);
 }
 
+/* Dark workspace chrome: the navigation rail, top bar and the padding around the content
+   frame share one gray, with the thread list a step darker. Pathway Chat keeps
+   its branded surfaces. */
+html.dark:not([data-theme-id="pathway-chat"]) {
+  --workspace-frame: #242424;
+}
+/* The content card (conversation, its header, and other pages) and the right panel, which
+   renders outside it, share the darkest gray. */
+html.dark:not([data-theme-id="pathway-chat"]) [data-app-content-frame],
+html.dark:not([data-theme-id="pathway-chat"]) [data-preview-panel-mode] {
+  --background: #181818;
+}
+html.dark:not([data-theme-id="pathway-chat"]) [data-app-sidebar] {
+  --sidebar: #1d1d1d;
+  --sidebar-stage-fade: var(--sidebar);
+}
+/* Pairing screens sit on a flat gray in dark mode, without the tinted glow. */
+html.dark:not([data-theme-id="pathway-chat"]) .pairing-surface {
+  background: #181818;
+}
+html.dark:not([data-theme-id="pathway-chat"]) .pairing-surface-glow {
+  display: none;
+}
+/* Opaque so the composer and its context strip read as one exact gray over any
+   conversation background. */
+html.dark:not([data-theme-id="pathway-chat"]) .chat-composer-glass-shell {
+  --chat-composer-glass-surface: #242424;
+  --glass-opacity: 100%;
+}
+html.dark:not([data-theme-id="pathway-chat"]) .chat-composer-context-strip-top::before {
+  background: #242424;
+}
+
 /* Attached drawers share the companion's border; only the outer corners stay rounded. */
 [data-floating-companion]:has([data-companion-panel="left"]) {
   border-top-left-radius: 0;

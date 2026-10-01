@@ -449,6 +449,13 @@
         color: var(--boot-foreground);
       }
 
+      /* Dark loading screens use one flat gray in both frames (Pathway Chat keeps
+         its splash). The shorthand also drops the React frame's grain. */
+      html.dark:not([data-theme-id="pathway-chat"]) #boot-shell,
+      html.dark:not([data-theme-id="pathway-chat"]) .boot-shell {
+        background: #181818;
+      }
+
       /* The lift is half the message block, so the logo starts in the exact
          middle of the screen and the logo and message end up centered as a
          pair. Keep it in sync with the gap and the message line height. */
