@@ -87,6 +87,41 @@ color filters, VoiceOver, and a test push notification; Android adds
 orientation and network controls. The drawer only shows what the platform
 supports, and each control shows the value read back from the device.
 
+## Build and run on a simulator
+
+With an iOS simulator open, choose **Run on _simulator_…** below the screen.
+Pathway reads the conversation's project, or its worktree when it has one,
+and lists its Xcode projects, workspaces and schemes. Pick a scheme and,
+optionally, a configuration or app target. Then choose **Run** to build,
+install and launch the app on that simulator, **Build** to build only, or
+**Test** to run the scheme's tests. You can also open the command palette and
+choose **Run on simulator**. If no simulator is open yet, the panel asks you
+to pick one first.
+
+The build card shows each step as it happens: resolving, building,
+installing, launching and running. It also streams the build output. Errors
+and warnings appear above the log. Click a file location to open it at that
+line in your editor. The card keeps the most recent output and tells you when
+earlier output was trimmed. **Cancel** stops the build. Once a build finishes,
+fails or is cancelled, choose **Run again** to repeat it or **Change
+settings** to pick something else. Hiding the panel doesn't stop a build, and
+reopening it shows the latest one, including builds an agent started.
+
+Builds run on the Mac that hosts the conversation's environment, so they work
+the same from the web app, desktop, or a remote connection. Some setups can't
+build:
+
+- Simulators on SSH device hosts can't receive builds yet.
+- Environments that aren't running on a Mac can't build for iOS.
+- Without a full Xcode installation, the panel links to Xcode setup.
+- Expo projects need their native `ios/` project generated with Expo
+  prebuild first. Install React Native CocoaPods dependencies before
+  building. Release builds bundle JavaScript; Debug builds need your
+  project's Metro server running.
+
+"Running" means the app launched. Pathway doesn't keep watching it after
+that.
+
 ## Agents and devices
 
 Device support and agent control are separate choices. Leave **Agent device
