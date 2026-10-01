@@ -207,6 +207,31 @@ const handler = Effect.gen(function* () {
   if (!ready) {
     return HttpServerResponse.text("Device hub is not running", { status: 503 });
   }
+  const encodedPathDevice = /^\/vendor\/serve-sim\/helper\/([^/]+)\/(?!ws)/.exec(hubPath)?.[1];
+  const pathDevice =
+    encodedPathDevice === undefined
+      ? Option.some(undefined)
+      : yield* Effect.try(() => decodeURIComponent(encodedPathDevice)).pipe(Effect.option);
+  if (Option.isNone(pathDevice)) {
+    return HttpServerResponse.text("Invalid device selector", { status: 400 });
+  }
+  const queryDevices = url.value.searchParams.getAll("device");
+  const deviceId = pathDevice.value ?? queryDevices[0];
+  if (queryDevices.some((selector) => selector !== deviceId)) {
+    return HttpServerResponse.text("Conflicting device selectors", { status: 400 });
+  }
+  const inventoryOnly = [
+    "/api/devices",
+    "/api/devices/ws",
+    "/vendor/serve-emu/api/devices",
+    "/vendor/serve-emu/health",
+  ].includes(hubPath);
+  if (!inventoryOnly) {
+    if (!deviceId) return HttpServerResponse.text("A device is required", { status: 400 });
+    const claimed = yield* devices.claimDevice(ready.hostId, deviceId).pipe(Effect.result);
+    if (claimed._tag === "Failure")
+      return HttpServerResponse.text(claimed.failure.message, { status: 409 });
+  }
   // The hub runs in standalone mode at its origin root; the panel builds every
   // stream and socket URL itself, so nothing depends on the hub knowing the
   // Pathway prefix.

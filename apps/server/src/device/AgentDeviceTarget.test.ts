@@ -13,6 +13,7 @@ import {
   agentDeviceConfigPath,
   agentDeviceSession,
   writeAgentDeviceConfig,
+  writeAgentDeviceTargetGrant,
 } from "./AgentDeviceTarget.ts";
 
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
@@ -39,12 +40,18 @@ if (process.env.AGENT_DEVICE_DAEMON_BASE_URL) process.exit(2);`,
       );
       const shim = yield* ensureAgentDeviceShim({ entryPath, stateDir: dir });
       const files = ["mini", "android"].map((host) => agentDeviceConfigPath(dir, host, path));
-      for (const [index, file] of files.entries())
+      for (const [index, file] of files.entries()) {
         yield* writeAgentDeviceConfig(file, {
           baseUrl: `http://127.0.0.1:${1000 + index}`,
           token: `token-${index}`,
           entryPath,
         });
+        yield* writeAgentDeviceTargetGrant(dir, agentDeviceSession("thread", file, "same-id"), {
+          configPath: file,
+          deviceId: "same-id",
+          platform: "ios",
+        });
+      }
       const invoke = (file: string) =>
         exec(
           platform === "win32" ? process.execPath : path.join(shim, "agent-device"),
@@ -54,7 +61,11 @@ if (process.env.AGENT_DEVICE_DAEMON_BASE_URL) process.exit(2);`,
             "--config",
             file,
             "--session",
-            "test-session",
+            agentDeviceSession("thread", file, "same-id"),
+            "--platform",
+            "ios",
+            "--udid",
+            "same-id",
           ],
           { env: { ...process.env, AGENT_DEVICE_DAEMON_BASE_URL: "http://wrong-host" } },
         ).then((result) => JSON.parse(result.stdout));
@@ -67,6 +78,14 @@ if (process.env.AGENT_DEVICE_DAEMON_BASE_URL) process.exit(2);`,
         baseUrl: "http://127.0.0.1:2000",
         token: "new",
         entryPath,
+      });
+      yield* Effect.promise(() =>
+        expect(invoke(files[0]!)).rejects.toThrow("Call device_open again"),
+      );
+      yield* writeAgentDeviceTargetGrant(dir, agentDeviceSession("thread", files[0]!, "same-id"), {
+        configPath: files[0]!,
+        deviceId: "same-id",
+        platform: "ios",
       });
       expect((yield* Effect.promise(() => invoke(files[0]!))).daemonAuthToken).toBe("new");
       expect(yield* fs.readFileString(files[1]!)).toBe(second);

@@ -27,13 +27,37 @@ export const ensureAgentDeviceShim = Effect.fn("AgentDeviceShim.ensure")(functio
   const launcherPath = path.join(shimDir, "agent-device-launcher.mjs");
   yield* fs.writeFileString(
     launcherPath,
-    `import { spawn } from "node:child_process";
+    `import { spawn, execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 const args = process.argv.slice(2);
 const informational = args.length === 1 && ["help", "--help", "-h", "--version", "version"].includes(args[0]);
 const hasValue = flag => { const index = args.indexOf(flag); return index >= 0 && !!args[index + 1] && !args[index + 1].startsWith("--"); };
 if (!informational && !(hasValue("--config") && hasValue("--session"))) {
   console.error("Call device_open first and include its --config and --session flags.");
   process.exit(1);
+}
+if (!informational) {
+  try {
+    const flags = ["--config", "--session", "--platform", "--udid", "--serial"];
+    for (const flag of flags) if (args.filter(arg => arg === flag).length > 1 || args.some(arg => arg.startsWith(flag + "="))) throw Error("Ambiguous target flags");
+    const value = flag => args[args.indexOf(flag) + 1];
+    const session = value("--session");
+    if (!/^pathway-[a-f0-9]{24}$/.test(session)) throw Error("Unknown session");
+    const grant = JSON.parse(fs.readFileSync(path.join(${JSON.stringify(input.stateDir)}, "device", "targets", session + ".json"), "utf8"));
+    process.kill(grant.serverPid, 0);
+    if (grant.serverIdentity !== "unknown") {
+      const identity = execFileSync("ps", ["-p", String(grant.serverPid), "-o", "lstart="], { encoding: "utf8", timeout: 5000, env: { ...process.env, LC_ALL: "C", TZ: "UTC" } }).trim();
+      if (identity !== grant.serverIdentity) throw Error("Owning server changed");
+    }
+    const selector = grant.platform === "ios" ? "--udid" : "--serial";
+    const other = grant.platform === "ios" ? "--serial" : "--udid";
+    if (!hasValue(selector) || value(selector) !== grant.deviceId || !hasValue("--platform") || value("--platform") !== grant.platform || args.includes(other) || args.some(arg => /^(--device|--all)(=|$)/.test(arg))) throw Error("Target differs from device_open");
+    if (value("--config") !== grant.configPath || fs.readFileSync(grant.configPath, "utf8") !== grant.endpoint) throw Error("Device connection changed");
+  } catch {
+    console.error("Device ownership or target changed. Call device_open again and use its exact target flags.");
+    process.exit(1);
+  }
 }
 const env = { ...process.env };
 delete env.AGENT_DEVICE_DAEMON_BASE_URL;

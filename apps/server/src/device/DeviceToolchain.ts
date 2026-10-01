@@ -1,3 +1,5 @@
+import { withMachineLock, retainDeviceTool } from "./deviceMachineLock.ts";
+import { DEVICE_TOOL_MANIFEST } from "./deviceToolManifest.ts";
 import type { DeviceToolVersions } from "@spiritdevs/contracts";
 /**
  * Pinned installs of the two external tools device support is built on.
@@ -26,9 +28,9 @@ import * as Semaphore from "effect/Semaphore";
 import * as ProcessRunner from "../processRunner.ts";
 
 const DEVICE_HUB_PACKAGE = "expo-device-hub";
-export const DEVICE_HUB_VERSION = "0.12.0";
+export const DEVICE_HUB_VERSION = DEVICE_TOOL_MANIFEST.hub;
 const AGENT_DEVICE_PACKAGE = "agent-device";
-export const AGENT_DEVICE_VERSION = "0.21.12";
+export const AGENT_DEVICE_VERSION = DEVICE_TOOL_MANIFEST.agent;
 
 const INSTALL_TIMEOUT = Duration.minutes(10);
 const installLock = Semaphore.makeUnsafe(1);
@@ -197,7 +199,30 @@ const ensureTool = Effect.fn("DeviceToolchain.ensureTool")(function* (
 ) {
   const path = yield* Path.Path;
   const paths = deviceToolchainPaths(path, baseDir);
-  return yield* installLock.withPermit(installTool(spec, select(paths)));
+  const context = yield* Effect.context<Effect.Services<ReturnType<typeof installTool>>>();
+  return yield* installLock.withPermit(
+    Effect.tryPromise({
+      try: (signal) =>
+        withMachineLock(
+          path.join(baseDir, "tools"),
+          async () => {
+            await retainDeviceTool(path.join(baseDir, "tools"), spec.name, spec.version);
+            return Effect.runPromiseExitWith(context)(installTool(spec, select(paths)), { signal });
+          },
+          signal,
+        ),
+      catch: (cause) =>
+        new DeviceToolchainInstallError({
+          tool: spec.name,
+          step: "locking the shared cache",
+          cause,
+        }),
+    }).pipe(
+      Effect.flatMap((exit) =>
+        exit._tag === "Success" ? Effect.succeed(exit.value) : Effect.failCause(exit.cause),
+      ),
+    ),
+  );
 });
 
 export const ensureDeviceHub = (baseDir: string) =>
@@ -261,6 +286,13 @@ export const deviceToolVersions = Effect.fn("DeviceToolchain.versions")(function
   return yield* Effect.gen(function* () {
     return {
       hub: yield* inspect(HUB_SPEC),
+      serveSim: yield* inspect(HUB_SPEC).pipe(
+        Effect.map((value) => ({
+          requiredVersion: DEVICE_TOOL_MANIFEST.serveSim,
+          installedVersions: value.installedVersions.map((version) => `expo-device-hub@${version}`),
+          runningVersion: value.runningVersion ? `expo-device-hub@${value.runningVersion}` : null,
+        })),
+      ),
       agent: yield* inspect(AGENT_DEVICE_SPEC),
     } satisfies DeviceToolVersions;
   }).pipe(Effect.orElseSucceed(() => undefined));

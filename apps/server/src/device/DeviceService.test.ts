@@ -97,6 +97,9 @@ const fixture = Effect.fn("fixture")(function* (
   runtimeFailure?: NodeRuntimeUnavailableError | DeviceHost.DeviceHostError,
   inspectError = false,
   installTool?: Parameters<typeof makeWithHosts>[3],
+  hostOverrides: Partial<DeviceHost.DeviceHost["Service"]> = {},
+  configureAgent?: Parameters<typeof makeWithHosts>[2],
+  grantAgentTarget?: Parameters<typeof makeWithHosts>[4],
 ) {
   const settings = yield* Ref.make(DEFAULT_SERVER_SETTINGS);
   const starts: string[] = [];
@@ -112,6 +115,8 @@ const fixture = Effect.fn("fixture")(function* (
     run: () => Effect.succeed({ code: 0, stdout: "Pixel_API_35\n", stderr: "" }),
   };
   const host: DeviceHost.DeviceHost["Service"] = {
+    acquireDevice: () => Effect.succeed(null),
+    deviceOwners: () => Effect.succeed({}),
     ...(inspectError
       ? {
           inspect: Effect.fail(
@@ -157,12 +162,14 @@ const fixture = Effect.fn("fixture")(function* (
     stop: Effect.sync(() => {
       starts.push("stop");
     }),
+    ...hostOverrides,
   };
   const service = yield* makeWithHosts(
     new Map([[host.id, host]]),
     undefined,
-    undefined,
+    configureAgent,
     installTool,
+    grantAgentTarget,
   ).pipe(
     Effect.provideService(DeviceHost.DeviceHost, host),
     Effect.provideService(
@@ -445,6 +452,8 @@ it.effect.each(["shutdown", "close"] as const)(
         run: () => Effect.succeed({ code: 0, stdout: "", stderr: "" }),
       };
       const host: DeviceHost.DeviceHost["Service"] = {
+        acquireDevice: () => Effect.succeed(null),
+        deviceOwners: () => Effect.succeed({}),
         id: LOCAL_DEVICE_HOST_ID,
         summary: Effect.succeed({
           id: LOCAL_DEVICE_HOST_ID,
@@ -536,6 +545,8 @@ it.effect.each([
         run: () => Effect.succeed({ code: 0, stdout: "", stderr: "" }),
       };
       const host: DeviceHost.DeviceHost["Service"] = {
+        acquireDevice: () => Effect.succeed(null),
+        deviceOwners: () => Effect.succeed({}),
         id: LOCAL_DEVICE_HOST_ID,
         summary: Effect.succeed({
           id: LOCAL_DEVICE_HOST_ID,
@@ -717,7 +728,7 @@ it.effect(
       expect(state.supportsToolUpdate).toBe(true);
       expect(state.hostStatus).toBe(before.hostStatus);
       expect(state.agentAccessEnabled).toBe(before.agentAccessEnabled);
-      expect(state.revision).toBeGreaterThan(before.revision);
+      expect(state.revision).toBe(before.revision);
       expect(starts).toEqual([]);
       expect(agentStarts).toEqual([]);
       expect(requests).toEqual([]);
@@ -779,4 +790,240 @@ it.effect("returns only an environment-relative media path to remote clients", (
       expect(new URL(`${state.hubBasePath}/vendor/serve-emu/ws`, origin).origin).toBe(origin);
     }
   }),
+);
+
+it.effect("does not broadcast unchanged inspection snapshots", () =>
+  Effect.gen(function* () {
+    const { service } = yield* fixture();
+    const changes = yield* service.subscribe;
+    const before = yield* service.state;
+    yield* service.inspect;
+    yield* service.inspect;
+    expect(yield* service.state).toEqual(before);
+    const changed = yield* service.setHostStatus("local", { status: "installing" });
+    expect(yield* PubSub.takeAll(changes)).toEqual([changed]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "updates all pinned tools per environment and leaves consent and sessions unchanged",
+  () =>
+    Effect.gen(function* () {
+      const installed: string[] = [];
+      const { service, starts, agentStarts } = yield* fixture(
+        Effect.void,
+        undefined,
+        false,
+        undefined,
+        false,
+        (tool) =>
+          Effect.sync(() => {
+            installed.push(tool);
+          }),
+      );
+      const before = yield* service.state;
+      yield* service.updateTools({});
+      expect(installed).toEqual(["hub", "agent"]);
+      yield* service.updateTools({ tools: ["agent", "agent"] });
+      expect(installed).toEqual(["hub", "agent", "agent"]);
+      expect(yield* service.state).toEqual(before);
+      expect(starts).toEqual([]);
+      expect(agentStarts).toEqual([]);
+    }).pipe(Effect.scoped),
+);
+
+it.effect("failed environment updates are retryable and never start helpers", () =>
+  Effect.gen(function* () {
+    let attempts = 0;
+    const { service, starts } = yield* fixture(
+      Effect.void,
+      undefined,
+      false,
+      undefined,
+      false,
+      () =>
+        Effect.suspend(() =>
+          ++attempts === 1
+            ? Effect.fail(
+                new DeviceOperationError({
+                  operation: "update",
+                  reason: "command_failed",
+                  cause: new Error("offline"),
+                }),
+              )
+            : Effect.void,
+        ),
+    );
+    const before = yield* service.state;
+    expect((yield* service.updateTools({ tools: ["hub"] }).pipe(Effect.result))._tag).toBe(
+      "Failure",
+    );
+    expect(yield* service.state).toEqual(before);
+    yield* service.updateTools({ tools: ["hub"] });
+    expect(attempts).toBe(2);
+    expect(starts).toEqual([]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("denies boot, shutdown and automation when another environment owns the device", () =>
+  Effect.gen(function* () {
+    const owner = { environmentId: "other", environmentLabel: "Other Mac environment" };
+    const { service, requests } = yield* fixture(
+      Effect.void,
+      undefined,
+      false,
+      undefined,
+      false,
+      undefined,
+      {
+        acquireDevice: () => Effect.succeed(owner),
+        deviceOwners: (keys) => Effect.succeed(Object.fromEntries(keys.map((key) => [key, owner]))),
+      },
+    );
+    yield* service.configure({ enabled: true });
+    const device = (yield* service.state).devices[0]!;
+    expect(device.inUseBy).toEqual(owner);
+    const input = {
+      threadId: ThreadId.make("lease-test"),
+      deviceId: device.id,
+      platform: device.platform,
+    };
+    const failure = yield* service.open(input).pipe(Effect.flip);
+    expect(failure.message).toContain("In use by Other Mac environment");
+    expect((yield* service.shutdown(input).pipe(Effect.result))._tag).toBe("Failure");
+    expect(
+      (yield* service.agentTarget({ ...input, hostId: "local" }).pipe(Effect.result))._tag,
+    ).toBe("Failure");
+    expect(requests.some((value) => value.endsWith("/boot") || value.endsWith("/shutdown"))).toBe(
+      false,
+    );
+  }).pipe(Effect.scoped),
+);
+
+it.effect("keeps lifecycle operations available while an update waits for a download", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const finish = yield* Deferred.make<void>();
+    const { service } = yield* fixture(Effect.void, undefined, false, undefined, false, () =>
+      Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(finish))),
+    );
+    const update = yield* service.updateTools({ tools: ["hub"] }).pipe(Effect.forkChild);
+    yield* Deferred.await(entered);
+    expect((yield* service.configure({ enabled: false })).hostStatus).toBe("disabled");
+    yield* Deferred.succeed(finish, undefined);
+    yield* Fiber.join(update);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("clears stale ownership status when a released simulator is acquired", () =>
+  Effect.gen(function* () {
+    let owner: { environmentId: string; environmentLabel: string } | null = {
+      environmentId: "other",
+      environmentLabel: "Other",
+    };
+    const { service } = yield* fixture(Effect.void, undefined, false, undefined, false, undefined, {
+      acquireDevice: () => Effect.sync(() => owner),
+      deviceOwners: (keys) =>
+        Effect.sync(() => {
+          const held = owner;
+          return held ? Object.fromEntries(keys.map((key) => [key, held])) : {};
+        }),
+    });
+    yield* service.configure({ enabled: true });
+    const device = (yield* service.state).devices[0]!;
+    expect(device.inUseBy).toEqual(owner);
+    owner = null;
+    yield* service.claimDevice("local", device.id);
+    expect((yield* service.state).devices[0]?.inUseBy).toBeUndefined();
+  }).pipe(Effect.scoped),
+);
+
+it.effect("restarts selected helpers without closing sessions or releasing ownership", () =>
+  Effect.gen(function* () {
+    const restarted: ReadonlyArray<"hub" | "agent">[] = [];
+    const { service, starts, agentStops } = yield* fixture(
+      Effect.void,
+      undefined,
+      false,
+      undefined,
+      false,
+      undefined,
+      {
+        restartTools: (tools) =>
+          Effect.sync(() => {
+            restarted.push(tools);
+            return null;
+          }),
+      },
+    );
+    yield* service.configure({ enabled: true });
+    yield* service.open({
+      threadId: ThreadId.make("restart-session"),
+      deviceId: "Pixel_API_35",
+      platform: "android",
+    });
+    const before = yield* service.state;
+    const startsBefore = [...starts];
+    const result = yield* service.restartTools({ tools: ["hub", "hub"] });
+    expect(restarted).toEqual([["hub"]]);
+    expect(result.sessions).toEqual(before.sessions);
+    expect(result.devices).toEqual(before.devices);
+    expect(starts).toEqual(startsBefore);
+    expect(agentStops).toEqual([]);
+    yield* service.restartTools({});
+    expect(restarted[1]).toEqual(["hub", "agent"]);
+    expect((yield* service.restartTools({ hostId: "missing" }).pipe(Effect.result))._tag).toBe(
+      "Failure",
+    );
+  }).pipe(Effect.scoped),
+);
+
+it.effect("refreshes existing agent grants after restart changes the daemon endpoint", () =>
+  Effect.gen(function* () {
+    let endpoint = "";
+    const grants: string[] = [];
+    const { service } = yield* fixture(
+      Effect.void,
+      undefined,
+      false,
+      undefined,
+      false,
+      undefined,
+      {
+        restartTools: () =>
+          Effect.succeed({
+            nodePath: process.execPath,
+            hub: { origin: "http://device.test" },
+            helpers: { serveSimAxSettings: null, serveSimCli: null },
+            run: () => Effect.succeed({ stdout: "", stderr: "", code: 0 }),
+            agentDevice: { baseUrl: "http://restarted.test", token: "new", entryPath: "/agent" },
+          }),
+      },
+      (_hostId, ready) =>
+        Effect.sync(() => {
+          endpoint = ready.agentDevice.baseUrl;
+          return "/config";
+        }),
+      () =>
+        Effect.sync(() => {
+          grants.push(endpoint);
+        }),
+    );
+    yield* service.configure({ enabled: true, agentAccessEnabled: true });
+    yield* service.open({
+      threadId: ThreadId.make("agent-restart"),
+      deviceId: "Pixel_API_35",
+      platform: "android",
+    });
+    yield* service.agentTarget({
+      threadId: ThreadId.make("agent-restart"),
+      hostId: "local",
+      deviceId: "emulator-5554",
+    });
+    yield* service.restartTools({ tools: ["agent"] });
+    expect(grants).toEqual(["http://agent.test", "http://restarted.test"]);
+    yield* service.configure({ agentAccessEnabled: false });
+    yield* service.restartTools({ tools: ["hub"] });
+    expect(grants).toHaveLength(2);
+  }).pipe(Effect.scoped),
 );

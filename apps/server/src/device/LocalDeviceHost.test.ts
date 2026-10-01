@@ -1,7 +1,13 @@
+// @effect-diagnostics preferSchemaOverJson:off - fixture daemon writes its external JSON state.
 import { HostProcessIsExecutable } from "./nodeRuntime.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { HostProcessEnvironment, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
+import * as Deferred from "effect/Deferred";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import { makeDeviceLeases } from "./DeviceLeases.ts";
+import { DEVICE_HUB_VERSION, AGENT_DEVICE_VERSION } from "./DeviceToolchain.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -10,7 +16,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as LocalDeviceHost from "./LocalDeviceHost.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as NetService from "@spiritdevs/shared/Net";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -166,4 +172,124 @@ it.effect(
       yield* host.stop;
       expect(yield* fs.exists(`${baseDir}/tools`)).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("restarts only selected local helpers and retains leases throughout", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const base = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-restart-" });
+    const cache = path.join(base, "cache");
+    const hubStops: number[] = [];
+    let hubStarts = 0;
+    let agentStarts = 0;
+    let agentStops = 0;
+    for (const [name, version, entry] of [
+      ["expo-device-hub", DEVICE_HUB_VERSION, "dist/server/cli.mjs"],
+      ["agent-device", AGENT_DEVICE_VERSION, "bin/agent-device.mjs"],
+    ]) {
+      const directory = path.join(cache, "tools", name!, version!);
+      const file = path.join(directory, "node_modules", name!, entry!);
+      yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+      yield* fs.writeFileString(file, "fixture");
+      yield* fs.writeFileString(path.join(directory, ".install-complete"), version!);
+    }
+    const host = yield* LocalDeviceHost.make().pipe(
+      Effect.provide(Layer.mergeAll(ServerConfig.layerTest(base, base), NetService.layer)),
+      Effect.provideService(HostProcessEnvironment, {
+        HOME: base,
+        PATH: "",
+        PATHWAY_DEVICE_CACHE_DIR: cache,
+      }),
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provideService(HostProcessIsExecutable, false),
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.gen(function* () {
+            const pid = ++hubStarts;
+            const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+            let running = true;
+            yield* Effect.addFinalizer(() =>
+              Effect.gen(function* () {
+                running = false;
+                hubStops.push(pid);
+                yield* Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0));
+              }),
+            );
+            return ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(900000 + pid),
+              stdin: Sink.drain,
+              stdout: Stream.empty,
+              stderr: Stream.empty,
+              all: Stream.empty,
+              exitCode: Deferred.await(exit),
+              isRunning: Effect.sync(() => running),
+              kill: () => Effect.void,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+              unref: Effect.succeed(Effect.void),
+            });
+          }),
+        ),
+      ),
+      Effect.provideService(ProcessRunner.ProcessRunner, {
+        run: (input) =>
+          Effect.gen(function* () {
+            if (input.args.includes("devices")) {
+              agentStarts++;
+              yield* fs.writeFileString(
+                path.join(input.env!.AGENT_DEVICE_STATE_DIR!, "daemon.json"),
+                JSON.stringify({ httpPort: 5000 + agentStarts, token: `token-${agentStarts}` }),
+              );
+            }
+            if (input.args.includes("stop")) {
+              agentStops++;
+              yield* fs.remove(
+                path.join(input.args[input.args.indexOf("--state-dir") + 1]!, "daemon.json"),
+                { force: true },
+              );
+            }
+            return {
+              stdout: "",
+              stderr: "",
+              code: ChildProcessSpawner.ExitCode(0),
+              timedOut: false,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
+            };
+          }).pipe(Effect.orDie),
+      }),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response("ok"))),
+        ),
+      ),
+    );
+    expect(yield* host.restartTools!(["hub", "agent"])).toBeNull();
+    const original = yield* host.ensureAgentReady(() => Effect.void);
+    yield* host.acquireDevice("ios:phone");
+    const competitor = makeDeviceLeases(cache, {
+      environmentId: "other",
+      environmentLabel: "Other",
+    });
+    const hubOnly = yield* host.restartTools!(["hub"]);
+    expect(hubOnly?.hub.origin).not.toBe(original.hub.origin);
+    expect(hubOnly?.agentDevice).toEqual(original.agentDevice);
+    expect([hubStarts, agentStarts, agentStops]).toEqual([2, 1, 0]);
+    expect(yield* Effect.promise(() => competitor.acquire("ios:phone"))).not.toBeNull();
+    const agentOnly = yield* host.restartTools!(["agent"]);
+    expect(agentOnly?.hub).toEqual(hubOnly?.hub);
+    expect(agentOnly?.agentDevice).not.toEqual(original.agentDevice);
+    expect([hubStarts, agentStarts, agentStops]).toEqual([2, 2, 1]);
+    yield* host.restartTools!(["hub", "agent"]);
+    expect([hubStarts, agentStarts, agentStops]).toEqual([3, 3, 2]);
+    expect(hubStops).toEqual([1, 2]);
+    expect(yield* Effect.promise(() => competitor.acquire("ios:phone"))).not.toBeNull();
+    yield* host.stop;
+    expect(yield* Effect.promise(() => competitor.acquire("ios:phone"))).toBeNull();
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

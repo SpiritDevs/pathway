@@ -22,12 +22,14 @@ it.effect("preserves installed status after probes and cleans failed agent activ
     const modes: string[] = [];
     const owners: string[] = [];
     let forwards = 0;
+    let guardians = 0;
     let failForward = true;
     let rejectConfig = true;
     const spawner = ChildProcessSpawner.make((command) =>
       Effect.gen(function* () {
         if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
-        const forwarding = command.args.includes("-N");
+        const guardian = command.args.includes("-T");
+        const forwarding = guardian || command.args.includes("-N");
         let output = "";
         if (forwarding) {
           if (failForward) {
@@ -40,9 +42,12 @@ it.effect("preserves installed status after probes and cleans failed agent activ
             });
           }
           forwards++;
+          if (guardian) guardians++;
+          output = "ready\n";
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => {
               forwards--;
+              if (guardian) guardians--;
             }),
           );
         } else {
@@ -69,7 +74,7 @@ it.effect("preserves installed status after probes and cleans failed agent activ
             platforms: [{ platform: "ios", available: true }],
             hubPort: 1234,
             helpers: { serveSimAxSettings: null, serveSimCli: null },
-            ...(mode === "agent-start"
+            ...(mode === "agent-start" || mode.startsWith("restart-")
               ? { daemonPort: 1235, token: "fixture", entryPath: "/agent.mjs" }
               : {}),
           });
@@ -116,8 +121,8 @@ it.effect("preserves installed status after probes and cleans failed agent activ
       Effect.provide(ServerConfig.layerTest(home, home)),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
-    expect(new Set(owners).size).toBe(1);
-    expect(owners[0]).toMatch(/^[a-f0-9]{24}$/);
+    expect(new Set(owners).size).toBe(2);
+    expect(owners[0]).toMatch(/^[a-f0-9]{24}-[a-f0-9-]{36}$/);
     expect(forwards).toBe(1);
     expect(modes.filter((mode) => mode === "start")).toHaveLength(2);
     yield* host.platformAvailability("ios");
@@ -131,6 +136,16 @@ it.effect("preserves installed status after probes and cleans failed agent activ
     yield* host.ensureAgentReady(() => Effect.void);
     yield* host.platformAvailability("ios");
     expect((yield* host.summary).agentDeviceInstalled).toBe(true);
+    for (const tools of [["hub"], ["agent"], ["hub", "agent"]] as const) {
+      const before = modes.length;
+      yield* host.restartTools!(tools);
+      expect(guardians).toBe(1);
+      expect(forwards).toBe(2);
+      expect(modes.slice(before)).toEqual([
+        tools.length === 2 ? "restart-tools" : `restart-${tools[0]}`,
+      ]);
+      expect(yield* host.current).not.toBeNull();
+    }
     yield* host.stopAgent;
     expect(forwards).toBe(1);
     yield* host.stop;

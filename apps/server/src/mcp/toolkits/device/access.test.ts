@@ -60,6 +60,10 @@ it.effect(
         const service = DeviceService.of({
           agentCli: unexpected(),
           updateTool: unexpected,
+          updateTools: unexpected,
+          restartTools: unexpected,
+          checkRequirements: unexpected,
+          claimDevice: unexpected,
           inspect: unexpected(),
           retryHost: unexpected,
           testHost: unexpected,

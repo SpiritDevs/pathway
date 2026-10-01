@@ -74,8 +74,9 @@ const makeProxy = (origin: string) =>
   }).pipe(
     Layer.provide(
       Layer.succeed(DeviceService, {
+        claimDevice: () => Effect.void,
         currentReadiness: () => Effect.succeed({ hostId: "remote-mac", hub: { origin } }),
-      } as DeviceService["Service"]),
+      } as unknown as DeviceService["Service"]),
     ),
     Layer.provideMerge(authLayer),
     Layer.provide(FetchHttpClient.layer),

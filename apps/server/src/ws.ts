@@ -524,6 +524,9 @@ const CoreWsRpcGroup = WsRpcGroup.omit(
     RpcGroup.Rpcs<typeof WsComputerRpcGroup>["_tag"]
   >),
   WS_METHODS.deviceConfigure,
+  WS_METHODS.deviceUpdateTools,
+  WS_METHODS.deviceRestartTools,
+  WS_METHODS.deviceCheckRequirements,
   WS_METHODS.deviceList,
   WS_METHODS.deviceTestHost,
   WS_METHODS.deviceOpen,
@@ -3226,6 +3229,20 @@ const makeWsRpcLayer = (
           ),
       });
       const deviceHandlers = WsDeviceRpcGroup.of({
+        [WS_METHODS.deviceRestartTools]: (input) =>
+          observeRpcEffect(WS_METHODS.deviceRestartTools, deviceService.restartTools(input), {
+            "rpc.aggregate": "device",
+          }),
+        [WS_METHODS.deviceUpdateTools]: (input) =>
+          observeRpcEffect(WS_METHODS.deviceUpdateTools, deviceService.updateTools(input), {
+            "rpc.aggregate": "device",
+          }),
+        [WS_METHODS.deviceCheckRequirements]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deviceCheckRequirements,
+            deviceService.checkRequirements(input),
+            { "rpc.aggregate": "device" },
+          ),
         [WS_METHODS.deviceConfigure]: (input) =>
           observeRpcEffect(WS_METHODS.deviceConfigure, deviceService.configure(input), {
             "rpc.aggregate": "device",

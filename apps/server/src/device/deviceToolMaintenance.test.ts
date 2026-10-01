@@ -157,3 +157,36 @@ it("serializes competing maintenance processes after reclaiming a stale lock", a
     await NodeFSP.rm(root, { recursive: true, force: true });
   }
 });
+
+it("retains an older version registered by an idle live environment before its helper starts", async () => {
+  const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "pathway-tool-retain-"));
+  try {
+    for (const version of ["0.1.0", "0.2.0", "0.3.0", "0.4.0"]) {
+      const directory = NodePath.join(root, "expo-device-hub", version);
+      await NodeFSP.mkdir(directory, { recursive: true });
+      await NodeFSP.writeFile(NodePath.join(directory, ".install-complete"), version);
+    }
+    await NodeFSP.mkdir(NodePath.join(root, ".users"));
+    await NodeFSP.writeFile(
+      NodePath.join(root, ".users", "live.json"),
+      JSON.stringify({ pid: process.pid, name: "expo-device-hub", version: "0.1.0" }),
+    );
+    await NodeFSP.writeFile(
+      NodePath.join(root, ".users", "dead.json"),
+      JSON.stringify({ pid: 2147483647, name: "expo-device-hub", version: "0.2.0" }),
+    );
+    await exec(process.execPath, [
+      "-e",
+      deviceToolMaintenanceScript +
+        `pruneTools(${JSON.stringify(root)}, [['expo-device-hub', '0.4.0']], false).catch(error => { console.error(error); process.exitCode = 1; });`,
+    ]);
+    expect(await NodeFSP.readdir(NodePath.join(root, "expo-device-hub"))).toEqual([
+      "0.1.0",
+      "0.3.0",
+      "0.4.0",
+    ]);
+    expect(await NodeFSP.readdir(NodePath.join(root, ".users"))).toEqual(["live.json"]);
+  } finally {
+    await NodeFSP.rm(root, { recursive: true, force: true });
+  }
+});

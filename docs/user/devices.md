@@ -110,3 +110,36 @@ offline host keeps its installed tools, but an update needs network access
 before device support can start; Pathway does not fall back to an older
 version. Reconnect the host and choose **Retry** if installation fails. Your
 device and agent-access settings are kept.
+
+## Keeping environments in sync
+
+Each Pathway release pins its device tool versions and recommends an Xcode
+version and simulator runtimes. When several environments share devices, keep
+their tools on the same versions.
+
+**Settings → Integrations → Devices** compares every connected environment,
+including relay and Pathway Connect ones, side by side: Xcode, installed
+runtimes, Device Hub, and agent-device. Each host shows **Current**,
+**Update available**, **Restart to apply**, or **Not checked**. **Check all**
+refreshes versions everywhere without installing or starting anything.
+**Update** installs the pinned tools on one host, and **Update all** updates
+every host that is behind. Each host reports its own progress and errors, so a
+failed host can be retried on its own.
+
+Updates install tools but do not restart running device helpers. A host showing
+**Restart to apply** has a **Restart** button, in Settings and in the Devices
+panel, that restarts its helpers in place. Open devices stay connected and keep
+their owner. On environments running an older Pathway without that button,
+finish active work, then turn **Device support** off and on for that
+environment. An environment marked **Older release** runs a Pathway version
+that pins older tools; update Pathway there to match. Xcode and runtime
+recommendations are advisory. Install those yourself with Xcode or Android
+Studio.
+
+The Device panel shows a short notice when the environment's tools are behind
+its release, with an **Update** button.
+
+A simulator can only be used by one environment at a time. A device another
+environment is using shows **In use by** that environment and cannot be
+started or opened until that environment turns off device support or stops.
+Conversations in the same environment can share a device.

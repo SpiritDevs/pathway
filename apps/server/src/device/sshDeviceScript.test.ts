@@ -6,6 +6,9 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeEvents from "node:events";
+import { remoteDeviceGuardian } from "./remoteDeviceLease.ts";
+import { makeDeviceLeases } from "./DeviceLeases.ts";
 import * as NodeUtil from "node:util";
 import { quoteRemoteArg, remoteDeviceEnvironment, remoteDeviceScript } from "./sshDeviceScript.ts";
 import { AGENT_DEVICE_VERSION, DEVICE_HUB_VERSION } from "./DeviceToolchain.ts";
@@ -57,8 +60,9 @@ describe("remote helper lifecycle", () => {
         await NodeFSP.mkdir(bin);
         await NodeFSP.writeFile(NodePath.join(bin, "adb"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
         const root = NodePath.join(home, ".pathway/device");
-        const hubDir = NodePath.join(root, `tools/expo-device-hub@${DEVICE_HUB_VERSION}`);
-        const agentDir = NodePath.join(root, `tools/agent-device@${AGENT_DEVICE_VERSION}`);
+        const cache = NodePath.join(home, ".pathway/device-cache");
+        const hubDir = NodePath.join(cache, `tools/expo-device-hub/${DEVICE_HUB_VERSION}`);
+        const agentDir = NodePath.join(cache, `tools/agent-device/${AGENT_DEVICE_VERSION}`);
         const hub = NodePath.join(hubDir, "node_modules/expo-device-hub/dist/server/cli.mjs");
         const agent = NodePath.join(agentDir, "node_modules/agent-device/bin/agent-device.mjs");
         await NodeFSP.mkdir(NodePath.join(hubDir, "node_modules/expo-device-hub/dist/server"), {
@@ -92,7 +96,7 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
         let invocation = 0;
         const invoke = async (
           owner: string,
-          mode: "probe" | "start" | "agent-start" | "stop-agent" | "stop",
+          mode: Parameters<typeof remoteDeviceScript>[1],
           upgraded = false,
         ) => {
           const file = NodePath.join(home, `${owner}-${mode}-${invocation++}.cjs`);
@@ -116,8 +120,7 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
         const template = NodePath.join(home, "hub-template");
         await NodeFSP.cp(hubDir, template, { recursive: true });
         await NodeFSP.rm(NodePath.join(hubDir, ".install-complete"));
-        const installLock = hubDir + ".lock";
-        await NodeFSP.symlink("2147483647:exited-installer", installLock);
+
         await NodeFSP.writeFile(
           NodePath.join(bin, "npm"),
           `#!${process.execPath}\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='--version'){console.log('10.0.0');process.exit(0);}fs.cpSync(${JSON.stringify(template)},args[args.indexOf('--prefix')+1],{recursive:true});`,
@@ -125,9 +128,8 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
         );
         await NodeFSP.mkdir(NodePath.join(root, "hosts/one"), { recursive: true });
         await NodeFSP.writeFile(NodePath.join(root, "hosts/one/fail-start-once"), "");
-        // Unavailable advisory bookkeeping must not prevent either helper from starting.
-        await NodeFSP.writeFile(NodePath.join(root, "tools/.maintenance-lock"), "blocked");
-        await NodeFSP.writeFile(NodePath.join(root, "tools/.users"), "unwritable lease directory");
+
+        let guardian: NodeChildProcess.ChildProcessWithoutNullStreams | undefined;
         try {
           const [manual, concurrent] = await Promise.all([
             invoke("one", "start"),
@@ -174,7 +176,7 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
             [hubDir, "expo-device-hub", nextHubVersion],
             [agentDir, "agent-device", nextAgentVersion],
           ]) {
-            const destination = NodePath.join(root, `tools/${name}@${version}`);
+            const destination = NodePath.join(cache, `tools/${name}/${version}`);
             await NodeFSP.cp(source!, destination, { recursive: true });
             await NodeFSP.writeFile(NodePath.join(destination, ".install-complete"), version!);
           }
@@ -198,6 +200,38 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
             await NodeFSP.readFile(NodePath.join(root, "hosts/one/stopped-agent"), "utf8"),
           ).toBe(String(upgradedDaemon.pid));
           expect(repaired.daemonPort).not.toBe(upgraded.daemonPort);
+          const environment = { environmentId: "one", environmentLabel: "Remote environment" };
+          guardian = NodeChildProcess.spawn(
+            process.execPath,
+            ["-e", remoteDeviceGuardian("one", environment)],
+            {
+              env: { ...process.env, HOME: home },
+              stdio: ["pipe", "pipe", "pipe"],
+            },
+          );
+          await NodeEvents.EventEmitter.once(guardian.stdout, "data");
+          const acquire = await exec(
+            process.execPath,
+            ["-e", remoteDeviceScript("one", "lease-acquire", "ios:phone")],
+            { env: { ...process.env, HOME: home } },
+          );
+          expect(JSON.parse(acquire.stdout)).toEqual({ owner: null });
+          const contender = makeDeviceLeases(cache, {
+            environmentId: "other",
+            environmentLabel: "Other",
+          });
+          const readPid = async (file: string) =>
+            JSON.parse(await NodeFSP.readFile(NodePath.join(root, "hosts/one", file), "utf8")).pid;
+          for (const mode of ["restart-hub", "restart-agent", "restart-tools"] as const) {
+            const hubPid = await readPid("hub.json");
+            const agentPid = await readPid("daemon.json");
+            repaired = await invoke("one", mode, true);
+            expect((await readPid("hub.json")) === hubPid).toBe(mode === "restart-agent");
+            expect((await readPid("daemon.json")) === agentPid).toBe(mode === "restart-hub");
+            expect(await contender.acquire("ios:phone")).toEqual(environment);
+            expect((await fetch(`http://127.0.0.1:${repaired.hubPort}/readyz`)).ok).toBe(true);
+            expect((await fetch(`http://127.0.0.1:${repaired.daemonPort}/health`)).ok).toBe(true);
+          }
           // Stop still uses the recorded entry when a future pinned package is not installed yet.
           const originalScript = remoteDeviceScript("one", "stop-agent");
           const upgradedStop = NodePath.join(home, "upgraded-stop.cjs");
@@ -222,6 +256,11 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
               .owner,
           ).toBe("two");
         } finally {
+          if (guardian && guardian.exitCode === null && guardian.signalCode === null) {
+            const exited = NodeEvents.EventEmitter.once(guardian, "exit");
+            guardian.stdin.end();
+            await exited;
+          }
           await invoke("one", "stop").catch(() => {});
           await invoke("two", "stop").catch(() => {});
           await NodeFSP.rm(home, { recursive: true, force: true });

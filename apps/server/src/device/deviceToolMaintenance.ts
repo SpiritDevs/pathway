@@ -9,8 +9,12 @@ import { AGENT_DEVICE_VERSION, DEVICE_HUB_VERSION } from "./DeviceToolchain.ts";
 export const deviceToolMaintenanceScript = String.raw`
 const maintenanceFs = require('node:fs');
 const maintenancePath = require('node:path');
-const maintenanceAlive = pid => {
-  try { process.kill(pid, 0); return true; }
+const maintenanceIdentity = pid => {
+  try { return require('node:child_process').execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8', timeout: 5000, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).trim() || 'unknown'; }
+  catch { return 'unknown'; }
+};
+const maintenanceAlive = (pid, identity) => {
+  try { process.kill(pid, 0); const current = maintenanceIdentity(pid); return !identity || identity === 'unknown' || current === 'unknown' || identity === current; }
   catch (error) { return error.code !== 'ESRCH'; }
 };
 async function withToolMaintenance(root, operation) {
@@ -19,8 +23,8 @@ async function withToolMaintenance(root, operation) {
   const nonce = require('node:crypto').randomUUID();
   const ownerFile = process.pid + '.' + nonce + '.json';
   const candidate = lock + '.' + nonce;
-  const holder = { pid: process.pid };
-  const deadline = Date.now() + 30000;
+  const holder = { pid: process.pid, identity: maintenanceIdentity(process.pid) };
+  const deadline = Date.now() + 660000;
   const removeEmptyLock = () => {
     try { maintenanceFs.rmdirSync(lock); }
     catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST', 'EPERM'].includes(error.code)) throw error; }
@@ -42,7 +46,7 @@ async function withToolMaintenance(root, operation) {
           const previousFile = maintenancePath.join(lock, files[0]);
           let previous;
           try { previous = JSON.parse(maintenanceFs.readFileSync(previousFile, 'utf8')); } catch {}
-          if (Number.isSafeInteger(previous?.pid) && previous.pid > 0 && !maintenanceAlive(previous.pid)) {
+          if (Number.isSafeInteger(previous?.pid) && previous.pid > 0 && !maintenanceAlive(previous.pid, previous.identity)) {
             // The unique filename belongs only to that owner. Never unlink a replacement owner's file.
             try { maintenanceFs.unlinkSync(previousFile); } catch (error) { if (error.code !== 'ENOENT') throw error; }
           }
@@ -53,7 +57,7 @@ async function withToolMaintenance(root, operation) {
         await new Promise(resolve => setTimeout(resolve, 50));
       }
     }
-    try { return operation(); }
+    try { return await operation(); }
     finally {
       maintenanceFs.unlinkSync(maintenancePath.join(lock, ownerFile));
       removeEmptyLock();
@@ -69,6 +73,16 @@ function pruneTools(root, specs, flat) {
       ? require('node:child_process').spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | Select-Object -ExpandProperty CommandLine'], { encoding: 'utf8', timeout: 10000 })
       : require('node:child_process').spawnSync('ps', ['-ax', '-o', 'command='], { encoding: 'utf8', timeout: 10000 });
     if (scan.status !== 0 || !scan.stdout) return;
+    const retained = new Set();
+    const users = maintenancePath.join(root, '.users');
+    try {
+      for (const file of maintenanceFs.readdirSync(users)) {
+        if (!file.endsWith('.json')) continue;
+        const record = JSON.parse(maintenanceFs.readFileSync(maintenancePath.join(users, file), 'utf8'));
+        if (maintenanceAlive(record.pid, record.identity)) retained.add(record.name + '@' + record.version);
+        else maintenanceFs.unlinkSync(maintenancePath.join(users, file));
+      }
+    } catch (error) { if (error.code !== 'ENOENT') return; }
     for (const [name, required] of specs) {
       const parent = flat ? root : maintenancePath.join(root, name);
       let names;
@@ -88,7 +102,7 @@ function pruneTools(root, specs, flat) {
       if (!completed.some(value => value.version === required)) continue;
       const previous = completed.filter(value => value.version !== required).sort((a, b) => b.modified - a.modified || b.version.localeCompare(a.version, 'en', { numeric: true }))[0]?.version;
       for (const { version, directory } of completed) {
-        if (version === required || version === previous || scan.stdout.includes(directory + maintenancePath.sep)) continue;
+        if (version === required || version === previous || retained.has(name + '@' + version) || scan.stdout.includes(directory + maintenancePath.sep)) continue;
         maintenanceFs.rmSync(directory, { recursive: true, force: true });
       }
     }

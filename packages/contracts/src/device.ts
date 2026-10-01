@@ -49,7 +49,15 @@ export const SshDeviceHostConfigs = Schema.Array(SshDeviceHostConfig).check(
 export const DeviceId = TrimmedNonEmptyString.check(Schema.isMaxLength(256));
 export type DeviceId = typeof DeviceId.Type;
 
+export const DeviceOwnership = Schema.Struct({
+  environmentId: Schema.String,
+  environmentLabel: Schema.String,
+});
+export type DeviceOwnership = typeof DeviceOwnership.Type;
+
 export const DeviceSummary = Schema.Struct({
+  /** Present when another environment owns this simulator. */
+  inUseBy: Schema.optional(DeviceOwnership),
   hostId: DeviceHostId,
   id: DeviceId,
   platform: DevicePlatform,
@@ -80,7 +88,73 @@ export const DeviceToolVersion = Schema.Struct({
 });
 export type DeviceToolVersion = typeof DeviceToolVersion.Type;
 
+export const DeviceToolManifest = Schema.Struct({
+  revision: Schema.String,
+  hub: Schema.String,
+  agent: Schema.String,
+  /** serve-sim is vendored in this exact hub release, not installed separately. */
+  serveSim: Schema.String,
+  recommendedXcode: Schema.String,
+  recommendedRuntimes: Schema.Array(
+    Schema.Struct({ platform: DevicePlatform, version: Schema.String }),
+  ),
+});
+export type DeviceToolManifest = typeof DeviceToolManifest.Type;
+
+export const DeviceSdkInventory = Schema.Struct({
+  xcode: Schema.NullOr(Schema.String),
+  sdks: Schema.Array(Schema.Struct({ platform: DevicePlatform, version: Schema.String })),
+  runtimes: Schema.Array(Schema.Struct({ platform: DevicePlatform, version: Schema.String })),
+  /** Failed probes are unknown, never evidence that an SDK is missing. */
+  inspectionErrors: Schema.Array(Schema.String),
+});
+export type DeviceSdkInventory = typeof DeviceSdkInventory.Type;
+
+export const DeviceToolDrift = Schema.Struct({
+  tool: Schema.Literals(["hub", "agent", "serveSim", "xcode", "iosRuntime", "androidRuntime"]),
+  status: Schema.Literals(["match", "missing", "different", "unknown"]),
+  expected: Schema.String,
+  actual: Schema.Array(Schema.String),
+  restartRequired: Schema.Boolean,
+});
+export type DeviceToolDrift = typeof DeviceToolDrift.Type;
+
+export const DeviceUpdateToolsInput = Schema.Struct({
+  /** Defaults to this environment's local host. Clients fan out across environments. */
+  hostId: Schema.optional(DeviceHostId),
+  /** Omit to install every pinned helper. serve-sim updates with hub. */
+  tools: Schema.optional(
+    Schema.Array(Schema.Literals(["hub", "agent"])).check(Schema.isMinLength(1)),
+  ),
+});
+export type DeviceUpdateToolsInput = typeof DeviceUpdateToolsInput.Type;
+
+/** Restart selected running helpers without closing device sessions or releasing ownership. */
+export const DeviceRestartToolsInput = DeviceUpdateToolsInput;
+export type DeviceRestartToolsInput = typeof DeviceRestartToolsInput.Type;
+
+export const DeviceRequirement = Schema.Struct({
+  kind: Schema.Literals(["sdk", "runtime"]),
+  platform: DevicePlatform,
+  version: TrimmedNonEmptyString,
+});
+export type DeviceRequirement = typeof DeviceRequirement.Type;
+export const DeviceCheckRequirementsInput = Schema.Struct({
+  hostId: Schema.optional(DeviceHostId),
+  /** Build integration supplies the project's resolved SDK/runtime requirements. */
+  requirements: Schema.Array(DeviceRequirement).check(Schema.isMaxLength(64)),
+});
+export type DeviceCheckRequirementsInput = typeof DeviceCheckRequirementsInput.Type;
+export const DeviceCheckRequirementsResult = Schema.Struct({
+  hostId: DeviceHostId,
+  satisfied: Schema.Boolean,
+  missing: Schema.Array(DeviceRequirement),
+  unknown: Schema.Array(DeviceRequirement),
+});
+export type DeviceCheckRequirementsResult = typeof DeviceCheckRequirementsResult.Type;
+
 export const DeviceToolVersions = Schema.Struct({
+  serveSim: Schema.optional(DeviceToolVersion),
   hub: DeviceToolVersion,
   agent: DeviceToolVersion,
 });
@@ -93,6 +167,8 @@ export const DeviceHostSummary = Schema.Struct({
   platforms: Schema.Array(DevicePlatformAvailability),
   tools: Schema.optional(DeviceToolVersions),
   toolInspectionError: Schema.optional(Schema.String),
+  sdkInventory: Schema.optional(DeviceSdkInventory),
+  drift: Schema.optional(Schema.Array(DeviceToolDrift)),
   hubInstalled: Schema.Boolean,
   agentDeviceInstalled: Schema.Boolean,
 });
@@ -127,8 +203,11 @@ export const DeviceSession = Schema.Struct({
 export type DeviceSession = typeof DeviceSession.Type;
 
 export const DeviceServiceState = Schema.Struct({
+  manifest: Schema.optional(DeviceToolManifest),
+  supportsEnvironmentToolSync: Schema.optional(Schema.Boolean),
   supportsHostRetry: Schema.optional(Schema.Boolean),
   supportsToolUpdate: Schema.optional(Schema.Boolean),
+  supportsToolRestart: Schema.optional(Schema.Boolean),
   supportsToolInspection: Schema.optional(Schema.Boolean),
   hosts: Schema.Array(DeviceHostSummary),
   hostStatus: DeviceHostStatus,

@@ -27,6 +27,18 @@ describe("RPC authorization scopes", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });
 
+  it("requires operate scope for tool updates and read scope for SDK checks", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.deviceUpdateTools)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.deviceRestartTools)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.deviceCheckRequirements)).toBe(
+      AuthOrchestrationReadScope,
+    );
+  });
+
   it("requires orchestration read access for host headroom", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.serverGetHostResources)).toBe(
       AuthOrchestrationReadScope,
