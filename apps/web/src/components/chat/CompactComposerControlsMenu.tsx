@@ -1,6 +1,6 @@
 import { ProviderInteractionMode, RuntimeMode } from "@spiritdevs/contracts";
 import { memo, type ReactNode } from "react";
-import { EllipsisIcon } from "lucide-react";
+import { EllipsisIcon, TargetIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -14,11 +14,12 @@ import {
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
   interactionMode: ProviderInteractionMode;
+  goalMode: boolean;
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
   disabledReason?: string;
-  onToggleInteractionMode: () => void;
+  onComposerModeChange: (mode: "goal" | "plan" | "default") => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const trigger = (
@@ -37,7 +38,14 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         />
       }
     >
-      <EllipsisIcon aria-hidden="true" className="size-4" />
+      {props.goalMode ? (
+        <>
+          <TargetIcon aria-hidden="true" className="size-4" />
+          <span>Goal</span>
+        </>
+      ) : (
+        <EllipsisIcon aria-hidden="true" className="size-4" />
+      )}
     </MenuTrigger>
   );
 
@@ -60,22 +68,28 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             <MenuDivider />
           </>
         ) : null}
-        {props.showInteractionModeToggle ? (
+        {props.showInteractionModeToggle || props.goalMode ? (
           <>
             <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Mode</div>
             <MenuRadioGroup
-              value={props.interactionMode}
+              value={props.goalMode ? "goal" : props.interactionMode}
               onValueChange={(value) => {
                 if (props.disabledReason) return;
-                if (!value || value === props.interactionMode) return;
-                props.onToggleInteractionMode();
+                if (value !== "default" && value !== "plan" && value !== "goal") return;
+                props.onComposerModeChange(value);
               }}
             >
               <MenuRadioItem value="default" disabled={Boolean(props.disabledReason)}>
-                Chat
+                Build
               </MenuRadioItem>
-              <MenuRadioItem value="plan" disabled={Boolean(props.disabledReason)}>
+              <MenuRadioItem
+                value="plan"
+                disabled={Boolean(props.disabledReason) || !props.showInteractionModeToggle}
+              >
                 Plan
+              </MenuRadioItem>
+              <MenuRadioItem value="goal" disabled={Boolean(props.disabledReason)}>
+                Goal
               </MenuRadioItem>
             </MenuRadioGroup>
             <MenuDivider />

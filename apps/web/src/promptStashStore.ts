@@ -196,6 +196,8 @@ function readPersistedEntries(): ReadonlyArray<PromptStashEntry> | null {
 
 interface PromptStashStoreState {
   entries: ReadonlyArray<PromptStashEntry>;
+  /** Reads a saved prompt without consuming it. */
+  getEntry: (entryId: string) => PromptStashEntry | null;
   /**
    * Prepends an entry to the queue, evicting the oldest entry past the cap.
    * Returns the evicted entry (for messaging) if any.
@@ -211,7 +213,7 @@ interface PromptStashStoreState {
     durable: boolean;
   };
   /**
-   * Removes and returns an entry from the queue (restore + delete).
+   * Deletes and returns an entry from the queue.
    * `durable` is false when the removal could not be persisted, meaning a
    * reload would resurrect the entry.
    */
@@ -219,7 +221,7 @@ interface PromptStashStoreState {
   /**
    * Attaches the encoded images to an entry written earlier by `stashEntry`,
    * clearing its pending count. Returns attached=false when the entry is gone
-   * (restored or deleted while encoding was still running) so the caller can
+   * (deleted while encoding was still running) so the caller can
    * tell the user their images did not make it.
    */
   finalizeEntryImages: (
@@ -234,6 +236,7 @@ interface PromptStashStoreState {
 
 export const usePromptStashStore = create<PromptStashStoreState>()((set, get) => ({
   entries: [],
+  getEntry: (entryId) => get().entries.find((entry) => entry.id === entryId) ?? null,
   stashEntry: (entry) => {
     const nextEntries = [entry, ...get().entries];
     const evicted = nextEntries.length > MAX_STASH_ENTRIES ? (nextEntries.pop() ?? null) : null;
@@ -260,7 +263,7 @@ export const usePromptStashStore = create<PromptStashStoreState>()((set, get) =>
     const entries = get().entries;
     const index = entries.findIndex((candidate) => candidate.id === entryId);
     const existing = index === -1 ? undefined : entries[index];
-    // Restored or deleted mid-encode: nothing to attach to.
+    // Deleted mid-encode: nothing to attach to.
     if (!existing) return { attached: false, durable: true };
     const nextEntries = [...entries];
     nextEntries[index] = {
@@ -298,5 +301,10 @@ export const usePromptStashStore = create<PromptStashStoreState>()((set, get) =>
  */
 export function writePromptStashStorageForTest(raw: string): void {
   baseStashStorage.setItem(PROMPT_STASH_STORAGE_KEY, raw);
+  rehydratePromptStashForTest();
+}
+
+/** Reloads saved entries through the startup decoder. */
+export function rehydratePromptStashForTest(): void {
   usePromptStashStore.setState({ entries: readPersistedEntries() ?? [] });
 }

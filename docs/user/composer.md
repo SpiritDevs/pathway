@@ -10,7 +10,19 @@ headings, and fenced code blocks appear formatted, and their markers stay visibl
 color so you can still edit them. The agent receives exactly the markdown you typed. Very long
 messages, such as large pastes, stay unformatted so typing remains fast.
 
-Use the paperclip beside Send to add attachments. Their previews appear above the input in a
+Use the plus button on the left of the input to open the Add menu. It grows out of the top of
+the message field and covers the environment controls while open. The Add section holds
+attachments, Goal, Plan mode, Computer use (when the environment supports it), and Stash
+prompts. Your skills follow. Search to find an item. Stash prompts opens your stashed prompts:
+stash the current draft, restore a prompt into this thread, or delete one.
+
+Each save adds a separate prompt, newest first, and clears its text and attachments from the
+input. Restoring adds to your current draft and keeps the saved prompt for reuse. The stash
+saves on this device and holds up to 20 prompts. Adding a 21st removes the oldest and shows
+a notice. Select the X beside a saved prompt to delete it.
+
+Choose Files and folders to upload files from your device or reference a file or folder
+in the selected environment's project. Attachment previews appear above the input in a
 separate scrollable area, so a long draft or several attachments cannot fill the conversation.
 You can still preview and remove attachments, inspect upload status, and retry failed uploads.
 
@@ -28,8 +40,12 @@ Checkout and branch controls sit above the input. Model, reasoning, and permissi
 controls in the options menu. These menus do not expand the composer. The same layout applies
 to new threads and existing conversations, including phone-sized web windows.
 
-Conversations without a project omit the Build/Plan toggle from the web and desktop
-composer, including its compact options menu.
+Choose Goal in the Add menu to change the footer's Build control to Goal. The input prompts
+you to describe your goal and define measurable outcomes. Goal asks the agent to work toward
+those outcomes and report progress in the message you send. The selection stays with your
+draft, including after a reload. Choose Build to leave Goal, or choose Plan mode to plan first.
+
+Conversations without a project omit the Build/Plan toggle unless Goal is selected.
 
 Notices above the checkout controls form a stack, with each card behind the first appearing
 narrower. Hover over the notices or focus their controls to lift the stack and reveal more notices.

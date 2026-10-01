@@ -1,10 +1,61 @@
 import type { ServerProviderSkill } from "@spiritdevs/contracts";
 
+// Words that read wrong when only their first letter is capitalised.
+const SKILL_NAME_WORDS: Record<string, string> = {
+  ai: "AI",
+  api: "API",
+  ci: "CI",
+  cli: "CLI",
+  css: "CSS",
+  gh: "GitHub",
+  github: "GitHub",
+  html: "HTML",
+  ios: "iOS",
+  ipados: "iPadOS",
+  json: "JSON",
+  llm: "LLM",
+  macos: "macOS",
+  mcp: "MCP",
+  pr: "PR",
+  sdk: "SDK",
+  seo: "SEO",
+  sql: "SQL",
+  tvos: "tvOS",
+  ui: "UI",
+  url: "URL",
+  ux: "UX",
+  visionos: "visionOS",
+  watchos: "watchOS",
+};
+
+const MINOR_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "as",
+  "at",
+  "by",
+  "for",
+  "in",
+  "of",
+  "on",
+  "or",
+  "the",
+  "to",
+  "with",
+]);
+
 function titleCaseWords(value: string): string {
   const words: string[] = [];
   for (const segment of value.split(/[\s:_-]+/)) {
     if (segment.length === 0) continue;
-    words.push(segment.charAt(0).toUpperCase() + segment.slice(1));
+    const lower = segment.toLowerCase();
+    words.push(
+      SKILL_NAME_WORDS[lower] ??
+        (words.length > 0 && MINOR_WORDS.has(lower)
+          ? lower
+          : segment.charAt(0).toUpperCase() + segment.slice(1)),
+    );
   }
   return words.join(" ");
 }
@@ -20,7 +71,8 @@ export function formatProviderSkillDisplayName(
   if (displayName) {
     return displayName;
   }
-  return titleCaseWords(skill.name);
+  // Plugin skills are namespaced as `plugin:skill`; the skill part names it.
+  return titleCaseWords(skill.name.slice(skill.name.lastIndexOf(":") + 1));
 }
 
 export function formatProviderSkillInstallSource(

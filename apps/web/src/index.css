@@ -748,6 +748,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
   .chat-composer-glass-shell {
     --chat-composer-glass-surface: var(--card);
     --chat-composer-outline: rgb(0 0 0 / 8%);
+    --chat-composer-top-radius: 22px;
 
     position: relative;
     isolation: isolate;
@@ -758,7 +759,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
     position: absolute;
     z-index: 0;
     inset: 0;
-    border-radius: 22px;
+    border-radius: var(--chat-composer-top-radius) var(--chat-composer-top-radius) 22px 22px;
     background: color-mix(
       in srgb,
       var(--chat-composer-glass-surface) var(--glass-opacity),
@@ -780,13 +781,18 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
      * strip is inset 1.375rem per side, so the step-in positions and their
      * curve controls stay in rem to keep tracking it at non-default interface
      * font sizes; the composer's 22px top radius and the strip's 16px bottom
-     * radius are px by design.
+     * radius are px by design. The top radius drops to 0 while the add menu
+     * is attached above the composer.
      */
     clip-path: shape(
-      from 0 22px,
-      curve to 22px 0 with 0 9.85px / 9.85px 0,
-      line to calc(100% - 22px) 0,
-      curve to 100% 22px with calc(100% - 9.85px) 0 / 100% 9.85px,
+      from 0 var(--chat-composer-top-radius),
+      curve to var(--chat-composer-top-radius) 0 with 0
+        calc(var(--chat-composer-top-radius) * 0.4477) /
+        calc(var(--chat-composer-top-radius) * 0.4477) 0,
+      line to calc(100% - var(--chat-composer-top-radius)) 0,
+      curve to 100% var(--chat-composer-top-radius) with
+        calc(100% - var(--chat-composer-top-radius) * 0.4477) 0 / 100%
+        calc(var(--chat-composer-top-radius) * 0.4477),
       line to 100% calc(100% - var(--chat-composer-context-extension) - 1.375rem),
       curve to calc(100% - 1.375rem) calc(100% - var(--chat-composer-context-extension)) with 100%
         calc(100% - var(--chat-composer-context-extension) - 0.6156rem) / calc(100% - 0.6156rem)
@@ -801,7 +807,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
       curve to 0 calc(100% - var(--chat-composer-context-extension) - 1.375rem) with 0.6156rem
         calc(100% - var(--chat-composer-context-extension)) / 0
         calc(100% - var(--chat-composer-context-extension) - 0.6156rem),
-      line to 0 22px,
+      line to 0 var(--chat-composer-top-radius),
       close
     );
   }
@@ -923,7 +929,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
   @supports not (clip-path: shape(from 0 0, line to 1px 1px)) {
     .chat-composer-glass-shell-with-context::before {
       inset-block-end: var(--chat-composer-context-extension);
-      border-radius: 22px;
+      border-radius: var(--chat-composer-top-radius) var(--chat-composer-top-radius) 22px 22px;
       clip-path: none;
     }
 
@@ -1237,7 +1243,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
   @supports not (clip-path: shape(from 0 0, line to 1px 1px)) {
     .chat-composer-glass-shell-with-context::before {
       inset-block-end: var(--chat-composer-context-extension);
-      border-radius: 22px;
+      border-radius: var(--chat-composer-top-radius) var(--chat-composer-top-radius) 22px 22px;
       clip-path: none;
     }
 
@@ -2912,6 +2918,16 @@ label:has(> select#reasoning-effort) select {
   padding-inline: 0.625rem;
   font-size: 0.875rem;
   border-radius: var(--control-radius);
+}
+
+/* The add menu grows out of the composer's top edge, so the seam corners go square. */
+.chat-composer-glass-shell:has([data-composer-add-menu-open="true"]) {
+  --chat-composer-top-radius: 0px;
+}
+
+.chat-composer-attached-panel {
+  /* Opaque on purpose: the panel covers the conversation, and backdrop blur is not guaranteed here. */
+  background: var(--chat-composer-glass-surface);
 }
 
 /* Attached drawers share the companion's border; only the outer corners stay rounded. */

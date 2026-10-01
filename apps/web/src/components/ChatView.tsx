@@ -375,6 +375,7 @@ import {
 } from "../state/entities";
 import { useEnvironmentShellBootstrapped } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { applyComposerGoalIntent } from "./chat/composerAddMenu.logic";
 import { IssueDetailSheet } from "./issues/IssueDetailSheet";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ImageLightbox } from "./media/ImageLightbox";
@@ -4613,6 +4614,7 @@ function ChatViewContent(props: ChatViewProps) {
 
   const handleInteractionModeChange = useCallback(
     (mode: ProviderInteractionMode) => {
+      useComposerDraftStore.getState().setGoalMode(composerDraftTarget, false);
       if (mode === interactionMode) return;
       setComposerDraftInteractionMode(composerDraftTarget, mode);
       if (isLocalDraftThread) {
@@ -7756,6 +7758,7 @@ function ChatViewContent(props: ChatViewProps) {
       ? parseStandaloneComposerSlashCommand(trimmed)
       : null;
     if (standaloneSlashCommand) {
+      useComposerDraftStore.getState().setGoalMode(composerDraftTarget, false);
       handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
@@ -7934,7 +7937,10 @@ function ChatViewContent(props: ChatViewProps) {
       model: ctxSelectedModel,
       models: ctxSelectedProviderModels,
       effort: ctxSelectedPromptEffort,
-      text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+      text: applyComposerGoalIntent(
+        messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+        sendCtx?.goalMode === true,
+      ),
     });
     if (pendingDraftTarget !== null) {
       const store = useComposerDraftStore.getState();

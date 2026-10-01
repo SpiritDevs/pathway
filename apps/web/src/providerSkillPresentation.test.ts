@@ -22,6 +22,13 @@ describe("formatProviderSkillDisplayName", () => {
       }),
     ).toBe("Review Follow Up");
   });
+
+  it("drops the plugin namespace and keeps familiar acronyms", () => {
+    expect(formatProviderSkillDisplayName({ name: "build-ios-apps:ios-app-intents" })).toBe(
+      "iOS App Intents",
+    );
+    expect(formatProviderSkillDisplayName({ name: "gh-fix-ci" })).toBe("GitHub Fix CI");
+  });
 });
 
 describe("formatProviderSkillInstallSource", () => {
