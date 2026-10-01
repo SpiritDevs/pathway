@@ -4,9 +4,11 @@ Open **Settings → Apple accounts** to manage the Apple IDs, Developer teams an
 
 ## Add an Apple ID
 
-Choose **Add Apple ID** and enter the Apple ID email and an optional display name. You can add several Apple IDs, for example a personal one and one for work. Select an Apple ID in the list to see its details.
+Choose **Add Apple ID**, enter the Apple ID email and choose **Continue**. Then sign in with the Apple ID password and the verification code Apple sends to your devices or phone. Pathway signs in from the environment chosen next to **Test and list apps on**, then adds every Developer team on that Apple ID for you. Your password is used for that sign-in only and is never stored.
 
-Adding an Apple ID does not sign in to it, so a new Apple ID shows **Not verified yet**. You sign in from an environment when it needs your Apple ID, such as when you [install Xcode](xcode.md). You can rename an Apple ID at any time.
+You can add several Apple IDs, for example a personal one and one for work. Select an Apple ID in the list to see its details. Until it is signed in, an Apple ID shows **Not signed in** and asks for its password when you select it. Entering an Apple ID that is already in the list opens that one instead.
+
+When your teams change, choose **Refresh teams** and sign in again. Every Apple ID starts with its email as its name; rename it at any time.
 
 ## Personal or shared with a company
 
@@ -14,9 +16,9 @@ A new Apple ID is personal, and only you can see and use it. While an organizati
 
 Only the person who added an Apple ID can change who it is shared with. Unlink it from all projects before you change this; Pathway tells you when a project still uses it.
 
-## Add Developer teams
+## Developer teams
 
-Each Apple ID can have several Developer teams. Choose **Add team** and enter the team ID, team name and type. The team ID has ten letters or digits and appears under Membership details in your Apple Developer account.
+Signing in adds each Developer team on the Apple ID, with its name and type. Apple ID sign-in does not support hardware security keys, federated work accounts or Apple's own account notices. For those Apple IDs, or a team Apple did not list, choose **Add team** and enter the team ID, team name and type yourself. The team ID has ten letters or digits and appears under Membership details in your Apple Developer account.
 
 To remove a team, choose **Remove team** on it and confirm. This removes the team and its API key from every environment. Unlink any projects that use the team first; Pathway tells you when one still does.
 
