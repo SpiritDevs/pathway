@@ -1,9 +1,8 @@
-import { currentDeviceController } from "@spiritdevs/client-runtime/state/device";
 import type { DeviceControlProof, EnvironmentId } from "@spiritdevs/contracts";
 import type * as Cause from "effect/Cause";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { randomUUID } from "~/lib/utils";
-import { deviceEnvironment, useDeviceState } from "~/state/device";
+import { deviceEnvironment, useDeviceControlSelection } from "~/state/device";
 import { useEnvironmentConnectionState } from "~/state/environments";
 import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -44,7 +43,8 @@ export function useDeviceControlLease(options: {
   readonly visible: boolean;
 }) {
   const { environmentId, hostId, deviceId, visible } = options;
-  const { state, error: stateError, refresh } = useDeviceState(environmentId);
+  const selection = useDeviceControlSelection(environmentId, hostId, deviceId);
+  const { control, refresh } = selection;
   const connectionState = useEnvironmentConnectionState(environmentId).data;
   // The environment drops a viewer's lease with the RPC connection that acquired it.
   const connection = connectionState?.phase === "connected" ? connectionState.generation : null;
@@ -53,10 +53,20 @@ export function useDeviceControlLease(options: {
   const releaseControl = useAtomCommand(deviceEnvironment.releaseControl, {
     reportFailure: false,
   });
+  const restartTools = useAtomCommand(deviceEnvironment.restartTools, { reportFailure: false });
   const [viewerId] = useState(randomUUID);
   const [lease, setLeaseState] = useState<Lease | null>(null);
   const [pending, setPending] = useState<"acquire" | "release" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorState] = useState<{
+    readonly message: string;
+    readonly code: DeviceControlCode | null;
+  } | null>(null);
+  const [recovering, setRecovering] = useState(false);
+  const setError = useCallback(
+    (message: string | null, code: DeviceControlCode | null = null) =>
+      setErrorState(message === null ? null : { message, code }),
+    [],
+  );
   // Cleanup and late RPC results read the newest values, not a render's closure.
   const leaseRef = useRef<Lease | null>(null);
   const connectionRef = useRef(connection);
@@ -70,9 +80,8 @@ export function useDeviceControlLease(options: {
   };
   const generation = lease?.generation ?? null;
 
-  const supported = state.supportsDeviceControl === true;
-  const unknown = stateError !== null || connection === null;
-  const control = currentDeviceController(state, hostId, deviceId);
+  const supported = selection.supported;
+  const unknown = selection.error !== null || connection === null;
   const held =
     lease !== null &&
     lease.connection === connection &&
@@ -88,7 +97,7 @@ export function useDeviceControlLease(options: {
 
   const fail = useCallback((cause: Cause.Cause<unknown>) => {
     const code = deviceControlErrorCode(cause);
-    setError(code ? deviceControlErrorCopy[code] : formatEnvironmentQueryError(cause));
+    setError(code ? deviceControlErrorCopy[code] : formatEnvironmentQueryError(cause), code);
     return code;
   }, []);
 
@@ -99,7 +108,7 @@ export function useDeviceControlLease(options: {
   const reportError = useCallback(
     (code: DeviceControlCode, sentWith: number) => {
       if (leaseRef.current?.generation !== sentWith) return;
-      setError(deviceControlErrorCopy[code]);
+      setError(deviceControlErrorCopy[code], code);
       if (deviceControlLost(code)) setLease(null);
       if (code === "stale_generation") refresh();
     },
@@ -169,6 +178,16 @@ export function useDeviceControlLease(options: {
     unknown,
     viewerId,
   ]);
+
+  /** Restarts the host's helpers, the only way past `input_unconfirmed`. */
+  const recover = useCallback(async () => {
+    setRecovering(true);
+    const result = await restartTools({ environmentId, input: { hostId } });
+    setRecovering(false);
+    // The error and its button stay up during the restart, so the way out never disappears.
+    if (result._tag === "Failure") fail(result.cause);
+    else setError(null);
+  }, [environmentId, fail, hostId, restartTools, setError]);
 
   // Generations only grow, so a newer one, or ours no longer held, means control moved on.
   useEffect(() => {
@@ -243,8 +262,12 @@ export function useDeviceControlLease(options: {
     /** Acquired but not yet confirmed by state, or waiting on the previous controller to drain. */
     acquiring: pending === "acquire" || (lease !== null && !held && !unknown),
     releasing: pending === "release",
-    error,
+    error: error?.message ?? null,
     dismissError: () => setError(null),
+    /** Helper restart is offered when the environment can't confirm earlier input finished. */
+    canRecover: selection.supportsToolRestart && error?.code === "input_unconfirmed",
+    recovering,
+    recover,
     take,
     release,
     reportError,

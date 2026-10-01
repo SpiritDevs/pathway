@@ -1,4 +1,5 @@
 import type { DeviceServiceState, EnvironmentId } from "@spiritdevs/contracts";
+import type * as Cause from "effect/Cause";
 import { CheckIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -10,6 +11,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
+import { deviceControlFence } from "../device/deviceControl";
 import {
   deviceToolSyncRows,
   carryPendingDeviceToolUpdates,
@@ -101,9 +103,11 @@ export function DeviceToolSyncSettings() {
       row.key,
       result._tag === "Success"
         ? { operation, status: "success" }
-        : { operation, status: "failed", message: formatEnvironmentQueryError(result.cause) },
+        : failedOutcome(operation, result.cause),
     );
   };
+  const dismiss = (key: string, outcome: FailedDeviceToolOutcome) =>
+    setOutcome(key, { ...outcome, retired: true });
   const current = retireStaleDeviceToolFailures(rows, outcomes);
   if (current !== outcomes) setOutcomes(current);
   const targets = deviceToolUpdateTargets(rows, current);
@@ -173,6 +177,7 @@ export function DeviceToolSyncSettings() {
                   row={row}
                   outcome={current.get(row.key)}
                   onRun={(operation) => void update(row, operation)}
+                  onDismiss={(outcome) => dismiss(row.key, outcome)}
                 />
               ))}
             </tbody>
@@ -189,6 +194,22 @@ export function DeviceToolSyncSettings() {
   );
 }
 
+/** A failed request, keeping the device it fenced so its Retry outlives version drift. */
+function failedOutcome(
+  operation: DeviceToolOperation,
+  cause: Cause.Cause<unknown>,
+): DeviceToolUpdateOutcome {
+  const fence = deviceControlFence(cause);
+  return {
+    operation,
+    status: "failed",
+    message: formatEnvironmentQueryError(cause),
+    ...(fence ? { fence } : {}),
+  };
+}
+
+type FailedDeviceToolOutcome = Extract<DeviceToolUpdateOutcome, { status: "failed" }>;
+
 const HELPER_BADGE = {
   current: { label: "Current", variant: "success" },
   behind: { label: "Update available", variant: "warning" },
@@ -200,10 +221,12 @@ function DeviceToolSyncTableRow({
   row,
   outcome,
   onRun,
+  onDismiss,
 }: {
   row: DeviceToolSyncRow;
   outcome: DeviceToolUpdateOutcome | undefined;
   onRun: (operation: DeviceToolOperation) => void;
+  onDismiss: (outcome: FailedDeviceToolOutcome) => void;
 }) {
   const badge = HELPER_BADGE[row.helperState];
   return (
@@ -263,6 +286,12 @@ function DeviceToolSyncTableRow({
           <p role="alert" className="mt-1 max-w-48 text-left text-destructive">
             {outcome.message}
           </p>
+        ) : null}
+        {outcome?.status === "failed" && !outcome.retired && outcome.fence ? (
+          // A fenced device's failure outlives the drift, so it needs its own way out.
+          <Button size="xs" variant="ghost" onClick={() => onDismiss(outcome)}>
+            Dismiss
+          </Button>
         ) : null}
       </td>
     </tr>

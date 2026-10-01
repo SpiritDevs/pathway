@@ -1,4 +1,4 @@
-import type { DeviceControlError } from "@spiritdevs/contracts";
+import type { DeviceControlError, DeviceServiceState } from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 
 export type DeviceControlCode = DeviceControlError["code"];
@@ -41,3 +41,26 @@ export function deviceControlErrorCode(cause: unknown): DeviceControlCode | null
 /** Codes meaning this viewer no longer holds the lease it thinks it holds. */
 export const deviceControlLost = (code: DeviceControlCode) =>
   code === "stale_generation" || code === "control_held" || code === "control_required";
+
+/** A device whose earlier input the environment couldn't confirm finished. */
+export type DeviceControlFence = { readonly hostId: string; readonly deviceId: string };
+
+/** The device an `input_unconfirmed` failure names, so its error can outlive version drift. */
+export function deviceControlFence(cause: unknown): DeviceControlFence | null {
+  const error: unknown = Cause.isCause(cause) ? Cause.squash(cause) : cause;
+  if (deviceControlErrorCode(error) !== "input_unconfirmed") return null;
+  const { hostId, deviceId } = error as { readonly hostId?: unknown; readonly deviceId?: unknown };
+  return typeof hostId === "string" && typeof deviceId === "string" ? { hostId, deviceId } : null;
+}
+
+/** A fence lasts until that device's control leaves `draining`; other devices are unaffected. */
+export const deviceStillFenced = (
+  state: Pick<DeviceServiceState, "controls">,
+  fence: DeviceControlFence,
+) =>
+  state.controls?.some(
+    (control) =>
+      control.hostId === fence.hostId &&
+      control.deviceId === fence.deviceId &&
+      control.phase === "draining",
+  ) === true;

@@ -48,9 +48,10 @@ the panel says who is in control: you, this conversation's agent, an agent in
 another conversation (choose **Open thread** to go there), someone else, or
 nobody.
 
-Choose **Take control** to use the device yourself. The button reads **Taking
-control…** while any input from the previous controller finishes, and the
-device becomes interactive once the environment confirms you are in control.
+Choose **Take control** to use the device yourself, even while the previous
+controller's input is finishing. The button reads **Taking control…** until
+that input finishes, and the device becomes interactive once the environment
+confirms you are in control.
 Taking control from an agent pauses its device use.
 
 While you are in control, choose **Release control** to go back to watching,
@@ -66,8 +67,12 @@ switches to watching. Choose **Take control** again once it reconnects.
 
 If someone else takes control, or your control ends some other way, the panel
 says so and returns to watching. Choose **Take control** again to continue.
-If Pathway can't confirm your last input finished, restart the device tools,
-then take control again.
+If Pathway can't confirm the last input on a device finished, the panel says
+so and offers **Restart device tools**, even when the tools are current. After
+the restart, take control again. A restart that leaves one device unconfirmed
+keeps its error and **Retry** in the Devices settings and the Device panel
+until that device recovers or you dismiss the error. Other devices on the same
+host are not held up.
 
 Environments running an older Pathway release don't support control. Their
 device panels stay interactive for everyone, as before.

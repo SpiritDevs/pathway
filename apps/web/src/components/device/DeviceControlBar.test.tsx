@@ -24,6 +24,7 @@ const commands = vi.hoisted(() => ({
   acquire: vi.fn<(request: unknown) => Promise<Result>>(),
   renew: vi.fn<(request: unknown) => Promise<Result>>(),
   release: vi.fn<(request: unknown) => Promise<Result>>(),
+  restart: vi.fn<(request: unknown) => Promise<{ _tag: "Success" } | Result>>(),
   refresh: vi.fn(),
   state: { current: null as unknown },
   stateError: { current: null as string | null },
@@ -34,13 +35,20 @@ vi.mock("~/state/device", () => ({
     acquireControl: "acquire",
     renewControl: "renew",
     releaseControl: "release",
+    restartTools: "restart",
   },
-  useDeviceState: () => ({
-    state: commands.state.current,
-    loaded: true,
-    error: commands.stateError.current,
-    refresh: commands.refresh,
-  }),
+  useDeviceControlSelection: (_environmentId: unknown, hostId: string, deviceId: string) => {
+    const state = commands.state.current as DeviceServiceState | null;
+    return {
+      supported: state?.supportsDeviceControl === true,
+      supportsToolRestart: state?.supportsToolRestart === true,
+      error: commands.stateError.current,
+      control:
+        state?.controls?.find((entry) => entry.hostId === hostId && entry.deviceId === deviceId) ??
+        null,
+      refresh: commands.refresh,
+    };
+  },
 }));
 vi.mock("~/state/environments", () => ({
   useEnvironmentConnectionState: () => ({ data: commands.connection.current }),
@@ -52,7 +60,7 @@ vi.mock("~/components/ui/tooltip", () => ({
   TooltipPopup: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock("~/state/use-atom-command", () => ({
-  useAtomCommand: (command: "acquire" | "renew" | "release") => commands[command],
+  useAtomCommand: (command: "acquire" | "renew" | "release" | "restart") => commands[command],
 }));
 vi.mock("~/state/query", () => ({ formatEnvironmentQueryError: () => "Request failed" }));
 vi.mock("~/lib/utils", async (original) => ({
@@ -84,6 +92,7 @@ const serviceState = (controls: DeviceControlState[], supported = true) =>
     hubBasePath: "/api/device-hub",
     revision: 0,
     supportsDeviceControl: supported,
+    supportsToolRestart: true,
     controls,
   }) as unknown as DeviceServiceState;
 const connected = (generation: number) => ({ phase: "connected", generation });
@@ -140,11 +149,19 @@ const textOf = (node: ReactTestInstance | string): string =>
   typeof node === "string" ? node : node.children.map(textOf).join("");
 const button = (label: string): ReactTestInstance =>
   renderer!.root.find((node) => node.type === "button" && textOf(node).includes(label));
+const maybeButton = (label: string) =>
+  renderer!.root.findAll((node) => node.type === "button" && textOf(node).includes(label))[0];
 const click = (label: string) => act(async () => button(label).props.onClick());
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  for (const command of [commands.acquire, commands.renew, commands.release, commands.refresh])
+  for (const command of [
+    commands.acquire,
+    commands.renew,
+    commands.release,
+    commands.restart,
+    commands.refresh,
+  ])
     command.mockReset();
   resume.mockReset();
   commands.release.mockResolvedValue(success(control({ phase: "idle" })));
@@ -186,11 +203,11 @@ it("stays watch-only until the environment confirms this viewer's generation", a
   expect(text()).toContain("You're in control.");
 });
 
-it("shows a disabled Take control while another controller drains or the state is unknown", async () => {
+it("offers Take control while another controller drains, but not while the state is unknown", async () => {
   commands.state.current = serviceState([control({ phase: "draining" })]);
   await mount();
   expect(text()).toContain("Finishing the previous controller's input");
-  expect(button("Take control").props.disabled).toBe(true);
+  expect(button("Take control").props.disabled).toBe(false);
 
   commands.state.current = serviceState([]);
   commands.stateError.current = "Disconnected";
@@ -497,4 +514,44 @@ it("drops control and re-reads state when a fold is refused as stale", async () 
   expect(lease.control).toBeNull();
   expect(lease.error).toContain("Your control of this device ended");
   expect(fold().props.disabled).toBe(true);
+});
+
+it("offers a helper restart when the environment can't confirm earlier input finished", async () => {
+  commands.state.current = serviceState([control({ phase: "draining", owner: null })]);
+  commands.connection.current = connected(1);
+  commands.acquire.mockResolvedValue(failure("input_unconfirmed"));
+  await mount();
+  await click("Take control");
+  expect(text()).toContain("Pathway couldn't confirm the last input finished");
+
+  const restart = deferred();
+  commands.restart.mockReturnValue(restart.promise);
+  await click("Restart device tools");
+  expect(commands.restart).toHaveBeenCalledWith({ environmentId, input: { hostId: "local" } });
+  expect(button("Restarting device tools…").props.disabled).toBe(true);
+  await act(async () => restart.resolve(success(control({ phase: "idle", owner: null }))));
+  expect(text()).not.toContain("couldn't confirm");
+  expect(maybeButton("Restart device tools")).toBeUndefined();
+
+  commands.acquire.mockResolvedValue(success(mine(4)));
+  await click("Take control");
+  expect(commands.acquire).toHaveBeenCalledTimes(2);
+});
+
+it("does not offer a helper restart for other control errors or without restart support", async () => {
+  commands.state.current = {
+    ...serviceState([control({ phase: "draining", owner: null })]),
+    supportsToolRestart: false,
+  };
+  commands.connection.current = connected(1);
+  commands.acquire.mockResolvedValue(failure("input_unconfirmed"));
+  await mount();
+  await click("Take control");
+  expect(text()).toContain("Pathway couldn't confirm the last input finished");
+  expect(maybeButton("Restart device tools")).toBeUndefined();
+
+  commands.state.current = serviceState([control({ phase: "draining", owner: null })]);
+  commands.acquire.mockResolvedValue(failure("control_held"));
+  await click("Take control");
+  expect(maybeButton("Restart device tools")).toBeUndefined();
 });

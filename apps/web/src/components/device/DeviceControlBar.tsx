@@ -65,7 +65,8 @@ export function DeviceControlBar(props: {
           <Button
             size="xs"
             variant="outline"
-            disabled={lease.acquiring || view.kind === "draining" || view.kind === "unknown"}
+            // Allowed while draining: acquisition waits for the drain, or reports why it can't.
+            disabled={lease.acquiring || view.kind === "unknown"}
             onClick={() => void lease.take()}
           >
             {lease.acquiring ? "Taking control…" : "Take control"}
@@ -75,6 +76,16 @@ export function DeviceControlBar(props: {
       {lease.error ? (
         <div role="alert" className="flex items-start gap-2 px-3 pb-1.5 text-destructive">
           <p className="min-w-0 flex-1">{lease.error}</p>
+          {lease.canRecover ? (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={lease.recovering}
+              onClick={() => void lease.recover()}
+            >
+              {lease.recovering ? "Restarting device tools…" : "Restart device tools"}
+            </Button>
+          ) : null}
           <Button
             size="icon-xs"
             variant="ghost"
