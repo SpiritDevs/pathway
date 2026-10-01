@@ -118,14 +118,14 @@ export function StorageStatusIndicator() {
           <Button
             variant="ghost"
             size="icon-sm"
-            className={`[-webkit-app-region:no-drag] ${color}`}
+            className={`rounded-full [-webkit-app-region:no-drag] ${color}`}
             aria-label="Environment storage"
           >
             <HardDriveIcon className={`size-4 ${color}`} />
           </Button>
         }
       />
-      <PopoverPopup align="end" className="w-80">
+      <PopoverPopup align="end" className="w-80" side="right" sideOffset={10}>
         <div className="w-full min-w-0">
           <h3 className="px-3 pt-3 pb-1 text-sm font-medium">Environment storage</h3>
           <div className="max-h-80 overflow-y-auto p-1.5">

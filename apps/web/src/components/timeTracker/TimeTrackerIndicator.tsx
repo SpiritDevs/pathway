@@ -154,17 +154,22 @@ function ConfiguredTimeTrackerIndicator() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        render={<Button variant="ghost" size="sm" />}
+        render={<Button variant="ghost" />}
         aria-label={`Time tracker${running ? `, ${running} running` : sessions.length ? `, ${sessions.length} paused` : ""}`}
-        className="gap-1.5 rounded-lg px-2 text-muted-foreground [-webkit-app-region:no-drag]"
+        className="h-auto w-9 flex-col gap-1 rounded-full px-0 py-1.5 text-muted-foreground [-webkit-app-region:no-drag]"
       >
         <Clock3Icon className={`size-4 ${running ? "text-primary" : ""}`} />
         {sessions.length ? (
           <>
-            <span className="font-mono text-xs tabular-nums">
-              {formatTrackedDuration(duration)}
+            {/* The rail is too narrow for "1h 05m" on one line, so hours and minutes stack. */}
+            <span className="flex flex-col font-mono text-[10px] leading-3 tabular-nums">
+              {formatTrackedDuration(duration)
+                .split(" ")
+                .map((part) => (
+                  <span key={part}>{part}</span>
+                ))}
             </span>
-            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] leading-3 font-medium text-primary">
               {sessions.length}
             </span>
           </>
@@ -172,7 +177,8 @@ function ConfiguredTimeTrackerIndicator() {
       </PopoverTrigger>
       <PopoverPopup
         align="end"
-        sideOffset={8}
+        side="right"
+        sideOffset={10}
         className="w-96 max-w-[calc(100vw-1rem)]"
         viewportClassName="p-0"
       >

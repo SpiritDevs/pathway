@@ -203,11 +203,14 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
 export const RightPanelPopOutControl = memo(function RightPanelPopOutControl({
   poppedOut,
   onToggle,
+  hidesWhenPoppedOut = false,
 }: {
   poppedOut: boolean;
   onToggle: () => void;
+  /** Pressing it while popped out hides the panel instead of docking it. */
+  hidesWhenPoppedOut?: boolean;
 }) {
-  const label = poppedOut ? "Dock panel" : "Pop out panel";
+  const label = poppedOut ? (hidesWhenPoppedOut ? "Hide panel" : "Dock panel") : "Pop out panel";
   return (
     <Tooltip>
       <TooltipTrigger

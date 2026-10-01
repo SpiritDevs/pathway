@@ -32,8 +32,6 @@ import {
   ListTodoIcon,
   MailIcon,
   MessagesSquareIcon,
-  PanelLeftCloseIcon,
-  PanelLeftIcon,
   PinIcon,
   SettingsIcon,
   type LucideIcon,
@@ -103,10 +101,9 @@ import {
   resolveHrefDestination,
   type RailPageMenuAction,
 } from "./railPageMenu";
+import { RailAccountPill } from "./RailAccountPill";
 
-export const PRIMARY_NAVIGATION_COMPACT_WIDTH = "3.5rem";
-export const PRIMARY_NAVIGATION_EXPANDED_WIDTH = "13rem";
-export const PRIMARY_NAVIGATION_EXPANDED_STORAGE_KEY = "pathway:primary-navigation-expanded";
+export const PRIMARY_NAVIGATION_RAIL_WIDTH = "3.5rem";
 const PRIMARY_NAVIGATION_FIXED_BOTTOM_ITEM_COUNT = 2;
 
 export const PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS = [
@@ -172,10 +169,6 @@ export function movePrimaryNavigationDestination(
   const toIndex = direction === "up" ? fromIndex - 1 : fromIndex + 1;
   if (toIndex < 0 || toIndex >= order.length) return order;
   return arrayMove([...order], fromIndex, toIndex);
-}
-
-export function resolvePrimaryNavigationRailWidth(expanded: boolean): string {
-  return expanded ? PRIMARY_NAVIGATION_EXPANDED_WIDTH : PRIMARY_NAVIGATION_COMPACT_WIDTH;
 }
 
 export type PrimaryNavigationDestination =
@@ -268,7 +261,6 @@ export function resolvePrimaryNavigationDestination(
 
 type NavigationRailButtonProps = Omit<ComponentProps<typeof Button>, "children"> & {
   active?: boolean;
-  expanded: boolean;
   icon: LucideIcon;
   avatar?: React.ReactNode;
   label: string;
@@ -299,13 +291,11 @@ export function formatNavigationBadgeCount(count: number): string {
   return count > 99 ? "99+" : String(count);
 }
 
-/** Pane and window pips, drawn under the icon when compact and after the label when expanded. */
+/** Pane and window pips, drawn under the icon. */
 function OpenPlacementMarks({
-  expanded,
   openInPane,
   openInWindow,
 }: {
-  expanded: boolean;
   openInPane: boolean;
   openInWindow: boolean;
 }) {
@@ -313,10 +303,7 @@ function OpenPlacementMarks({
   return (
     <span
       aria-hidden="true"
-      className={cn(
-        "pointer-events-none flex items-center gap-0.5",
-        expanded ? "shrink-0" : "absolute bottom-0.5 left-1/2 -translate-x-1/2",
-      )}
+      className="pointer-events-none absolute bottom-0.5 left-1/2 flex -translate-x-1/2 items-center gap-0.5"
     >
       {openInPane ? <span className="size-1.5 rounded-full bg-primary" /> : null}
       {openInWindow ? <span className="size-1.5 rounded-full border border-primary" /> : null}
@@ -333,7 +320,6 @@ function describeOpenPlacements(openInPane: boolean, openInWindow: boolean): str
 
 function NavigationRailButton({
   active = false,
-  expanded,
   icon: Icon,
   avatar,
   label,
@@ -349,7 +335,7 @@ function NavigationRailButton({
 
   return (
     <div className="relative flex w-full justify-center">
-      <Tooltip disabled={expanded}>
+      <Tooltip>
         <TooltipTrigger
           render={
             <Button
@@ -360,30 +346,19 @@ function NavigationRailButton({
                 "relative h-9! overflow-hidden [-webkit-app-region:no-drag] [--control-icon-color:var(--sidebar-muted-foreground)]",
                 "[&_[data-orchestrator-avatar]_svg]:mx-0",
                 "hover:[--control-icon-color:var(--sidebar-foreground)] [:hover,[data-pressed]]:bg-sidebar-foreground/6 data-pressed:bg-sidebar-foreground/6",
-                expanded ? "w-full justify-start gap-2 px-2.5" : "w-9 gap-0 px-0",
+                "w-9 gap-0 px-0",
                 active &&
                   "bg-sidebar-foreground/10 text-sidebar-foreground [--control-icon-color:var(--sidebar-foreground)] [:hover,[data-pressed]]:bg-sidebar-foreground/10 data-pressed:bg-sidebar-foreground/10",
               )}
               onClick={onClick}
               onContextMenu={onContextMenu}
               size="icon-lg"
-              style={{ width: expanded ? "100%" : "2.25rem" }}
+              style={{ width: "2.25rem" }}
               variant="ghost"
             >
               {avatar ?? <Icon className="size-5" />}
-              {expanded ? (
-                <span className="min-w-0 flex-1 truncate text-left text-sm">{label}</span>
-              ) : null}
-              <OpenPlacementMarks
-                expanded={expanded}
-                openInPane={openInPane}
-                openInWindow={openInWindow}
-              />
-              {badgeLabel === null ? null : expanded ? (
-                <span className="shrink-0 rounded-full bg-sidebar-foreground/10 px-1.5 text-[11px] leading-4 font-medium text-sidebar-foreground tabular-nums">
-                  {badgeLabel}
-                </span>
-              ) : (
+              <OpenPlacementMarks openInPane={openInPane} openInWindow={openInWindow} />
+              {badgeLabel === null ? null : (
                 // Inside the button's bounds: the rail clips its overflow, so a corner pill has to
                 // sit within it rather than straddle the edge.
                 <span className="absolute top-0.5 right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-[9px] leading-[0.875rem] font-semibold text-primary-foreground tabular-nums">
@@ -405,7 +380,6 @@ function NavigationRailButton({
 
 type RailPageButtonProps = {
   active: boolean;
-  expanded: boolean;
   openInPane: boolean;
   openInWindow: boolean;
   onClick: ComponentProps<typeof Button>["onClick"];
@@ -414,14 +388,12 @@ type RailPageButtonProps = {
 
 function PrimaryNavigationOverflowMenu({
   activeDestination,
-  expanded,
   items,
   pinnedDestinations,
   onTogglePin,
   onPageContextMenu,
 }: {
   activeDestination: PrimaryNavigationDestination;
-  expanded: boolean;
   items: readonly (MobileNavigationItem & { destination: PinnablePrimaryNavigationDestination })[];
   pinnedDestinations: readonly PinnablePrimaryNavigationDestination[];
   onTogglePin: (destination: PinnablePrimaryNavigationDestination) => void;
@@ -440,7 +412,6 @@ function PrimaryNavigationOverflowMenu({
           <NavigationRailButton
             active={hiddenItems.some((item) => item.destination === activeDestination)}
             badgeCount={hiddenItems.reduce((total, item) => total + (item.badgeCount ?? 0), 0)}
-            expanded={expanded}
             icon={EllipsisIcon}
             label="More"
           />
@@ -509,7 +480,6 @@ function PrimaryNavigationOverflowMenu({
 
 function SortableNavigationRailButton({
   active,
-  expanded,
   item,
   openInPane,
   openInWindow,
@@ -532,7 +502,6 @@ function SortableNavigationRailButton({
       <NavigationRailButton
         active={active}
         badgeCount={item.badgeCount ?? 0}
-        expanded={expanded}
         icon={item.icon}
         label={item.label}
         onClick={onClick}
@@ -813,13 +782,7 @@ export function MobileNavigationToolbar({
   );
 }
 
-export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
-  expanded,
-  onExpandedChange,
-}: {
-  expanded: boolean;
-  onExpandedChange: (expanded: boolean) => void;
-}) {
+export const PrimaryNavigationRail = memo(function PrimaryNavigationRail() {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const activeDestination = resolvePrimaryNavigationDestination(pathname);
@@ -1044,14 +1007,13 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   const movableNavigationItems = pinnedViewOrder.map(
     (destination) => navigationItemsByDestination[destination],
   );
-  const fixedBottomNavigationItems = [
-    navigationItemsByDestination.orchestrator,
-    navigationItemsByDestination.settings,
-  ];
+  // Settings lives in the profile menu on desktop; the mobile toolbar has no profile menu, so it
+  // keeps Settings beside the orchestrator.
   const navigationItems = [
     navigationItemsByDestination.dashboard,
     ...visibleViewOrder.map((destination) => navigationItemsByDestination[destination]),
-    ...fixedBottomNavigationItems,
+    navigationItemsByDestination.orchestrator,
+    navigationItemsByDestination.settings,
   ];
 
   const togglePin = useCallback(
@@ -1229,17 +1191,13 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
       <aside
         ref={railRef}
         aria-label="Primary navigation"
-        className="relative z-20 hidden h-dvh w-(--primary-navigation-rail-width) shrink-0 flex-col overflow-hidden bg-workspace-frame text-sidebar-foreground transition-[width] duration-200 ease-linear motion-reduce:transition-none md:flex"
-        data-expanded={expanded}
+        className="relative z-20 hidden h-dvh w-(--primary-navigation-rail-width) shrink-0 flex-col overflow-hidden bg-workspace-frame text-sidebar-foreground md:flex"
         data-primary-navigation-rail=""
       >
         <div className="h-11 shrink-0" aria-hidden="true" />
         <nav
           aria-label="Workspace"
-          className={cn(
-            "flex min-h-0 w-full flex-1 flex-col gap-1 overflow-y-auto px-2 pb-2",
-            expanded ? "items-stretch" : "items-center",
-          )}
+          className="flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto px-2 pb-2"
         >
           <DndContext
             collisionDetection={collisionDetection}
@@ -1252,7 +1210,6 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
           >
             <DraggableNavigationRailButton
               active={activeDestination === "dashboard"}
-              expanded={expanded}
               item={navigationItemsByDestination.dashboard}
               openInPane={openPlacements.inPane.has("dashboard")}
               openInWindow={openPlacements.inWindow.has("dashboard")}
@@ -1267,7 +1224,6 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
             />
             <DraggableNavigationRailButton
               active={activeDestination === "threads"}
-              expanded={expanded}
               item={navigationItemsByDestination.threads}
               openInPane={openPlacements.inPane.has("threads")}
               openInWindow={openPlacements.inWindow.has("threads")}
@@ -1282,7 +1238,6 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
             />
             <PrimaryNavigationOverflowMenu
               activeDestination={activeDestination}
-              expanded={expanded}
               items={overflowItems}
               pinnedDestinations={pinnedDestinations}
               onTogglePin={togglePin}
@@ -1298,7 +1253,6 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
                 <SortableNavigationRailButton
                   key={item.destination}
                   active={activeDestination === item.destination}
-                  expanded={expanded}
                   item={item}
                   openInPane={openPlacements.inPane.has(item.destination)}
                   openInWindow={openPlacements.inWindow.has(item.destination)}
@@ -1330,42 +1284,18 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
         </nav>
         <nav
           aria-label="Account and application"
-          className={cn(
-            "mt-auto flex w-full flex-col gap-1 px-2 pb-3",
-            expanded ? "items-stretch" : "items-center",
-          )}
+          className="mt-auto flex w-full flex-col items-center gap-1 px-2 pb-3"
         >
-          <SidebarUpdatePill expanded={expanded} />
-          {fixedBottomNavigationItems.map(
-            ({ destination, icon, label, badgeCount, onNavigate }: MobileNavigationItem) => (
-              <NavigationRailButton
-                key={destination}
-                active={activeDestination === destination}
-                badgeCount={badgeCount ?? 0}
-                expanded={expanded}
-                icon={icon}
-                avatar={
-                  destination === "orchestrator" ? (
-                    <OrchestratorAvatar
-                      contact={orchestrators.personalAvatar}
-                      className="size-7"
-                      idle="frequent"
-                    />
-                  ) : undefined
-                }
-                label={label}
-                onClick={onNavigate}
-              />
-            ),
-          )}
-          <div className="mt-1 flex w-full flex-col items-center border-t border-sidebar-border pt-2">
-            <NavigationRailButton
-              expanded={expanded}
-              icon={expanded ? PanelLeftCloseIcon : PanelLeftIcon}
-              label={expanded ? "Collapse navigation" : "Expand navigation"}
-              onClick={() => onExpandedChange(!expanded)}
-            />
-          </div>
+          <SidebarUpdatePill />
+          <NavigationRailButton
+            active={activeDestination === "orchestrator"}
+            avatar={navigationItemsByDestination.orchestrator.avatar}
+            badgeCount={orchestrators.unreadCount}
+            icon={BotIcon}
+            label={navigationItemsByDestination.orchestrator.label}
+            onClick={navigateToOrchestrator}
+          />
+          <RailAccountPill />
         </nav>
       </aside>
       <MobileNavigationToolbar activeDestination={activeDestination} items={navigationItems} />

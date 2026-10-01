@@ -7,22 +7,44 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
 import { isElectron } from "../../env";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { cn, isMacPlatform } from "../../lib/utils";
-import { PathwayConnectProfileButton } from "../clerk/PathwayConnectSidebarSignIn";
+import { useIsFocusedPane } from "../../panes/usePaneFocus";
 import { Button } from "../ui/button";
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { TimeTrackerIndicator } from "../timeTracker/TimeTrackerIndicator";
-import { SyncStatusIndicator } from "./SyncStatusIndicator";
-import { StorageStatusIndicator } from "./StorageStatusIndicator";
 import { type WorkspaceHistoryEntry, workspaceHistoryTracker } from "./workspaceHistory.logic";
 
 const HISTORY_LONG_PRESS_MS = 500;
+const ACTIONS_HOST_SELECTOR = "[data-workspace-top-bar-actions]";
+
+/** Whether an event target sits among the top bar's portalled window-level controls. */
+export function isInWorkspaceTopBarActions(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(ACTIONS_HOST_SELECTOR) !== null;
+}
+
+/**
+ * The top bar's right-hand slot, for the focused pane's page to portal window-level
+ * controls into. Null while the bar is hidden (narrow windows) or the pane is not
+ * focused, so callers keep their controls inline instead.
+ */
+export function useWorkspaceTopBarActionsHost(enabled: boolean): HTMLElement | null {
+  const focused = useIsFocusedPane();
+  const barVisible = useMediaQuery("md");
+  const [host, setHost] = useState<HTMLElement | null>(null);
+
+  useLayoutEffect(() => {
+    setHost(document.querySelector<HTMLElement>(ACTIONS_HOST_SELECTOR));
+  }, []);
+
+  return enabled && focused && barVisible ? host : null;
+}
 
 type HistoryDirection = "back" | "forward";
 
@@ -190,7 +212,7 @@ export function WorkspaceTopBar() {
   return (
     <header
       className={cn(
-        "hidden min-h-11 shrink-0 items-center justify-between bg-workspace-frame pr-4 md:flex",
+        "hidden min-h-11 shrink-0 items-center justify-between bg-workspace-frame pr-4 wco:pr-[var(--workspace-native-controls-inset)] md:flex",
         isMacDesktop ? "pl-8" : "pl-2",
         isElectron && "drag-region",
       )}
@@ -198,12 +220,12 @@ export function WorkspaceTopBar() {
       data-workspace-top-bar=""
     >
       <WorkspaceHistoryControls />
-      <div className="flex items-center gap-2">
-        <StorageStatusIndicator />
-        <SyncStatusIndicator />
-        <TimeTrackerIndicator />
-        <PathwayConnectProfileButton />
-      </div>
+      {/* Above the right panel sheet's overlay, so its toggles stay usable while it is open.
+          Pressed and hover fills match the rail's, since the accent fill vanishes on this gray. */}
+      <div
+        className="relative z-60 flex items-center gap-1 [&_button:not([data-pressed]):hover]:bg-sidebar-foreground/6 [&_button[data-pressed]]:bg-sidebar-foreground/10"
+        data-workspace-top-bar-actions=""
+      />
     </header>
   );
 }

@@ -1,4 +1,4 @@
-import { TriangleAlertIcon, XIcon } from "lucide-react";
+import { TriangleAlertIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { isElectron } from "../../env";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -17,7 +17,6 @@ import {
   shouldToastDesktopUpdateActionResult,
 } from "../desktopUpdate.logic";
 import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
-import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Separator } from "../ui/separator";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -101,9 +100,8 @@ function SidebarUpdateReleaseNotesTooltip({
   );
 }
 
-export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) {
+export function SidebarUpdatePill() {
   const state = useDesktopUpdateState();
-  const [dismissed, setDismissed] = useState(false);
   const [isActionPending, setIsActionPending] = useState(false);
   const [isCheckAnimationLatched, setIsCheckAnimationLatched] = useState(false);
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
@@ -135,7 +133,7 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
     : "Checking for updates…";
   const disabled = showCheckIcon || action === "none" || isDesktopUpdateButtonDisabled(state);
   const isInteractionDisabled = disabled || isActionPending;
-  const visible = isElectron && (showUpdateDetails ? !dismissed : showCheckIcon);
+  const visible = isElectron && (showUpdateDetails || showCheckIcon);
   const showArm64Warning = isElectron && shouldShowArm64IntelBuildWarning(state);
   const arm64Description =
     state && showArm64Warning ? getArm64IntelBuildWarningDescription(state) : null;
@@ -239,14 +237,8 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
   if (!visible && !showArm64Warning) return null;
 
   return (
-    <div className={cn("flex flex-col gap-1", expanded ? "w-full" : "items-center")}>
-      {showArm64Warning && arm64Description && expanded ? (
-        <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8 text-xs">
-          <TriangleAlertIcon />
-          <AlertTitle>Intel build on Apple Silicon</AlertTitle>
-          <AlertDescription>{arm64Description}</AlertDescription>
-        </Alert>
-      ) : showArm64Warning && arm64Description ? (
+    <div className="flex flex-col items-center gap-1">
+      {showArm64Warning && arm64Description ? (
         <Tooltip>
           <TooltipTrigger
             render={
@@ -268,11 +260,10 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
       {visible && (
         <div
           className={cn(
-            "group/update relative flex items-center text-xs font-medium",
+            "group/update relative flex size-9 items-center rounded-md text-xs font-medium",
             showUpdateIconState
               ? "bg-update-surface text-update-foreground"
               : "text-[var(--sidebar-icon-color)]",
-            expanded ? "h-7 w-full rounded-lg" : "size-9 rounded-md",
             isInteractionDisabled && "cursor-not-allowed opacity-60",
           )}
         >
@@ -292,9 +283,8 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
                   aria-label={tooltip}
                   aria-disabled={isInteractionDisabled || undefined}
                   className={cn(
-                    "update-main relative flex h-full flex-1 items-center",
+                    "update-main relative flex h-full flex-1 items-center justify-center px-0",
                     isInteractionDisabled ? "cursor-not-allowed" : "cursor-pointer",
-                    expanded ? "gap-2 px-2" : "justify-center px-0",
                   )}
                   onClick={handleAction}
                 >
@@ -305,21 +295,6 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
                     onCheckAnimationIteration={handleCheckAnimationIteration}
                     status={iconStatus}
                   />
-                  {expanded ? (
-                    <span>
-                      {action === "install"
-                        ? "Restart to update"
-                        : isDownloading
-                          ? `Downloading${
-                              typeof state?.downloadPercent === "number"
-                                ? ` (${Math.floor(state.downloadPercent)}%)`
-                                : "…"
-                            }`
-                          : action === "download"
-                            ? "Update available"
-                            : "Checking for updates…"}
-                    </span>
-                  ) : null}
                 </button>
               }
             />
@@ -332,8 +307,8 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
                     "pointer-events-auto max-w-none text-balance"
                   : undefined
               }
-              side={expanded ? "top" : "right"}
-              sideOffset={expanded ? 0 : 8}
+              side="right"
+              sideOffset={8}
             >
               {showUpdateDetails && state ? (
                 <SidebarUpdateReleaseNotesTooltip state={state} tooltip={tooltip} />
@@ -342,23 +317,6 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
               )}
             </TooltipPopup>
           </Tooltip>
-          {expanded && action === "download" && (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-label="Dismiss update"
-                    className="mr-1 inline-flex size-5 items-center justify-center rounded-md text-update-foreground transition-colors"
-                    onClick={() => setDismissed(true)}
-                  >
-                    <XIcon className="size-3.5" />
-                  </button>
-                }
-              />
-              <TooltipPopup side="top">Dismiss until next launch</TooltipPopup>
-            </Tooltip>
-          )}
         </div>
       )}
     </div>

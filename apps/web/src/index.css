@@ -913,6 +913,19 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
     box-shadow: inset 0 1px var(--chat-composer-highlight);
   }
 
+  /* The default dark composer is opaque, so paint its gray on the input and settings row
+     themselves instead of a clipped glass layer behind them, which could show as a full
+     rectangle around both. Kept in this layer so drag-over highlights still win. */
+  html.dark:not([data-theme-id="pathway-chat"]) .chat-composer-glass-shell::before {
+    display: none;
+  }
+
+  html.dark:not([data-theme-id="pathway-chat"])
+    .chat-composer-content-sized-shell
+    :is([data-chat-composer-content-sized], [data-chat-composer-footer]) {
+    background-color: var(--chat-composer-glass-surface);
+  }
+
   .dark .chat-composer-context-strip::before {
     border-color: rgb(255 255 255 / 7%);
     background:
@@ -2936,11 +2949,16 @@ label:has(> select#reasoning-effort) select {
 html.dark:not([data-theme-id="pathway-chat"]) {
   --workspace-frame: #242424;
 }
-/* The content card (conversation, its header, and other pages) and the right panel, which
-   renders outside it, share the darkest gray. */
+/* The content card (conversation, its header, and other pages), the right panel, which
+   renders outside it, and the sign-in screens share the darkest gray. */
 html.dark:not([data-theme-id="pathway-chat"]) [data-app-content-frame],
-html.dark:not([data-theme-id="pathway-chat"]) [data-preview-panel-mode] {
+html.dark:not([data-theme-id="pathway-chat"]) [data-preview-panel-mode],
+html.dark:not([data-theme-id="pathway-chat"]) [data-auth-shell] {
   --background: #181818;
+}
+/* Sign-in cards lift to the composer gray so they stand off the darkest-gray page. */
+html.dark:not([data-theme-id="pathway-chat"]) [data-auth-shell] {
+  --card: var(--workspace-frame);
 }
 html.dark:not([data-theme-id="pathway-chat"]) [data-app-sidebar] {
   --sidebar: #1d1d1d;

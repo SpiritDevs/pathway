@@ -17,7 +17,10 @@ export function AuthShell({
   readonly width?: "form" | "wide";
 }) {
   return (
-    <main className="surface-grain relative flex min-h-dvh items-center justify-center overflow-hidden bg-background px-4 py-16 text-foreground sm:px-6">
+    <main
+      className="surface-grain relative flex min-h-dvh items-center justify-center overflow-hidden bg-background px-4 py-16 text-foreground sm:px-6"
+      data-auth-shell=""
+    >
       <div
         aria-hidden
         className="pointer-events-none absolute inset-x-0 top-0 h-64 overflow-hidden"

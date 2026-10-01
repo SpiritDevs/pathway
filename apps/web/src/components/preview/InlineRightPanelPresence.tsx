@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
@@ -9,8 +9,22 @@ import {
   usePaneId,
 } from "~/panes/usePaneFocus";
 
-const INLINE_RIGHT_PANEL_EXIT_DURATION_MS = 180;
+const INLINE_RIGHT_PANEL_ENTER_DURATION_MS = 280;
+const INLINE_RIGHT_PANEL_EXIT_DURATION_MS = 200;
+const INLINE_RIGHT_PANEL_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
 
+/** The gap the row puts before the panel, which also has to open and close with it. */
+function rowGapBefore(element: HTMLElement): number {
+  let row = element.parentElement;
+  while (row && getComputedStyle(row).display === "contents") row = row.parentElement;
+  return row ? Number.parseFloat(getComputedStyle(row).columnGap) || 0 : 0;
+}
+
+/**
+ * Opens and closes the inline panel by growing and shrinking its width, so the page
+ * beside it slides over rather than jumping. The panel keeps its full width while
+ * the frame reveals it from the right edge.
+ */
 export function InlineRightPanelPresence({
   children,
   open,
@@ -20,43 +34,86 @@ export function InlineRightPanelPresence({
 }) {
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const [mounted, setMounted] = useState(open);
-  const [visible, setVisible] = useState(false);
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const animationRef = useRef<Animation | null>(null);
+  // Already open when the page mounts (such as switching threads), so no entrance.
+  const lastOpenRef = useRef(open);
 
-  useEffect(() => {
-    if (open) {
-      setMounted(true);
-      if (prefersReducedMotion) {
-        setVisible(true);
-        return;
-      }
-      const frame = window.requestAnimationFrame(() => setVisible(true));
-      return () => window.cancelAnimationFrame(frame);
-    }
+  if (open && !mounted) setMounted(true);
 
-    setVisible(false);
-    if (prefersReducedMotion) {
-      setMounted(false);
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    const content = contentRef.current;
+    if (!frame || !content || lastOpenRef.current === open) return;
+    lastOpenRef.current = open;
+
+    // Start from wherever an interrupted animation left the frame.
+    const previous = animationRef.current;
+    const fromStyle = previous ? getComputedStyle(frame) : null;
+    const from = fromStyle
+      ? {
+          width: `${frame.getBoundingClientRect().width}px`,
+          marginLeft: fromStyle.marginLeft,
+          opacity: Number(fromStyle.opacity),
+        }
+      : null;
+    previous?.cancel();
+    animationRef.current = null;
+    content.style.width = "";
+    frame.style.overflow = "";
+
+    if (prefersReducedMotion || typeof frame.animate !== "function") {
+      if (!open) setMounted(false);
       return;
     }
-    const timeout = window.setTimeout(() => setMounted(false), INLINE_RIGHT_PANEL_EXIT_DURATION_MS);
-    return () => window.clearTimeout(timeout);
+
+    const width = frame.getBoundingClientRect().width;
+    const collapsed = { width: "0px", marginLeft: `${-rowGapBefore(frame)}px`, opacity: 0 };
+    const expanded = { width: `${width}px`, marginLeft: "0px", opacity: 1 };
+
+    // Pin the panel at its full width so its contents never reflow mid-animation.
+    content.style.width = `${width}px`;
+    frame.style.overflow = "hidden";
+    const animation = frame.animate(
+      open ? [from ?? collapsed, expanded] : [from ?? expanded, collapsed],
+      {
+        duration: open ? INLINE_RIGHT_PANEL_ENTER_DURATION_MS : INLINE_RIGHT_PANEL_EXIT_DURATION_MS,
+        easing: INLINE_RIGHT_PANEL_EASING,
+        fill: "forwards",
+      },
+    );
+    animationRef.current = animation;
+    animation.finished.then(
+      () => {
+        if (animationRef.current !== animation) return;
+        animationRef.current = null;
+        if (!open) {
+          setMounted(false);
+          return;
+        }
+        animation.cancel();
+        content.style.width = "";
+        frame.style.overflow = "";
+      },
+      () => {},
+    );
   }, [open, prefersReducedMotion]);
+
+  useEffect(() => () => animationRef.current?.cancel(), []);
 
   if (!mounted) return null;
 
   return (
     <div
+      ref={frameRef}
       aria-hidden={!open}
-      className={cn(
-        "flex min-h-0 min-w-0 transform-gpu transition-[transform,opacity] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:translate-x-0 motion-reduce:transition-none",
-        "shrink-0",
-        visible
-          ? "translate-x-0 opacity-100 duration-[240ms]"
-          : "pointer-events-none translate-x-4 opacity-0 duration-[180ms]",
-      )}
-      data-inline-right-panel-presence={visible ? "open" : "closing"}
+      className={cn("flex min-h-0 min-w-0 shrink-0 justify-end", !open && "pointer-events-none")}
+      data-inline-right-panel-presence={open ? "open" : "closing"}
     >
-      {children}
+      <div ref={contentRef} className="flex min-h-0 shrink-0">
+        {children}
+      </div>
     </div>
   );
 }
