@@ -89,9 +89,10 @@ export const makeDeviceInputChannel = Effect.fn("DeviceInputChannel.make")(funct
       if (parsed._tag === "None") return;
       const value = parsed.value;
       if (value.type === "touch") {
-        if (value.action === "up") held.delete("touch");
+        const name = `touch:${value.pointerId ?? 0}`;
+        if (value.action === "up") held.delete(name);
         else if (value.action === "down" || value.action === "move")
-          held.set("touch", JSON.stringify({ ...value, action: "up" }));
+          held.set(name, JSON.stringify({ ...value, action: "up" }));
       } else if (value.type === "key") {
         const name = `key:${value.keycode}`;
         if (value.action === "up") held.delete(name);

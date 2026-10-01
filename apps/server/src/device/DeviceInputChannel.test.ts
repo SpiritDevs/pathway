@@ -113,3 +113,55 @@ it.effect("missing completion receipts keep takeover fenced even after the input
     ).toBe("input_unconfirmed");
   }).pipe(Effect.scoped),
 );
+
+for (const takeover of [false, true]) {
+  it.effect(
+    `Android ${takeover ? "takeover" : "hand-back"} finishes every remaining pointer with its latest coordinates`,
+    () =>
+      Effect.gen(function* () {
+        const control = yield* make();
+        const state = yield* control.acquire(target, owner);
+        const grant = { ...target, owner, generation: state.generation };
+        const writes = yield* Queue.unbounded<string | Uint8Array>();
+        const channel = yield* makeDeviceInputChannel(control, grant, "android", (frame) =>
+          Queue.offer(writes, frame).pipe(Effect.asVoid),
+        );
+        const send = (frame: object) =>
+          Effect.gen(function* () {
+            const sent = yield* channel.input(JSON.stringify(frame)).pipe(Effect.forkChild);
+            yield* Queue.take(writes);
+            yield* channel.receipt('{"ok":true}');
+            yield* Fiber.join(sent);
+          });
+        yield* send({ type: "touch", action: "down", x: 0.1, y: 0.1, pointerId: 1 });
+        yield* send({ type: "touch", action: "down", x: 0.2, y: 0.2, pointerId: 2 });
+        yield* send({ type: "touch", action: "move", x: 0.3, y: 0.4, pointerId: 1 });
+        yield* send({ type: "touch", action: "up", x: 0.2, y: 0.2, pointerId: 2 });
+        // Omitted pointerId and explicit zero are the same vendor pointer.
+        yield* send({ type: "touch", action: "down", x: 0.5, y: 0.5 });
+        yield* send({ type: "touch", action: "move", x: 0.6, y: 0.7, pointerId: 0 });
+        let acknowledged = false;
+        const release = yield* (
+          takeover ? control.acquire(target, { ...owner, viewerId: "two" }) : control.release(grant)
+        ).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              acknowledged = true;
+            }),
+          ),
+          Effect.forkChild,
+        );
+        for (const expected of [
+          { type: "touch", action: "up", x: 0.3, y: 0.4, pointerId: 1, ack: true },
+          { type: "touch", action: "up", x: 0.6, y: 0.7, pointerId: 0, ack: true },
+        ]) {
+          expect(JSON.parse(String(yield* Queue.take(writes)))).toEqual(expected);
+          expect(acknowledged).toBe(false);
+          yield* channel.receipt('{"ok":true}');
+        }
+        yield* Fiber.join(release);
+        expect(acknowledged).toBe(true);
+        expect(yield* Queue.size(writes)).toBe(0);
+      }).pipe(Effect.scoped),
+  );
+}

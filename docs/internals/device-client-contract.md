@@ -253,6 +253,17 @@ the live channel. A disconnected controlling socket or the RPC connection that
 acquired control releases that lease. Generation checks protect a replacement
 viewer from delayed cleanup of an older generation.
 
+Session revocation closes the client with 1008 while the environment retains the
+helper connection long enough to finish held input. Hand-back finishes every
+Android pointer, including pointer 0 when `pointerId` was omitted.
+These backend fixes do not change the RPC names, payloads, state fields or errors.
+The external agent grant still rotates after hand-back; the gateway transfers an
+environment-owned daemon session internally so the new grant can resume it.
+Managed calls have a five-minute completion deadline, including while Stop waits
+for accepted work. A deadline can produce `input_unconfirmed`; stay watch-only until helper restart confirms the
+old helper has terminated. Restart can stop a stalled helper without waiting for
+its old command response.
+
 `DeviceControlError` includes `hostId`, `deviceId`, `code`, and `message`:
 
 | Code                | Meaning                                                                        |

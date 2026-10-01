@@ -1,4 +1,10 @@
-import { DeviceControlCaller } from "./DeviceControl.ts";
+import {
+  DeviceControlCaller,
+  DEVICE_CONTROL_CALL_TIMEOUT,
+  DEVICE_CONTROL_TTL,
+} from "./DeviceControl.ts";
+import { AgentDeviceRequest } from "./DeviceAgentGateway.ts";
+import { TestClock } from "effect/testing";
 import { RunId } from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -29,6 +35,7 @@ const encodeState = Schema.encodeEffect(
 );
 
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const decodeAgentRequest = Schema.decodeUnknownSync(Schema.fromJsonString(AgentDeviceRequest));
 
 const baseState: DeviceServiceState = {
   hosts: [],
@@ -119,6 +126,7 @@ const fixture = Effect.fn("fixture")(function* (
   const agentStarts: string[] = [];
   const agentStops: string[] = [];
   const requests: string[] = [];
+  const agentRequests: (typeof AgentDeviceRequest.Type)[] = [];
   let booted = false;
   let shutDown = false;
   const ready: DeviceHost.DeviceHostReady = {
@@ -210,6 +218,9 @@ const fixture = Effect.fn("fixture")(function* (
         Effect.gen(function* () {
           requests.push(request.url);
           if (request.url.endsWith("/rpc")) {
+            if (request.body._tag !== "Uint8Array")
+              return yield* Effect.die("Expected JSON request");
+            agentRequests.push(decodeAgentRequest(new TextDecoder().decode(request.body.body)));
             yield* onAgentCommand;
             return HttpClientResponse.fromWeb(
               request,
@@ -266,7 +277,7 @@ const fixture = Effect.fn("fixture")(function* (
       ),
     ),
   );
-  return { service, starts, agentStarts, agentStops, requests, settings };
+  return { service, starts, agentStarts, agentStops, requests, agentRequests, settings };
 });
 
 describe("device setup consent", () => {
@@ -1267,3 +1278,194 @@ it.effect("shutdown finishes before a concurrent lifecycle drain and refresh", (
     expect((yield* service.control.state).every((state) => state.owner === null)).toBe(true);
   }).pipe(Effect.scoped),
 );
+
+it.effect(
+  "rotates grants while transferring one daemon session across hand-back, expiry, and runs",
+  () =>
+    Effect.gen(function* () {
+      const grants: { token: string; session: string }[] = [];
+      const { service, agentRequests } = yield* fixture(
+        Effect.void,
+        undefined,
+        false,
+        undefined,
+        false,
+        undefined,
+        {},
+        (_host, _ready, grant) =>
+          Effect.sync(() => {
+            if (grant) grants.push(grant);
+            return `/config/${grant?.session ?? "host"}`;
+          }),
+      );
+      yield* service.configure({ enabled: true, agentAccessEnabled: true });
+      const opened = yield* service.open({
+        threadId: ThreadId.make("thread"),
+        deviceId: "Pixel_API_35",
+        platform: "android",
+      });
+      const owner = { kind: "viewer" as const, sessionId: "session", viewerId: "viewer" };
+      const command = (grant: { token: string; session: string }) =>
+        service.agentCommand(grant.token, {
+          jsonrpc: "2.0",
+          id: "open",
+          method: "agent_device.command",
+          params: {
+            session: grant.session,
+            command: "open",
+            flags: { platform: "android", serial: opened.deviceId },
+          },
+        });
+      for (const transition of ["initial", "hand-back", "expiry", "new-run"]) {
+        if (transition === "hand-back") {
+          const held = yield* service.control.acquire(opened, owner);
+          yield* service.control.release({ ...opened, owner, generation: held.generation });
+        } else if (transition === "expiry") {
+          yield* TestClock.adjust(DEVICE_CONTROL_TTL);
+          expect((yield* service.control.state)[0]?.owner).toBeNull();
+        } else if (transition === "new-run") {
+          yield* service.control.stopRun(opened.threadId, "run");
+        }
+        const previous = grants.at(-1);
+        yield* service.agentTarget({
+          ...opened,
+          runId: RunId.make(transition === "new-run" ? "next-run" : "run"),
+        });
+        if (previous) expect((yield* command(previous).pipe(Effect.result))._tag).toBe("Failure");
+        yield* command(grants.at(-1)!);
+      }
+      expect(new Set(grants.map((grant) => grant.token)).size).toBe(4);
+      expect(new Set(grants.map((grant) => grant.session)).size).toBe(4);
+      expect(new Set(agentRequests.map((request) => request.params.session)).size).toBe(1);
+      expect(grants.map((grant) => grant.session)).not.toContain(agentRequests[0]!.params.session);
+    }).pipe(Effect.scoped),
+);
+
+for (const recovery of ["restart", "restart-failed", "disable", "stop", "deadline"] as const) {
+  it.effect(
+    `${recovery} recovers from a command whose response never completes without granting uncertain control`,
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const terminated = yield* Deferred.make<void>();
+        const stopping = yield* Deferred.make<void>();
+        const stopped = yield* Deferred.make<void>();
+        let grant: { token: string; session: string } | undefined;
+        const stop = Deferred.succeed(stopping, undefined).pipe(
+          Effect.andThen(Deferred.await(stopped)),
+        );
+        const { service } = yield* fixture(
+          Effect.void,
+          undefined,
+          false,
+          undefined,
+          false,
+          undefined,
+          {
+            stop,
+            restartTools: () =>
+              stop.pipe(
+                Effect.andThen(
+                  recovery === "restart-failed"
+                    ? Effect.fail(
+                        new DeviceHost.DeviceHostError({
+                          hostId: "local",
+                          step: "stop",
+                          cause: new Error("Termination was not confirmed"),
+                        }),
+                      )
+                    : Effect.succeed({
+                        nodePath: process.execPath,
+                        hub: { origin: "http://device.test" },
+                        helpers: { serveSimAxSettings: null, serveSimCli: null },
+                        run: () => Effect.succeed({ code: 0, stdout: "", stderr: "" }),
+                      }),
+                ),
+              ),
+          },
+          (_host, _ready, value) =>
+            Effect.sync(() => {
+              grant = value;
+              return "/config";
+            }),
+          undefined,
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(Deferred.succeed(terminated, undefined)),
+          ),
+        );
+        yield* service.configure({ enabled: true, agentAccessEnabled: true });
+        const opened = yield* service.open({
+          threadId: ThreadId.make("thread"),
+          deviceId: "Pixel_API_35",
+          platform: "android",
+        });
+        yield* service.agentTarget({ ...opened, runId: RunId.make("run") });
+        const command = yield* service
+          .agentCommand(grant!.token, {
+            jsonrpc: "2.0",
+            id: "stalled",
+            method: "agent_device.command",
+            params: {
+              session: grant!.session,
+              command: "click",
+              flags: { platform: "android", serial: opened.deviceId },
+            },
+          })
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(started);
+        const owner = { kind: "viewer" as const, sessionId: "session", viewerId: "viewer" };
+        if (recovery === "deadline" || recovery === "stop") {
+          const stop =
+            recovery === "stop"
+              ? yield* service.control
+                  .stopRun(opened.threadId, "run")
+                  .pipe(Effect.forkChild({ startImmediately: true }))
+              : undefined;
+          yield* TestClock.adjust(DEVICE_CONTROL_CALL_TIMEOUT);
+          if (stop) yield* Fiber.join(stop);
+          yield* Deferred.await(terminated);
+          expect((yield* Fiber.join(command))._tag).toBe("Failure");
+          expect((yield* service.control.acquire(opened, owner).pipe(Effect.flip)).code).toBe(
+            "input_unconfirmed",
+          );
+        } else {
+          // Begin the ordinary drain first: explicit recovery must get past that waiter.
+          const changes = yield* service.subscribe;
+          const draining = yield* Stream.fromSubscription(changes).pipe(
+            Stream.filter(
+              (state) => state.controls?.some((control) => control.phase === "draining") ?? false,
+            ),
+            Stream.runHead,
+            Effect.forkChild({ startImmediately: true }),
+          );
+          const takeover = yield* service.control
+            .acquire(opened, owner)
+            .pipe(Effect.result, Effect.forkChild);
+          yield* Fiber.join(draining);
+          const recovering = yield* (
+            recovery.startsWith("restart")
+              ? service.restartTools({ tools: ["agent"] })
+              : service.configure({ enabled: false })
+          ).pipe(Effect.result, Effect.forkChild);
+          yield* Deferred.await(stopping);
+          yield* Deferred.await(terminated);
+          expect((yield* Fiber.join(command))._tag).toBe("Failure");
+          expect((yield* Fiber.join(takeover))._tag).toBe("Failure");
+          expect((yield* service.control.acquire(opened, owner).pipe(Effect.flip)).code).toBe(
+            "control_draining",
+          );
+          yield* Deferred.succeed(stopped, undefined);
+          expect((yield* Fiber.join(recovering))._tag).toBe(
+            recovery === "restart-failed" ? "Failure" : "Success",
+          );
+          if (recovery === "restart")
+            expect((yield* service.control.acquire(opened, owner)).phase).toBe("held");
+          else
+            expect((yield* service.control.acquire(opened, owner).pipe(Effect.flip)).code).toBe(
+              "input_unconfirmed",
+            );
+        }
+      }).pipe(Effect.scoped),
+  );
+}

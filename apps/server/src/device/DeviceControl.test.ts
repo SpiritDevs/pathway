@@ -16,6 +16,45 @@ const agent: DeviceControlOwner = {
 };
 
 describe("environment device control", () => {
+  it.effect("caller cancellation still waits for native completion before takeover", () =>
+    Effect.gen(function* () {
+      const draining = yield* Deferred.make<void>();
+      const control = yield* make((states) =>
+        states.some((state) => state.phase === "draining" && state.owner?.kind === "agent")
+          ? Deferred.succeed(draining, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+      );
+      const held = yield* control.acquire(target, agent);
+      const started = yield* Deferred.make<void>();
+      const done = yield* Deferred.make<void>();
+      let finished = false;
+      const command = yield* control
+        .run(
+          { ...target, owner: agent, generation: held.generation },
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(done)),
+            Effect.ensuring(
+              Effect.sync(() => {
+                finished = true;
+              }),
+            ),
+          ),
+          "agent",
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      const canceled = yield* Fiber.interrupt(command).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      const takeover = yield* control.acquire(target, viewer("next")).pipe(Effect.forkChild);
+      yield* Deferred.await(draining);
+      expect(finished).toBe(false);
+      yield* Deferred.succeed(done, undefined);
+      yield* Fiber.join(canceled);
+      expect((yield* Fiber.join(takeover)).phase).toBe("held");
+      expect(finished).toBe(true);
+    }).pipe(Effect.scoped),
+  );
   it.effect(
     "fences an agent immediately and acknowledges a viewer only after the command receipt",
     () =>

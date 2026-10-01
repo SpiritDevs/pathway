@@ -7,6 +7,8 @@ import {
 import { Clock, Context, Deferred, Effect, Scope, Semaphore } from "effect";
 
 export const DEVICE_CONTROL_TTL = 30_000;
+export const DEVICE_CONTROL_CALL_TIMEOUT = 300_000;
+type DeviceTool = "hub" | "agent";
 export interface DeviceControlTarget {
   readonly hostId: string;
   readonly deviceId: string;
@@ -47,7 +49,7 @@ const sameOwner = (a: DeviceControlOwner | null, b: DeviceControlOwner) =>
 interface Entry {
   state: DeviceControlState;
   lock: Semaphore.Semaphore;
-  calls: Set<Deferred.Deferred<void>>;
+  calls: Map<Deferred.Deferred<void>, { tool: DeviceTool; cancel: Deferred.Deferred<void> }>;
   finish: Set<Effect.Effect<void, DeviceControlError>>;
   uncertain: Set<"hub" | "agent">;
 }
@@ -60,6 +62,7 @@ export const make = Effect.fn("DeviceControl.make")(function* (
   const clock = yield* Clock.Clock;
   const entries = new Map<string, Entry>();
   const stopped = new Set<string>();
+  const recoveringHosts = new Set<string>();
   let generation = 0;
   const runKey = (threadId: string, runId: string) => JSON.stringify([threadId, runId]);
   const get = (target: DeviceControlTarget) => {
@@ -68,7 +71,7 @@ export const make = Effect.fn("DeviceControl.make")(function* (
       entry = {
         state: { ...target, generation: ++generation, phase: "idle", owner: null, expiresAt: null },
         lock: Semaphore.makeUnsafe(1),
-        calls: new Set(),
+        calls: new Map(),
         finish: new Set(),
         uncertain: new Set(),
       };
@@ -77,8 +80,27 @@ export const make = Effect.fn("DeviceControl.make")(function* (
     return entry;
   };
   const changed = Effect.suspend(() => publish([...entries.values()].map((entry) => entry.state)));
+  const fence = (entry: Entry) => {
+    entry.state = { ...entry.state, generation: ++generation, phase: "draining", expiresAt: null };
+  };
+  const uncertain = (target: DeviceControlTarget, tool: DeviceTool = "hub") =>
+    Effect.gen(function* () {
+      const entry = get(target);
+      entry.uncertain.add(tool);
+      fence(entry);
+      yield* changed;
+    });
+  const cancelCalls = (entry: Entry, tools: ReadonlyArray<DeviceTool>) => {
+    fence(entry);
+    for (const { tool, cancel } of entry.calls.values()) {
+      if (!tools.includes(tool)) continue;
+      entry.uncertain.add(tool);
+      Deferred.doneUnsafe(cancel, Effect.void);
+    }
+  };
   const check = (grant: DeviceControlGrant) => {
     const entry = get(grant);
+    if (recoveringHosts.has(grant.hostId)) return controlError(grant, "control_draining");
     if (
       grant.owner.kind === "agent" &&
       stopped.has(runKey(grant.owner.threadId, grant.owner.runId))
@@ -95,9 +117,10 @@ export const make = Effect.fn("DeviceControl.make")(function* (
     return null;
   };
   const drain = Effect.fn("DeviceControl.drain")(function* (entry: Entry) {
-    entry.state = { ...entry.state, generation: ++generation, phase: "draining", expiresAt: null };
+    fence(entry);
     yield* changed;
-    yield* Effect.forEach([...entry.calls], Deferred.await, { discard: true });
+    yield* Effect.forEach([...entry.calls.keys()], Deferred.await, { discard: true });
+    if (entry.uncertain.size) return yield* controlError(entry.state, "input_unconfirmed");
     // Finishing held touches/keys uses the old channel, without admitting new input.
     yield* Effect.forEach([...entry.finish], (finish) => finish, { discard: true });
     entry.finish.clear();
@@ -140,6 +163,8 @@ export const make = Effect.fn("DeviceControl.make")(function* (
     return entry.lock
       .withPermit(
         Effect.gen(function* () {
+          if (recoveringHosts.has(target.hostId))
+            return yield* controlError(target, "control_draining");
           if (owner.kind === "agent") {
             if (stopped.has(runKey(owner.threadId, owner.runId)))
               return yield* controlError(target, "run_stopped");
@@ -192,14 +217,24 @@ export const make = Effect.fn("DeviceControl.make")(function* (
   const run = <A, E, R>(
     grant: DeviceControlGrant,
     effect: Effect.Effect<A, E, R>,
+    tool: DeviceTool = "hub",
   ): Effect.Effect<A, E | DeviceControlError, R> =>
     Effect.suspend((): Effect.Effect<A, E | DeviceControlError, R> => {
       const error = check(grant);
       if (error) return Effect.fail(error);
       const entry = get(grant);
       const done = Deferred.makeUnsafe<void>();
-      entry.calls.add(done);
+      const cancel = Deferred.makeUnsafe<void>();
+      entry.calls.set(done, { tool, cancel });
+      const unconfirmed = uncertain(grant, tool).pipe(
+        Effect.andThen(Effect.fail(controlError(grant, "input_unconfirmed"))),
+      );
       return effect.pipe(
+        // Caller disconnects still drain. Only the deadline or explicit recovery
+        // cancels this wait, and neither is evidence of native completion.
+        Effect.interruptible,
+        Effect.raceFirst(Deferred.await(cancel).pipe(Effect.andThen(unconfirmed))),
+        Effect.timeoutOrElse({ duration: DEVICE_CONTROL_CALL_TIMEOUT, orElse: () => unconfirmed }),
         Effect.ensuring(
           Effect.sync(() => {
             entry.calls.delete(done);
@@ -277,6 +312,25 @@ export const make = Effect.fn("DeviceControl.make")(function* (
         { concurrency: "unbounded", discard: true },
       ),
     );
+  const recoverHost = <A, E, R>(
+    hostId: string,
+    tools: ReadonlyArray<DeviceTool>,
+    recovery: Effect.Effect<A, E, R>,
+  ) =>
+    Effect.gen(function* () {
+      recoveringHosts.add(hostId);
+      for (const entry of entries.values())
+        if (entry.state.hostId === hostId) cancelCalls(entry, tools);
+      yield* changed;
+      return yield* recovery.pipe(
+        Effect.ensuring(
+          Effect.gen(function* () {
+            yield* invalidateWhere((state) => state.hostId === hostId).pipe(Effect.ignore);
+            recoveringHosts.delete(hostId);
+          }),
+        ),
+      );
+    }).pipe(Effect.uninterruptible);
   return {
     acquire,
     renew,
@@ -287,24 +341,14 @@ export const make = Effect.fn("DeviceControl.make")(function* (
     endWith,
     viewerGrant,
     invalidate,
+    recoverHost,
     state: Effect.sync(() => [...entries.values()].map((entry) => entry.state)),
     assert: (grant: DeviceControlGrant) =>
       Effect.suspend(() => {
         const error = check(grant);
         return error ? Effect.fail(error) : Effect.void;
       }),
-    uncertain: (target: DeviceControlTarget, tool: "hub" | "agent" = "hub") =>
-      Effect.gen(function* () {
-        const entry = get(target);
-        entry.uncertain.add(tool);
-        entry.state = {
-          ...entry.state,
-          generation: ++generation,
-          phase: "draining",
-          expiresAt: null,
-        };
-        yield* changed;
-      }),
+    uncertain,
     onFinish: (grant: DeviceControlGrant, finish: Effect.Effect<void, DeviceControlError>) =>
       Effect.suspend(() => {
         const error = check(grant);
@@ -336,15 +380,20 @@ export const make = Effect.fn("DeviceControl.make")(function* (
         Effect.ignore,
       ),
     /** Only after host.stop/restart has joined all old helpers may uncertainty be cleared. */
-    hostStopped: (hostId: string, tools: ReadonlyArray<"hub" | "agent"> = ["hub", "agent"]) =>
-      Effect.gen(function* () {
-        for (const entry of entries.values())
-          if (entry.state.hostId === hostId) {
-            for (const tool of tools) entry.uncertain.delete(tool);
-            if (tools.includes("hub")) entry.finish.clear();
-          }
-        yield* invalidateWhere((state) => state.hostId === hostId);
-      }),
+    hostStopped: (hostId: string, tools: ReadonlyArray<DeviceTool> = ["hub", "agent"]) =>
+      Effect.forEach(
+        [...entries.values()].filter((entry) => entry.state.hostId === hostId),
+        (entry) =>
+          entry.lock.withPermit(
+            Effect.gen(function* () {
+              yield* Effect.forEach([...entry.calls.keys()], Deferred.await, { discard: true });
+              for (const tool of tools) entry.uncertain.delete(tool);
+              if (tools.includes("hub")) entry.finish.clear();
+              yield* drain(entry);
+            }),
+          ),
+        { discard: true },
+      ).pipe(Effect.uninterruptible),
   };
 });
 export type DeviceControl = Effect.Success<ReturnType<typeof make>>;

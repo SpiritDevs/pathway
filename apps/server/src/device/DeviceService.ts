@@ -61,6 +61,7 @@ import * as ServerConfig from "../config.ts";
 import {
   agentDeviceConfigPath,
   agentDeviceSession,
+  agentDeviceDaemonSession,
   writeAgentDeviceConfig,
   writeAgentDeviceTargetGrant,
 } from "./AgentDeviceTarget.ts";
@@ -693,16 +694,24 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
             );
           if (!nextEnabled || !nextAgentAccess) {
             agentGrants.clear();
-            yield* control.invalidateAll.pipe(Effect.ignore);
           }
           if (!nextEnabled) {
-            yield* Effect.forEach(hosts.values(), (host) => host.stop.pipe(Effect.ignore), {
-              discard: true,
-            });
+            yield* Effect.forEach(
+              hosts.values(),
+              (host) =>
+                control.recoverHost(host.id, ["hub", "agent"], host.stop).pipe(Effect.ignore),
+              {
+                discard: true,
+              },
+            );
           } else if (input.agentAccessEnabled === false) {
-            yield* Effect.forEach(hosts.values(), (host) => host.stopAgent.pipe(Effect.ignore), {
-              discard: true,
-            });
+            yield* Effect.forEach(
+              hosts.values(),
+              (host) => control.recoverHost(host.id, ["agent"], host.stopAgent).pipe(Effect.ignore),
+              {
+                discard: true,
+              },
+            );
           }
           yield* publish((state) => ({
             ...state,
@@ -1127,20 +1136,23 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
             reason: "Tool restarts are unavailable on this host.",
           });
         const tools = [...new Set(input.tools ?? (["hub", "agent"] as const))];
-        yield* control
-          .invalidateHost(host.id)
-          .pipe(Effect.catchTag("DeviceControlError", () => Effect.void));
-        const restarted = yield* host.restartTools(tools).pipe(
-          Effect.mapError(
-            (cause) =>
-              new DeviceOperationError({
-                operation: "restart device tools",
-                reason: "command_failed",
-                cause,
-              }),
+        yield* control.recoverHost(
+          host.id,
+          tools,
+          host.restartTools(tools).pipe(
+            Effect.mapError(
+              (cause) =>
+                new DeviceOperationError({
+                  operation: "restart device tools",
+                  reason: "command_failed",
+                  cause,
+                }),
+            ),
+            Effect.flatMap((restarted) =>
+              restarted ? control.hostStopped(host.id, tools).pipe(Effect.ignore) : Effect.void,
+            ),
           ),
         );
-        if (restarted) yield* control.hostStopped(host.id, tools).pipe(Effect.ignore);
         for (const [token, access] of agentGrants)
           if (access.host === host) agentGrants.delete(token);
       }),
@@ -1193,7 +1205,15 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
             HttpClientRequest.post(`${ready.agentDevice.baseUrl}/rpc`).pipe(
               HttpClientRequest.bearerToken(ready.agentDevice.token),
             ),
-            request,
+            {
+              ...request,
+              params: {
+                ...request.params,
+                // Daemon ownership survives hand-back. Only the environment may
+                // transfer this session to a new run/generation-bound grant.
+                session: agentDeviceDaemonSession(access.host.id, access.grant.deviceId),
+              },
+            },
           ).pipe(Effect.mapError(() => DeviceControl.controlError(access.grant, "invalid_grant")));
           return yield* control.run(
             access.grant,
@@ -1215,6 +1235,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
                 yield* control.uncertain(access.grant, "agent");
               return result;
             }),
+            "agent",
           );
         }),
       testHost,

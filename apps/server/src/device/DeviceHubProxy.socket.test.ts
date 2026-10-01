@@ -8,6 +8,7 @@ import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import {
   FetchHttpClient,
@@ -34,7 +35,9 @@ const portOf = (server: HttpServer.HttpServer["Service"]) => {
   return server.address.port;
 };
 
-const makeHub = Effect.fn("deviceProxySocket.makeHub")(function* () {
+const makeHub = Effect.fn("deviceProxySocket.makeHub")(function* (
+  onInput: (packet: string | Uint8Array) => Effect.Effect<void> = () => Effect.void,
+) {
   const input = yield* Deferred.make<Uint8Array>();
   const disconnected = yield* Deferred.make<void>();
   const requests: string[] = [];
@@ -53,10 +56,13 @@ const makeHub = Effect.fn("deviceProxySocket.makeHub")(function* () {
               Effect.gen(function* () {
                 if (typeof message === "string") {
                   yield* Deferred.succeed(input, new TextEncoder().encode(message));
+                  yield* onInput(message);
                   yield* write('{"ok":true}');
                 } else {
                   const payload = JSON.parse(Buffer.from(message.subarray(1)).toString());
-                  yield* Deferred.succeed(input, Buffer.from(payload.packet, "base64"));
+                  const packet = Buffer.from(payload.packet, "base64");
+                  yield* Deferred.succeed(input, packet);
+                  yield* onInput(packet);
                   yield* write(
                     Buffer.concat([
                       Buffer.from([254]),
@@ -64,6 +70,7 @@ const makeHub = Effect.fn("deviceProxySocket.makeHub")(function* () {
                     ]),
                   );
                 }
+                yield* write(new Uint8Array([77]));
               }),
             { onOpen: write(new Uint8Array([0, 255, 42])).pipe(Effect.ignore) },
           )
@@ -98,6 +105,109 @@ const makeProxy = (origin: string, control: DeviceControl.DeviceControl) =>
   );
 
 it.layer(NodeServices.layer)("device proxy sockets", (it) => {
+  for (const platform of ["ios", "android"] as const) {
+    it.effect(
+      `revocation drains held ${platform} input before disconnecting its receipt reader`,
+      () =>
+        Effect.gen(function* () {
+          const cleanupStarted = yield* Deferred.make<void>();
+          const cleanupDone = yield* Deferred.make<void>();
+          const packets: object[] = [];
+          const hub = yield* makeHub((packet) =>
+            Effect.gen(function* () {
+              const value = JSON.parse(
+                typeof packet === "string" ? packet : Buffer.from(packet.subarray(1)).toString(),
+              );
+              packets.push(value);
+              if (value.type === "up" || value.action === "up") {
+                yield* Deferred.succeed(cleanupStarted, undefined);
+                yield* Deferred.await(cleanupDone);
+              }
+            }),
+          );
+          const control = yield* DeviceControl.make();
+          yield* Effect.gen(function* () {
+            const auth = yield* EnvironmentAuth.EnvironmentAuth;
+            const session = yield* auth.issueSession({
+              scopes: ["orchestration:read", "orchestration:operate"],
+            });
+            const target = { hostId: "remote-mac", deviceId: "phone" };
+            const owner = {
+              kind: "viewer" as const,
+              sessionId: session.sessionId,
+              viewerId: "viewer",
+            };
+            const held = yield* control.acquire(target, owner);
+            const ticket = yield* auth.issueWebSocketTicket(session);
+            const server = yield* HttpServer.HttpServer;
+            const received = yield* Deferred.make<void>();
+            const downAcknowledged = yield* Deferred.make<void>();
+            const closed = yield* Deferred.make<number>();
+            const path =
+              platform === "ios" ? "/vendor/serve-sim/helper/ws" : "/vendor/serve-emu/ws";
+            const socket = yield* Effect.acquireRelease(
+              Effect.sync(() => {
+                const ws = new WebSocket(
+                  `ws://127.0.0.1:${portOf(server)}/api/device-hub${path}?hostId=remote-mac&device=phone&viewerId=viewer&controlGeneration=${held.generation}&wsTicket=${encodeURIComponent(ticket.ticket)}`,
+                );
+                ws.binaryType = "arraybuffer";
+                ws.addEventListener("message", (event) => {
+                  Deferred.doneUnsafe(received, Effect.void);
+                  if (new Uint8Array(event.data as ArrayBuffer)[0] === 77)
+                    Deferred.doneUnsafe(downAcknowledged, Effect.void);
+                });
+                ws.addEventListener("error", (event) =>
+                  Deferred.doneUnsafe(received, Effect.die(event)),
+                );
+                ws.addEventListener("close", (event) =>
+                  Deferred.doneUnsafe(closed, Effect.succeed(event.code)),
+                );
+                return ws;
+              }),
+              (ws) => Effect.sync(() => ws.close()),
+            );
+            yield* Deferred.await(received);
+            const down =
+              platform === "ios"
+                ? { type: "down", usage: 42 }
+                : { type: "touch", action: "down", x: 0.1, y: 0.2, pointerId: 7 };
+            socket.send(
+              platform === "ios"
+                ? Buffer.concat([Buffer.from([6]), Buffer.from(JSON.stringify(down))])
+                : JSON.stringify(down),
+            );
+            yield* Deferred.await(downAcknowledged);
+            yield* auth.revokeSession(session.sessionId);
+            expect(yield* Deferred.await(closed)).toBe(1008);
+            yield* Deferred.await(cleanupStarted);
+            let acquired = false;
+            const takeover = yield* control
+              .acquire(target, { ...owner, sessionId: "other", viewerId: "next" })
+              .pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    acquired = true;
+                  }),
+                ),
+                Effect.forkChild({ startImmediately: true }),
+              );
+            expect(acquired).toBe(false);
+            expect((yield* control.state)[0]?.phase).toBe("draining");
+            yield* Deferred.succeed(cleanupDone, undefined);
+            expect((yield* Fiber.join(takeover)).phase).toBe("held");
+            yield* Deferred.await(hub.disconnected);
+            expect(packets).toEqual(
+              [
+                down,
+                platform === "ios"
+                  ? { type: "up", usage: 42 }
+                  : { ...down, action: "up", ack: true },
+              ].map((packet) => (platform === "android" ? { ...packet, ack: true } : packet)),
+            );
+          }).pipe(Effect.provide(makeProxy(hub.origin, control)));
+        }),
+    );
+  }
   it.effect("an Android read-only watcher receives video while its input is rejected", () =>
     Effect.gen(function* () {
       const hub = yield* makeHub();

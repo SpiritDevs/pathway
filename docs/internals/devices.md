@@ -133,6 +133,9 @@ The Android socket retains video and `reset-video` while dropping unauthorized
 input. Viewer renewal preserves the generation. Disconnect, session revocation,
 expiry, shutdown, host replacement and helper restart invalidate it. Client hide
 and background should release promptly; expiry covers a lost release.
+Revocation closes client admission immediately but retains the upstream receipt
+reader until accepted input and held keys/touches finish. Android tracks each
+pointer independently, treating an omitted pointer ID as the vendor's pointer 0.
 
 `DeviceInputChannel` serializes input on each socket and tracks completion receipts.
 Android already acknowledges gesture completion. Hub 0.12.0's iOS handler fires
@@ -150,9 +153,23 @@ The managed agent CLI receives a gateway URL on the environment and an opaque
 run/generation-bound token, not the host daemon credential. Every command reaches
 `/api/device-agent/rpc`, validates its target, then runs inside the same control
 lease. The gateway waits for the daemon's response even if the CLI disconnects.
+All managed calls have a five-minute completion deadline. Deadline expiry
+cancels the response wait and leaves `input_unconfirmed`; cancellation is
+not proof that the native command stopped. Explicit helper recovery fences new
+admission and can stop the helper without waiting for its old response. Only a
+confirmed helper restart clears that helper's uncertainty. Disabling support
+also reaches the helper stop without waiting for the response, but does not
+treat a stop request alone as confirmed termination.
 Each accepted command renews the 30-second expiry. After idle expiry, the active
 run calls `device_open` again to obtain a fresh grant.
-The orchestrator's `RunStopFence` drains device calls as well as Computer calls.
+The external CLI session and config remain run/generation-specific. The gateway
+translates them to one environment-owned daemon session per `(hostId, deviceId)`.
+After the outgoing generation drains, its successor reuses that session and its
+device claim. Hand-back, idle expiry and run completion retain the daemon session;
+old tokens remain invalid. A granted `agent-device close` closes that session and
+its retained resources, and helper termination performs the daemon's cleanup.
+The orchestrator's `RunStopFence` fences device calls as well as Computer calls,
+waiting for accepted device work within the same completion deadline.
 Agent access settings are rechecked at command admission. Background replay and
 batch operations are refused because their completion would not prove input has
 stopped. The current gateway accepts the bounded commands and flags listed in

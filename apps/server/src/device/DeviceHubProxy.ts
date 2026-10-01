@@ -22,6 +22,7 @@ import {
   type AuthSessionId,
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import {
   HttpClient,
@@ -159,17 +160,23 @@ const proxyWebSocket = Effect.fn("DeviceHubProxy.proxyWebSocket")(function* (
         input.platform,
         writeToUpstream,
       );
-      yield* Effect.raceFirst(
-        upstream
-          .runRaw((frame) =>
-            channel
-              .receipt(frame)
-              .pipe(Effect.flatMap((receipt) => (receipt ? Effect.void : writeToClient(frame)))),
-          )
-          .pipe(Effect.ensuring(channel.disconnected)),
-        client.runRaw(channel.input).pipe(Effect.ensuring(channel.release)),
+      // Scope owns the receipt reader independently of client admission. A
+      // revoked/closed client must not interrupt the reader needed by release.
+      const reader = yield* upstream
+        .runRaw((frame) =>
+          channel
+            .receipt(frame)
+            .pipe(
+              Effect.flatMap((receipt) =>
+                receipt ? Effect.void : writeToClient(frame).pipe(Effect.ignore),
+              ),
+            ),
+        )
+        .pipe(Effect.ensuring(channel.disconnected), Effect.forkScoped);
+      yield* Effect.raceFirst(Fiber.join(reader), client.runRaw(channel.input)).pipe(
+        Effect.ensuring(channel.release),
       );
-    }),
+    }).pipe(Effect.scoped),
   ).pipe(
     Effect.catchTag("SocketError", (error) => Effect.logDebug("device hub socket closed", error)),
   );
