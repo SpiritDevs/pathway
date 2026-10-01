@@ -55,7 +55,9 @@ describe("compileClaudeModelSelection", () => {
 
   it("preserves xhigh effort and the 1M default context for Claude Opus 5.5", () => {
     expect(
-      compileClaudeModelSelection(selection("claude-opus-5-5", [{ id: "effort", value: "xhigh" }])),
+      compileClaudeModelSelection(
+        selection("claude-opus-5-5", [{ id: "effort", value: "xhigh" }]),
+      ),
     ).toMatchObject({
       apiModelId: "claude-opus-5-5[1m]",
       effort: "xhigh",
