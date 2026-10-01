@@ -192,24 +192,74 @@ struct PathwayDevicesTests {
     @Test func releasingWhileTakingControlHandsTheLateGrantBack() async throws {
         let server = FakeDeviceControlServer()
         let lease = server.lease()
-        server.holdsAcquire = true
+        server.holding = ["device.acquireControl"]
         server.respond = { tag, _ in
             tag == "device.releaseControl" ? self.control(8, "idle") : self.control(7, "held", owner: self.viewer(lease.viewerID))
         }
         let taking = Task { try await lease.acquire(hostID: "local", deviceID: "UDID-1") }
-        await server.waitUntilAcquiring()
+        await server.waitUntilHolding()
         #expect(lease.acquiring)
         #expect(lease.target == .init(hostID: "local", deviceID: "UDID-1"))
         // The viewer is hidden or switches devices while the previous owner's input finishes.
         try await lease.release()
         #expect(!lease.acquiring)
         #expect(lease.target == nil)
-        server.grant()
+        server.resumeHeld()
         try await taking.value
         #expect(lease.proof == nil)
         #expect(server.calls.map(\.0) == ["device.acquireControl", "device.releaseControl"])
         #expect(server.calls[1].1.objectValue?["generation"] == .number(7))
         #expect(server.closed == 1)
+    }
+
+    /// Retaking first hands back the old grant; hiding the viewer or losing device state during that
+    /// wait abandons the retake, so no new lease is acquired.
+    @Test(arguments: [false, true]) func retakingStopsWhenTheViewerHidesOrDisconnectsDuringTheOldRelease(disconnects: Bool) async throws {
+        let server = FakeDeviceControlServer()
+        let lease = server.lease()
+        server.respond = { _, _ in self.control(7, "held", owner: self.viewer(lease.viewerID)) }
+        try await lease.acquire(hostID: "local", deviceID: "UDID-1")
+        // Someone else took the device, so the old grant's release is refused once it lands.
+        server.holding = ["device.releaseControl"]
+        server.respond = { tag, _ in
+            if tag == "device.releaseControl" { throw PathwayRPCError.deviceControl(code: "stale_generation", message: "") }
+            return self.control(9, "held", owner: self.viewer(lease.viewerID))
+        }
+        let retaking = Task { try await lease.acquire(hostID: "local", deviceID: "UDID-1") }
+        await server.waitUntilHolding()
+        #expect(lease.acquiring)
+        #expect(lease.target == .init(hostID: "local", deviceID: "UDID-1"))
+        if disconnects { await lease.invalidate() } else { try await lease.release() }
+        #expect(lease.target == nil)
+        server.resumeHeld()
+        try await retaking.value
+        #expect(server.calls.map(\.0) == ["device.acquireControl", "device.releaseControl"])
+        #expect(lease.proof == nil)
+        #expect(lease.target == nil)
+        #expect(!lease.acquiring)
+        #expect(server.opened == 1)
+        await server.waitUntilClosed(1)
+        #expect(lease.notice == (disconnects ? PathwayDeviceControl.lostConnectionMessage : nil))
+    }
+
+    /// A grant that lands after the viewer hides or disconnects mid-retake is released at once.
+    @Test(arguments: [false, true]) func aRetakeGrantThatArrivesAfterAHideOrDisconnectIsReleased(disconnects: Bool) async throws {
+        let server = FakeDeviceControlServer()
+        let lease = server.lease()
+        server.respond = { tag, _ in
+            tag == "device.releaseControl" ? self.control(10, "idle") : self.control(9, "held", owner: self.viewer(lease.viewerID))
+        }
+        try await lease.acquire(hostID: "local", deviceID: "UDID-1")
+        server.holding = ["device.acquireControl"]
+        let retaking = Task { try await lease.acquire(hostID: "local", deviceID: "UDID-1") }
+        await server.waitUntilHolding()
+        if disconnects { await lease.invalidate() } else { try await lease.release() }
+        server.resumeHeld()
+        try await retaking.value
+        #expect(server.calls.map(\.0) == ["device.acquireControl", "device.releaseControl", "device.acquireControl", "device.releaseControl"])
+        #expect(server.calls[3].1.objectValue?["generation"] == .number(9))
+        #expect(lease.proof == nil)
+        await server.waitUntilClosed(2)
     }
 
     @Test func aRefusedReleaseIsNotAHandBack() async throws {
@@ -474,50 +524,59 @@ private actor DeviceSessionCounter {
 /// Answers device control RPCs and counts the connections the lease opens and closes.
 @MainActor private final class FakeDeviceControlServer {
     var respond: (String, JSONValue) throws -> JSONValue = { _, _ in .null }
-    /// Holds acquire requests until `grant`, like an environment waiting for the previous owner's input.
-    var holdsAcquire = false
+    /// Requests held until `resumeHeld`, like an environment waiting for the previous owner's input.
+    var holding: Set<String> = []
     var ticketFails = false
     private(set) var calls: [(String, JSONValue)] = []
     private(set) var opened = 0
     private(set) var closed = 0
     private var held: CheckedContinuation<Void, Never>?
-    private var socket: CheckedContinuation<Void, Never>?
+    /// Close waiters per connection; like the RPC client, a closed socket answers waiters at once.
+    private var sockets: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var droppedSockets: Set<Int> = []
 
     func lease() -> PathwayDeviceControlLease {
         PathwayDeviceControlLease(watching: { DeviceSessionCounter.connection(ticket: "watching", token: "watching") }) { self.connection() }
     }
     func connection() -> PathwayDeviceControlLease.Connection {
         opened += 1
+        let id = opened
         return .init(
             request: { tag, payload in try await self.handle(tag, payload) },
             ticketed: { try await self.ticket() },
-            closed: { await self.waitForSocket() },
-            close: { await self.close() }
+            closed: { await self.waitForSocket(id) },
+            close: { await self.close(id) }
         )
     }
     func waitUntilClosed(_ count: Int) async {
         while closed < count { await Task.yield() }
     }
-    func waitUntilAcquiring() async {
+    func waitUntilHolding() async {
         while held == nil { await Task.yield() }
     }
-    func grant() { held?.resume(); held = nil }
-    func dropSocket() { socket?.resume(); socket = nil }
+    func resumeHeld() { held?.resume(); held = nil }
+    /// Closes the newest connection's socket from the environment's side.
+    func dropSocket() { dropSocket(opened) }
+    private func dropSocket(_ id: Int) {
+        droppedSockets.insert(id)
+        sockets.removeValue(forKey: id)?.resume()
+    }
 
     private func handle(_ tag: String, _ payload: JSONValue) async throws -> JSONValue {
         calls.append((tag, payload))
-        if tag == "device.acquireControl", holdsAcquire { await withCheckedContinuation { held = $0 } }
+        if holding.contains(tag) { await withCheckedContinuation { held = $0 } }
         return try respond(tag, payload)
     }
     private func ticket() throws -> PathwayPreparedEnvironmentConnection {
         if ticketFails { throw PathwayConnectError.response(status: 401, message: "expired", traceID: nil) }
         return DeviceSessionCounter.connection(ticket: "lease", token: "lease")
     }
-    private func waitForSocket() async {
-        await withCheckedContinuation { socket = $0 }
+    private func waitForSocket(_ id: Int) async {
+        guard !droppedSockets.contains(id) else { return }
+        await withCheckedContinuation { sockets[id] = $0 }
     }
-    private func close() {
+    private func close(_ id: Int) {
         closed += 1
-        dropSocket()
+        dropSocket(id)
     }
 }

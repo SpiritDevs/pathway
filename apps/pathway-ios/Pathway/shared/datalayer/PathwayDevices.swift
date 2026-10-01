@@ -323,16 +323,21 @@ final class PathwayDeviceControlLease {
     }
 
     /// Takes the device from whoever has it and keeps the lease renewed until it is released or lost.
-    /// Returns without a lease when released or ended first; a grant that arrives late is handed straight back.
+    /// Returns without a lease when released or ended first, including while the previous grant is handed
+    /// back; a grant that arrives late is handed straight back.
     func acquire(hostID: String, deviceID: String) async throws {
-        try? await release()
+        let previous = lease, previousConnection = connection, wasAcquiring = acquiring
         epoch += 1
         let epoch = epoch
-        let connection = connect()
-        self.connection = connection
+        clear()
+        // The intent is registered before any wait, so hiding, switching devices or losing the connection abandons it.
         target = Target(hostID: hostID, deviceID: deviceID)
         acquiring = true
         notice = nil
+        if let previousConnection, !wasAcquiring { try? await handBack(previous, over: previousConnection) }
+        guard epoch == self.epoch else { return }
+        let connection = connect()
+        self.connection = connection
         let response: JSONValue
         do {
             response = try await connection.request("device.acquireControl", .object([
@@ -392,12 +397,7 @@ final class PathwayDeviceControlLease {
         let held = lease, connection = connection, wasAcquiring = acquiring
         clear()
         guard let connection, !wasAcquiring else { return }
-        // The release finishes even if the caller's task is cancelled, for example when the viewer goes away.
-        try await Task {
-            defer { Task { await connection.close() } }
-            guard let held else { return }
-            _ = try await connection.request("device.releaseControl", self.payload(held))
-        }.value
+        try await handBack(held, over: connection)
     }
 
     /// Ends the lease without asking, for example when the environment's device state stops being live.
@@ -418,6 +418,16 @@ final class PathwayDeviceControlLease {
     }
 
     private static let lostConnection = PathwayDeviceControl.lostConnectionMessage
+
+    /// Releases `held` and closes its connection. The release finishes even if the caller's task is
+    /// cancelled, for example when the viewer goes away.
+    private func handBack(_ held: PathwayDeviceControlState?, over connection: Connection) async throws {
+        try await Task {
+            defer { Task { await connection.close() } }
+            guard let held else { return }
+            _ = try await connection.request("device.releaseControl", self.payload(held))
+        }.value
+    }
 
     private func end(_ notice: String?) async {
         epoch += 1
