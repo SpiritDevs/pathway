@@ -48,6 +48,7 @@ export interface VerifiedSession {
   readonly client: AuthClientMetadata;
   readonly expiresAt?: DateTime.DateTime;
   readonly subject: string;
+  readonly clerkSubject?: string;
   readonly initiatingEnvironmentId?: EnvironmentId;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
@@ -364,6 +365,7 @@ export class SessionStore extends Context.Service<
     readonly issue: (input?: {
       readonly ttl?: Duration.Duration;
       readonly subject?: string;
+      readonly clerkSubject?: string;
       readonly initiatingEnvironmentId?: EnvironmentId;
       readonly method?: ServerAuthSessionMethod;
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
@@ -624,6 +626,7 @@ export const make = Effect.gen(function* () {
         .create({
           sessionId,
           subject: claims.sub,
+          ...(input?.clerkSubject ? { clerkSubject: input.clerkSubject } : {}),
           initiatingEnvironmentId: claims.initiatingEnvironmentId ?? null,
           scopes: claims.scopes,
           method: claims.method,
@@ -724,6 +727,7 @@ export const make = Effect.gen(function* () {
         client: toClientMetadata(row.value.client),
         expiresAt: expiresAt.value,
         subject: claims.sub,
+        ...(row.value.clerkSubject ? { clerkSubject: row.value.clerkSubject } : {}),
         ...(claims.initiatingEnvironmentId
           ? { initiatingEnvironmentId: claims.initiatingEnvironmentId }
           : {}),
@@ -833,6 +837,7 @@ export const make = Effect.gen(function* () {
       client: toClientMetadata(row.value.client),
       expiresAt: row.value.expiresAt,
       subject: row.value.subject,
+      ...(row.value.clerkSubject ? { clerkSubject: row.value.clerkSubject } : {}),
       ...(row.value.initiatingEnvironmentId
         ? { initiatingEnvironmentId: row.value.initiatingEnvironmentId }
         : {}),

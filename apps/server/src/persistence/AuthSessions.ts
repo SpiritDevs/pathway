@@ -34,6 +34,7 @@ export type AuthSessionClientMetadataRecord = typeof AuthSessionClientMetadataRe
 export const AuthSessionRecord = Schema.Struct({
   sessionId: AuthSessionId,
   subject: Schema.String,
+  clerkSubject: Schema.NullOr(Schema.String),
   initiatingEnvironmentId: Schema.NullOr(EnvironmentId),
   scopes: AuthEnvironmentScopes,
   method: ServerAuthSessionMethod,
@@ -48,6 +49,7 @@ export type AuthSessionRecord = typeof AuthSessionRecord.Type;
 export const CreateAuthSessionInput = Schema.Struct({
   sessionId: AuthSessionId,
   subject: Schema.String,
+  clerkSubject: Schema.optionalKey(Schema.String),
   initiatingEnvironmentId: Schema.NullOr(EnvironmentId),
   scopes: AuthEnvironmentScopes,
   method: ServerAuthSessionMethod,
@@ -112,6 +114,7 @@ export class AuthSessionRepository extends Context.Service<
 const AuthSessionDbRow = Schema.Struct({
   sessionId: AuthSessionId,
   subject: Schema.String,
+  clerkSubject: Schema.NullOr(Schema.String),
   initiatingEnvironmentId: Schema.NullOr(EnvironmentId),
   scopes: Schema.fromJsonString(AuthEnvironmentScopes),
   method: ServerAuthSessionMethod,
@@ -130,6 +133,7 @@ const AuthSessionDbRow = Schema.Struct({
 const AuthSessionRawDbRow = Schema.Struct({
   sessionId: Schema.String,
   subject: Schema.Unknown,
+  clerkSubject: Schema.Unknown,
   initiatingEnvironmentId: Schema.Unknown,
   scopes: Schema.Unknown,
   method: Schema.Unknown,
@@ -151,6 +155,7 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionReco
   return {
     sessionId: row.sessionId,
     subject: row.subject,
+    clerkSubject: row.clerkSubject,
     initiatingEnvironmentId: row.initiatingEnvironmentId,
     scopes: row.scopes,
     method: row.method,
@@ -194,6 +199,7 @@ export const make = Effect.gen(function* () {
         INSERT INTO auth_sessions (
           session_id,
           subject,
+          clerk_subject,
           initiating_environment_id,
           scopes,
           method,
@@ -210,6 +216,7 @@ export const make = Effect.gen(function* () {
         VALUES (
           ${input.sessionId},
           ${input.subject},
+          ${input.clerkSubject ?? null},
           ${input.initiatingEnvironmentId},
           ${JSON.stringify(input.scopes)},
           ${input.method},
@@ -234,6 +241,7 @@ export const make = Effect.gen(function* () {
         SELECT
           session_id AS "sessionId",
           subject AS "subject",
+          clerk_subject AS "clerkSubject",
           initiating_environment_id AS "initiatingEnvironmentId",
           scopes AS "scopes",
           method AS "method",
@@ -260,6 +268,7 @@ export const make = Effect.gen(function* () {
         SELECT
           session_id AS "sessionId",
           subject AS "subject",
+          clerk_subject AS "clerkSubject",
           initiating_environment_id AS "initiatingEnvironmentId",
           scopes AS "scopes",
           method AS "method",

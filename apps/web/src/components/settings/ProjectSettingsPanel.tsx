@@ -154,6 +154,7 @@ import {
   SettingsSection,
   SettingsSurfaceProvider,
 } from "./settingsLayout";
+import { ProjectAppStoreConnectSection } from "./ProjectAppStoreConnectSection";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
 import { projectGroupTitleNeedsUpdate } from "./ProjectSettingsPanel.logic";
 import { useCompanySettings, type CompanySettings } from "./company/useCompanySettings";
@@ -419,6 +420,11 @@ export function ProjectDetail({
         companies.find((company) => workspaceProject.companyIds.includes(String(company.id))) ??
         null);
   const syncedIcon = useCompanyProjectIcon(workspaceProject?.cloudProjectId ?? null);
+  // A folded row can hold one cloud project per company; App Store links belong to the owner's.
+  const appStoreConnectProjectId =
+    workspaceProject === null || owningCompany === null
+      ? null
+      : workspaceProjectCloudIdForCompany(workspaceProject, String(owningCompany.id));
   const mergeTarget =
     workspaceProject === null
       ? null
@@ -1347,6 +1353,20 @@ export function ProjectDetail({
             />
           </SettingsSection>
         ) : null}
+
+        {appStoreConnectProjectId !== null && owningCompany !== null ? (
+          <ProjectAppStoreConnectSection
+            companyId={owningCompany.id as CompanyId}
+            projectId={appStoreConnectProjectId}
+            environmentId={selectedCheckout.environmentId}
+          />
+        ) : (
+          <SettingsSection title="App Store Connect">
+            <p className="px-4 py-3 text-sm text-muted-foreground">
+              Apps can be linked once this project syncs to a company.
+            </p>
+          </SettingsSection>
+        )}
 
         {mergeProject !== null &&
         mergeCompanyId !== undefined &&

@@ -1173,6 +1173,7 @@ export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCrede
           yield* requireCloudMintConnectGrantAuthorization(dependencies, proof, environmentId);
           return {
             subject: "cloud-connect",
+            clerkSubject: proof.sub,
             ...(proof.clientEnvironmentId
               ? { initiatingEnvironmentId: proof.clientEnvironmentId }
               : {}),

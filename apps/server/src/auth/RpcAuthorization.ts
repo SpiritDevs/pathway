@@ -1,3 +1,4 @@
+import { APPLE_WS_METHODS } from "@spiritdevs/contracts/apple";
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
@@ -27,6 +28,20 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
  * runtime failure.
  */
 export const RPC_REQUIRED_SCOPES = {
+  [APPLE_WS_METHODS.registerBundleId]: AuthOrchestrationOperateScope,
+  [APPLE_WS_METHODS.createApp]: AuthOrchestrationOperateScope,
+  [APPLE_WS_METHODS.status]: AuthOrchestrationReadScope,
+  [APPLE_WS_METHODS.testConnection]: AuthOrchestrationReadScope,
+  [APPLE_WS_METHODS.listApps]: AuthOrchestrationReadScope,
+  [APPLE_WS_METHODS.listBuilds]: AuthOrchestrationReadScope,
+  [APPLE_WS_METHODS.listBetaGroups]: AuthOrchestrationReadScope,
+  [APPLE_WS_METHODS.appleIdStatus]: AuthOrchestrationReadScope,
+  [APPLE_WS_METHODS.appleIdSubscribe]: AuthOrchestrationReadScope,
+  [APPLE_WS_METHODS.appleIdStart]: AuthOrchestrationOperateScope,
+  [APPLE_WS_METHODS.appleIdComplete]: AuthOrchestrationOperateScope,
+  [APPLE_WS_METHODS.appleIdCancel]: AuthOrchestrationOperateScope,
+  [APPLE_WS_METHODS.appleIdSignOut]: AuthOrchestrationOperateScope,
+
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.getTurnDiff]: AuthOrchestrationReadScope,

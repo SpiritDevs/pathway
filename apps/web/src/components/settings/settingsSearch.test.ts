@@ -181,7 +181,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
     ]);
   });
 
-  it("puts collaboration and environments in the Account group", () => {
+  it("puts collaboration, environments and Apple accounts in the Account group", () => {
     expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Account")?.paths).toEqual([
       "/settings/members-teams",
       "/settings/company-members",
@@ -189,7 +189,12 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/company-roles",
       "/settings/calendars",
       "/settings/environments",
+      "/settings/apple",
     ]);
+    expect(searchSettings("app store connect")[0]).toMatchObject({
+      id: "apple-api-key",
+      to: "/settings/apple",
+    });
     expect(searchSettings("members and invitations")[0]).toMatchObject({
       id: "company-members",
       to: "/settings/company-members",

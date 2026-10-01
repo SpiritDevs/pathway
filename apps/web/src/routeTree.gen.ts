@@ -66,6 +66,7 @@ import { Route as SettingsCompanyRolesRouteImport } from './routes/settings.comp
 import { Route as SettingsCompanyMembersRouteImport } from './routes/settings.company-members'
 import { Route as SettingsCalendarsRouteImport } from './routes/settings.calendars'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
+import { Route as SettingsAppleRouteImport } from './routes/settings.apple'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as IssuesMilestonesRouteImport } from './routes/issues_.milestones'
@@ -381,6 +382,11 @@ const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
   path: '/archived',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsAppleRoute = SettingsAppleRouteImport.update({
+  id: '/apple',
+  path: '/apple',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   id: '/appearance',
   path: '/appearance',
@@ -510,6 +516,7 @@ export interface FileRoutesByFullPath {
   '/issues/milestones': typeof IssuesMilestonesRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
+  '/settings/apple': typeof SettingsAppleRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/calendars': typeof SettingsCalendarsRoute
   '/settings/company-members': typeof SettingsCompanyMembersRoute
@@ -586,6 +593,7 @@ export interface FileRoutesByTo {
   '/issues/milestones': typeof IssuesMilestonesRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
+  '/settings/apple': typeof SettingsAppleRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/calendars': typeof SettingsCalendarsRoute
   '/settings/company-members': typeof SettingsCompanyMembersRoute
@@ -665,6 +673,7 @@ export interface FileRoutesById {
   '/issues_/milestones': typeof IssuesMilestonesRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
+  '/settings/apple': typeof SettingsAppleRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/calendars': typeof SettingsCalendarsRoute
   '/settings/company-members': typeof SettingsCompanyMembersRoute
@@ -744,6 +753,7 @@ export interface FileRouteTypes {
     | '/issues/milestones'
     | '/projects/$projectKey'
     | '/settings/appearance'
+    | '/settings/apple'
     | '/settings/archived'
     | '/settings/calendars'
     | '/settings/company-members'
@@ -820,6 +830,7 @@ export interface FileRouteTypes {
     | '/issues/milestones'
     | '/projects/$projectKey'
     | '/settings/appearance'
+    | '/settings/apple'
     | '/settings/archived'
     | '/settings/calendars'
     | '/settings/company-members'
@@ -898,6 +909,7 @@ export interface FileRouteTypes {
     | '/issues_/milestones'
     | '/projects/$projectKey'
     | '/settings/appearance'
+    | '/settings/apple'
     | '/settings/archived'
     | '/settings/calendars'
     | '/settings/company-members'
@@ -1377,6 +1389,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsArchivedRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/apple': {
+      id: '/settings/apple'
+      path: '/apple'
+      fullPath: '/settings/apple'
+      preLoaderRoute: typeof SettingsAppleRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/appearance': {
       id: '/settings/appearance'
       path: '/appearance'
@@ -1549,6 +1568,7 @@ const ProjectsRouteWithChildren = ProjectsRoute._addFileChildren(
 
 interface SettingsRouteChildren {
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute
+  SettingsAppleRoute: typeof SettingsAppleRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
   SettingsCalendarsRoute: typeof SettingsCalendarsRoute
   SettingsCompanyMembersRoute: typeof SettingsCompanyMembersRoute
@@ -1600,6 +1620,7 @@ interface SettingsRouteChildren {
 
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppearanceRoute: SettingsAppearanceRoute,
+  SettingsAppleRoute: SettingsAppleRoute,
   SettingsArchivedRoute: SettingsArchivedRoute,
   SettingsCalendarsRoute: SettingsCalendarsRoute,
   SettingsCompanyMembersRoute: SettingsCompanyMembersRoute,
