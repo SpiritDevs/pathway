@@ -47,6 +47,7 @@ export interface ThreadWithLineage extends ThreadBreadcrumbAncestor {
   } | null;
   readonly lineage: {
     readonly parentThreadId: ThreadId | null;
+    readonly relationshipToParent?: "fork" | "subagent" | null;
     readonly parentEnvironmentId?: EnvironmentId | undefined;
   };
 }
@@ -56,9 +57,16 @@ export interface ThreadBreadcrumbParent {
   readonly threadId: ThreadId;
 }
 
-/** A fork's source run when it has one, else the lineage parent, which may be on another environment. */
+/**
+ * A fork's source run while it is still a fork, else the lineage parent, which may be on another
+ * environment.
+ */
 export function breadcrumbParent(thread: ThreadWithLineage): ThreadBreadcrumbParent | null {
-  if (thread.forkedFrom?.type === "run" && thread.forkedFrom.threadId !== undefined) {
+  if (
+    thread.lineage.relationshipToParent === "fork" &&
+    thread.forkedFrom?.type === "run" &&
+    thread.forkedFrom.threadId !== undefined
+  ) {
     return { environmentId: thread.environmentId, threadId: thread.forkedFrom.threadId };
   }
   return thread.lineage.parentThreadId === null

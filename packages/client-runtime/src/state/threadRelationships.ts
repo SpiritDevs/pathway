@@ -91,8 +91,9 @@ export function deriveThreadRelationshipGraph(input: {
   };
 
   for (const thread of threads) {
+    // A fork moved elsewhere keeps its fork origin, but lineage says where it lists now.
     const parentThreadId =
-      thread.forkedFrom?.type === "run"
+      thread.lineage.relationshipToParent === "fork" && thread.forkedFrom?.type === "run"
         ? thread.forkedFrom.threadId
         : thread.lineage.parentThreadId;
     if (parentThreadId === null) continue;

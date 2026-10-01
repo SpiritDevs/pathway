@@ -7,6 +7,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  type OrchestrationV2Command,
   type OrchestrationV2ThreadProjection,
   type OrchestratorMcpFailure,
   type ServerProvider,
@@ -79,11 +80,18 @@ const remoteEnvironmentId = EnvironmentId.make("mcp-conversation-remote-environm
 let remoteProjection: OrchestrationV2ThreadProjection | null = null;
 const requestedRemoteSources: Array<ReadonlyArray<ThreadId>> = [];
 const remoteSends: Array<string> = [];
+const remoteCommands: Array<OrchestrationV2Command> = [];
 const remoteThreadsLayer = Layer.succeed(
   RemoteThreads,
   RemoteThreads.of({
     launchTargets: Effect.succeed([]),
     launchGrant: () => Effect.succeed(null),
+    dispatch: (threadId, command) =>
+      Effect.sync(() => {
+        if (threadId !== remoteThreadId) return null;
+        remoteCommands.push(command(remoteEnvironmentId));
+        return remoteEnvironmentId;
+      }),
     read: (threadId, sourcesFor) =>
       Effect.sync(() => {
         if (threadId !== remoteThreadId || remoteProjection === null) return null;
@@ -302,6 +310,55 @@ it.layer(testLayer)("MCP conversation company scope", (it) => {
         relationshipToParent: null,
         rootThreadId: threadId,
         parentEnvironmentId: remoteEnvironmentId,
+      });
+    }),
+  );
+
+  it.effect("moves threads under a parent and back, here or on another environment", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const service = yield* OrchestratorMcpService;
+      const parentId = yield* createConversation("set-parent-parent", companyA);
+      const childId = yield* createConversation("set-parent-child", companyA);
+      const lineageOf = (threadId: ThreadId) =>
+        orchestrator.getThreadProjection(threadId).pipe(Effect.map(({ thread }) => thread.lineage));
+
+      yield* service.setThreadParent(invocation(parentId), {
+        threadId: childId,
+        parentThreadId: parentId,
+      });
+      assert.deepEqual(yield* lineageOf(childId), {
+        parentThreadId: parentId,
+        relationshipToParent: null,
+        rootThreadId: childId,
+      });
+
+      const cycle = yield* service
+        .setThreadParent(invocation(parentId), { threadId: parentId, parentThreadId: childId })
+        .pipe(Effect.flip);
+      assert.include(cycle.message, "cannot be listed under itself");
+
+      yield* service.setThreadParent(invocation(parentId), {
+        threadId: childId,
+        parentThreadId: null,
+        clientRequestId: "back-to-list",
+      });
+      assert.deepEqual(yield* lineageOf(childId), {
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: childId,
+      });
+
+      // A local parent of a thread elsewhere is named with this environment.
+      yield* service.setThreadParent(invocation(parentId), {
+        threadId: remoteThreadId,
+        parentThreadId: parentId,
+      });
+      assert.deepEqual(remoteCommands.at(-1), {
+        type: "thread.parent.set",
+        commandId: remoteCommands.at(-1)!.commandId,
+        threadId: remoteThreadId,
+        parent: { threadId: parentId, environmentId: invocation(parentId).environmentId },
       });
     }),
   );

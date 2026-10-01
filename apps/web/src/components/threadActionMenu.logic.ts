@@ -19,6 +19,8 @@ export type ThreadActionMenuId =
   | `snooze:${string}`
   | "unsnooze"
   | "rename"
+  | "set-parent"
+  | "move-to-threads-list"
   | "regenerate-title"
   | "mark-unread"
   | "copy-path"
@@ -39,7 +41,10 @@ export interface ThreadActionMenuState {
   readonly isRegeneratingTitle: boolean;
   /** Archive rejects a thread with an active turn, so disable it here rather than let the action fail. */
   readonly isRunning: boolean;
+  /** Listed under another thread's Lineage rather than in the threads list. */
+  readonly hasParent?: boolean;
   readonly supports: {
+    readonly parent?: boolean;
     readonly settlement: boolean;
     readonly forceSettlement?: boolean;
     readonly settleAfterCompletion: boolean;
@@ -124,6 +129,14 @@ export function buildThreadActionMenuItems(
             label: state.isRegeneratingTitle ? "Regenerating…" : "Regenerate title",
             disabled: state.isRegeneratingTitle,
           },
+        ]
+      : []),
+    ...(state.supports.parent
+      ? [
+          { id: "set-parent" as const, label: "Set parent…" },
+          ...(state.hasParent
+            ? [{ id: "move-to-threads-list" as const, label: "Move to threads list" }]
+            : []),
         ]
       : []),
     { id: "mark-unread", label: "Mark unread" },

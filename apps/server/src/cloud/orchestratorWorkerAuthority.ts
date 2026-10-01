@@ -67,6 +67,7 @@ export function workerToolCapability(name: string): string | null {
     [
       "task_cancel",
       "pathway_thread_send",
+      "pathway_thread_set_parent",
       "pathway_thread_interrupt",
       "pathway_worktree_handoff",
     ].includes(name)

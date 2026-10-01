@@ -10,6 +10,8 @@ function thread(input: {
   readonly title: string;
   readonly parentId?: string | null;
   readonly forkParentId?: string;
+  /** A fork that was later moved under another thread or to the threads list. */
+  readonly moved?: boolean;
   readonly environment?: string;
   readonly parentEnvironment?: string;
 }) {
@@ -26,6 +28,8 @@ function thread(input: {
         input.parentId === undefined || input.parentId === null
           ? null
           : ThreadId.make(input.parentId),
+      relationshipToParent:
+        input.forkParentId === undefined || input.moved ? null : ("fork" as const),
       ...(input.parentEnvironment === undefined
         ? {}
         : { parentEnvironmentId: EnvironmentId.make(input.parentEnvironment) }),
@@ -82,6 +86,22 @@ describe("thread header breadcrumb ancestry", () => {
 
     expect(resolveThreadBreadcrumbAncestors(child, [remoteParent, child])).toEqual([
       { id: remoteParent.id, title: "On the laptop", environmentId: remoteParent.environmentId },
+    ]);
+  });
+
+  it("follows lineage once a fork has been moved under another thread", () => {
+    const newParent = thread({ id: "new-parent", title: "New parent" });
+    const forkParent = thread({ id: "fork-parent", title: "Fork parent" });
+    const moved = thread({
+      id: "moved",
+      title: "Moved",
+      parentId: "new-parent",
+      forkParentId: "fork-parent",
+      moved: true,
+    });
+
+    expect(resolveThreadBreadcrumbAncestors(moved, [newParent, forkParent, moved])).toEqual([
+      { id: newParent.id, title: "New parent", environmentId: newParent.environmentId },
     ]);
   });
 

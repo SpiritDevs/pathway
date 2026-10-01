@@ -21,6 +21,8 @@ import {
   type OrchestratorMcpDelegateTaskInput,
   type OrchestratorMcpDelegateTaskOutcome,
   type OrchestratorMcpEnvironmentListResult,
+  type OrchestratorMcpThreadSetParentInput,
+  type OrchestratorMcpThreadSetParentResult,
   type OrchestratorMcpDelegateTaskResult,
   type OrchestratorMcpRemoteDelegateTaskResult,
   type OrchestratorMcpInteractionMode,
@@ -113,6 +115,10 @@ export interface OrchestratorMcpServiceShape {
   readonly listEnvironments: (
     scope: McpInvocationScope,
   ) => Effect.Effect<OrchestratorMcpEnvironmentListResult, OrchestratorMcpFailure>;
+  readonly setThreadParent: (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpThreadSetParentInput,
+  ) => Effect.Effect<OrchestratorMcpThreadSetParentResult, OrchestratorMcpFailure>;
   readonly taskStatus: (
     scope: McpInvocationScope,
     taskId: NodeId,
@@ -1388,6 +1394,71 @@ const make = Effect.gen(function* () {
             })),
           })),
         } satisfies OrchestratorMcpEnvironmentListResult;
+      }),
+    // Moves a thread here or on another of the account's environments, like pathway_thread_send.
+    setThreadParent: (scope, input) =>
+      Effect.gen(function* () {
+        yield* requireCapability(scope);
+        if (scope.orchestratorOrigin)
+          return yield* failure(
+            "invalid_request",
+            "Ask the coordinating orchestrator to rearrange threads outside this assignment.",
+          );
+        const key = yield* requestKey(input.clientRequestId);
+        const commandId = stableCommandId({
+          scope,
+          requestKey: key,
+          operation: "thread-set-parent",
+        });
+        const parentThreadId = input.parentThreadId;
+        const parentEnvironmentId =
+          parentThreadId === null
+            ? undefined
+            : (input.parentEnvironmentId ??
+              (Option.isSome(yield* findLocalThread(parentThreadId))
+                ? scope.environmentId
+                : undefined));
+        const command = (threadEnvironmentId: EnvironmentId) =>
+          ({
+            type: "thread.parent.set",
+            commandId,
+            threadId: input.threadId,
+            parent:
+              parentThreadId === null
+                ? null
+                : {
+                    threadId: parentThreadId,
+                    ...(parentEnvironmentId === undefined ||
+                    parentEnvironmentId === threadEnvironmentId
+                      ? {}
+                      : { environmentId: parentEnvironmentId }),
+                  },
+          }) as const;
+
+        if (Option.isSome(yield* findLocalThread(input.threadId))) {
+          yield* threadManagement
+            .dispatch(command(scope.environmentId))
+            .pipe(
+              Effect.mapError((error) =>
+                failure(
+                  "orchestration_error",
+                  error._tag === "OrchestratorDispatchError" && typeof error.cause === "string"
+                    ? error.cause
+                    : `Unable to move thread ${input.threadId}: ${errorMessage(error)}`,
+                ),
+              ),
+            );
+        } else {
+          if (Option.isNone(remoteThreads)) return yield* threadNotFound(input.threadId);
+          const moved = yield* remoteThreads.value
+            .dispatch(input.threadId, command)
+            .pipe(Effect.mapError(remoteFailure));
+          if (moved === null) return yield* threadNotFound(input.threadId);
+        }
+        return {
+          threadId: input.threadId,
+          parentThreadId,
+        } satisfies OrchestratorMcpThreadSetParentResult;
       }),
     delegateTask: (scope, input) =>
       input.targetEnvironmentId === undefined

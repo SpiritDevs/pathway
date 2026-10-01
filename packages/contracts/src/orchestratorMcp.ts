@@ -224,6 +224,27 @@ export const OrchestratorMcpDelegateTaskOutcome = Schema.Union([
 ]);
 export type OrchestratorMcpDelegateTaskOutcome = typeof OrchestratorMcpDelegateTaskOutcome.Type;
 
+export const OrchestratorMcpThreadSetParentInput = Schema.Struct({
+  threadId: ThreadId,
+  parentThreadId: Schema.NullOr(ThreadId).annotate({
+    description: "Thread to list it under, or null to move it to the user's threads list.",
+  }),
+  parentEnvironmentId: Schema.optional(
+    EnvironmentId.annotate({
+      description:
+        "Environment holding parentThreadId. Omit when the parent is on this environment or on the thread's own.",
+    }),
+  ),
+  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
+});
+export type OrchestratorMcpThreadSetParentInput = typeof OrchestratorMcpThreadSetParentInput.Type;
+
+export const OrchestratorMcpThreadSetParentResult = Schema.Struct({
+  threadId: ThreadId,
+  parentThreadId: Schema.NullOr(ThreadId),
+});
+export type OrchestratorMcpThreadSetParentResult = typeof OrchestratorMcpThreadSetParentResult.Type;
+
 export const OrchestratorMcpEnvironment = Schema.Struct({
   environmentId: EnvironmentId,
   label: Schema.String,

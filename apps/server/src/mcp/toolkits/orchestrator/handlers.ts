@@ -114,6 +114,12 @@ const handlers = {
       const service = yield* OrchestratorMcpService;
       return yield* service.sendToThread(scope, input);
     }),
+  pathway_thread_set_parent: (input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext;
+      const service = yield* OrchestratorMcpService;
+      return yield* service.setThreadParent(scope, input);
+    }),
   pathway_thread_wait: (input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;

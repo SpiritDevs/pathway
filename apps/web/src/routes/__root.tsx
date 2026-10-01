@@ -31,6 +31,7 @@ import { AppSidebarLayout, WorkspaceFrame } from "../components/AppSidebarLayout
 import { OrchestratorProvider } from "../components/orchestrator/OrchestratorProvider";
 import { PairingRouteSurface } from "../components/auth/PairingRouteSurface";
 import { CommandPalette } from "../components/CommandPalette";
+import { ThreadParentDialog } from "../components/chat/ThreadParentDialog";
 import { TemporaryThreadDiscardDialog } from "../components/TemporaryThreadDiscardDialog";
 import { WorkspaceCleanupNoticeHost } from "../components/WorkspaceCleanupNoticeHost";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
@@ -419,6 +420,7 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         <AppSidebarLayout>
           <Outlet />
         </AppSidebarLayout>
+        <ThreadParentDialog />
       </CommandPalette>
     </OrchestratorProvider>
   );

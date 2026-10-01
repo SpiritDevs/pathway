@@ -294,6 +294,7 @@ function commandThreadId(command: OrchestrationV2Command): ThreadId {
     case "thread.project.attach":
     case "thread.temporary.set":
     case "thread.metadata.update":
+    case "thread.parent.set":
     case "thread.title.regeneration.complete":
     case "thread.browser-takeover.request":
     case "thread.browser-takeover.transition":
@@ -1803,6 +1804,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.project.attach"
           | "thread.temporary.set"
           | "thread.metadata.update"
+          | "thread.parent.set"
           | "thread.title.regeneration.complete"
           | "thread.runtime-mode.set"
           | "thread.interaction-mode.set"
@@ -2078,6 +2080,41 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
 
+    if (command.type === "thread.parent.set") {
+      const rejectParent = (cause: string) =>
+        new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause,
+        });
+      if (
+        thread.lineage.relationshipToParent === "subagent" &&
+        projection.runs.some((run) =>
+          ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+        )
+      ) {
+        return yield* rejectParent("Wait for this subagent to finish before moving it.");
+      }
+      // A local parent must exist, and walking up from it must not reach this thread.
+      let ancestorId =
+        command.parent?.environmentId === undefined ? command.parent?.threadId : null;
+      while (ancestorId !== null && ancestorId !== undefined) {
+        if (ancestorId === thread.id) {
+          return yield* rejectParent("A thread cannot be listed under itself or its own children.");
+        }
+        const ancestor = yield* projectionStore
+          .getThreadProjection(ancestorId)
+          .pipe(Effect.mapError(() => rejectParent(`Thread ${ancestorId} was not found.`)));
+        if (ancestor.thread.deletedAt !== null) {
+          return yield* rejectParent(`Thread ${ancestorId} was deleted.`);
+        }
+        ancestorId =
+          ancestor.thread.lineage.parentEnvironmentId === undefined
+            ? ancestor.thread.lineage.parentThreadId
+            : null;
+      }
+    }
+
     const providerSwitchPlan =
       command.type === "thread.model-selection.set" || command.type === "provider.switch"
         ? yield* Effect.gen(function* () {
@@ -2336,6 +2373,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 : {}),
             updatedAt: now,
           };
+        case "thread.parent.set": {
+          // The root keeps naming where the thread began; it scopes conversation folders.
+          const { parentEnvironmentId: _previous, ...lineage } = thread.lineage;
+          return {
+            ...thread,
+            lineage: {
+              ...lineage,
+              parentThreadId: command.parent?.threadId ?? null,
+              relationshipToParent: null,
+              ...(command.parent?.environmentId === undefined
+                ? {}
+                : { parentEnvironmentId: command.parent.environmentId }),
+            },
+            updatedAt: now,
+          };
+        }
         case "thread.title.regeneration.complete":
           return thread.titleRegeneration?.requestId === command.requestId
             ? {
@@ -2392,6 +2445,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         case "thread.project.attach":
         case "thread.temporary.set":
         case "thread.metadata.update":
+        case "thread.parent.set":
         case "thread.title.regeneration.complete":
           return "thread.metadata-updated" as const;
         case "thread.runtime-mode.set":
@@ -8775,6 +8829,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.project.attach":
       case "thread.temporary.set":
       case "thread.metadata.update":
+      case "thread.parent.set":
       case "thread.title.regeneration.complete":
       case "thread.runtime-mode.set":
       case "thread.interaction-mode.set":

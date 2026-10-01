@@ -9,6 +9,7 @@ import {
   type ModelSelection,
   type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
+  type OrchestrationV2ThreadParentRef,
   type PlanId,
   type PendingChatAttachment,
   type ProjectFaviconPath,
@@ -106,6 +107,11 @@ export interface SetThreadTemporaryInput extends ThreadCommandInput {
 
 export interface SettleAfterCompletionInput extends ThreadCommandInput {
   readonly enabled: boolean;
+}
+
+export interface SetThreadParentInput extends ThreadCommandInput {
+  /** `environmentId` only when the parent lives on another environment; null moves it to the list. */
+  readonly parent: OrchestrationV2ThreadParentRef | null;
 }
 
 export interface UnsettleThreadInput extends ThreadCommandInput {
@@ -620,6 +626,17 @@ export const unpinThread = Effect.fn("EnvironmentCommands.unpinThread")(function
   input: UnpinThreadInput,
 ) {
   return yield* simpleThreadCommand("thread.unpin", input);
+});
+
+export const setThreadParent = Effect.fn("EnvironmentCommands.setThreadParent")(function* (
+  input: SetThreadParentInput,
+) {
+  return yield* dispatch({
+    type: "thread.parent.set",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    parent: input.parent,
+  });
 });
 
 export const unsettleThread = Effect.fn("EnvironmentCommands.unsettleThread")(function* (

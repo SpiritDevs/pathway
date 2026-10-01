@@ -16,6 +16,7 @@ import {
   EnvironmentId,
   type MessageId,
   ORCHESTRATION_V2_WS_METHODS,
+  type OrchestrationV2Command,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
   type ProjectId,
@@ -210,6 +211,14 @@ export class RemoteThreads extends Context.Service<
       environmentId: EnvironmentId,
       projectId: ProjectId,
     ) => Effect.Effect<string | null, RemoteThreadError>;
+    /**
+     * Dispatches `command`, built for the environment holding the thread, over a send session.
+     * `null` when no other environment the account can message publishes the thread.
+     */
+    readonly dispatch: (
+      threadId: ThreadId,
+      command: (environmentId: EnvironmentId) => OrchestrationV2Command,
+    ) => Effect.Effect<EnvironmentId | null, RemoteThreadError>;
     /** `null` when no other environment the account can message publishes the thread. */
     readonly send: <E>(
       input: RemoteSendInput<E>,
@@ -340,6 +349,14 @@ export const layer = Layer.effect(
             : `Pathway could not authorize starting a thread on environment ${environmentId}.`,
       ).pipe(Effect.map((grant) => grant?.token ?? null));
 
-    return RemoteThreads.of({ read, launchTargets, launchGrant, send });
+    const dispatch: RemoteThreads["Service"]["dispatch"] = (threadId, command) =>
+      withThreadSession(threadId, "send", (environmentId, client) =>
+        client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](command(environmentId)).pipe(
+          Effect.as(environmentId),
+          unreachable(threadId),
+        ),
+      );
+
+    return RemoteThreads.of({ read, launchTargets, launchGrant, dispatch, send });
   }),
 );

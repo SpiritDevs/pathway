@@ -96,6 +96,7 @@ const executionEnvironmentDescriptor = v.object({
     threadSnooze: v.optional(v.boolean()),
     threadPinning: v.optional(v.boolean()),
     threadPinReorder: v.optional(v.boolean()),
+    threadParent: v.optional(v.boolean()),
     threadTitleRegeneration: v.optional(v.boolean()),
     threadVisitedTracking: v.optional(v.boolean()),
     serverSelfUpdate: v.optional(

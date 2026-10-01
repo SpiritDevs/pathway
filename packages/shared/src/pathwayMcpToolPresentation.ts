@@ -23,6 +23,7 @@ const PATHWAY_MCP_TOOL_DISPLAY_NAMES: Record<string, string> = {
   pathway_thread_list: "List Pathway threads",
   pathway_thread_read: "Read a Pathway thread",
   pathway_thread_send: "Send to a Pathway thread",
+  pathway_thread_set_parent: "Move a Pathway thread",
   pathway_thread_wait: "Wait for a Pathway thread",
   pathway_thread_interrupt: "Interrupt a Pathway thread",
   pathway_worktree_handoff: "Hand off thread to a git worktree",

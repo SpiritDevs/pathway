@@ -2353,6 +2353,13 @@ export const OrchestrationV2StoredEventJson = Schema.Struct({
 });
 export type OrchestrationV2StoredEventJson = typeof OrchestrationV2StoredEventJson.Type;
 
+/** A parent to list a thread under; `environmentId` only when it lives on another environment. */
+export const OrchestrationV2ThreadParentRef = Schema.Struct({
+  threadId: ThreadId,
+  environmentId: Schema.optional(EnvironmentId),
+});
+export type OrchestrationV2ThreadParentRef = typeof OrchestrationV2ThreadParentRef.Type;
+
 export const OrchestrationV2ThreadParent = Schema.Struct({
   threadId: ThreadId,
   environmentId: EnvironmentId,
@@ -2517,6 +2524,16 @@ export const OrchestrationV2Command = Schema.Union([
     worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     expectedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     workspaceMove: Schema.optional(Schema.NullOr(OrchestrationV2WorkspaceMove)),
+  }),
+  /**
+   * Lists a thread under another as an attached thread, or with `parent: null` moves it back to the
+   * threads list. `environmentId` is set only when the parent lives on another environment.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.parent.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    parent: Schema.NullOr(OrchestrationV2ThreadParentRef),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.title.regeneration.complete"),
