@@ -5,6 +5,21 @@ import {
   UsageRecoveryResult,
   UsageRecoveryError,
 } from "./usageRecovery.ts";
+import {
+  DeviceActionInput,
+  DeviceCloseInput,
+  DeviceConfigureInput,
+  DeviceDetail,
+  DeviceDetailInput,
+  DeviceError,
+  DeviceListInput,
+  SshDeviceHostConfig,
+  DeviceHostSummary,
+  DeviceOpenInput,
+  DeviceServiceState,
+  DeviceSession,
+  DeviceShutdownInput,
+} from "./device.ts";
 import { ThreadId } from "./baseSchemas.ts";
 import {
   StorageSnapshot,
@@ -481,6 +496,16 @@ export const WS_METHODS = {
   terminalRestart: "terminal.restart",
   terminalClose: "terminal.close",
 
+  // Device methods
+  deviceConfigure: "device.configure",
+  deviceList: "device.list",
+  deviceTestHost: "device.testHost",
+  deviceOpen: "device.open",
+  deviceClose: "device.close",
+  deviceShutdown: "device.shutdown",
+  deviceDetail: "device.detail",
+  deviceAction: "device.action",
+
   // Preview methods
   previewRemoteCommand: "preview.remote.command",
   subscribePreviewRemoteFrames: "preview.remote.frames",
@@ -580,6 +605,7 @@ export const WS_METHODS = {
   subscribeVcsStatus: "subscribeVcsStatus",
   subscribeTerminalEvents: "subscribeTerminalEvents",
   subscribeTerminalMetadata: "subscribeTerminalMetadata",
+  subscribeDeviceState: "subscribeDeviceState",
   subscribePreviewEvents: "subscribePreviewEvents",
   subscribeDiscoveredLocalServers: "subscribeDiscoveredLocalServers",
   subscribeServerConfig: "subscribeServerConfig",
@@ -1271,6 +1297,59 @@ export const WsPreviewAutomationRespondRpc = Rpc.make(WS_METHODS.previewAutomati
 export const WsPreviewAutomationFocusHostRpc = Rpc.make(WS_METHODS.previewAutomationFocusHost, {
   payload: PreviewAutomationHostFocus,
   error: EnvironmentAuthorizationError,
+});
+
+const WsDeviceTestHostRpc = Rpc.make(WS_METHODS.deviceTestHost, {
+  payload: SshDeviceHostConfig,
+  success: DeviceHostSummary,
+  error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+});
+
+const WsDeviceListRpc = Rpc.make(WS_METHODS.deviceList, {
+  payload: DeviceListInput,
+  success: DeviceServiceState,
+  error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+});
+
+const WsDeviceConfigureRpc = Rpc.make(WS_METHODS.deviceConfigure, {
+  payload: DeviceConfigureInput,
+  success: DeviceServiceState,
+  error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+});
+
+const WsDeviceOpenRpc = Rpc.make(WS_METHODS.deviceOpen, {
+  payload: DeviceOpenInput,
+  success: DeviceSession,
+  error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+});
+
+const WsDeviceCloseRpc = Rpc.make(WS_METHODS.deviceClose, {
+  payload: DeviceCloseInput,
+  error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+});
+
+const WsDeviceShutdownRpc = Rpc.make(WS_METHODS.deviceShutdown, {
+  payload: DeviceShutdownInput,
+  error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+});
+
+const WsDeviceDetailRpc = Rpc.make(WS_METHODS.deviceDetail, {
+  payload: DeviceDetailInput,
+  success: DeviceDetail,
+  error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+});
+
+const WsDeviceActionRpc = Rpc.make(WS_METHODS.deviceAction, {
+  payload: DeviceActionInput,
+  success: DeviceDetail,
+  error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+});
+
+const WsSubscribeDeviceStateRpc = Rpc.make(WS_METHODS.subscribeDeviceState, {
+  payload: Schema.Struct({}),
+  success: DeviceServiceState,
+  error: EnvironmentAuthorizationError,
+  stream: true,
 });
 
 export const WsSubscribePreviewEventsRpc = Rpc.make(WS_METHODS.subscribePreviewEvents, {
@@ -2279,6 +2358,18 @@ export const WsComputerRpcGroup = RpcGroup.make(
   WsSubscribeComputerEventsRpc,
 );
 
+export const WsDeviceRpcGroup = RpcGroup.make(
+  WsDeviceConfigureRpc,
+  WsDeviceListRpc,
+  WsDeviceTestHostRpc,
+  WsDeviceOpenRpc,
+  WsDeviceCloseRpc,
+  WsDeviceShutdownRpc,
+  WsDeviceDetailRpc,
+  WsDeviceActionRpc,
+  WsSubscribeDeviceStateRpc,
+);
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -2423,6 +2514,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeWorkspaceCleanupRpc,
   WsOrchestrationV2RetryWorkspaceCleanupRpc,
 )
+  .merge(WsDeviceRpcGroup)
   .merge(IssuesRpcs)
   .merge(EmailRpcs)
   .merge(WsComputerRpcGroup);

@@ -12,6 +12,7 @@ import {
   ISSUES_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
   type AuthEnvironmentScope,
+  type DeviceListInput,
   type ServerSettingsPatch,
   WS_METHODS,
   WsRpcGroup,
@@ -153,6 +154,15 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.terminalClose]: AuthTerminalOperateScope,
   [WS_METHODS.subscribeTerminalEvents]: AuthTerminalOperateScope,
   [WS_METHODS.subscribeTerminalMetadata]: AuthTerminalOperateScope,
+  [WS_METHODS.deviceConfigure]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deviceTestHost]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deviceList]: AuthOrchestrationReadScope,
+  [WS_METHODS.deviceOpen]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deviceClose]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deviceShutdown]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deviceDetail]: AuthOrchestrationReadScope,
+  [WS_METHODS.deviceAction]: AuthOrchestrationOperateScope,
+  [WS_METHODS.subscribeDeviceState]: AuthOrchestrationReadScope,
   [WS_METHODS.previewOpen]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewRemoteCommand]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribePreviewRemoteFrames]: AuthOrchestrationReadScope,
@@ -309,3 +319,8 @@ export function extraScopeForServerSettingsPatch(
 ): AuthEnvironmentScope | null {
   return patch.computer === undefined ? null : AuthAccessWriteScope;
 }
+
+export const requiredScopeForDeviceList = (input: DeviceListInput): AuthEnvironmentScope =>
+  input.retryHostId || input.updateTool
+    ? AuthOrchestrationOperateScope
+    : AuthOrchestrationReadScope;

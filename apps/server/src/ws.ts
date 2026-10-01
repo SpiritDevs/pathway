@@ -1,5 +1,6 @@
 import { UsageRecoveryService } from "./providerUsage/UsageRecoveryService.ts";
 import { ModelManifest } from "./provider/ModelManifest.ts";
+import * as DeviceService from "./device/DeviceService.ts";
 import { StorageService } from "./storage/StorageService.ts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -82,6 +83,7 @@ import {
   WsUsageRecoveryCancelRpc,
   WsUsageRecoveryPauseRpc,
   WsComputerRpcGroup,
+  WsDeviceRpcGroup,
 } from "@spiritdevs/contracts";
 import { resolveServerBackgroundActivitySettings } from "@spiritdevs/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
@@ -171,6 +173,7 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
   extraScopeForServerSettingsPatch,
   requiredScopeForRpcMethod,
+  requiredScopeForDeviceList,
 } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -511,7 +514,7 @@ const usageRecoveryRpcLayer = UsageRecoveryRpcGroup.toLayer(
 );
 
 // Computer RPCs are served by their own handler layer (see makeWsComputerRpcLayer).
-const ServerWsRpcGroup = WsRpcGroup.omit(
+const CoreWsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.usageRecoveryGet,
   WS_METHODS.usageRecoverySubscribe,
   WS_METHODS.usageRecoverySchedule,
@@ -520,6 +523,15 @@ const ServerWsRpcGroup = WsRpcGroup.omit(
   ...([...WsComputerRpcGroup.requests.keys()] as ReadonlyArray<
     RpcGroup.Rpcs<typeof WsComputerRpcGroup>["_tag"]
   >),
+  WS_METHODS.deviceConfigure,
+  WS_METHODS.deviceList,
+  WS_METHODS.deviceTestHost,
+  WS_METHODS.deviceOpen,
+  WS_METHODS.deviceClose,
+  WS_METHODS.deviceShutdown,
+  WS_METHODS.deviceDetail,
+  WS_METHODS.deviceAction,
+  WS_METHODS.subscribeDeviceState,
 );
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
@@ -677,7 +689,7 @@ const makeWsRpcLayer = (
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   providerUsageUpdates: ReturnType<typeof subscribeProviderUsage>,
 ) =>
-  ServerWsRpcGroup.toLayer(
+  Layer.unwrap(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
@@ -742,6 +754,7 @@ const makeWsRpcLayer = (
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
+      const deviceService = yield* DeviceService.DeviceService;
       const remoteBrowser = yield* RemoteBrowser;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
@@ -949,6 +962,7 @@ const makeWsRpcLayer = (
             otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
           },
           settings,
+          deviceWorkspace: true,
           shellResumeCompletionMarker: true,
           threadResumeCompletionMarker: true,
           threadSnapshotPagination: true,
@@ -1428,7 +1442,7 @@ const makeWsRpcLayer = (
         }
       });
 
-      const handlers = ServerWsRpcGroup.of({
+      const handlers = CoreWsRpcGroup.of({
         [ORCHESTRATION_V2_WS_METHODS.subscribeWorkspaceCleanup]: (_input) =>
           observeRpcStream(
             ORCHESTRATION_V2_WS_METHODS.subscribeWorkspaceCleanup,
@@ -3211,7 +3225,63 @@ const makeWsRpcLayer = (
             },
           ),
       });
-      return handlers;
+      const deviceHandlers = WsDeviceRpcGroup.of({
+        [WS_METHODS.deviceConfigure]: (input) =>
+          observeRpcEffect(WS_METHODS.deviceConfigure, deviceService.configure(input), {
+            "rpc.aggregate": "device",
+          }),
+        [WS_METHODS.deviceTestHost]: (input) =>
+          observeRpcEffect(WS_METHODS.deviceTestHost, deviceService.testHost(input), {
+            "rpc.aggregate": "device",
+          }),
+        [WS_METHODS.deviceList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deviceList,
+            input.inspectOnly && !input.updateTool
+              ? deviceService.inspect
+              : authorizeEffect(
+                  requiredScopeForDeviceList(input),
+                  input.updateTool
+                    ? deviceService.updateTool(input.updateTool)
+                    : input.retryHostId
+                      ? deviceService.retryHost(input.retryHostId)
+                      : deviceService.list,
+                ),
+            {
+              "rpc.aggregate": "device",
+            },
+          ),
+        [WS_METHODS.deviceOpen]: (input) =>
+          observeRpcEffect(WS_METHODS.deviceOpen, deviceService.open(input), {
+            "rpc.aggregate": "device",
+          }),
+        [WS_METHODS.deviceClose]: (input) =>
+          observeRpcEffect(WS_METHODS.deviceClose, deviceService.close(input), {
+            "rpc.aggregate": "device",
+          }),
+        [WS_METHODS.deviceShutdown]: (input) =>
+          observeRpcEffect(WS_METHODS.deviceShutdown, deviceService.shutdown(input), {
+            "rpc.aggregate": "device",
+          }),
+        [WS_METHODS.deviceDetail]: (input) =>
+          observeRpcEffect(WS_METHODS.deviceDetail, deviceService.detail(input), {
+            "rpc.aggregate": "device",
+          }),
+        [WS_METHODS.deviceAction]: (input) =>
+          observeRpcEffect(WS_METHODS.deviceAction, deviceService.action(input), {
+            "rpc.aggregate": "device",
+          }),
+        [WS_METHODS.subscribeDeviceState]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeDeviceState,
+            DeviceService.stateStream(deviceService),
+            { "rpc.aggregate": "device" },
+          ),
+      });
+      return Layer.mergeAll(
+        CoreWsRpcGroup.toLayer(handlers),
+        WsDeviceRpcGroup.toLayer(deviceHandlers),
+      );
     }),
   );
 

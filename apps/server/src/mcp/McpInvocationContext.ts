@@ -10,7 +10,13 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
-export const ALL_MCP_CAPABILITIES = ["preview", "orchestration", "worktree", "email"] as const;
+export const ALL_MCP_CAPABILITIES = [
+  "preview",
+  "orchestration",
+  "worktree",
+  "email",
+  "device",
+] as const;
 /**
  * `computer` is granted per credential, only while the thread's Computer
  * control is on, so it is never part of the default set.
