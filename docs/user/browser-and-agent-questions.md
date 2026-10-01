@@ -31,6 +31,10 @@ On iOS, you can also choose Remote browser from the thread's top-right menu. It 
 
 Use the tab bar to open, select, and close pages. Websites can open additional tabs for links and sign-in flows. Closing the final remote-browser tab stops its browser process. Opening the browser later reuses the task's saved website profile.
 
+On desktop and web, the remote browser streams at your display's resolution. A small label in the corner shows the frame rate and delay, or that the stream is reconnecting; click it to reconnect sooner. The stream pauses while the panel or window is hidden. When several people watch the same tab, the largest window sets the page size. When the connection is slow, the picture gets softer so the page keeps up.
+
+The page's own prompts appear over the stream: alerts, confirmations, text prompts, leave-page warnings, drop-down menus, and file pickers. Files you pick are uploaded to the environment. Text you copy in the page is copied to your device. Files the page downloads are listed under **Downloads** in the corner, and **Save** fetches each one from the environment.
+
 The agent works in whichever browser you are watching. Opening the remote browser routes the agent's browsing there. On desktop, opening a new local tab hands the agent back to this computer's browser.
 
 Take browser control before interacting while the agent is working. Use **Take over to assist agent** in the browser panel or above the composer. Resume the agent when you are finished. Any client watching the remote browser can take control. For a local tab, only the desktop showing that tab can take control. A failed attempt to open a browser without a tab does not offer takeover.

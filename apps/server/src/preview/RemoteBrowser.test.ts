@@ -4,6 +4,10 @@ import {
   EnvironmentId,
   PreviewAutomationConnectionId,
   ThreadId,
+  type PreviewRemoteInteractionCommand,
+  type PreviewRemoteInteractionEvent,
+  type PreviewRemoteInteractionState,
+  PreviewTabId,
   type PreviewAutomationResponse,
   type PreviewAutomationStreamEvent,
 } from "@spiritdevs/contracts";
@@ -13,10 +17,12 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { makeRemoteBrowser } from "./RemoteBrowser.ts";
+import type { BrowserArtifact } from "./RemoteBrowserRuntime.ts";
 
 const threadId = ThreadId.make("remote-deleted-task");
 const makeHarness = Effect.fn(function* () {
   let deleted = false;
+  let agentRunning = false;
   const deletions = yield* Queue.unbounded<ThreadId>();
   const requests = yield* Queue.unbounded<PreviewAutomationStreamEvent>();
   const responses = yield* Queue.unbounded<PreviewAutomationResponse>();
@@ -24,6 +30,29 @@ const makeHarness = Effect.fn(function* () {
   const subscribed = Promise.withResolvers<void>();
   const unsubscribe = vi.fn(async () => undefined);
   const runtime = {
+    interact: vi.fn(
+      async (
+        _input: PreviewRemoteInteractionCommand,
+        authorize: () => Promise<void>,
+      ): Promise<PreviewRemoteInteractionState> => {
+        await authorize();
+        return {
+          tabId: PreviewTabId.make("tab"),
+          cursor: "default",
+          clipboard: null,
+          dialog: null,
+          select: null,
+          fileChooser: null,
+          downloads: [],
+        };
+      },
+    ),
+    subscribeInteractions: vi.fn(
+      async (_threadId: string, _listener: (event: PreviewRemoteInteractionEvent) => void) =>
+        async () =>
+          undefined,
+    ),
+    subscribeSurface: vi.fn(async () => async () => undefined),
     command: vi.fn(async (_input: unknown, beforeAction?: () => Promise<void>) => {
       await beforeAction?.();
       return { tabs: [], selectedTabId: null, artifacts: [] };
@@ -46,6 +75,9 @@ const makeHarness = Effect.fn(function* () {
       Queue.offer(responses, response).pipe(Effect.asVoid),
     invoke: <A>() => Effect.die("Unexpected invocation") as Effect.Effect<A>,
   };
+  const signArtifact = vi.fn((artifact: BrowserArtifact) =>
+    Effect.succeed({ ...artifact, url: "test-capture" }),
+  );
   const service = yield* makeRemoteBrowser({
     runtime,
     broker,
@@ -53,10 +85,10 @@ const makeHarness = Effect.fn(function* () {
     getThreadProjection: () =>
       Effect.sync(() => ({
         thread: { deletedAt: deleted ? DateTime.makeUnsafe("2026-09-07T00:00:00Z") : null },
-        runs: [],
+        runs: agentRunning ? [{ status: "running" as const }] : [],
       })),
     deletedThreads: Stream.fromQueue(deletions),
-    signArtifact: (artifact) => Effect.succeed({ ...artifact, url: "test-capture" }),
+    signArtifact,
   });
   return {
     service,
@@ -68,6 +100,10 @@ const makeHarness = Effect.fn(function* () {
     closed,
     subscribed,
     unsubscribe,
+    signArtifact,
+    markAgentRunning: () => {
+      agentRunning = true;
+    },
     markDeleted: () => {
       deleted = true;
     },
@@ -75,6 +111,98 @@ const makeHarness = Effect.fn(function* () {
 });
 
 describe("remote browser deleted task lifecycle", () => {
+  it.effect(
+    "denies interaction control while an agent runs, including the last-moment recheck",
+    () =>
+      Effect.gen(function* () {
+        const input = {
+          action: "clipboardRead" as const,
+          threadId,
+          tabId: PreviewTabId.make("tab"),
+        };
+        const h = yield* makeHarness();
+        h.markAgentRunning();
+        expect((yield* Effect.flip(h.service.interact(input))).detail).toContain(
+          "Take browser control",
+        );
+        expect(h.runtime.interact).not.toHaveBeenCalled();
+        const racing = yield* makeHarness();
+        racing.runtime.interact.mockImplementation(async (_input, authorize) => {
+          racing.markAgentRunning();
+          await authorize();
+          throw new Error("must not apply");
+        });
+        expect((yield* Effect.flip(racing.service.interact(input))).detail).toContain(
+          "Take browser control",
+        );
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "acknowledges interactions without snapshots and reuses subscription download signatures",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const state: PreviewRemoteInteractionState = {
+          tabId: PreviewTabId.make("tab"),
+          cursor: "default",
+          clipboard: null,
+          dialog: null,
+          fileChooser: null,
+          select: null,
+          downloads: [
+            {
+              downloadId: "download",
+              name: "report.csv",
+              status: "ready",
+              attachmentId: "attachment",
+              sizeBytes: 4,
+            },
+          ],
+        };
+        const delivered = yield* Queue.unbounded<PreviewRemoteInteractionEvent>();
+        const unsubscribed = vi.fn(async () => undefined);
+        let publish = (_event: PreviewRemoteInteractionEvent) => {};
+        h.runtime.subscribeInteractions.mockImplementation(async (_thread, listener) => {
+          publish = listener;
+          listener({ type: "state", tabs: [state] });
+          return unsubscribed;
+        });
+        const running = yield* h.service.interactions({ threadId }).pipe(
+          Stream.runForEach((event) => Queue.offer(delivered, event)),
+          Effect.flip,
+          Effect.forkScoped,
+        );
+        expect((yield* Queue.take(delivered)).tabs[0]?.downloads[0]?.url).toBe("test-capture");
+        h.runtime.interact.mockResolvedValue(state);
+        for (const command of [
+          { action: "pointerMove", x: 1, y: 2 },
+          { action: "wheel", x: 1, y: 2, deltaX: 0, deltaY: 1 },
+          {
+            action: "composition",
+            phase: "update",
+            text: "test",
+            selectionStart: 0,
+            selectionEnd: 4,
+          },
+          { action: "clipboardRead" },
+        ] as const) {
+          expect(
+            yield* h.service.interact({ ...command, threadId, tabId: state.tabId }),
+          ).toBeUndefined();
+          publish({ type: "state", tabs: [{ ...state, clipboard: "copied" }] });
+          const event = yield* Queue.take(delivered);
+          expect(event.tabs[0]?.clipboard).toBe("copied");
+          expect(event.tabs[0]?.downloads[0]?.url).toBe("test-capture");
+        }
+        expect(h.signArtifact).toHaveBeenCalledOnce();
+        h.markDeleted();
+        yield* Queue.offer(h.deletions, threadId);
+        expect((yield* Fiber.join(running)).detail).toContain("unavailable");
+        expect(unsubscribed).toHaveBeenCalledOnce();
+      }).pipe(Effect.scoped),
+  );
+
   it.effect(
     "rejects deleted tasks before commands, host selection, metadata or frame subscriptions",
     () =>

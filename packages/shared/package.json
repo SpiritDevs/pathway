@@ -299,6 +299,10 @@
     "./uiTreeTargeting": {
       "types": "./src/uiTreeTargeting.ts",
       "import": "./src/uiTreeTargeting.ts"
+    },
+    "./environmentSurface": {
+      "types": "./src/environmentSurface.ts",
+      "import": "./src/environmentSurface.ts"
     }
   },
   "scripts": {

@@ -1,7 +1,6 @@
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import type {
   PreviewRemoteCommand,
-  PreviewRemoteFrame,
   PreviewRemoteTab,
   PreviewTabId,
   ScopedThreadRef,
@@ -12,7 +11,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { previewEnvironment } from "~/state/preview";
 
+import { RemoteBrowserInteractions } from "./RemoteBrowserInteractions";
 import { remoteBrowserPoint } from "./remoteBrowserCoordinates";
+import { surfaceIndicator } from "./remoteBrowserSurface";
+import { useRemoteBrowserSurface } from "./useRemoteBrowserSurface";
 
 /** Automatic retries before the stream waits for the user to press Reconnect. */
 const AUTO_RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000] as const;
@@ -20,9 +22,11 @@ const AUTO_RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 type RemoteBrowserInput = (command: PreviewRemoteCommand) => Promise<boolean>;
 
 /**
- * Live view of one remote tab. With `onInput` it forwards clicks, keys, paste and
- * scrolling to the environment; without it the view is watch-only and `onActivate`
- * handles clicks (the mini-player uses this to open the panel).
+ * Live view of one remote tab. Pixels arrive over the environment's binary
+ * surface socket; tab metadata over a frame-less RPC subscription. With
+ * `onInput` it forwards clicks, keys, paste, pointer and wheel input and
+ * presents the page's dialogs, pickers and downloads; without it the view is
+ * watch-only and `onActivate` handles clicks (the mini-player opens the panel).
  */
 export function RemoteBrowserStream({
   threadRef,
@@ -41,23 +45,20 @@ export function RemoteBrowserStream({
   emptyState?: React.ReactNode;
   compact?: boolean;
 }) {
+  // Without a tabId the subscription carries tab metadata only and captures nothing.
   const atom = useMemo(
     () =>
       previewEnvironment.remoteFrames({
         environmentId: threadRef.environmentId,
-        input: { threadId: threadRef.threadId, ...(tabId ? { tabId } : {}) },
+        input: { threadId: threadRef.threadId },
       }),
-    [tabId, threadRef.environmentId, threadRef.threadId],
+    [threadRef.environmentId, threadRef.threadId],
   );
   const result = useAtomValue(atom);
   const reconnect = useAtomRefresh(atom);
   const failed = AsyncResult.isFailure(result);
   const [retries, setRetries] = useState(0);
   const incoming = AsyncResult.isSuccess(result) ? result.value : undefined;
-  // Keep the last painted frame across metadata-only updates without a second render per frame.
-  const lastFrame = useRef<PreviewRemoteFrame | undefined>(undefined);
-  if (incoming?.data && incoming.tabId === tabId) lastFrame.current = incoming;
-  const frame = lastFrame.current?.tabId === tabId ? lastFrame.current : undefined;
 
   useEffect(() => {
     if (incoming) setRetries(0);
@@ -108,33 +109,14 @@ export function RemoteBrowserStream({
     );
   }
   if (!tabId) return <>{emptyState ?? null}</>;
-  if (!frame)
-    return (
-      <p role="status" className="p-4 text-sm text-muted-foreground">
-        Connecting to the remote browser…
-      </p>
-    );
-
-  const target = { threadId: threadRef.threadId, tabId };
-  const imageClassName =
-    "h-full w-full object-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary";
-  const src = `data:${frame.mimeType};base64,${frame.data}`;
-  if (!onInput)
-    return (
-      <img
-        alt="Live remote browser page"
-        src={src}
-        className={`${imageClassName} ${onActivate ? "cursor-pointer" : ""}`}
-        draggable={false}
-        onClick={onActivate}
-      />
-    );
   return (
-    <InteractiveFrame
-      frame={frame}
-      src={src}
-      className={imageClassName}
-      send={(command) => void onInput({ ...command, ...target } as PreviewRemoteCommand)}
+    <RemoteBrowserSurface
+      key={tabId}
+      threadRef={threadRef}
+      tabId={tabId}
+      onInput={onInput}
+      onActivate={onActivate}
+      compact={compact}
     />
   );
 }
@@ -145,90 +127,157 @@ type TargetlessCommand = PreviewRemoteCommand extends infer C
     : never
   : never;
 
-function InteractiveFrame({
-  frame,
-  src,
-  className,
-  send,
+function RemoteBrowserSurface({
+  threadRef,
+  tabId,
+  onInput,
+  onActivate,
+  compact,
 }: {
-  frame: PreviewRemoteFrame;
-  src: string;
-  className: string;
-  send: (command: TargetlessCommand) => void;
+  threadRef: ScopedThreadRef;
+  tabId: PreviewTabId;
+  onInput: RemoteBrowserInput | undefined;
+  onActivate: (() => void) | undefined;
+  compact: boolean;
 }) {
-  const scroll = useRef({
-    x: 0,
-    y: 0,
-    timer: undefined as ReturnType<typeof setTimeout> | undefined,
+  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const surface = useRemoteBrowserSurface({
+    environmentId: threadRef.environmentId,
+    threadId: threadRef.threadId,
+    tabId,
+    enabled: true,
+    // The mini-player is a thumbnail; it must not shrink the agent's page.
+    sizing: compact ? "passive" : "active",
+    containerRef,
+    canvasRef,
   });
-  useEffect(
-    () => () => {
-      clearTimeout(scroll.current.timer);
-    },
-    [],
-  );
+  const indicator = surfaceIndicator(surface.state, surface.quality);
+  const target = { threadId: threadRef.threadId, tabId };
+  const send = onInput
+    ? (command: TargetlessCommand) =>
+        void onInput({ ...command, ...target } as PreviewRemoteCommand)
+    : undefined;
+  // Maps a pointer position on the letterboxed canvas to page CSS pixels.
+  const pagePoint = (event: { clientX: number; clientY: number }) => {
+    const canvas = canvasRef.current;
+    const page = surface.pageSize.current;
+    if (!canvas || !page) return null;
+    const box = canvas.getBoundingClientRect();
+    return remoteBrowserPoint({
+      x: event.clientX - box.left,
+      y: event.clientY - box.top,
+      boxWidth: box.width,
+      boxHeight: box.height,
+      width: page.width,
+      height: page.height,
+    });
+  };
+
   return (
-    <img
-      alt="Remote browser page. Click to interact; use your keyboard after clicking."
-      src={src}
-      className={className}
-      draggable={false}
-      tabIndex={0}
-      onClick={(event) => {
-        event.currentTarget.focus();
-        const box = event.currentTarget.getBoundingClientRect();
-        const point = remoteBrowserPoint({
-          x: event.clientX - box.left,
-          y: event.clientY - box.top,
-          boxWidth: box.width,
-          boxHeight: box.height,
-          width: frame.width,
-          height: frame.height,
-        });
-        if (point) send({ action: "click", ...point });
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.currentTarget.blur();
-          return;
+    <div ref={containerRef} className="relative h-full w-full self-stretch overflow-hidden">
+      <canvas
+        ref={canvasRef}
+        aria-label={
+          send
+            ? "Remote browser page. Click to interact; use your keyboard after clicking."
+            : "Live remote browser page"
         }
-        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") return;
-        if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return;
-        event.preventDefault();
-        const modifiers = [
-          event.metaKey ? "Meta" : "",
-          event.ctrlKey ? "Control" : "",
-          event.altKey ? "Alt" : "",
-          event.shiftKey ? "Shift" : "",
-        ].filter(Boolean);
-        if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey)
-          send({ action: "type", text: event.key });
-        else
-          send({
-            action: "press",
-            key: [...modifiers, event.key === " " ? "Space" : event.key].join("+"),
-          });
-      }}
-      onPaste={(event) => {
-        event.preventDefault();
-        send({ action: "type", text: event.clipboardData.getData("text/plain") });
-      }}
-      onWheel={(event) => {
-        const pending = scroll.current;
-        const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? frame.height : 1;
-        pending.x += event.deltaX * multiplier;
-        pending.y += event.deltaY * multiplier;
-        if (pending.timer !== undefined) return;
-        pending.timer = setTimeout(() => {
-          const deltaX = pending.x;
-          const deltaY = pending.y;
-          pending.x = 0;
-          pending.y = 0;
-          pending.timer = undefined;
-          send({ action: "scroll", deltaX, deltaY });
-        }, 100);
-      }}
-    />
+        role="img"
+        tabIndex={send ? 0 : undefined}
+        className={`h-full w-full object-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary ${
+          !send && onActivate ? "cursor-pointer" : ""
+        } ${surface.hasFrame ? "" : "invisible"}`}
+        onClick={
+          send
+            ? (event) => {
+                event.currentTarget.focus();
+                const point = pagePoint(event);
+                if (point) send({ action: "click", ...point });
+              }
+            : onActivate
+        }
+        onKeyDown={
+          send
+            ? (event) => {
+                if (event.key === "Escape") {
+                  event.currentTarget.blur();
+                  return;
+                }
+                if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") return;
+                if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return;
+                event.preventDefault();
+                const modifiers = [
+                  event.metaKey ? "Meta" : "",
+                  event.ctrlKey ? "Control" : "",
+                  event.altKey ? "Alt" : "",
+                  event.shiftKey ? "Shift" : "",
+                ].filter(Boolean);
+                if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey)
+                  send({ action: "type", text: event.key });
+                else
+                  send({
+                    action: "press",
+                    key: [...modifiers, event.key === " " ? "Space" : event.key].join("+"),
+                  });
+              }
+            : undefined
+        }
+        onPaste={
+          send
+            ? (event) => {
+                event.preventDefault();
+                send({ action: "type", text: event.clipboardData.getData("text/plain") });
+              }
+            : undefined
+        }
+      />
+      {!surface.hasFrame ? (
+        <p
+          role="status"
+          className="absolute inset-0 flex items-center justify-center p-4 text-sm text-muted-foreground"
+        >
+          {surface.state === "failed"
+            ? "The remote browser stream is offline. Retrying…"
+            : "Connecting to the remote browser…"}
+        </p>
+      ) : null}
+      {send ? (
+        <RemoteBrowserInteractions
+          threadRef={threadRef}
+          tabId={tabId}
+          canvasRef={canvasRef}
+          pagePoint={pagePoint}
+          pageHeight={() => surface.pageSize.current?.height ?? 0}
+        />
+      ) : null}
+      {!compact ? (
+        <button
+          type="button"
+          className="absolute right-2 bottom-2 flex items-center gap-1.5 rounded-full border bg-background/85 px-2 py-0.5 text-[11px] text-muted-foreground tabular-nums"
+          title={
+            indicator.tone === "live"
+              ? "Streaming from the environment. Latency includes clock differences between machines."
+              : "Reconnect the stream"
+          }
+          onClick={() => {
+            if (indicator.tone !== "live") surface.reconnect();
+          }}
+        >
+          <span
+            aria-hidden
+            className={`size-1.5 rounded-full ${
+              indicator.tone === "live"
+                ? "bg-emerald-500"
+                : indicator.tone === "degraded"
+                  ? "bg-amber-500"
+                  : "bg-destructive"
+            }`}
+          />
+          {indicator.label}
+        </button>
+      ) : null}
+    </div>
   );
 }
 

@@ -193,6 +193,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeDeviceState]: AuthOrchestrationReadScope,
   [WS_METHODS.previewOpen]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewRemoteCommand]: AuthOrchestrationOperateScope,
+  [WS_METHODS.previewRemoteInteract]: AuthOrchestrationOperateScope,
+  [WS_METHODS.subscribePreviewRemoteInteractions]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribePreviewRemoteFrames]: AuthOrchestrationReadScope,
   [WS_METHODS.previewNavigate]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewResize]: AuthOrchestrationOperateScope,

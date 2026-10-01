@@ -1,3 +1,11 @@
+import { RemoteBrowserInteractions } from "./RemoteBrowserInteractions.ts";
+import type {
+  PreviewRemoteInteractionCommand,
+  PreviewRemoteInteractionEvent,
+} from "@spiritdevs/contracts";
+import { EnvironmentSurfaceStream, type SurfaceSink } from "../surface/EnvironmentSurfaceStream.ts";
+import { jpegDimensions } from "@spiritdevs/shared/environmentSurface";
+import type { EnvironmentSurfaceSizing, EnvironmentSurfaceViewport } from "@spiritdevs/contracts";
 import { fillBrowserLoginFields } from "@spiritdevs/shared/browserPasswordAutofill";
 // @effect-diagnostics nodeBuiltinImport:off - Playwright and streaming encoder run at this adapter boundary.
 // @effect-diagnostics globalDate:off globalTimers:off - Native browser events and encoder frame pacing use the Node event loop.
@@ -69,12 +77,17 @@ interface Recording {
   finalization: Promise<BrowserArtifact> | null;
 }
 interface Tab {
+  interactions: RemoteBrowserInteractions;
+  ready: Promise<void>;
   owner: BrowserSession;
   id: PreviewTabId;
   page: Page;
   openerTabId: PreviewTabId | null;
   session: CDPSession | null;
-  captureStarting: Promise<void> | null;
+  captureTail: Promise<void>;
+  captureConfig: string;
+  surface: EnvironmentSurfaceStream;
+  surfaceTimer: ReturnType<typeof setInterval> | null;
   listeners: Set<(frame: PreviewRemoteFrame) => void>;
   frame: PreviewRemoteFrame | null;
   jpeg: Buffer | null;
@@ -98,6 +111,7 @@ interface BrowserSession {
   metadataTail: Promise<void>;
 }
 export interface BrowserArtifact {
+  downloadName?: string | undefined;
   id: string;
   path: string;
   mimeType: string;
@@ -115,7 +129,8 @@ const BrowserCaptureIndex = Schema.Struct({
     Schema.Struct({
       id: Schema.String,
       fileName: Schema.String,
-      mimeType: Schema.Literals(["image/png", "video/mp4"]),
+      mimeType: Schema.Literals(["image/png", "video/mp4", "application/octet-stream"]),
+      downloadName: Schema.optional(Schema.String),
       sizeBytes: Schema.Number,
       createdAt: Schema.String,
     }),
@@ -134,6 +149,10 @@ export class RemoteBrowserRuntime {
   private artifactWrites = new Map<string, Promise<void>>();
   private artifacts = new Map<string, BrowserArtifact>();
   private artifactOwners = new Map<string, string>();
+  private interactionWatchers = new Map<
+    string,
+    Set<(event: PreviewRemoteInteractionEvent) => void>
+  >();
   private watchers = new Map<string, Set<(frame: PreviewRemoteFrame) => void>>();
   private readonly directory: string;
   private readonly attachmentsDirectory: string;
@@ -221,11 +240,15 @@ export class RemoteBrowserRuntime {
     });
     context.on("close", () => {
       for (const tab of session.tabs.values()) {
+        void tab.interactions.close();
+        tab.surface.close();
+        if (tab.surfaceTimer) clearInterval(tab.surfaceTimer);
         if (tab.publishTimer) clearTimeout(tab.publishTimer);
         tab.publishTimer = null;
         if (tab.recording) void this.stopRecording(tab).catch(() => undefined);
       }
       session.tabs.clear();
+      this.publishInteractions(session);
       session.selectedTabId = null;
       void this.forgetSession(session);
       void this.publishMetadata(session).catch(() => undefined);
@@ -236,15 +259,32 @@ export class RemoteBrowserRuntime {
 
   private async register(session: BrowserSession, page: Page): Promise<Tab> {
     const existing = [...session.tabs.values()].find((tab) => tab.page === page);
-    if (existing) return existing;
+    if (existing) {
+      await existing.ready;
+      return existing;
+    }
     // Insert before awaiting opener/title so simultaneous page events cannot duplicate the tab.
+    const id = PreviewTabId.make(`remote-${NodeCrypto.randomUUID()}`);
+    const interactions = new RemoteBrowserInteractions(
+      page,
+      session.threadId,
+      id,
+      this.attachmentsDirectory,
+      () => this.publishInteractions(session),
+      (artifact) => this.rememberArtifact(session.threadId, artifact),
+    );
     const tab: Tab = {
+      interactions,
+      ready: Promise.resolve(),
       owner: session,
-      id: PreviewTabId.make(`remote-${NodeCrypto.randomUUID()}`),
+      id,
       page,
       openerTabId: null,
       session: null,
-      captureStarting: null,
+      captureTail: Promise.resolve(),
+      captureConfig: "",
+      surface: new EnvironmentSurfaceStream(),
+      surfaceTimer: null,
       listeners: new Set(),
       frame: null,
       jpeg: null,
@@ -260,7 +300,11 @@ export class RemoteBrowserRuntime {
     session.tabs.set(tab.id, tab);
     session.selectedTabId ??= tab.id;
     page.on("close", () => {
+      void tab.interactions.close();
+      tab.surface.close();
+      if (tab.surfaceTimer) clearInterval(tab.surfaceTimer);
       session.tabs.delete(tab.id);
+      this.publishInteractions(session);
       if (tab.publishTimer) clearTimeout(tab.publishTimer);
       tab.publishTimer = null;
       if (session.selectedTabId === tab.id)
@@ -285,25 +329,65 @@ export class RemoteBrowserRuntime {
     page.on("domcontentloaded", () => {
       void this.publishMetadata(session).catch(() => undefined);
     });
-    page.on("dialog", (dialog) => {
-      void dialog.dismiss().catch(() => undefined);
-    });
-    page.on("download", (download) => {
-      // Keep downloads on the environment; never silently write into the user's checkout.
-      const file = NodePath.join(
-        this.directory,
-        "downloads",
-        `${NodeCrypto.randomUUID()}-${download.suggestedFilename().replace(/[^a-zA-Z0-9._-]/g, "_")}`,
-      );
-      void NodeFSP.mkdir(NodePath.join(this.directory, "downloads"), { recursive: true })
-        .then(() => download.saveAs(file))
-        .catch(() => undefined);
-    });
-    const opener = await page.opener().catch(() => null);
-    tab.openerTabId =
-      [...session.tabs.values()].find((candidate) => candidate.page === opener)?.id ?? null;
-    await this.publishMetadata(session);
+    tab.ready = (async () => {
+      await interactions.watch((this.interactionWatchers.get(session.threadId)?.size ?? 0) > 0);
+      await interactions.install();
+      const opener = await page.opener().catch(() => null);
+      tab.openerTabId =
+        [...session.tabs.values()].find((candidate) => candidate.page === opener)?.id ?? null;
+      await this.publishMetadata(session);
+      this.publishInteractions(session);
+    })();
+    await tab.ready;
     return tab;
+  }
+
+  private publishInteractions(session: BrowserSession) {
+    const event: PreviewRemoteInteractionEvent = {
+      type: "state",
+      tabs: [...session.tabs.values()].map((tab) => tab.interactions.state),
+    };
+    for (const listener of this.interactionWatchers.get(session.threadId) ?? []) listener(event);
+  }
+
+  async subscribeInteractions(
+    threadId: string,
+    listener: (event: PreviewRemoteInteractionEvent) => void,
+  ) {
+    this.assertThreadOpen(threadId);
+    const watchers = this.interactionWatchers.get(threadId) ?? new Set();
+    watchers.add(listener);
+    this.interactionWatchers.set(threadId, watchers);
+    const unsubscribe = async () => {
+      watchers.delete(listener);
+      if (!watchers.size && this.interactionWatchers.get(threadId) === watchers) {
+        this.interactionWatchers.delete(threadId);
+        const current = await this.sessions.get(threadId)?.catch(() => undefined);
+        if (current) {
+          const watched = (this.interactionWatchers.get(threadId)?.size ?? 0) > 0;
+          await Promise.all(
+            [...current.tabs.values()].map((tab) => tab.interactions.watch(watched)),
+          );
+        }
+      }
+    };
+    try {
+      const session = await this.sessions.get(threadId);
+      if (session) {
+        await Promise.all([...session.tabs.values()].map((tab) => tab.interactions.watch(true)));
+        this.publishInteractions(session);
+      } else listener({ type: "state", tabs: [] });
+      return unsubscribe;
+    } catch (error) {
+      await unsubscribe();
+      throw error;
+    }
+  }
+
+  async interact(input: PreviewRemoteInteractionCommand, authorize: () => Promise<void>) {
+    const { tab } = await this.getTab(input.threadId, input.tabId);
+    // Replies must run while a navigation/click is waiting for its dialog to close.
+    return tab.interactions.command(input, authorize);
   }
 
   private async forgetSession(session: BrowserSession) {
@@ -314,7 +398,10 @@ export class RemoteBrowserRuntime {
 
   private closeSession(session: BrowserSession): Promise<void> {
     session.closing ??= Promise.resolve()
-      .then(() => session.context.close())
+      .then(async () => {
+        await Promise.all([...session.tabs.values()].map((tab) => tab.interactions.close()));
+        await session.context.close();
+      })
       .finally(() => this.forgetSession(session));
     return session.closing;
   }
@@ -369,7 +456,8 @@ export class RemoteBrowserRuntime {
   }
 
   private serial<T>(tab: Tab, action: () => Promise<T>): Promise<T> {
-    const result = tab.tail.then(() => {
+    const result = tab.tail.then(async () => {
+      await tab.ready;
       this.assertThreadOpen(tab.owner.threadId);
       if (tab.page.isClosed()) throw new Error("The browser tab closed before the action ran.");
       return action();
@@ -379,15 +467,15 @@ export class RemoteBrowserRuntime {
   }
 
   async list(threadId: string) {
+    // Legacy capture UIs label every non-video artifact as a screenshot. Downloads
+    // use the interaction stream until those UIs adopt the new contract.
+    const artifacts = (await this.getArtifacts(threadId)).filter(
+      (artifact) => artifact.mimeType !== "application/octet-stream",
+    );
     const pending = this.sessions.get(threadId);
-    if (!pending)
-      return { tabs: [], selectedTabId: null, artifacts: await this.getArtifacts(threadId) };
+    if (!pending) return { tabs: [], selectedTabId: null, artifacts };
     const session = await pending;
-    return {
-      tabs: await this.tabs(session),
-      selectedTabId: session.selectedTabId,
-      artifacts: await this.getArtifacts(threadId),
-    };
+    return { tabs: await this.tabs(session), selectedTabId: session.selectedTabId, artifacts };
   }
 
   private captureIndexPath(threadId: string) {
@@ -414,7 +502,12 @@ export class RemoteBrowserRuntime {
         throw new Error("Browser capture index ownership does not match this task.");
       const recovered: BrowserArtifact[] = [];
       for (const capture of index.captures) {
-        const extension = capture.mimeType === "image/png" ? "png" : "mp4";
+        const extension =
+          capture.mimeType === "image/png"
+            ? "png"
+            : capture.mimeType === "video/mp4"
+              ? "mp4"
+              : "bin";
         if (
           capture.fileName !== `${capture.id}.${extension}` ||
           NodePath.basename(capture.fileName) !== capture.fileName
@@ -491,7 +584,7 @@ export class RemoteBrowserRuntime {
   private async writeCaptureIndex(threadId: string, artifacts: BrowserArtifact[]) {
     const captures = artifacts.map(({ path, ...metadata }) => ({
       ...metadata,
-      mimeType: metadata.mimeType as "image/png" | "video/mp4",
+      mimeType: metadata.mimeType as "image/png" | "video/mp4" | "application/octet-stream",
       fileName: NodePath.basename(path),
     }));
     const path = this.captureIndexPath(threadId);
@@ -667,7 +760,7 @@ export class RemoteBrowserRuntime {
   private async status(tab: Tab): Promise<PreviewAutomationStatus> {
     return {
       available: true,
-      visible: tab.listeners.size > 0,
+      visible: tab.listeners.size > 0 || tab.surface.size > 0,
       tabId: tab.id,
       url: tab.page.url(),
       title: await tab.page.title(),
@@ -950,79 +1043,172 @@ export class RemoteBrowserRuntime {
     return artifact;
   }
 
-  private async startCapture(tab: Tab): Promise<void> {
-    if (tab.captureStarting) return tab.captureStarting;
-    if (tab.session) return;
-    const start = async () => {
-      const cdp = await tab.page.context().newCDPSession(tab.page);
-      tab.session = cdp;
-      cdp.on("Page.screencastFrame", (event) => {
-        void cdp
-          .send("Page.screencastFrameAck", { sessionId: event.sessionId })
-          .catch(() => undefined);
-        tab.jpeg = Buffer.from(event.data, "base64");
-        const size = tab.page.viewportSize() ?? { width: 1280, height: 800 };
-        const frame: PreviewRemoteFrame = {
-          tabId: tab.id,
-          mimeType: "image/jpeg",
-          data: event.data,
-          ...size,
-          sequence: ++tab.sequence,
-          tabs: tab.owner.metadata,
-          metadataRevision: tab.owner.metadataRevision,
-        };
-        tab.frame = frame;
-        const publish = () => {
-          tab.publishTimer = null;
-          if (!tab.frame || tab.page.isClosed() || tab.session !== cdp) return;
-          tab.publishedAt = Date.now();
-          for (const listener of tab.listeners)
-            listener({
-              ...tab.frame,
-              tabs: tab.owner.metadata,
-              metadataRevision: tab.owner.metadataRevision,
-            });
-        };
-        const remaining = 160 - (Date.now() - tab.publishedAt);
-        if (remaining <= 0) {
-          if (tab.publishTimer) clearTimeout(tab.publishTimer);
-          publish();
-        } else if (!tab.publishTimer) {
-          tab.publishTimer = setTimeout(publish, remaining);
+  private startCapture(tab: Tab): Promise<void> {
+    const reconcile = async () => {
+      const wanted = tab.listeners.size > 0 || tab.surface.size > 0 || tab.recording !== null;
+      if (!wanted || tab.page.isClosed()) {
+        const cdp = tab.session;
+        tab.session = null;
+        tab.captureConfig = "";
+        if (tab.publishTimer) clearTimeout(tab.publishTimer);
+        tab.publishTimer = null;
+        if (cdp) {
+          await cdp.send("Page.stopScreencast").catch(() => undefined);
+          await cdp.detach().catch(() => undefined);
         }
-      });
+        tab.jpeg = null;
+        tab.frame = null;
+        return;
+      }
+      const config = tab.surface.configuration(
+        tab.page.viewportSize() ?? { width: 1280, height: 800 },
+      );
+      const key = JSON.stringify(config);
+      const currentViewport = tab.page.viewportSize();
+      if (
+        tab.session &&
+        tab.captureConfig === key &&
+        (!config.resizeViewport ||
+          (currentViewport?.width === config.width && currentViewport.height === config.height))
+      )
+        return;
+      const cdp = tab.session ?? (await tab.page.context().newCDPSession(tab.page));
+      if (!tab.session) {
+        tab.session = cdp;
+        cdp.on("Page.screencastFrame", (event) => {
+          void cdp
+            .send("Page.screencastFrameAck", { sessionId: event.sessionId })
+            .catch(() => undefined);
+          if (tab.session !== cdp || (!tab.listeners.size && !tab.surface.size && !tab.recording))
+            return;
+          this.publishCapture(tab, event.data);
+        });
+      } else await cdp.send("Page.stopScreencast");
       try {
+        // A single viewport policy also keeps Playwright's CSS-coordinate input consistent.
+        if (config.resizeViewport) {
+          await tab.page.setViewportSize({ width: config.width, height: config.height });
+          await cdp.send("Emulation.setDeviceMetricsOverride", {
+            width: config.width,
+            height: config.height,
+            deviceScaleFactor: config.deviceScale,
+            mobile: false,
+          });
+        }
         await cdp.send("Page.startScreencast", {
           format: "jpeg",
-          quality: 75,
-          maxWidth: 1280,
-          maxHeight: 900,
+          quality: config.quality,
+          maxWidth: config.maxWidth,
+          maxHeight: config.maxHeight,
           everyNthFrame: 1,
         });
+        tab.captureConfig = key;
+        if (tab.surface.size && !tab.jpeg) {
+          const jpeg = await tab.page.screenshot({
+            type: "jpeg",
+            quality: config.quality,
+            timeout: 5000,
+          });
+          if (tab.surface.size) this.publishCapture(tab, jpeg.toString("base64"));
+        }
       } catch (error) {
         tab.session = null;
+        tab.captureConfig = "";
         await cdp.detach().catch(() => undefined);
         throw error;
       }
     };
-    tab.captureStarting = start();
-    try {
-      await tab.captureStarting;
-    } finally {
-      tab.captureStarting = null;
-    }
+    const result = tab.captureTail.then(reconcile);
+    tab.captureTail = result.catch(() => undefined);
+    return result;
   }
 
-  private async stopUnusedCapture(tab: Tab) {
-    if (tab.captureStarting) await tab.captureStarting.catch(() => undefined);
-    if (tab.listeners.size || tab.recording || !tab.session) return;
-    const cdp = tab.session;
-    tab.session = null;
-    if (tab.publishTimer) clearTimeout(tab.publishTimer);
-    tab.publishTimer = null;
-    await cdp.send("Page.stopScreencast").catch(() => undefined);
-    await cdp.detach().catch(() => undefined);
-    tab.jpeg = null;
+  private publishCapture(tab: Tab, data: string) {
+    const size = tab.page.viewportSize() ?? { width: 1280, height: 800 };
+    const sequence = ++tab.sequence;
+    if (tab.surface.size || tab.recording) tab.jpeg = Buffer.from(data, "base64");
+    if (tab.surface.size && tab.jpeg) {
+      const pixels = jpegDimensions(tab.jpeg) ?? size;
+      tab.surface.publish({
+        ...pixels,
+        sequence,
+        deviceScale: pixels.width / size.width,
+        timestampMs: Date.now(),
+        jpeg: tab.jpeg,
+      });
+    }
+    // Retain the old RPC representation only while an old client needs it.
+    if (!tab.listeners.size) return;
+    tab.frame = { tabId: tab.id, mimeType: "image/jpeg", data, ...size, sequence };
+    const publish = () => {
+      tab.publishTimer = null;
+      if (!tab.frame || tab.page.isClosed() || !tab.session) return;
+      tab.publishedAt = Date.now();
+      for (const listener of tab.listeners)
+        listener({
+          ...tab.frame,
+          tabs: tab.owner.metadata,
+          metadataRevision: tab.owner.metadataRevision,
+        });
+    };
+    const remaining = 160 - (Date.now() - tab.publishedAt);
+    if (remaining <= 0) {
+      if (tab.publishTimer) clearTimeout(tab.publishTimer);
+      publish();
+    } else if (!tab.publishTimer) tab.publishTimer = setTimeout(publish, remaining);
+  }
+
+  private stopUnusedCapture(tab: Tab) {
+    return this.startCapture(tab);
+  }
+
+  async subscribeSurface(
+    threadId: string,
+    tabId: string,
+    viewport: EnvironmentSurfaceViewport,
+    sink: SurfaceSink,
+    sizing: EnvironmentSurfaceSizing = "active",
+  ) {
+    const { tab } = await this.getTab(threadId, tabId);
+    const remove = tab.surface.add(sink, viewport, sizing);
+    if (!tab.surfaceTimer) {
+      let updating = false;
+      tab.surfaceTimer = setInterval(() => {
+        tab.surface.tick();
+        if (updating) return;
+        updating = true;
+        void this.startCapture(tab)
+          .catch(() => tab.surface.close())
+          .finally(() => {
+            updating = false;
+          });
+      }, 100);
+    }
+    const unsubscribe = async () => {
+      remove();
+      if (!tab.surface.size && tab.surfaceTimer) {
+        clearInterval(tab.surfaceTimer);
+        tab.surfaceTimer = null;
+      }
+      await this.stopUnusedCapture(tab);
+    };
+    try {
+      await this.startCapture(tab);
+      // The last binary viewer clears its replay frame even if another consumer keeps capture alive.
+      if (!tab.surface.hasFrame && tab.surface.size) {
+        const data =
+          tab.frame?.data ||
+          tab.jpeg?.toString("base64") ||
+          (await tab.page.screenshot({ type: "jpeg", quality: 75, timeout: 5000 })).toString(
+            "base64",
+          );
+        if (tab.surface.size) this.publishCapture(tab, data);
+      }
+    } catch (error) {
+      await unsubscribe();
+      throw error;
+    }
+    return unsubscribe;
   }
 
   async subscribe(
@@ -1304,6 +1490,7 @@ export class RemoteBrowserRuntime {
         this.replaceArtifacts(threadId, []);
       } finally {
         this.watchers.delete(threadId);
+        this.interactionWatchers.delete(threadId);
       }
     };
     const completion = close();
@@ -1318,10 +1505,12 @@ export class RemoteBrowserRuntime {
         const session = await pending;
         for (const tab of session.tabs.values())
           if (tab.recording) await this.stopRecording(tab).catch(() => undefined);
+        await Promise.all([...session.tabs.values()].map((tab) => tab.interactions.close()));
         await session.context.close();
       }),
     );
     this.sessions.clear();
     this.watchers.clear();
+    this.interactionWatchers.clear();
   }
 }

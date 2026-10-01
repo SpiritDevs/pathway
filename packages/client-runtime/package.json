@@ -298,6 +298,10 @@
     "./device/duo-control": {
       "types": "./src/device/duoControl.ts",
       "default": "./src/device/duoControl.ts"
+    },
+    "./surface": {
+      "types": "./src/surface/index.ts",
+      "import": "./src/surface/index.ts"
     }
   },
   "scripts": {

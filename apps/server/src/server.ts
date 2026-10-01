@@ -1,5 +1,6 @@
 import * as DeviceService from "./device/DeviceService.ts";
 import { deviceHubProxyRouteLayer } from "./device/DeviceHubProxy.ts";
+import { environmentSurfaceRouteLayer } from "./surface/environmentSurfaceRoute.ts";
 import { commandReadinessLayer, rendererShellReadinessRouteLayer } from "./httpStartupReadiness.ts";
 import * as StorageManagement from "./storage/StorageService.ts";
 import { EnvironmentHttpApi } from "@spiritdevs/contracts";
@@ -685,6 +686,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       deviceHubProxyRouteLayer,
       websocketRpcRouteLayer,
       computerFrameRouteLayer,
+      environmentSurfaceRouteLayer,
       desktopComputerEmergencyStopRouteLayer,
     ),
     // The MCP session registry is provided globally (shared with V2 provider

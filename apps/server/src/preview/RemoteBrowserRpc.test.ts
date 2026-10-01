@@ -16,9 +16,42 @@ import { RemoteBrowser } from "./RemoteBrowser.ts";
 const threadId = ThreadId.make("browser-rpc-authorization");
 
 describe("remote browser RPC authorization", () => {
+  it.effect("separates read-only interaction snapshots from control and clipboard RPCs", () =>
+    Effect.gen(function* () {
+      const browser = {
+        subscribeSurface: () => Effect.void,
+        command: () => Effect.succeed({ tabs: [], selectedTabId: null }),
+        frames: () => Stream.empty,
+        interact: vi.fn(() => Effect.die("must not execute")),
+        interactions: vi.fn(() => Stream.empty),
+      };
+      const readOnly = remoteBrowserRpcHandlers([AuthOrchestrationReadScope], browser);
+      const denied = yield* Effect.flip(
+        readOnly[WS_METHODS.previewRemoteInteract]({
+          action: "clipboardRead",
+          threadId,
+          tabId: PreviewTabId.make("tab"),
+        }),
+      );
+      expect(denied).toMatchObject({ requiredScope: AuthOrchestrationOperateScope });
+      expect(browser.interact).not.toHaveBeenCalled();
+      yield* Stream.runDrain(readOnly[WS_METHODS.subscribePreviewRemoteInteractions]({ threadId }));
+      expect(browser.interactions).toHaveBeenCalledOnce();
+      const noScopes = remoteBrowserRpcHandlers([], browser);
+      expect(
+        (yield* Effect.flip(
+          Stream.runDrain(noScopes[WS_METHODS.subscribePreviewRemoteInteractions]({ threadId })),
+        ))._tag,
+      ).toBe("EnvironmentAuthorizationError");
+    }),
+  );
+
   it.effect("keeps the hosted browser after leaving the service construction context", () =>
     Effect.gen(function* () {
       const browser = {
+        interact: vi.fn(() => Effect.die("unused")),
+        interactions: vi.fn(() => Stream.empty),
+        subscribeSurface: vi.fn(() => Effect.void),
         command: vi.fn(() => Effect.succeed({ tabs: [], selectedTabId: null })),
         frames: vi.fn(() => Stream.empty),
       };
@@ -43,6 +76,9 @@ describe("remote browser RPC authorization", () => {
   it.effect("denies browser commands to read-only tokens before invoking the browser", () =>
     Effect.gen(function* () {
       const browser = {
+        interact: vi.fn(() => Effect.die("unused")),
+        interactions: vi.fn(() => Stream.empty),
+        subscribeSurface: vi.fn(() => Effect.void),
         command: vi.fn(() => Effect.succeed({ tabs: [], selectedTabId: null })),
         frames: vi.fn(() => Stream.empty),
       };
@@ -59,6 +95,9 @@ describe("remote browser RPC authorization", () => {
   it.effect("requires read scope before subscribing and forwards metadata-only subscriptions", () =>
     Effect.gen(function* () {
       const browser = {
+        interact: vi.fn(() => Effect.die("unused")),
+        interactions: vi.fn(() => Stream.empty),
+        subscribeSurface: vi.fn(() => Effect.void),
         command: vi.fn(() => Effect.succeed({ tabs: [], selectedTabId: null })),
         frames: vi.fn(() => Stream.empty),
       };
@@ -79,6 +118,9 @@ describe("remote browser RPC authorization", () => {
     Effect.gen(function* () {
       let tracingEnabled: boolean | undefined;
       const browser = {
+        interact: vi.fn(() => Effect.die("unused")),
+        interactions: vi.fn(() => Stream.empty),
+        subscribeSurface: vi.fn(() => Effect.void),
         command: vi.fn(() =>
           Effect.gen(function* () {
             tracingEnabled = yield* References.TracerEnabled;
