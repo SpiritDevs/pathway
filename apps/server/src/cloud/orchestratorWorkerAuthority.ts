@@ -49,7 +49,11 @@ export function workerToolCapability(name: string): string | null {
   if (name === "pathway_mail_write") return "mail.send";
   if (name === "pathway_time_read") return "time.read";
   if (name === "pathway_time_write") return "time.manage";
-  if (name === "pathway_provider_allowance" || name === "pathway_allowance_allocate")
+  if (
+    name === "pathway_provider_allowance" ||
+    name === "pathway_allowance_allocate" ||
+    name === "pathway_environments_list"
+  )
     return "environments.read";
   if (name.startsWith("issues_"))
     return ISSUES_READ_TOOL_NAMES.has(name) ? "tasks.read" : "tasks.manage";

@@ -2,7 +2,7 @@ import {
   CommandId,
   defaultInstanceIdForDriver,
   EnvironmentCommandId,
-  type EnvironmentId,
+  EnvironmentId,
   isProviderAvailable,
   MessageId,
   type ModelSelection,
@@ -10,6 +10,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
+  ProjectId,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2TurnItem,
   OrchestratorMcpFailure,
@@ -19,6 +20,7 @@ import {
   type OrchestratorMcpCreatedThread,
   type OrchestratorMcpDelegateTaskInput,
   type OrchestratorMcpDelegateTaskOutcome,
+  type OrchestratorMcpEnvironmentListResult,
   type OrchestratorMcpDelegateTaskResult,
   type OrchestratorMcpRemoteDelegateTaskResult,
   type OrchestratorMcpInteractionMode,
@@ -108,6 +110,9 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpDelegateTaskInput,
   ) => Effect.Effect<OrchestratorMcpDelegateTaskOutcome, OrchestratorMcpFailure>;
+  readonly listEnvironments: (
+    scope: McpInvocationScope,
+  ) => Effect.Effect<OrchestratorMcpEnvironmentListResult, OrchestratorMcpFailure>;
   readonly taskStatus: (
     scope: McpInvocationScope,
     taskId: NodeId,
@@ -1080,10 +1085,16 @@ const make = Effect.gen(function* () {
     input: OrchestratorMcpDelegateTaskInput & { readonly targetEnvironmentId: EnvironmentId },
   ) {
     yield* requireCapability(scope);
-    if (Option.isNone(remoteDispatch)) {
+    if (Option.isNone(remoteDispatch) || Option.isNone(remoteThreads)) {
       return yield* failure(
         "remote_dispatch_unavailable",
         "This server runtime does not provide cross-environment dispatch.",
+      );
+    }
+    if (input.targetProjectId === undefined) {
+      return yield* failure(
+        "invalid_request",
+        "Remote delegation needs targetProjectId. Find it with pathway_environments_list.",
       );
     }
     if (
@@ -1125,12 +1136,20 @@ const make = Effect.gen(function* () {
       }),
     );
     const threadId = ThreadId.make(`thread:delegated:${id}`);
+    const connectGrantToken = yield* remoteThreads.value
+      .launchGrant(input.targetEnvironmentId, input.targetProjectId)
+      .pipe(Effect.mapError((error) => failure("remote_dispatch_unavailable", error.message)));
+    if (connectGrantToken === null) {
+      return yield* failure(
+        "remote_dispatch_unavailable",
+        `Your account cannot start threads in project ${input.targetProjectId} on environment ${input.targetEnvironmentId}. Check pathway_environments_list for the environments and projects you can use.`,
+      );
+    }
     yield* inheritAllowance(scope.threadId, input.targetEnvironmentId, threadId);
     const dispatched = yield* remoteDispatch.value
       .dispatch({
         targetEnvironmentId: input.targetEnvironmentId,
-        ...(input.targetProjectId === undefined ? {} : { targetProjectId: input.targetProjectId }),
-        ...(input.cloudProjectId === undefined ? {} : { cloudProjectId: input.cloudProjectId }),
+        targetProjectId: input.targetProjectId,
         kind: "startThread",
         args: {
           kind: "startThread",
@@ -1139,9 +1158,7 @@ const make = Effect.gen(function* () {
           modelSelection,
         },
         idempotencyId: id,
-        ...(input.connectGrantToken === undefined
-          ? {}
-          : { connectGrantToken: input.connectGrantToken }),
+        connectGrantToken,
       })
       .pipe(
         Effect.mapError((error) =>
@@ -1345,15 +1362,39 @@ const make = Effect.gen(function* () {
           },
         };
       }),
+    listEnvironments: (scope) =>
+      Effect.gen(function* () {
+        yield* requireCapability(scope);
+        if (Option.isNone(remoteThreads)) {
+          return yield* failure(
+            "remote_dispatch_unavailable",
+            "This server runtime does not provide cross-environment dispatch.",
+          );
+        }
+        const targets = yield* remoteThreads.value.launchTargets.pipe(
+          Effect.mapError((error) => failure("remote_dispatch_unavailable", error.message)),
+        );
+        return {
+          environments: targets.map((target) => ({
+            environmentId: EnvironmentId.make(target.environmentId),
+            label: target.label,
+            lastSeenAt: target.lastSeenAt,
+            updateRequired: target.updateRequired,
+            projects: target.projects.map((project) => ({
+              projectId: ProjectId.make(project.localProjectId),
+              name: project.name,
+              workspaceRoot: project.workspaceRoot,
+            })),
+          })),
+        } satisfies OrchestratorMcpEnvironmentListResult;
+      }),
     delegateTask: (scope, input) =>
       input.targetEnvironmentId === undefined
-        ? input.targetProjectId !== undefined ||
-          input.cloudProjectId !== undefined ||
-          input.connectGrantToken !== undefined
+        ? input.targetProjectId !== undefined
           ? Effect.fail(
               failure(
                 "invalid_request",
-                "Remote project and grant parameters require targetEnvironmentId; the request was not run locally.",
+                "targetProjectId requires targetEnvironmentId; the request was not run locally.",
               ),
             )
           : Effect.gen(function* () {

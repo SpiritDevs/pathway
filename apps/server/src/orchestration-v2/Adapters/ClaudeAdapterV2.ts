@@ -903,6 +903,7 @@ export const CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS: ReadonlyArray<string> =
   "pathway_time_read",
   "pathway_thread_list",
   "pathway_thread_wait",
+  "pathway_environments_list",
   "pathway_worktree_status",
   "email_wait_for",
   "email_latest_code",

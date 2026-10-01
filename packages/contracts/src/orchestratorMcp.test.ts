@@ -64,8 +64,6 @@ describe("orchestrator MCP contracts", () => {
       task: "Run on the build host.",
       targetEnvironmentId: "environment-build",
       targetProjectId: "project-build",
-      cloudProjectId: "cloud-project-build",
-      connectGrantToken: "single-use-grant",
     });
     const result = decodeDelegateTaskOutcome({
       environmentCommandId: "environment-command-build",
@@ -78,7 +76,7 @@ describe("orchestrator MCP contracts", () => {
     });
 
     expect(request.targetEnvironmentId).toBe("environment-build");
-    expect(request.connectGrantToken).toBe("single-use-grant");
+    expect(request.targetProjectId).toBe("project-build");
     expect(result).toMatchObject({ delivery: "deferred", threadId: null, status: "queued" });
   });
 

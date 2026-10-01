@@ -30,7 +30,7 @@ import { isRegisteredProofKey, tokenProofKeyThumbprint } from "../src/environmen
 import { hasCompanyPermission, isPermissionKey } from "../src/permissions.ts";
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
-import { action, internalMutation, mutation, type MutationCtx } from "./_generated/server.js";
+import { action, internalMutation, mutation, query, type QueryCtx } from "./_generated/server.js";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { backendError } from "./lib/errors.ts";
 import {
@@ -228,7 +228,7 @@ export const issueThreadAccess = action({
  * The one account that linked the calling environment through the relay. Registrations only
  * authenticate the caller's key; whoever created them may be a manager, not the environment's owner.
  */
-async function environmentAccountUser(ctx: MutationCtx): Promise<{
+async function environmentAccountUser(ctx: QueryCtx): Promise<{
   readonly environmentId: string;
   readonly userId: Id<"users">;
 }> {
@@ -288,34 +288,16 @@ export const recordThreadAccess = internalMutation({
       .collect();
     for (const row of published.toSorted((left, right) => right.updatedAt - left.updatedAt)) {
       if (row.environmentId === caller.environmentId) continue;
-      const company = await ctx.db.get(row.companyId);
-      if (company?.lifecycleState !== "active") continue;
-      const membership = await ctx.db
-        .query("memberships")
-        .withIndex("by_company_and_user", (q) =>
-          q.eq("companyId", row.companyId).eq("userId", caller.userId),
-        )
-        .unique();
-      if (membership?.state !== "active") continue;
-      const registration = await ctx.db
-        .query("environmentRegistrations")
-        .withIndex("by_company_and_environment", (q) =>
-          q.eq("companyId", row.companyId).eq("environmentId", row.environmentId),
-        )
-        .unique();
-      if (registration?.state !== "active") continue;
+      const member = await activeMember(ctx, row.companyId, caller.userId);
+      if (member === null) continue;
+      const registration = await activeRegistration(ctx, row.companyId, row.environmentId);
+      if (registration === null) continue;
       if (!enforcesPeerThreadGrants(registration)) {
         unsupportedTarget = true;
         continue;
       }
-      const owner = await ctx.db
-        .query("companyOwners")
-        .withIndex("by_company_and_membership", (q) =>
-          q.eq("companyId", row.companyId).eq("membershipId", membership._id),
-        )
-        .unique();
-      const { permissions } = await membershipAuthorization(ctx, membership, owner !== null);
-      if (!hasCompanyPermission(permissions, permission)) continue;
+      if (!hasCompanyPermission(member.permissions, permission)) continue;
+      const membership = member.membership;
 
       const issuedAt = Date.now();
       await ctx.db.insert("connectGrants", {
@@ -340,6 +322,213 @@ export const recordThreadAccess = internalMutation({
         "The environment holding this thread runs a Pathway version that cannot limit remote thread access. Update Pathway there to reach it remotely.",
       );
     return null;
+  },
+});
+
+/** The account's active membership in an active company, with its effective permissions. */
+async function activeMember(ctx: QueryCtx, companyId: Id<"companies">, userId: Id<"users">) {
+  const company = await ctx.db.get(companyId);
+  if (company?.lifecycleState !== "active") return null;
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_company_and_user", (q) => q.eq("companyId", companyId).eq("userId", userId))
+    .unique();
+  if (membership?.state !== "active") return null;
+  const owner = await ctx.db
+    .query("companyOwners")
+    .withIndex("by_company_and_membership", (q) =>
+      q.eq("companyId", companyId).eq("membershipId", membership._id),
+    )
+    .unique();
+  const { permissions } = await membershipAuthorization(ctx, membership, owner !== null);
+  return { membership, permissions };
+}
+
+async function activeRegistration(
+  ctx: QueryCtx,
+  companyId: Id<"companies">,
+  environmentId: string,
+) {
+  const registration = await ctx.db
+    .query("environmentRegistrations")
+    .withIndex("by_company_and_environment", (q) =>
+      q.eq("companyId", companyId).eq("environmentId", environmentId),
+    )
+    .unique();
+  return registration?.state === "active" ? registration : null;
+}
+
+/** Starting a thread elsewhere is a dispatch that the started thread's sender then controls. */
+const LAUNCH_PERMISSIONS = ["remoteAgents.dispatch", AuthPeerSendGrantPermission] as const;
+
+/**
+ * An active project checkout on another environment that the calling environment's account may
+ * start threads in. `null` when any part of that chain is missing or unauthorized.
+ */
+async function launchTarget(
+  ctx: QueryCtx,
+  caller: { readonly environmentId: string; readonly userId: Id<"users"> },
+  binding: Doc<"environmentBindings">,
+) {
+  if (binding.status !== "active" || binding.environmentId === caller.environmentId) return null;
+  const member = await activeMember(ctx, binding.companyId, caller.userId);
+  if (
+    member === null ||
+    !LAUNCH_PERMISSIONS.every((permission) => hasCompanyPermission(member.permissions, permission))
+  )
+    return null;
+  const registration = await activeRegistration(ctx, binding.companyId, binding.environmentId);
+  const project = await ctx.db.get(binding.cloudProjectId);
+  if (registration === null || project === null || project.deletedAt !== null) return null;
+  if (project.archivedAt !== null) return null;
+  return { binding, registration, project, membership: member.membership };
+}
+
+function descriptorLabel(registration: Doc<"environmentRegistrations">): string {
+  const descriptor: unknown = registration.descriptor;
+  const label =
+    typeof descriptor === "object" && descriptor !== null
+      ? (descriptor as Record<string, unknown>)["label"]
+      : undefined;
+  return typeof label === "string" && label.length > 0 ? label : registration.environmentId;
+}
+
+/**
+ * Every other environment, with its projects, where the calling environment's account may start
+ * a thread through {@link issueProjectLaunch}. `updateRequired` marks environments running a
+ * Pathway too old to accept a narrowed launch grant.
+ */
+export const launchTargets = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      environmentId: v.string(),
+      label: v.string(),
+      lastSeenAt: v.union(v.number(), v.null()),
+      updateRequired: v.boolean(),
+      projects: v.array(
+        v.object({ localProjectId: v.string(), name: v.string(), workspaceRoot: v.string() }),
+      ),
+    }),
+  ),
+  handler: async (ctx) => {
+    const caller = await environmentAccountUser(ctx);
+    const memberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", caller.userId))
+      .collect();
+    const environments = new Map<
+      string,
+      {
+        environmentId: string;
+        label: string;
+        lastSeenAt: number | null;
+        updateRequired: boolean;
+        projects: Array<{ localProjectId: string; name: string; workspaceRoot: string }>;
+      }
+    >();
+    for (const membership of memberships) {
+      const bindings = await ctx.db
+        .query("environmentBindings")
+        .withIndex("by_company_status_environment", (q) =>
+          q.eq("companyId", membership.companyId).eq("status", "active"),
+        )
+        .collect();
+      for (const binding of bindings) {
+        const target = await launchTarget(ctx, caller, binding);
+        if (target === null) continue;
+        const environment = environments.get(binding.environmentId) ?? {
+          environmentId: binding.environmentId,
+          label: descriptorLabel(target.registration),
+          lastSeenAt: target.registration.lastSeenAt,
+          updateRequired: !enforcesPeerThreadGrants(target.registration),
+          projects: [],
+        };
+        if (
+          !environment.projects.some((project) => project.localProjectId === binding.localProjectId)
+        )
+          environment.projects.push({
+            localProjectId: binding.localProjectId,
+            name: target.project.name,
+            workspaceRoot: binding.localWorkspaceRoot,
+          });
+        environments.set(binding.environmentId, environment);
+      }
+    }
+    return [...environments.values()]
+      .map((environment) => ({
+        ...environment,
+        projects: environment.projects.toSorted((left, right) =>
+          left.name.localeCompare(right.name),
+        ),
+      }))
+      .toSorted((left, right) => left.label.localeCompare(right.label));
+  },
+});
+
+/**
+ * Mints a single-use grant that lets the calling environment start a thread in one project on
+ * another environment, acting as the account that linked the caller. The grant carries send
+ * access, which the target already narrows to read and operate scopes. `null` means the account
+ * cannot start threads in that project.
+ */
+export const issueProjectLaunch = action({
+  args: { environmentId: v.string(), localProjectId: v.string() },
+  returns: v.union(v.object({ token: v.string() }), v.null()),
+  handler: async (ctx, args): Promise<{ token: string } | null> => {
+    const token = generateConnectGrantToken();
+    const tokenHash = await hashConnectGrantToken(token);
+    const recorded: boolean = await ctx.runMutation(internal.connectGrants.recordProjectLaunch, {
+      ...args,
+      tokenHash,
+    });
+    return recorded ? { token } : null;
+  },
+});
+
+/** Authorization and storage half of {@link issueProjectLaunch}. */
+export const recordProjectLaunch = internalMutation({
+  args: { environmentId: v.string(), localProjectId: v.string(), tokenHash: v.string() },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const caller = await environmentAccountUser(ctx);
+    const bindings = await ctx.db
+      .query("environmentBindings")
+      .withIndex("by_environment_local_project", (q) =>
+        q.eq("environmentId", args.environmentId).eq("localProjectId", args.localProjectId),
+      )
+      .collect();
+    let unsupportedTarget = false;
+    for (const binding of bindings) {
+      const target = await launchTarget(ctx, caller, binding);
+      if (target === null) continue;
+      if (!enforcesPeerThreadGrants(target.registration)) {
+        unsupportedTarget = true;
+        continue;
+      }
+      const issuedAt = Date.now();
+      await ctx.db.insert("connectGrants", {
+        id: mintDomainId(issuedAt),
+        companyId: binding.companyId,
+        environmentId: binding.environmentId,
+        targetRegistrationId: target.registration._id,
+        grantedMembershipId: target.membership._id,
+        permission: AuthPeerSendGrantPermission,
+        tokenHash: args.tokenHash,
+        issuedAt,
+        expiresAt: connectGrantExpiresAt(issuedAt),
+        consumedAt: null,
+        consumer: null,
+        threadAccess: "send",
+      });
+      return true;
+    }
+    if (unsupportedTarget)
+      throw backendError(
+        AuthPeerThreadAccessUnsupportedCode,
+        "That environment runs a Pathway version that cannot limit remote access. Update Pathway there to start threads on it remotely.",
+      );
+    return false;
   },
 });
 

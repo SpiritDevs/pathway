@@ -22,6 +22,12 @@ const handlers = {
       const service = yield* OrchestratorMcpService;
       return yield* service.capabilities(scope);
     }),
+  pathway_environments_list: () =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext;
+      const service = yield* OrchestratorMcpService;
+      return yield* service.listEnvironments(scope);
+    }),
   delegate_task: (input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;

@@ -19,6 +19,7 @@ import { ThreadManagementService } from "../orchestration-v2/ThreadManagementSer
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
 import { RemoteDispatch } from "../cloud/remoteDispatch.ts";
+import { RemoteThreads } from "../cloud/remoteThreads.ts";
 import {
   ProviderAllowanceRuntime,
   AllowanceInheritanceError,
@@ -27,7 +28,7 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
 describe("OrchestratorMcpService", () => {
-  it.effect("routes explicit remote delegation without touching local task dispatch", () =>
+  it.effect("authorizes remote delegation without touching local task dispatch", () =>
     Effect.gen(function* () {
       const parentThreadId = ThreadId.make("thread:mcp-remote-parent");
       const targetEnvironmentId = EnvironmentId.make("environment:mcp-remote-target");
@@ -66,12 +67,37 @@ describe("OrchestratorMcpService", () => {
               boundThreads.add(child);
             }),
         }),
+        Layer.mock(RemoteThreads)({
+          launchTargets: Effect.succeed([
+            {
+              environmentId: targetEnvironmentId,
+              label: "Mac Studio",
+              lastSeenAt: 5,
+              updateRequired: false,
+              projects: [
+                {
+                  localProjectId: targetProjectId,
+                  name: "pathway",
+                  workspaceRoot: "/src/pathway",
+                },
+              ],
+            },
+          ]),
+          launchGrant: (environmentId, projectId) =>
+            Effect.succeed(
+              environmentId === targetEnvironmentId && projectId === targetProjectId
+                ? "single-use-grant"
+                : null,
+            ),
+        }),
         Layer.succeed(
           RemoteDispatch,
           RemoteDispatch.of({
             dispatch: (input) =>
               Effect.gen(function* () {
                 assert.equal(input.args.kind, "startThread");
+                assert.equal(input.connectGrantToken, "single-use-grant");
+                assert.equal(input.targetProjectId, targetProjectId);
                 assert.isTrue(
                   input.args.kind === "startThread" && boundThreads.has(input.args.threadId!),
                 );
@@ -79,7 +105,10 @@ describe("OrchestratorMcpService", () => {
                   Effect.as({
                     delivery: "direct" as const,
                     id: input.idempotencyId,
-                    result: { kind: "startThread" as const, threadId: remoteProjection.thread.id },
+                    result: {
+                      kind: "startThread" as const,
+                      threadId: remoteProjection.thread.id,
+                    },
                     projection: remoteProjection,
                   }),
                 );
@@ -103,7 +132,6 @@ describe("OrchestratorMcpService", () => {
           task: "Run on the remote environment.",
           targetEnvironmentId,
           targetProjectId,
-          connectGrantToken: "single-use-grant",
           clientRequestId: "remote-delegate-1",
         });
 
@@ -135,12 +163,44 @@ describe("OrchestratorMcpService", () => {
         const malformed = yield* service
           .delegateTask(scope, {
             task: "Do not silently run this locally.",
-            connectGrantToken: "grant-without-target",
+            targetProjectId,
           })
           .pipe(Effect.flip);
         assert.equal(malformed.code, "invalid_request");
         assert.include(malformed.message, "was not run locally");
+
+        const noProject = yield* service
+          .delegateTask(scope, { task: "Which project?", targetEnvironmentId })
+          .pipe(Effect.flip);
+        assert.equal(noProject.code, "invalid_request");
+        assert.include(noProject.message, "pathway_environments_list");
+
+        canInherit = true;
+        const refused = yield* service
+          .delegateTask(scope, {
+            task: "Not allowed here.",
+            targetEnvironmentId,
+            targetProjectId: ProjectId.make("project:not-permitted"),
+          })
+          .pipe(Effect.flip);
+        assert.equal(refused.code, "remote_dispatch_unavailable");
+        assert.include(refused.message, "cannot start threads");
+        assert.equal((yield* Ref.get(remoteCalls)).length, 1);
         assert.isEmpty(yield* Ref.get(localCalls));
+
+        assert.deepEqual(yield* service.listEnvironments(scope), {
+          environments: [
+            {
+              environmentId: targetEnvironmentId,
+              label: "Mac Studio",
+              lastSeenAt: 5,
+              updateRequired: false,
+              projects: [
+                { projectId: targetProjectId, name: "pathway", workspaceRoot: "/src/pathway" },
+              ],
+            },
+          ],
+        });
       }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
     }),
   );

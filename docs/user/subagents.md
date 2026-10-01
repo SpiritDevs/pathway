@@ -3,3 +3,9 @@
 Agents can delegate work to subagents. Open a subagent's card in the conversation or its entry in Lineage to inspect the child conversation.
 
 Codex task names appear as readable labels. For example, `audit_server` appears as "Audit server" in the conversation, Lineage, and the child conversation's title. Nested subagents use their own task name; their relationship to the parent remains in Lineage. Previously saved conversations retain their saved titles.
+
+## Work on another machine
+
+An agent can also start work on another of your machines. For example, you can ask an agent on your laptop to investigate something on your desktop. The agent sees which machines and projects you can use, and starts a conversation in the project you choose, acting as you. That conversation runs on the other machine, and the agent can read it and send it messages.
+
+This needs a recent Pathway on both machines. Your role must also allow you to dispatch and control remote agents. If the other machine runs an older Pathway, the agent tells you to update it first.

@@ -1,5 +1,5 @@
 /**
- * Reads and messages threads that live on other environments reachable by this environment's
+ * Reads, messages, and starts threads on other environments reachable by this environment's
  * Pathway account.
  *
  * Pathway Cloud finds the environment that published the thread and mints a single-use connect
@@ -18,6 +18,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
+  type ProjectId,
   type ThreadId,
 } from "@spiritdevs/contracts";
 import type { RpcSession } from "@spiritdevs/client-runtime/rpc";
@@ -53,6 +54,30 @@ const issueThreadAccessRef = makeFunctionReference<
   { threadId: string; access: ThreadAccess },
   { token: string; environmentId: string } | null
 >("connectGrants:issueThreadAccess");
+const launchTargetsRef = makeFunctionReference<
+  "query",
+  Record<string, never>,
+  RemoteLaunchTarget[]
+>("connectGrants:launchTargets");
+const issueProjectLaunchRef = makeFunctionReference<
+  "action",
+  { environmentId: string; localProjectId: string },
+  { token: string } | null
+>("connectGrants:issueProjectLaunch");
+
+/** Another environment, with the projects this environment's account may start threads in. */
+export interface RemoteLaunchTarget {
+  readonly environmentId: string;
+  readonly label: string;
+  readonly lastSeenAt: number | null;
+  /** The environment runs a Pathway too old to accept a remote launch. */
+  readonly updateRequired: boolean;
+  readonly projects: ReadonlyArray<{
+    readonly localProjectId: string;
+    readonly name: string;
+    readonly workspaceRoot: string;
+  }>;
+}
 
 /** Why Pathway Cloud refused a thread grant, in words an agent can act on. */
 export function grantFailureMessage(threadId: ThreadId, cause: unknown): string {
@@ -176,6 +201,15 @@ export class RemoteThreads extends Context.Service<
       threadId: ThreadId,
       sourcesFor: (projection: OrchestrationV2ThreadProjection) => ReadonlyArray<ThreadId>,
     ) => Effect.Effect<RemoteThread | null, RemoteThreadError>;
+    readonly launchTargets: Effect.Effect<ReadonlyArray<RemoteLaunchTarget>, RemoteThreadError>;
+    /**
+     * A single-use connect grant for starting one thread in `projectId` on `environmentId`.
+     * `null` when the account may not start threads there.
+     */
+    readonly launchGrant: (
+      environmentId: EnvironmentId,
+      projectId: ProjectId,
+    ) => Effect.Effect<string | null, RemoteThreadError>;
     /** `null` when no other environment the account can message publishes the thread. */
     readonly send: <E>(
       input: RemoteSendInput<E>,
@@ -218,6 +252,34 @@ export const layer = Layer.effect(
       }),
     );
 
+    const callCloud = <A>(
+      call: (client: Effect.Success<typeof connectCloud>["client"]) => Promise<A>,
+      failure: (cause: unknown) => string,
+    ) =>
+      Effect.gen(function* () {
+        const cloud = yield* connectCloud.pipe(
+          Effect.mapError((error) =>
+            error instanceof RemoteThreadError
+              ? error
+              : new RemoteThreadError({
+                  message: "Pathway could not authenticate this environment with Pathway Cloud.",
+                }),
+          ),
+        );
+        const token = yield* cloud.tokens.token.pipe(
+          Effect.mapError((cause) => new RemoteThreadError({ message: failure(cause) })),
+        );
+        return yield* cloud.lock.withPermits(1)(
+          Effect.tryPromise({
+            try: () => {
+              cloud.client.setAuth(token);
+              return call(cloud.client);
+            },
+            catch: (cause) => new RemoteThreadError({ message: failure(cause) }),
+          }),
+        );
+      });
+
     // Opens a relay session to the environment publishing `threadId`, or returns null when the
     // account cannot reach one. Read grants yield read-only sessions.
     const withThreadSession = Effect.fn("RemoteThreads.withThreadSession")(function* <A, E>(
@@ -225,25 +287,9 @@ export const layer = Layer.effect(
       access: ThreadAccess,
       use: (environmentId: EnvironmentId, client: RpcSession["client"]) => Effect.Effect<A, E>,
     ) {
-      const cloud = yield* connectCloud.pipe(
-        Effect.mapError((error) =>
-          error instanceof RemoteThreadError
-            ? error
-            : new RemoteThreadError({
-                message: "Pathway could not authenticate this environment with Pathway Cloud.",
-              }),
-        ),
-      );
-      const token = yield* cloud.tokens.token.pipe(unreachable(threadId));
-      const grant = yield* cloud.lock.withPermits(1)(
-        Effect.tryPromise({
-          try: () => {
-            cloud.client.setAuth(token);
-            return cloud.client.action!(issueThreadAccessRef, { threadId, access });
-          },
-          catch: (cause) =>
-            new RemoteThreadError({ message: grantFailureMessage(threadId, cause) }),
-        }),
+      const grant = yield* callCloud(
+        (client) => client.action!(issueThreadAccessRef, { threadId, access }),
+        (cause) => grantFailureMessage(threadId, cause),
       );
       if (grant === null) return null;
       const environmentId = EnvironmentId.make(grant.environmentId);
@@ -279,6 +325,21 @@ export const layer = Layer.effect(
         sendOnTarget(client, environmentId, input),
       );
 
-    return RemoteThreads.of({ read, send });
+    const launchTargets = callCloud(
+      (client) => client.query(launchTargetsRef, {}),
+      () => "Pathway could not list the environments this account can start threads on.",
+    );
+
+    const launchGrant: RemoteThreads["Service"]["launchGrant"] = (environmentId, projectId) =>
+      callCloud(
+        (client) =>
+          client.action!(issueProjectLaunchRef, { environmentId, localProjectId: projectId }),
+        (cause) =>
+          convexErrorCode(cause) === AuthPeerThreadAccessUnsupportedCode
+            ? `Environment ${environmentId} runs an older Pathway that cannot accept remote launches. Update Pathway there first.`
+            : `Pathway could not authorize starting a thread on environment ${environmentId}.`,
+      ).pipe(Effect.map((grant) => grant?.token ?? null));
+
+    return RemoteThreads.of({ read, launchTargets, launchGrant, send });
   }),
 );

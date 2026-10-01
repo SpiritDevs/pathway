@@ -10,6 +10,7 @@ const PATHWAY_MCP_SERVER_ALIASES = new Set(["pathway", "pathway", "pathway_code"
 
 const PATHWAY_MCP_TOOL_DISPLAY_NAMES: Record<string, string> = {
   orchestrator_capabilities: "Get orchestration capabilities",
+  pathway_environments_list: "List Pathway environments",
   delegate_task: "Delegate a child task",
   task_status: "Get delegated task status",
   task_cancel: "Cancel delegated task",
