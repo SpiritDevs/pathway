@@ -18,6 +18,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -30,7 +31,7 @@ const CONSTRAINED_SAMPLE_INTERVAL = Duration.seconds(15);
 const DEFAULT_HOST_POWER_ACTIVE_INTERVAL = Duration.seconds(30);
 const DEFAULT_HOST_POWER_IDLE_INTERVAL = Duration.minutes(2);
 const IDLE_THRESHOLD_SECONDS = 60;
-const encodeMessage = Schema.encodeSync(Schema.fromJsonString(DesktopHostTelemetryMessage));
+const encodeMessage = Schema.encodeEffect(Schema.fromJsonString(DesktopHostTelemetryMessage));
 const textEncoder = new TextEncoder();
 
 type PowerEvent =
@@ -82,6 +83,11 @@ export class DesktopTelemetryPublisher extends Context.Service<
 
 function booleanState(value: boolean): HostPowerSnapshot["onBattery"] {
   return value ? "true" : "false";
+}
+
+/** JSON has no NaN or Infinity; they would reach the server as null. */
+function finiteOrZero(value: number): number {
+  return Number.isFinite(value) ? value : 0;
 }
 
 function idleState(value: ElectronPowerMonitor.ElectronIdleState): HostPowerSnapshot["idle"] {
@@ -276,11 +282,12 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
           type: metric.type,
           ...(metric.name === undefined ? {} : { name: metric.name }),
           ...(metric.serviceName === undefined ? {} : { serviceName: metric.serviceName }),
-          cpuPercent: metric.cpu.percentCPUUsage,
-          ...(metric.cpu.cumulativeCPUUsage === undefined
+          cpuPercent: finiteOrZero(metric.cpu.percentCPUUsage),
+          ...(metric.cpu.cumulativeCPUUsage === undefined ||
+          !Number.isFinite(metric.cpu.cumulativeCPUUsage)
             ? {}
             : { cumulativeCpuSeconds: metric.cpu.cumulativeCPUUsage }),
-          idleWakeupsPerSecond: metric.cpu.idleWakeupsPerSecond,
+          idleWakeupsPerSecond: finiteOrZero(metric.cpu.idleWakeupsPerSecond),
           workingSetBytes: Math.max(0, Math.round(metric.memory.workingSetSize * 1024)),
           peakWorkingSetBytes: Math.max(0, Math.round(metric.memory.peakWorkingSetSize * 1024)),
         })),
@@ -400,7 +407,21 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
       electronPid: process.pid,
     } as const),
     Stream.merge(snapshots, updateReports),
-  ).pipe(Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)));
+  ).pipe(
+    // Drop a message the schema rejects. Failing here would end this
+    // backend's telemetry for its lifetime while leaving the fd open.
+    Stream.filterMapEffect((message) =>
+      encodeMessage(message).pipe(
+        Effect.map((json) => Result.succeed(textEncoder.encode(`${json}\n`))),
+        Effect.catch((error) =>
+          Effect.logWarning("Dropped desktop telemetry message that failed to encode", {
+            type: message.type,
+            cause: error.message,
+          }).pipe(Effect.as(Result.failVoid)),
+        ),
+      ),
+    ),
+  );
 
   const publishUpdateReport: DesktopTelemetryPublisher["Service"]["publishUpdateReport"] = (
     report,

@@ -12,6 +12,8 @@ import {
   DesktopTelemetryControlMessage,
   type DesktopUpdateState,
 } from "@spiritdevs/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { expect, it } from "vite-plus/test";
 
@@ -207,14 +209,88 @@ it("prepares over fd3/fd4 and receives retained install failures after a backend
   }
 }, 20_000);
 
+it("keeps the update channel open past a sample the server cannot decode", async () => {
+  const baseDir = await NodeFSP.mkdtemp(
+    NodePath.join(NodeOS.tmpdir(), "pathway-desktop-update-transport-skip-"),
+  );
+  try {
+    const result = await runBackend(baseDir, (message, report, end) => {
+      if (message.type !== "requestDesktopUpdate") return;
+      // Encodes cleanly on the desktop but arrives as `cpuPercent: null`.
+      report({
+        version: 1,
+        type: "desktopTelemetry",
+        sequence: 1,
+        sampledAtUnixMs: 1_000,
+        electronPid: 1,
+        power: {
+          source: "electron-main",
+          idle: "false",
+          idleSeconds: 0,
+          locked: "false",
+          suspended: false,
+          onBattery: "false",
+          lowPowerMode: "unknown",
+          thermalState: "nominal",
+          stale: false,
+          updatedAt: DateTime.nowUnsafe(),
+        },
+        speedLimitPercent: Option.none(),
+        electronProcesses: [
+          {
+            pid: 1,
+            creationTimeMs: 0,
+            type: "Browser",
+            cpuPercent: Number.NaN,
+            idleWakeupsPerSecond: 0,
+            workingSetBytes: 0,
+            peakWorkingSetBytes: 0,
+          },
+        ],
+      });
+      report({
+        version: 1,
+        type: "desktopUpdateStatus",
+        requestId: message.requestId,
+        state: downloadedState,
+        outcome: "ready-to-install",
+      });
+      end();
+    });
+    expect(result.prepared?.targetVersion).toBe("1.2.4");
+  } finally {
+    await NodeFSP.rm(baseDir, { recursive: true, force: true });
+  }
+}, 20_000);
+
 it.each([
-  { phase: "preparation", finalChunk: "", token: undefined },
-  { phase: "preparation", finalChunk: "not-json\n", token: undefined },
-  { phase: "installation", finalChunk: "", token: "prepared-update-token" },
-  { phase: "installation", finalChunk: "not-json\n", token: "prepared-update-token" },
+  {
+    phase: "preparation",
+    finalChunk: "",
+    token: undefined,
+    cause: "Desktop telemetry stream on fd 3 closed.",
+  },
+  {
+    phase: "preparation",
+    finalChunk: "not-json\n",
+    token: undefined,
+    cause: "Failed to decode desktop telemetry.",
+  },
+  {
+    phase: "installation",
+    finalChunk: "",
+    token: "prepared-update-token",
+    cause: "Desktop telemetry stream on fd 3 closed.",
+  },
+  {
+    phase: "installation",
+    finalChunk: "not-json\n",
+    token: "prepared-update-token",
+    cause: "Failed to decode desktop telemetry.",
+  },
 ])(
   "fails promptly when the report transport closes during $phase ($finalChunk)",
-  async ({ finalChunk, token }) => {
+  async ({ finalChunk, token, cause }) => {
     const baseDir = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "pathway-desktop-update-transport-loss-"),
     );
@@ -237,8 +313,8 @@ it.each([
       );
       expect(result.failure).toBe(
         token
-          ? "The desktop app stopped reporting the install."
-          : "The desktop app stopped reporting its update.",
+          ? `The desktop app stopped reporting the install. ${cause}`
+          : `The desktop app stopped reporting its update. ${cause}`,
       );
     } finally {
       await NodeFSP.rm(baseDir, { recursive: true, force: true });

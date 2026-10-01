@@ -69,6 +69,20 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
     cause === undefined
       ? new ServerSelfUpdateError({ reason })
       : new ServerSelfUpdateError({ reason, cause });
+  /** Fails because the report stream ended, naming why the telemetry reader stopped. */
+  const failReportsEnded = (reason: string) =>
+    receiver.health.pipe(
+      Effect.flatMap((health) =>
+        Effect.fail(
+          failWith(
+            Option.match(health.lastError, {
+              onNone: () => reason,
+              onSome: (lastError) => `${reason} ${lastError}`,
+            }),
+          ),
+        ),
+      ),
+    );
 
   const consumeReports = Effect.fn("desktopUpdate.desktopAppUpdate.consumeReports")(function* (
     requestId: string,
@@ -109,7 +123,7 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
       // The report pipe can fail while the control pipe remains writable.
       // Release an orphaned preparation without clearing a terminal failure.
       yield* receiver.cancelDesktopUpdate(requestId).pipe(Effect.ignore);
-      return yield* failWith("The desktop app stopped reporting its update.");
+      return yield* failReportsEnded("The desktop app stopped reporting its update.");
     }
 
     const report = terminal.value;
@@ -207,7 +221,7 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
       }),
     );
     if (Option.isNone(terminal)) {
-      return yield* failWith("The desktop app stopped reporting the install.");
+      return yield* failReportsEnded("The desktop app stopped reporting the install.");
     }
     return yield* failWith(
       terminal.value.reason ??
