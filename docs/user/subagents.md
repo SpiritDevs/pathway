@@ -6,6 +6,6 @@ Codex task names appear as readable labels. For example, `audit_server` appears 
 
 ## Work on another machine
 
-An agent can also start work on another of your machines. For example, you can ask an agent on your laptop to investigate something on your desktop. The agent sees which machines and projects you can use, and starts a conversation in the project you choose, acting as you. That conversation runs on the other machine, and the agent can read it and send it messages.
+An agent can also start work on another of your machines. For example, you can ask an agent on your laptop to investigate something on your desktop. The agent sees which machines and projects you can use, and starts a conversation in the project you choose, acting as you. That conversation runs on the other machine, and the agent can read it and send it messages. It is listed in the Lineage section of the agent's conversation rather than in your threads list, and its own Lineage links back to the agent's conversation.
 
 This needs a recent Pathway on both machines. Your role must also allow you to dispatch and control remote agents. If the other machine runs an older Pathway, the agent tells you to update it first.

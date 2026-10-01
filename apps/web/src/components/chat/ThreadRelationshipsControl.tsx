@@ -18,6 +18,7 @@ import {
   ArrowRightIcon,
   BotIcon,
   CheckIcon,
+  CornerDownRightIcon,
   CornerLeftUpIcon,
   GitForkIcon,
   GitMergeIcon,
@@ -122,6 +123,9 @@ function relationshipLabel(edge: ThreadRelationshipEdge, currentThreadId: Thread
   if (edge.kind === "subagent") {
     return edge.sourceThreadId === currentThreadId ? "Subagent" : "Parent agent";
   }
+  if (edge.kind === "attached") {
+    return edge.sourceThreadId === currentThreadId ? "Attached thread" : "Parent thread";
+  }
   return edge.sourceThreadId === currentThreadId ? "Fork" : "Parent thread";
 }
 
@@ -151,14 +155,29 @@ function useThreadRelationshipsModel(props: {
   const archivedShells = archived.snapshots.find(
     (entry) => entry.environmentId === props.environmentId,
   )?.snapshot.threads;
-  const graph = useMemo(() => {
-    const shells: ReadonlyArray<OrchestrationV2ThreadShell> = [
-      ...threadShells
-        .filter((thread) => thread.environmentId === props.environmentId)
-        .map((thread) => thread.source),
-      ...(archivedShells ?? []),
-    ];
-    return deriveThreadRelationshipGraph({ threads: shells, projection });
+  // Attachments can cross environments: a thread started here from another environment points at
+  // its parent there, and threads elsewhere point at parents here.
+  const { graph, environmentByThreadId } = useMemo(() => {
+    const parent = projection?.thread.lineage;
+    const shells: OrchestrationV2ThreadShell[] = [];
+    const environmentByThreadId = new Map<ThreadId, EnvironmentId>();
+    for (const thread of threadShells) {
+      const lineage = thread.source.lineage;
+      if (
+        thread.environmentId === props.environmentId ||
+        lineage.parentEnvironmentId === props.environmentId ||
+        (thread.environmentId === parent?.parentEnvironmentId &&
+          thread.source.id === parent.parentThreadId)
+      ) {
+        shells.push(thread.source);
+        environmentByThreadId.set(thread.source.id, thread.environmentId);
+      }
+    }
+    shells.push(...(archivedShells ?? []));
+    return {
+      graph: deriveThreadRelationshipGraph({ threads: shells, projection }),
+      environmentByThreadId,
+    };
   }, [archivedShells, projection, props.environmentId, threadShells]);
   const navigate = useNavigate();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack);
@@ -226,7 +245,9 @@ function useThreadRelationshipsModel(props: {
   const openThread = (threadId: ThreadId) => {
     void navigate({
       to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(scopeThreadRef(props.environmentId, threadId)),
+      params: buildThreadRouteParams(
+        scopeThreadRef(environmentByThreadId.get(threadId) ?? props.environmentId, threadId),
+      ),
     });
   };
 
@@ -482,7 +503,13 @@ export function ThreadLineagePanel() {
           const isSubagent = edge.kind === "subagent";
           const isMergeTarget = threadId === mergeTargetThreadId;
           const isParent = isParentThreadRelationship(edge, currentThreadId);
-          const RelationshipIcon = isParent ? CornerLeftUpIcon : isSubagent ? BotIcon : GitForkIcon;
+          const RelationshipIcon = isParent
+            ? CornerLeftUpIcon
+            : isSubagent
+              ? BotIcon
+              : edge.kind === "attached"
+                ? CornerDownRightIcon
+                : GitForkIcon;
           const relationship = relationshipLabel(edge, currentThreadId);
           const threadTitle = relationshipThreadTitle({
             title: node?.thread?.title ?? threadId,

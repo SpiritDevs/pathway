@@ -7,6 +7,7 @@ import {
   type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2CreationSource,
+  type OrchestrationV2ThreadParent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2WorkspacePreparation,
   type OrchestrationV2WorkspacePreparationControlInput,
@@ -71,6 +72,7 @@ export interface ThreadLaunchInput {
   readonly commandId: CommandId;
   readonly orchestratorOrigin?: OrchestratorAssignmentOrigin | undefined;
   readonly threadId?: ThreadId;
+  readonly remoteParent?: OrchestrationV2ThreadParent | undefined;
   readonly reuseExistingThread?: boolean;
   readonly projectId: ProjectId | null;
   readonly temporary?: boolean | undefined;
@@ -855,6 +857,7 @@ export const make = Effect.gen(function* () {
                 commandId: input.commandId,
                 threadId: candidateThreadId,
                 projectId: input.projectId,
+                ...(input.remoteParent === undefined ? {} : { remoteParent: input.remoteParent }),
                 temporary: input.temporary ?? false,
                 ...(input.temporary === true
                   ? {

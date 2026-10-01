@@ -387,6 +387,30 @@ describe("sidebar thread lineage helpers", () => {
     ).toEqual([parentId]);
   });
 
+  it("lists attached threads under a listed parent and back in the sidebar once it is gone", () => {
+    const here = EnvironmentId.make("environment-here");
+    const elsewhere = EnvironmentId.make("environment-elsewhere");
+    const parent = makeThreadFixture({ id: ThreadId.make("thread-parent"), environmentId: here });
+    const attached = (id: string, parentThreadId: string) =>
+      makeThreadFixture({
+        id: ThreadId.make(id),
+        environmentId: elsewhere,
+        lineage: {
+          rootThreadId: ThreadId.make(id),
+          parentThreadId: ThreadId.make(parentThreadId),
+          relationshipToParent: null,
+          parentEnvironmentId: here,
+        },
+      });
+
+    expect(
+      filterSidebarV2VisibleThreads(
+        [parent, attached("thread-attached", "thread-parent"), attached("thread-orphan", "gone")],
+        null,
+      ).map((thread) => thread.id),
+    ).toEqual(["thread-parent", "thread-orphan"]);
+  });
+
   it("identifies subagent threads so the sidebar can hide them", () => {
     const parentId = ThreadId.make("thread-parent");
     const subagent = makeThreadFixture({

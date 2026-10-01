@@ -1150,6 +1150,7 @@ const make = Effect.gen(function* () {
       .dispatch({
         targetEnvironmentId: input.targetEnvironmentId,
         targetProjectId: input.targetProjectId,
+        parent: { threadId: scope.threadId, environmentId: scope.environmentId },
         kind: "startThread",
         args: {
           kind: "startThread",

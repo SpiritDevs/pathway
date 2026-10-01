@@ -28,6 +28,27 @@ describe("thread relationships", () => {
     expect(resolveThreadForkKind({ title: "Manual branch", lineage } as never)).toBe("manual");
   });
 
+  it("links attached threads to their parent without fork or subagent meaning", () => {
+    const parent = ThreadId.make("thread-parent");
+    const child = ThreadId.make("thread-attached");
+    const graph = deriveThreadRelationshipGraph({
+      threads: [
+        {
+          id: child,
+          title: "Attached",
+          status: "running",
+          forkedFrom: null,
+          lineage: { rootThreadId: child, parentThreadId: parent, relationshipToParent: null },
+        },
+      ] as never,
+      projection: null,
+    });
+
+    expect(graph.edges).toEqual([
+      { sourceThreadId: parent, targetThreadId: child, kind: "attached", status: "running" },
+    ]);
+  });
+
   it("keeps an older activity run visible over a newer cancelled run", () => {
     const parent = ThreadId.make("thread-parent");
     const child = ThreadId.make("thread-child");

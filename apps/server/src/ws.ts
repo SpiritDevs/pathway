@@ -1703,6 +1703,7 @@ const makeWsRpcLayer = (
                 threadLaunch.launch({
                   commandId: input.commandId,
                   ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
+                  ...(input.remoteParent === undefined ? {} : { remoteParent: input.remoteParent }),
                   ...(input.reuseExistingThread === undefined
                     ? {}
                     : { reuseExistingThread: input.reuseExistingThread }),

@@ -114,6 +114,7 @@ export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "line
 
 export function filterSidebarV2VisibleThreads<
   T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage" | "locations" | "title"> & {
+    id: string;
     environmentId: string;
     projectId: string | null;
   },
@@ -122,11 +123,23 @@ export function filterSidebarV2VisibleThreads<
   scopedProjectKeys: ReadonlySet<string> | null,
   includeConversations = scopedProjectKeys === null,
 ): T[] {
+  // An attached thread lists under its parent's Lineage, but returns here once that parent is gone.
+  let listed: ReadonlySet<string> | null = null;
+  const isListedUnderParent = ({ environmentId, lineage }: T) => {
+    if (lineage.parentThreadId === null) return false;
+    listed ??= new Set(
+      threads
+        .filter((thread) => thread.archivedAt === null)
+        .map((thread) => `${thread.environmentId}:${thread.id}`),
+    );
+    return listed.has(`${lineage.parentEnvironmentId ?? environmentId}:${lineage.parentThreadId}`);
+  };
   return threads.filter(
     (thread) =>
       thread.archivedAt === null &&
       threadIsVisibleAt(thread, "agents") &&
       thread.lineage.relationshipToParent === null &&
+      !isListedUnderParent(thread) &&
       !isPullRequestReviewThreadTitle(thread.title) &&
       (thread.projectId === null
         ? includeConversations
@@ -1071,7 +1084,7 @@ export function sortLogicalProjectsForSidebar<
 
 export function sortSidebarV2ProjectGroups<
   TProject extends LogicalSidebarProject,
-  TThread extends ScopedSidebarThread & Pick<SidebarThreadSummary, "lineage" | "title">,
+  TThread extends ScopedSidebarThread & Pick<SidebarThreadSummary, "id" | "lineage" | "title">,
 >(
   projects: readonly TProject[],
   threads: readonly TThread[],

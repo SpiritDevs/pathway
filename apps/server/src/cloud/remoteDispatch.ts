@@ -21,6 +21,7 @@ import {
   type ModelSelection,
   ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationV2Run,
+  type OrchestrationV2ThreadParent,
   type OrchestrationV2ThreadProjection,
   type ProjectId,
   type CloudProjectId,
@@ -104,6 +105,8 @@ export class EnvironmentCommandIssuer extends Context.Service<
 
 export interface RemoteDispatchInput {
   readonly targetEnvironmentId: EnvironmentId;
+  /** The thread on this environment that a direct `startThread` is attached under. */
+  readonly parent?: OrchestrationV2ThreadParent;
   readonly targetProjectId?: ProjectId;
   readonly cloudProjectId?: CloudProjectId;
   readonly kind: EnvironmentCommandKind;
@@ -349,6 +352,7 @@ const executeDirect = Effect.fn("cloud.remote_dispatch.execute_direct")(function
           const launched = yield* client[ORCHESTRATION_V2_WS_METHODS.launchThread]({
             commandId,
             ...(input.args.threadId === undefined ? {} : { threadId: input.args.threadId }),
+            ...(input.parent === undefined ? {} : { remoteParent: input.parent }),
             creationSource: "mcp",
             projectId: input.targetProjectId!,
             title: "New delegated task",
