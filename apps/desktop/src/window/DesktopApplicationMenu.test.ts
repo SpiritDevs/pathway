@@ -13,6 +13,7 @@ import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as DesktopApplicationMenu from "./DesktopApplicationMenu.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as PreviewManager from "../preview/Manager.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 
@@ -123,7 +124,7 @@ const makeElectronMenuLayer = (
 const configureMenu = (
   selectedActions: Array<string>,
   applicationMenuTemplate: Deferred.Deferred<readonly Electron.MenuItemConstructorOptions[]>,
-  options: { readonly devServerUrl?: string } = {},
+  options: { readonly devServerUrl?: string; readonly browserFocused?: boolean } = {},
 ) =>
   Effect.gen(function* () {
     const menu = yield* DesktopApplicationMenu.DesktopApplicationMenu;
@@ -133,6 +134,12 @@ const configureMenu = (
       DesktopApplicationMenu.layer.pipe(
         Layer.provideMerge(makeElectronMenuLayer(applicationMenuTemplate)),
         Layer.provideMerge(makeDesktopWindowLayer(selectedActions)),
+        Layer.provideMerge(
+          Layer.mock(PreviewManager.PreviewManager)({
+            isBrowserPartition: () => false,
+            isBrowserContentFocused: () => options.browserFocused ?? false,
+          }),
+        ),
         Layer.provideMerge(desktopUpdatesLayer),
         Layer.provideMerge(electronDialogLayer),
         Layer.provideMerge(electronAppLayer),
@@ -210,6 +217,42 @@ describe("DesktopApplicationMenu", () => {
 
       zoomIn.click({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
       assert.deepEqual(selectedActions, ["zoom-in"]);
+    }),
+  );
+
+  it.effect("leaves app shortcuts to a focused browser tab but keeps menu clicks working", () =>
+    Effect.gen(function* () {
+      const selectedActions: Array<string> = [];
+      const applicationMenuTemplate =
+        yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
+
+      yield* configureMenu(selectedActions, applicationMenuTemplate, { browserFocused: true });
+
+      const template = yield* Deferred.await(applicationMenuTemplate);
+      const item = (menuLabel: string, label: string) => {
+        const menu = template.find(
+          (entry) => entry.label === menuLabel || entry.role === menuLabel,
+        );
+        if (!Array.isArray(menu?.submenu)) throw new Error("Expected a submenu array.");
+        const found = menu.submenu.find((entry) => entry.label === label);
+        if (typeof found?.click !== "function") throw new Error(`Expected "${label}" to click.`);
+        return found.click;
+      };
+      const shortcut = { triggeredByAccelerator: true } as Electron.KeyboardEvent;
+      const mouse = { triggeredByAccelerator: false } as Electron.KeyboardEvent;
+      let closed = 0;
+      const window = { close: () => closed++ } as unknown as Electron.BrowserWindow;
+
+      item("File", "Settings...")({} as Electron.MenuItem, window, shortcut);
+      item("View", "Zoom In")({} as Electron.MenuItem, window, shortcut);
+      item("windowMenu", "Close Window")({} as Electron.MenuItem, window, shortcut);
+      assert.deepEqual(selectedActions, []);
+      assert.equal(closed, 0);
+
+      item("File", "Settings...")({} as Electron.MenuItem, window, mouse);
+      item("windowMenu", "Close Window")({} as Electron.MenuItem, window, mouse);
+      assert.deepEqual(selectedActions, ["open-settings"]);
+      assert.equal(closed, 1);
     }),
   );
 

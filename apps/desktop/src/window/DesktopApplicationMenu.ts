@@ -11,6 +11,7 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as PreviewManager from "../preview/Manager.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 
@@ -121,6 +122,7 @@ export const make = Effect.gen(function* () {
   const electronApp = yield* ElectronApp.ElectronApp;
   const electronMenu = yield* ElectronMenu.ElectronMenu;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const previewManager = yield* PreviewManager.PreviewManager;
   const appName = yield* electronApp.name;
   const context = yield* Effect.context<DesktopApplicationMenuRuntimeServices>();
   const runPromise = Effect.runPromiseWith(context);
@@ -141,12 +143,31 @@ export const make = Effect.gen(function* () {
     );
   };
 
+  // A focused browser tab owns the keyboard like a real browser: its unhandled
+  // chords reach this menu, so Pathway's own shortcuts stand down for it.
+  // Clicking the item still works.
+  const appShortcut =
+    (run: (window: Electron.BaseWindow | undefined) => void) =>
+    (
+      _item: Electron.MenuItem,
+      window: Electron.BaseWindow | undefined,
+      event: Electron.KeyboardEvent,
+    ) => {
+      if (event.triggeredByAccelerator && previewManager.isBrowserContentFocused()) return;
+      run(window);
+    };
+
   const configure = Effect.gen(function* () {
     const checkForUpdatesClick = () => {
       runMenuEffect("check-for-updates", handleCheckForUpdatesMenuClick);
     };
-    const settingsClick = () => {
+    const settingsClick = appShortcut(() => {
       runMenuEffect("open-settings", dispatchMenuAction("open-settings"));
+    });
+    const closeWindowItem: Electron.MenuItemConstructorOptions = {
+      label: "Close Window",
+      accelerator: "CmdOrCtrl+W",
+      click: appShortcut((window) => window?.close()),
     };
     // Panes live in the main window, so DesktopWindow routes these there even
     // when a torn-out window has focus.
@@ -159,9 +180,10 @@ export const make = Effect.gen(function* () {
     const reloadClick = () => {
       runMenuEffect("reload-app", reloadMainWindow());
     };
-    const zoomClick = (direction: DesktopWindow.MainWindowZoomDirection) => () => {
-      runMenuEffect(`zoom-${direction}`, zoomMainWindow(direction));
-    };
+    const zoomClick = (direction: DesktopWindow.MainWindowZoomDirection) =>
+      appShortcut(() => {
+        runMenuEffect(`zoom-${direction}`, zoomMainWindow(direction));
+      });
     const template: Electron.MenuItemConstructorOptions[] = [];
 
     if (environment.platform === "darwin") {
@@ -214,7 +236,7 @@ export const make = Effect.gen(function* () {
                 { type: "separator" as const },
               ]
             : []),
-          { role: environment.platform === "darwin" ? "close" : "quit" },
+          environment.platform === "darwin" ? closeWindowItem : { role: "quit" },
         ],
       },
       { role: "editMenu" },
@@ -251,9 +273,7 @@ export const make = Effect.gen(function* () {
         // Electron's default Window menu, plus closing every torn-out window.
         submenu: [
           { role: "minimize" },
-          ...(environment.platform === "darwin"
-            ? [{ role: "zoom" as const }]
-            : [{ role: "close" as const }]),
+          ...(environment.platform === "darwin" ? [{ role: "zoom" as const }] : [closeWindowItem]),
           { type: "separator" },
           { label: "Close All Pathway Windows", click: closeAllWindowsClick },
           ...(environment.platform === "darwin"

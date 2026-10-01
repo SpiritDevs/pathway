@@ -501,6 +501,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
   const resolvedArtifactDirectory = path.resolve(artifactDirectory);
+  // Browser tabs and their popups. They receive app menu shortcuts like a real
+  // browser (native edit commands included), so the menu asks whether one of
+  // them owns focus before running a Pathway action.
+  const browserContents = new Set<Electron.WebContents>();
+  const isBrowserContentFocused = (): boolean =>
+    [...browserContents].some((contents) => !contents.isDestroyed() && contents.isFocused());
   const playwrightInstallExpression = yield* Effect.cached(
     playwrightInjectedRuntimeInstallExpression(),
   );
@@ -1356,9 +1362,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     };
     const popups = new Set<BrowserWindow>();
     const windowCreated = (window: BrowserWindow): void => {
+      const contents = window.webContents;
       popups.add(window);
-      window.once("closed", () => popups.delete(window));
-      window.webContents.setIgnoreMenuShortcuts(true);
+      browserContents.add(contents);
+      window.once("closed", () => {
+        popups.delete(window);
+        browserContents.delete(contents);
+      });
       window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     };
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
@@ -1390,6 +1400,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.off("did-fail-load", failed as never);
         wc.off("before-input-event", beforeInput);
         wc.off("did-create-window", windowCreated);
+        browserContents.delete(wc);
         for (const popup of popups) if (!popup.isDestroyed()) popup.destroy();
         popups.clear();
       }).pipe(Effect.ignore),
@@ -1402,7 +1413,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.on("did-start-loading", sync);
         wc.on("did-stop-loading", sync);
         wc.on("did-fail-load", failed as never);
-        wc.setIgnoreMenuShortcuts(true);
+        browserContents.add(wc);
         wc.setWindowOpenHandler((details) => {
           if (previewWindowOpenAction(details, previewOpenerPreferences(wc)) === "popup") {
             return { action: "allow", overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS };
@@ -3165,7 +3176,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       yield* send("Page.bringToFront");
       yield* send("Emulation.setFocusEmulationEnabled", { enabled: true });
       keyDownAttempted = true;
-      yield* send("Input.dispatchKeyEvent", keySequence.keyDown);
+      // Agent chords must never reach the app menu (an unhandled Cmd+Q would
+      // quit Pathway). Their packets carry their own edit commands instead.
+      wc.setIgnoreMenuShortcuts(true);
+      yield* send("Input.dispatchKeyEvent", keySequence.keyDown).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (!wc.isDestroyed()) wc.setIgnoreMenuShortcuts(false);
+          }),
+        ),
+      );
     }).pipe(Effect.ensuring(releaseInput));
   });
 
@@ -3423,6 +3443,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     goBack,
     goForward,
     hardReload,
+    isBrowserContentFocused,
     navigate,
     openPictureInPicture,
     openDevTools,
@@ -3712,6 +3733,8 @@ export class PreviewManager extends Context.Service<
     readonly setMainWindow: (window: BrowserWindow) => Effect.Effect<void, PreviewManagerError>;
     readonly getBrowserSession: (scope?: string) => Effect.Effect<Session, PreviewManagerError>;
     readonly isBrowserPartition: (partition: string) => boolean;
+    /** True while a browser tab or one of its popups owns keyboard focus. */
+    readonly isBrowserContentFocused: () => boolean;
     readonly createTab: (tabId: string) => Effect.Effect<PreviewTabState, PreviewManagerError>;
     readonly closeTab: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly registerWebview: (
@@ -3835,6 +3858,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
         );
     }),
     isBrowserPartition: browserSession.isPartition,
+    isBrowserContentFocused: operations.isBrowserContentFocused,
     createTab: operations.createTab,
     closeTab: operations.closeTab,
     registerWebview: operations.registerWebview,
