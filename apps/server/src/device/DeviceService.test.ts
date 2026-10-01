@@ -1341,6 +1341,73 @@ it.effect(
     }).pipe(Effect.scoped),
 );
 
+it.effect("agent-only recovery reaches every device and reports remaining hub uncertainty", () =>
+  Effect.gen(function* () {
+    const agentStopping = yield* Deferred.make<void>();
+    const agentStopped = yield* Deferred.make<void>();
+    const hubStopping = yield* Deferred.make<void>();
+    const hubStopped = yield* Deferred.make<void>();
+    const restarted: ReadonlyArray<"hub" | "agent">[] = [];
+    const { service } = yield* fixture(Effect.void, undefined, false, undefined, false, undefined, {
+      restartTools: (tools) =>
+        Effect.gen(function* () {
+          restarted.push(tools);
+          const agentOnly = tools.length === 1 && tools[0] === "agent";
+          yield* Deferred.succeed(agentOnly ? agentStopping : hubStopping, undefined);
+          yield* Deferred.await(agentOnly ? agentStopped : hubStopped);
+          return {
+            nodePath: process.execPath,
+            hub: { origin: "http://device.test" },
+            helpers: { serveSimAxSettings: null, serveSimCli: null },
+            run: () => Effect.succeed({ code: 0, stdout: "", stderr: "" }),
+          };
+        }),
+    });
+    yield* service.configure({ enabled: true, agentAccessEnabled: true });
+    const first = { hostId: "local", deviceId: "first" };
+    const second = { hostId: "local", deviceId: "second" };
+    const owner = { kind: "viewer" as const, sessionId: "session", viewerId: "viewer" };
+    yield* service.control.acquire(first, owner);
+    yield* service.control.acquire(second, {
+      kind: "agent",
+      threadId: ThreadId.make("thread"),
+      runId: RunId.make("run"),
+    });
+    yield* service.control.uncertain(first, "hub");
+    yield* service.control.uncertain(second, "agent");
+
+    const agentRestart = yield* service
+      .restartTools({ tools: ["agent"] })
+      .pipe(Effect.result, Effect.forkChild);
+    yield* Deferred.await(agentStopping);
+    expect((yield* service.control.acquire(second, owner).pipe(Effect.flip)).code).toBe(
+      "control_draining",
+    );
+    yield* Deferred.succeed(agentStopped, undefined);
+    const result = yield* Fiber.join(agentRestart);
+    expect((yield* service.control.acquire(second, owner)).phase).toBe("held");
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "DeviceControlError", ...first, code: "input_unconfirmed" },
+    });
+    expect((yield* service.control.acquire(first, owner).pipe(Effect.flip)).code).toBe(
+      "input_unconfirmed",
+    );
+
+    const hubRestart = yield* service
+      .restartTools({ tools: ["hub"] })
+      .pipe(Effect.result, Effect.forkChild);
+    yield* Deferred.await(hubStopping);
+    expect((yield* service.control.acquire(first, owner).pipe(Effect.flip)).code).toBe(
+      "control_draining",
+    );
+    yield* Deferred.succeed(hubStopped, undefined);
+    expect((yield* Fiber.join(hubRestart))._tag).toBe("Success");
+    expect((yield* service.control.acquire(first, owner)).phase).toBe("held");
+    expect(restarted).toEqual([["agent"], ["hub"]]);
+  }).pipe(Effect.scoped),
+);
+
 for (const recovery of ["restart", "restart-failed", "disable", "stop", "deadline"] as const) {
   it.effect(
     `${recovery} recovers from a command whose response never completes without granting uncertain control`,

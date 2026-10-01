@@ -214,6 +214,42 @@ describe("environment device control", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect(
+    "confirmed termination recovers later devices before reporting an earlier drain failure",
+    () =>
+      Effect.gen(function* () {
+        const control = yield* make();
+        const first = { ...target, deviceId: "first" };
+        const second = { ...target, deviceId: "second" };
+        yield* control.acquire(first, viewer("one"));
+        const held = yield* control.acquire(second, agent);
+        const finishing = yield* Deferred.make<void>();
+        const finished = yield* Deferred.make<void>();
+        yield* control.onFinish(
+          { ...second, owner: agent, generation: held.generation },
+          Deferred.succeed(finishing, undefined).pipe(Effect.andThen(Deferred.await(finished))),
+        );
+        yield* control.uncertain(first, "hub");
+        yield* control.uncertain(second, "agent");
+        const recovered = yield* control
+          .hostStopped("local", ["agent"])
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(finishing);
+        yield* Deferred.succeed(finished, undefined);
+        const result = yield* Fiber.join(recovered);
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { ...first, code: "input_unconfirmed" },
+        });
+        expect((yield* control.acquire(second, viewer("one"))).phase).toBe("held");
+        expect((yield* control.acquire(first, viewer("one")).pipe(Effect.flip)).code).toBe(
+          "input_unconfirmed",
+        );
+        yield* control.hostStopped("local", ["hub"]);
+        expect((yield* control.acquire(first, viewer("one"))).phase).toBe("held");
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("a queued disconnect does not revoke the viewer taking over", () =>
     Effect.gen(function* () {
       const control = yield* make();

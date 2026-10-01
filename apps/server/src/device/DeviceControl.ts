@@ -380,20 +380,27 @@ export const make = Effect.fn("DeviceControl.make")(function* (
         Effect.ignore,
       ),
     /** Only after host.stop/restart has joined all old helpers may uncertainty be cleared. */
-    hostStopped: (hostId: string, tools: ReadonlyArray<DeviceTool> = ["hub", "agent"]) =>
-      Effect.forEach(
+    hostStopped: Effect.fn("DeviceControl.hostStopped")(function* (
+      hostId: string,
+      tools: ReadonlyArray<DeviceTool> = ["hub", "agent"],
+    ) {
+      const results = yield* Effect.forEach(
         [...entries.values()].filter((entry) => entry.state.hostId === hostId),
         (entry) =>
-          entry.lock.withPermit(
-            Effect.gen(function* () {
-              yield* Effect.forEach([...entry.calls.keys()], Deferred.await, { discard: true });
-              for (const tool of tools) entry.uncertain.delete(tool);
-              if (tools.includes("hub")) entry.finish.clear();
-              yield* drain(entry);
-            }),
-          ),
-        { discard: true },
-      ).pipe(Effect.uninterruptible),
+          entry.lock
+            .withPermit(
+              Effect.gen(function* () {
+                yield* Effect.forEach([...entry.calls.keys()], Deferred.await, { discard: true });
+                for (const tool of tools) entry.uncertain.delete(tool);
+                if (tools.includes("hub")) entry.finish.clear();
+                yield* drain(entry);
+              }),
+            )
+            .pipe(Effect.result),
+      );
+      // A device waiting on another helper must not skip recovery of later devices.
+      for (const result of results) if (result._tag === "Failure") return yield* result.failure;
+    }, Effect.uninterruptible),
   };
 });
 export type DeviceControl = Effect.Success<ReturnType<typeof make>>;

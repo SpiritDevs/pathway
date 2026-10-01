@@ -157,7 +157,11 @@ All managed calls have a five-minute completion deadline. Deadline expiry
 cancels the response wait and leaves `input_unconfirmed`; cancellation is
 not proof that the native command stopped. Explicit helper recovery fences new
 admission and can stop the helper without waiting for its old response. Only a
-confirmed helper restart clears that helper's uncertainty. Disabling support
+confirmed helper restart clears that helper's uncertainty on every device on the
+host, even if another device still needs a different helper recovered. Recovery
+attempts every device's drain, then returns the first remaining error. For example,
+an agent-only restart can recover one device while returning `input_unconfirmed`
+for another device that still needs its hub restarted. Disabling support
 also reaches the helper stop without waiting for the response, but does not
 treat a stop request alone as confirmed termination.
 Each accepted command renews the 30-second expiry. After idle expiry, the active

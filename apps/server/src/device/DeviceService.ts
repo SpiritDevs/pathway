@@ -1149,12 +1149,14 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
                 }),
             ),
             Effect.flatMap((restarted) =>
-              restarted ? control.hostStopped(host.id, tools).pipe(Effect.ignore) : Effect.void,
+              Effect.gen(function* () {
+                for (const [token, access] of agentGrants)
+                  if (access.host === host) agentGrants.delete(token);
+                if (restarted) yield* control.hostStopped(host.id, tools);
+              }),
             ),
           ),
         );
-        for (const [token, access] of agentGrants)
-          if (access.host === host) agentGrants.delete(token);
       }),
     );
     return yield* inspect;

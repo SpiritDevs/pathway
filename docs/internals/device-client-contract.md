@@ -264,6 +264,14 @@ for accepted work. A deadline can produce `input_unconfirmed`; stay watch-only u
 old helper has terminated. Restart can stop a stalled helper without waiting for
 its old command response.
 
+`device.restartTools` processes every device on the host after confirmed helper
+termination, then returns the first remaining drain error instead of reporting
+success. The existing `DeviceControlError` identifies the affected device. An
+agent-only restart can recover one device while returning `input_unconfirmed`
+for another that still needs a hub restart. Use `subscribeDeviceState` to observe
+each device's control state; a restart error does not mean every device is still
+fenced. RPC names, payloads, state fields and error codes are unchanged.
+
 `DeviceControlError` includes `hostId`, `deviceId`, `code`, and `message`:
 
 | Code                | Meaning                                                                        |
