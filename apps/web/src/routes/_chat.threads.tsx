@@ -3,7 +3,7 @@ import { activeCompanyIdAtom } from "../cloud/activeCompany";
 import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import { threadIsVisibleAt } from "@spiritdevs/contracts";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
+import { KeyRoundIcon, LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { openCommandPalette } from "../commandPaletteBus";
@@ -22,6 +22,7 @@ import {
 import { useEnvironments } from "../state/environments";
 import { APP_DISPLAY_NAME } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
+import { isClientOnlyChosen, pairWithServingEnvironment } from "~/hostedPairing";
 import { cn } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
@@ -294,11 +295,17 @@ function HostedStaticOnboardingState() {
                   ? "Sign in to Pathway Connect to connect a linked environment through its managed tunnel, or add a reachable backend manually."
                   : "Add a reachable backend manually to start working from this browser."}
               </EmptyDescription>
-              <div className="mt-6 flex justify-center">
+              <div className="mt-6 flex flex-wrap justify-center gap-2">
                 <Button render={<Link to="/settings/environments" />} size="sm">
                   <PlusIcon className="size-4" />
                   {cloudEnabled ? "Open Environments" : "Add environment"}
                 </Button>
+                {isClientOnlyChosen() ? (
+                  <Button onClick={pairWithServingEnvironment} size="sm" variant="outline">
+                    <KeyRoundIcon className="size-4" />
+                    Pair with this server
+                  </Button>
+                ) : null}
               </div>
             </EmptyHeader>
           </div>

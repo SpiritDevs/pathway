@@ -107,7 +107,11 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collaps
 import { AnimatedHeight } from "../AnimatedHeight";
 import { Textarea } from "../ui/textarea";
 import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "../../pairingUrl";
-import { readHostedPairingRequest } from "../../hostedPairing";
+import {
+  isClientOnlyChosen,
+  pairWithServingEnvironment,
+  readHostedPairingRequest,
+} from "../../hostedPairing";
 import {
   createServerPairingCredential,
   revokeServerClientSession,
@@ -3509,6 +3513,19 @@ export function EnvironmentConnectionSettings({
 
   return (
     <>
+      {isClientOnlyChosen() ? (
+        <SettingsSection title="This environment">
+          <SettingsRow
+            title="Used as a client"
+            description="This browser connects only to your saved environments and skips pairing with the server that serves it."
+            control={
+              <Button size="xs" variant="outline" onClick={pairWithServingEnvironment}>
+                Pair with this server
+              </Button>
+            }
+          />
+        </SettingsSection>
+      ) : null}
       {canManageLocalBackend ? (
         <>
           <SettingsSection title="This environment">

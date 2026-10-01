@@ -1,5 +1,6 @@
 import type { AuthSessionState } from "@spiritdevs/contracts";
 import { squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runtime";
+import { ArrowLeftIcon, ChevronRightIcon, KeyRoundIcon, NetworkIcon } from "lucide-react";
 import React, { startTransition, useEffect, useRef, useState, useCallback } from "react";
 
 import { APP_DISPLAY_NAME } from "../../branding";
@@ -9,15 +10,15 @@ import {
   stripPairingTokenFromUrl,
   submitServerAuthCredential,
 } from "../../environments/primary";
-import { readHostedPairingRequest } from "../../hostedPairing";
+import { readHostedPairingRequest, setClientOnlyChosen } from "../../hostedPairing";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 export function PairingPendingSurface() {
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
-      <div className="pointer-events-none absolute inset-0 opacity-80">
+    <div className="pairing-surface relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
+      <div className="pairing-surface-glow pointer-events-none absolute inset-0 opacity-80">
         <div className="absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--color-emerald-500)_14%,transparent),transparent)]" />
         <div className="absolute inset-y-0 left-0 w-72 bg-[radial-gradient(28rem_18rem_at_left,color-mix(in_srgb,var(--color-sky-500)_10%,transparent),transparent)]" />
         <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
@@ -51,6 +52,12 @@ export function PairingRouteSurface({
   const [credential, setCredential] = useState(() => autoPairTokenRef.current ?? "");
   const [errorMessage, setErrorMessage] = useState(initialErrorMessage ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Pairing links, errors, and an explicit visit to /pair skip straight to the token form.
+  const [view, setView] = useState<"choose" | "pair">(() =>
+    autoPairTokenRef.current || initialErrorMessage || window.location.pathname === "/pair"
+      ? "pair"
+      : "choose",
+  );
   const autoSubmitAttemptedRef = useRef(false);
 
   const submitCredential = useCallback(
@@ -97,69 +104,143 @@ export function PairingRouteSurface({
   }, [submitCredential]);
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
-      <div className="pointer-events-none absolute inset-0 opacity-80">
+    <div className="pairing-surface relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
+      <div className="pairing-surface-glow pointer-events-none absolute inset-0 opacity-80">
         <div className="absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--color-emerald-500)_14%,transparent),transparent)]" />
         <div className="absolute inset-y-0 left-0 w-72 bg-[radial-gradient(28rem_18rem_at_left,color-mix(in_srgb,var(--color-sky-500)_10%,transparent),transparent)]" />
         <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
       </div>
 
-      <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
-        <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-          {APP_DISPLAY_NAME}
-        </p>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
-          Pair with this environment
-        </h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          {describeAuthGate(auth.bootstrapMethods)}
-        </p>
+      {view === "choose" ? (
+        <section className="relative w-full max-w-2xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
+          <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+            {APP_DISPLAY_NAME}
+          </p>
+          <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
+            How do you want to use {APP_DISPLAY_NAME} here?
+          </h1>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            Work on the server that serves this page, or use this browser to reach your other
+            environments.
+          </p>
 
-        <form className="mt-6 space-y-4" onSubmit={(event) => void handleSubmit(event)}>
-          <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="pairing-token">
-              Pairing token
-            </label>
-            <Input
-              id="pairing-token"
-              autoCapitalize="none"
-              autoComplete="off"
-              autoCorrect="off"
-              disabled={isSubmitting}
-              nativeInput
-              onChange={(event) => setCredential(event.currentTarget.value)}
-              placeholder="Paste a one-time token or pairing secret"
-              spellCheck={false}
-              value={credential}
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            <PairingChoiceCard
+              icon={<KeyRoundIcon className="size-5" />}
+              title="Pair with this environment"
+              description="Enter a pairing code to work with this server's projects and agents."
+              onSelect={() => setView("pair")}
+            />
+            <PairingChoiceCard
+              icon={<NetworkIcon className="size-5" />}
+              title="Use as a client"
+              description="Connect to your other environments from this browser. This server stays unpaired."
+              onSelect={() => {
+                setClientOnlyChosen(true);
+                window.location.assign("/");
+              }}
             />
           </div>
+        </section>
+      ) : (
+        <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
+          <Button
+            className="-ml-2 mb-3 text-muted-foreground"
+            disabled={isSubmitting}
+            onClick={() => {
+              setErrorMessage("");
+              setView("choose");
+            }}
+            size="xs"
+            variant="ghost"
+          >
+            <ArrowLeftIcon className="size-3.5" />
+            Back
+          </Button>
+          <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+            {APP_DISPLAY_NAME}
+          </p>
+          <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
+            Pair with this environment
+          </h1>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            {describeAuthGate(auth.bootstrapMethods)}
+          </p>
 
-          {errorMessage ? (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
-              {errorMessage}
+          <form className="mt-6 space-y-4" onSubmit={(event) => void handleSubmit(event)}>
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="pairing-token">
+                Pairing token
+              </label>
+              <Input
+                id="pairing-token"
+                autoCapitalize="none"
+                autoComplete="off"
+                autoCorrect="off"
+                disabled={isSubmitting}
+                nativeInput
+                onChange={(event) => setCredential(event.currentTarget.value)}
+                placeholder="Paste a one-time token or pairing secret"
+                spellCheck={false}
+                value={credential}
+              />
             </div>
-          ) : null}
 
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={isSubmitting} size="sm" type="submit">
-              {isSubmitting ? "Pairing..." : "Continue"}
-            </Button>
-            <Button
-              disabled={isSubmitting}
-              onClick={() => window.location.reload()}
-              size="sm"
-              variant="outline"
-            >
-              Reload app
-            </Button>
+            {errorMessage ? (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
+                {errorMessage}
+              </div>
+            ) : null}
+
+            <div className="flex flex-wrap gap-2">
+              <Button disabled={isSubmitting} size="sm" type="submit">
+                {isSubmitting ? "Pairing..." : "Continue"}
+              </Button>
+              <Button
+                disabled={isSubmitting}
+                onClick={() => window.location.reload()}
+                size="sm"
+                variant="outline"
+              >
+                Reload app
+              </Button>
+            </div>
+          </form>
+
+          <div className="mt-6 rounded-lg border border-border/70 bg-background/55 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
+            {describeSupportedMethods(auth.bootstrapMethods)}
           </div>
-        </form>
-
-        <div className="mt-6 rounded-lg border border-border/70 bg-background/55 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
-          {describeSupportedMethods(auth.bootstrapMethods)}
-        </div>
-      </section>
+        </section>
+      )}
     </div>
+  );
+}
+
+function PairingChoiceCard(props: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      className="group flex h-full flex-col gap-4 rounded-xl border border-border/70 bg-background/45 p-4 text-left transition-colors hover:border-border hover:bg-accent/45 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      onClick={props.onSelect}
+      type="button"
+    >
+      <span className="flex w-full items-center justify-between">
+        <span className="flex size-10 items-center justify-center rounded-lg border border-border/70 bg-card text-foreground/80">
+          {props.icon}
+        </span>
+        <ChevronRightIcon className="size-4 text-muted-foreground/60 transition-colors group-hover:text-foreground" />
+      </span>
+      <span className="space-y-1">
+        <span className="block text-sm font-medium text-foreground">{props.title}</span>
+        <span className="block text-xs leading-relaxed text-muted-foreground">
+          {props.description}
+        </span>
+      </span>
+    </button>
   );
 }
 
@@ -233,8 +314,8 @@ export function HostedPairingRouteSurface() {
   const request = hostedPairingRequestRef.current;
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
-      <div className="pointer-events-none absolute inset-0 opacity-80">
+    <div className="pairing-surface relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
+      <div className="pairing-surface-glow pointer-events-none absolute inset-0 opacity-80">
         <div className="absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--color-emerald-500)_14%,transparent),transparent)]" />
         <div className="absolute inset-y-0 left-0 w-72 bg-[radial-gradient(28rem_18rem_at_left,color-mix(in_srgb,var(--color-sky-500)_10%,transparent),transparent)]" />
         <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
