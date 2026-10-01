@@ -97,6 +97,25 @@ Restart an existing agent session after granting access. Turning access off
 revokes it for current agent sessions too; your own Device panel is
 unaffected.
 
+## On iPhone and iPad
+
+When a chat has a device open, a **One device open** (or **N devices open**)
+button appears above the composer. Tap it to watch the device full screen. If
+the chat has several devices open, switch between them from the **…** menu,
+which also has **Reload stream**, **App switcher**, **Back** (Android),
+**Rotate** (iOS), and **Shut down device**.
+
+While the agent is working, the viewer only watches and shows **Agent is using
+the device**. Tap **Take control** to stop the agent's current turn and use the
+device yourself. When you're done, tap **Resume agent**, optionally with a
+message, and the agent continues from where you left the device. When the agent
+is idle, you can use the device without taking control. Another person or
+device can still send the agent a new message, which hands the device back to
+the agent.
+
+The stream pauses when you leave the viewer or switch apps, and reconnects
+when you come back. It works over Pathway Connect, including on cellular.
+
 ## Settings
 
 Manage devices in **Settings → Integrations → Devices**. Choose the

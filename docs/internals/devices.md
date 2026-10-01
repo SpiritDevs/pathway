@@ -85,6 +85,18 @@ headless browsers reject that profile, and WebCodecs is secure-context only, so
 clients should probe `isConfigSupported` and fall back to the MJPEG endpoint on
 iOS. Android has no MJPEG; clients should report that they cannot decode it.
 
+The web viewer and the native iOS app share `client-runtime/device/stream.ts`.
+iOS bundles it with `scripts/ios/build-device-stream.mjs` into
+`PathwayDeviceStream.bundle` (CI checks the bundle with `--check`) and runs it
+in a WKWebView whose empty document is loaded at the environment's origin, so
+media and input are same-origin and WebCodecs gets a secure context over
+HTTPS. The app mints the ticket and passes it in as `DeviceHubAccess`; an
+`unauthorized` reply makes it mint a fresh one, except right after minting,
+when it reports the rejection instead of looping. Device control on mobile is
+client-side: the server has no device control lease, so the viewer derives
+watch-only versus user control from the thread's active run, and **Take
+control** interrupts that run.
+
 ## Upstream version and tool inventory
 
 The backend follows t3code `d15210cd3da79f9a1a495a6309d912d76362a046`.

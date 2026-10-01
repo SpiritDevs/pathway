@@ -79,6 +79,8 @@ jobs:
 
       - name: Verify bundled terminal
         run: node scripts/ios/build-terminal.mjs --check
+      - name: Verify bundled device stream
+        run: node scripts/ios/build-device-stream.mjs --check
 
       - name: Archive and upload
         env:

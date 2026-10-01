@@ -92,6 +92,7 @@ security list-keychains -d user -s "$keychain_path" "${original_keychains[@]}"
 node scripts/configure-pathway-ios.ts
 xcodebuild -version
 node scripts/ios/build-terminal.mjs --check
+node scripts/ios/build-device-stream.mjs --check
 
 auth=(
   -allowProvisioningUpdates

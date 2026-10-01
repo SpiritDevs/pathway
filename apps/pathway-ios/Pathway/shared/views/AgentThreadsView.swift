@@ -1094,6 +1094,7 @@ struct AgentThreadConversationView: View {
     @State private var model: PathwayAgentThreadModel
     @State private var subscriptionLifetime: PathwayThreadSubscriptionLifetime
     @State private var computer: PathwayThreadComputerModel?
+    @State private var devices: PathwayThreadDevicesModel?
     @State private var isComposerExpanded = false
     @State private var isNearBottom = true
     @State private var followsLatest = true
@@ -1117,6 +1118,7 @@ struct AgentThreadConversationView: View {
     @State private var showsAlternateEnvironment = false
     @State private var showsBrowser = false
     @State private var showsComputer = false
+    @State private var showsDevices = false
     @State private var newThreadDefaults: PathwayNewThreadDefaults?
     @State private var showsQueueMove = false
     @State private var isCancelingQueuedThread = false
@@ -1128,6 +1130,7 @@ struct AgentThreadConversationView: View {
         _model = State(initialValue: model)
         _subscriptionLifetime = State(initialValue: PathwayThreadSubscriptionLifetime(start: { model.start() }, stop: { await model.stop() }))
         _computer = State(initialValue: model.connect.map { PathwayThreadComputerModel(threadID: model.threadID, environment: model.environment, connect: $0) })
+        _devices = State(initialValue: model.connect.map { PathwayThreadDevicesModel(threadID: model.threadID, environment: model.environment, connect: $0) })
         _showsGitReview = State(initialValue: initiallyReviewChanges)
     }
 
@@ -1136,6 +1139,7 @@ struct AgentThreadConversationView: View {
         _model = State(initialValue: model)
         _subscriptionLifetime = State(initialValue: PathwayThreadSubscriptionLifetime(start: { model.start() }, stop: { await model.stop() }))
         _computer = State(initialValue: model.connect.map { PathwayThreadComputerModel(threadID: model.threadID, environment: model.environment, connect: $0) })
+        _devices = State(initialValue: model.connect.map { PathwayThreadDevicesModel(threadID: model.threadID, environment: model.environment, connect: $0) })
     }
 
     private func collapseComposer() {
@@ -1249,6 +1253,13 @@ struct AgentThreadConversationView: View {
                         isComposerFocused = false
                         subscriptionLifetime.retain(.browser)
                         showsBrowser = true
+                    }
+                    if let devices, model.servesDevices {
+                        AgentThreadDevicesButton(devices: devices) {
+                            isComposerFocused = false
+                            subscriptionLifetime.retain(.devices)
+                            showsDevices = true
+                        }
                     }
                     if let connect = appModel.connect {
                         PathwayConversationStorageNotice(environment: model.environment, connect: connect, threadID: model.thread.threadId, isStartingConversation: false,
@@ -1384,6 +1395,13 @@ struct AgentThreadConversationView: View {
                 .onAppear { subscriptionLifetime.retain(.browser) }
                 .onDisappear { subscriptionLifetime.release(.browser) }
         }
+        .navigationDestination(isPresented: $showsDevices) {
+            if let devices {
+                AgentThreadDeviceViewer(devices: devices, model: model)
+                    .onAppear { subscriptionLifetime.retain(.devices) }
+                    .onDisappear { subscriptionLifetime.release(.devices) }
+            }
+        }
         .navigationDestination(item: $childDestination) { destination in
             AgentThreadConversationView(model: destination.model, workspaceRoot: destination.workspaceRoot)
         }
@@ -1412,6 +1430,9 @@ struct AgentThreadConversationView: View {
         .onChange(of: showsBrowser) { _, presented in
             if !presented { subscriptionLifetime.release(.browser) }
         }
+        .onChange(of: showsDevices) { _, presented in
+            if !presented { subscriptionLifetime.release(.devices) }
+        }
         .onChange(of: isComposerExpanded, initial: true) { _, expanded in compactThreadChrome?.setComposerExpanded(expanded, owner: chromeOwner) }
         .onChange(of: model.thread.shell.deletedAt) { _, deletedAt in
             if deletedAt != nil { dismiss() }
@@ -1421,6 +1442,10 @@ struct AgentThreadConversationView: View {
     private var synchronizedConversation: some View {
         conversationLifecycle
         .modifier(AgentThreadComputerWatch(computer: computer, model: model))
+        .task(id: devices != nil && model.servesDevices && scenePhase == .active) {
+            guard let devices, model.servesDevices, scenePhase == .active else { return }
+            await devices.watch()
+        }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             do {
