@@ -21,6 +21,7 @@ const state = vi.hoisted(() => ({
   command: vi.fn(),
   deleteThread: vi.fn(),
   confirmAndDeleteThread: vi.fn(),
+  search: {} as { environment?: string },
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => "company" }));
 vi.mock("react", async (original) => {
@@ -37,6 +38,13 @@ vi.mock("../../lib/storageDashboardState", () => ({
 }));
 vi.mock("../../lib/storagePreferences", () => ({
   useStorageDefaultPolicy: () => ({ canSave: false }),
+}));
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()),
+  useSearch: () => state.search,
+  useNavigate: () => (options: { search: { environment?: string } }) => {
+    state.search = options.search;
+  },
 }));
 vi.mock("../../state/entities", () => ({ useActiveEnvironmentId: () => "remote-machine" }));
 vi.mock("../../state/server", () => ({ serverEnvironment: {} }));
@@ -120,6 +128,7 @@ function deletionDialog() {
 beforeEach(() => {
   hooks.reset();
   vi.clearAllMocks();
+  state.search = {};
   state.deleteThread.mockResolvedValue({ _tag: "Success", value: undefined });
   // Model ordinary deletion with its confirmation preference disabled: it deletes immediately.
   state.confirmAndDeleteThread.mockImplementation((ref: unknown) => state.deleteThread(ref));

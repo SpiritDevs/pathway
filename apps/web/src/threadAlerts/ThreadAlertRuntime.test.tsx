@@ -102,13 +102,16 @@ beforeEach(() => {
 });
 
 describe("notification click navigation", () => {
-  it("opens Storage & cleanup for a native storage alert without touching a thread notification", async () => {
+  it("opens Storage & cleanup filtered to the alerting environment without touching a thread notification", async () => {
     hooks.beginRender();
     const host = ThreadAlertRuntime() as ReactElement<{
       onNavigate: (target: ThreadAlertTarget) => Promise<void>;
     }>;
     await host.props.onNavigate({ kind: "storage", environmentId: "env" });
-    expect(callbacks.navigate).toHaveBeenCalledExactlyOnceWith({ to: "/settings/archived" });
+    expect(callbacks.navigate).toHaveBeenCalledExactlyOnceWith({
+      to: "/settings/archived",
+      search: { environment: "env" },
+    });
     expect(callbacks.markRead).not.toHaveBeenCalled();
     expect(callbacks.setAtom).not.toHaveBeenCalled();
   });
