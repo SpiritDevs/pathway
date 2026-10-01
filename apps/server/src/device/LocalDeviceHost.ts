@@ -1,3 +1,4 @@
+import { deviceHubControlNodeOptions } from "./deviceHubControlAdapter.ts";
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import { deviceCacheBaseDir } from "./deviceMachineLock.ts";
@@ -402,7 +403,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
             shell: false,
             stdout: "pipe",
             stderr: "pipe",
-            env: hubEnvironment(),
+            env: { ...hubEnvironment(), NODE_OPTIONS: deviceHubControlNodeOptions },
           },
         ),
       )
@@ -724,8 +725,8 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
           yield* Ref.set(runningRef, { ...next, agentDevice: previous.agentDevice });
         }
         if (tools.includes("agent") && previous.agentDevice) {
-          yield* stopAgentDeviceDaemon(agentToolRef);
           const daemon = yield* readDaemonFile().pipe(Effect.option);
+          yield* stopAgentDeviceDaemon(agentToolRef);
           if (
             Option.isSome(daemon) &&
             daemon.value.pid &&

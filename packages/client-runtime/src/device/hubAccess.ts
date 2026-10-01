@@ -29,3 +29,17 @@ export type DeviceHubAccessSource = DeviceHubAccess | (() => DeviceHubAccess);
 
 export const currentDeviceHubAccess = (source: DeviceHubAccessSource): DeviceHubAccess =>
   typeof source === "function" ? source() : source;
+
+/** Renewing a lease keeps its generation. Reconnect input sockets after acquisition. */
+export function withDeviceControl(
+  access: DeviceHubAccess,
+  proof: import("@spiritdevs/contracts").DeviceControlProof | null,
+): DeviceHubAccess {
+  const { viewerId: _viewerId, controlGeneration: _generation, ...query } = access.query;
+  return {
+    ...access,
+    query: proof
+      ? { ...query, viewerId: proof.viewerId, controlGeneration: String(proof.generation) }
+      : query,
+  };
+}

@@ -5,6 +5,7 @@ import { PrimaryConnectionTarget, type PreparedConnection } from "../connection/
 import { remoteHttpClientLayer } from "../rpc/http.ts";
 import { ManagedRelayDpopSigner, type ManagedRelayDpopProofInput } from "../relay/managedRelay.ts";
 import { resolveDeviceHubAccess } from "./deviceHubAccess.ts";
+import { withDeviceControl, withDeviceHubQuery } from "../device/hubAccess.ts";
 
 const target = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("test"),
@@ -20,6 +21,26 @@ const prepared: PreparedConnection = {
   socketUrl: target.wsBaseUrl + "ws",
   httpAuthorization: null,
 };
+
+it.effect("replaces control generations without changing the remote media credential", () =>
+  Effect.gen(function* () {
+    const access = yield* resolveDeviceHubAccess({ prepared, hubBasePath: "/api/device-hub" });
+    const ticketed = { ...access, query: { wsTicket: "remote-ticket" } };
+    const old = withDeviceControl(ticketed, { viewerId: "viewer-one", generation: 5 });
+    const current = withDeviceControl(old, { viewerId: "viewer-two", generation: 9 });
+    const url = new URL(
+      withDeviceHubQuery(`${current.wsBase}/vendor/serve-emu/ws?device=phone`, current),
+    );
+    expect(url.origin).toBe("wss://device.test");
+    expect(url.searchParams.getAll("controlGeneration")).toEqual(["9"]);
+    expect(url.searchParams.get("viewerId")).toBe("viewer-two");
+    expect(url.searchParams.get("wsTicket")).toBe("remote-ticket");
+    expect(withDeviceControl(current, null).query).toEqual({ wsTicket: "remote-ticket" });
+    expect(ticketed.query).toEqual({ wsTicket: "remote-ticket" });
+  }).pipe(
+    Effect.provide(remoteHttpClientLayer(() => Promise.reject(new Error("No HTTP expected")))),
+  ),
+);
 
 it.effect("uses session cookies without minting tickets for the local client", () =>
   Effect.gen(function* () {

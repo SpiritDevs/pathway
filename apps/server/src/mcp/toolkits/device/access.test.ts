@@ -1,3 +1,4 @@
+import * as DeviceControl from "../../../device/DeviceControl.ts";
 import { expect, it } from "@effect/vitest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import {
@@ -58,6 +59,8 @@ it.effect(
         view.setUint32(20, 20);
         const unexpected = () => Effect.die(new Error("Unexpected device operation"));
         const service = DeviceService.of({
+          control: yield* DeviceControl.make(),
+          agentCommand: unexpected,
           agentCli: unexpected(),
           updateTool: unexpected,
           updateTools: unexpected,

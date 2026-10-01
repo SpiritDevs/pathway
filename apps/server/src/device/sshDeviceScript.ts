@@ -1,3 +1,4 @@
+import { deviceHubControlNodeOptions } from "./deviceHubControlAdapter.ts";
 import { deviceSdkInventoryScript } from "./deviceSdkInventory.ts";
 import { remoteDeviceLeaseScript } from "./remoteDeviceLease.ts";
 import { deviceToolMaintenanceScript } from "./deviceToolMaintenance.ts";
@@ -238,7 +239,7 @@ async function install(name, version, entry) {
       const hubPort = await port();
       const log = fs.openSync(path.join(state, 'hub.log'), 'a');
       const child = spawn(process.execPath, [hubEntry, '--port', String(hubPort), '--host', '127.0.0.1', '--hide-sidebar', '--hide-boot-device'], {
-        cwd: state, detached: true, stdio: ['ignore', log, log], env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+        cwd: state, detached: true, stdio: ['ignore', log, log], env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', NODE_OPTIONS: ${JSON.stringify(deviceHubControlNodeOptions)} },
       });
       try { await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); }
       finally { fs.closeSync(log); }

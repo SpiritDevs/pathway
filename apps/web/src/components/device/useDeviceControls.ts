@@ -1,6 +1,7 @@
 import type { DeviceHubAccess } from "@spiritdevs/client-runtime/state/deviceHubAccess";
 import type {
   DeviceActionInput,
+  DeviceControlProof,
   DeviceDetail,
   DeviceSummary,
   EnvironmentId,
@@ -10,6 +11,11 @@ import { deviceEnvironment } from "~/state/device";
 import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { subscribeDeviceForeground, type DeviceForegroundInfo } from "./deviceHubApi";
+import {
+  deviceControlErrorCode,
+  deviceControlErrorCopy,
+  type DeviceControlCode,
+} from "./deviceControl";
 
 type ActionBody = DeviceActionInput extends infer A
   ? A extends { readonly type: string }
@@ -23,8 +29,12 @@ export function useDeviceControls(options: {
   device: DeviceSummary;
   access: DeviceHubAccess | null;
   visible: boolean;
+  /** Undefined where the environment has no control leases; null while only watching. */
+  control?: DeviceControlProof | null | undefined;
+  /** Receives control failures with the generation the action was sent under. */
+  onControlError?: ((code: DeviceControlCode, generation: number) => void) | undefined;
 }) {
-  const { environmentId, device, access, visible } = options;
+  const { environmentId, device, access, visible, control, onControlError } = options;
   const readDetail = useAtomCommand(deviceEnvironment.detail, { reportFailure: false });
   const runAction = useAtomCommand(deviceEnvironment.action, { reportFailure: false });
   const [detail, setDetail] = useState<DeviceDetail | null>(null);
@@ -78,17 +88,18 @@ export function useDeviceControls(options: {
     };
   }, [access, device.id, device.platform, visible]);
 
-  const available = detail !== null && visible;
+  const available = detail !== null && visible && control !== null;
   const act = async (body: ActionBody) => {
     if (busy.current || !available) return;
     busy.current = true;
+    const proof = control;
     // A settings read started before this action must not overwrite its confirmed result.
     const revision = ++generation.current;
     setPending(true);
     setError(null);
     return runAction({
       environmentId,
-      input: { ...target, ...body } as DeviceActionInput,
+      input: { ...target, ...(proof ? { control: proof } : {}), ...body } as DeviceActionInput,
     })
       .then((result) => {
         if (generation.current !== revision) {
@@ -108,8 +119,15 @@ export function useDeviceControls(options: {
             }
           });
         }
-        if (result._tag === "Success") setDetail(result.value);
-        else setError(formatEnvironmentQueryError(result.cause));
+        if (result._tag === "Success") {
+          setDetail(result.value);
+          return;
+        }
+        // Control failures belong to the lease, which shows them beside Take control.
+        const code = deviceControlErrorCode(result.cause);
+        if (code && proof && onControlError) onControlError(code, proof.generation);
+        else
+          setError(code ? deviceControlErrorCopy[code] : formatEnvironmentQueryError(result.cause));
       })
       .finally(() => {
         busy.current = false;
@@ -122,7 +140,7 @@ export function useDeviceControls(options: {
     pending,
     error,
     act,
-    disabled: pending || !detail || !visible,
+    disabled: pending || !available,
     foregroundApp: foreground === undefined ? (detail?.foregroundApp ?? null) : foreground,
   };
 }

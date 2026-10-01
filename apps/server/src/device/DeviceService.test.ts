@@ -1,3 +1,11 @@
+import {
+  DeviceControlCaller,
+  DEVICE_CONTROL_CALL_TIMEOUT,
+  DEVICE_CONTROL_TTL,
+} from "./DeviceControl.ts";
+import { AgentDeviceRequest } from "./DeviceAgentGateway.ts";
+import { TestClock } from "effect/testing";
+import { RunId } from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -27,6 +35,7 @@ const encodeState = Schema.encodeEffect(
 );
 
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const decodeAgentRequest = Schema.decodeUnknownSync(Schema.fromJsonString(AgentDeviceRequest));
 
 const baseState: DeviceServiceState = {
   hosts: [],
@@ -90,6 +99,15 @@ describe("DeviceService.stateStream", () => {
   );
 });
 
+const asLifecycleAgent = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.provideService(DeviceControlCaller, {
+      kind: "agent",
+      threadId: "lifecycle-test",
+      runId: "lifecycle-run",
+    }),
+  );
+
 const fixture = Effect.fn("fixture")(function* (
   onBoot: Effect.Effect<void> = Effect.void,
   bootError?: string,
@@ -100,12 +118,15 @@ const fixture = Effect.fn("fixture")(function* (
   hostOverrides: Partial<DeviceHost.DeviceHost["Service"]> = {},
   configureAgent?: Parameters<typeof makeWithHosts>[2],
   grantAgentTarget?: Parameters<typeof makeWithHosts>[4],
+  onAgentCommand: Effect.Effect<void> = Effect.void,
+  onShutdown: Effect.Effect<void> = Effect.void,
 ) {
   const settings = yield* Ref.make(DEFAULT_SERVER_SETTINGS);
   const starts: string[] = [];
   const agentStarts: string[] = [];
   const agentStops: string[] = [];
   const requests: string[] = [];
+  const agentRequests: (typeof AgentDeviceRequest.Type)[] = [];
   let booted = false;
   let shutDown = false;
   const ready: DeviceHost.DeviceHostReady = {
@@ -196,6 +217,16 @@ const fixture = Effect.fn("fixture")(function* (
       HttpClient.make((request) =>
         Effect.gen(function* () {
           requests.push(request.url);
+          if (request.url.endsWith("/rpc")) {
+            if (request.body._tag !== "Uint8Array")
+              return yield* Effect.die("Expected JSON request");
+            agentRequests.push(decodeAgentRequest(new TextDecoder().decode(request.body.body)));
+            yield* onAgentCommand;
+            return HttpClientResponse.fromWeb(
+              request,
+              Response.json({ jsonrpc: "2.0", id: "request", result: { ok: true } }),
+            );
+          }
           if (request.url.includes("/api/screenshot")) {
             return HttpClientResponse.fromWeb(
               request,
@@ -203,6 +234,7 @@ const fixture = Effect.fn("fixture")(function* (
             );
           }
           if (request.url.endsWith("/shutdown")) {
+            yield* onShutdown;
             shutDown = true;
             booted = false;
             return HttpClientResponse.fromWeb(request, Response.json({ ok: true }));
@@ -245,7 +277,7 @@ const fixture = Effect.fn("fixture")(function* (
       ),
     ),
   );
-  return { service, starts, agentStarts, agentStops, requests, settings };
+  return { service, starts, agentStarts, agentStops, requests, agentRequests, settings };
 });
 
 describe("device setup consent", () => {
@@ -429,7 +461,9 @@ it.effect("keeps shutdown successful when subsequent discovery fails", () =>
       deviceId: "Pixel_API_35",
       platform: "android",
     });
-    yield* service.close({ threadId, deviceId: session.deviceId, shutdown: true });
+    yield* asLifecycleAgent(
+      service.close({ threadId, deviceId: session.deviceId, shutdown: true }),
+    );
     const state = yield* service.state;
     expect(state.sessions).toEqual([]);
     expect(state.devices.find((device) => device.id === session.deviceId)?.booted).toBe(false);
@@ -513,8 +547,8 @@ it.effect.each(["shutdown", "close"] as const)(
       const input = { threadId, deviceId, platform: "ios" as const };
       yield* service.open(input);
       expect(capture).toBe(1);
-      if (operation === "shutdown") yield* service.shutdown(input);
-      else yield* service.close({ threadId, deviceId, shutdown: true });
+      if (operation === "shutdown") yield* asLifecycleAgent(service.shutdown(input));
+      else yield* asLifecycleAgent(service.close({ threadId, deviceId, shutdown: true }));
       expect(capture).toBeNull();
       expect((yield* service.state).sessions).toEqual([]);
       yield* service.open(input);
@@ -608,7 +642,9 @@ it.effect.each([
         Effect.provideService(HttpClient.HttpClient, http),
       );
       yield* service.list;
-      const exit = yield* Effect.exit(service.shutdown({ deviceId, platform: "ios" }));
+      const exit = yield* Effect.exit(
+        asLifecycleAgent(service.shutdown({ deviceId, platform: "ios" })),
+      );
       expect(paths.filter((path) => path.endsWith("shutdown"))).toEqual([
         "/vendor/serve-sim/grid/api/shutdown",
       ]);
@@ -892,7 +928,9 @@ it.effect("denies boot, shutdown and automation when another environment owns th
     expect(failure.message).toContain("In use by Other Mac environment");
     expect((yield* service.shutdown(input).pipe(Effect.result))._tag).toBe("Failure");
     expect(
-      (yield* service.agentTarget({ ...input, hostId: "local" }).pipe(Effect.result))._tag,
+      (yield* service
+        .agentTarget({ runId: RunId.make("run-test"), ...input, hostId: "local" })
+        .pipe(Effect.result))._tag,
     ).toBe("Failure");
     expect(requests.some((value) => value.endsWith("/boot") || value.endsWith("/shutdown"))).toBe(
       false,
@@ -978,7 +1016,7 @@ it.effect("restarts selected helpers without closing sessions or releasing owner
   }).pipe(Effect.scoped),
 );
 
-it.effect("refreshes existing agent grants after restart changes the daemon endpoint", () =>
+it.effect("invalidates existing agent grants when restart changes the daemon endpoint", () =>
   Effect.gen(function* () {
     let endpoint = "";
     const grants: string[] = [];
@@ -1016,14 +1054,485 @@ it.effect("refreshes existing agent grants after restart changes the daemon endp
       platform: "android",
     });
     yield* service.agentTarget({
+      runId: RunId.make("run-test"),
       threadId: ThreadId.make("agent-restart"),
       hostId: "local",
       deviceId: "emulator-5554",
     });
     yield* service.restartTools({ tools: ["agent"] });
-    expect(grants).toEqual(["http://agent.test", "http://restarted.test"]);
+    expect(grants).toEqual(["http://agent.test"]);
+    expect((yield* service.state).controls?.every((state) => state.owner === null)).toBe(true);
     yield* service.configure({ agentAccessEnabled: false });
     yield* service.restartTools({ tools: ["hub"] });
-    expect(grants).toHaveLength(2);
+    expect(grants).toHaveLength(1);
   }).pipe(Effect.scoped),
 );
+
+it.effect(
+  "the agent gateway drains an accepted command before takeover and revokes its reusable token",
+  () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const done = yield* Deferred.make<void>();
+      let token = "";
+      let session = "";
+      const { service, requests } = yield* fixture(
+        Effect.void,
+        undefined,
+        false,
+        undefined,
+        false,
+        undefined,
+        {},
+        (_hostId, _ready, grant) =>
+          Effect.sync(() => {
+            token = grant!.token;
+            session = grant!.session;
+            return "/run-bound-config";
+          }),
+        undefined,
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(done))),
+      );
+      yield* service.configure({ enabled: true, agentAccessEnabled: true });
+      const opened = yield* service.open({
+        threadId: ThreadId.make("thread"),
+        deviceId: "Pixel_API_35",
+        platform: "android",
+      });
+      yield* service.agentTarget({ ...opened, runId: RunId.make("run") });
+      const request = {
+        jsonrpc: "2.0" as const,
+        id: "request",
+        method: "agent_device.command" as const,
+        params: {
+          session,
+          command: "click",
+          positionals: ["@e1"],
+          flags: { platform: "android", serial: opened.deviceId },
+        },
+      };
+      const command = yield* service.agentCommand(token, request).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      const changes = yield* service.subscribe;
+      const draining = yield* Stream.fromSubscription(changes).pipe(
+        Stream.filter(
+          (state) => state.controls?.some((control) => control.phase === "draining") ?? false,
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      let acknowledged = false;
+      const takeover = yield* service.control
+        .acquire(opened, { kind: "viewer", sessionId: "session", viewerId: "viewer" })
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              acknowledged = true;
+            }),
+          ),
+          Effect.forkChild,
+        );
+      yield* Fiber.join(draining);
+      expect(acknowledged).toBe(false);
+      const refused = yield* service.agentCommand(token, request).pipe(Effect.result);
+      expect(refused._tag).toBe("Failure");
+      yield* Deferred.succeed(done, undefined);
+      yield* Fiber.join(command);
+      yield* Fiber.join(takeover);
+      expect(acknowledged).toBe(true);
+      expect((yield* service.agentCommand(token, request).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
+      expect(requests.filter((url) => url.endsWith("/rpc"))).toHaveLength(1);
+    }).pipe(Effect.scoped),
+);
+
+it.effect("shutdown rejects missing and stale viewer proofs before sending anything", () =>
+  Effect.gen(function* () {
+    const { service, requests } = yield* fixture();
+    yield* service.configure({ enabled: true });
+    const opened = yield* service.open({
+      threadId: ThreadId.make("thread"),
+      deviceId: "Pixel_API_35",
+      platform: "android",
+    });
+    const caller = { kind: "viewer" as const, sessionId: "session" };
+    const denied = yield* service
+      .shutdown(opened)
+      .pipe(Effect.provideService(DeviceControlCaller, caller), Effect.flip);
+    expect(denied._tag).toBe("DeviceControlError");
+    expect(requests.some((url) => url.endsWith("/shutdown"))).toBe(false);
+    const held = yield* service.control.acquire(opened, { ...caller, viewerId: "viewer" });
+    yield* service
+      .shutdown({ ...opened, control: { viewerId: "viewer", generation: held.generation } })
+      .pipe(Effect.provideService(DeviceControlCaller, caller));
+    expect(
+      (yield* service.state).controls?.find((control) => control.deviceId === opened.deviceId)
+        ?.owner,
+    ).toBeNull();
+    expect(
+      (yield* service
+        .shutdown({ ...opened, control: { viewerId: "viewer", generation: held.generation } })
+        .pipe(Effect.provideService(DeviceControlCaller, caller), Effect.flip))._tag,
+    ).toBe("DeviceControlError");
+    expect(requests.filter((url) => url.endsWith("/shutdown"))).toHaveLength(1);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("takeover does not wait on an agent command queued behind the host lifecycle lock", () =>
+  Effect.gen(function* () {
+    let token = "";
+    let session = "";
+    const { service, requests } = yield* fixture(
+      Effect.void,
+      undefined,
+      false,
+      undefined,
+      false,
+      undefined,
+      {},
+      (_hostId, _ready, grant) =>
+        Effect.sync(() => {
+          token = grant!.token;
+          session = grant!.session;
+          return "/config";
+        }),
+    );
+    yield* service.configure({ enabled: true, agentAccessEnabled: true });
+    const opened = yield* service.open({
+      threadId: ThreadId.make("thread"),
+      deviceId: "Pixel_API_35",
+      platform: "android",
+    });
+    yield* service.agentTarget({ ...opened, runId: RunId.make("run") });
+    const locked = yield* Deferred.make<void>();
+    const unlock = yield* Deferred.make<void>();
+    const lifecycle = yield* service
+      .withLifecycleLock(
+        Deferred.succeed(locked, undefined).pipe(Effect.andThen(Deferred.await(unlock))),
+      )
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(locked);
+    const command = yield* service
+      .agentCommand(token, {
+        jsonrpc: "2.0",
+        id: "queued",
+        method: "agent_device.command",
+        params: {
+          session,
+          command: "click",
+          flags: { platform: "android", serial: opened.deviceId },
+        },
+      })
+      .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+    const acquired = yield* service.control.acquire(opened, {
+      kind: "viewer",
+      sessionId: "session",
+      viewerId: "viewer",
+    });
+    expect(acquired.phase).toBe("held");
+    yield* Deferred.succeed(unlock, undefined);
+    yield* Fiber.join(lifecycle);
+    expect((yield* Fiber.join(command))._tag).toBe("Failure");
+    expect(requests.filter((url) => url.endsWith("/rpc"))).toHaveLength(0);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("shutdown finishes before a concurrent lifecycle drain and refresh", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const finish = yield* Deferred.make<void>();
+    const { service } = yield* fixture(
+      Effect.void,
+      undefined,
+      false,
+      undefined,
+      false,
+      undefined,
+      {},
+      undefined,
+      undefined,
+      Effect.void,
+      Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(finish))),
+    );
+    yield* service.configure({ enabled: true });
+    const opened = yield* service.open({
+      threadId: ThreadId.make("thread"),
+      deviceId: "Pixel_API_35",
+      platform: "android",
+    });
+    const shutdown = yield* asLifecycleAgent(service.shutdown(opened)).pipe(Effect.forkChild);
+    yield* Deferred.await(entered);
+    const locked = yield* Deferred.make<void>();
+    const lifecycle = yield* service
+      .withLifecycleLock(
+        Deferred.succeed(locked, undefined).pipe(
+          Effect.andThen(service.control.invalidateHost("local")),
+        ),
+      )
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(locked);
+    yield* Deferred.succeed(finish, undefined);
+    yield* Fiber.join(lifecycle);
+    yield* Fiber.join(shutdown);
+    expect((yield* service.control.state).every((state) => state.owner === null)).toBe(true);
+  }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "rotates grants while transferring one daemon session across hand-back, expiry, and runs",
+  () =>
+    Effect.gen(function* () {
+      const grants: { token: string; session: string }[] = [];
+      const { service, agentRequests } = yield* fixture(
+        Effect.void,
+        undefined,
+        false,
+        undefined,
+        false,
+        undefined,
+        {},
+        (_host, _ready, grant) =>
+          Effect.sync(() => {
+            if (grant) grants.push(grant);
+            return `/config/${grant?.session ?? "host"}`;
+          }),
+      );
+      yield* service.configure({ enabled: true, agentAccessEnabled: true });
+      const opened = yield* service.open({
+        threadId: ThreadId.make("thread"),
+        deviceId: "Pixel_API_35",
+        platform: "android",
+      });
+      const owner = { kind: "viewer" as const, sessionId: "session", viewerId: "viewer" };
+      const command = (grant: { token: string; session: string }) =>
+        service.agentCommand(grant.token, {
+          jsonrpc: "2.0",
+          id: "open",
+          method: "agent_device.command",
+          params: {
+            session: grant.session,
+            command: "open",
+            flags: { platform: "android", serial: opened.deviceId },
+          },
+        });
+      for (const transition of ["initial", "hand-back", "expiry", "new-run"]) {
+        if (transition === "hand-back") {
+          const held = yield* service.control.acquire(opened, owner);
+          yield* service.control.release({ ...opened, owner, generation: held.generation });
+        } else if (transition === "expiry") {
+          yield* TestClock.adjust(DEVICE_CONTROL_TTL);
+          expect((yield* service.control.state)[0]?.owner).toBeNull();
+        } else if (transition === "new-run") {
+          yield* service.control.stopRun(opened.threadId, "run");
+        }
+        const previous = grants.at(-1);
+        yield* service.agentTarget({
+          ...opened,
+          runId: RunId.make(transition === "new-run" ? "next-run" : "run"),
+        });
+        if (previous) expect((yield* command(previous).pipe(Effect.result))._tag).toBe("Failure");
+        yield* command(grants.at(-1)!);
+      }
+      expect(new Set(grants.map((grant) => grant.token)).size).toBe(4);
+      expect(new Set(grants.map((grant) => grant.session)).size).toBe(4);
+      expect(new Set(agentRequests.map((request) => request.params.session)).size).toBe(1);
+      expect(grants.map((grant) => grant.session)).not.toContain(agentRequests[0]!.params.session);
+    }).pipe(Effect.scoped),
+);
+
+it.effect("agent-only recovery reaches every device and reports remaining hub uncertainty", () =>
+  Effect.gen(function* () {
+    const agentStopping = yield* Deferred.make<void>();
+    const agentStopped = yield* Deferred.make<void>();
+    const hubStopping = yield* Deferred.make<void>();
+    const hubStopped = yield* Deferred.make<void>();
+    const restarted: ReadonlyArray<"hub" | "agent">[] = [];
+    const { service } = yield* fixture(Effect.void, undefined, false, undefined, false, undefined, {
+      restartTools: (tools) =>
+        Effect.gen(function* () {
+          restarted.push(tools);
+          const agentOnly = tools.length === 1 && tools[0] === "agent";
+          yield* Deferred.succeed(agentOnly ? agentStopping : hubStopping, undefined);
+          yield* Deferred.await(agentOnly ? agentStopped : hubStopped);
+          return {
+            nodePath: process.execPath,
+            hub: { origin: "http://device.test" },
+            helpers: { serveSimAxSettings: null, serveSimCli: null },
+            run: () => Effect.succeed({ code: 0, stdout: "", stderr: "" }),
+          };
+        }),
+    });
+    yield* service.configure({ enabled: true, agentAccessEnabled: true });
+    const first = { hostId: "local", deviceId: "first" };
+    const second = { hostId: "local", deviceId: "second" };
+    const owner = { kind: "viewer" as const, sessionId: "session", viewerId: "viewer" };
+    yield* service.control.acquire(first, owner);
+    yield* service.control.acquire(second, {
+      kind: "agent",
+      threadId: ThreadId.make("thread"),
+      runId: RunId.make("run"),
+    });
+    yield* service.control.uncertain(first, "hub");
+    yield* service.control.uncertain(second, "agent");
+
+    const agentRestart = yield* service
+      .restartTools({ tools: ["agent"] })
+      .pipe(Effect.result, Effect.forkChild);
+    yield* Deferred.await(agentStopping);
+    expect((yield* service.control.acquire(second, owner).pipe(Effect.flip)).code).toBe(
+      "control_draining",
+    );
+    yield* Deferred.succeed(agentStopped, undefined);
+    const result = yield* Fiber.join(agentRestart);
+    expect((yield* service.control.acquire(second, owner)).phase).toBe("held");
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "DeviceControlError", ...first, code: "input_unconfirmed" },
+    });
+    expect((yield* service.control.acquire(first, owner).pipe(Effect.flip)).code).toBe(
+      "input_unconfirmed",
+    );
+
+    const hubRestart = yield* service
+      .restartTools({ tools: ["hub"] })
+      .pipe(Effect.result, Effect.forkChild);
+    yield* Deferred.await(hubStopping);
+    expect((yield* service.control.acquire(first, owner).pipe(Effect.flip)).code).toBe(
+      "control_draining",
+    );
+    yield* Deferred.succeed(hubStopped, undefined);
+    expect((yield* Fiber.join(hubRestart))._tag).toBe("Success");
+    expect((yield* service.control.acquire(first, owner)).phase).toBe("held");
+    expect(restarted).toEqual([["agent"], ["hub"]]);
+  }).pipe(Effect.scoped),
+);
+
+for (const recovery of ["restart", "restart-failed", "disable", "stop", "deadline"] as const) {
+  it.effect(
+    `${recovery} recovers from a command whose response never completes without granting uncertain control`,
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const terminated = yield* Deferred.make<void>();
+        const stopping = yield* Deferred.make<void>();
+        const stopped = yield* Deferred.make<void>();
+        let grant: { token: string; session: string } | undefined;
+        const stop = Deferred.succeed(stopping, undefined).pipe(
+          Effect.andThen(Deferred.await(stopped)),
+        );
+        const { service } = yield* fixture(
+          Effect.void,
+          undefined,
+          false,
+          undefined,
+          false,
+          undefined,
+          {
+            stop,
+            restartTools: () =>
+              stop.pipe(
+                Effect.andThen(
+                  recovery === "restart-failed"
+                    ? Effect.fail(
+                        new DeviceHost.DeviceHostError({
+                          hostId: "local",
+                          step: "stop",
+                          cause: new Error("Termination was not confirmed"),
+                        }),
+                      )
+                    : Effect.succeed({
+                        nodePath: process.execPath,
+                        hub: { origin: "http://device.test" },
+                        helpers: { serveSimAxSettings: null, serveSimCli: null },
+                        run: () => Effect.succeed({ code: 0, stdout: "", stderr: "" }),
+                      }),
+                ),
+              ),
+          },
+          (_host, _ready, value) =>
+            Effect.sync(() => {
+              grant = value;
+              return "/config";
+            }),
+          undefined,
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(Deferred.succeed(terminated, undefined)),
+          ),
+        );
+        yield* service.configure({ enabled: true, agentAccessEnabled: true });
+        const opened = yield* service.open({
+          threadId: ThreadId.make("thread"),
+          deviceId: "Pixel_API_35",
+          platform: "android",
+        });
+        yield* service.agentTarget({ ...opened, runId: RunId.make("run") });
+        const command = yield* service
+          .agentCommand(grant!.token, {
+            jsonrpc: "2.0",
+            id: "stalled",
+            method: "agent_device.command",
+            params: {
+              session: grant!.session,
+              command: "click",
+              flags: { platform: "android", serial: opened.deviceId },
+            },
+          })
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(started);
+        const owner = { kind: "viewer" as const, sessionId: "session", viewerId: "viewer" };
+        if (recovery === "deadline" || recovery === "stop") {
+          const stop =
+            recovery === "stop"
+              ? yield* service.control
+                  .stopRun(opened.threadId, "run")
+                  .pipe(Effect.forkChild({ startImmediately: true }))
+              : undefined;
+          yield* TestClock.adjust(DEVICE_CONTROL_CALL_TIMEOUT);
+          if (stop) yield* Fiber.join(stop);
+          yield* Deferred.await(terminated);
+          expect((yield* Fiber.join(command))._tag).toBe("Failure");
+          expect((yield* service.control.acquire(opened, owner).pipe(Effect.flip)).code).toBe(
+            "input_unconfirmed",
+          );
+        } else {
+          // Begin the ordinary drain first: explicit recovery must get past that waiter.
+          const changes = yield* service.subscribe;
+          const draining = yield* Stream.fromSubscription(changes).pipe(
+            Stream.filter(
+              (state) => state.controls?.some((control) => control.phase === "draining") ?? false,
+            ),
+            Stream.runHead,
+            Effect.forkChild({ startImmediately: true }),
+          );
+          const takeover = yield* service.control
+            .acquire(opened, owner)
+            .pipe(Effect.result, Effect.forkChild);
+          yield* Fiber.join(draining);
+          const recovering = yield* (
+            recovery.startsWith("restart")
+              ? service.restartTools({ tools: ["agent"] })
+              : service.configure({ enabled: false })
+          ).pipe(Effect.result, Effect.forkChild);
+          yield* Deferred.await(stopping);
+          yield* Deferred.await(terminated);
+          expect((yield* Fiber.join(command))._tag).toBe("Failure");
+          expect((yield* Fiber.join(takeover))._tag).toBe("Failure");
+          expect((yield* service.control.acquire(opened, owner).pipe(Effect.flip)).code).toBe(
+            "control_draining",
+          );
+          yield* Deferred.succeed(stopped, undefined);
+          expect((yield* Fiber.join(recovering))._tag).toBe(
+            recovery === "restart-failed" ? "Failure" : "Success",
+          );
+          if (recovery === "restart")
+            expect((yield* service.control.acquire(opened, owner)).phase).toBe("held");
+          else
+            expect((yield* service.control.acquire(opened, owner).pipe(Effect.flip)).code).toBe(
+              "input_unconfirmed",
+            );
+        }
+      }).pipe(Effect.scoped),
+  );
+}

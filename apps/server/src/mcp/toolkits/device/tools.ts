@@ -1,3 +1,4 @@
+import { ProjectionStoreV2 } from "../../../orchestration-v2/ProjectionStore.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import {
   DeviceToolCloseInput,
@@ -56,7 +57,13 @@ const DeviceOpenTool = Tool.make("device_open", {
   parameters: DeviceToolOpenInput,
   success: DeviceToolOpenResult,
   failure: DeviceToolError,
-  dependencies: [...dependencies, FileSystem.FileSystem, Path.Path, ServerConfig],
+  dependencies: [
+    ...dependencies,
+    ProjectionStoreV2,
+    FileSystem.FileSystem,
+    Path.Path,
+    ServerConfig,
+  ],
 })
   .annotate(Tool.Title, "Open device")
   .annotate(Tool.Readonly, false)
@@ -86,7 +93,7 @@ const DeviceCloseTool = Tool.make("device_close", {
     description: "The device was closed.",
   }),
   failure: DeviceToolError,
-  dependencies,
+  dependencies: [...dependencies, ProjectionStoreV2],
 })
   .annotate(Tool.Title, "Close device")
   .annotate(Tool.Readonly, false)

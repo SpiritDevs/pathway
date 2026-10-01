@@ -13,7 +13,7 @@
  */
 import { Schema } from "effect";
 
-import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { RunId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const DevicePlatform = Schema.Literals(["ios", "android"]);
 export type DevicePlatform = typeof DevicePlatform.Type;
@@ -202,7 +202,67 @@ export const DeviceSession = Schema.Struct({
 });
 export type DeviceSession = typeof DeviceSession.Type;
 
+/** Control is independent of the cross-environment machine lease. */
+export const DeviceViewerId = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
+export const DeviceControlGeneration = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+export const DeviceControlOwner = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("viewer"),
+    sessionId: Schema.String,
+    viewerId: DeviceViewerId,
+  }),
+  Schema.Struct({ kind: Schema.Literal("agent"), threadId: ThreadId, runId: RunId }),
+]);
+export type DeviceControlOwner = typeof DeviceControlOwner.Type;
+export const DeviceControlState = Schema.Struct({
+  hostId: DeviceHostId,
+  deviceId: DeviceId,
+  generation: DeviceControlGeneration,
+  phase: Schema.Literals(["idle", "held", "draining"]),
+  owner: Schema.NullOr(DeviceControlOwner),
+  /** Epoch milliseconds on the environment clock. */
+  expiresAt: Schema.NullOr(Schema.Number),
+});
+export type DeviceControlState = typeof DeviceControlState.Type;
+export const DeviceControlProof = Schema.Struct({
+  viewerId: DeviceViewerId,
+  generation: DeviceControlGeneration,
+});
+export type DeviceControlProof = typeof DeviceControlProof.Type;
+export const DeviceAcquireControlInput = Schema.Struct({
+  hostId: Schema.optional(DeviceHostId),
+  deviceId: DeviceId,
+  viewerId: DeviceViewerId,
+});
+export type DeviceAcquireControlInput = typeof DeviceAcquireControlInput.Type;
+export const DeviceRenewControlInput = Schema.Struct({
+  ...DeviceAcquireControlInput.fields,
+  generation: DeviceControlGeneration,
+});
+export type DeviceRenewControlInput = typeof DeviceRenewControlInput.Type;
+export const DeviceReleaseControlInput = DeviceRenewControlInput;
+export type DeviceReleaseControlInput = typeof DeviceReleaseControlInput.Type;
+export class DeviceControlError extends Schema.TaggedErrorClass<DeviceControlError>()(
+  "DeviceControlError",
+  {
+    hostId: DeviceHostId,
+    deviceId: DeviceId,
+    code: Schema.Literals([
+      "control_required",
+      "control_held",
+      "stale_generation",
+      "control_draining",
+      "run_stopped",
+      "invalid_grant",
+      "input_unconfirmed",
+    ]),
+    message: Schema.String,
+  },
+) {}
+
 export const DeviceServiceState = Schema.Struct({
+  supportsDeviceControl: Schema.optional(Schema.Boolean),
+  controls: Schema.optional(Schema.Array(DeviceControlState)),
   manifest: Schema.optional(DeviceToolManifest),
   supportsEnvironmentToolSync: Schema.optional(Schema.Boolean),
   supportsHostRetry: Schema.optional(Schema.Boolean),
@@ -260,6 +320,7 @@ export const DeviceOpenInput = Schema.Struct({
 export type DeviceOpenInput = typeof DeviceOpenInput.Type;
 
 export const DeviceCloseInput = Schema.Struct({
+  control: Schema.optional(DeviceControlProof),
   hostId: Schema.optional(DeviceHostId),
   threadId: ThreadId,
   /** Omit to close every device session for the thread. */
@@ -270,6 +331,7 @@ export const DeviceCloseInput = Schema.Struct({
 export type DeviceCloseInput = typeof DeviceCloseInput.Type;
 
 export const DeviceShutdownInput = Schema.Struct({
+  control: Schema.optional(DeviceControlProof),
   hostId: Schema.optional(DeviceHostId),
   deviceId: DeviceId,
   platform: DevicePlatform,
@@ -359,6 +421,7 @@ export const DevicePermission = Schema.Literals([
 export type DevicePermission = typeof DevicePermission.Type;
 
 const DeviceTarget = {
+  control: Schema.optional(DeviceControlProof),
   hostId: Schema.optional(DeviceHostId),
   deviceId: DeviceId,
 };
@@ -536,6 +599,7 @@ export class DeviceActionUnavailableError extends Schema.TaggedErrorClass<Device
 }
 
 export const DeviceError = Schema.Union([
+  DeviceControlError,
   DeviceHostUnavailableError,
   DevicePlatformUnavailableError,
   DeviceNotFoundError,
@@ -640,6 +704,7 @@ export class DeviceToolUnavailableError extends Schema.TaggedErrorClass<DeviceTo
 }
 
 export const DeviceToolError = Schema.Union([
+  DeviceControlError,
   DeviceToolUnavailableError,
   DeviceHostUnavailableError,
   DevicePlatformUnavailableError,

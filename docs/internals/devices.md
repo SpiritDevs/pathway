@@ -62,7 +62,7 @@ an absolute shim path from `device_open`. The CLI installs on the environment
 server even when that server cannot run simulators. Hosts start on demand.
 
 Pathway resolves the CLI on `device_open` and returns an absolute launcher
-path with host- and thread-specific `--config` and `--session` arguments. This
+path with host-, run- and generation-specific `--config` and `--session` arguments. This
 works for Codex, Claude, Cursor, Grok and OpenCode without changing a running
 provider's PATH. Every MCP call rechecks both its device capability and the
 current device-support and agent-access settings.
@@ -108,3 +108,78 @@ Android fold state and changes use the authenticated
 
 The [client contract](device-client-contract.md) lists every RPC, response,
 subscription and media-ticket step for web, desktop and mobile integration.
+
+## Environment control ownership
+
+COR-165 adds a separate, in-memory control lease for each `(hostId, deviceId)`.
+`DeviceControl` owns the monotonic generation, controller and 30-second expiry.
+A viewer is identified by its authenticated environment session and its own
+`viewerId`. An agent is identified by thread and run. Multiple clients can watch
+one device; watching grants no input permission.
+
+With no controller, an active agent run obtains control when it opens the device.
+Another agent run cannot displace it. A viewer acquires explicitly and can replace
+any controller. Acquire first fences the old generation, waits for all accepted
+managed commands, then finishes held touches and keys. It acknowledges only after
+those operations finish. It does not depend on an interrupt request reaching the
+provider. Release performs the same drain and returns to the unowned policy. A
+client may dispatch its Resume agent continuation only after release succeeds.
+That run calls `device_open` for a fresh grant; old grants never become valid again.
+
+The device state stream includes `supportsDeviceControl` and `controls`. The
+`draining` phase is watch-only. Viewer RPCs, device actions, shutdown, fold/tuning
+HTTP mutations and each input frame check the authenticated owner and generation.
+The Android socket retains video and `reset-video` while dropping unauthorized
+input. Viewer renewal preserves the generation. Disconnect, session revocation,
+expiry, shutdown, host replacement and helper restart invalidate it. Client hide
+and background should release promptly; expiry covers a lost release.
+Revocation closes client admission immediately but retains the upstream receipt
+reader until accepted input and held keys/touches finish. Android tracks each
+pointer independently, treating an omitted pointer ID as the vendor's pointer 0.
+
+`DeviceInputChannel` serializes input on each socket and tracks completion receipts.
+Android already acknowledges gesture completion. Hub 0.12.0's iOS handler fires
+native HID promises without awaiting them, so `deviceHubControlAdapter` installs a
+process-local Node loader in the local and SSH hub processes. It awaits those
+promises and adds a private receipt envelope between the environment and helper.
+It also replaces the vendor's last-socket keyboard reset with the environment's
+explicit cleanup. The shared npm install is never edited. The adapter checks the
+pinned source shape and requires Node's `registerHooks` support, Node 22.15+.
+No receipt or an upstream failure leaves ownership fenced with `input_unconfirmed`;
+a timeout never counts as a successful handoff. Restart the affected helper before
+retrying. Updating the vendor pin requires revalidating this adapter.
+
+The managed agent CLI receives a gateway URL on the environment and an opaque
+run/generation-bound token, not the host daemon credential. Every command reaches
+`/api/device-agent/rpc`, validates its target, then runs inside the same control
+lease. The gateway waits for the daemon's response even if the CLI disconnects.
+All managed calls have a five-minute completion deadline. Deadline expiry
+cancels the response wait and leaves `input_unconfirmed`; cancellation is
+not proof that the native command stopped. Explicit helper recovery fences new
+admission and can stop the helper without waiting for its old response. Only a
+confirmed helper restart clears that helper's uncertainty on every device on the
+host, even if another device still needs a different helper recovered. Recovery
+attempts every device's drain, then returns the first remaining error. For example,
+an agent-only restart can recover one device while returning `input_unconfirmed`
+for another device that still needs its hub restarted. Disabling support
+also reaches the helper stop without waiting for the response, but does not
+treat a stop request alone as confirmed termination.
+Each accepted command renews the 30-second expiry. After idle expiry, the active
+run calls `device_open` again to obtain a fresh grant.
+The external CLI session and config remain run/generation-specific. The gateway
+translates them to one environment-owned daemon session per `(hostId, deviceId)`.
+After the outgoing generation drains, its successor reuses that session and its
+device claim. Hand-back, idle expiry and run completion retain the daemon session;
+old tokens remain invalid. A granted `agent-device close` closes that session and
+its retained resources, and helper termination performs the daemon's cleanup.
+The orchestrator's `RunStopFence` fences device calls as well as Computer calls,
+waiting for accepted device work within the same completion deadline.
+Agent access settings are rechecked at command admission. Background replay and
+batch operations are refused because their completion would not prove input has
+stopped. The current gateway accepts the bounded commands and flags listed in
+`DeviceAgentGateway.ts`; artifact upload/download endpoints are not forwarded.
+Use `device_screenshot` for image transfer. Commands needing local artifact upload
+must use a file already available on the device host until transfer support is added.
+
+This is enforcement for Pathway-managed device access. An agent with unrestricted
+shell access can still invoke raw `simctl` or `adb`; this lease is not an OS sandbox.

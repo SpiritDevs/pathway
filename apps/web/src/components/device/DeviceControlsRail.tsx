@@ -46,6 +46,8 @@ export function DeviceControlsRail(props: {
   onFloat?: (() => void) | undefined;
   onClose: () => void;
   onPowerOff: () => void;
+  /** Powering off needs control on environments with control leases. */
+  powerOffDisabled?: boolean;
 }) {
   const { view, handle, controls } = props;
   const popupSide = "left";
@@ -218,7 +220,11 @@ export function DeviceControlsRail(props: {
               Close device panel
             </MenuItem>
             <MenuSeparator />
-            <MenuItem variant="destructive" onClick={props.onPowerOff}>
+            <MenuItem
+              variant="destructive"
+              disabled={props.powerOffDisabled}
+              onClick={props.onPowerOff}
+            >
               <Power />
               Power off device
             </MenuItem>
@@ -249,6 +255,7 @@ export function DeviceControlsRail(props: {
             tooltipSide={popupSide}
             label={view.keyboard.attached ? "Detach Magic Keyboard" : "Attach Magic Keyboard"}
             pressed={view.keyboard.attached}
+            disabled={view.keyboard.disabled}
             onClick={view.keyboard.toggle}
           >
             <Keyboard />

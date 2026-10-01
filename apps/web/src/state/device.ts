@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { createDeviceEnvironmentAtoms } from "@spiritdevs/client-runtime/state/device";
 import {
   type DeviceHubAccess,
@@ -7,7 +7,14 @@ import {
   deviceHubAccessAt,
   resolveDeviceHubCredentials,
 } from "@spiritdevs/client-runtime/state/deviceHubAccess";
-import type { DeviceServiceState, EnvironmentId } from "@spiritdevs/contracts";
+import type {
+  DeviceControlState,
+  DeviceServiceState,
+  DeviceSession,
+  DeviceSummary,
+  EnvironmentId,
+} from "@spiritdevs/contracts";
+import * as Equal from "effect/Equal";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -15,7 +22,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentSession } from "./session";
-import { useEnvironmentQuery } from "./query";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "./query";
 
 export const deviceEnvironment = createDeviceEnvironmentAtoms(connectionAtomRuntime);
 
@@ -46,6 +53,119 @@ export function useDeviceState(environmentId: EnvironmentId | null): {
     error: query.error,
     refresh: query.refresh,
   };
+}
+
+const deviceStateAtom = (environmentId: EnvironmentId) =>
+  deviceEnvironment.state({ environmentId, input: {} });
+
+/** Only the hub path, so stream consumers skip lease and status publications. */
+const deviceHubBasePathAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) =>
+    Option.match(AsyncResult.value(get(deviceStateAtom(environmentId))), {
+      onNone: () => EMPTY_DEVICE_STATE.hubBasePath,
+      onSome: (state) => state.hubBasePath,
+    }),
+  ).pipe(Atom.withLabel(`device-hub-base-path:${environmentId}`)),
+);
+
+/**
+ * One device's control record without its expiry, which renewals republish every 10 seconds.
+ * Equal selections compare equal, so a lease re-renders only when control actually moves.
+ */
+export function selectDeviceControl(
+  result: AsyncResult.AsyncResult<DeviceServiceState, unknown>,
+  hostId: string,
+  deviceId: string,
+): DeviceControlSelection {
+  const state = Option.getOrNull(AsyncResult.value(result));
+  const control = state?.controls?.find(
+    (entry) => entry.hostId === hostId && entry.deviceId === deviceId,
+  );
+  return {
+    supported: state?.supportsDeviceControl === true,
+    supportsToolRestart: state?.supportsToolRestart === true,
+    error: result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
+    control: control
+      ? { generation: control.generation, phase: control.phase, owner: control.owner }
+      : null,
+  };
+}
+
+const deviceControlSelectionAtom = Atom.family((key: string) => {
+  const [environmentId, hostId, deviceId] = key.split("\u0000") as [EnvironmentId, string, string];
+  return Atom.make((get) =>
+    selectDeviceControl(get(deviceStateAtom(environmentId)), hostId, deviceId),
+  ).pipe(Atom.withEquality(Equal.equals), Atom.withLabel(`device-control-selection:${key}`));
+});
+
+export type DeviceWorkspaceTarget = {
+  readonly session: DeviceSession;
+  readonly device: DeviceSummary;
+  readonly hostLabel: string;
+};
+
+/**
+ * The thread's open device, its session and host label. Equal snapshots keep their identity, so
+ * the workspace and its stream skip publications that only move control or other devices.
+ */
+const deviceWorkspaceTargetAtom = Atom.family((key: string) => {
+  const [environmentId, threadId, hostId, deviceId] = key.split("\u0000") as [
+    EnvironmentId,
+    string,
+    string,
+    string,
+  ];
+  return Atom.make((get): DeviceWorkspaceTarget | null => {
+    const state = Option.getOrNull(AsyncResult.value(get(deviceStateAtom(environmentId))));
+    const session = state?.sessions.find(
+      (entry) =>
+        entry.threadId === threadId && entry.hostId === hostId && entry.deviceId === deviceId,
+    );
+    const device = session
+      ? state?.devices.find((entry) => entry.hostId === hostId && entry.id === deviceId)
+      : undefined;
+    if (!state || !session || !device) return null;
+    const hostLabel = state.hosts.find((host) => host.id === hostId)?.label ?? "Device host";
+    return { session, device, hostLabel };
+  }).pipe(Atom.withEquality(Equal.equals), Atom.withLabel(`device-workspace-target:${key}`));
+});
+
+const NO_WORKSPACE_TARGET_ATOM = Atom.make<DeviceWorkspaceTarget | null>(null).pipe(
+  Atom.withLabel("device-workspace-target:none"),
+);
+
+export function useDeviceWorkspaceTarget(
+  environmentId: EnvironmentId,
+  threadId: string,
+  target: { readonly hostId: string; readonly deviceId: string } | null | undefined,
+): DeviceWorkspaceTarget | null {
+  return useAtomValue(
+    target
+      ? deviceWorkspaceTargetAtom(
+          `${environmentId}\u0000${threadId}\u0000${target.hostId}\u0000${target.deviceId}`,
+        )
+      : NO_WORKSPACE_TARGET_ATOM,
+  );
+}
+
+export type DeviceControlSelection = {
+  readonly supported: boolean;
+  readonly supportsToolRestart: boolean;
+  readonly error: string | null;
+  readonly control: Pick<DeviceControlState, "generation" | "phase" | "owner"> | null;
+};
+
+/** What a control lease needs from device state, and a way to re-read it. */
+export function useDeviceControlSelection(
+  environmentId: EnvironmentId,
+  hostId: string,
+  deviceId: string,
+): DeviceControlSelection & { readonly refresh: () => void } {
+  const selection = useAtomValue(
+    deviceControlSelectionAtom(`${environmentId}\u0000${hostId}\u0000${deviceId}`),
+  );
+  const refresh = useAtomRefresh(deviceStateAtom(environmentId));
+  return { ...selection, refresh };
 }
 
 const TICKET_RENEW_MARGIN_MS = 60_000;
@@ -90,7 +210,9 @@ export function useDeviceHubAccess(
   const result = useAtomValue(
     environmentId === null ? EMPTY_ACCESS_ATOM : deviceHubAccessAtom(environmentId),
   );
-  const { hubBasePath } = useDeviceState(environmentId).state;
+  const hubBasePath = useAtomValue(
+    environmentId === null ? EMPTY_HUB_BASE_PATH_ATOM : deviceHubBasePathAtom(environmentId),
+  );
   // A failed renewal still carries the last credentials; use them until they expire.
   const credentials = Option.getOrNull(AsyncResult.value(result));
   const expiresAt = credentials?.expiresAt ?? null;
@@ -109,6 +231,10 @@ export function useDeviceHubAccess(
     return { ...access, query: { ...access.query, hostId } };
   }, [credentials, expired, hubBasePath, hostId]);
 }
+
+const EMPTY_HUB_BASE_PATH_ATOM = Atom.make(EMPTY_DEVICE_STATE.hubBasePath).pipe(
+  Atom.withLabel("device-hub-base-path:empty"),
+);
 
 const EMPTY_ACCESS_ATOM = Atom.make(AsyncResult.initial<DeviceHubCredentials, never>()).pipe(
   Atom.withLabel("device-hub-access:empty"),

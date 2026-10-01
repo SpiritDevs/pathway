@@ -23,9 +23,13 @@ export const agentDeviceConfigPath = (stateDir: string, hostId: string, path: Pa
 export const agentDeviceSession = (threadId: string, hostId: string, deviceId: string) =>
   `pathway-${key(JSON.stringify([threadId, hostId, deviceId]))}`;
 
+/** The host daemon belongs to this environment; external grants rotate independently. */
+export const agentDeviceDaemonSession = (hostId: string, deviceId: string) =>
+  agentDeviceSession("environment-control", hostId, deviceId);
+
 export const writeAgentDeviceConfig = Effect.fn("AgentDeviceTarget.writeConfig")(function* (
   file: string,
-  endpoint: AgentDeviceEndpoint,
+  endpoint: Pick<AgentDeviceEndpoint, "baseUrl" | "token"> & { readonly entryPath?: string },
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

@@ -5,6 +5,7 @@ import { Button } from "~/components/ui/button";
 import { deviceEnvironment } from "~/state/device";
 import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { deviceControlFence, deviceStillFenced, type DeviceControlFence } from "./deviceControl";
 import {
   deviceToolBanner,
   deviceToolOperationSupported,
@@ -29,44 +30,57 @@ export function DeviceToolDriftBanner({
     operation: DeviceToolOperation;
     hostIds: ReadonlyArray<string>;
     error: string | null;
+    fence: DeviceControlFence | null;
   } | null>(null);
   const banner = deviceToolBanner(state);
-  // A failure stays retryable while one of its own hosts still needs work and the environment
-  // supports it. Once they are all current, other hosts' drift gets the banner's fresh action.
+  // A failure that fenced a device stays retryable until that device recovers, whatever the drift.
+  const fenced =
+    request?.fence != null &&
+    deviceStillFenced(state, request.fence) &&
+    deviceToolOperationSupported(state, "restart");
+  // Other failures stay retryable while one of their own hosts still needs work and the
+  // environment supports it. Once they are all current, other drift gets the banner's action.
   if (
     request?.error != null &&
+    !fenced &&
     (!banner ||
       unresolvedDeviceToolHosts(state, request.hostIds).length === 0 ||
       !deviceToolOperationSupported(state, request.operation))
   ) {
     setRequest(null);
   }
-  if (!banner) return null;
+  if (!banner && !request) return null;
   const run = async (operation: DeviceToolOperation, hostIds: ReadonlyArray<string>) => {
     const command = operation === "restart" ? restartTools : updateTools;
-    setRequest({ operation, hostIds, error: null });
+    setRequest({ operation, hostIds, error: null, fence: null });
     const results = await Promise.all(
       hostIds.map((hostId) => command({ environmentId, input: { hostId } })),
     );
     const failure = results.find((result) => result._tag === "Failure");
     setRequest(
       failure?._tag === "Failure"
-        ? { operation, hostIds, error: formatEnvironmentQueryError(failure.cause) }
+        ? {
+            operation,
+            hostIds,
+            error: formatEnvironmentQueryError(failure.cause),
+            fence: deviceControlFence(failure.cause),
+          }
         : null,
     );
   };
-  const action =
-    banner.kind === "behind" && banner.canUpdate
-      ? { operation: "update" as const, label: "Update" }
+  const action = !banner
+    ? null
+    : banner.kind === "behind" && banner.canUpdate
+      ? { operation: "update" as const, label: "Update", hostIds: banner.hostIds }
       : banner.kind === "restart" && banner.canRestart
-        ? { operation: "restart" as const, label: "Restart" }
+        ? { operation: "restart" as const, label: "Restart", hostIds: banner.hostIds }
         : null;
   return (
     <div role="status" className="flex items-start gap-3 border-b px-3 py-2 text-xs">
       <div className="min-w-0 flex-1">
-        <p className="text-muted-foreground">{banner.message}</p>
+        {banner ? <p className="text-muted-foreground">{banner.message}</p> : null}
         {request?.error ? (
-          <p role="alert" className="mt-1 text-destructive">
+          <p role="alert" className={banner ? "mt-1 text-destructive" : "text-destructive"}>
             {request.error}
           </p>
         ) : null}
@@ -76,18 +90,26 @@ export function DeviceToolDriftBanner({
           {deviceToolProgressLabel(request.operation)}
         </Button>
       ) : request ? (
-        <Button
-          size="xs"
-          variant="outline"
-          onClick={() => void run(request.operation, request.hostIds)}
-        >
-          Retry
-        </Button>
+        <>
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => void run(request.operation, request.hostIds)}
+          >
+            Retry
+          </Button>
+          {request.fence ? (
+            // A fenced device's failure outlives the drift, so it needs its own way out.
+            <Button size="xs" variant="ghost" onClick={() => setRequest(null)}>
+              Dismiss
+            </Button>
+          ) : null}
+        </>
       ) : action ? (
         <Button
           size="xs"
           variant="outline"
-          onClick={() => void run(action.operation, banner.hostIds)}
+          onClick={() => void run(action.operation, action.hostIds)}
         >
           {action.label}
         </Button>

@@ -4,6 +4,7 @@ import type {
   DeviceToolDrift,
   DeviceToolManifest,
 } from "@spiritdevs/contracts";
+import type { DeviceControlFence } from "./deviceControl";
 
 export type DeviceDriftStatus = DeviceToolDrift["status"];
 
@@ -35,6 +36,8 @@ export interface DeviceToolSyncRow<Id extends string = string> {
   readonly canRestart: boolean;
   /** What the environment can do at all, whatever its drift recommends. */
   readonly supports: Readonly<Record<DeviceToolOperation, boolean>>;
+  /** Devices on this host whose control is still draining, which includes fenced ones. */
+  readonly drainingDeviceIds: ReadonlyArray<string>;
   readonly columns: {
     readonly xcode: DeviceToolCell;
     readonly runtimes: DeviceToolCell;
@@ -52,6 +55,8 @@ export type DeviceToolUpdateOutcome = { readonly operation: DeviceToolOperation 
   | {
       readonly status: "failed";
       readonly message: string;
+      /** A device the environment couldn't confirm; Retry stays until it recovers, whatever the drift. */
+      readonly fence?: DeviceControlFence;
       /** The drift it answered resolved or the operation lost support, so it is history, not a Retry. */
       readonly retired?: true;
     }
@@ -197,6 +202,9 @@ export function deviceToolSyncRows<Id extends string>(
           update: deviceToolOperationSupported(state, "update"),
           restart: deviceToolOperationSupported(state, "restart"),
         },
+        drainingDeviceIds: (state.controls ?? [])
+          .filter((control) => control.hostId === host.id && control.phase === "draining")
+          .map((control) => control.deviceId),
         columns: hostToolColumns(host),
       };
     });
@@ -224,8 +232,8 @@ export function unresolvedDeviceToolHosts(
 }
 
 /**
- * Retires failures that can no longer be retried: the host needs nothing now, or the environment
- * stopped supporting the operation. They stay in the summary, but new drift gets its own action
+ * Retires failures that can no longer be retried: the host needs nothing now and no device it
+ * fenced is still draining, or the environment stopped supporting the operation. They stay in the summary, but new drift gets its own action
  * instead of an old Retry. Returns the same map when nothing changed.
  */
 export function retireStaleDeviceToolFailures<Row extends DeviceToolSyncRow>(
@@ -237,6 +245,12 @@ export function retireStaleDeviceToolFailures<Row extends DeviceToolSyncRow>(
     const outcome = outcomes.get(row.key);
     if (outcome?.status !== "failed" || outcome.retired) continue;
     if ((row.canUpdate || row.canRestart) && row.supports[outcome.operation]) continue;
+    if (
+      outcome.fence &&
+      row.supports.restart &&
+      row.drainingDeviceIds.includes(outcome.fence.deviceId)
+    )
+      continue;
     next ??= new Map(outcomes);
     next.set(row.key, { ...outcome, retired: true });
   }

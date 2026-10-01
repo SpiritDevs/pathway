@@ -39,6 +39,44 @@ live display and touch input to that screen. On supported Android foldables,
 use **Fold device** and **Unfold device** beside the screen, in either view.
 Small panels and browsers without 3D support use the flat screen view.
 
+## Taking control
+
+One person or agent controls a device at a time. Everyone else watches: the
+live screen stays visible, but touch, typing, hardware buttons, rotation, fold
+changes, device tools, and power off are unavailable. The bar at the top of
+the panel says who is in control: you, this conversation's agent, an agent in
+another conversation (choose **Open thread** to go there), someone else, or
+nobody.
+
+Choose **Take control** to use the device yourself, even while the previous
+controller's input is finishing. The button reads **Taking control…** until
+that input finishes, and the device becomes interactive once the environment
+confirms you are in control.
+Taking control from an agent pauses its device use.
+
+While you are in control, choose **Release control** to go back to watching,
+or **Resume agent** to hand the device back to this conversation's agent.
+Resume agent waits for the environment to confirm your control has ended,
+then asks the agent to continue. If that can't be confirmed, the agent is not
+asked, and the panel says why. Hiding the panel, switching to another browser
+tab, minimizing the window, or closing the device also releases control.
+Moving focus to another window while Pathway stays visible does not.
+
+If the connection to the environment drops, your control ends and the panel
+switches to watching. Choose **Take control** again once it reconnects.
+
+If someone else takes control, or your control ends some other way, the panel
+says so and returns to watching. Choose **Take control** again to continue.
+If Pathway can't confirm the last input on a device finished, the panel says
+so and offers **Restart device tools**, even when the tools are current. After
+the restart, take control again. A restart that leaves one device unconfirmed
+keeps its error and **Retry** in the Devices settings and the Device panel
+until that device recovers or you dismiss the error. Other devices on the same
+host are not held up.
+
+Environments running an older Pathway release don't support control. Their
+device panels stay interactive for everyone, as before.
+
 ## Tools
 
 The **Tools** button opens a drawer for the open device. It shows the

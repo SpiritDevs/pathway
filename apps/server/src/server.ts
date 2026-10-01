@@ -1,3 +1,5 @@
+import { deviceAgentGatewayRouteLayer } from "./device/DeviceAgentGateway.ts";
+import { RunStopFence } from "./orchestration-v2/RunStopFence.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { deviceHubProxyRouteLayer } from "./device/DeviceHubProxy.ts";
 import { environmentSurfaceRouteLayer } from "./surface/environmentSurfaceRoute.ts";
@@ -520,7 +522,24 @@ const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
   Layer.provide(
     computerServerOwnedRuntimeRequestsLayer.pipe(Layer.provide(ComputerApprovalGateLayerLive)),
   ),
-  Layer.provide(ComputerRunCalls.computerRunStopFenceLayer.pipe(Layer.provide(ComputerLayerLive))),
+  Layer.provide(
+    Layer.effect(
+      RunStopFence,
+      Effect.gen(function* () {
+        const computer = yield* RunStopFence.pipe(
+          Effect.provide(ComputerRunCalls.computerRunStopFenceLayer),
+        );
+        const devices = yield* DeviceService.DeviceService;
+        return {
+          stopRun: (input) =>
+            Effect.all([computer.stopRun(input), devices.control.stopRun(input.threadId, input.runId)], {
+              concurrency: "unbounded",
+              discard: true,
+            }),
+        };
+      }),
+    ).pipe(Layer.provide(ComputerLayerLive), Layer.provide(DeviceLayerLive)),
+  ),
   // Turn start admits each run's Computer intent against the host.
   Layer.provide(ComputerLayerLive),
   Layer.provide(questionAnswerDeliveryLayer),
@@ -682,6 +701,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       assetRouteLayer,
       attachmentUploadRouteLayer,
       deviceHubProxyRouteLayer,
+      deviceAgentGatewayRouteLayer,
       websocketRpcRouteLayer,
       computerFrameRouteLayer,
       environmentSurfaceRouteLayer,

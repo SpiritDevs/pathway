@@ -3,6 +3,7 @@ import { makeXcodeRpcLayer } from "./xcode/xcodeRpc.ts";
 import { AppleRpcs } from "@spiritdevs/contracts/apple";
 import { makeConfiguredAppleServices } from "./apple/appleBackend.ts";
 import { makeAppleRpcLayer } from "./apple/appleRpc.ts";
+import { DeviceControlCaller } from "./device/DeviceControl.ts";
 import { UsageRecoveryService } from "./providerUsage/UsageRecoveryService.ts";
 import { ModelManifest } from "./provider/ModelManifest.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -538,6 +539,9 @@ const CoreWsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.deviceTestHost,
   WS_METHODS.deviceOpen,
   WS_METHODS.deviceClose,
+  WS_METHODS.deviceAcquireControl,
+  WS_METHODS.deviceRenewControl,
+  WS_METHODS.deviceReleaseControl,
   WS_METHODS.deviceShutdown,
   WS_METHODS.deviceDetail,
   WS_METHODS.deviceAction,
@@ -3235,7 +3239,63 @@ const makeWsRpcLayer = (
             },
           ),
       });
+      const viewerGrants = new Set<import("./device/DeviceControl.ts").DeviceControlGrant>();
+      yield* Effect.addFinalizer(() =>
+        Effect.forEach(
+          viewerGrants.values(),
+          (grant) => deviceService.control.release(grant).pipe(Effect.ignore),
+          { discard: true },
+        ),
+      );
+      const viewerCall = <A, E>(effect: Effect.Effect<A, E>) =>
+        effect.pipe(
+          Effect.provideService(DeviceControlCaller, {
+            kind: "viewer",
+            sessionId: currentSessionId,
+          }),
+        );
       const deviceHandlers = WsDeviceRpcGroup.of({
+        [WS_METHODS.deviceAcquireControl]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deviceAcquireControl,
+            Effect.gen(function* () {
+              const target = { hostId: input.hostId ?? "local", deviceId: input.deviceId };
+              yield* deviceService.claimDevice(target.hostId, target.deviceId);
+              const owner = {
+                kind: "viewer" as const,
+                sessionId: currentSessionId,
+                viewerId: input.viewerId,
+              };
+              const state = yield* deviceService.control.acquire(target, owner);
+              viewerGrants.add({ ...target, owner, generation: state.generation });
+              return state;
+            }),
+            { "rpc.aggregate": "device" },
+          ),
+        [WS_METHODS.deviceRenewControl]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deviceRenewControl,
+            deviceService.control.renew(
+              deviceService.control.viewerGrant(
+                { hostId: input.hostId ?? "local", deviceId: input.deviceId },
+                currentSessionId,
+                input,
+              ),
+            ),
+            { "rpc.aggregate": "device" },
+          ),
+        [WS_METHODS.deviceReleaseControl]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deviceReleaseControl,
+            deviceService.control.release(
+              deviceService.control.viewerGrant(
+                { hostId: input.hostId ?? "local", deviceId: input.deviceId },
+                currentSessionId,
+                input,
+              ),
+            ),
+            { "rpc.aggregate": "device" },
+          ),
         [WS_METHODS.deviceRestartTools]: (input) =>
           observeRpcEffect(WS_METHODS.deviceRestartTools, deviceService.restartTools(input), {
             "rpc.aggregate": "device",
@@ -3280,11 +3340,11 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "device",
           }),
         [WS_METHODS.deviceClose]: (input) =>
-          observeRpcEffect(WS_METHODS.deviceClose, deviceService.close(input), {
+          observeRpcEffect(WS_METHODS.deviceClose, viewerCall(deviceService.close(input)), {
             "rpc.aggregate": "device",
           }),
         [WS_METHODS.deviceShutdown]: (input) =>
-          observeRpcEffect(WS_METHODS.deviceShutdown, deviceService.shutdown(input), {
+          observeRpcEffect(WS_METHODS.deviceShutdown, viewerCall(deviceService.shutdown(input)), {
             "rpc.aggregate": "device",
           }),
         [WS_METHODS.deviceDetail]: (input) =>
@@ -3292,7 +3352,7 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "device",
           }),
         [WS_METHODS.deviceAction]: (input) =>
-          observeRpcEffect(WS_METHODS.deviceAction, deviceService.action(input), {
+          observeRpcEffect(WS_METHODS.deviceAction, viewerCall(deviceService.action(input)), {
             "rpc.aggregate": "device",
           }),
         [WS_METHODS.subscribeDeviceState]: (_input) =>
