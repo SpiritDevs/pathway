@@ -1,3 +1,5 @@
+import { HostProcessIsExecutable } from "./nodeRuntime.ts";
+import { HostProcessExecutablePath, HostProcessEnvironment } from "@spiritdevs/shared/hostProcess";
 import * as PlatformError from "effect/PlatformError";
 import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -120,6 +122,7 @@ import * as Runner from ${JSON.stringify(new URL("../processRunner.ts", import.m
 import { ensureDeviceHub } from ${JSON.stringify(new URL("./DeviceToolchain.ts", import.meta.url).href)};
 const base = ${JSON.stringify(base)};
 const runner = { run: input => Effect.promise(async () => {
+  if (!input.args.includes('--prefix')) return { code: 0, stdout: '', stderr: '' };
   await fs.appendFile(path.join(base, 'downloads'), 'download\\n');
   const stage = input.args[input.args.indexOf('--prefix') + 1];
   const entry = path.join(stage, 'node_modules/expo-device-hub/dist/server/cli.mjs');
@@ -140,3 +143,73 @@ console.log(tool.entryPath);
     await fs.rm(base, { recursive: true, force: true });
   }
 });
+
+it.effect(
+  "uses a resolved Node runtime for hub installation and tool updates in standalone distributions",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      for (const mode of ["setup", "update"]) {
+        const base = yield* fs.makeTempDirectoryScoped({ prefix: `device-${mode}-` });
+        const commands: string[] = [];
+        yield* ensureDeviceHub(base).pipe(
+          Effect.provideService(HostProcessEnvironment, { PATH: path.dirname(process.execPath) }),
+          Effect.provideService(ProcessRunner.ProcessRunner, {
+            run: (input) =>
+              Effect.gen(function* () {
+                commands.push(input.command);
+                if (input.command === "npm") {
+                  const args = input.args!;
+                  const entry = path.join(
+                    args[args.indexOf("--prefix") + 1]!,
+                    "node_modules/expo-device-hub/dist/server/cli.mjs",
+                  );
+                  yield* fs
+                    .makeDirectory(path.dirname(entry), { recursive: true })
+                    .pipe(Effect.orDie);
+                  yield* fs.writeFileString(entry, "").pipe(Effect.orDie);
+                }
+                return {
+                  code: ChildProcessSpawner.ExitCode(0),
+                  stdout: "",
+                  stderr: "",
+                  timedOut: false,
+                  stdoutTruncated: false,
+                  stderrTruncated: false,
+                  stdoutInvalidUtf8: false,
+                  stderrInvalidUtf8: false,
+                };
+              }),
+          }),
+        );
+        expect(commands).toEqual(["npm", process.execPath]);
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcessIsExecutable, true),
+      Effect.provideService(HostProcessExecutablePath, "/packaged/pathway"),
+      Effect.provide(NodeServices.layer),
+    ),
+);
+
+it.effect("reports native TV build state separately and detects a missing executable", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem,
+      path = yield* Path.Path;
+    const base = yield* fs.makeTempDirectoryScoped();
+    const binary = path.join(
+      base,
+      "tools/expo-device-hub",
+      DEVICE_HUB_VERSION,
+      "node_modules/expo-device-hub/vendor/serve-sim/dist/native/pathway-tv-input",
+    );
+    yield* fs.makeDirectory(path.dirname(binary), { recursive: true });
+    yield* fs.writeFileString(binary + ".json", '{"status":"notBuilt"}');
+    expect((yield* deviceToolVersions(base))?.tvInputBuild?.status).toBe("notBuilt");
+    yield* fs.writeFileString(binary + ".json", '{"status":"ready"}');
+    expect((yield* deviceToolVersions(base))?.tvInputBuild?.status).toBe("unavailable");
+    yield* fs.writeFileString(binary, "");
+    expect((yield* deviceToolVersions(base))?.tvInputBuild?.status).toBe("ready");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

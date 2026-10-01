@@ -1,6 +1,9 @@
 import { ProjectionStoreV2 } from "../../../orchestration-v2/ProjectionStore.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import {
+  DeviceInputInput,
+  DeviceActionInput,
+  DeviceDetail,
   DeviceToolCloseInput,
   DeviceToolError,
   DeviceToolListResult,
@@ -24,16 +27,10 @@ const dependencies = [
   DeviceService.DeviceService,
 ];
 
-/**
- * Deliberately a small surface: lifecycle, visibility for the user, and one
- * image-returning verb. Driving the device (taps, typing, install, logs)
- * happens through the preconfigured `agent-device` CLI, which has the
- * semantic snapshot model agents need and stays current with its own
- * releases. Wrapping its commands here would only lag behind it.
- */
+/** Shared lifecycle tools plus native controls for families the CLI cannot fully drive. */
 const DeviceListTool = Tool.make("device_list", {
   description:
-    "List iOS Simulators and Android Emulators on this environment's device hosts, which platforms each host can run, and which devices are already open in this thread's Device panel. Call this before device_open when you do not know a device id.",
+    "List iPhone, iPad, Apple Watch, Apple TV simulators and Android emulators on this environment's device hosts, which platforms each host can run, and which devices are already open in this thread's Device panel. Call this before device_open when you do not know a device id.",
   // An empty struct serializes as `anyOf [object, array]`, which some
   // providers reject and then drop every tool on the server with it.
   parameters: Schema.Struct({
@@ -101,7 +98,35 @@ const DeviceCloseTool = Tool.make("device_close", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, true);
 
-export const DeviceStandardToolkit = Toolkit.make(DeviceListTool, DeviceOpenTool, DeviceCloseTool);
+const DeviceInputTool = Tool.make("device_input", {
+  description:
+    "Send touch, Digital Crown rotation, Watch buttons or Siri Remote buttons to an open simulator on the selected environment. TV uses buttons, never touches. Coordinates are normalized 0..1.",
+  parameters: DeviceInputInput,
+  success: Schema.Struct({ ok: Schema.Boolean }),
+  failure: DeviceToolError,
+  dependencies,
+})
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false);
+
+const DeviceActionTool = Tool.make("device_action", {
+  description:
+    "Run a typed device action on the selected environment, including Watch pair/unpair and app launch/terminate. Pairing requires an explicit same-host iPhone simulator id. Does not boot the companion.",
+  parameters: DeviceActionInput,
+  success: DeviceDetail,
+  failure: DeviceToolError,
+  dependencies,
+})
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false);
+
+export const DeviceStandardToolkit = Toolkit.make(
+  DeviceListTool,
+  DeviceOpenTool,
+  DeviceCloseTool,
+  DeviceInputTool,
+  DeviceActionTool,
+);
 
 export const DeviceScreenshotToolkit = Toolkit.make(DeviceScreenshotTool);
 
@@ -110,4 +135,6 @@ export const DeviceToolkit = Toolkit.make(
   DeviceOpenTool,
   DeviceScreenshotTool,
   DeviceCloseTool,
+  DeviceInputTool,
+  DeviceActionTool,
 );

@@ -8,7 +8,7 @@ import type {
   ScopedThreadRef,
 } from "@spiritdevs/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { Smartphone, X } from "lucide-react";
+import { Smartphone, Tablet, Tv, Watch, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { useRightPanelStore, type RightPanelSurface } from "~/rightPanelStore";
@@ -35,10 +35,18 @@ import { DeviceWorkspace } from "./DeviceWorkspace";
 import { SimBuildBar } from "./SimBuildBar";
 import { shouldOfferXcodeSetup } from "./deviceXcodeSetup.logic";
 import { useXcodeHost, XcodeSetupFlow } from "../xcode/XcodeSetup";
+import { DeviceWatchPairing } from "./DeviceWatchPairing";
+import { groupDevicesByFamily, watchPairLabel, type DeviceGroupKey } from "./deviceFamily";
 import { PreviewPanelShell, type PreviewPanelMode } from "../preview/PreviewPanelShell";
 
-const platformLabel = (platform: DevicePlatform) =>
-  platform === "ios" ? "iOS Simulators" : "Android Emulators";
+const GROUP_ICONS: Record<DeviceGroupKey, typeof Smartphone> = {
+  phone: Smartphone,
+  pad: Tablet,
+  watch: Watch,
+  tv: Tv,
+  ios: Smartphone,
+  android: Smartphone,
+};
 
 const deviceKey = (device: Pick<DeviceSummary, "hostId" | "id">) =>
   `${device.hostId}\u0000${device.id}`;
@@ -84,7 +92,7 @@ export function DevicePanel(props: {
   const activeSession = workspace?.session;
   const activeDevice = workspace?.device;
 
-  const grouped = useMemo(() => groupDevices(state), [state]);
+  const grouped = useMemo(() => groupDevicesByFamily(state.devices), [state.devices]);
 
   const selectDevice = async (value: string) => {
     const device = state.devices.find((candidate) => deviceKey(candidate) === value);
@@ -267,6 +275,7 @@ export function DevicePanel(props: {
             device={activeDevice}
             hostLabel={workspace.hostLabel}
             hostDiagnostics={state.hostStatusDetail}
+            devices={state.devices}
             visible={props.visible && pageVisible}
             onClose={onClose}
             onPowerOff={onPowerOff}
@@ -322,71 +331,100 @@ export function DevicePanel(props: {
               ) : null}
               {hostReady && grouped.length > 0 ? (
                 <div className="w-full space-y-6 text-left">
-                  {grouped.map((group) => (
-                    <section key={group.platform} className="space-y-3">
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Smartphone className="size-4 shrink-0" />
-                        <h3 className="font-medium">{platformLabel(group.platform)}</h3>
-                      </div>
-                      <DiscoveryList>
-                        {group.devices.map((device) => {
-                          // Another environment's lease blocks opening and booting here.
-                          const owner =
-                            device.inUseBy && device.inUseBy.environmentId !== environmentId
-                              ? device.inUseBy.environmentLabel
-                              : null;
-                          const row = (
-                            <DiscoveryListRow
-                              key={deviceKey(device)}
-                              icon={
-                                <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border/60">
-                                  <Smartphone className="size-4" />
-                                </span>
-                              }
-                              title={device.name}
-                              description={`${state.hosts.find((host) => host.id === device.hostId)?.label} · ${device.version} · ${owner ? `In use by ${owner}` : device.booted ? "Running" : "Stopped"}`}
-                              disabled={pendingDeviceKey !== null || owner !== null}
-                              aria-label={
-                                owner
-                                  ? `${device.name}, in use by ${owner}`
-                                  : `${device.booted ? "Open" : "Start"} ${device.name}`
-                              }
-                              onClick={() => void selectDevice(deviceKey(device))}
-                              action={
-                                pendingDeviceKey === deviceKey(device) ? (
-                                  <Spinner className="size-3" />
-                                ) : (
-                                  <span className="text-xs text-muted-foreground">
-                                    {owner ? "In use" : device.booted ? "Open" : "Start"}
+                  {grouped.map((group) => {
+                    const Icon = GROUP_ICONS[group.key];
+                    return (
+                      <section key={group.key} className="space-y-3">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Icon className="size-4 shrink-0" />
+                          <h3 className="font-medium">{group.label}</h3>
+                        </div>
+                        <DiscoveryList>
+                          {group.devices.map((device) => {
+                            // Another environment's lease blocks opening and booting here.
+                            const owner =
+                              device.inUseBy && device.inUseBy.environmentId !== environmentId
+                                ? device.inUseBy.environmentLabel
+                                : null;
+                            const row = (
+                              <DiscoveryListRow
+                                key={deviceKey(device)}
+                                icon={
+                                  <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border/60">
+                                    <Icon className="size-4" />
                                   </span>
-                                )
-                              }
-                            />
-                          );
-                          if (!owner) return row;
-                          // The disabled row ignores pointer events and focus, so the wrapper owns the tooltip.
-                          return (
-                            <Tooltip key={deviceKey(device)}>
-                              <TooltipTrigger
-                                render={
-                                  <div
-                                    tabIndex={0}
-                                    className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                  />
                                 }
-                              >
-                                {row}
-                              </TooltipTrigger>
-                              <TooltipPopup>
-                                {owner} is using this device. It becomes available when that
-                                environment turns off device support or stops.
-                              </TooltipPopup>
-                            </Tooltip>
-                          );
-                        })}
-                      </DiscoveryList>
-                    </section>
-                  ))}
+                                title={device.name}
+                                description={[
+                                  state.hosts.find((host) => host.id === device.hostId)?.label,
+                                  device.version,
+                                  owner
+                                    ? `In use by ${owner}`
+                                    : device.booted
+                                      ? "Running"
+                                      : "Stopped",
+                                  // Pairing controls follow an available Watch row instead.
+                                  owner ? watchPairLabel(device, state.devices) : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ")}
+                                disabled={pendingDeviceKey !== null || owner !== null}
+                                aria-label={
+                                  owner
+                                    ? `${device.name}, in use by ${owner}`
+                                    : `${device.booted ? "Open" : "Start"} ${device.name}`
+                                }
+                                onClick={() => void selectDevice(deviceKey(device))}
+                                action={
+                                  pendingDeviceKey === deviceKey(device) ? (
+                                    <Spinner className="size-3" />
+                                  ) : (
+                                    <span className="text-xs text-muted-foreground">
+                                      {owner ? "In use" : device.booted ? "Open" : "Start"}
+                                    </span>
+                                  )
+                                }
+                              />
+                            );
+                            if (!owner && device.family === "watch")
+                              return (
+                                <div key={deviceKey(device)}>
+                                  {row}
+                                  <div className="px-3 pb-2.5 pl-14">
+                                    <DeviceWatchPairing
+                                      environmentId={environmentId}
+                                      watch={device}
+                                      devices={state.devices}
+                                      disabled={pendingDeviceKey !== null}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            if (!owner) return row;
+                            // The disabled row ignores pointer events and focus, so the wrapper owns the tooltip.
+                            return (
+                              <Tooltip key={deviceKey(device)}>
+                                <TooltipTrigger
+                                  render={
+                                    <div
+                                      tabIndex={0}
+                                      className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    />
+                                  }
+                                >
+                                  {row}
+                                </TooltipTrigger>
+                                <TooltipPopup>
+                                  {owner} is using this device. It becomes available when that
+                                  environment turns off device support or stops.
+                                </TooltipPopup>
+                              </Tooltip>
+                            );
+                          })}
+                        </DiscoveryList>
+                      </section>
+                    );
+                  })}
                 </div>
               ) : null}
               {hostReady &&
@@ -424,15 +462,4 @@ export function DevicePanel(props: {
       ) : null}
     </PreviewPanelShell>
   );
-}
-
-function groupDevices(state: DeviceServiceState) {
-  const groups: Array<{ platform: DevicePlatform; devices: DeviceSummary[] }> = [];
-  for (const platform of ["ios", "android"] as const) {
-    const devices = state.devices
-      .filter((device) => device.platform === platform)
-      .toSorted((a, b) => Number(b.booted) - Number(a.booted) || a.name.localeCompare(b.name));
-    if (devices.length > 0) groups.push({ platform, devices });
-  }
-  return groups;
 }

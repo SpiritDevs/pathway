@@ -10,15 +10,17 @@ import {
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import { DeviceService } from "../../../device/DeviceService.ts";
+import { ProjectionStoreV2 } from "../../../orchestration-v2/ProjectionStore.ts";
 import { ServerSettingsService, layerTest } from "../../../serverSettings.ts";
 import { makeAllToolkitsTestHandler } from "../../McpHttpServer.ts";
 import type { McpInvocationScope } from "../../McpInvocationContext.ts";
 
 const device = {
-  hostId: "local",
-  id: "test-device",
+  hostId: "ssh-mac",
+  id: "test-watch",
+  family: "watch" as const,
   platform: "ios" as const,
-  name: "Test phone",
+  name: "Test Watch",
   version: "27",
   booted: true,
   physical: false,
@@ -50,6 +52,7 @@ it.effect(
     Effect.scoped(
       Effect.gen(function* () {
         let reads = 0;
+        const controls: unknown[] = [];
         const png = new Uint8Array(24);
         const view = new DataView(png.buffer);
         view.setUint32(0, 0x89504e47);
@@ -74,14 +77,38 @@ it.effect(
           state: Effect.succeed(state),
           subscribe: unexpected(),
           configure: unexpected,
-          open: unexpected,
+          open: (input) =>
+            Effect.sync(() => {
+              controls.push(input);
+              return {
+                threadId: input.threadId,
+                hostId: device.hostId,
+                deviceId: device.id,
+                platform: device.platform,
+                openedAt: "now",
+              };
+            }),
           close: unexpected,
           shutdown: unexpected,
           detail: unexpected,
-          action: unexpected,
+          action: (input) =>
+            Effect.sync(() => {
+              controls.push(input);
+              return {
+                hostId: device.hostId,
+                deviceId: device.id,
+                settings: {},
+                foregroundApp: null,
+                readAt: "now",
+              };
+            }),
+          input: (input) =>
+            Effect.sync(() => {
+              controls.push(input);
+            }),
           readiness: unexpected,
           readinessIfSupported: unexpected,
-          agentReadinessIfSupported: unexpected,
+          agentReadinessIfSupported: () => Effect.succeed(null),
           currentReadiness: unexpected,
           list: Effect.sync(() => {
             reads++;
@@ -91,7 +118,7 @@ it.effect(
             Effect.succeed([
               {
                 threadId: invocation.threadId,
-                hostId: "local",
+                hostId: device.hostId,
                 deviceId: device.id,
                 platform: "ios" as const,
                 openedAt: "now",
@@ -101,6 +128,19 @@ it.effect(
         });
         const handler = yield* makeAllToolkitsTestHandler.pipe(
           Effect.provideService(DeviceService, service),
+          // device_open reads only the caller's active run.
+          Effect.provideService(ProjectionStoreV2, {
+            getThreadProjection: () =>
+              Effect.succeed({
+                runs: [
+                  {
+                    id: "run",
+                    status: "running",
+                    providerInstanceId: invocation.providerInstanceId,
+                  },
+                ],
+              }),
+          } as unknown as ProjectionStoreV2["Service"]),
         );
         const client = new Client(
           { name: "device-test", version: "1.0.0" },
@@ -121,8 +161,21 @@ it.effect(
           }),
           (client) => Effect.promise(() => client.close()).pipe(Effect.orDie),
         );
-        for (const name of ["device_list", "device_open", "device_close", "device_screenshot"]) {
-          const denied = yield* Effect.promise(() => client.callTool({ name, arguments: {} }));
+        for (const name of [
+          "device_list",
+          "device_open",
+          "device_close",
+          "device_screenshot",
+          "device_input",
+          "device_action",
+        ]) {
+          const args =
+            name === "device_input"
+              ? { deviceId: device.id, input: { kind: "watchButton", button: "side" } }
+              : name === "device_action"
+                ? { deviceId: device.id, type: "unpairWatch" }
+                : {};
+          const denied = yield* Effect.promise(() => client.callTool({ name, arguments: args }));
           expect(denied.isError).toBe(true);
           expect(denied.content).toEqual([
             { type: "text", text: expect.stringContaining("turned off") },
@@ -152,12 +205,41 @@ it.effect(
           device,
           screenshot: { mimeType: "image/png", width: 10, height: 20 },
         });
+        const opened = yield* Effect.promise(() =>
+          client.callTool({
+            name: "device_open",
+            arguments: { hostId: device.hostId, family: "watch", companionDeviceId: "phone" },
+          }),
+        );
+        expect(opened.isError).toBe(false);
+        expect(opened.structuredContent).toMatchObject({ device, agentDevice: null });
+        expect(controls[0]).toMatchObject({
+          hostId: device.hostId,
+          deviceId: device.id,
+          companionDeviceId: "phone",
+        });
+        for (const [name, args] of [
+          [
+            "device_input",
+            {
+              hostId: device.hostId,
+              deviceId: device.id,
+              input: { kind: "digitalCrown", delta: -5 },
+            },
+          ],
+          ["device_action", { hostId: device.hostId, deviceId: device.id, type: "unpairWatch" }],
+        ] as const) {
+          const result = yield* Effect.promise(() => client.callTool({ name, arguments: args }));
+          expect(result.isError).toBe(false);
+          expect(controls.at(-1)).toEqual(args);
+        }
+        expect(controls).toHaveLength(3);
         yield* settings.updateSettings({ enableAgentDeviceAccess: false });
         const revoked = yield* Effect.promise(() =>
           client.callTool({ name: "device_list", arguments: {} }),
         );
         expect(revoked.isError).toBe(true);
-        expect(reads).toBe(1);
+        expect(reads).toBe(2);
       }),
     ).pipe(Effect.provide(layerTest())),
 );

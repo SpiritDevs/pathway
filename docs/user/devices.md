@@ -1,7 +1,7 @@
 # Devices
 
 The Device panel shows a live iOS Simulator or Android Emulator next to a
-conversation, so you can watch an agent verify mobile work and use the device
+conversation, including Apple Watch and Apple TV simulators, so you can watch an agent verify mobile work and use the device
 yourself.
 
 ## Open a device
@@ -12,6 +12,7 @@ Android support, and choosing whether agents may control devices. Opening the
 panel alone does not download or start anything. If device support is already
 installed, setup says so and reuses it.
 
+The picker groups devices into iPhone, iPad, Apple Watch, Apple TV and Android.
 Choose a running device to watch it, or choose **Start** next to a stopped
 device to boot it. The panel shows a loading state until the first frame
 arrives. If the stream drops, choose **Reconnect**.
@@ -77,6 +78,49 @@ host are not held up.
 Environments running an older Pathway release don't support control. Their
 device panels stay interactive for everyone, as before.
 
+## Apple Watch
+
+An Apple Watch simulator appears inside a plain watch-shaped frame. There is
+no 3D Watch model yet. Click or drag on the screen to touch it. To turn the
+**Digital Crown**, scroll with a mouse wheel or trackpad over the screen, or
+use the Crown controls on the rail. Those controls can also press the Crown or
+the side button. When the Crown control has focus, the Up and Down arrow keys
+turn it too.
+
+In the device picker, each Watch shows the iPhone it's paired with. To pair an
+unpaired Watch, choose an iPhone simulator on the same host, then choose
+**Pair**. Choose **Unpair** to undo that. The same controls appear under
+**Paired iPhone** in the Tools drawer. Pairing won't boot the iPhone. If a
+companion app needs the iPhone running, open the iPhone separately. To pair a
+Watch with a different iPhone, unpair it first. Pairing needs a Pathway
+server that supports it on the environment. If the server is older, the
+picker tells you.
+
+## Apple TV
+
+An Apple TV simulator appears as a 16:9 screen. You can't tap or swipe a TV,
+so use the on-screen Siri Remote below the screen instead. It has arrows,
+Select, Back, TV/Home and Play/Pause. You can also click the screen, then use
+the keyboard:
+
+| Key                 | Remote button |
+| ------------------- | ------------- |
+| Arrow keys          | Arrows        |
+| Enter               | Select        |
+| Escape or Backspace | Back          |
+| Space               | Play/Pause    |
+| Home                | TV/Home       |
+
+These keys only reach the TV while the screen has focus and the remote is
+connected. Keys pressed with Command, Control, Option or Shift keep their
+usual app shortcuts. Holding a key repeats the button press.
+
+Simulator settings aren't available for Watch and TV. That includes
+appearance, text size, accessibility settings, location, permissions and push
+notifications. The Tools drawer only offers app launch and terminate for these
+devices. If a device can't stream on its host, the panel says why rather than
+showing a placeholder screen.
+
 ## Tools
 
 The **Tools** button opens a drawer for the open device. It shows the
@@ -128,6 +172,8 @@ Device support and agent control are separate choices. Leave **Agent device
 access** off to use the controls yourself only. Turn it on to let agents
 discover, open, inspect, and control devices. iOS taps build a small test
 runner on first use, which takes a couple of minutes once per environment.
+Agents can control Apple Watch simulators with Pathway's device tools, but not
+with the iOS test runner. The Tools drawer explains this.
 Restart an existing agent session after granting access. Turning access off
 revokes it for current agent sessions too; your own Device panel is
 unaffected.

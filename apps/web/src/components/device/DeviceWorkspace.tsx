@@ -6,11 +6,16 @@ import {
 } from "@spiritdevs/client-runtime/device/screenshot";
 import { refreshDeviceHubAccess, useDeviceHubAccess } from "~/state/device";
 import { DeviceControlBar } from "./DeviceControlBar";
+import { Button } from "~/components/ui/button";
 import { DeviceControlsRail } from "./DeviceControlsRail";
 import { DeviceStreamView, type DeviceStreamHandle } from "./DeviceStreamView";
 import { DeviceToolsPanel } from "./DeviceToolsPanel";
 import { useDeviceControlLease } from "./useDeviceControlLease";
 import { useDeviceControls } from "./useDeviceControls";
+import { useDeviceInput } from "./useDeviceInput";
+import { deviceFamily } from "./deviceFamily";
+import { DeviceWatchControls } from "./DeviceWatchControls";
+import { DeviceTvRemote } from "./DeviceTvRemote";
 
 /**
  * Keyed by environment and device; the screen, quick controls and drawer share the same session.
@@ -22,6 +27,8 @@ export const DeviceWorkspace = memo(function DeviceWorkspace(props: {
   device: DeviceSummary;
   hostLabel: string;
   hostDiagnostics: string | undefined;
+  /** All devices in the environment, for Watch companion choices. */
+  devices: ReadonlyArray<DeviceSummary>;
   visible: boolean;
   onFloat?: (() => void) | undefined;
   onClose: () => void;
@@ -51,6 +58,14 @@ export const DeviceWorkspace = memo(function DeviceWorkspace(props: {
     onControlError: lease.reportError,
   });
   const watching = lease.control === null;
+  const family = deviceFamily(props.device);
+  const semantic = family === "watch" || family === "tv";
+  const input = useDeviceInput({
+    environmentId: props.environmentId,
+    device: props.device,
+    enabled: semantic && props.visible && !watching && handle?.inputConnected === true,
+  });
+  const streaming = props.device.capabilities?.streaming;
   useEffect(() => {
     if (!access || !props.visible) captureRef.current?.abort();
     return () => {
@@ -106,47 +121,87 @@ export const DeviceWorkspace = memo(function DeviceWorkspace(props: {
           onOpenThread={props.onOpenThread}
           onResumeAgent={props.onResumeAgent}
         />
-        {screenshotError || (controls.error && !toolsOpen) ? (
+        {screenshotError || input.error || (controls.error && !toolsOpen) ? (
           <p role="alert" className="px-3 py-2 text-xs text-destructive">
-            {screenshotError ?? controls.error}
+            {screenshotError ?? input.error ?? controls.error}
           </p>
         ) : null}
         <div className="min-h-0 flex-1">
-          <DeviceStreamView
-            environmentId={props.environmentId}
-            platform={props.device.platform}
-            deviceName={props.device.name}
-            deviceDescription={`${props.hostLabel} · ${props.device.version}`}
-            deviceId={props.device.id}
-            hostId={props.device.hostId}
-            visible={props.visible}
-            axOverlay={axOverlay}
-            control={lease.control}
-            onControlError={lease.reportError}
-            allowPhoneView
-            onHandle={setHandle}
-            renderControls={(view) => (
-              <DeviceControlsRail
-                platform={props.device.platform}
-                handle={watching && handle ? { ...handle, inputConnected: false } : handle}
-                view={view}
-                controls={controls}
-                screenshotPending={screenshotPending}
-                onScreenshot={() => void saveScreenshot()}
-                toolsOpen={toolsOpen}
-                onTools={() => setToolsOpen(!toolsOpen)}
-                onFloat={props.onFloat}
-                onClose={props.onClose}
-                onPowerOff={() => props.onPowerOff(lease.control ?? undefined)}
-                powerOffDisabled={watching}
-              />
-            )}
-          />
+          {streaming?.status === "unsupported" ? (
+            <div
+              role="status"
+              className="flex size-full flex-col items-center justify-center gap-1 p-6 text-center text-sm text-muted-foreground"
+            >
+              <p className="font-medium text-foreground">Live view isn't available</p>
+              <p className="max-w-sm text-xs">{streaming.reason}</p>
+              <div className="mt-3 flex gap-2">
+                <Button size="sm" variant="outline" onClick={props.onClose}>
+                  Close
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={watching}
+                  onClick={() => props.onPowerOff(lease.control ?? undefined)}
+                >
+                  Power off
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <DeviceStreamView
+              environmentId={props.environmentId}
+              platform={props.device.platform}
+              deviceName={props.device.name}
+              deviceDescription={`${props.hostLabel} · ${props.device.version}`}
+              deviceId={props.device.id}
+              hostId={props.device.hostId}
+              family={family}
+              aspectHint={props.device.capabilities?.framing.aspectRatio}
+              onRemoteButton={
+                family === "tv" && input.enabled
+                  ? (button) => input.queue.press({ kind: "remoteButton", button })
+                  : undefined
+              }
+              onCrown={family === "watch" && input.enabled ? input.queue.turnCrown : undefined}
+              visible={props.visible}
+              axOverlay={axOverlay}
+              control={lease.control}
+              onControlError={lease.reportError}
+              allowPhoneView
+              onHandle={setHandle}
+              renderControls={(view) => (
+                <DeviceControlsRail
+                  platform={props.device.platform}
+                  family={family}
+                  familyControls={
+                    family === "watch" ? <DeviceWatchControls input={input} /> : undefined
+                  }
+                  handle={watching && handle ? { ...handle, inputConnected: false } : handle}
+                  view={view}
+                  controls={controls}
+                  screenshotPending={screenshotPending}
+                  onScreenshot={() => void saveScreenshot()}
+                  toolsOpen={toolsOpen}
+                  onTools={() => setToolsOpen(!toolsOpen)}
+                  onFloat={props.onFloat}
+                  onClose={props.onClose}
+                  onPowerOff={() => props.onPowerOff(lease.control ?? undefined)}
+                  powerOffDisabled={watching}
+                />
+              )}
+            />
+          )}
         </div>
+        {family === "tv" && streaming?.status !== "unsupported" ? (
+          <DeviceTvRemote input={input} />
+        ) : null}
       </div>
       {toolsOpen ? (
         <DeviceToolsPanel
           device={props.device}
+          devices={props.devices}
+          environmentId={props.environmentId}
           controls={controls}
           hostDiagnostics={props.hostDiagnostics}
           access={access}

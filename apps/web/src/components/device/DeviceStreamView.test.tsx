@@ -52,7 +52,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function setup() {
+async function setup(extra: Partial<Parameters<typeof DeviceStreamView>[0]> = {}) {
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("fetch", () => {
@@ -83,6 +83,7 @@ async function setup() {
       deviceId="test"
       platform="ios"
       visible={visible}
+      {...extra}
     />
   );
   await act(async () => {
@@ -159,4 +160,29 @@ it("keeps a healthy stream when its ticket rotates", async () => {
   expect(images).toHaveLength(1);
   expect(images[0]!.src).toContain("stream.mjpeg");
   expect(primes).toBe(1);
+});
+
+it("maps unmodified TV keys to remote buttons only while streaming", async () => {
+  const onRemoteButton = vi.fn();
+  const { images } = await setup({ family: "tv", aspectHint: 16 / 9, onRemoteButton });
+  const screen = () => renderer!.root.findByProps({ role: "application" });
+  const key = (code: string, modifiers: Partial<KeyboardEvent> = {}) => {
+    const preventDefault = vi.fn();
+    const target = {};
+    screen().props.onKeyDown({ code, target, currentTarget: target, preventDefault, ...modifiers });
+    return preventDefault;
+  };
+  expect(key("ArrowDown")).not.toHaveBeenCalled();
+  await act(async () => {
+    images[0]!.naturalWidth = 1280;
+    images[0]!.naturalHeight = 720;
+    images[0]!.dispatchEvent(new Event("load"));
+  });
+  expect(key("ArrowDown")).toHaveBeenCalledOnce();
+  expect(key("Escape")).toHaveBeenCalledOnce();
+  expect(key("Space")).toHaveBeenCalledOnce();
+  expect(key("ArrowUp", { metaKey: true })).not.toHaveBeenCalled();
+  expect(key("KeyA")).not.toHaveBeenCalled();
+  expect(onRemoteButton.mock.calls).toEqual([["down"], ["back"], ["playPause"]]);
+  expect(screen().props["aria-label"]).toContain("Apple TV screen");
 });

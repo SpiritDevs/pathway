@@ -210,6 +210,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.deviceShutdown]: AuthOrchestrationOperateScope,
   [WS_METHODS.deviceDetail]: AuthOrchestrationReadScope,
   [WS_METHODS.deviceAction]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deviceInput]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribeDeviceState]: AuthOrchestrationReadScope,
   [WS_METHODS.previewOpen]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewRemoteCommand]: AuthOrchestrationOperateScope,

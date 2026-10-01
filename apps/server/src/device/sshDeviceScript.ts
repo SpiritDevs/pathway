@@ -1,4 +1,5 @@
 import { deviceHubControlNodeOptions } from "./deviceHubControlAdapter.ts";
+import { deviceHubPatchScript, DEVICE_HUB_UPSTREAM_VERSION } from "./deviceHubPatch.ts";
 import { deviceSdkInventoryScript } from "./deviceSdkInventory.ts";
 import { remoteDeviceLeaseScript } from "./remoteDeviceLease.ts";
 import { deviceToolMaintenanceScript } from "./deviceToolMaintenance.ts";
@@ -44,8 +45,10 @@ const owner = ${JSON.stringify(owner)};
 const mode = ${JSON.stringify(mode)};
 const deviceKey = ${JSON.stringify(deviceKey ?? "")};
 const hubVersion = ${JSON.stringify(DEVICE_HUB_VERSION)};
+const hubUpstreamVersion = ${JSON.stringify(DEVICE_HUB_UPSTREAM_VERSION)};
 const agentVersion = ${JSON.stringify(AGENT_DEVICE_VERSION)};
 ` +
+  deviceHubPatchScript +
   deviceToolMaintenanceScript +
   deviceSdkInventoryScript +
   remoteDeviceLeaseScript +
@@ -88,7 +91,12 @@ const versions = () => {
   agent: toolVersions('agent-device', agentVersion, 'bin/agent-device.mjs', { ...read(path.join(state, 'agent.json')), ...read(path.join(state, 'daemon.json')) }),
   };
   if (!result.hub || !result.agent) return undefined;
-  return { ...result, serveSim: { requiredVersion: 'expo-device-hub@' + hubVersion, installedVersions: result.hub.installedVersions.map(version => 'expo-device-hub@' + version), runningVersion: result.hub.runningVersion ? 'expo-device-hub@' + result.hub.runningVersion : null } };
+  const tvBinary = path.join(cacheRoot, 'tools', 'expo-device-hub', hubVersion, 'node_modules/expo-device-hub/vendor/serve-sim/dist/native/pathway-tv-input');
+  let tvInputBuild = read(tvBinary + '.json');
+  if (!['notBuilt','ready','unavailable'].includes(tvInputBuild?.status)) tvInputBuild = undefined;
+  if (tvInputBuild?.status === 'ready' && !fs.existsSync(tvBinary)) tvInputBuild = { status:'unavailable', reason:'TV input executable is missing. Retry TV input to rebuild it.' };
+  if (tvInputBuild) tvInputBuild = { status:tvInputBuild.status, ...(typeof tvInputBuild.reason === 'string' ? { reason:tvInputBuild.reason } : {}) };
+  return { ...result, ...(tvInputBuild ? { tvInputBuild } : {}), serveSim: { requiredVersion: 'expo-device-hub@' + hubVersion, installedVersions: result.hub.installedVersions.map(version => 'expo-device-hub@' + version), runningVersion: result.hub.runningVersion ? 'expo-device-hub@' + result.hub.runningVersion : null } };
 };
 const stopHub = hub => {
   if (!hub || hub.owner !== owner) return;
@@ -139,9 +147,10 @@ async function install(name, version, entry) {
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     const staging = fs.mkdtempSync(path.join(path.dirname(dir), '.install-'));
     try {
-      const result = run('npm', ['install', '--prefix', staging, '--no-fund', '--no-audit', name + '@' + version], { timeout: 600000, maxBuffer: 8 * 1024 * 1024 });
+      const result = run('npm', ['install', '--prefix', staging, '--no-fund', '--no-audit', name + '@' + (name === 'expo-device-hub' ? hubUpstreamVersion : version)], { timeout: 600000, maxBuffer: 8 * 1024 * 1024 });
       if (result.status !== 0) throw Error('Installing ' + name + ' failed. Check npm on the device host.');
       if (!fs.existsSync(path.join(staging, 'node_modules', name, entry))) throw Error('Missing installed entry for ' + name);
+      if (name === 'expo-device-hub') patchDeviceHub(path.join(staging, 'node_modules', name));
       fs.writeFileSync(path.join(staging, '.install-complete'), version);
       fs.rmSync(dir, { recursive: true, force: true });
       fs.renameSync(staging, dir);

@@ -1,3 +1,4 @@
+import { deviceHubPatchScript } from "./deviceHubPatch.ts";
 // @effect-diagnostics nodeBuiltinImport:off globalFetchInEffect:off preferSchemaOverJson:off - verifies generated remote scripts using real shell and Node processes.
 import * as Effect from "effect/Effect";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
@@ -104,6 +105,7 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
             file,
             `const originalKill = process.kill; process.kill = (pid, signal) => { if (signal === 'SIGTERM') require('node:fs').appendFileSync(${JSON.stringify(NodePath.join(home, "stops"))}, pid+'\\n'); return originalKill(pid, signal); };\n` +
               remoteDeviceScript(owner, mode)
+                .replace(deviceHubPatchScript, "function patchDeviceHub() {}\n")
                 .replace(DEVICE_HUB_VERSION, upgraded ? nextHubVersion : DEVICE_HUB_VERSION)
                 .replace(AGENT_DEVICE_VERSION, upgraded ? nextAgentVersion : AGENT_DEVICE_VERSION),
           );
@@ -112,7 +114,18 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
           });
           return result.stdout ? JSON.parse(result.stdout) : null;
         };
+        const tvBinary = NodePath.join(
+          hubDir,
+          "node_modules/expo-device-hub/vendor/serve-sim/dist/native/pathway-tv-input",
+        );
+        await NodeFSP.mkdir(NodePath.dirname(tvBinary), { recursive: true });
+        await NodeFSP.writeFile(tvBinary + ".json", '{"status":"notBuilt"}');
         const inventory = await invoke("one", "probe");
+        expect(inventory.tools.tvInputBuild).toEqual({ status: "notBuilt" });
+        await NodeFSP.writeFile(tvBinary + ".json", '{"status":"ready"}');
+        expect((await invoke("one", "probe")).tools.tvInputBuild.status).toBe("unavailable");
+        await NodeFSP.writeFile(tvBinary, "test-native-input");
+        expect((await invoke("one", "probe")).tools.tvInputBuild).toEqual({ status: "ready" });
         expect(inventory.tools.hub.installedVersions).toEqual([DEVICE_HUB_VERSION]);
         expect(inventory.tools.hub.runningVersion).toBeNull();
         expect(inventory.tools.agent.installedVersions).toEqual([AGENT_DEVICE_VERSION]);

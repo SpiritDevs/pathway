@@ -1,6 +1,8 @@
+import { resolveNodeExecutable } from "./nodeRuntime.ts";
+import { deviceHubPatchScript, DEVICE_HUB_UPSTREAM_VERSION } from "./deviceHubPatch.ts";
 import { withMachineLock, retainDeviceTool } from "./deviceMachineLock.ts";
 import { DEVICE_TOOL_MANIFEST } from "./deviceToolManifest.ts";
-import type { DeviceToolVersions } from "@spiritdevs/contracts";
+import { DeviceTvInputBuild, type DeviceToolVersions } from "@spiritdevs/contracts";
 /**
  * Pinned installs of the two external tools device support is built on.
  *
@@ -140,7 +142,7 @@ const installTool = Effect.fn("DeviceToolchain.installTool")(function* (
       stagingDir,
       "--no-fund",
       "--no-audit",
-      `${spec.name}@${spec.version}`,
+      `${spec.name}@${spec.name === DEVICE_HUB_PACKAGE ? DEVICE_HUB_UPSTREAM_VERSION : spec.version}`,
     ];
     const result = yield* runner
       .run({ command: "npm", args: installArgs, timeout: INSTALL_TIMEOUT })
@@ -172,6 +174,29 @@ const installTool = Effect.fn("DeviceToolchain.installTool")(function* (
         tool: spec.name,
         step: "verifying the installed entry point",
       });
+    }
+    if (spec.name === DEVICE_HUB_PACKAGE) {
+      const nodePath = yield* resolveNodeExecutable("Local device support").pipe(
+        Effect.mapError(fail("resolving Node for the hub patch")),
+      );
+      const patched = yield* runner
+        .run({
+          command: nodePath,
+          args: [
+            "-e",
+            deviceHubPatchScript + "\npatchDeviceHub(process.argv[1]);",
+            path.join(stagingDir, "node_modules", spec.name),
+          ],
+          timeout: INSTALL_TIMEOUT,
+        })
+        .pipe(Effect.mapError(fail("patching Apple simulator support")));
+      if (patched.code !== 0)
+        return yield* new DeviceToolchainInstallError({
+          tool: spec.name,
+          step: "patching Apple simulator support",
+          exitCode: Number(patched.code),
+          cause: patched,
+        });
     }
     yield* fs
       .writeFileString(path.join(stagingDir, ".install-complete"), `${spec.version}\n`)
@@ -248,6 +273,8 @@ export const isDeviceHubInstalled = (baseDir: string) =>
 export const isAgentDeviceInstalled = (baseDir: string) =>
   isToolInstalled(baseDir, AGENT_DEVICE_SPEC, (paths) => paths.agentDevice);
 
+const decodeTvInputBuild = Schema.decodeUnknownEffect(Schema.fromJsonString(DeviceTvInputBuild));
+
 /** Read completed installs without downloading or starting either tool. */
 export const deviceToolVersions = Effect.fn("DeviceToolchain.versions")(function* (
   baseDir: string,
@@ -284,7 +311,32 @@ export const deviceToolVersions = Effect.fn("DeviceToolchain.versions")(function
     };
   });
   return yield* Effect.gen(function* () {
+    const tvBinary = path.join(
+      toolPaths(path, baseDir, HUB_SPEC).installDir,
+      "node_modules",
+      DEVICE_HUB_PACKAGE,
+      "vendor/serve-sim/dist/native/pathway-tv-input",
+    );
+    const tvInputBuild = yield* fs.readFileString(tvBinary + ".json").pipe(
+      Effect.flatMap(decodeTvInputBuild),
+      Effect.flatMap((build) =>
+        build.status === "ready"
+          ? fs.exists(tvBinary).pipe(
+              Effect.map((exists) =>
+                exists
+                  ? build
+                  : {
+                      status: "unavailable" as const,
+                      reason: "TV input executable is missing. Retry TV input to rebuild it.",
+                    },
+              ),
+            )
+          : Effect.succeed(build),
+      ),
+      Effect.orElseSucceed(() => undefined),
+    );
     return {
+      ...(tvInputBuild ? { tvInputBuild } : {}),
       hub: yield* inspect(HUB_SPEC),
       serveSim: yield* inspect(HUB_SPEC).pipe(
         Effect.map((value) => ({
