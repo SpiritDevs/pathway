@@ -2,7 +2,7 @@
 
 On web and desktop, you can tidy related threads by listing one thread under another. A thread listed under another leaves your threads list and appears in the parent's Lineage section, in the thread details panel.
 
-- **Set parent…** opens a search of your threads, including threads on your other machines. Choose the thread to list this one under. It is in a thread's right-click menu in the sidebar, in the right-click and "…" menus of each Lineage and Chats row, and in the Lineage section's "…" menu for the open thread.
+- **Set parent…** opens a search of your threads, including threads on your other machines. Choose the thread to list this one under. It is in a thread's right-click menu in the sidebar, in the right-click and "…" menus of each Lineage and Chats row, and in the Lineage section for the open thread: its "…" menu, or a Set parent… row when nothing is related to it yet.
 - **Move to threads list** puts a listed-under thread, or a fork or subagent, back in your threads list. It is in the same menus.
 
 You can also ask an agent to do either, for example "move that thread back to my threads list".
