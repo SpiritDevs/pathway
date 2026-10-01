@@ -15,10 +15,14 @@ import {
   CopyIcon,
   RefreshCwIcon,
   ClockIcon,
+  EyeIcon,
+  EyeOffIcon,
 } from "lucide-react";
+import * as Schema from "effect/Schema";
 import { useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { sameAttachedPullRequest } from "~/state/threadPullRequest";
 import { parseChangeRequestUrl } from "~/lib/openPullRequestLink";
 import { readLocalApi } from "~/localApi";
@@ -63,6 +67,9 @@ import {
   THREAD_DETAILS_PANEL_ROW_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./threadDetailsPanelStyles";
+
+// One preference for every PR row, so the panel and hover cards agree.
+const CHECK_DETAILS_VISIBLE_STORAGE_KEY = "pathway:pr-row:check-details-visible";
 
 export function ThreadDetailsPrRow({
   environmentId,
@@ -111,6 +118,11 @@ export function ThreadDetailsPrRow({
   });
   const { handoff, startHandoff } = usePullRequestHandoffs({ environmentId, detail });
   const [confirmingMerge, setConfirmingMerge] = useState(false);
+  const [checkDetailsVisible, setCheckDetailsVisible] = useLocalStorage(
+    CHECK_DETAILS_VISIBLE_STORAGE_KEY,
+    false,
+    Schema.Boolean,
+  );
 
   const checking =
     reference !== null &&
@@ -278,6 +290,11 @@ export function ThreadDetailsPrRow({
               <RefreshCwIcon />
               Refresh
             </MenuItem>
+            <MenuItem onClick={() => setCheckDetailsVisible((visible) => !visible)}>
+              {checkDetailsVisible ? <EyeOffIcon /> : <EyeIcon />}
+              {checkDetailsVisible ? "Hide check details" : "Show check details"}
+            </MenuItem>
+            <MenuSeparator />
             <MenuItem onClick={() => void readLocalApi()?.shell.openExternal(pr.url)}>
               <ExternalLinkIcon />
               Open in {pr.url.startsWith("https://github.com/") ? "GitHub" : "browser"}
@@ -308,16 +325,18 @@ export function ThreadDetailsPrRow({
             )}
             <span>{checksLabel}</span>
           </div>
-          <ul className="mt-1 max-h-40 space-y-1.5 overflow-y-auto ps-5">
-            {visibleChecks.map((check) => (
-              <li key={`${check.name}:${check.url ?? ""}`} className="break-words">
-                <span>{check.name}</span>
-                {check.description ? (
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">{check.description}</p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          {checkDetailsVisible ? (
+            <ul className="mt-1 max-h-40 space-y-1.5 overflow-y-auto ps-5">
+              {visibleChecks.map((check) => (
+                <li key={`${check.name}:${check.url ?? ""}`} className="break-words">
+                  <span>{check.name}</span>
+                  {check.description ? (
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">{check.description}</p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       ) : null}
       {unavailable || checking ? (
