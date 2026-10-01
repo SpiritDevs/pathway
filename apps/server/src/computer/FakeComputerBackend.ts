@@ -61,6 +61,7 @@ import {
   type ComputerMenuBackendTarget,
   type ComputerResolvedTarget,
   type ComputerShieldTarget,
+  type ComputerStreamFrame,
   type ComputerTextRange,
 } from "./ComputerBackend.ts";
 import {
@@ -1007,13 +1008,21 @@ export class FakeComputerBackend implements ComputerBackend {
     keyframe = false,
     codecConfig = false,
     data = Uint8Array.of(0x01),
+    mimeType?: ComputerStreamFrame["mimeType"],
   ): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
       if (!this.streamAttached || this.disposed) return;
       const timestampMs = yield* Clock.currentTimeMillis;
       this.emit({
         type: "frame",
-        frame: { sequence: this.nextSequence++, timestampMs, keyframe, codecConfig, data },
+        frame: {
+          sequence: this.nextSequence++,
+          timestampMs,
+          keyframe,
+          codecConfig,
+          data,
+          ...(mimeType !== undefined ? { mimeType } : {}),
+        },
       });
     });
   }
@@ -1037,6 +1046,16 @@ export class FakeComputerBackend implements ComputerBackend {
    */
   emitDesktopInterrupted(pauses: readonly string[] = []): void {
     this.emit({ type: "desktop-interrupted", pauses });
+  }
+
+  /** Reports a changed capability set, as a reconnect or a slot swap does. */
+  emitCapabilitiesChanged(): void {
+    this.emit({ type: "capabilities-changed", capabilities: this.currentCapabilities });
+  }
+
+  /** Reports that the desktop this backend drove has ended for good. */
+  emitDesktopGone(message = "The fake desktop exited."): void {
+    this.emit({ type: "desktop-gone", message });
   }
 
   setAvailability(availability: ComputerAvailability): void {

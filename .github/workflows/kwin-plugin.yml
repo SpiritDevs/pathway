@@ -1,0 +1,244 @@
+# Builds the KWin Computer Use plugin against the KWin each distribution ships,
+# and runs its fixture tests. Mirrors Synara's KWin plugin prebuild workflow.
+#
+# The plugin is a binary KWin module: it loads only into the exact KWin version
+# it was compiled against. Each leg is a distribution container, and the KWin
+# version is read off the built system rather than declared, so the matrix
+# covers what users actually run. Each leg uploads its .so with a JSON sidecar
+# recording what it linked against.
+name: KWin Plugin
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/kwin-plugin.yml"
+      - "native/computer-use-kwin/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/kwin-plugin.yml"
+      - "native/computer-use-kwin/**"
+  # KWin moves on the distributions' schedule, not ours, so a monthly rebuild
+  # keeps the matrix honest between changes.
+  schedule:
+    - cron: "0 6 1 * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kwin-plugin-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fixtures:
+    name: Fixture tests
+    if: ${{ vars.FLEET_ENABLE_LINUX_CHECKS == 'true' }}
+    runs-on: ${{ fromJSON(vars.FLEET_LINUX_RUNNER || '["self-hosted","fleet-linux-x64"]') }}
+    timeout-minutes: 15
+    container: "debian:trixie@sha256:34cd9e9fd437c0a095ec39cb2e73422c9f30821b0d0848ed74fd0d43bae4d958"
+    steps:
+      - name: Install Python and a C++20 compiler
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends python3 g++ ca-certificates git
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      # Each test compiles the production logic it pins into a small fixture,
+      # so these need no KWin headers.
+      - name: Run fixture tests
+        working-directory: native/computer-use-kwin/tests
+        run: python3 -m unittest discover -s . -p '*_test.py' -v
+
+  build:
+    name: ${{ matrix.distro.id }} (x64)
+    if: ${{ vars.FLEET_ENABLE_LINUX_CHECKS == 'true' }}
+    runs-on: ${{ fromJSON(vars.FLEET_LINUX_RUNNER || '["self-hosted","fleet-linux-x64"]') }}
+    timeout-minutes: 30
+    container: ${{ matrix.distro.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        distro:
+          # Pinned by multi-arch manifest digest: these binaries load into the
+          # user's own compositor process, so a mutable tag is supply-chain
+          # drift waiting to happen. The digest freezes only the base image;
+          # KWin still comes from the distribution's live repositories, so the
+          # KWin version a build targets moves with each run. Bumping the
+          # digests is the monthly refresh that goes with the schedule above.
+          - {
+              id: fedora-43,
+              image: "fedora:43@sha256:762d73ba1c455232b0272c5d445a34f36c4b9f421cbc05ce8102552325b6a222",
+            }
+          - {
+              id: fedora-44,
+              image: "fedora:44@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898",
+            }
+          - {
+              id: debian-trixie,
+              image: "debian:trixie@sha256:34cd9e9fd437c0a095ec39cb2e73422c9f30821b0d0848ed74fd0d43bae4d958",
+            }
+          - {
+              id: ubuntu-2604,
+              image: "ubuntu:26.04@sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b",
+            }
+          - {
+              id: opensuse-tumbleweed,
+              image: "opensuse/tumbleweed:latest@sha256:ba9f806363116cb7633f10ca7dbe645d286915e9b898fe24b94615c2184b6911",
+            }
+          - {
+              id: arch,
+              image: "archlinux:latest@sha256:4bf33b21a715aac0b48ce6e9eaed4782a898eae96f88f5da3635572129c2584a",
+            }
+    steps:
+      - name: Install the toolchain and KWin headers
+        id: deps
+        shell: bash
+        # A distribution that has dropped or renamed its KWin development
+        # package is a gap in the matrix, not a broken build: it is reported
+        # and skipped.
+        continue-on-error: true
+        env:
+          DISTRO_ID: ${{ matrix.distro.id }}
+        run: |
+          set -euxo pipefail
+          case "$DISTRO_ID" in
+            fedora-*)
+              dnf -y install cmake ninja-build gcc-c++ kwin-devel qt6-qtbase-devel \
+                kf6-kwindowsystem-devel wayland-devel extra-cmake-modules pkgconf \
+                coreutils util-linux gawk grep git
+              ;;
+            debian-*|ubuntu-*)
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends cmake ninja-build g++ \
+                kwin-dev qt6-base-dev libkf6windowsystem-dev libwayland-dev \
+                extra-cmake-modules pkg-config coreutils util-linux gawk grep ca-certificates git
+              ;;
+            opensuse-*)
+              zypper --non-interactive refresh
+              zypper --non-interactive install cmake ninja gcc-c++ kwin6-devel \
+                qt6-base-devel kf6-kwindowsystem-devel wayland-devel \
+                extra-cmake-modules pkgconf-pkg-config coreutils util-linux gawk grep git
+              ;;
+            arch)
+              pacman -Syu --noconfirm cmake ninja gcc kwin qt6-base kwindowsystem \
+                wayland extra-cmake-modules pkgconf coreutils util-linux gawk grep git
+              ;;
+            *)
+              echo "::error::No package recipe for $DISTRO_ID"
+              exit 1
+              ;;
+          esac
+
+      # continue-on-error leaves the job green, so without this annotation a
+      # failed leg would disappear silently.
+      - name: Report the dependency gap
+        if: steps.deps.outcome != 'success'
+        shell: bash
+        env:
+          DISTRO_ID: ${{ matrix.distro.id }}
+        run: |
+          echo "::warning title=No KWin plugin build for $DISTRO_ID::Dependency install failed; the plugin was not built for $DISTRO_ID."
+
+      - name: Checkout
+        if: steps.deps.outcome == 'success'
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Read the KWin, Qt, KF and glibc versions this image ships
+        if: steps.deps.outcome == 'success'
+        id: kwin
+        shell: bash
+        env:
+          DISTRO_ID: ${{ matrix.distro.id }}
+          DISTRO_IMAGE: ${{ matrix.distro.image }}
+        # The cmake package version files are the authority; the binary is the
+        # fallback for images that ship headers without the compositor.
+        run: |
+          set -euo pipefail
+          cmake_package_version() {
+            local config
+            for config in /usr/lib64/cmake/"$1"/"$1"ConfigVersion.cmake \
+                          /usr/lib/cmake/"$1"/"$1"ConfigVersion.cmake \
+                          /usr/lib/*/cmake/"$1"/"$1"ConfigVersion.cmake; do
+              if [ -f "$config" ]; then
+                grep -oE 'PACKAGE_VERSION "[0-9.]+"' "$config" | grep -oE '[0-9.]+' | head -n 1 && return 0
+              fi
+            done
+            return 0
+          }
+          version="$(cmake_package_version KWin)"
+          if [ -z "$version" ] && command -v kwin_wayland >/dev/null 2>&1; then
+            version="$(kwin_wayland --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n 1)"
+          fi
+          if [ -z "$version" ]; then
+            echo "::error::Could not read a KWin version from $DISTRO_IMAGE"
+            exit 1
+          fi
+          qt_version="$(cmake_package_version Qt6)"
+          kf_version="$(cmake_package_version KF6WindowSystem)"
+          glibc_version="$(ldd --version 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+$' || true)"
+          for pair in "Qt:$qt_version" "KF:$kf_version" "glibc:$glibc_version"; do
+            if [ -z "${pair#*:}" ]; then
+              echo "::warning title=Toolchain version unknown for $DISTRO_ID::${pair%%:*} version could not be read."
+            fi
+          done
+          {
+            echo "version=$version"
+            echo "qt_version=$qt_version"
+            echo "kf_version=$kf_version"
+            echo "glibc_version=$glibc_version"
+          } >>"$GITHUB_OUTPUT"
+          echo "Building against KWin $version (Qt $qt_version, KF $kf_version, glibc $glibc_version)"
+
+      - name: Build the plugin
+        if: steps.deps.outcome == 'success'
+        shell: bash
+        env:
+          DISTRO_ID: ${{ matrix.distro.id }}
+          KWIN_VERSION: ${{ steps.kwin.outputs.version }}
+          QT_VERSION: ${{ steps.kwin.outputs.qt_version }}
+          KF_VERSION: ${{ steps.kwin.outputs.kf_version }}
+          GLIBC_VERSION: ${{ steps.kwin.outputs.glibc_version }}
+        run: |
+          set -euo pipefail
+          path="$(bash native/computer-use-kwin/scripts/install-and-load.sh --build-only | tail -n 1)"
+          [ -f "$path" ] || { echo "::error::--build-only printed no usable path"; exit 1; }
+          mkdir -p out
+          name="PathwayComputerUsePlugin-kwin${KWIN_VERSION}-x64-${DISTRO_ID}.so"
+          cp "$path" "out/$name"
+          cat >"out/${name}.json" <<EOF
+          {
+            "kwinVersion": "$KWIN_VERSION",
+            "arch": "x64",
+            "file": "$name",
+            "builtOn": "$DISTRO_ID",
+            "qtVersion": "$QT_VERSION",
+            "kfVersion": "$KF_VERSION",
+            "glibcVersion": "$GLIBC_VERSION"
+          }
+          EOF
+
+      - name: Upload
+        if: steps.deps.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: kwin-plugin-${{ matrix.distro.id }}-x64
+          path: out/
+          if-no-files-found: error
+          retention-days: 14

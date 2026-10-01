@@ -14,8 +14,18 @@ export type ComputerWindowReadiness = Pick<
   "window" | "windowStatus" | "windowReason"
 >;
 
+/**
+ * What the launch itself established about the process it started.
+ *
+ * `pid` alone is the historical rule and stays exact: a window of that
+ * process, and no other. `appId` is a backend's statement that the pid may be
+ * a launcher's (flatpak, `gio launch` and single-instance apps hand the window
+ * to a different process), so a window of that app identity counts too, as
+ * does the launch name, whenever no window carries the pid.
+ */
 export interface WaitForWindowTarget<E, R> {
   readonly pid?: number;
+  readonly appId?: string;
   readonly checkInputReady?: (windowId: string) => Effect.Effect<void, E, R>;
 }
 
@@ -62,19 +72,11 @@ const probeWindow = Effect.fnUntraced(function* <E1, R1, E2, R2>(
   timeoutMs: number,
   target: WaitForWindowTarget<E2, R2> | undefined,
 ) {
-  const name = app
-    .split(/[\\/]/)
-    .at(-1)
-    ?.replace(/\.app$/i, "")
-    .toLocaleLowerCase();
+  const name = launchName(app);
   const deadline =
     (yield* Clock.currentTimeMillis) + Math.min(PROBE_BUDGET_MS, Math.max(0, timeoutMs));
   while (true) {
-    const matches = (yield* read).filter((window) =>
-      target?.pid !== undefined
-        ? window.pid === target.pid
-        : window.appName?.toLocaleLowerCase() === name,
-    );
+    const matches = launchedWindows(yield* read, name, target);
     // Titles, visibility and size do not prove which same-app window is the
     // requested document. Keep the choice explicit when siblings exist.
     if (matches.length > 1) return unavailable("ambiguous");
@@ -99,3 +101,49 @@ const probeWindow = Effect.fnUntraced(function* <E1, R1, E2, R2>(
     yield* Effect.sleep(Math.min(POLL_INTERVAL_MS, remaining));
   }
 });
+
+function launchName(app: string): string | undefined {
+  return app
+    .split(/[\\/]/)
+    .at(-1)
+    ?.replace(/\.app$/i, "")
+    .toLocaleLowerCase();
+}
+
+/** A desktop entry id names its app with or without the `.desktop` suffix. */
+function withoutDesktopSuffix(name: string | undefined): string | undefined {
+  return name?.replace(/\.desktop$/i, "");
+}
+
+/**
+ * The windows this launch may have produced. Without an app identity the rule
+ * is the one every backend always had: the pid when the launch reported one,
+ * else the launch name against `appName`. With one, the pid still wins when any
+ * window carries it, and otherwise the identity or the launch name may match,
+ * because the reported pid belongs to a process that hands the window on.
+ */
+function launchedWindows(
+  windows: readonly ComputerWindow[],
+  name: string | undefined,
+  target: { readonly pid?: number; readonly appId?: string } | undefined,
+): readonly ComputerWindow[] {
+  const pid = target?.pid;
+  if (target?.appId === undefined) {
+    return windows.filter((window) =>
+      pid !== undefined ? window.pid === pid : window.appName?.toLocaleLowerCase() === name,
+    );
+  }
+  if (pid !== undefined) {
+    const byPid = windows.filter((window) => window.pid === pid);
+    if (byPid.length > 0) return byPid;
+  }
+  const names = new Set(
+    [withoutDesktopSuffix(launchName(target.appId)), withoutDesktopSuffix(name)].filter(
+      (entry): entry is string => entry !== undefined && entry.length > 0,
+    ),
+  );
+  return windows.filter((window) => {
+    const appName = withoutDesktopSuffix(window.appName?.toLocaleLowerCase());
+    return appName !== undefined && names.has(appName);
+  });
+}

@@ -40,3 +40,8 @@ node_modules/
 
 # Locally compiled dictation hosts, model engines, and downloaded test weights.
 native/dictation/build/
+__pycache__/
+
+# Prebuilt KWin plugin binaries, assembled by scripts/assemble-kwin-plugin-prebuilds.mjs
+# into the directory the server reads at install time. Built artifacts, never sources.
+native/computer-use-kwin/prebuilt/

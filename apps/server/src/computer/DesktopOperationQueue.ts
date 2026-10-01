@@ -225,6 +225,22 @@ export class DesktopOperationQueue {
     });
   }
 
+  /**
+   * Exclusive work the admission limit cannot refuse. A desktop replacement is
+   * the one caller: a queue full of ordinary work must not push the swap
+   * outside the barrier, where it would land between an operation's
+   * targeting and its input.
+   */
+  runBarrier<A, E, R>(
+    action: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E | ComputerOperationError, R> {
+    return Effect.flatMap(Effect.service(DesktopQueueFrames), (frames) => {
+      if (this.closed) return Effect.fail(closedError());
+      if (this.activeFrame(frames)) return reentrant(action, undefined);
+      return this.admit(undefined, frames, action, undefined, false);
+    });
+  }
+
   runScoped<A, E, R>(
     key: string,
     action: Effect.Effect<A, E, R>,
@@ -266,8 +282,9 @@ export class DesktopOperationQueue {
     frames: ReadonlyArray<QueueFrame>,
     action: Effect.Effect<A, E, R>,
     signal: DesktopSignal | undefined,
+    limited = true,
   ): Effect.Effect<A, E | ComputerOperationError, R> {
-    if (this.entries.length >= DESKTOP_OPERATION_QUEUE_LIMIT) {
+    if (limited && this.entries.length >= DESKTOP_OPERATION_QUEUE_LIMIT) {
       return Effect.fail(
         new ComputerBackendError({
           message: "Too many computer operations are queued; try again later.",
