@@ -1,3 +1,4 @@
+import { SIM_BUILD_WS_METHODS } from "@spiritdevs/contracts/simBuild";
 import { XCODE_WS_METHODS } from "@spiritdevs/contracts/xcode";
 import { APPLE_WS_METHODS } from "@spiritdevs/contracts/apple";
 import { COMPUTER_SURFACE_METHODS } from "@spiritdevs/contracts";
@@ -30,6 +31,13 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
  * runtime failure.
  */
 export const RPC_REQUIRED_SCOPES = {
+  [SIM_BUILD_WS_METHODS.discover]: AuthOrchestrationOperateScope,
+  [SIM_BUILD_WS_METHODS.start]: AuthOrchestrationOperateScope,
+  [SIM_BUILD_WS_METHODS.list]: AuthOrchestrationReadScope,
+  [SIM_BUILD_WS_METHODS.get]: AuthOrchestrationReadScope,
+  [SIM_BUILD_WS_METHODS.cancel]: AuthOrchestrationOperateScope,
+  [SIM_BUILD_WS_METHODS.subscribe]: AuthOrchestrationReadScope,
+
   [XCODE_WS_METHODS.status]: AuthOrchestrationReadScope,
   [XCODE_WS_METHODS.subscribe]: AuthOrchestrationReadScope,
   [XCODE_WS_METHODS.install]: AuthOrchestrationOperateScope,

@@ -1,3 +1,6 @@
+import { SimBuildRpcs } from "@spiritdevs/contracts/simBuild";
+import { SimBuildService } from "./simBuild/SimBuildService.ts";
+import { makeSimBuildRpcLayer } from "./simBuild/simBuildRpc.ts";
 import { XcodeRpcs } from "@spiritdevs/contracts/xcode";
 import { makeXcodeRpcLayer } from "./xcode/xcodeRpc.ts";
 import { AppleRpcs } from "@spiritdevs/contracts/apple";
@@ -521,6 +524,9 @@ const usageRecoveryRpcLayer = UsageRecoveryRpcGroup.toLayer(
 
 // Computer RPCs are served by their own handler layer (see makeWsComputerRpcLayer).
 const CoreWsRpcGroup = WsRpcGroup.omit(
+  ...([...SimBuildRpcs.requests.keys()] as ReadonlyArray<
+    RpcGroup.Rpcs<typeof SimBuildRpcs>["_tag"]
+  >),
   ...([...XcodeRpcs.requests.keys()] as ReadonlyArray<RpcGroup.Rpcs<typeof XcodeRpcs>["_tag"]>),
   ...([...AppleRpcs.requests.keys()] as ReadonlyArray<RpcGroup.Rpcs<typeof AppleRpcs>["_tag"]>),
   WS_METHODS.usageRecoveryGet,
@@ -3372,6 +3378,7 @@ const makeWsRpcLayer = (
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const appleServices = yield* makeConfiguredAppleServices();
+    const simBuild = yield* SimBuildService;
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
@@ -3401,6 +3408,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             makeWsComputerRpcLayer(session),
             makeAppleRpcLayer(appleServices.runtime, session.scopes, appleServices.sessions),
             makeXcodeRpcLayer(appleServices.xcode, appleServices.runtime, session.scopes),
+            makeSimBuildRpcLayer(simBuild, session.scopes),
             usageRecoveryRpcLayer,
           ).pipe(
             Layer.provideMerge(RpcSerialization.layerJson),

@@ -1,3 +1,4 @@
+import { SimBuildToolkit } from "./toolkits/simBuild/tools.ts";
 import { DeviceToolkit } from "./toolkits/device/tools.ts";
 import * as Context from "effect/Context";
 import { Tool } from "effect/unstable/ai";
@@ -13,6 +14,7 @@ import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 export const PATHWAY_MCP_TOOLS = [
   ...Object.values(PreviewToolkit.tools),
   ...Object.values(DeviceToolkit.tools),
+  ...Object.values(SimBuildToolkit.tools),
   ...Object.values(IssuesToolkit.tools),
   ...Object.values(ProjectsToolkit.tools),
   ...Object.values(OrchestratorToolkit.tools),

@@ -95,6 +95,10 @@
     "./apple": {
       "types": "./src/apple.ts",
       "import": "./src/apple.ts"
+    },
+    "./simBuild": {
+      "types": "./src/simBuild.ts",
+      "import": "./src/simBuild.ts"
     }
   },
   "scripts": {

@@ -879,6 +879,8 @@ export const CLAUDE_PATHWAY_MCP_TOOL_WILDCARD = McpProviderSession.PATHWAY_MCP_T
 // Mirrors every Tool.Readonly annotation in the production Pathway MCP catalog so headless
 // read-only sessions can use every safe tool. The adapter test cross-checks the full catalog.
 export const CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
+  "device_build_status",
+  "device_build_wait",
   "device_list",
   "device_screenshot",
   "preview_status",

@@ -22,6 +22,7 @@ import { bulkAlertChoices, threadPolicyView } from "../threadAlerts/policyUi";
 import { appAtomRegistry as alertRegistry } from "../rpc/atomRegistry";
 import { environmentThreadShells as alertThreadShells } from "../state/threads";
 import { environmentProjects as alertProjects } from "../state/projects";
+import { requestSimulatorRun } from "../state/simBuild";
 
 import {
   scopedProjectKey,
@@ -93,6 +94,7 @@ import {
   SquarePenIcon,
   TextSearchIcon,
   XIcon,
+  SmartphoneIcon,
 } from "lucide-react";
 import {
   lazy,
@@ -2182,6 +2184,18 @@ function OpenCommandPaletteDialog(props: {
         useRightPanelStore
           .getState()
           .open(scopeThreadRef(activeThread.environmentId, activeThread.id), "computer");
+      },
+    });
+  if (activeThread && activeThread.projectId !== null)
+    actionItems.push({
+      kind: "action",
+      value: "action:run-on-simulator",
+      searchTerms: ["run", "build", "test", "simulator", "ios", "xcode", "device", "scheme"],
+      title: "Run on simulator",
+      description: activeThread.title,
+      icon: <SmartphoneIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        requestSimulatorRun(scopeThreadRef(activeThread.environmentId, activeThread.id));
       },
     });
   if (activeThread && alertMutations && alertPolicies !== null && alertPoliciesReady)

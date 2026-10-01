@@ -19,7 +19,10 @@ import { WizardPopup } from "~/components/ui/wizard";
 import { Spinner } from "~/components/ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
+import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
 import { deviceEnvironment, useDeviceState, useDeviceWorkspaceTarget } from "~/state/device";
+import { useThreadShell } from "~/state/entities";
+import { useSimBuildRequestStore } from "~/state/simBuild";
 import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
@@ -29,6 +32,7 @@ import { deviceControlErrorCode, deviceControlErrorCopy } from "./deviceControl"
 import { DeviceLoadingView } from "./DeviceLoadingView";
 import { DeviceSetup } from "./DeviceSetup";
 import { DeviceWorkspace } from "./DeviceWorkspace";
+import { SimBuildBar } from "./SimBuildBar";
 import { shouldOfferXcodeSetup } from "./deviceXcodeSetup.logic";
 import { useXcodeHost, XcodeSetupFlow } from "../xcode/XcodeSetup";
 import { PreviewPanelShell, type PreviewPanelMode } from "../preview/PreviewPanelShell";
@@ -166,6 +170,16 @@ export function DevicePanel(props: {
   const xcodeHost = useXcodeHost(environmentId);
   // Setup sits above the list so Android devices stay reachable while Xcode installs.
   const offerXcode = loaded && !hostBusy && shouldOfferXcodeSetup(state, xcodeHost.support);
+  const projectId = useThreadShell(props.threadRef)?.projectId ?? null;
+  // A palette "Run on simulator" request opens the run form once an iOS simulator is showing.
+  const threadKey = scopedThreadKey(props.threadRef);
+  const runRequested = useSimBuildRequestStore((store) => store.requestedThreadKeys.has(threadKey));
+  const [runFormRequest, setRunFormRequest] = useState(0);
+  const runTarget = props.visible && activeDevice?.platform === "ios";
+  useEffect(() => {
+    if (runRequested && runTarget && useSimBuildRequestStore.getState().take(threadKey))
+      setRunFormRequest((count) => count + 1);
+  }, [runRequested, runTarget, threadKey]);
   const unavailablePlatforms = state.hosts.flatMap((host) =>
     host.platforms
       .filter((platform) => !platform.available)
@@ -223,6 +237,22 @@ export function DevicePanel(props: {
             variant="ghost"
             aria-label="Dismiss device error"
             onClick={() => setOperationError(null)}
+          >
+            <X className="size-3" />
+          </Button>
+        </div>
+      ) : null}
+      {runRequested && !activeDevice ? (
+        <div
+          role="status"
+          className="flex items-center gap-2 border-b px-3 py-2 text-xs text-muted-foreground"
+        >
+          <p className="flex-1">Choose an iOS simulator to run this thread's app on.</p>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Dismiss run request"
+            onClick={() => useSimBuildRequestStore.getState().take(threadKey)}
           >
             <X className="size-3" />
           </Button>
@@ -381,6 +411,17 @@ export function DevicePanel(props: {
           </div>
         )}
       </div>
+      {activeDevice && activeSession ? (
+        <SimBuildBar
+          environmentId={environmentId}
+          threadId={threadId}
+          projectId={projectId}
+          device={activeDevice}
+          hostSupport={xcodeHost.support}
+          visible={props.visible && pageVisible}
+          openRequest={runFormRequest}
+        />
+      ) : null}
     </PreviewPanelShell>
   );
 }

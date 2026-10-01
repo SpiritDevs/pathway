@@ -1,5 +1,6 @@
 import { deviceAgentGatewayRouteLayer } from "./device/DeviceAgentGateway.ts";
 import { RunStopFence } from "./orchestration-v2/RunStopFence.ts";
+import * as SimBuildService from "./simBuild/SimBuildService.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { deviceHubProxyRouteLayer } from "./device/DeviceHubProxy.ts";
 import { environmentSurfaceRouteLayer } from "./surface/environmentSurfaceRoute.ts";
@@ -532,10 +533,13 @@ const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
         const devices = yield* DeviceService.DeviceService;
         return {
           stopRun: (input) =>
-            Effect.all([computer.stopRun(input), devices.control.stopRun(input.threadId, input.runId)], {
-              concurrency: "unbounded",
-              discard: true,
-            }),
+            Effect.all(
+              [computer.stopRun(input), devices.control.stopRun(input.threadId, input.runId)],
+              {
+                concurrency: "unbounded",
+                discard: true,
+              },
+            ),
         };
       }),
     ).pipe(Layer.provide(ComputerLayerLive), Layer.provide(DeviceLayerLive)),
@@ -561,6 +565,7 @@ const StorageManagementLayerLive = StorageManagement.layer.pipe(
 );
 
 const RuntimeCoreDependenciesBaseLive = AgentAwarenessRelay.layer.pipe(
+  Layer.provideMerge(SimBuildService.layer.pipe(Layer.provide(DeviceLayerLive))),
   Layer.provideMerge(ComputerLayerLive),
   Layer.provideMerge(StorageManagementLayerLive),
   // Core Services
