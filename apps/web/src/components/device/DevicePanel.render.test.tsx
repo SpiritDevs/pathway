@@ -55,6 +55,12 @@ vi.mock("./DeviceToolDriftBanner", () => ({ DeviceToolDriftBanner: () => null })
 vi.mock("./DeviceSetup", () => ({ DeviceSetup: () => null }));
 vi.mock("./DeviceControlsRail", () => ({ DeviceControlsRail: () => null }));
 vi.mock("./DeviceToolsPanel", () => ({ DeviceToolsPanel: () => null }));
+vi.mock("./SimBuildBar", () => ({ SimBuildBar: () => null }));
+vi.mock("~/state/entities", () => ({ useThreadShell: () => null }));
+vi.mock("../xcode/XcodeSetup", () => ({
+  useXcodeHost: () => ({ label: "Test Mac", mac: null, support: "unknown", connected: true }),
+  XcodeSetupFlow: () => null,
+}));
 vi.mock("./useDeviceControls", () => ({ useDeviceControls: () => harness.controls }));
 vi.mock("../preview/PreviewPanelShell", () => ({
   PreviewPanelShell: ({ children }: { children: ReactNode }) => children,
