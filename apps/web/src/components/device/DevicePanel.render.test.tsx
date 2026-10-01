@@ -20,6 +20,7 @@ const harness = vi.hoisted(() => ({
   start: vi.fn(),
   stop: vi.fn(),
   streamCommits: vi.fn(),
+  parentRenders: vi.fn(),
 }));
 vi.mock("@spiritdevs/client-runtime/state/device", async (original) => ({
   ...(await original<object>()),
@@ -65,7 +66,11 @@ vi.mock("./useDeviceControls", () => ({ useDeviceControls: () => harness.control
 vi.mock("../preview/PreviewPanelShell", () => ({
   PreviewPanelShell: ({ children }: { children: ReactNode }) => children,
 }));
-vi.mock("~/rightPanelStore", () => ({ useRightPanelStore: { getState: () => ({}) } }));
+vi.mock("~/rightPanelStore", () => ({
+  deviceSurfaceId: (target: { hostId: string; deviceId: string }) =>
+    `device:${target.hostId}:${target.deviceId}`,
+  useRightPanelStore: { getState: () => ({ reconcileDeviceSurfaces() {}, openDevice() {} }) },
+}));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => harness.navigate }));
 vi.mock("./DeviceStreamView", async (original) => {
   const actual = await original<typeof import("./DeviceStreamView")>();
@@ -79,6 +84,7 @@ vi.mock("./DeviceStreamView", async (original) => {
   };
 });
 import { DevicePanel } from "./DevicePanel";
+import { useDeviceSessionSync } from "./DeviceSessionSync";
 
 const environmentId = EnvironmentId.make("environment");
 const held: DeviceControlState = {
@@ -113,6 +119,36 @@ const published = (controls: DeviceControlState[], revision: number) =>
     controls,
   } as unknown as DeviceServiceState);
 
+const threadRef = { environmentId, threadId: "thread-1" } as unknown as ScopedThreadRef;
+const surface = {
+  id: "device-surface",
+  kind: "device",
+  target: { hostId: "local", deviceId: "phone", platform: "ios", name: "iPhone" },
+} as unknown as ComponentProps<typeof DevicePanel>["surface"];
+const nodeMock = {
+  createNodeMock: () => ({
+    style: { setProperty() {} },
+    getBoundingClientRect: () => ({ width: 400, height: 800 }),
+  }),
+};
+const resumeAgent = () => {};
+
+/** ChatView's device wiring: session sync plus the embedded panel and its resume callback. */
+function ChatDeviceParent() {
+  harness.parentRenders();
+  useDeviceSessionSync(threadRef);
+  return (
+    <DevicePanel
+      mode="embedded"
+      threadRef={threadRef}
+      surface={surface}
+      visible
+      onDismissSetup={() => {}}
+      onResumeAgent={resumeAgent}
+    />
+  );
+}
+
 let registry: AtomRegistry.AtomRegistry;
 let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
@@ -141,6 +177,7 @@ beforeEach(() => {
       expiresAt: null,
     }),
   );
+  vi.clearAllMocks();
   harness.command.mockResolvedValue({ _tag: "Success" });
 });
 afterEach(async () => {
@@ -156,24 +193,13 @@ it("does not re-commit the stream when a publication only renews control", async
       <RegistryContext.Provider value={registry}>
         <DevicePanel
           mode={"docked" as ComponentProps<typeof DevicePanel>["mode"]}
-          threadRef={{ environmentId, threadId: "thread-1" } as unknown as ScopedThreadRef}
-          surface={
-            {
-              id: "device-surface",
-              kind: "device",
-              target: { hostId: "local", deviceId: "phone", platform: "ios", name: "iPhone" },
-            } as unknown as ComponentProps<typeof DevicePanel>["surface"]
-          }
+          threadRef={threadRef}
+          surface={surface}
           visible
           onDismissSetup={() => {}}
         />
       </RegistryContext.Provider>,
-      {
-        createNodeMock: () => ({
-          style: { setProperty() {} },
-          getBoundingClientRect: () => ({ width: 400, height: 800 }),
-        }),
-      },
+      nodeMock,
     );
   });
   const commits = harness.streamCommits.mock.calls.length;
@@ -197,4 +223,28 @@ it("does not re-commit the stream when a publication only renews control", async
     ),
   );
   expect(harness.streamCommits.mock.calls.length).toBeGreaterThan(commits);
+});
+
+it("does not re-render the chat's device wiring when a publication only renews control", async () => {
+  await act(async () => {
+    renderer = create(
+      <RegistryContext.Provider value={registry}>
+        <ChatDeviceParent />
+      </RegistryContext.Provider>,
+      nodeMock,
+    );
+  });
+  const parentRenders = harness.parentRenders.mock.calls.length;
+  const streamCommits = harness.streamCommits.mock.calls.length;
+  expect(streamCommits).toBeGreaterThan(0);
+
+  await act(async () =>
+    registry.set(
+      harness.stateAtom as Atom.Writable<unknown>,
+      published([{ ...held, expiresAt: 40_000 }], 2),
+    ),
+  );
+  expect(harness.parentRenders).toHaveBeenCalledTimes(parentRenders);
+  expect(harness.streamCommits).toHaveBeenCalledTimes(streamCommits);
+  expect(harness.start).toHaveBeenCalledOnce();
 });

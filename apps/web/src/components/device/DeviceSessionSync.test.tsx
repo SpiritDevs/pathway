@@ -4,7 +4,9 @@ import { beforeEach, afterEach, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ThreadId, type DeviceServiceState } from "@spiritdevs/contracts";
 import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import { useRightPanelStore, selectThreadRightPanelState } from "~/rightPanelStore";
-vi.mock("~/state/device", () => ({ useDeviceState: () => ({ state, loaded: true }) }));
+vi.mock("~/state/device", () => ({
+  useDeviceThreadSessions: () => ({ sessions: state.sessions, devices: state.devices }),
+}));
 import { useDeviceSessionSync } from "./DeviceSessionSync";
 const ref = scopeThreadRef(EnvironmentId.make("test"), ThreadId.make("thread"));
 const device = {
