@@ -8,7 +8,7 @@ import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@spiritdevs/contr
 import { Atom } from "effect/unstable/reactivity";
 
 import {
-  breadcrumbParentThreadId,
+  breadcrumbParent,
   type ThreadBreadcrumbAncestor,
   type ThreadWithLineage,
   walkThreadBreadcrumbAncestors,
@@ -61,23 +61,31 @@ export function useSideChatThreadIds(ref: ScopedThreadRef | null): ReadonlyArray
 }
 
 const breadcrumbAncestorsAtom = Atom.family((key: string) => {
-  const [environmentId, threadId, parentThreadId] = JSON.parse(key) as [
+  const [environmentId, threadId, parentEnvironmentId, parentThreadId] = JSON.parse(key) as [
     EnvironmentId,
     ThreadId,
+    EnvironmentId,
     ThreadId,
   ];
   let previous = EMPTY_ANCESTORS;
   return Atom.make((get) => {
     const next = walkThreadBreadcrumbAncestors(
-      { id: threadId, title: "", environmentId, forkedFrom: null, lineage: { parentThreadId } },
-      (id) =>
-        get(environmentThreadShells.threadShellAtom({ environmentId, threadId: id })) ?? undefined,
+      {
+        id: threadId,
+        title: "",
+        environmentId,
+        forkedFrom: null,
+        lineage: { parentThreadId, parentEnvironmentId },
+      },
+      (parent) => get(environmentThreadShells.threadShellAtom(parent)) ?? undefined,
     );
     if (
       next.length === previous.length &&
       next.every(
         (ancestor, index) =>
-          ancestor.id === previous[index]?.id && ancestor.title === previous[index]?.title,
+          ancestor.id === previous[index]?.id &&
+          ancestor.environmentId === previous[index]?.environmentId &&
+          ancestor.title === previous[index]?.title,
       )
     ) {
       return previous;
@@ -91,10 +99,12 @@ const breadcrumbAncestorsAtom = Atom.family((key: string) => {
 export function useThreadBreadcrumbAncestors(
   thread: ThreadWithLineage | null | undefined,
 ): ReadonlyArray<ThreadBreadcrumbAncestor> {
-  const parentThreadId = thread ? breadcrumbParentThreadId(thread) : null;
+  const parent = thread ? breadcrumbParent(thread) : null;
   return useAtomValue(
-    thread && parentThreadId !== null
-      ? breadcrumbAncestorsAtom(JSON.stringify([thread.environmentId, thread.id, parentThreadId]))
+    thread && parent !== null
+      ? breadcrumbAncestorsAtom(
+          JSON.stringify([thread.environmentId, thread.id, parent.environmentId, parent.threadId]),
+        )
       : NO_ANCESTORS_ATOM,
   );
 }

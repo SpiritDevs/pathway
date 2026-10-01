@@ -274,6 +274,38 @@ it.layer(testLayer)("MCP conversation company scope", (it) => {
     }),
   );
 
+  it.effect("attaches a thread started from another environment under its remote parent", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("remote-launched-child");
+      const remoteParent = { threadId: remoteThreadId, environmentId: remoteEnvironmentId };
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("remote-launched-child:create"),
+        threadId,
+        projectId: null,
+        conversationCompanyId: companyA,
+        remoteParent,
+        title: "Remote launch",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "agent",
+        creationSource: "mcp",
+      });
+
+      const { thread } = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(thread.lineage, {
+        parentThreadId: remoteThreadId,
+        relationshipToParent: null,
+        rootThreadId: threadId,
+        parentEnvironmentId: remoteEnvironmentId,
+      });
+    }),
+  );
+
   it.effect("reads threads from the account's other environments when they are not local", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;

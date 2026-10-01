@@ -7032,10 +7032,10 @@ function ChatViewContent(props: ChatViewProps) {
   );
 
   const onOpenRelatedThread = useCallback(
-    (threadId: ThreadId) => {
+    (threadId: ThreadId, threadEnvironmentId: EnvironmentId = environmentId) => {
       void navigate({
         to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
+        params: buildThreadRouteParams(scopeThreadRef(threadEnvironmentId, threadId)),
       });
     },
     [environmentId, navigate],

@@ -98,6 +98,10 @@ describe("OrchestratorMcpService", () => {
                 assert.equal(input.args.kind, "startThread");
                 assert.equal(input.connectGrantToken, "single-use-grant");
                 assert.equal(input.targetProjectId, targetProjectId);
+                assert.deepEqual(input.parent, {
+                  threadId: parentThreadId,
+                  environmentId: EnvironmentId.make("environment:mcp-remote-source"),
+                });
                 assert.isTrue(
                   input.args.kind === "startThread" && boundThreads.has(input.args.threadId!),
                 );

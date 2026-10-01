@@ -389,3 +389,9 @@ starting duplicate work. See [durable thread submission](durable-thread-queue.md
 The atomic point at which an environment takes permanent delivery ownership of a queued
 submission. Editing, cancellation, and reassignment are available before acceptance. Acceptance
 is separate from durable local delivery and from provider startup.
+
+## Thread lineage
+
+**Attached thread**:
+A thread whose lineage names a parent but no fork or subagent relationship (`relationshipToParent: null`). It lists under its parent in Lineage rather than in the sidebar, and returns to the sidebar once that parent is gone. It has none of the fork or subagent behavior, such as merge-back, completion delivery, or cascading delete. `lineage.parentEnvironmentId` is set when the parent lives on another environment, as with a thread started there by `delegate_task`.
+_Avoid_: Linked thread, child thread (when no subagent is meant)

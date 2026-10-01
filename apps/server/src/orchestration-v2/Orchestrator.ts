@@ -1702,9 +1702,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           : (dedicatedWorkspace?.worktreePath ?? command.worktreePath),
       activeProviderThreadId: null,
       lineage: {
-        parentThreadId: null,
+        parentThreadId: command.remoteParent?.threadId ?? null,
         relationshipToParent: null,
         rootThreadId: command.threadId,
+        ...(command.remoteParent === undefined
+          ? {}
+          : { parentEnvironmentId: command.remoteParent.environmentId }),
       },
       forkedFrom: null,
       createdAt: now,

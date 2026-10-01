@@ -10,6 +10,7 @@ import {
   CheckpointScopeId,
   CommandId,
   ContextHandoffId,
+  EnvironmentId,
   ContextTransferId,
   EventId,
   IsoDateTime,
@@ -81,10 +82,17 @@ export const OrchestrationV2ProviderRef = Schema.Struct({
 });
 export type OrchestrationV2ProviderRef = typeof OrchestrationV2ProviderRef.Type;
 
+/**
+ * Where a thread sits under another. A `parentThreadId` with a null `relationshipToParent` is a
+ * plain attachment, such as a thread delegated from another environment: it lists under its parent
+ * like a child but carries no fork or subagent behavior.
+ */
 export const OrchestrationV2AppThreadLineage = Schema.Struct({
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   rootThreadId: ThreadId,
+  /** Set when the parent lives on another environment. */
+  parentEnvironmentId: Schema.optional(EnvironmentId),
 });
 export type OrchestrationV2AppThreadLineage = typeof OrchestrationV2AppThreadLineage.Type;
 
@@ -2345,6 +2353,12 @@ export const OrchestrationV2StoredEventJson = Schema.Struct({
 });
 export type OrchestrationV2StoredEventJson = typeof OrchestrationV2StoredEventJson.Type;
 
+export const OrchestrationV2ThreadParent = Schema.Struct({
+  threadId: ThreadId,
+  environmentId: EnvironmentId,
+});
+export type OrchestrationV2ThreadParent = typeof OrchestrationV2ThreadParent.Type;
+
 export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("thread.create"),
@@ -2352,6 +2366,8 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     projectId: Schema.NullOr(ProjectId),
+    /** Attaches the new thread under a thread on another environment that started it. */
+    remoteParent: Schema.optional(OrchestrationV2ThreadParent),
     conversationCompanyId: Schema.optional(Schema.NullOr(CompanyId)),
     orchestratorOrigin: Schema.optional(OrchestratorAssignmentOrigin),
     temporary: Schema.optional(Schema.Boolean),
@@ -2915,6 +2931,7 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   commandId: CommandId,
   creationSource: Schema.optional(OrchestrationV2CreationSource),
   threadId: Schema.optional(ThreadId),
+  remoteParent: Schema.optional(OrchestrationV2ThreadParent),
   reuseExistingThread: Schema.optional(Schema.Boolean),
   projectId: Schema.NullOr(ProjectId),
   conversationCompanyId: Schema.optional(Schema.NullOr(CompanyId)),

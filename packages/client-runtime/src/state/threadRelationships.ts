@@ -5,7 +5,8 @@ import type {
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 
-export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "transfer";
+/** `attached` is a plain parent link with no fork or subagent behavior. */
+export type ThreadRelationshipKind = "attached" | "fork" | "subagent" | "transfer";
 
 export interface ThreadRelationshipNode {
   readonly threadId: ThreadId;
@@ -98,7 +99,7 @@ export function deriveThreadRelationshipGraph(input: {
     addEdge({
       sourceThreadId: parentThreadId,
       targetThreadId: thread.id,
-      kind: thread.lineage.relationshipToParent === "subagent" ? "subagent" : "fork",
+      kind: thread.lineage.relationshipToParent ?? "attached",
       status: thread.activityRunStatus ?? thread.status,
     });
   }
