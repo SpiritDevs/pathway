@@ -1,12 +1,14 @@
 # Environment surface streams
 
 `GET /ws/environment-surface` streams an environment-owned surface. Version one
-supports `kind=browser&threadId=…&tabId=…`, plus `width`, `height` in CSS pixels and
-`deviceScale`. Optional `sizing=active|passive` defaults to `active`. The prepared
+supports `kind=browser&threadId=…&tabId=…` and `kind=computer&computerId=desktop`,
+plus `width`, `height` in logical pixels and `deviceScale`. Browser streams accept an
+optional `sizing=active|passive`, which defaults to `active`. The prepared
 environment connection supplies the origin and proxy
 prefix. Cookie, bearer-ticket and relay DPoP-ticket authentication match the
 computer frame route. `orchestration:read` is required. Session revocation closes
-the socket with 1008. The route does not launch a browser or create a tab.
+the socket with 1008. The route does not launch a browser or create a tab. Computer capture, control
+RPCs and coordinate mapping are described in [Persistent computer surface](computer-use-surface.md).
 
 After opening, send text `ready`. The server sends text `ping` every 15 seconds;
 reply `pong`. A missing reply closes the socket on the next heartbeat. These are
@@ -135,7 +137,7 @@ a browser viewer.
 
 `preview.remote.interact(command)` requires `orchestration:operate`, selects the
 environment browser host and applies the existing agent takeover checks. It
-returns the updated `PreviewRemoteInteractionState`. Replies bypass the tab's
+returns a void acknowledgement; changes arrive on the interaction subscription. Replies bypass the tab's
 navigation/action queue, so a click waiting for a dialog cannot block its reply.
 The UI must also dispatch this RPC outside its serial `remoteCommand` scheduler.
 

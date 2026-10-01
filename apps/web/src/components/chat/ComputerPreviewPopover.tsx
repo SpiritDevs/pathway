@@ -16,7 +16,7 @@
 
 import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
 import type { ClientSettings, ScopedThreadRef } from "@spiritdevs/contracts";
-import { Maximize2Icon, Minimize2Icon, XIcon } from "lucide-react";
+import { Maximize2Icon, Minimize2Icon, MonitorIcon, XIcon } from "lucide-react";
 import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -34,6 +34,7 @@ import { useComputerSupport } from "../../hooks/useComputerSupport";
 import { useClientSettings } from "../../hooks/useSettings";
 import { useThreadComputerStateSeed } from "../../hooks/useThreadComputerStateSeed";
 import { cn } from "../../lib/utils";
+import { useRightPanelStore } from "../../rightPanelStore";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import {
   computerCanvasLabel,
@@ -473,11 +474,32 @@ function ComputerPreviewViewport(props: {
                 <Maximize2Icon className="size-4" />
               </button>
             )}
+            <ComputerPreviewOpenViewButton threadRef={threadRef} />
             <ComputerPreviewHideButton threadRef={threadRef} />
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+/** Moves the screen into the persistent Computer tab, which outlives the task. */
+function ComputerPreviewOpenViewButton(props: { readonly threadRef: ScopedThreadRef }) {
+  const hidePreviewForTask = useComputerPreviewStore((store) => store.hidePreviewForTask);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        useRightPanelStore.getState().open(props.threadRef, "computer");
+        // One stream is enough; the tab takes over from the preview.
+        hidePreviewForTask(props.threadRef);
+      }}
+      title="Open the computer view, where you can take control"
+      aria-label="Open the computer view"
+      className="grid size-7 place-items-center rounded-full text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.6)] transition-colors duration-150 hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:outline-none"
+    >
+      <MonitorIcon className="size-4" />
+    </button>
   );
 }
 

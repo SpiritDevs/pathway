@@ -13,6 +13,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import { RunStopFence } from "../orchestration-v2/RunStopFence.ts";
 import {
@@ -22,6 +23,7 @@ import {
   withDesktopOperationSignal,
 } from "./DesktopOperationQueue.ts";
 import { ComputerBackendError, type ComputerOperationError } from "./computerErrors.ts";
+import { ComputerService } from "./Services/ComputerService.ts";
 
 /** How long Stop waits for a stopped run's calls to unwind; Synara's bound. */
 export const COMPUTER_RUN_STOP_DRAIN = Duration.seconds(2);
@@ -112,6 +114,16 @@ export const computerRunStopFenceLayer = Layer.effect(
   RunStopFence,
   Effect.gen(function* () {
     const calls = yield* ComputerRunCalls;
-    return { stopRun: ({ threadId, runId }) => calls.stop(threadId, runId) };
+    const computer = yield* Effect.serviceOption(ComputerService);
+    return {
+      stopRun: ({ threadId, runId }) =>
+        calls.stop(threadId, runId).pipe(
+          Effect.andThen(() => {
+            if (Option.isNone(computer)) return Effect.void;
+            computer.value.manager.surfaceControl.endTurn(threadId, runId);
+            return Effect.ignore(computer.value.manager.releaseDesktopControl(threadId, runId));
+          }),
+        ),
+    };
   }),
 );

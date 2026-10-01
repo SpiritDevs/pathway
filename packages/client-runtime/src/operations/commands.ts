@@ -1,5 +1,6 @@
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import {
+  type ChatImageAttachment,
   CommandId,
   MessageId,
   ORCHESTRATION_V2_WS_METHODS,
@@ -296,6 +297,19 @@ export interface PromoteQueuedRunInput extends ThreadCommandInput {
 export interface ControlWorkspacePreparationInput extends ThreadCommandInput {
   readonly runId: RunId;
   readonly action: "cancel" | "work_locally" | "retry";
+}
+
+export interface DispatchComputerHandBackInput extends ThreadCommandInput {
+  /**
+   * Allocated once per follow-up, with `messageId`, and reused by every retry:
+   * a retry after a lost response is then a duplicate command, not a second run.
+   */
+  readonly commandId: CommandId;
+  /** The id allocated before `computer.surface.handBack`. */
+  readonly messageId: MessageId;
+  readonly message: string;
+  readonly summary: string;
+  readonly attachment: ChatImageAttachment;
 }
 
 export interface CancelQueuedRunInput extends ThreadCommandInput {
@@ -901,6 +915,36 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     dispatchMode,
   });
 });
+
+/**
+ * The follow-up text for a hand-back: `/computer-use` opts that one turn into
+ * Computer, and the server's summary of what the user did rides underneath.
+ */
+export function computerHandBackText(message: string, summary: string): string {
+  const trimmedSummary = summary.trim();
+  const head = `/computer-use ${message.trim()}`;
+  return trimmedSummary.length > 0 ? `${head}\n\n${trimmedSummary}` : head;
+}
+
+/**
+ * Sends the follow-up after `computer.surface.handBack`. The attachment is
+ * already stored by the hand-back, so nothing is uploaded or persisted here.
+ */
+export const dispatchComputerHandBack = Effect.fn("EnvironmentCommands.dispatchComputerHandBack")(
+  function* (input: DispatchComputerHandBackInput) {
+    return yield* dispatch({
+      type: "message.dispatch",
+      commandId: input.commandId,
+      createdBy: "user",
+      creationSource: input.creationSource ?? "web",
+      threadId: input.threadId,
+      messageId: input.messageId,
+      text: computerHandBackText(input.message, input.summary),
+      attachments: [input.attachment],
+      dispatchMode: { type: "queue_after_active" },
+    });
+  },
+);
 
 export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThreadTurn")(function* (
   input: InterruptThreadTurnInput,

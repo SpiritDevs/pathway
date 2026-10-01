@@ -75,6 +75,9 @@ it.layer(NodeServices.layer)("computer WebSocket RPC layer", (it) => {
           ).pipe(
             Layer.provideMerge(RpcSerialization.layerJson),
             Layer.provide(ServerSettings.layerTest()),
+            Layer.provide(
+              ServerConfig.layerTest(process.cwd(), { prefix: "pathway-surface-rpc-test-" }),
+            ),
             Layer.provide(Layer.succeed(ComputerApprovalGate, approvalGate)),
             Layer.provide(
               Layer.succeed(ComputerService, {

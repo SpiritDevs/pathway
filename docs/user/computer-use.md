@@ -43,12 +43,39 @@ to do. Approve or decline it there.
 
 When an agent acts on the desktop, a preview appears over the chat. Float it as a window you can
 drag, dock it back, or hide it for the rest of the task; hiding does not stop the agent. Tap the
-preview to click at that spot on the controlled computer. The preview streams only while it is on
-screen. Revoking a device in **Settings** > **Connections** disconnects its open preview and
-Computer connection. Other connected devices can keep watching.
+preview to click at that spot on the controlled computer. The preview belongs to the task and
+closes when the task ends. Revoking a device in **Settings** > **Connections** disconnects its open
+preview and Computer connection. Other connected devices can keep watching.
 
 If the preview stream fails, it shows **Live view unavailable**. Any last image stays visible,
 dimmed and marked **Stale frame** in place of the activity label.
+
+## The computer view
+
+The computer view keeps the host's screen open beside the chat, before, during and after a task.
+Open it from the right panel's **+** menu, from the command menu with **Open computer view**, with
+**⌘⌥C** (**Ctrl+Alt+C** on Windows and Linux), or with the monitor button on the chat preview. The
+shortcut closes the view again. The header says who has the screen: the agent,
+you, another device, or nobody.
+
+- **Take control** hands you the mouse and keyboard. Click, double-click, right-click, scroll, type
+  and paste on the view as if it were the host. Other devices can watch but not act.
+- **Release** gives control up.
+- **Hand back** gives control back and, if you wrote a message in **Tell the agent what's next…**,
+  sends it to the agent with a screenshot and a summary of what you did. The message waits until
+  the agent's current reply finishes. If it can't be sent, **Retry** sends it again without losing
+  the screenshot.
+- Pressing Escape while you have control stops your control and the agent's current action. Take
+  control again to continue.
+- Switching to another tab, closing the view or disconnecting releases control. So does hiding
+  Pathway, such as switching browser tabs or minimising the window; the view tells you when you
+  come back.
+- While you have control, keys you press on the view go to the host, not to Pathway's shortcuts or
+  the chat composer. Click outside the view to use Pathway's shortcuts again.
+- Anything you clicked or typed reaches the host before control is released or handed back.
+
+The view streams only while it is on screen, and it says so when the environment can't share its
+screen. On a host that can't track a held mouse button, dragging isn't available; clicks are.
 
 To stop the agent, use **Stop** in the chat, or press Escape on the host Mac. After a stop, send a
 new request to continue.
@@ -107,7 +134,7 @@ agent still works on the host Mac; nothing runs on your phone.
   it is open, the chat is on screen and the app is in the foreground. Hiding it, leaving the chat
   or leaving the app stops the stream at once. If the connection drops, the last image stays and
   streaming resumes once the app has reconnected and confirmed the computer. Hide it with the close
-  button; it comes back on the next task. You can't click through the preview from a phone. If the
+  button; it comes back on the next task. The computer view is not in the iPhone and iPad app yet. You can't click through the preview from a phone. If the
   stream drops and cannot recover, the preview reads **Live view unavailable**.
 - **Approving and stopping.** Approval, setup and control-off cards work as they do on the desktop.
   Grant macOS permissions on the host Mac itself. To stop the agent, tap **Stop** in the chat;

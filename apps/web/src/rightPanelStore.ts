@@ -25,6 +25,7 @@ export const RIGHT_PANEL_KINDS = [
   "terminal",
   "pull-request",
   "agents",
+  "computer",
   "thread",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
@@ -74,6 +75,8 @@ export type RightPanelSurface =
       number: number;
     }
   | { id: "agents"; kind: "agents" }
+  /** The environment's screen, shared by every thread in that environment. */
+  | { id: "computer"; kind: "computer" }
   | {
       /** Local-only issue detail tab used by the Issues workspace assistant panel. */
       id: `issue:${string}`;
@@ -194,6 +197,8 @@ const singletonSurface = (
       return { id: "files", kind };
     case "agents":
       return { id: "agents", kind };
+    case "computer":
+      return { id: "computer", kind };
   }
 };
 

@@ -1,6 +1,13 @@
 import { XcodeRpcs } from "./xcode.ts";
 import { AppleRpcs } from "./apple.ts";
 import {
+  COMPUTER_SURFACE_METHODS,
+  ComputerSurfaceSessionState,
+  ComputerSurfaceInput,
+  ComputerSurfaceHandBackInput,
+  ComputerSurfaceHandBackResult,
+} from "./computerSurface.ts";
+import {
   PreviewRemoteInteractionCommand,
   PreviewRemoteInteractionEvent,
   PreviewRemoteInteractionInput,
@@ -2359,8 +2366,45 @@ export const WsSubscribeComputerEventsRpc = Rpc.make(COMPUTER_WS_METHODS.subscri
   stream: true,
 });
 
+export const WsComputerSurfaceGetStateRpc = Rpc.make(COMPUTER_SURFACE_METHODS.getState, {
+  payload: Schema.Struct({}),
+  success: ComputerSurfaceSessionState,
+  error: ComputerRpcError,
+});
+export const WsComputerSurfaceSubscribeRpc = Rpc.make(COMPUTER_SURFACE_METHODS.subscribe, {
+  payload: Schema.Struct({}),
+  success: ComputerSurfaceSessionState,
+  error: ComputerRpcError,
+  stream: true,
+});
+export const WsComputerSurfaceTakeControlRpc = Rpc.make(COMPUTER_SURFACE_METHODS.takeControl, {
+  payload: Schema.Struct({}),
+  success: ComputerSurfaceSessionState,
+  error: ComputerRpcError,
+});
+export const WsComputerSurfaceReleaseControlRpc = Rpc.make(
+  COMPUTER_SURFACE_METHODS.releaseControl,
+  { payload: Schema.Struct({}), success: ComputerSurfaceSessionState, error: ComputerRpcError },
+);
+export const WsComputerSurfaceInputRpc = Rpc.make(COMPUTER_SURFACE_METHODS.input, {
+  payload: Schema.Struct({ event: ComputerSurfaceInput }),
+  success: Schema.Void,
+  error: ComputerRpcError,
+});
+export const WsComputerSurfaceHandBackRpc = Rpc.make(COMPUTER_SURFACE_METHODS.handBack, {
+  payload: ComputerSurfaceHandBackInput,
+  success: ComputerSurfaceHandBackResult,
+  error: ComputerRpcError,
+});
+
 /** Platform-neutral computer control and perception surface. */
 export const WsComputerRpcGroup = RpcGroup.make(
+  WsComputerSurfaceGetStateRpc,
+  WsComputerSurfaceSubscribeRpc,
+  WsComputerSurfaceTakeControlRpc,
+  WsComputerSurfaceReleaseControlRpc,
+  WsComputerSurfaceInputRpc,
+  WsComputerSurfaceHandBackRpc,
   WsComputerGetStatusRpc,
   WsComputerGetAuditHistoryRpc,
   WsComputerProvisionRpc,

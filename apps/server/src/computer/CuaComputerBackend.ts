@@ -2322,6 +2322,15 @@ export const makeCuaComputerBackend = (options: CuaComputerBackendOptions = {}) 
         Effect.map(refresh(), () => state.size),
       getState,
       captureScreenshot,
+      captureSurface: () => captureOverview(false),
+      surfaceKeyboardWindow: () =>
+        readWindows(true).pipe(
+          Effect.map((windows) =>
+            windows.find(
+              (window) => window.keyboardFocused === true && window.visible && !window.minimized,
+            ),
+          ),
+        ),
       focusWindow: (windowId: string): BackendEffect<void> =>
         Effect.gen(function* () {
           // Selection sends no input. The actual actuator revalidates the exact

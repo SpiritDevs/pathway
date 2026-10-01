@@ -10,45 +10,46 @@ import { runAtomCommand, squashAtomCommandFailure } from "@spiritdevs/client-run
 import type {
   EnvironmentId,
   EnvironmentSurfaceSizing,
+  EnvironmentSurfaceTarget,
   EnvironmentSurfaceViewport,
-  PreviewTabId,
-  ThreadId,
 } from "@spiritdevs/contracts";
 import { useContext, useEffect, useRef, useState, type RefObject } from "react";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
 
-import { sameSurfaceViewport, surfaceViewportFor } from "./remoteBrowserSurface";
+import { sameSurfaceViewport, surfaceViewportFor } from "~/browser/remoteBrowserSurface";
 
 const surfaceSocket = createSurfaceSocketAtoms(connectionAtomRuntime);
 
 /** Resizing reconnects the stream, so wait for the panel to settle. */
 const VIEWPORT_SETTLE_MS = 250;
 
-/** The CSS size of the page in the latest frame, for mapping input. */
+/**
+ * The latest frame's size in the target's own units, for mapping input: CSS
+ * pixels for a browser page, desktop points for a computer screen.
+ */
 export interface SurfacePageSize {
   width: number;
   height: number;
 }
 
 /**
- * Streams one environment browser tab into `canvasRef` over the binary surface
- * socket. Frames are drawn straight to the canvas without a React render; only
- * the connection state and a once-a-second quality sample re-render. The
- * stream pauses while the view or the page is hidden.
+ * Streams one environment surface (a browser tab or the computer's screen) into
+ * `canvasRef` over the binary surface socket. Frames are drawn straight to the
+ * canvas without a React render; only the connection state and a once-a-second
+ * quality sample re-render. The stream pauses while the view or the page is
+ * hidden, and does not start without a target.
  */
-export function useRemoteBrowserSurface({
+export function useEnvironmentSurface({
   environmentId,
-  threadId,
-  tabId,
+  target,
   enabled,
   sizing = "active",
   containerRef,
   canvasRef,
 }: {
   environmentId: EnvironmentId;
-  threadId: ThreadId;
-  tabId: PreviewTabId | undefined;
+  target: EnvironmentSurfaceTarget | undefined;
   enabled: boolean;
   /** Passive viewers (thumbnails) watch without resizing the page the agent sees. */
   sizing?: EnvironmentSurfaceSizing;
@@ -94,7 +95,11 @@ export function useRemoteBrowserSurface({
     };
   }, [containerRef, enabled]);
 
-  const live = enabled && pageVisible && tabId !== undefined && viewport !== null;
+  // Callers build the target inline; the key keeps a new object from reconnecting.
+  const targetKey = target ? JSON.stringify(target) : null;
+  const targetRef = useRef(target);
+  targetRef.current = target;
+  const live = enabled && pageVisible && targetKey !== null && viewport !== null;
   // The viewport is read at creation and then pushed with setViewport, so a
   // resize reconnects the socket without tearing down the painted canvas.
   const viewportRef = useRef(viewport);
@@ -102,8 +107,8 @@ export function useRemoteBrowserSurface({
 
   useEffect(() => {
     const initial = viewportRef.current;
-    if (!live || !tabId || !initial) return;
-    const target = { kind: "browser" as const, threadId, tabId };
+    const target = targetRef.current;
+    if (!live || !target || !initial) return;
     pageSize.current = null;
     setHasFrame(false);
     setQuality(null);
@@ -159,7 +164,7 @@ export function useRemoteBrowserSurface({
       created.close();
       if (stream.current === created) stream.current = null;
     };
-  }, [canvasRef, environmentId, live, registry, sizing, tabId, threadId]);
+  }, [canvasRef, environmentId, live, registry, sizing, targetKey]);
 
   useEffect(() => {
     if (!viewport || !stream.current || sameSurfaceViewport(streamViewport.current, viewport))

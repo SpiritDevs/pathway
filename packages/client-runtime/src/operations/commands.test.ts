@@ -55,6 +55,7 @@ import {
   mergeThreadBack,
   cancelQueuedRun,
   editQueuedRun,
+  dispatchComputerHandBack,
   editAndRestartMessage,
   promoteQueuedRun,
   reorderQueuedRun,
@@ -560,6 +561,80 @@ describe("V2 environment commands", () => {
           text: "Corrected text",
         },
       ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("queues a Computer hand-back behind the active run with its capture", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const attachment = {
+        type: "image" as const,
+        id: "capture",
+        name: "computer.jpg",
+        mimeType: "image/jpeg",
+        sizeBytes: 10,
+      };
+
+      yield* dispatchComputerHandBack({
+        commandId: CommandId.make("hand-back"),
+        threadId: v2ThreadId,
+        messageId: MessageId.make("message-hand-back"),
+        message: "  Now save the file ",
+        summary: "You clicked File.",
+        attachment,
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(commands).toEqual([
+        {
+          type: "message.dispatch",
+          commandId: "hand-back",
+          createdBy: "user",
+          creationSource: "web",
+          threadId: v2ThreadId,
+          messageId: "message-hand-back",
+          text: "/computer-use Now save the file\n\nYou clicked File.",
+          attachments: [attachment],
+          dispatchMode: { type: "queue_after_active" },
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("retries a Computer hand-back with the same command and message ids", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const followUp = {
+        commandId: CommandId.make("hand-back-once"),
+        threadId: v2ThreadId,
+        messageId: MessageId.make("message-hand-back-once"),
+        message: "Continue",
+        summary: "",
+        attachment: {
+          type: "image" as const,
+          id: "capture",
+          name: "computer.jpg",
+          mimeType: "image/jpeg",
+          sizeBytes: 10,
+        },
+      };
+
+      // The first response was lost; Retry sends the same follow-up again.
+      yield* dispatchComputerHandBack(followUp).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      );
+      yield* dispatchComputerHandBack(followUp).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      );
+
+      expect(commands.map((command) => command.commandId)).toEqual([
+        "hand-back-once",
+        "hand-back-once",
+      ]);
+      expect(
+        commands.map((command) => (command.type === "message.dispatch" ? command.messageId : null)),
+      ).toEqual(["message-hand-back-once", "message-hand-back-once"]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 

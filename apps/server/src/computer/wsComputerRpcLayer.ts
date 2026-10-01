@@ -10,6 +10,7 @@ import {
   type AuthEnvironmentScope,
   type AuthSessionId,
   COMPUTER_WS_METHODS,
+  COMPUTER_SURFACE_METHODS,
   ComputerError,
   EnvironmentAuthorizationError,
   WsComputerRpcGroup,
@@ -28,11 +29,14 @@ import {
   observeRpcStream as instrumentRpcStream,
 } from "../observability/RpcInstrumentation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
 import { ComputerApprovalGate } from "./ComputerApprovalGate.ts";
 import { requireComputerAccess } from "./computerAccessPolicy.ts";
 import { ComputerEventInterests } from "./computerEventInterests.ts";
 import { ComputerService } from "./Services/ComputerService.ts";
 import { makeWsComputerHandlers, wrapWsComputerHandlers } from "./wsComputerHandlers.ts";
+import { DesktopDispatchAuthority } from "./DesktopOperationQueue.ts";
+import { makeComputerSurfaceHandlers } from "./wsComputerSurfaceHandlers.ts";
 
 const TRACE_ATTRIBUTES = { "rpc.aggregate": "computer" } as const;
 
@@ -74,6 +78,22 @@ export const makeWsComputerRpcLayer = (currentSession: EnvironmentAuth.Authentic
     Effect.gen(function* () {
       const computerService = yield* ComputerService;
       const serverSettings = yield* ServerSettingsService;
+      const surfaceClientId = yield* randomUuidV4;
+      yield* Effect.addFinalizer(() =>
+        Effect.ignore(computerService.manager.surfaceControl.disconnect(surfaceClientId)),
+      );
+      const surfaceHandlers = makeComputerSurfaceHandlers(
+        computerService.manager,
+        surfaceClientId,
+        serverSettings.getSettings.pipe(
+          Effect.mapError(
+            () => new ComputerError({ message: "Failed to read the Computer access policy." }),
+          ),
+          Effect.flatMap((settings) =>
+            requireComputerAccess(settings.computer.accessPolicy, currentSession.scopes),
+          ),
+        ),
+      );
       const handlers = makeWsComputerHandlers(computerService, {
         approvalGate: yield* ComputerApprovalGate,
         // Read per call: an admin can change the policy while this socket is open.
@@ -112,7 +132,38 @@ export const makeWsComputerRpcLayer = (currentSession: EnvironmentAuth.Authentic
       const permits = (method: string) =>
         currentSession.scopes.includes(requiredScopeForRpcMethod(method));
 
+      const surfaceCall = <A, E, R>(method: string, effect: Effect.Effect<A, E, R>) =>
+        permits(method) ? effect : Effect.fail(denied(requiredScopeForRpcMethod(method)));
       return WsComputerRpcGroup.of({
+        [COMPUTER_SURFACE_METHODS.getState]: () =>
+          surfaceCall(
+            COMPUTER_SURFACE_METHODS.getState,
+            surfaceHandlers[COMPUTER_SURFACE_METHODS.getState](),
+          ),
+        [COMPUTER_SURFACE_METHODS.takeControl]: () =>
+          surfaceCall(
+            COMPUTER_SURFACE_METHODS.takeControl,
+            surfaceHandlers[COMPUTER_SURFACE_METHODS.takeControl](),
+          ),
+        [COMPUTER_SURFACE_METHODS.releaseControl]: () =>
+          surfaceCall(
+            COMPUTER_SURFACE_METHODS.releaseControl,
+            surfaceHandlers[COMPUTER_SURFACE_METHODS.releaseControl](),
+          ),
+        [COMPUTER_SURFACE_METHODS.input]: (input) =>
+          surfaceCall(
+            COMPUTER_SURFACE_METHODS.input,
+            surfaceHandlers[COMPUTER_SURFACE_METHODS.input](input),
+          ),
+        [COMPUTER_SURFACE_METHODS.handBack]: (input) =>
+          surfaceCall(
+            COMPUTER_SURFACE_METHODS.handBack,
+            surfaceHandlers[COMPUTER_SURFACE_METHODS.handBack](input),
+          ),
+        [COMPUTER_SURFACE_METHODS.subscribe]: () =>
+          permits(COMPUTER_SURFACE_METHODS.subscribe)
+            ? surfaceHandlers[COMPUTER_SURFACE_METHODS.subscribe]()
+            : Stream.fail(denied(requiredScopeForRpcMethod(COMPUTER_SURFACE_METHODS.subscribe))),
         ...wrapWsComputerHandlers(
           {
             ...handlers,
@@ -125,7 +176,14 @@ export const makeWsComputerRpcLayer = (currentSession: EnvironmentAuth.Authentic
           (method, effect) =>
             instrumentRpcEffect(
               method,
-              permits(method) ? effect : Effect.fail(denied(requiredScopeForRpcMethod(method))),
+              permits(method)
+                ? effect.pipe(
+                    Effect.provideService(
+                      DesktopDispatchAuthority,
+                      computerService.manager.surfaceControl.assertUnclaimed(),
+                    ),
+                  )
+                : Effect.fail(denied(requiredScopeForRpcMethod(method))),
               TRACE_ATTRIBUTES,
             ),
         ),

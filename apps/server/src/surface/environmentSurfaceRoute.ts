@@ -1,8 +1,9 @@
 import {
   AuthOrchestrationReadScope,
   ENVIRONMENT_SURFACE_WS_PATH,
+  BrowserSurfaceTarget,
+  ComputerSurfaceTarget,
   EnvironmentSurfaceSizing,
-  EnvironmentSurfaceTarget,
   EnvironmentSurfaceViewport,
 } from "@spiritdevs/contracts";
 import { Deferred, Effect, Fiber, Option, Schema } from "effect";
@@ -20,20 +21,28 @@ import {
   failEnvironmentScopeRequired,
 } from "../auth/http.ts";
 import { withSessionWebSocket } from "../auth/sessionWebSocket.ts";
+import {
+  ComputerService,
+  type ComputerServiceShape,
+} from "../computer/Services/ComputerService.ts";
 import { RemoteBrowser, type RemoteBrowserService } from "../preview/RemoteBrowser.ts";
 import { makeSurfaceSocket } from "./surfaceSocket.ts";
 
-const Query = Schema.Struct({
-  ...EnvironmentSurfaceTarget.fields,
-  ...EnvironmentSurfaceViewport.fields,
-  sizing: EnvironmentSurfaceSizing,
-});
+const Query = Schema.Union([
+  Schema.Struct({
+    ...BrowserSurfaceTarget.fields,
+    ...EnvironmentSurfaceViewport.fields,
+    sizing: EnvironmentSurfaceSizing,
+  }),
+  Schema.Struct({ ...ComputerSurfaceTarget.fields, ...EnvironmentSurfaceViewport.fields }),
+]);
 export const decodeSurfaceQuery = Schema.decodeUnknownOption(Query);
 
 export const serveEnvironmentSurface = Effect.fn("serveEnvironmentSurface")(function* (
   socket: Socket.Socket,
   input: typeof Query.Type,
   browser: RemoteBrowserService,
+  computer?: ComputerServiceShape,
 ) {
   const ready = yield* Deferred.make<Option.Option<Socket.WebSocket["Service"]>>();
   let alive = true;
@@ -56,7 +65,10 @@ export const serveEnvironmentSurface = Effect.fn("serveEnvironmentSurface")(func
   );
   const connection = yield* makeSurfaceSocket(socket, native);
   onPong = connection.pong;
-  yield* browser.subscribeSurface({ ...input, viewport: input }, connection.sink);
+  if (input.kind === "computer" && computer)
+    yield* computer.manager.surfaceStream.subscribe(input, connection.sink);
+  else if (input.kind === "browser")
+    yield* browser.subscribeSurface({ ...input, viewport: input }, connection.sink);
   yield* Effect.gen(function* () {
     while (true) {
       yield* Effect.sleep("15 seconds");
@@ -92,6 +104,7 @@ export const environmentSurfaceRouteLayer = HttpRouter.add(
     const params = url.value.searchParams;
     const input = decodeSurfaceQuery({
       kind: params.get("kind"),
+      computerId: params.get("computerId"),
       threadId: params.get("threadId"),
       tabId: params.get("tabId"),
       width: Number(params.get("width")),
@@ -102,8 +115,17 @@ export const environmentSurfaceRouteLayer = HttpRouter.add(
     if (Option.isNone(input))
       return HttpServerResponse.text("Invalid surface target, viewport or sizing", { status: 400 });
     const browser = yield* RemoteBrowser;
+    const computer = yield* Effect.serviceOption(ComputerService);
+    if (
+      input.value.kind === "computer" &&
+      (Option.isNone(computer) ||
+        !computer.value.supported ||
+        computer.value.manager.computerId !== input.value.computerId ||
+        !computer.value.manager.surfaceControl.snapshot.capabilities.capture)
+    )
+      return HttpServerResponse.text("Computer surface is unavailable", { status: 404 });
     yield* withSessionWebSocket(session.sessionId, (socket) =>
-      serveEnvironmentSurface(socket, input.value, browser),
+      serveEnvironmentSurface(socket, input.value, browser, Option.getOrUndefined(computer)),
     ).pipe(
       Effect.catchTags({
         SocketError: () => Effect.void,

@@ -9,12 +9,13 @@ import { squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runti
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { KEYBINDING_CAPTURE_ATTRIBUTE } from "~/keybindings";
 import { previewEnvironment } from "~/state/preview";
+import { useEnvironmentSurface } from "~/surface/useEnvironmentSurface";
 
 import { RemoteBrowserInteractions } from "./RemoteBrowserInteractions";
 import { remoteBrowserPoint } from "./remoteBrowserCoordinates";
 import { surfaceIndicator } from "./remoteBrowserSurface";
-import { useRemoteBrowserSurface } from "./useRemoteBrowserSurface";
 
 /** Automatic retries before the stream waits for the user to press Reconnect. */
 const AUTO_RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000] as const;
@@ -142,10 +143,9 @@ function RemoteBrowserSurface({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const surface = useRemoteBrowserSurface({
+  const surface = useEnvironmentSurface({
     environmentId: threadRef.environmentId,
-    threadId: threadRef.threadId,
-    tabId,
+    target: { kind: "browser", threadId: threadRef.threadId, tabId },
     enabled: true,
     // The mini-player is a thumbnail; it must not shrink the agent's page.
     sizing: compact ? "passive" : "active",
@@ -185,6 +185,7 @@ function RemoteBrowserSurface({
         }
         role="img"
         tabIndex={send ? 0 : undefined}
+        {...(send ? { [KEYBINDING_CAPTURE_ATTRIBUTE]: "" } : {})}
         className={`h-full w-full object-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary ${
           !send && onActivate ? "cursor-pointer" : ""
         } ${surface.hasFrame ? "" : "invisible"}`}
@@ -200,6 +201,8 @@ function RemoteBrowserSurface({
         onKeyDown={
           send
             ? (event) => {
+                // Keys belong to the page, not to app shortcuts further up.
+                event.stopPropagation();
                 if (event.key === "Escape") {
                   event.currentTarget.blur();
                   return;

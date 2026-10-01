@@ -1,3 +1,6 @@
+import { ComputerSurfaceControl } from "./ComputerSurfaceControl.ts";
+import { ComputerSurfaceStream } from "./ComputerSurfaceStream.ts";
+import type { ComputerSurfaceInput, ComputerSurfaceState } from "@spiritdevs/contracts";
 // @effect-diagnostics preferSchemaOverJson:off - refusal messages quote ids and titles as JSON strings.
 /**
  * Thread state, targeting, action dispatch, and stream ownership for one
@@ -138,6 +141,7 @@ import {
   type DesktopAbort,
   desktopDeliveryMode,
   DesktopOperationQueue,
+  raceDesktopSignal,
   desktopOperationSignal,
   desktopSignal,
   makeDesktopAbort,
@@ -404,6 +408,7 @@ interface ComputerManagerParts {
   readonly runFork: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
   readonly events: PubSub.PubSub<ComputerEvent>;
   readonly controlState: ComputerControlState;
+  readonly surfaceUpdates: PubSub.PubSub<ComputerSurfaceState>;
   readonly auditLog: ComputerAuditLog;
   readonly scrollGearingFile: ScrollGearingFile;
 }
@@ -444,6 +449,7 @@ export class ComputerManager {
           runFork,
           events,
           controlState,
+          surfaceUpdates: yield* PubSub.sliding<ComputerSurfaceState>(1),
           auditLog,
           scrollGearingFile,
         },
@@ -525,6 +531,8 @@ export class ComputerManager {
    */
   private lastUserDesktopInputAt: number | undefined;
   private readonly operations = new DesktopOperationQueue();
+  readonly surfaceControl: ComputerSurfaceControl;
+  readonly surfaceStream: ComputerSurfaceStream;
   readonly cursorActivity: CursorActivity;
   readonly spaceBroker: ComputerSpaceBroker;
   private activity: string | null = null;
@@ -604,6 +612,19 @@ export class ComputerManager {
       }),
     });
     this.computerId = options.backend.computerId;
+    this.surfaceControl = new ComputerSurfaceControl(
+      this.computerId,
+      this.operations,
+      parts.surfaceUpdates,
+      () => ({
+        capture: this.backend.capabilities().capture && this.backend.captureSurface !== undefined,
+        input: this.backend.capabilities().input,
+        pointerPhases:
+          this.backend.surfacePointer !== undefined && this.backend.stopInput !== undefined,
+      }),
+      () => this.backend.stopInput?.() ?? Effect.void,
+    );
+    this.surfaceStream = new ComputerSurfaceStream(() => this.captureSurface(), this.runFork);
     this.leaseIdleMs = options.leaseIdleMs ?? COMPUTER_LEASE_IDLE_MS;
     this.actionSettleMs =
       options.actionSettleMs ?? cuaActionSettleMsOverride() ?? COMPUTER_ACTION_SETTLE_MS;
@@ -658,6 +679,7 @@ export class ComputerManager {
         this.backendHealth = event.health;
         this.republishAllThreads();
       } else if (event.type === "capabilities-changed") {
+        this.surfaceControl.publish();
         this.republishAllThreads();
       } else if (event.type === "desktop-interrupted") {
         // Locked-use resume policy: consent granted before a lock/sleep/session
@@ -1294,7 +1316,11 @@ export class ComputerManager {
       for (const live of this.activeAuthorities.values()) {
         for (const abort of live) Deferred.doneUnsafe(abort, Effect.fail(stopReason));
       }
-      return (this.backend.stopInput?.() ?? Effect.void).pipe(
+      return (
+        this.surfaceControl.snapshot.controller.kind === "client"
+          ? this.surfaceControl.interrupt()
+          : (this.backend.stopInput?.() ?? Effect.void)
+      ).pipe(
         Effect.ensuring(
           Effect.sync(() => this.emit({ type: "computer.input-stopped", stopped: false })),
         ),
@@ -1480,6 +1506,104 @@ export class ComputerManager {
       if (options.includeText !== true || !withAvailability.root) return withAvailability;
       return { ...withAvailability, text: describeComputerUiTree(withAvailability.root) };
     });
+  }
+
+  captureSurface(): Effect.Effect<ComputerScreenshot, ComputerOperationError> {
+    return Effect.suspend(() => {
+      this.engageBackend();
+      return (
+        this.backend.captureSurface?.() ??
+        Effect.fail(
+          new ComputerBackendError({
+            message: "This host does not support primary-screen capture.",
+          }),
+        )
+      );
+    });
+  }
+
+  /** Human input shares the same desktop transaction and cancellation path as agent input. */
+  surfaceInput<E = never>(
+    clientId: string,
+    input: ComputerSurfaceInput,
+    admit: Effect.Effect<void, E> = Effect.void,
+  ): Effect.Effect<void, ComputerOperationError | E> {
+    const action = Effect.gen({ self: this }, function* () {
+      yield* admit;
+      this.engageBackend();
+      this.lastUserDesktopInputAt = this.now();
+      if ("x" in input) {
+        const size = yield* this.backend.getScreenSize();
+        if (input.x < 0 || input.y < 0 || input.x >= size.width || input.y >= size.height)
+          return yield* new ComputerBackendError({
+            message: "Input is outside the primary display.",
+          });
+      }
+      switch (input.type) {
+        case "pointer.move":
+        case "pointer.down":
+        case "pointer.up":
+          if (!this.backend.surfacePointer || !this.backend.stopInput)
+            return yield* new ComputerBackendError({
+              message:
+                "This host does not support physical pointer phases. Use pointer.click instead.",
+            });
+          yield* this.backend.surfacePointer(input);
+          break;
+        case "pointer.click":
+          if (input.button === "middle")
+            return yield* new ComputerBackendError({
+              message: "Middle-click is unavailable on this host.",
+            });
+          yield* this.withUserPointTarget(input, (target) =>
+            input.button === "right"
+              ? this.rightClick(undefined, target, input.modifiers)
+              : (input.clickCount ?? 1) === 2
+                ? this.doubleClick(undefined, target, input.modifiers)
+                : this.click(undefined, target, input.modifiers),
+          );
+          break;
+        case "wheel":
+          yield* this.withUserPointTarget(input, (target) =>
+            this.scroll(undefined, target, input.deltaX, input.deltaY, input.modifiers),
+          );
+          break;
+        case "key":
+        case "type": {
+          const window = this.backend.surfaceKeyboardWindow
+            ? yield* this.backend.surfaceKeyboardWindow()
+            : ((yield* this.readWindows()).find(
+                (w) => w.keyboardFocused === true && w.visible && !w.minimized,
+              ) ??
+              (this.agentDialect !== "macos"
+                ? (yield* this.readWindows()).find((w) => w.focused && w.visible && !w.minimized)
+                : undefined));
+          if (!window)
+            return yield* new ComputerBackendError({
+              message: "No keyboard-focused window is available on the current desktop.",
+            });
+          yield* this.runKeyboardDispatch(
+            undefined,
+            window.id,
+            input.type === "type"
+              ? this.backend.typeText(input.text, window.id)
+              : input.modifiers?.length
+                ? this.backend.hotkey([...new Set(input.modifiers), input.key], window.id)
+                : this.backend.pressKey(input.key, window.id),
+          );
+          break;
+        }
+      }
+    });
+    if (input.type === "key" && ["Escape", "Esc", "ESC"].includes(input.key))
+      return Effect.andThen(this.surfaceControl.assertHolder(clientId, true), () =>
+        this.emergencyStopInput(),
+      );
+    return this.surfaceControl.input(
+      clientId,
+      input,
+      withDesktopDeliveryMode("foreground", action),
+    );
   }
 
   /** Zoomed capture of one window or desktop region, with its pixel mapping. */
@@ -3006,6 +3130,7 @@ export class ComputerManager {
     target: ComputerTarget | null,
     deltaX: number,
     deltaY: number,
+    modifiers?: readonly ComputerInputModifier[],
   ): Effect.Effect<ComputerActionResult, ComputerOperationError> {
     return this.withBackgroundProcessControl(
       threadId,
@@ -3015,7 +3140,7 @@ export class ComputerManager {
           "resolve",
           this.prepareScrollTarget(target, threadId),
         );
-        const result = yield* this.injectScroll(resolved, deltaX, deltaY, undefined);
+        const result = yield* this.injectScroll(resolved, deltaX, deltaY, modifiers);
         return yield* this.actionResult(
           threadId,
           "computer_scroll",
@@ -3968,9 +4093,16 @@ export class ComputerManager {
       // Entered around the queue handoff so a call's total covers its wait for
       // the desktop, not just the work after it wins.
       return yield* this.withComputerCall(
-        operationKey
-          ? this.operations.runScoped(operationKey, execute, admissionSignal)
-          : this.operations.run(execute, admissionSignal),
+        raceDesktopSignal(
+          this.surfaceControl.withAgentControl(
+            (guarded) =>
+              operationKey
+                ? this.operations.runScoped(operationKey, guarded, admissionSignal)
+                : this.operations.run(guarded, admissionSignal),
+            execute,
+          ),
+          admissionSignal,
+        ),
       );
     });
   }
@@ -4871,6 +5003,8 @@ export class ComputerManager {
           }),
         ),
       );
+      yield* this.surfaceStream.stop();
+      yield* Effect.ignore(this.surfaceControl.interrupt());
       yield* this.backend.dispose();
       yield* PubSub.shutdown(this.eventHub);
       yield* this.auditLog.flush;

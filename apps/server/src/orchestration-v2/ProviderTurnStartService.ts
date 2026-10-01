@@ -738,83 +738,94 @@ export const layer: Layer.Layer<
       const routableSubagents = projection.subagents.filter((subagent) =>
         canRouteRelatedSubagent(subagent.status),
       );
-      yield* runExecution.startRootRun({
-        commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
-        appThread: projection.thread,
-        providerSessionId,
-        session,
-        run: runningRun,
-        rootNode: runningRootNode,
-        checkpointScope:
-          projection.thread.projectId === null
-            ? { ...checkpointScope, repositoryRootOnly: true }
-            : checkpointScope,
-        providerThread: runningProviderThread,
-        attempt: runningAttempt,
-        attemptId: attempt.id,
-        loadInheritedBackgroundTurnItems: () =>
-          projectionStore.getThreadProjection(projection.thread.id).pipe(
-            Effect.map(selectInheritedBackgroundItems),
-            Effect.catchCause(() => Effect.succeed(inheritedBackgroundTurnItems)),
+      if (enableComputerControl && Option.isSome(computer))
+        computer.value.manager.surfaceControl.startTurn(input.threadId, run.id);
+      yield* runExecution
+        .startRootRun({
+          commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
+          appThread: projection.thread,
+          providerSessionId,
+          session,
+          run: runningRun,
+          rootNode: runningRootNode,
+          checkpointScope:
+            projection.thread.projectId === null
+              ? { ...checkpointScope, repositoryRootOnly: true }
+              : checkpointScope,
+          providerThread: runningProviderThread,
+          attempt: runningAttempt,
+          attemptId: attempt.id,
+          loadInheritedBackgroundTurnItems: () =>
+            projectionStore.getThreadProjection(projection.thread.id).pipe(
+              Effect.map(selectInheritedBackgroundItems),
+              Effect.catchCause(() => Effect.succeed(inheritedBackgroundTurnItems)),
+            ),
+          relatedThreadIds: routableSubagents.flatMap((subagent) =>
+            subagent.childThreadId === null ? [] : [subagent.childThreadId],
           ),
-        relatedThreadIds: routableSubagents.flatMap((subagent) =>
-          subagent.childThreadId === null ? [] : [subagent.childThreadId],
-        ),
-        relatedProviderThreadIds: routableSubagents.flatMap((subagent) =>
-          subagent.providerThreadId === null ? [] : [subagent.providerThreadId],
-        ),
-        providerTurnOrdinal:
-          Math.max(
-            0,
-            ...projection.providerTurns
-              .filter((turn) => turn.providerThreadId === providerThread.id)
-              .map((turn) => turn.ordinal),
-          ) + 1,
-        shouldStartProviderTurn: () => isCurrentAttemptInStatus("running"),
-        shouldFinalizeRun: () =>
-          projectionStore.getThreadProjection(projection.thread.id).pipe(
-            Effect.map((current) => {
-              const currentRun = current.runs.find((candidate) => candidate.id === run.id);
-              return (
-                currentRun?.activeAttemptId === attempt.id &&
-                (currentRun.status === "starting" || currentRun.status === "running")
-              );
+          relatedProviderThreadIds: routableSubagents.flatMap((subagent) =>
+            subagent.providerThreadId === null ? [] : [subagent.providerThreadId],
+          ),
+          providerTurnOrdinal:
+            Math.max(
+              0,
+              ...projection.providerTurns
+                .filter((turn) => turn.providerThreadId === providerThread.id)
+                .map((turn) => turn.ordinal),
+            ) + 1,
+          shouldStartProviderTurn: () => isCurrentAttemptInStatus("running"),
+          shouldFinalizeRun: () =>
+            projectionStore.getThreadProjection(projection.thread.id).pipe(
+              Effect.map((current) => {
+                const currentRun = current.runs.find((candidate) => candidate.id === run.id);
+                return (
+                  currentRun?.activeAttemptId === attempt.id &&
+                  (currentRun.status === "starting" || currentRun.status === "running")
+                );
+              }),
+              Effect.catchCause(() => Effect.succeed(false)),
+            ),
+          hasUnpairedRunInterruptRequest: () =>
+            projectionStore.getThreadProjection(projection.thread.id).pipe(
+              Effect.map((current) => {
+                const requestId = idAllocator.derive.runSignalTurnItem({
+                  runId: run.id,
+                  signal: "interrupt-request",
+                });
+                const resultId = idAllocator.derive.runSignalTurnItem({
+                  runId: run.id,
+                  signal: "interrupt-result",
+                });
+                const hasRequest = current.turnItems.some((item) => item.id === requestId);
+                const hasResult = current.turnItems.some((item) => item.id === resultId);
+                return hasRequest && !hasResult;
+              }),
+              Effect.catchCause(() => Effect.succeed(false)),
+            ),
+          message: {
+            messageId: message.id,
+            text:
+              effectiveHandoffs.length === 0
+                ? providerText
+                : providerMessageWithContextHandoffs({
+                    handoffs: effectiveHandoffs,
+                    userText: providerText,
+                  }),
+            attachments: message.attachments,
+            createdBy: message.createdBy,
+            creationSource: message.creationSource,
+          },
+          modelSelection: run.modelSelection,
+          runtimePolicy: resolvedRuntimePolicy,
+        })
+        .pipe(
+          Effect.onError(() =>
+            Effect.sync(() => {
+              if (Option.isSome(computer))
+                computer.value.manager.surfaceControl.endTurn(input.threadId, run.id);
             }),
-            Effect.catchCause(() => Effect.succeed(false)),
           ),
-        hasUnpairedRunInterruptRequest: () =>
-          projectionStore.getThreadProjection(projection.thread.id).pipe(
-            Effect.map((current) => {
-              const requestId = idAllocator.derive.runSignalTurnItem({
-                runId: run.id,
-                signal: "interrupt-request",
-              });
-              const resultId = idAllocator.derive.runSignalTurnItem({
-                runId: run.id,
-                signal: "interrupt-result",
-              });
-              const hasRequest = current.turnItems.some((item) => item.id === requestId);
-              const hasResult = current.turnItems.some((item) => item.id === resultId);
-              return hasRequest && !hasResult;
-            }),
-            Effect.catchCause(() => Effect.succeed(false)),
-          ),
-        message: {
-          messageId: message.id,
-          text:
-            effectiveHandoffs.length === 0
-              ? providerText
-              : providerMessageWithContextHandoffs({
-                  handoffs: effectiveHandoffs,
-                  userText: providerText,
-                }),
-          attachments: message.attachments,
-          createdBy: message.createdBy,
-          creationSource: message.creationSource,
-        },
-        modelSelection: run.modelSelection,
-        runtimePolicy: resolvedRuntimePolicy,
-      });
+        );
     });
 
     return ProviderTurnStartServiceV2.of({

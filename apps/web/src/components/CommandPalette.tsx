@@ -86,6 +86,7 @@ import {
   Layers3Icon,
   LinkIcon,
   MessageSquareIcon,
+  MonitorIcon,
   PaletteIcon,
   ServerIcon,
   SettingsIcon,
@@ -113,6 +114,7 @@ import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { environmentCatalog } from "../connection/catalog";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread, useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { useComputerEventsServed } from "../hooks/useComputerSupport";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
@@ -1308,6 +1310,7 @@ function OpenCommandPaletteDialog(props: {
   );
 
   const activeThreadId = activeThread?.id;
+  const computerServed = useComputerEventsServed(activeThread?.environmentId ?? null);
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
   const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
@@ -2167,6 +2170,20 @@ function OpenCommandPaletteDialog(props: {
       await navigate({ to: "/settings/xcode" });
     },
   });
+  if (activeThread && computerServed)
+    actionItems.push({
+      kind: "action",
+      value: "action:open-computer-view",
+      searchTerms: ["computer", "screen", "desktop", "take control", "computer use"],
+      title: "Open computer view",
+      icon: <MonitorIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "computer.toggle",
+      run: async () => {
+        useRightPanelStore
+          .getState()
+          .open(scopeThreadRef(activeThread.environmentId, activeThread.id), "computer");
+      },
+    });
   if (activeThread && alertMutations && alertPolicies !== null && alertPoliciesReady)
     actionItems.push({
       kind: "action",

@@ -13,6 +13,7 @@ import {
   GitPullRequest,
   Globe2,
   MessagesSquare,
+  Monitor,
   Plus,
   TerminalSquare,
 } from "lucide-react";
@@ -84,6 +85,8 @@ interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
+  /** Present where the environment's screen can be shown; absent hides the entry. */
+  onAddComputer?: () => void;
   onAddSideChat: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
@@ -170,6 +173,8 @@ function RightPanelEmptyState(props: {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
+  /** Present where the environment's screen can be shown; absent hides the entry. */
+  onAddComputer?: () => void;
   onAddSideChat: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
@@ -256,6 +261,20 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddAgents,
       badgeCount: props.liveAgentCount,
     },
+    ...(props.onAddComputer
+      ? [
+          {
+            kind: "computer",
+            label: "Computer",
+            description: "Watch the environment's screen and take control.",
+            icon: Monitor,
+            available: true,
+            disabledReason: "",
+            onClick: props.onAddComputer,
+            badgeCount: 0,
+          },
+        ]
+      : []),
     {
       kind: "thread",
       label: "Side chat",
@@ -359,6 +378,8 @@ export function resolveRightPanelSurfaceTitle(
       return `#${surface.number}`;
     case "agents":
       return "Agents";
+    case "computer":
+      return "Computer";
     case "issue":
       return `${surface.issueKey} ${surface.title}`.trim();
     case "thread":
@@ -448,6 +469,8 @@ function SurfaceIcon({
     }
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    case "computer":
+      return <Monitor className="size-3 shrink-0" />;
     case "issue":
       return <CircleDot className="size-3 shrink-0" />;
     case "thread":
@@ -712,6 +735,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                       Agents
                     </SurfaceMenuItem>
                   ) : null}
+                  {props.onAddComputer && (props.allowedSurfaceKinds?.has("computer") ?? true) ? (
+                    <SurfaceMenuItem available onClick={props.onAddComputer}>
+                      <Monitor />
+                      Computer
+                    </SurfaceMenuItem>
+                  ) : null}
                   {(props.allowedSurfaceKinds?.has("thread") ?? true) ? (
                     <SurfaceMenuItem
                       available={props.sideChatAvailable}
@@ -742,6 +771,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddAgents={props.onAddAgents}
+            {...(props.onAddComputer ? { onAddComputer: props.onAddComputer } : {})}
             onAddSideChat={props.onAddSideChat}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
