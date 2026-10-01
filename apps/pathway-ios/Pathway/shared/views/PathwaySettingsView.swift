@@ -22,6 +22,7 @@ struct PathwaySettingsView: View {
                         cloudMutation: cloudMutation
                     )
                 }
+                NavigationLink("Xcode") { PathwayXcodeSettingsView() }
             }
             Section("App") {
                 NavigationLink("Report a bug") { PathwayBugReportSettingsView() }
