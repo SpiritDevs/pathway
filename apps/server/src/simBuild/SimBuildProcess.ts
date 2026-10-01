@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off -- Captured-child process boundary; no shell, process groups, or PID discovery.
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off -- Each invocation owns a detached POSIX process group, captured at spawn.
 import * as Schema from "effect/Schema";
 import * as NodeChildProcess from "node:child_process";
 import { SimBuildError } from "@spiritdevs/contracts/simBuild";
@@ -19,34 +19,60 @@ export type SimBuildProcess = (
   output?: SimBuildOutput,
 ) => Promise<string>;
 
-/** Pipe consumers await the bounded log sink. Abort waits for this child to close before releasing the job lock. */
+/** Mac-only host adapter. Cancellation drains the owned group and pipes, even after its leader exits. */
 export const runSimBuildProcess: SimBuildProcess = async (command, signal, output) => {
   signal.throwIfAborted();
   const child = NodeChildProcess.spawn(command.file, [...command.args], {
     cwd: command.cwd,
     env: { ...process.env, ...command.env },
+    detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  const groupId = child.pid;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
-  let closed = false;
+  let exited = false;
+  let stopping = false;
+  let stopped = false;
+  let consumerFailure: unknown;
+  const signalGroup = (signal: NodeJS.Signals) => {
+    if (groupId === undefined) return;
+    try {
+      process.kill(-groupId, signal);
+    } catch (error) {
+      // The group may have exited between delivery and the leader's exit event.
+      if (!(error instanceof Error && "code" in error && error.code === "ESRCH"))
+        consumerFailure = error;
+    }
+  };
+  const finishStop = () => {
+    if (stopped) return;
+    stopped = true;
+    if (killTimer) clearTimeout(killTimer);
+    killTimer = undefined;
+    signalGroup("SIGKILL");
+    // Descendants can inherit these pipes beyond the leader's exit. Do not let
+    // a held fd prevent cancellation from draining the parent's consumers.
+    child.stdout.destroy();
+    child.stderr.destroy();
+  };
   const abort = () => {
-    if (closed) return;
-    child.kill("SIGTERM");
-    killTimer ??= setTimeout(() => {
-      if (!closed) child.kill("SIGKILL");
-    }, 5_000);
+    if (stopping) return;
+    stopping = true;
+    signalGroup("SIGTERM");
+    if (exited) finishStop();
+    else killTimer = setTimeout(finishStop, 5_000);
   };
   const completion = new Promise<number | null>((resolve, reject) => {
     child.once("error", reject);
-    child.once("close", (code) => {
-      closed = true;
+    child.once("exit", (code) => {
+      exited = true;
+      if (stopping) finishStop();
       resolve(code);
     });
   });
   signal.addEventListener("abort", abort, { once: true });
   if (signal.aborted) abort();
   let captured = "";
-  let consumerFailure: unknown;
   const consume = async (source: "stdout" | "stderr") => {
     const stream = child[source];
     stream.setEncoding("utf8");

@@ -16,6 +16,7 @@ export const SimBuildFailure = Schema.Struct({
   code: Schema.Literals([
     "needs-mac",
     "not-found",
+    "history-pruned",
     "invalid-project",
     "invalid-destination",
     "busy",
@@ -80,7 +81,7 @@ export const SimBuildStartInput = Schema.Struct({
   ...SimBuildContext.fields,
   ...SimBuildOptions.fields,
   action: SimBuildAction,
-  /** Reuse on transport retries; reusing it with different options is rejected. */
+  /** Reuse on transport retries; changed options fail with busy, pruned jobs with history-pruned. */
   requestId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
 });
 export type SimBuildStartInput = typeof SimBuildStartInput.Type;

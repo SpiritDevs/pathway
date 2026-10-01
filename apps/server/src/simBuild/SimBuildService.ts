@@ -67,6 +67,7 @@ export const layer = Layer.effect(
     const runtime = new SimBuildRuntime(
       root,
       {
+        environmentId,
         resolve: (input, signal) =>
           run(resolveSimBuildWorkspace(input, environmentId, projects, threads), signal),
         destination: (input, signal) =>

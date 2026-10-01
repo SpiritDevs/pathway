@@ -40,7 +40,12 @@ const options = {
 function fixture() {
   const runtime = new SimBuildRuntime(
     "/unused",
-    { resolve: vi.fn(), destination: vi.fn(), claim: vi.fn() },
+    {
+      environmentId: invocation.environmentId,
+      resolve: vi.fn(),
+      destination: vi.fn(),
+      claim: vi.fn(),
+    },
     { load: vi.fn(), save: vi.fn() },
     new SimBuildHost(async () => "", "darwin"),
   );

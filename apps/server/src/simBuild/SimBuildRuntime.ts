@@ -13,10 +13,14 @@ import {
   type SimBuildReceipt,
   type SimBuildUpdate,
 } from "@spiritdevs/contracts/simBuild";
-import { type DeviceSummary, LOCAL_DEVICE_HOST_ID } from "@spiritdevs/contracts";
+import {
+  type DeviceSummary,
+  type EnvironmentId,
+  LOCAL_DEVICE_HOST_ID,
+} from "@spiritdevs/contracts";
 import { SimBuildHost } from "./SimBuildHost.ts";
 import { SimBuildLog } from "./SimBuildLog.ts";
-import type { SimBuildStore } from "./SimBuildStore.ts";
+import type { SimBuildStore, SimBuildRequestRecord } from "./SimBuildStore.ts";
 
 const error = (code: SimBuildError["code"], message: string) =>
   new SimBuildError({ code, message });
@@ -28,7 +32,28 @@ export const safeSimBuildError = (cause: unknown) =>
     : error("process-failed", "The simulator build operation failed. See the build log.");
 const sameContext = (a: SimBuildContext, b: SimBuildContext) =>
   a.environmentId === b.environmentId && a.projectId === b.projectId && a.threadId === b.threadId;
+const digest = (value: unknown) =>
+  NodeCrypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const requestKey = (input: SimBuildStartInput) =>
+  digest([input.environmentId, input.projectId, input.threadId, input.requestId]);
+const requestFingerprint = (input: SimBuildStartInput, workspaceRoot: string) =>
+  digest([
+    workspaceRoot,
+    input.action,
+    input.hostId,
+    input.deviceId,
+    input.containerPath,
+    input.scheme,
+    input.target ?? null,
+    input.configuration ?? null,
+  ]);
+const requestRecord = (job: SimBuildJob): SimBuildRequestRecord => ({
+  key: requestKey(job),
+  fingerprint: requestFingerprint(job, job.workspaceRoot),
+  jobId: job.id,
+});
 export interface SimBuildDependencies {
+  readonly environmentId: EnvironmentId;
   /** Resolves a registered project and verifies that the thread belongs to it on this environment. */
   resolve(input: SimBuildContext, signal?: AbortSignal): Promise<string>;
   destination(input: SimBuildStartInput, signal: AbortSignal): Promise<DeviceSummary>;
@@ -46,6 +71,7 @@ interface Entry {
 /** Phase receipts are the durable source of job state. Logs are a bounded, explicitly lossy live window. */
 export class SimBuildRuntime {
   readonly #entries = new Map<string, Entry>();
+  readonly #requests = new Map<string, SimBuildRequestRecord>();
   #journal: Promise<void> = Promise.resolve();
   #admission: Promise<void> = Promise.resolve();
   #loaded: Promise<void> | undefined;
@@ -84,7 +110,11 @@ export class SimBuildRuntime {
   }
   async #load() {
     this.#loaded ??= (async () => {
-      for (const receipt of await this.store.load()) {
+      const journal = await this.store.load();
+      for (const request of journal.requests) this.#requests.set(request.key, request);
+      for (const receipt of journal.receipts) {
+        const request = requestRecord(receipt.job);
+        this.#requests.set(request.key, request);
         const entry = this.#entries.get(receipt.job.id) ?? this.#entry(receipt.job);
         entry.job = receipt.job;
         entry.receipts.push(receipt);
@@ -112,15 +142,19 @@ export class SimBuildRuntime {
       const retained = entries.filter(
         (item) => item === entry || !item.job.terminal || recent.has(item),
       );
+      const request = requestRecord(job);
+      const requests = new Map(this.#requests).set(request.key, request);
       try {
-        await this.store.save(
-          retained.flatMap((item) =>
+        await this.store.save({
+          receipts: retained.flatMap((item) =>
             item === entry ? [...item.receipts, receipt] : item.receipts,
           ),
-        );
+          requests: [...requests.values()],
+        });
       } catch {
         throw error("storage-failed", "Could not persist the simulator build phase.");
       }
+      this.#requests.set(request.key, request);
       entry.job = job;
       entry.receipts.push(receipt);
       for (const item of this.#entries.values())
@@ -150,6 +184,20 @@ export class SimBuildRuntime {
     const admit = this.#admission.then(async () => {
       if (this.#disposed) throw error("unavailable", "The environment is stopping.");
       const workspaceRoot = await this.dependencies.resolve(input);
+      const previous = this.#requests.get(requestKey(input));
+      if (previous) {
+        if (previous.fingerprint !== requestFingerprint(input, workspaceRoot))
+          throw error(
+            "busy",
+            "This requestId was already used with different build options or checkout.",
+          );
+        const entry = this.#entries.get(previous.jobId);
+        if (entry) return entry.job;
+        throw error(
+          "history-pruned",
+          `Request already accepted as build ${previous.jobId}. Its history was pruned. Use a new requestId only for a deliberate new build.`,
+        );
+      }
       for (const entry of this.#entries.values()) {
         if (sameContext(entry.job, input) && entry.job.requestId === input.requestId) {
           for (const key of Object.keys(SimBuildStartInput.fields) as (keyof SimBuildStartInput)[])
@@ -194,20 +242,11 @@ export class SimBuildRuntime {
       entry.worker = accepted.then(
         () => this.#work(entry, controller.signal),
         () => {
-          entry.job = {
-            ...entry.job,
-            phase: "failed",
-            terminal: true,
-            failure: { code: "storage-failed", message: "Could not accept the simulator build." },
-          };
+          this.#failWithoutReceipt(entry, "Could not accept the simulator build.");
+          delete entry.controller;
         },
       );
-      try {
-        await accepted;
-      } catch (cause) {
-        this.#entries.delete(job.id);
-        throw cause;
-      }
+      await accepted;
       return job;
     });
     this.#admission = admit.then(
@@ -337,26 +376,33 @@ export class SimBuildRuntime {
         });
       } catch {
         // Persistence loss must stop work and release waiters without inventing a durable receipt.
-        entry.job = {
-          ...entry.job,
-          phase: "failed",
-          terminal: true,
-          failure: {
-            code: "storage-failed",
-            message:
-              "Could not save the build result. Restart recovery will mark the job interrupted.",
-          },
-        };
-        entry.log.flush(true);
-        for (const watcher of entry.watchers) watcher();
+        this.#failWithoutReceipt(
+          entry,
+          "Could not save the build result. Restart recovery will mark the job interrupted.",
+        );
       }
     } finally {
       entry.log.flush(true);
       delete entry.controller;
     }
   }
+  #failWithoutReceipt(entry: Entry, message: string) {
+    entry.job = {
+      ...entry.job,
+      phase: "failed",
+      terminal: true,
+      updatedAt: this.now(),
+      failure: { code: "storage-failed", message },
+    };
+    entry.log.flush(true);
+    for (const watcher of entry.watchers) watcher();
+  }
+  #authorizeContext(input: SimBuildContext) {
+    if (input.environmentId !== this.dependencies.environmentId)
+      throw error("invalid-project", "This build belongs to a different environment connection.");
+  }
   async #get(input: SimBuildJobInput) {
-    await this.dependencies.resolve(input);
+    this.#authorizeContext(input);
     await this.#load();
     const entry = this.#entries.get(input.jobId);
     if (!entry || !sameContext(entry.job, input))
@@ -367,7 +413,7 @@ export class SimBuildRuntime {
     return entry;
   }
   async list(input: SimBuildContext) {
-    await this.dependencies.resolve(input);
+    this.#authorizeContext(input);
     await this.#load();
     return [...this.#entries.values()]
       .filter((entry) => sameContext(entry.job, input))

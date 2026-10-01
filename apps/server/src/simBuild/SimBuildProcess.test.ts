@@ -7,17 +7,21 @@ vi.mock("node:child_process", () => ({ spawn }));
 import { runSimBuildProcess } from "./SimBuildProcess.ts";
 
 function child() {
+  const signalGroup = vi.spyOn(process, "kill").mockReturnValue(true);
   const handle = Object.assign(new NodeEvents.EventEmitter(), {
     stdout: new NodeStream.PassThrough(),
     stderr: new NodeStream.PassThrough(),
     kill: vi.fn(),
+    pid: 43210,
   });
   spawn.mockReturnValue(handle);
   return {
     handle,
+    signalGroup,
     close: (code: number | null) => {
       handle.stdout.end();
       handle.stderr.end();
+      handle.emit("exit", code);
       handle.emit("close", code);
     },
   };
@@ -25,6 +29,7 @@ function child() {
 afterEach(() => {
   vi.useRealTimers();
   spawn.mockReset();
+  vi.restoreAllMocks();
 });
 
 it("passes argv without a shell and streams both pipes without collecting build output", async () => {
@@ -47,17 +52,21 @@ it("passes argv without a shell and streams both pipes without collecting build 
   expect(output).toHaveBeenCalledWith("warning: warning\n", "stderr");
   expect(spawn.mock.calls[0]?.slice(0, 2)).toEqual(["/xcodebuild", ["-scheme", "App with spaces"]]);
   expect(spawn.mock.calls[0]?.[2].shell).toBeUndefined();
+  expect(spawn.mock.calls[0]?.[2].detached).toBe(true);
 });
-it("kills only the captured child and waits for close on cancellation", async () => {
+it("signals only the spawned process group and drains after escalation", async () => {
   vi.useFakeTimers();
   const c = child();
   const controller = new AbortController();
   const result = runSimBuildProcess({ file: "xcodebuild", args: [] }, controller.signal);
   const rejected = expect(result).rejects.toMatchObject({ code: "cancelled" });
   controller.abort();
-  expect(c.handle.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+  expect(c.signalGroup).toHaveBeenCalledExactlyOnceWith(-43210, "SIGTERM");
   await vi.advanceTimersByTimeAsync(5000);
-  expect(c.handle.kill).toHaveBeenLastCalledWith("SIGKILL");
+  expect(c.signalGroup).toHaveBeenLastCalledWith(-43210, "SIGKILL");
+  expect(c.handle.stdout.destroyed).toBe(true);
+  expect(c.handle.stderr.destroyed).toBe(true);
+  expect(c.handle.kill).not.toHaveBeenCalled();
   c.close(null);
   await rejected;
   expect(vi.getTimerCount()).toBe(0);
@@ -106,12 +115,30 @@ it("awaits the output consumer and bounds JSON capture", async () => {
     new AbortController().signal,
   );
   const killed = new Promise<void>((resolve) => {
-    large.handle.kill.mockImplementation(() => {
+    large.signalGroup.mockImplementation(() => {
       resolve();
+      return true;
     });
   });
   large.handle.stdout.write("x".repeat(8 * 1024 * 1024 + 1));
   await killed;
   large.close(0);
   await expect(overflow).rejects.toMatchObject({ code: "process-failed" });
+});
+
+it("terminates descendants after the leader exits without waiting for inherited pipe close", async () => {
+  const c = child();
+  const controller = new AbortController();
+  const execution = runSimBuildProcess({ file: "xcodebuild", args: [] }, controller.signal);
+  const rejected = expect(execution).rejects.toMatchObject({ code: "cancelled" });
+  c.handle.emit("exit", 0);
+  expect(c.handle.stdout.destroyed).toBe(false);
+  controller.abort();
+  await rejected;
+  expect(c.signalGroup.mock.calls).toEqual([
+    [-43210, "SIGTERM"],
+    [-43210, "SIGKILL"],
+  ]);
+  expect(c.handle.stdout.destroyed).toBe(true);
+  expect(c.handle.stderr.destroyed).toBe(true);
 });

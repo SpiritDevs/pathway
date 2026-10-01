@@ -16,7 +16,6 @@ import {
 } from "@spiritdevs/contracts";
 import {
   SimBuildError,
-  type SimBuildReceipt,
   type SimBuildStartInput,
   type SimBuildUpdate,
 } from "@spiritdevs/contracts/simBuild";
@@ -24,7 +23,7 @@ import { SimBuildHost } from "./SimBuildHost.ts";
 import { SimBuildRuntime } from "./SimBuildRuntime.ts";
 import type { SimBuildCommand, SimBuildProcess } from "./SimBuildProcess.ts";
 import { makeSimBuildRpcHandlers } from "./simBuildRpc.ts";
-import { fileSimBuildStore } from "./SimBuildStore.ts";
+import { fileSimBuildStore, type SimBuildJournal } from "./SimBuildStore.ts";
 
 const context = {
   environmentId: EnvironmentId.make("env"),
@@ -56,11 +55,11 @@ async function fixture() {
   cleanups.push(() => NodeFSP.rm(root, { recursive: true, force: true }));
   await NodeFSP.mkdir(NodePath.join(root, "App.xcodeproj"));
   const calls: SimBuildCommand[] = [];
-  let saved: readonly SimBuildReceipt[] = [];
+  let saved: SimBuildJournal = { receipts: [], requests: [] };
   const store = {
     load: vi.fn(async () => saved),
-    save: vi.fn(async (receipts: readonly SimBuildReceipt[]) => {
-      saved = structuredClone(receipts);
+    save: vi.fn(async (journal: SimBuildJournal) => {
+      saved = structuredClone(journal);
     }),
   };
   let device: DeviceSummary = {
@@ -73,6 +72,7 @@ async function fixture() {
     booted: true,
   };
   const dependencies = {
+    environmentId: context.environmentId,
     resolve: vi.fn(async () => root),
     destination: vi.fn(async () => device),
     claim: vi.fn(async () => undefined),
@@ -134,6 +134,9 @@ async function fixture() {
     runtime,
     dependencies,
     get saved() {
+      return saved.receipts;
+    },
+    get journal() {
       return saved;
     },
     setDevice: (value: Partial<DeviceSummary>) => {
@@ -311,7 +314,7 @@ it("recovers an unfinished durable job as interrupted without spawning a process
   });
   const job = await h.runtime.start(input);
   await entered.promise;
-  const saved = structuredClone(h.saved);
+  const saved = structuredClone(h.journal);
   const store = { load: async () => saved, save: vi.fn(async () => undefined) };
   const run = vi.fn<SimBuildProcess>();
   const recovered = new SimBuildRuntime(
@@ -461,9 +464,11 @@ it("atomically round-trips receipt journals and refuses corrupt history", async 
   await h.runtime.drain({ ...context, jobId: job.id });
   const file = NodePath.join(h.root, "journal/receipts.json");
   const store = fileSimBuildStore(file);
-  expect(await store.load()).toEqual([]);
-  await store.save(h.saved);
-  expect(await store.load()).toEqual(h.saved);
+  expect(await store.load()).toEqual({ receipts: [], requests: [] });
+  await store.save(h.journal);
+  expect(await store.load()).toEqual(h.journal);
+  await NodeFSP.writeFile(file, JSON.stringify(h.saved));
+  expect(await store.load()).toEqual({ receipts: h.saved, requests: [] });
   await NodeFSP.writeFile(file, "broken");
   await expect(store.load()).rejects.toMatchObject({ code: "storage-failed" });
 });
@@ -506,4 +511,145 @@ it("stops before install if the thread switches checkout while building", async 
     "invalid-project",
   );
   expect(h.calls.some((c) => c.args.includes("install"))).toBe(false);
+});
+
+it.effect(
+  "publishes terminal storage failure to a subscriber attached during failed admission",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* Effect.promise(fixture);
+        const entered = gate();
+        const release = gate();
+        const subscribed = gate();
+        h.store.save.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          throw new Error("disk full");
+        });
+        const starting = h.runtime.start(input).catch((error: unknown) => error);
+        yield* Effect.promise(() => entered.promise);
+        const [job] = yield* Effect.promise(() => h.runtime.list(context));
+        const target = { ...context, jobId: job!.id };
+        const rpc = makeSimBuildRpcHandlers(h.runtime, ["orchestration:read"]);
+        const updates: SimBuildUpdate[] = [];
+        const observer = yield* rpc["simBuild.subscribe"](target).pipe(
+          Stream.runForEach((update) =>
+            Effect.sync(() => {
+              updates.push(update);
+              subscribed.resolve();
+            }),
+          ),
+          Effect.forkScoped,
+        );
+        yield* Effect.promise(() => subscribed.promise);
+        release.resolve();
+        expect(yield* Effect.promise(() => starting)).toMatchObject({ code: "storage-failed" });
+        yield* Fiber.join(observer);
+        expect(updates.map((update) => update.job.phase)).toEqual(["resolving", "failed"]);
+        expect(updates.at(-1)).toMatchObject({
+          job: { terminal: true, failure: { code: "storage-failed" } },
+          receipts: [],
+        });
+        expect((yield* Effect.promise(() => h.runtime.get(target))).job.phase).toBe("failed");
+        expect(h.saved).toEqual([]);
+        expect(h.calls).toEqual([]);
+        const next = yield* Effect.promise(() =>
+          h.runtime.start({ ...input, requestId: "after-storage-recovery" }),
+        );
+        expect(
+          (yield* Effect.promise(() => h.runtime.drain({ ...context, jobId: next.id }))).phase,
+        ).toBe("running");
+      }),
+    ),
+);
+
+it.effect(
+  "cancels and observes the recorded job after its thread is deleted without widening authorization",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* Effect.promise(fixture);
+        const entered = gate();
+        const terminated = gate();
+        h.intercept(async (command, signal) => {
+          if (command.args.includes("build")) {
+            entered.resolve();
+            await new Promise<void>((resolve) =>
+              signal.addEventListener(
+                "abort",
+                () => {
+                  terminated.resolve();
+                  resolve();
+                },
+                { once: true },
+              ),
+            );
+            signal.throwIfAborted();
+          }
+          return "CONTINUE";
+        });
+        const job = yield* Effect.promise(() => h.runtime.start(input));
+        yield* Effect.promise(() => entered.promise);
+        const target = { ...context, jobId: job.id };
+        h.dependencies.resolve.mockRejectedValue(
+          new SimBuildError({ code: "invalid-project", message: "Thread deleted" }),
+        );
+        const rpc = makeSimBuildRpcHandlers(h.runtime, [
+          "orchestration:operate",
+          "orchestration:read",
+        ]);
+        const updates = yield* rpc["simBuild.subscribe"](target).pipe(
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        const readOnly = makeSimBuildRpcHandlers(h.runtime, ["orchestration:read"]);
+        expect(yield* Effect.result(readOnly["simBuild.cancel"](target))).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "EnvironmentAuthorizationError" },
+        });
+        for (const wrong of [
+          { environmentId: EnvironmentId.make("other") },
+          { projectId: ProjectId.make("other") },
+          { threadId: ThreadId.make("other") },
+        ]) {
+          expect(
+            yield* Effect.result(rpc["simBuild.cancel"]({ ...target, ...wrong })),
+          ).toMatchObject({ _tag: "Failure" });
+        }
+        expect((yield* rpc["simBuild.cancel"](target)).phase).toBe("cancelled");
+        yield* Effect.promise(() => terminated.promise);
+        expect((yield* Fiber.join(updates)).at(-1)?.receipts.at(-1)?.job.phase).toBe("cancelled");
+        expect((yield* Effect.promise(() => h.runtime.drain(target))).phase).toBe("cancelled");
+        expect(
+          yield* Effect.result(rpc["simBuild.start"]({ ...input, requestId: "new-work" })),
+        ).toMatchObject({ _tag: "Failure", failure: { code: "invalid-project" } });
+      }),
+    ),
+);
+
+it("retains durable request fingerprints after pruning and restart, including changed-option conflicts", async () => {
+  const h = await fixture();
+  const file = NodePath.join(h.root, "durable/receipts.json");
+  const store = fileSimBuildStore(file);
+  const runtime = new SimBuildRuntime(h.root, h.dependencies, store, h.host);
+  cleanups.push(() => runtime.dispose());
+  const original = { ...input, action: "test" as const };
+  const first = await runtime.start(original);
+  await runtime.drain({ ...context, jobId: first.id });
+  for (let i = 0; i < 50; i++) {
+    const job = await runtime.start({ ...original, requestId: `later-${i}` });
+    await runtime.drain({ ...context, jobId: job.id });
+  }
+  expect((await runtime.list(context)).some((job) => job.id === first.id)).toBe(false);
+  expect((await store.load()).requests).toHaveLength(51);
+  const restarted = new SimBuildRuntime(h.root, h.dependencies, store, h.host);
+  cleanups.push(() => restarted.dispose());
+  for (const instance of [runtime, restarted]) {
+    await expect(instance.start(original)).rejects.toMatchObject({ code: "history-pruned" });
+    await expect(instance.start({ ...original, scheme: "Tests" })).rejects.toMatchObject({
+      code: "busy",
+    });
+  }
+  expect(h.calls.filter((call) => call.args.at(-1) === "test")).toHaveLength(51);
 });

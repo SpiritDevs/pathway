@@ -5,9 +5,11 @@ import {
   SimBuildRpcs,
   SIM_BUILD_WS_METHODS,
   SimBuildLogChunk,
+  SimBuildError,
 } from "./simBuild.ts";
 const decodeStart = Schema.decodeUnknownSync(SimBuildStartInput);
 const decodeLog = Schema.decodeUnknownSync(SimBuildLogChunk);
+const decodeError = Schema.decodeUnknownSync(SimBuildError);
 const input = {
   environmentId: "env",
   projectId: "project",
@@ -41,4 +43,10 @@ it("publishes the complete UI RPC group", () => {
   expect([...SimBuildRpcs.requests.keys()].sort()).toEqual(
     Object.values(SIM_BUILD_WS_METHODS).sort(),
   );
+});
+it("describes retries whose job history has been pruned", () => {
+  expect(
+    decodeError({ _tag: "SimBuildError", code: "history-pruned", message: "Already accepted." })
+      .code,
+  ).toBe("history-pruned");
 });
