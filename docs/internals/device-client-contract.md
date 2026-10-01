@@ -22,6 +22,7 @@ omitting it from `device.close` matches all hosts in that thread.
 | `device.shutdown`      | `{ hostId?: string, deviceId: string, platform: "ios" \| "android" }`                           | void                                              | operate                        |
 | `device.detail`        | `{ hostId?: string, deviceId: string }`                                                         | `DeviceDetail`                                    | read                           |
 | `device.action`        | `{ hostId?: string, deviceId: string, ...action }`                                              | refreshed `DeviceDetail`                          | operate                        |
+| `device.input`         | `{ hostId?: string, deviceId: string, input: DeviceInput }`                                     | void (native acknowledgement)                     | operate                        |
 | `subscribeDeviceState` | `{}`                                                                                            | stream of complete `DeviceServiceState` snapshots | read                           |
 
 Scopes are `orchestration:read` and `orchestration:operate`. `device.list({})`
@@ -188,10 +189,10 @@ Main currently enables it only for `/ws`; this backend work does not edit web fi
 
 ## Agent tools
 
-The common MCP endpoint exposes `device_list`, `device_open`, `device_screenshot`
-and `device_close` to all providers. Calls require the `device` capability and
+The common MCP endpoint exposes `device_list`, `device_open`, `device_screenshot`,
+`device_close`, `device_input` and `device_action` to all providers. Calls require the `device` capability and
 current device-support/agent-access consent. `device_open` returns device metadata,
-`agentDevice: { command, targetArgs }` and `quickStart`; execute that absolute
+`agentDevice: { command, targetArgs } | null` and `quickStart`; when present, execute that absolute
 launcher on the selected environment with every returned argument. Screenshot
 results contain metadata plus an MCP PNG image block, not duplicated image data.
 
@@ -294,3 +295,87 @@ proof are watch-only on this backend.
 `currentDeviceController(state, hostId, deviceId)`, and
 `withDeviceControl(access, proof | null)` for media/input URL construction.
 Native iOS uses the same RPCs and snapshot fields. No new UI is included here.
+
+## Watch and TV backend contract (COR-103 / COR-104)
+
+Apple families retain `platform: "ios"` for transport and toolchain selection.
+New servers always provide `DeviceSummary.family` (`phone`, `pad`, `watch`, `tv`)
+and `capabilities`. Both fields remain optional on the wire for older servers.
+Do not infer a new family from a user-renamed simulator label.
+
+| Capability   | Meaning                                                                                                                  |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `streaming`  | `{ status: "supported" }` or `{ status: "unsupported", reason }`; do not start an unsupported stream                     |
+| `agentCli`   | Same support union; Watch is unsupported by the pinned XCTest CLI, with a reason directing agents to native MCP tools    |
+| `inputKinds` | Phone/pad: `touch`; Watch: `touch`, `digitalCrown`, `watchButton`; TV: `remoteButton`                                    |
+| `framing`    | `{ shape: "phone" \| "tablet" \| "watch" \| "tv", orientation, aspectRatio }`; TV is landscape 16:9, Watch portrait 0.82 |
+
+Framing is an initial layout hint, not a pixel-size contract. Use live stream
+width/height when available. A Watch has no phone bezel; TV has no touch overlay.
+The current native capture supports TV, so its streaming capability is supported.
+Older runtimes/toolchains can still fail to start capture or input; surface the
+operation failure, never substitute a placeholder stream.
+
+`device.input({ hostId, deviceId, input })` is an operate-scope RPC returning void
+only after the helper acknowledges native input. `createDeviceEnvironmentAtoms(...).input`
+uses the selected environment. Input targets must be booted and owned by that
+environment. Unsupported device/input combinations fail before invoking helpers.
+The same shape is available as the `device_input` MCP tool. This RPC targets
+Apple simulators; Android touch continues to use the existing serve-emu socket.
+
+```ts
+type Input =
+  | { kind: "touch"; phase: "begin" | "move" | "end"; x: number; y: number }
+  | { kind: "digitalCrown"; delta: number }
+  | { kind: "watchButton"; button: "crown" | "side" }
+  | {
+      kind: "remoteButton";
+      button: "up" | "down" | "left" | "right" | "select" | "menu" | "back" | "playPause" | "home";
+    };
+```
+
+Touch coordinates are normalized to 0..1. Crown deltas are signed SimulatorKit
+wheel pixels, bounded to -200..200 per message; coalesce within a frame. Buttons
+are full down/up presses, so keyboard repeat sends another press. TV directions
+and select/menu use keyboard HID events understood by the focus engine; home and
+play/pause use consumer HID events. There is no coordinate emulation on TV.
+`DEVICE_TV_KEYBOARD_MAP` maps `KeyboardEvent.code`: arrows, Enter=select,
+Escape/Backspace=back, Space=playPause, Home=home. Handle unmodified keys only while
+the viewer is focused; let text fields and other app shortcuts keep their keys.
+
+For continuous controls, reuse the existing authenticated helper WebSocket at
+`/vendor/serve-sim/helper/ws?device=...`, using the media-ticket rules above.
+`deviceSimulatorInputPacket(input)` produces the **inner** `{ tag, payload }`.
+Wrap it as one binary message: byte `0x12`, then UTF-8 JSON
+`{ id: "unique-request-id", ...deviceSimulatorInputPacket(input) }`. The helper
+responds on tag `0x12` with `{ id, ok, error? }`. Match ids, bound pending requests,
+and reject them when the socket closes. Ack means native dispatch completed;
+it is not evidence that the app rendered the expected result. TV's inner tag
+`0x13` is handled only inside this envelope. Never send TV input via the legacy
+raw `0x04` digitizer button path. Cancel input on disconnect/revocation and do not
+replay pending presses on reconnect. This uses the existing authenticated proxy
+and host selection; it introduces no client-visible helper address.
+
+Pairing uses `device.action` (or the `device_action` MCP tool):
+
+- `{ hostId, deviceId: watchId, type: "pairWatch", phoneDeviceId }` pairs an
+  explicit simulator iPhone on the same host. It is idempotent for the same pair.
+- `{ hostId, deviceId: watchId, type: "unpairWatch" }` reverses the operation.
+- `device.open` accepts `companionDeviceId` to perform that pairing before Watch
+  boot. Omit it to leave pairing unchanged; no phone is selected or booted
+  implicitly. Open the phone separately if a companion app needs it running.
+
+Both devices must be available to this environment. Existing conflicting pairs
+must be explicitly unpaired first; simctl compatibility errors remain failures.
+Pair mutations are serialized. Watch summaries and details expose
+`watchPair: { pairId, phoneDeviceId, state } | null`; absent means unavailable on
+an older server, null means unpaired. Pair state is the raw simctl label.
+Watch/TV details currently return empty settings and null foreground app; only
+launch/terminate app actions, plus Watch pairing, are advertised here.
+
+`device_open` also accepts a `family` filter. Ambiguous families require a family
+or explicit device id. Watch returns `agentDevice: null` and instructions for
+`device_input`, `device_action` and `device_screenshot`. TV returns the usual
+CLI launcher with `--platform ios --target tv --udid ...` and the existing
+host/thread config flags. The common toolkit exposes these tools to every
+provider, under the existing capability and current consent checks.

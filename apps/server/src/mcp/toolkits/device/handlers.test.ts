@@ -54,3 +54,26 @@ describe("device tool helpers", () => {
     expect(pngDimensions(new Uint8Array([1, 2, 3]))).toEqual({ width: 0, height: 0 });
   });
 });
+
+it("selects the TV CLI backend and teaches focus navigation instead of touch", () => {
+  const tv = { ...device, family: "tv" as const, version: "tvOS 27" };
+  expect(agentDeviceTargetArgs(tv)).toEqual([
+    "--platform",
+    "ios",
+    "--target",
+    "tv",
+    "--udid",
+    "ABCD-1234",
+  ]);
+  expect(agentDeviceQuickStart(tv)).toContain("tv-remote press right");
+  expect(agentDeviceQuickStart(tv)).toContain("playPause");
+  expect(agentDeviceQuickStart(tv)).not.toContain("click @e3");
+});
+
+it("teaches Watch native controls without advertising an unsupported XCTest CLI", () => {
+  const text = agentDeviceQuickStart({ ...device, family: "watch", version: "watchOS 27" });
+  expect(text).toContain("device_input");
+  expect(text).toContain("device_screenshot");
+  expect(text).toContain("cannot drive watchOS");
+  expect(text).not.toContain("snapshot -i");
+});

@@ -1,4 +1,5 @@
 import { deviceHubControlNodeOptions } from "./deviceHubControlAdapter.ts";
+import { deviceHubPatchScript, DEVICE_HUB_UPSTREAM_VERSION } from "./deviceHubPatch.ts";
 import { deviceSdkInventoryScript } from "./deviceSdkInventory.ts";
 import { remoteDeviceLeaseScript } from "./remoteDeviceLease.ts";
 import { deviceToolMaintenanceScript } from "./deviceToolMaintenance.ts";
@@ -44,8 +45,10 @@ const owner = ${JSON.stringify(owner)};
 const mode = ${JSON.stringify(mode)};
 const deviceKey = ${JSON.stringify(deviceKey ?? "")};
 const hubVersion = ${JSON.stringify(DEVICE_HUB_VERSION)};
+const hubUpstreamVersion = ${JSON.stringify(DEVICE_HUB_UPSTREAM_VERSION)};
 const agentVersion = ${JSON.stringify(AGENT_DEVICE_VERSION)};
 ` +
+  deviceHubPatchScript +
   deviceToolMaintenanceScript +
   deviceSdkInventoryScript +
   remoteDeviceLeaseScript +
@@ -139,9 +142,10 @@ async function install(name, version, entry) {
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     const staging = fs.mkdtempSync(path.join(path.dirname(dir), '.install-'));
     try {
-      const result = run('npm', ['install', '--prefix', staging, '--no-fund', '--no-audit', name + '@' + version], { timeout: 600000, maxBuffer: 8 * 1024 * 1024 });
+      const result = run('npm', ['install', '--prefix', staging, '--no-fund', '--no-audit', name + '@' + (name === 'expo-device-hub' ? hubUpstreamVersion : version)], { timeout: 600000, maxBuffer: 8 * 1024 * 1024 });
       if (result.status !== 0) throw Error('Installing ' + name + ' failed. Check npm on the device host.');
       if (!fs.existsSync(path.join(staging, 'node_modules', name, entry))) throw Error('Missing installed entry for ' + name);
+      if (name === 'expo-device-hub') patchDeviceHub(path.join(staging, 'node_modules', name));
       fs.writeFileSync(path.join(staging, '.install-complete'), version);
       fs.rmSync(dir, { recursive: true, force: true });
       fs.renameSync(staging, dir);

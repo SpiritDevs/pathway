@@ -16,6 +16,9 @@ import { AgentDeviceRequest, prepareAgentDeviceRequest } from "./DeviceAgentGate
  * every connected client the way `preview_open` does.
  */
 import {
+  DeviceFamily,
+  DeviceActionUnavailableError,
+  type DeviceInputInput,
   type DeviceActionInput,
   type DeviceUpdateToolsInput,
   type DeviceRestartToolsInput,
@@ -46,6 +49,9 @@ import {
   type ThreadId,
   type RunId,
 } from "@spiritdevs/contracts";
+import { deviceCapabilities, deviceFamily } from "./deviceCapabilities.ts";
+import { readWatchPair, readWatchPairs, runSimctl } from "./WatchPairing.ts";
+import { sendSimulatorInput } from "./SimulatorInput.ts";
 import * as NodeUtil from "node:util";
 import {
   DEVICE_TOOL_MANIFEST,
@@ -103,6 +109,7 @@ const BOOT_TIMEOUT = Duration.minutes(3);
 const SCREENSHOT_TIMEOUT = Duration.seconds(20);
 
 const HubDevice = Schema.Struct({
+  family: Schema.optional(DeviceFamily),
   id: Schema.String,
   name: Schema.String,
   version: Schema.String,
@@ -182,6 +189,7 @@ export class DeviceService extends Context.Service<
     /** Current settings and foreground app for one device. */
     readonly detail: (input: DeviceDetailInput) => Effect.Effect<DeviceDetail, DeviceError>;
     /** Runs one action, then returns the refreshed detail. */
+    readonly input: (input: DeviceInputInput) => Effect.Effect<void, DeviceError>;
     readonly action: (input: DeviceActionInput) => Effect.Effect<DeviceDetail, DeviceError>;
     readonly screenshot: (input: {
       readonly hostId?: DeviceHostId | undefined;
@@ -236,9 +244,11 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     session: string,
     target: { configPath: string; deviceId: string; platform: DevicePlatform },
   ) => Effect.Effect<void, DeviceError> = () => Effect.void,
+  sendInput: typeof sendSimulatorInput = sendSimulatorInput,
 ) {
   const settings = yield* ServerSettings.ServerSettingsService;
   const lifecycleLock = yield* Semaphore.make(1);
+  const watchPairLock = yield* Semaphore.make(1);
   const readDeviceSettings = settings.getSettings.pipe(
     Effect.map((value) => ({
       enabled: value.enableDeviceSupport,
@@ -491,8 +501,24 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       version: device.version,
       booted: device.booted,
       physical: device.physical,
+      family: deviceFamily(device),
+      capabilities: deviceCapabilities(deviceFamily(device)),
     });
     const devices = [...list.simulators, ...list.emulators].map(toSummary);
+    if (devices.some((device) => device.family === "watch")) {
+      const pairs = yield* readWatchPairs(ready);
+      for (let index = 0; index < devices.length; index++) {
+        const device = devices[index]!;
+        if (device.family !== "watch") continue;
+        const pair = Object.entries(pairs).find(([, pair]) => pair.watch.udid === device.id);
+        devices[index] = {
+          ...device,
+          watchPair: pair
+            ? { pairId: pair[0], phoneDeviceId: pair[1].phone.udid, state: pair[1].state }
+            : null,
+        };
+      }
+    }
     const host = yield* resolveHost(ready.hostId);
     if ((yield* host.platformAvailability("android")).available) {
       const avds = yield* ready.run("emulator", ["-list-avds"]);
@@ -517,6 +543,8 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
             version: "Android",
             booted: false,
             physical: false,
+            family: "phone",
+            capabilities: deviceCapabilities("phone"),
           });
         }
       }
@@ -839,7 +867,19 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
             new DeviceOperationError({ operation: "boot", reason: "invalid_payload", cause }),
         ),
         Effect.flatMap((request) =>
-          hubJson(request, HubActionResult, "attach stream", BOOT_TIMEOUT),
+          hubJson(request, HubActionResult, "attach stream", BOOT_TIMEOUT).pipe(
+            Effect.flatMap((result) =>
+              result.ok
+                ? Effect.void
+                : Effect.fail(
+                    new DeviceOperationError({
+                      operation: "attach stream",
+                      reason: "request_failed",
+                      cause: result,
+                    }),
+                  ),
+            ),
+          ),
         ),
       );
     }
@@ -855,12 +895,19 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     if (!device) {
       return yield* new DeviceNotFoundError({ hostId: host.id, deviceId: input.deviceId });
     }
+    if (device.platform !== input.platform)
+      return yield* new DeviceNotFoundError({ hostId: host.id, deviceId: input.deviceId });
     yield* claimDevice(host.id, device.id);
     const caller = yield* DeviceControl.DeviceControlCaller;
     const manageOpen = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       caller?.kind === "agent"
         ? control.mutation({ hostId: host.id, deviceId: input.deviceId }, undefined, effect)
         : effect;
+    if (input.companionDeviceId !== undefined) {
+      yield* manageOpen(pairWatch(ready, device, input.companionDeviceId));
+      state = yield* refresh(ready);
+      device = findDevice(state, host.id, device.id)!;
+    }
     if (!device.booted && input.boot !== false) {
       const booting = { ...device, threadId: input.threadId };
       yield* publish((current) => ({
@@ -897,7 +944,19 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
               new DeviceOperationError({ operation: "open", reason: "invalid_payload", cause }),
           ),
           Effect.flatMap((request) =>
-            hubJson(request, HubActionResult, "attach stream", BOOT_TIMEOUT),
+            hubJson(request, HubActionResult, "attach stream", BOOT_TIMEOUT).pipe(
+              Effect.flatMap((result) =>
+                result.ok
+                  ? Effect.void
+                  : Effect.fail(
+                      new DeviceOperationError({
+                        operation: "attach stream",
+                        reason: "request_failed",
+                        cause: result,
+                      }),
+                    ),
+              ),
+            ),
           ),
         ),
       );
@@ -1096,14 +1155,86 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   const detail: DeviceService["Service"]["detail"] = Effect.fn("DeviceService.detail")(
     function* (input) {
       const { ready, device } = yield* resolveDevice(input.hostId, input.deviceId);
-      const read = yield* readDeviceDetail(ready, device.platform, device.id);
+      const read =
+        device.family === "watch" || device.family === "tv"
+          ? { settings: {}, foregroundApp: null }
+          : yield* readDeviceDetail(ready, device.platform, device.id);
+      const watchPair =
+        device.family === "watch" ? yield* readWatchPair(ready, device.id) : undefined;
       return {
         hostId: ready.hostId,
         deviceId: device.id,
+        ...(watchPair !== undefined ? { watchPair } : {}),
         settings: read.settings,
         foregroundApp: read.foregroundApp,
         readAt: DateTime.formatIso(yield* DateTime.now),
       };
+    },
+  );
+
+  const pairWatch = Effect.fn("DeviceService.pairWatch")(function* (
+    ready: DeviceReadiness,
+    watch: DeviceSummary,
+    phoneId: DeviceId,
+  ) {
+    const state = yield* refresh(ready);
+    const phone = findDevice(state, ready.hostId, phoneId);
+    if (
+      watch.platform !== "ios" ||
+      watch.family !== "watch" ||
+      watch.physical ||
+      !phone ||
+      phone.platform !== "ios" ||
+      phone.family !== "phone" ||
+      phone.physical
+    ) {
+      return yield* new DeviceActionUnavailableError({
+        operation: "pairWatch",
+        platform: watch.platform,
+        reason: "unsupported",
+      });
+    }
+    yield* claimDevice(ready.hostId, watch.id);
+    yield* claimDevice(ready.hostId, phone.id);
+    const pairs = yield* readWatchPairs(ready);
+    if (
+      Object.values(pairs).some(
+        (pair) => pair.watch.udid === watch.id && pair.phone.udid === phone.id,
+      )
+    )
+      return;
+    if (
+      Object.values(pairs).some(
+        (pair) => pair.watch.udid === watch.id || pair.phone.udid === phone.id,
+      )
+    ) {
+      return yield* new DeviceOperationError({
+        operation: "pairWatch",
+        reason: "command_failed",
+        cause: "Unpair the existing companion first.",
+      });
+    }
+    yield* runSimctl(ready, "pairWatch", ["pair", watch.id, phone.id]);
+  }, watchPairLock.withPermit);
+
+  const input: DeviceService["Service"]["input"] = Effect.fn("DeviceService.input")(
+    function* (input) {
+      const { ready, device } = yield* resolveDevice(input.hostId, input.deviceId);
+      const capabilities = deviceCapabilities(deviceFamily(device));
+      if (device.platform !== "ios" || !capabilities.inputKinds.includes(input.input.kind)) {
+        return yield* new DeviceOperationError({
+          operation: "input",
+          reason: "command_failed",
+          cause: `Input ${input.input.kind} is unavailable for ${deviceFamily(device)}.`,
+        });
+      }
+      if (!device.booted)
+        return yield* new DeviceOperationError({
+          operation: "input",
+          reason: "command_failed",
+          cause: "Open and boot this device before sending input.",
+        });
+      yield* sendInput(ready, device.id, input.input);
     },
   );
 
@@ -1113,7 +1244,41 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       yield* control.mutation(
         { hostId: ready.hostId, deviceId: device.id },
         input.control,
-        runDeviceAction(ready, device.platform, input),
+        Effect.gen(function* () {
+          if (input.type === "pairWatch") {
+            yield* pairWatch(ready, device, input.phoneDeviceId);
+            yield* refresh(ready);
+          } else if (input.type === "unpairWatch") {
+            if (device.family !== "watch")
+              return yield* new DeviceActionUnavailableError({
+                operation: input.type,
+                platform: device.platform,
+                reason: "unsupported",
+              });
+            yield* watchPairLock.withPermit(
+              Effect.gen(function* () {
+                const pair = yield* readWatchPair(ready, device.id);
+                if (pair) {
+                  yield* claimDevice(ready.hostId, pair.phoneDeviceId);
+                  yield* runSimctl(ready, "unpairWatch", ["unpair", pair.pairId]);
+                }
+              }),
+            );
+            yield* refresh(ready);
+          } else {
+            if (
+              (device.family === "watch" || device.family === "tv") &&
+              input.type !== "launchApp" &&
+              input.type !== "terminateApp"
+            )
+              return yield* new DeviceActionUnavailableError({
+                operation: input.type,
+                platform: device.platform,
+                reason: "unsupported",
+              });
+            yield* runDeviceAction(ready, device.platform, input);
+          }
+        }),
       );
       return yield* detail({ hostId: ready.hostId, deviceId: device.id });
     },
@@ -1333,6 +1498,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       shutdown,
       detail,
       action,
+      input,
       screenshot,
       readiness,
       readinessIfSupported,

@@ -554,6 +554,7 @@ const CoreWsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.deviceShutdown,
   WS_METHODS.deviceDetail,
   WS_METHODS.deviceAction,
+  WS_METHODS.deviceInput,
   WS_METHODS.subscribeDeviceState,
 );
 // When a resuming client's cursor is more than this many events behind the
@@ -3358,6 +3359,10 @@ const makeWsRpcLayer = (
           }),
         [WS_METHODS.deviceDetail]: (input) =>
           observeRpcEffect(WS_METHODS.deviceDetail, deviceService.detail(input), {
+            "rpc.aggregate": "device",
+          }),
+        [WS_METHODS.deviceInput]: (input) =>
+          observeRpcEffect(WS_METHODS.deviceInput, deviceService.input(input), {
             "rpc.aggregate": "device",
           }),
         [WS_METHODS.deviceAction]: (input) =>

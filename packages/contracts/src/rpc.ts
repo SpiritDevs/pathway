@@ -23,6 +23,7 @@ import {
 } from "./usageRecovery.ts";
 import {
   DeviceActionInput,
+  DeviceInputInput,
   DeviceCloseInput,
   DeviceConfigureInput,
   DeviceDetail,
@@ -535,6 +536,7 @@ export const WS_METHODS = {
   deviceShutdown: "device.shutdown",
   deviceDetail: "device.detail",
   deviceAction: "device.action",
+  deviceInput: "device.input",
 
   // Preview methods
   previewRemoteCommand: "preview.remote.command",
@@ -1382,6 +1384,12 @@ const WsDeviceShutdownRpc = Rpc.make(WS_METHODS.deviceShutdown, {
 const WsDeviceDetailRpc = Rpc.make(WS_METHODS.deviceDetail, {
   payload: DeviceDetailInput,
   success: DeviceDetail,
+  error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+});
+
+const WsDeviceInputRpc = Rpc.make(WS_METHODS.deviceInput, {
+  payload: DeviceInputInput,
+  success: Schema.Void,
   error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
 });
 
@@ -2485,6 +2493,7 @@ export const WsDeviceRpcGroup = RpcGroup.make(
   WsDeviceShutdownRpc,
   WsDeviceDetailRpc,
   WsDeviceActionRpc,
+  WsDeviceInputRpc,
   WsSubscribeDeviceStateRpc,
 );
 

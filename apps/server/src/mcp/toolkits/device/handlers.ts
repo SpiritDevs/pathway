@@ -1,8 +1,10 @@
 import { ProjectionStoreV2 } from "../../../orchestration-v2/ProjectionStore.ts";
 import { DeviceControlCaller } from "../../../device/DeviceControl.ts";
+import { deviceFamily } from "../../../device/deviceCapabilities.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import {
   type DeviceError,
+  type DeviceFamily,
   type DeviceHostId,
   type DeviceId,
   type DevicePlatform,
@@ -24,7 +26,13 @@ import { DeviceScreenshotToolkit, DeviceStandardToolkit, DeviceToolkit } from ".
 /** The flags that pin every agent-device command to one device. */
 export function agentDeviceTargetArgs(device: DeviceSummary): ReadonlyArray<string> {
   return device.platform === "ios"
-    ? ["--platform", "ios", "--udid", device.id]
+    ? [
+        "--platform",
+        "ios",
+        ...(deviceFamily(device) === "tv" ? ["--target", "tv"] : []),
+        "--udid",
+        device.id,
+      ]
     : ["--platform", "android", "--serial", device.id];
 }
 
@@ -47,6 +55,22 @@ export function agentDeviceQuickStart(
       /^[a-zA-Z0-9_./:-]+$/.test(arg) ? arg : "'" + arg.replaceAll("'", "'\"'\"'") + "'",
     )
     .join(" ");
+  if (deviceFamily(device) === "watch")
+    return [
+      `Apple Watch ${device.name} is open on host ${device.hostId}.`,
+      "Use device_screenshot for visual feedback and device_input for normalized touch, digitalCrown deltas and watchButton crown/side presses.",
+      `Always pass hostId=${device.hostId} and deviceId=${device.id}. Use device_action launchApp/terminateApp with appId, or pairWatch with phoneDeviceId / unpairWatch.`,
+      "agent-device 0.21.12 cannot drive watchOS through XCTest; no CLI command is supplied for this target.",
+    ].join("\n");
+  if (deviceFamily(device) === "tv")
+    return [
+      `${device.name} is open on host ${device.hostId}. Drive the focus engine with Siri Remote buttons.`,
+      `  ${executable} tv-remote press right ${target}`,
+      `  ${executable} tv-remote press select ${target}`,
+      `  ${executable} snapshot -i ${target}`,
+      `Use device_input for up/down/left/right/select/menu/back/playPause/home, always passing hostId=${device.hostId} and deviceId=${device.id}.`,
+      "Use device_screenshot to check the result. Never use coordinate touches on TV. Keep every returned target flag, including --target tv, --config and --session.",
+    ].join("\n");
   const platformNotes =
     device.platform === "ios"
       ? "First use builds an XCTest runner and can take a couple of minutes; later commands are fast."
@@ -117,6 +141,7 @@ const pickDevice = (
   input: {
     readonly deviceId?: DeviceId | undefined;
     readonly platform?: DevicePlatform | undefined;
+    readonly family?: DeviceFamily | undefined;
     readonly hostId?: DeviceHostId | undefined;
   },
 ): Effect.Effect<DeviceSummary, DeviceToolUnavailableError> =>
@@ -134,7 +159,8 @@ const pickDevice = (
     const candidates = devices.filter(
       (device) =>
         device.hostId === hostId &&
-        (input.platform === undefined || device.platform === input.platform),
+        (input.platform === undefined || device.platform === input.platform) &&
+        (input.family === undefined || deviceFamily(device) === input.family),
     );
     if (candidates.length === 0) {
       return yield* new DeviceToolUnavailableError({
@@ -150,12 +176,29 @@ const pickDevice = (
         reason: "Both iOS and Android devices are available; pass platform or deviceId.",
       });
     }
+    if (input.family === undefined && new Set(candidates.map(deviceFamily)).size > 1)
+      return yield* new DeviceToolUnavailableError({
+        reason: "Multiple device families are available; pass family or deviceId.",
+      });
     return candidates.find((device) => device.booted) ?? candidates[0]!;
   });
 
 const toolError = (error: DeviceError | DeviceToolUnavailableError) => error;
 
 const handlers = {
+  device_input: (input) =>
+    Effect.gen(function* () {
+      yield* requireDeviceAccess;
+      const devices = yield* DeviceService.DeviceService;
+      yield* devices.input(input);
+      return { ok: true };
+    }).pipe(Effect.mapError(toolError)),
+  device_action: (input) =>
+    Effect.gen(function* () {
+      yield* requireDeviceAccess;
+      const devices = yield* DeviceService.DeviceService;
+      return yield* devices.action(input);
+    }).pipe(Effect.mapError(toolError)),
   device_list: (input) =>
     Effect.gen(function* () {
       const scope = yield* requireDeviceAccess;
@@ -203,21 +246,27 @@ const handlers = {
           hostId: target.hostId,
           deviceId: target.id,
           platform: target.platform,
+          ...(input.companionDeviceId ? { companionDeviceId: input.companionDeviceId } : {}),
         })
         .pipe(Effect.provideService(DeviceControlCaller, caller));
       if (session.deviceId !== target.id)
         yield* devices.control.invalidate({ hostId: target.hostId, deviceId: target.id });
-      const agentArgs = yield* devices.agentTarget({
-        runId: caller.runId,
-        threadId: scope.threadId,
-        hostId: session.hostId,
-        deviceId: session.deviceId,
-      });
+      const agentArgs =
+        deviceFamily(target) === "watch"
+          ? []
+          : yield* devices.agentTarget({
+              runId: caller.runId,
+              threadId: scope.threadId,
+              hostId: session.hostId,
+              deviceId: session.deviceId,
+            });
       const after = yield* devices.state;
       const device =
         after.devices.find(
           (candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId,
         ) ?? target;
+      if (deviceFamily(device) === "watch")
+        return { device, agentDevice: null, quickStart: agentDeviceQuickStart(device) };
       const targetArgs = [...agentDeviceTargetArgs(device), ...agentArgs];
       const config = yield* ServerConfig;
       const path = yield* Path.Path;

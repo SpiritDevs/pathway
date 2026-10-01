@@ -18,6 +18,96 @@ import { RunId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 export const DevicePlatform = Schema.Literals(["ios", "android"]);
 export type DevicePlatform = typeof DevicePlatform.Type;
 
+/** Apple families use the ios transport/toolchain; family determines controls and framing. */
+export const DeviceFamily = Schema.Literals(["phone", "pad", "watch", "tv"]);
+export type DeviceFamily = typeof DeviceFamily.Type;
+
+export const DeviceFeatureSupport = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("supported") }),
+  Schema.Struct({ status: Schema.Literal("unsupported"), reason: TrimmedNonEmptyString }),
+]);
+export const DeviceCapabilities = Schema.Struct({
+  streaming: DeviceFeatureSupport,
+  agentCli: DeviceFeatureSupport,
+  inputKinds: Schema.Array(
+    Schema.Literals(["touch", "digitalCrown", "watchButton", "remoteButton"]),
+  ),
+  framing: Schema.Struct({
+    shape: Schema.Literals(["phone", "tablet", "watch", "tv"]),
+    orientation: Schema.Literals(["portrait", "landscape"]),
+    /** A layout hint only. The stream's dimensions remain authoritative. */
+    aspectRatio: Schema.Number.check(Schema.isGreaterThan(0)),
+  }),
+});
+export type DeviceCapabilities = typeof DeviceCapabilities.Type;
+
+export const DeviceWatchPair = Schema.Struct({
+  pairId: Schema.String,
+  phoneDeviceId: Schema.String,
+  state: Schema.String,
+});
+
+export const DeviceRemoteButton = Schema.Literals([
+  "up",
+  "down",
+  "left",
+  "right",
+  "select",
+  "menu",
+  "back",
+  "playPause",
+  "home",
+]);
+export type DeviceRemoteButton = typeof DeviceRemoteButton.Type;
+
+/** DOM KeyboardEvent.code. Clients handle only unmodified keys while the viewer has focus. */
+export const DEVICE_TV_KEYBOARD_MAP: Readonly<Record<string, DeviceRemoteButton>> = {
+  ArrowUp: "up",
+  ArrowDown: "down",
+  ArrowLeft: "left",
+  ArrowRight: "right",
+  Enter: "select",
+  Escape: "back",
+  Backspace: "back",
+  Space: "playPause",
+  Home: "home",
+};
+
+export const DeviceInput = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("touch"),
+    phase: Schema.Literals(["begin", "move", "end"]),
+    x: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+    y: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("digitalCrown"),
+    /** Signed wheel delta in pixels, matching SimulatorKit. Coalesce one frame before sending. */
+    delta: Schema.Number.check(Schema.isBetween({ minimum: -200, maximum: 200 })),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("watchButton"),
+    button: Schema.Literals(["crown", "side"]),
+  }),
+  /** Each call sends a complete down/up pair. Key repeat sends another press. */
+  Schema.Struct({ kind: Schema.Literal("remoteButton"), button: DeviceRemoteButton }),
+]);
+export type DeviceInput = typeof DeviceInput.Type;
+
+/** Pinned serve-sim wire tags. TV has a separate button path, never the digitizer. */
+export function deviceSimulatorInputPacket(input: DeviceInput) {
+  switch (input.kind) {
+    case "touch":
+      return { tag: 3, payload: { type: input.phase, x: input.x, y: input.y } };
+    case "digitalCrown":
+      return { tag: 10, payload: { delta: input.delta } };
+    case "watchButton":
+      return { tag: 4, payload: { page: 0x0c, usage: input.button === "side" ? 0x95 : 0x40 } };
+    case "remoteButton":
+      return { tag: 19, payload: { button: input.button } };
+  }
+}
+
 export const DeviceHostId = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
 export type DeviceHostId = typeof DeviceHostId.Type;
 
@@ -56,6 +146,11 @@ export const DeviceOwnership = Schema.Struct({
 export type DeviceOwnership = typeof DeviceOwnership.Type;
 
 export const DeviceSummary = Schema.Struct({
+  /** Optional for older servers. New servers always supply family and capabilities. */
+  family: Schema.optional(DeviceFamily),
+  capabilities: Schema.optional(DeviceCapabilities),
+  /** null means unpaired; absent means not a Watch or pairing has not been read. */
+  watchPair: Schema.optional(Schema.NullOr(DeviceWatchPair)),
   /** Present when another environment owns this simulator. */
   inUseBy: Schema.optional(DeviceOwnership),
   hostId: DeviceHostId,
@@ -314,6 +409,8 @@ export const DeviceOpenInput = Schema.Struct({
   hostId: Schema.optional(DeviceHostId),
   deviceId: DeviceId,
   platform: DevicePlatform,
+  /** Explicit same-host iPhone companion. Never selected or booted implicitly. */
+  companionDeviceId: Schema.optional(DeviceId),
   /** Boot the simulator or emulator when it is not running. Defaults to true. */
   boot: Schema.optional(Schema.Boolean),
 });
@@ -399,6 +496,7 @@ export type DeviceForegroundApp = typeof DeviceForegroundApp.Type;
 export const DeviceDetail = Schema.Struct({
   hostId: DeviceHostId,
   deviceId: DeviceId,
+  watchPair: Schema.optional(Schema.NullOr(DeviceWatchPair)),
   settings: DeviceSettings,
   foregroundApp: Schema.NullOr(DeviceForegroundApp),
   readAt: Schema.String,
@@ -426,7 +524,12 @@ const DeviceTarget = {
   deviceId: DeviceId,
 };
 
+export const DeviceInputInput = Schema.Struct({ ...DeviceTarget, input: DeviceInput });
+export type DeviceInputInput = typeof DeviceInputInput.Type;
+
 export const DeviceActionInput = Schema.Union([
+  Schema.Struct({ ...DeviceTarget, type: Schema.Literal("pairWatch"), phoneDeviceId: DeviceId }),
+  Schema.Struct({ ...DeviceTarget, type: Schema.Literal("unpairWatch") }),
   Schema.Struct({
     ...DeviceTarget,
     type: Schema.Literal("setAppearance"),
@@ -622,6 +725,8 @@ export const DeviceToolListResult = Schema.Struct({
 export type DeviceToolListResult = typeof DeviceToolListResult.Type;
 
 export const DeviceToolOpenInput = Schema.Struct({
+  family: Schema.optional(DeviceFamily),
+  companionDeviceId: Schema.optional(DeviceId),
   deviceId: Schema.optional(
     DeviceId.annotate({
       description:
@@ -645,11 +750,13 @@ export type DeviceToolOpenInput = typeof DeviceToolOpenInput.Type;
 export const DeviceToolOpenResult = Schema.Struct({
   device: DeviceSummary,
   /** Ready-to-run agent-device invocation pinned to this device. */
-  agentDevice: Schema.Struct({
-    command: Schema.String,
-    /** Flags that pin every command to this device, e.g. `--udid <id>`. */
-    targetArgs: Schema.Array(Schema.String),
-  }),
+  agentDevice: Schema.NullOr(
+    Schema.Struct({
+      command: Schema.String,
+      /** Flags that pin every command to this device, e.g. `--udid <id>`. */
+      targetArgs: Schema.Array(Schema.String),
+    }),
+  ),
   quickStart: Schema.String,
 });
 export type DeviceToolOpenResult = typeof DeviceToolOpenResult.Type;

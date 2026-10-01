@@ -1,3 +1,4 @@
+import { deviceHubPatchScript, DEVICE_HUB_UPSTREAM_VERSION } from "./deviceHubPatch.ts";
 import { withMachineLock, retainDeviceTool } from "./deviceMachineLock.ts";
 import { DEVICE_TOOL_MANIFEST } from "./deviceToolManifest.ts";
 import type { DeviceToolVersions } from "@spiritdevs/contracts";
@@ -140,7 +141,7 @@ const installTool = Effect.fn("DeviceToolchain.installTool")(function* (
       stagingDir,
       "--no-fund",
       "--no-audit",
-      `${spec.name}@${spec.version}`,
+      `${spec.name}@${spec.name === DEVICE_HUB_PACKAGE ? DEVICE_HUB_UPSTREAM_VERSION : spec.version}`,
     ];
     const result = yield* runner
       .run({ command: "npm", args: installArgs, timeout: INSTALL_TIMEOUT })
@@ -172,6 +173,26 @@ const installTool = Effect.fn("DeviceToolchain.installTool")(function* (
         tool: spec.name,
         step: "verifying the installed entry point",
       });
+    }
+    if (spec.name === DEVICE_HUB_PACKAGE) {
+      const patched = yield* runner
+        .run({
+          command: process.execPath,
+          args: [
+            "-e",
+            deviceHubPatchScript + "\npatchDeviceHub(process.argv[1]);",
+            path.join(stagingDir, "node_modules", spec.name),
+          ],
+          timeout: INSTALL_TIMEOUT,
+        })
+        .pipe(Effect.mapError(fail("patching Apple simulator support")));
+      if (patched.code !== 0)
+        return yield* new DeviceToolchainInstallError({
+          tool: spec.name,
+          step: "patching Apple simulator support",
+          exitCode: Number(patched.code),
+          cause: patched,
+        });
     }
     yield* fs
       .writeFileString(path.join(stagingDir, ".install-complete"), `${spec.version}\n`)

@@ -120,6 +120,7 @@ import * as Runner from ${JSON.stringify(new URL("../processRunner.ts", import.m
 import { ensureDeviceHub } from ${JSON.stringify(new URL("./DeviceToolchain.ts", import.meta.url).href)};
 const base = ${JSON.stringify(base)};
 const runner = { run: input => Effect.promise(async () => {
+  if (!input.args.includes('--prefix')) return { code: 0, stdout: '', stderr: '' };
   await fs.appendFile(path.join(base, 'downloads'), 'download\\n');
   const stage = input.args[input.args.indexOf('--prefix') + 1];
   const entry = path.join(stage, 'node_modules/expo-device-hub/dist/server/cli.mjs');

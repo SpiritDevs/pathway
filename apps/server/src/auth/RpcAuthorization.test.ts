@@ -23,6 +23,11 @@ import {
 } from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
+  it("requires operate scope for simulator input and companion pairing", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.deviceInput)).toBe(AuthOrchestrationOperateScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.deviceAction)).toBe(AuthOrchestrationOperateScope);
+  });
+
   it("declares exactly one scope for every RPC in the server group", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });

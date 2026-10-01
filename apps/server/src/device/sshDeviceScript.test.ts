@@ -1,3 +1,4 @@
+import { deviceHubPatchScript } from "./deviceHubPatch.ts";
 // @effect-diagnostics nodeBuiltinImport:off globalFetchInEffect:off preferSchemaOverJson:off - verifies generated remote scripts using real shell and Node processes.
 import * as Effect from "effect/Effect";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
@@ -104,6 +105,7 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
             file,
             `const originalKill = process.kill; process.kill = (pid, signal) => { if (signal === 'SIGTERM') require('node:fs').appendFileSync(${JSON.stringify(NodePath.join(home, "stops"))}, pid+'\\n'); return originalKill(pid, signal); };\n` +
               remoteDeviceScript(owner, mode)
+                .replace(deviceHubPatchScript, "function patchDeviceHub() {}\n")
                 .replace(DEVICE_HUB_VERSION, upgraded ? nextHubVersion : DEVICE_HUB_VERSION)
                 .replace(AGENT_DEVICE_VERSION, upgraded ? nextAgentVersion : AGENT_DEVICE_VERSION),
           );

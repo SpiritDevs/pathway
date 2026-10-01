@@ -88,6 +88,12 @@ export function createDeviceEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    input: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:device:input",
+      tag: WS_METHODS.deviceInput,
+      scheduler,
+      concurrency,
+    }),
     action: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:device:action",
       tag: WS_METHODS.deviceAction,
