@@ -9,6 +9,10 @@ vi.mock("~/state/entities", () => ({
   useServerConfigs: () =>
     new Map([["test", { environment: { capabilities: { pullRequests: true } } }]]),
 }));
+let checkDetailsVisible = false;
+vi.mock("~/hooks/useLocalStorage", () => ({
+  useLocalStorage: () => [checkDetailsVisible, vi.fn()],
+}));
 vi.mock("../pullRequest/usePullRequestActions", () => ({
   usePullRequestActionRunner: () => ({ actionPending: false, perform: vi.fn() }),
   usePullRequestHandoffs: () => ({ handoff: null, startHandoff: vi.fn() }),
@@ -72,8 +76,10 @@ function render(
     isDraft?: boolean;
     error?: string;
     mergeability?: PullRequestDetail["mergeability"];
+    checkDetailsVisible?: boolean;
   } = {},
 ) {
+  checkDetailsVisible = options.checkDetailsVisible ?? false;
   const currentDetail = {
     ...detail,
     mergeability: options.mergeability ?? detail.mergeability,
@@ -133,8 +139,19 @@ const failedCheck = {
   url: null,
 };
 
-it("uses the sidebar failure colour and visibly explains the failing check", () => {
+it("summarises checks and keeps their details hidden by default", () => {
   const html = render({ mergeability: "mergeable", checks: [failedCheck] });
+  expect(html).toContain(">1 check failing</span>");
+  expect(html).not.toContain(failedCheck.name);
+  expect(html).not.toContain(failedCheck.description);
+});
+
+it("uses the sidebar failure colour and visibly explains the failing check", () => {
+  const html = render({
+    mergeability: "mergeable",
+    checks: [failedCheck],
+    checkDetailsVisible: true,
+  });
   expect(html).toMatch(/<svg[^>]*class="[^"]*text-red-600/);
   expect(html).not.toContain("text-emerald");
   expect(html).toContain(">1 check failing</span>");
@@ -152,6 +169,7 @@ it("shows pending checks and preserves draft glyphs with check-aware colour", ()
 it("counts cancelled checks as failing consistently with the sidebar", () => {
   const html = render({
     checks: [failedCheck, { ...failedCheck, name: "Tests", status: "cancelled" }],
+    checkDetailsVisible: true,
   });
   expect(html).toContain("2 checks failing");
   expect(html).toContain(">Tests</span>");
