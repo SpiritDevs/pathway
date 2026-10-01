@@ -103,9 +103,9 @@ export const collectCuaCacheInputs = Effect.fn("collectCuaCacheInputs")(function
     rust: yield* commandOutput("rustc", ["-vV"]),
     cargo: yield* commandOutput("cargo", ["--version"]),
     compiler: yield* commandOutput("cc", ["--version"]),
+    // xcrun, not xcodebuild: Command Line Tools hosts build Cua too.
     sdk: darwin
       ? [
-          yield* commandOutput("xcodebuild", ["-version"]),
           yield* commandOutput("xcrun", ["--show-sdk-version"]),
           yield* commandOutput("xcrun", ["--show-sdk-build-version"]),
         ]
