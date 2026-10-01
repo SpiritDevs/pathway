@@ -102,7 +102,11 @@ export type DeviceWorkspaceTarget = {
   readonly session: DeviceSession;
   readonly device: DeviceSummary;
   readonly hostLabel: string;
+  /** Companion choices for a Watch; empty for other devices so their changes don't reach it. */
+  readonly devices: ReadonlyArray<DeviceSummary>;
 };
+
+const NO_DEVICES: ReadonlyArray<DeviceSummary> = [];
 
 /**
  * The thread's open device, its session and host label. Equal snapshots keep their identity, so
@@ -126,7 +130,8 @@ const deviceWorkspaceTargetAtom = Atom.family((key: string) => {
       : undefined;
     if (!state || !session || !device) return null;
     const hostLabel = state.hosts.find((host) => host.id === hostId)?.label ?? "Device host";
-    return { session, device, hostLabel };
+    const devices = device.family === "watch" ? state.devices : NO_DEVICES;
+    return { session, device, hostLabel, devices };
   }).pipe(Atom.withEquality(Equal.equals), Atom.withLabel(`device-workspace-target:${key}`));
 });
 

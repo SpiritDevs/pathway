@@ -275,7 +275,7 @@ export function DevicePanel(props: {
             device={activeDevice}
             hostLabel={workspace.hostLabel}
             hostDiagnostics={state.hostStatusDetail}
-            devices={state.devices}
+            devices={workspace.devices}
             visible={props.visible && pageVisible}
             onClose={onClose}
             onPowerOff={onPowerOff}
