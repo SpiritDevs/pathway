@@ -18,11 +18,13 @@ const source = {
 };
 const json = (data: unknown) => Response.json(data);
 const ref = (type: string, id: string) => ({ data: { type, id } });
+const linksOnly = { links: { related: "https://api.appstoreconnect.apple.com/v1/apps/app" } };
 const build = {
   type: "builds",
   id: "build",
   attributes: { version: "8", processingState: "VALID" },
   relationships: {
+    app: linksOnly,
     preReleaseVersion: ref("preReleaseVersions", "version"),
     betaAppReviewSubmission: ref("betaAppReviewSubmissions", "beta"),
     buildBetaDetail: ref("buildBetaDetails", "detail"),
@@ -31,7 +33,12 @@ const build = {
 const buildPage = {
   data: [build],
   included: [
-    { type: "preReleaseVersions", id: "version", attributes: { version: "1.2" } },
+    {
+      type: "preReleaseVersions",
+      id: "version",
+      attributes: { version: "1.2" },
+      relationships: { builds: linksOnly },
+    },
     { type: "betaAppReviewSubmissions", id: "beta", attributes: { betaReviewState: "IN_REVIEW" } },
     {
       type: "buildBetaDetails",
@@ -58,17 +65,24 @@ const versionPage = {
         platform: "IOS",
         appStoreState: "PREPARE_FOR_SUBMISSION",
       },
-      relationships: { build: ref("builds", "build") },
+      relationships: { build: ref("builds", "build"), app: linksOnly },
     },
   ],
 };
 describe("App Store release HTTP boundary", () => {
-  it("seeds allocation from builds and pending uploads, conservatively counting missing versions", async () => {
+  it("seeds allocation from pending uploads with optional relationship linkage", async () => {
     const client = new AppStoreReleaseClient(appleTestCredential, async (url) =>
       url.includes("/builds?")
         ? json({ data: [{ id: "old", attributes: { version: "12.3", processingState: "VALID" } }] })
         : json({
-            data: [{ type: "buildUploads", id: "upload", attributes: { cfBundleVersion: "15" } }],
+            data: [
+              {
+                type: "buildUploads",
+                id: "upload",
+                attributes: { cfBundleVersion: "15" },
+                relationships: { build: linksOnly },
+              },
+            ],
           }),
     );
     expect(await client.highestBuildNumber("app", "1.2")).toBe(15);
@@ -164,7 +178,7 @@ describe("App Store release HTTP boundary", () => {
       client.dispose();
     },
   );
-  it("paginates testers, retains Apple states and briefly caches successful pages", async () => {
+  it("accepts links-only relationships including included resources, paginates and caches Organizer pages", async () => {
     const calls: string[] = [];
     let now = 1000;
     const http: AscHttp = async (url) => {
@@ -222,7 +236,7 @@ describe("App Store release HTTP boundary", () => {
     client.dispose();
   });
   it.each(["testflight", "app-store"] as const)(
-    "performs the %s review sequence and never retries writes",
+    "performs the %s review sequence with links-only relationships and never retries writes",
     async (kind) => {
       const writes: { url: string; body: unknown; method: string }[] = [];
       const http: AscHttp = async (url, init) => {
@@ -236,6 +250,17 @@ describe("App Store release HTTP boundary", () => {
           return json({ ...buildPage, included: buildPage.included.slice(0, 1) });
         if (url.includes("betaGroups")) return json(groups);
         if (url.includes("appStoreVersions")) return json(versionPage);
+        if (url.includes("betaBuildLocalizations"))
+          return json({
+            data: [
+              {
+                id: "localization",
+                type: "betaBuildLocalizations",
+                attributes: { locale: "en-US" },
+                relationships: { build: linksOnly },
+              },
+            ],
+          });
         return json({ data: [] });
       };
       const beforeWrite = vi.fn(async () => {});

@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { ReleaseRpcs, type ReleaseIntent } from "@spiritdevs/contracts/releases";
@@ -155,6 +156,123 @@ function harness() {
   };
 }
 describe("Release jobs and RPCs", () => {
+  it("disposes while the pre-worker approval consumption is stalled", async () => {
+    const h = harness();
+    const entered = Promise.withResolvers<void>();
+    const stalled = Promise.withResolvers<ReleaseIntent>();
+    h.cloud.consume = async () => {
+      entered.resolve();
+      return stalled.promise;
+    };
+    const executing = h.runtime.execute(target, caller, "intent");
+    const rejected = expect(executing).rejects.toBeDefined();
+    await entered.promise;
+    await h.runtime.dispose();
+    await rejected;
+    stalled.resolve({
+      id: "intent",
+      target,
+      environmentId: "env",
+      state: "consumed",
+      expiresAt: Date.now() + 30_000,
+      action: { kind: "app-store", buildId: "build", versionId: "version" },
+    });
+    await stalled.promise;
+    expect(h.state().jobs).toHaveLength(0);
+    expect(h.http).not.toHaveBeenCalled();
+  });
+  it.each(["cancel", "dispose"] as const)(
+    "%s drains a worker stalled before an Apple write",
+    async (method) => {
+      const h = harness();
+      const entered = Promise.withResolvers<void>();
+      const stalled = Promise.withResolvers<void>();
+      let checks = 0;
+      h.cloud.checkExecution = async () => {
+        if (++checks === 2) {
+          entered.resolve();
+          await stalled.promise;
+        }
+      };
+      await h.runtime.archive(archiveInput, caller);
+      await h.runtime.drain();
+      const archive = h.state().archives[0]!;
+      const intent = await h.runtime.prepare(target, caller, {
+        kind: "upload",
+        archiveId: archive.id,
+        artifactSha256: archive.artifactSha256,
+        version: archive.version,
+        buildNumber: archive.buildNumber,
+        platform: archive.platform,
+      });
+      h.approve();
+      const job = await h.runtime.execute(target, caller, intent.id);
+      await entered.promise;
+      if (method === "cancel") await h.runtime.cancel(target, job.id);
+      else await h.runtime.dispose();
+      expect(h.state().jobs.at(-1)?.state).toBe("cancelled");
+      stalled.resolve();
+      await stalled.promise;
+      await h.runtime.dispose();
+      expect(h.http.mock.calls.every(([, init]) => init.method === "GET")).toBe(true);
+    },
+  );
+  effectIt.effect("retains Organizer refresh while coalescing local progress events", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const entered = Promise.withResolvers<void>();
+      const gate = Promise.withResolvers<void>();
+      const initialOrganizer = Promise.withResolvers<void>();
+      let listener: ((kind: "local" | "organizer") => void) | undefined;
+      let localCalls = 0;
+      let organizerCalls = 0;
+      h.runtime.watch = (_target, onChange) => {
+        listener = onChange;
+        return () => {
+          listener = undefined;
+        };
+      };
+      h.runtime.localStatus = async () => {
+        if (++localCalls === 2) {
+          entered.resolve();
+          await gate.promise;
+        }
+        return { environmentId: "env", environmentLabel: "Test", archives: [], jobs: [] };
+      };
+      h.runtime.organizer = async () => {
+        organizerCalls++;
+        initialOrganizer.resolve();
+        return { builds: [], groups: [], testers: [], versions: [], reviews: [], fetchedAt: 0 };
+      };
+      const handlers = makeReleaseRpcHandlers(
+        h.runtime,
+        { authorizeCaller: async () => null },
+        ["orchestration:read"],
+        Effect.succeed(caller),
+      );
+      const fiber = yield* Effect.forkChild(
+        handlers["releases.subscribe"](target).pipe(Stream.take(5), Stream.runCollect),
+      );
+      yield* Effect.promise(() => initialOrganizer.promise);
+      listener!("local");
+      yield* Effect.promise(() => entered.promise);
+      listener!("organizer");
+      listener!("local");
+      listener!("local");
+      gate.resolve();
+      const updates = yield* Fiber.join(fiber);
+      expect([...updates].map((update) => update.kind)).toEqual([
+        "local",
+        "organizer",
+        "local",
+        "organizer",
+        "local",
+      ]);
+      expect(organizerCalls).toBe(2);
+      expect(listener).toBeUndefined();
+      yield* Effect.promise(() => h.runtime.dispose());
+    }),
+  );
   it("archives with a centrally allocated number, then requires client approval to upload", async () => {
     const h = harness();
     const job = await h.runtime.archive(archiveInput, caller);

@@ -114,20 +114,19 @@ export function makeAppleBackend(
       },
       acquireBuildLease: (target, caller, version) =>
         releaseCall((client) =>
-          client.mutation(api.appleReleases.acquireBuildLease, {
+          client.action(api.appleReleases.acquireBuildLease, {
             ...releaseTarget(target),
             caller,
             version,
           }),
         ),
-      allocateBuildNumber: (target, caller, version, token, observedMaximum) =>
+      allocateBuildNumber: (target, caller, version, token) =>
         releaseCall((client) =>
-          client.mutation(api.appleReleases.allocateBuildNumber, {
+          client.action(api.appleReleases.allocateBuildNumber, {
             ...releaseTarget(target),
             caller,
             version,
             token,
-            observedMaximum,
           }),
         ),
     },

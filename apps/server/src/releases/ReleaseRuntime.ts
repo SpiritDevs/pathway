@@ -15,7 +15,7 @@ import {
 import type { AppleCaller } from "../auth/appleCaller.ts";
 import { type ReleaseHost, releaseError } from "./ReleaseHost.ts";
 import type { ReleaseStore, ReleaseState } from "./ReleaseStore.ts";
-import type { ReleaseAccess } from "./ReleaseAccess.ts";
+import { awaitReleaseCloud, type ReleaseAccess } from "./ReleaseAccess.ts";
 export interface ReleaseBackend {
   prepare(
     target: ReleaseTarget,
@@ -34,7 +34,6 @@ export interface ReleaseBackend {
     caller: AppleCaller,
     version: string,
     token: string,
-    observedMaximum: number,
   ): Promise<string>;
 }
 export const sameReleaseTarget = (a: ReleaseTarget, b: ReleaseTarget) =>
@@ -70,6 +69,7 @@ export class ReleaseRuntime {
   #ready: Promise<void> | undefined;
   #serial: Promise<unknown> = Promise.resolve();
   #worker: { id: string; controller: AbortController; done: Promise<void> } | null = null;
+  readonly #lifetime = new AbortController();
   #closed = false;
   #views = new Map<string, Set<(kind: "organizer" | "local") => void>>();
   #cache = new Map<string, { until: number; value: ReleaseOrganizer }>();
@@ -195,7 +195,9 @@ export class ReleaseRuntime {
         );
       await this.#host.source(archive);
     }
-    return this.#cloud.prepare(target, caller, action);
+    return awaitReleaseCloud(this.#lifetime.signal, () =>
+      this.#cloud.prepare(target, caller, action),
+    );
   }
   #archive(target: ReleaseTarget, id: string) {
     const archive = this.#state.archives.find(
@@ -298,14 +300,11 @@ export class ReleaseRuntime {
             const app = (await client.listApps()).find((a) => a.id === input.appId);
             if (!app)
               throw releaseError("invalid-input", "Choose an app accessible to this Apple key.");
-            const lease = await this.#cloud.acquireBuildLease(input, caller, input.version);
-            const maximum = await client.highestBuildNumber(input.appId, input.version);
-            const buildNumber = await this.#cloud.allocateBuildNumber(
-              input,
-              caller,
-              input.version,
-              lease.token,
-              maximum,
+            const lease = await awaitReleaseCloud(leaseSignal, () =>
+              this.#cloud.acquireBuildLease(input, caller, input.version),
+            );
+            const buildNumber = await awaitReleaseCloud(leaseSignal, () =>
+              this.#cloud.allocateBuildNumber(input, caller, input.version, lease.token),
             );
             const result = await this.#host.archive(
               input,
@@ -342,49 +341,58 @@ export class ReleaseRuntime {
       if (this.#worker)
         throw releaseError("busy", "Another release job is running on this environment.");
       if (this.#closed) throw releaseError("interrupted", "The environment is stopping.");
-      const intent = await this.#cloud.consume(target, caller, intentId);
+      const intent = await awaitReleaseCloud(this.#lifetime.signal, () =>
+        this.#cloud.consume(target, caller, intentId),
+      );
       return this.#start(target, intent.action.kind, intentId, async (_job, signal, patch) => {
         const check = () => this.#cloud.checkExecution(target, caller, intentId);
-        await this.#access.run(target, caller, true, signal, check, async (client) => {
-          await check();
-          if (intent.action.kind === "upload") {
-            const archive = this.#archive(target, intent.action.archiveId);
-            if (
-              archive.artifactSha256 !== intent.action.artifactSha256 ||
-              archive.version !== intent.action.version ||
-              archive.buildNumber !== intent.action.buildNumber ||
-              archive.platform !== intent.action.platform
-            )
-              throw releaseError("artifact-changed", "The confirmed archive changed.");
-            const source = await this.#host.source(archive);
-            await patch({ phase: "uploading", archiveId: archive.id });
-            let last = 0;
-            const progress = (bytes: number, total: number) => {
-              if (this.#now() - last < 350 && bytes !== total) return;
-              last = this.#now();
-              // Byte ticks update the in-memory snapshot only; milestone patches persist it.
-              this.#state = {
-                ...this.#state,
-                jobs: this.#state.jobs.map((j) =>
-                  j.id === _job.id ? { ...j, progress: { bytes, total } } : j,
-                ),
+        await this.#access.run(
+          target,
+          caller,
+          true,
+          signal,
+          check,
+          async (client, _credential, leaseSignal) => {
+            await awaitReleaseCloud(leaseSignal, check);
+            if (intent.action.kind === "upload") {
+              const archive = this.#archive(target, intent.action.archiveId);
+              if (
+                archive.artifactSha256 !== intent.action.artifactSha256 ||
+                archive.version !== intent.action.version ||
+                archive.buildNumber !== intent.action.buildNumber ||
+                archive.platform !== intent.action.platform
+              )
+                throw releaseError("artifact-changed", "The confirmed archive changed.");
+              const source = await this.#host.source(archive);
+              await patch({ phase: "uploading", archiveId: archive.id });
+              let last = 0;
+              const progress = (bytes: number, total: number) => {
+                if (this.#now() - last < 350 && bytes !== total) return;
+                last = this.#now();
+                // Byte ticks update the in-memory snapshot only; milestone patches persist it.
+                this.#state = {
+                  ...this.#state,
+                  jobs: this.#state.jobs.map((j) =>
+                    j.id === _job.id ? { ...j, progress: { bytes, total } } : j,
+                  ),
+                };
+                this.#notify(target, "local");
               };
-              this.#notify(target, "local");
-            };
-            const resourceId = await client.upload(
-              target.appId,
-              intent.action,
-              source,
-              progress,
-              (id) => patch({ resourceId: id }),
-            );
-            await patch({ resourceId, progress: { bytes: source.size, total: source.size } });
-          } else {
-            await patch({ phase: "submitting" });
-            const resourceId = await client.publish(target.appId, intent.action);
-            await patch({ resourceId });
-          }
-        });
+              const resourceId = await client.upload(
+                target.appId,
+                intent.action,
+                source,
+                progress,
+                (id) => patch({ resourceId: id }),
+              );
+              await patch({ resourceId, progress: { bytes: source.size, total: source.size } });
+            } else {
+              await patch({ phase: "submitting" });
+              const resourceId = await client.publish(target.appId, intent.action);
+              await patch({ resourceId });
+            }
+          },
+        );
       });
     });
   }
@@ -408,6 +416,8 @@ export class ReleaseRuntime {
   }
   async dispose() {
     this.#closed = true;
+    this.#lifetime.abort();
+    this.#worker?.controller.abort();
     await this.#serial.catch(() => undefined);
     this.#worker?.controller.abort();
     await this.#worker?.done;

@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { AppStoreReleaseClient } from "@spiritdevs/backend/appStoreReleaseApi";
-import { ReleaseAccess } from "./ReleaseAccess.ts";
+import { awaitReleaseCloud, ReleaseAccess } from "./ReleaseAccess.ts";
 import type { AppleBackend } from "../apple/AppleRuntime.ts";
 import { appleTestCredential } from "../../../../packages/backend/src/fixtures/appleTestKey.ts";
 const target = {
@@ -19,6 +19,117 @@ describe("Active release credential leases", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+  it("bounds a stalled Cloud call even before a credential lease exists", async () => {
+    const entered = Promise.withResolvers<void>();
+    const stalled = Promise.withResolvers<void>();
+    const waiting = awaitReleaseCloud(new AbortController().signal, () => {
+      entered.resolve();
+      return stalled.promise;
+    });
+    const rejected = expect(waiting).rejects.toMatchObject({ code: "cloud-unavailable" });
+    await entered.promise;
+    await vi.advanceTimersByTimeAsync(30_000);
+    await rejected;
+    stalled.resolve();
+    await stalled.promise;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each([
+    "initial-authorize",
+    "initial-heartbeat",
+    "credential",
+    "write-authorize",
+    "write-approval",
+    "final-authorize",
+    "final-heartbeat",
+  ])("cancellation interrupts stalled %s and ignores its late reply", async (stage) => {
+    const entered = Promise.withResolvers<void>();
+    const stalled = Promise.withResolvers<void>();
+    const integration = {
+      accountId: target.accountId,
+      teamId: target.teamId,
+      accountRevision: 1,
+      revision: 1,
+      connected: true,
+      issuerId: "issuer",
+      keyIdSuffix: "KEY1",
+      lastVerifiedAt: null,
+    };
+    const wait = async (at: string) => {
+      if (stage === at) {
+        entered.resolve();
+        await stalled.promise;
+      }
+    };
+    let authorizations = 0;
+    let heartbeats = 0;
+    const backend: AppleBackend = {
+      authorizeCaller: async () => {
+        await wait(
+          ++authorizations === 1
+            ? "initial-authorize"
+            : stage.startsWith("write-")
+              ? "write-authorize"
+              : "final-authorize",
+        );
+        return null;
+      },
+      accountStatus: async () => null,
+      heartbeat: async () => {
+        await wait(++heartbeats === 1 ? "initial-heartbeat" : "final-heartbeat");
+        return { integration, expiresAt: Date.now() + 30_000 };
+      },
+      credential: async () => {
+        await wait("credential");
+        return appleTestCredential;
+      },
+      status: async () => ({ integration, environments: [] }),
+      health: async () => null,
+    };
+    const http = vi.fn(async () => Response.json({ data: { id: "upload" } }));
+    const access = new ReleaseAccess(
+      backend,
+      (credential, signal, check) =>
+        new AppStoreReleaseClient(credential, http, Date.now, signal, check),
+    );
+    const controller = new AbortController();
+    const work = vi.fn(async (client: AppStoreReleaseClient) => {
+      if (stage.startsWith("write-"))
+        await client.upload(
+          target.appId,
+          {
+            kind: "upload",
+            archiveId: "archive",
+            artifactSha256: "sha",
+            version: "1.0",
+            buildNumber: "1",
+            platform: "IOS",
+          },
+          { name: "App.ipa", size: 1, slice: () => new Blob(["x"]) },
+          () => {},
+          async () => {},
+        );
+    });
+    const running = access.run(
+      target,
+      caller,
+      true,
+      controller.signal,
+      () => wait("write-approval"),
+      work,
+    );
+    const rejected = expect(running).rejects.toBeDefined();
+    await entered.promise;
+    controller.abort();
+    await rejected;
+    const workCalls = work.mock.calls.length;
+    stalled.resolve();
+    await stalled.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(work).toHaveBeenCalledTimes(workCalls);
+    expect(http).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
   it.each(["rotation", "scope-change", "revoked", "cloud-outage"])(
     "aborts active work after %s",

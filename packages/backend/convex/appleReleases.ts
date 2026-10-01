@@ -1,6 +1,17 @@
 // @effect-diagnostics globalDate:off -- Convex transactions supply the authoritative lease clock.
 import { v, type Infer } from "convex/values";
-import { mutation, query, type QueryCtx } from "./_generated/server.js";
+import { makeFunctionReference } from "convex/server";
+import {
+  action,
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+  type ActionCtx,
+  type QueryCtx,
+} from "./_generated/server.js";
+import type { AscCredential } from "../src/appStoreConnectApi.ts";
+import { AppStoreReleaseClient } from "../src/appStoreReleaseApi.ts";
 import type { Doc } from "./_generated/dataModel.js";
 import { authorizeAppleTeam, authorizeAppleRuntimeCaller } from "./lib/appleIdentity.ts";
 import { requireUser } from "./lib/identity.ts";
@@ -216,12 +227,102 @@ export const checkExecution = query({
 });
 
 const numberArgs = { ...releaseTarget, caller: appleCaller, version: v.string() };
-/** One short exclusive allocator lease per ASC app and marketing version, across accounts/keys. */
-export const acquireBuildLease = mutation({
+const revisions = { revision: v.number(), accountRevision: v.number() };
+type NumberArgs = Infer<typeof numberArgsValidator>;
+const numberArgsValidator = v.object(numberArgs);
+type Revisions = Infer<typeof revisionValidator>;
+const revisionValidator = v.object(revisions);
+type Lease = { token: string; expiresAt: number };
+export const buildNumberAccess = internalQuery({
+  args: numberArgs,
+  returns: revisionValidator,
+  handler: async (ctx, args) => {
+    const { account, team } = await runtime(ctx, args);
+    if (!/^\d+(?:\.\d+){0,2}$/u.test(args.version))
+      return fail("invalid-arguments", "Use a numeric marketing version.");
+    return { revision: team.revision, accountRevision: account.revision };
+  },
+});
+const accessRef = makeFunctionReference<"query", NumberArgs, Revisions>(
+  "appleReleases:buildNumberAccess",
+);
+type CredentialTarget = Pick<Target, "companyId" | "accountId" | "teamId">;
+const heartbeatRef = makeFunctionReference<"mutation", CredentialTarget>(
+  "appleIntegrations:heartbeat",
+);
+const credentialRef = makeFunctionReference<"action", CredentialTarget & Revisions, AscCredential>(
+  "appleIntegrations:runtimeCredential",
+);
+const acquireRef = makeFunctionReference<"mutation", NumberArgs & Revisions, Lease>(
+  "appleReleases:acquireVerifiedBuildLease",
+);
+const allocateRef = makeFunctionReference<
+  "mutation",
+  NumberArgs & Revisions & { token: string; observedMaximum: number },
+  string
+>("appleReleases:allocateVerifiedBuildNumber");
+/** App authority and Apple's maximum are obtained in Cloud, never asserted by an environment. */
+async function withBuildApp<A>(
+  ctx: ActionCtx,
+  args: NumberArgs,
+  run: (client: AppStoreReleaseClient, verified: Revisions) => Promise<A>,
+): Promise<A> {
+  const verified = await ctx.runQuery(accessRef, {
+    companyId: args.companyId,
+    accountId: args.accountId,
+    teamId: args.teamId,
+    appId: args.appId,
+    caller: args.caller,
+    version: args.version,
+  });
+  const target = { companyId: args.companyId, accountId: args.accountId, teamId: args.teamId };
+  await ctx.runMutation(heartbeatRef, target);
+  const credential = await ctx.runAction(credentialRef, { ...target, ...verified });
+  const client = new AppStoreReleaseClient(credential);
+  try {
+    if (!(await client.listApps()).some((app) => app.id === args.appId))
+      return fail("permission-denied", "The Apple key cannot access this app.");
+    return await run(client, verified);
+  } finally {
+    client.dispose();
+  }
+}
+async function verifiedRuntime(ctx: QueryCtx, args: NumberArgs & Revisions) {
+  const access = await runtime(ctx, args);
+  if (access.account.revision !== args.accountRevision || access.team.revision !== args.revision)
+    return fail(
+      "stale-controller-lease",
+      "The Apple credential changed. Prepare the archive again.",
+    );
+  return access;
+}
+export const acquireBuildLease = action({
   args: numberArgs,
   returns: v.object({ token: v.string(), expiresAt: v.number() }),
+  handler: (ctx, args): Promise<Lease> =>
+    withBuildApp(ctx, args, (_client, verified) =>
+      ctx.runMutation(acquireRef, { ...args, ...verified }),
+    ),
+});
+export const allocateBuildNumber = action({
+  // Retained for old callers; this value is ignored. Only Cloud reads seed the counter.
+  args: { ...numberArgs, token: v.string(), observedMaximum: v.optional(v.number()) },
+  returns: v.string(),
+  handler: (ctx, args): Promise<string> =>
+    withBuildApp(ctx, args, async (client, verified) =>
+      ctx.runMutation(allocateRef, {
+        ...args,
+        ...verified,
+        observedMaximum: await client.highestBuildNumber(args.appId, args.version),
+      }),
+    ),
+});
+/** One short exclusive allocator lease per ASC app and marketing version, across accounts/keys. */
+export const acquireVerifiedBuildLease = internalMutation({
+  args: { ...numberArgs, ...revisions },
+  returns: v.object({ token: v.string(), expiresAt: v.number() }),
   handler: async (ctx, args) => {
-    const { actor } = await runtime(ctx, args);
+    const { actor } = await verifiedRuntime(ctx, args);
     if (!/^\d+(?:\.\d+){0,2}$/u.test(args.version))
       return fail("invalid-arguments", "Use a numeric marketing version.");
     const row = await ctx.db
@@ -248,11 +349,11 @@ export const acquireBuildLease = mutation({
     return { token, expiresAt };
   },
 });
-export const allocateBuildNumber = mutation({
-  args: { ...numberArgs, token: v.string(), observedMaximum: v.number() },
+export const allocateVerifiedBuildNumber = internalMutation({
+  args: { ...numberArgs, ...revisions, token: v.string(), observedMaximum: v.number() },
   returns: v.string(),
   handler: async (ctx, args) => {
-    const { actor } = await runtime(ctx, args);
+    const { actor } = await verifiedRuntime(ctx, args);
     const row = await ctx.db
       .query("appleBuildCounters")
       .withIndex("by_app_version", (q) => q.eq("appId", args.appId).eq("version", args.version))

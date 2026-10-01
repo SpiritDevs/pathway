@@ -65,29 +65,40 @@ export function makeReleaseRpcHandlers(
     [RELEASE_WS_METHODS.refresh]: (input) =>
       guard(RELEASE_WS_METHODS.refresh, input, async () => runtime.refresh(input)),
     [RELEASE_WS_METHODS.subscribe]: (input) =>
-      Stream.callback<"organizer" | "local">(
-        (queue) =>
-          Effect.gen(function* () {
-            yield* Effect.acquireRelease(
-              Effect.sync(() => runtime.watch(input, (kind) => Queue.offerUnsafe(queue, kind))),
-              (unwatch) => Effect.sync(unwatch),
-            );
-            Queue.offerUnsafe(queue, "local");
-            Queue.offerUnsafe(queue, "organizer");
-          }),
-        { bufferSize: 2, strategy: "sliding" },
-      ).pipe(
-        Stream.mapEffect((kind) =>
-          guard(
-            RELEASE_WS_METHODS.subscribe,
-            input,
-            async (caller, signal): Promise<ReleaseUpdate> =>
-              kind === "local"
-                ? { kind, local: await runtime.localStatus(input) }
-                : { kind, organizer: await runtime.organizer(input, caller, signal) },
+      Stream.suspend(() => {
+        const pending = new Set<"organizer" | "local">();
+        return Stream.callback<"organizer" | "local">(
+          (queue) =>
+            Effect.gen(function* () {
+              const notify = (kind: "organizer" | "local") => {
+                if (pending.has(kind)) return;
+                pending.add(kind);
+                Queue.offerUnsafe(queue, kind);
+              };
+              yield* Effect.acquireRelease(
+                Effect.sync(() => runtime.watch(input, notify)),
+                (unwatch) => Effect.sync(unwatch),
+              );
+              notify("local");
+              notify("organizer");
+            }),
+          { bufferSize: 2, strategy: "sliding" },
+        ).pipe(
+          Stream.mapEffect((kind) =>
+            Effect.suspend(() => {
+              pending.delete(kind);
+              return guard(
+                RELEASE_WS_METHODS.subscribe,
+                input,
+                async (caller, signal): Promise<ReleaseUpdate> =>
+                  kind === "local"
+                    ? { kind, local: await runtime.localStatus(input) }
+                    : { kind, organizer: await runtime.organizer(input, caller, signal) },
+              );
+            }),
           ),
-        ),
-      ),
+        );
+      }),
   } satisfies RpcGroup.HandlersFrom<RpcGroup.Rpcs<typeof ReleaseRpcs>>;
 }
 export const makeReleaseRpcLayer = (

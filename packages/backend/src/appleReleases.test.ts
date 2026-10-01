@@ -24,6 +24,15 @@ const apps = {
     },
   ],
 };
+const appleHttp = async (input: RequestInfo | URL) => {
+  const url = String(input);
+  if (url.includes("/apps?")) return Response.json(apps);
+  if (url.includes("/builds?"))
+    return Response.json({
+      data: [{ id: "build", attributes: { version: "10", processingState: "VALID" } }],
+    });
+  return Response.json({ data: [] });
+};
 const harness = () => convexTest(schema, modules);
 type Harness = ReturnType<typeof harness>;
 function human(t: Harness, subject = "owner") {
@@ -187,10 +196,7 @@ describe("Cloud release authority", () => {
       "PATHWAY_INTEGRATION_CREDENTIAL_KEYS",
       JSON.stringify({ "test-seal": btoa("a".repeat(32)) }),
     );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => Response.json(apps)),
-    );
+    vi.stubGlobal("fetch", vi.fn(appleHttp));
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -328,56 +334,179 @@ describe("Cloud release authority", () => {
     const h = await releases();
     const args = { ...h.releaseTarget, caller, version: "1.0" };
     const b = environment(h.t, "env-b");
-    const lease = await h.env.mutation(api.appleReleases.acquireBuildLease, args);
-    await expect(b.mutation(api.appleReleases.acquireBuildLease, args)).rejects.toThrow(
+    const lease = await h.env.action(api.appleReleases.acquireBuildLease, args);
+    await expect(b.action(api.appleReleases.acquireBuildLease, args)).rejects.toThrow(
       "Another environment",
     );
     await expect(
-      b.mutation(api.appleReleases.allocateBuildNumber, {
+      b.action(api.appleReleases.allocateBuildNumber, {
         ...args,
         token: lease.token,
         observedMaximum: 10,
       }),
     ).rejects.toThrow("lease");
     expect(
-      await h.env.mutation(api.appleReleases.allocateBuildNumber, {
+      await h.env.action(api.appleReleases.allocateBuildNumber, {
         ...args,
         token: lease.token,
         observedMaximum: 10,
       }),
     ).toBe("11");
-    const leaseB = await b.mutation(api.appleReleases.acquireBuildLease, args);
+    const leaseB = await b.action(api.appleReleases.acquireBuildLease, args);
     expect(
-      await b.mutation(api.appleReleases.allocateBuildNumber, {
+      await b.action(api.appleReleases.allocateBuildNumber, {
         ...args,
         token: leaseB.token,
         observedMaximum: 10,
       }),
     ).toBe("12");
     await expect(
-      h.env.mutation(api.appleReleases.allocateBuildNumber, {
+      h.env.action(api.appleReleases.allocateBuildNumber, {
         ...args,
         token: lease.token,
         observedMaximum: 10,
       }),
     ).rejects.toThrow("lease");
   });
+  it("allows only one simultaneous lease acquisition after Cloud app verification", async () => {
+    const h = await releases();
+    const args = { ...h.releaseTarget, caller, version: "1.0" };
+    const attempts = await Promise.allSettled([
+      h.env.action(api.appleReleases.acquireBuildLease, args),
+      environment(h.t, "env-b").action(api.appleReleases.acquireBuildLease, args),
+    ]);
+    expect(attempts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(attempts.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(await h.t.run((ctx) => ctx.db.query("appleBuildCounters").collect())).toHaveLength(1);
+  });
+  it("denies an unrelated account before touching a shared counter and ignores client maxima", async () => {
+    const h = await releases();
+    const args = { ...h.releaseTarget, caller, version: "1.0" };
+    const lease = await h.env.action(api.appleReleases.acquireBuildLease, args);
+    const before = await h.t.run((ctx) => ctx.db.query("appleBuildCounters").collect());
+    const other = human(h.t, "teammate");
+    const account = await other.mutation(api.appleIntegrations.createAccount, {
+      email: "other@apple.test",
+      displayName: "Other private account",
+    });
+    const otherTeam = { accountId: account.id, teamId: "OTHERTEAM1" };
+    await other.mutation(api.appleIntegrations.upsertTeam, {
+      ...otherTeam,
+      name: "Other",
+      type: "organization",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          data: [
+            {
+              id: "app-2",
+              attributes: { name: "Other app", bundleId: "com.other.app" },
+            },
+          ],
+        }),
+      ),
+    );
+    await other.action(api.appleIntegrations.connect, {
+      ...otherTeam,
+      ...appleTestCredential,
+      expectedRevision: 0,
+    });
+    await h.t.run(async (ctx) => {
+      const link = await ctx.db
+        .query("relayEnvironmentLinks")
+        .withIndex("by_user_and_environment", (q) =>
+          q.eq("userId", "owner").eq("environmentId", "env-b"),
+        )
+        .unique();
+      const { _id, _creationTime, ...copy } = link!;
+      await ctx.db.insert("relayEnvironmentLinks", { ...copy, userId: "teammate" });
+    });
+    await expect(other.query(api.appleReleases.settings, h.releaseTarget)).rejects.toThrow(
+      "private",
+    );
+    const otherArgs = { ...args, ...otherTeam, caller: { clerkSubject: "teammate" } };
+    const otherEnv = environment(h.t, "env-b");
+    await expect(otherEnv.action(api.appleReleases.acquireBuildLease, otherArgs)).rejects.toThrow(
+      "cannot access this app",
+    );
+    await expect(
+      otherEnv.action(api.appleReleases.allocateBuildNumber, {
+        ...otherArgs,
+        token: lease.token,
+        observedMaximum: 9998,
+      }),
+    ).rejects.toThrow("cannot access this app");
+    expect(await h.t.run((ctx) => ctx.db.query("appleBuildCounters").collect())).toEqual(before);
+    vi.stubGlobal("fetch", vi.fn(appleHttp));
+    expect(
+      await h.env.action(api.appleReleases.allocateBuildNumber, {
+        ...args,
+        token: lease.token,
+        observedMaximum: 9998,
+      }),
+    ).toBe("11");
+    // When Apple grants both keys access to the same app, they share the same counter.
+    const next = await otherEnv.action(api.appleReleases.acquireBuildLease, otherArgs);
+    expect(
+      await otherEnv.action(api.appleReleases.allocateBuildNumber, {
+        ...otherArgs,
+        token: next.token,
+        observedMaximum: 9998,
+      }),
+    ).toBe("12");
+    expect(await h.t.run((ctx) => ctx.db.query("appleBuildCounters").collect())).toHaveLength(1);
+  });
+  it.each(["acquire", "allocate"] as const)(
+    "rechecks credential revisions before %s writes",
+    async (operation) => {
+      const h = await releases();
+      const args = { ...h.releaseTarget, caller, version: "1.0" };
+      const lease =
+        operation === "allocate"
+          ? await h.env.action(api.appleReleases.acquireBuildLease, args)
+          : undefined;
+      const before = await h.t.run((ctx) => ctx.db.query("appleBuildCounters").collect());
+      const entered = Promise.withResolvers<void>();
+      const gate = Promise.withResolvers<void>();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          if (String(input).includes("/apps?")) {
+            entered.resolve();
+            await gate.promise;
+          }
+          return appleHttp(input);
+        }),
+      );
+      const attempt = lease
+        ? h.env.action(api.appleReleases.allocateBuildNumber, { ...args, token: lease.token })
+        : h.env.action(api.appleReleases.acquireBuildLease, args);
+      const rejected = expect(attempt).rejects.toThrow();
+      await entered.promise;
+      await h.owner.mutation(api.appleIntegrations.revoke, {
+        ...h.target,
+        expectedRevision: h.connected.revision,
+      });
+      gate.resolve();
+      await rejected;
+      expect(await h.t.run((ctx) => ctx.db.query("appleBuildCounters").collect())).toEqual(before);
+    },
+  );
   it("rejects expired allocation tokens and recovers after lease expiry", async () => {
     const h = await releases();
     const args = { ...h.releaseTarget, caller, version: "1.0" };
-    const lease = await h.env.mutation(api.appleReleases.acquireBuildLease, args);
+    const lease = await h.env.action(api.appleReleases.acquireBuildLease, args);
     vi.setSystemTime(NOW + 30_001);
     await expect(
-      h.env.mutation(api.appleReleases.allocateBuildNumber, {
+      h.env.action(api.appleReleases.allocateBuildNumber, {
         ...args,
         token: lease.token,
         observedMaximum: 0,
       }),
     ).rejects.toThrow("lease");
-    const fresh = await environment(h.t, "env-b").mutation(
-      api.appleReleases.acquireBuildLease,
-      args,
-    );
+    const fresh = await environment(h.t, "env-b").action(api.appleReleases.acquireBuildLease, args);
     expect(fresh.token).not.toBe(lease.token);
   });
 });

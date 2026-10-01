@@ -17,7 +17,9 @@ const resource = Schema.Struct({
   relationships: Schema.optional(
     Schema.Record(
       Schema.String,
-      Schema.Struct({ data: Schema.Union([Schema.Null, reference, Schema.Array(reference)]) }),
+      Schema.Struct({
+        data: Schema.optional(Schema.Union([Schema.Null, reference, Schema.Array(reference)])),
+      }),
     ),
   ),
 });

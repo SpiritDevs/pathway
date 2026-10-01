@@ -4,6 +4,34 @@ import type { AppleBackend } from "../apple/AppleRuntime.ts";
 import { appleFailure, type AscCredential } from "@spiritdevs/backend/appStoreConnectApi";
 import { AppStoreReleaseClient } from "@spiritdevs/backend/appStoreReleaseApi";
 import type { AppleCaller } from "../auth/appleCaller.ts";
+/** Stop awaiting Cloud on cancellation or timeout; late replies cannot resume the caller. */
+export function awaitReleaseCloud<A>(signal: AbortSignal, run: () => Promise<A>): Promise<A> {
+  signal.throwIfAborted();
+  return new Promise<A>((resolve, reject) => {
+    const finish = (complete: () => void) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      complete();
+    };
+    const abort = () => finish(() => reject(signal.reason));
+    const timer = setTimeout(
+      () =>
+        finish(() => reject(appleFailure("cloud-unavailable", "Cloud authorization timed out."))),
+      30_000,
+    );
+    timer.unref?.();
+    signal.addEventListener("abort", abort, { once: true });
+    Promise.resolve()
+      .then(() => {
+        signal.throwIfAborted();
+        return run();
+      })
+      .then(
+        (value) => finish(() => resolve(value)),
+        (error: unknown) => finish(() => reject(error)),
+      );
+  });
+}
 export class ReleaseAccess {
   readonly #backend: AppleBackend;
   readonly #makeClient: (
@@ -42,14 +70,12 @@ export class ReleaseAccess {
         caller,
         manage,
       });
-    await authorize();
-    const lease = await backend.heartbeat(target);
+    await awaitReleaseCloud(signal, authorize);
+    const lease = await awaitReleaseCloud(signal, () => backend.heartbeat(target));
     if (!lease.integration.connected || !lease.expiresAt)
       throw appleFailure("not-connected", "Connect an App Store Connect key first.");
-    const credential = await backend.credential(
-      target,
-      lease.integration.revision,
-      lease.integration.accountRevision,
+    const credential = await awaitReleaseCloud(signal, () =>
+      backend.credential(target, lease.integration.revision, lease.integration.accountRevision),
     );
     const controller = new AbortController();
     const combined = AbortSignal.any([signal, controller.signal]);
@@ -58,8 +84,8 @@ export class ReleaseAccess {
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
     const client = this.#makeClient(credential, combined, async () => {
-      await authorize();
-      await beforeWrite();
+      await awaitReleaseCloud(combined, authorize);
+      await awaitReleaseCloud(combined, beforeWrite);
       combined.throwIfAborted();
     });
     const abort = () => client.dispose();
@@ -84,9 +110,9 @@ export class ReleaseAccess {
         () => {
           void (async () => {
             try {
-              await authorize();
+              await awaitReleaseCloud(combined, authorize);
               if (stopped || combined.aborted) return;
-              const next = await backend.heartbeat(target);
+              const next = await awaitReleaseCloud(combined, () => backend.heartbeat(target));
               if (stopped || combined.aborted) return;
               if (
                 !next.integration.connected ||
@@ -97,9 +123,10 @@ export class ReleaseAccess {
                 expire();
                 return;
               }
-              if (manage) await beforeWrite();
+              if (manage) await awaitReleaseCloud(combined, beforeWrite);
               if (!stopped && !combined.aborted) arm(next.expiresAt);
             } catch (error) {
+              if (stopped || combined.aborted) return;
               failure = error;
               controller.abort();
             }
@@ -113,8 +140,8 @@ export class ReleaseAccess {
       arm(lease.expiresAt);
       combined.throwIfAborted();
       const result = await run(client, credential, combined);
-      await authorize();
-      const current = await backend.heartbeat(target);
+      await awaitReleaseCloud(combined, authorize);
+      const current = await awaitReleaseCloud(combined, () => backend.heartbeat(target));
       if (
         current.integration.revision !== lease.integration.revision ||
         current.integration.accountRevision !== lease.integration.accountRevision ||
@@ -131,6 +158,7 @@ export class ReleaseAccess {
       if (renewal) clearTimeout(renewal);
       if (deadline) clearTimeout(deadline);
       combined.removeEventListener("abort", abort);
+      controller.abort();
       client.dispose();
     }
   }
