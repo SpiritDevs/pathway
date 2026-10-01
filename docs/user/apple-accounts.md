@@ -42,6 +42,8 @@ Open a project's settings and find **App Store Connect**. Choose an Apple ID, th
 
 Projects must sync to a company before they can be linked.
 
+Once a project is linked, use [Releases](releases.md) to archive it and send builds to TestFlight and App Review. Each app's **Publishing** switch is listed next to it under the team, and is off until you turn it on.
+
 ### Create a new app
 
 App Store Connect creates new apps only on its website. Choose **Create a new app** to open App Store Connect, and create the app there. Then return to Pathway, refresh the app list and link the new app.

@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as TimeTrackerRouteImport } from './routes/time-tracker'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as ReleasesRouteImport } from './routes/releases'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as ProjectsRouteImport } from './routes/projects'
 import { Route as PairRouteImport } from './routes/pair'
@@ -101,6 +102,11 @@ const TimeTrackerRoute = TimeTrackerRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReleasesRoute = ReleasesRouteImport.update({
+  id: '/releases',
+  path: '/releases',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RegisterRoute = RegisterRouteImport.update({
@@ -513,6 +519,7 @@ export interface FileRoutesByFullPath {
   '/pair': typeof PairRoute
   '/projects': typeof ProjectsRouteWithChildren
   '/register': typeof RegisterRoute
+  '/releases': typeof ReleasesRoute
   '/settings': typeof SettingsRouteWithChildren
   '/time-tracker': typeof TimeTrackerRoute
   '/usage': typeof UsageRoute
@@ -591,6 +598,7 @@ export interface FileRoutesByTo {
   '/orchestrator': typeof OrchestratorRoute
   '/pair': typeof PairRoute
   '/register': typeof RegisterRoute
+  '/releases': typeof ReleasesRoute
   '/settings': typeof SettingsRouteWithChildren
   '/time-tracker': typeof TimeTrackerRoute
   '/usage': typeof UsageRoute
@@ -672,6 +680,7 @@ export interface FileRoutesById {
   '/pair': typeof PairRoute
   '/projects': typeof ProjectsRouteWithChildren
   '/register': typeof RegisterRoute
+  '/releases': typeof ReleasesRoute
   '/settings': typeof SettingsRouteWithChildren
   '/time-tracker': typeof TimeTrackerRoute
   '/usage': typeof UsageRoute
@@ -753,6 +762,7 @@ export interface FileRouteTypes {
     | '/pair'
     | '/projects'
     | '/register'
+    | '/releases'
     | '/settings'
     | '/time-tracker'
     | '/usage'
@@ -831,6 +841,7 @@ export interface FileRouteTypes {
     | '/orchestrator'
     | '/pair'
     | '/register'
+    | '/releases'
     | '/settings'
     | '/time-tracker'
     | '/usage'
@@ -911,6 +922,7 @@ export interface FileRouteTypes {
     | '/pair'
     | '/projects'
     | '/register'
+    | '/releases'
     | '/settings'
     | '/time-tracker'
     | '/usage'
@@ -992,6 +1004,7 @@ export interface RootRouteChildren {
   PairRoute: typeof PairRoute
   ProjectsRoute: typeof ProjectsRouteWithChildren
   RegisterRoute: typeof RegisterRoute
+  ReleasesRoute: typeof ReleasesRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   TimeTrackerRoute: typeof TimeTrackerRoute
   UsageRoute: typeof UsageRoute
@@ -1021,6 +1034,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/releases': {
+      id: '/releases'
+      path: '/releases'
+      fullPath: '/releases'
+      preLoaderRoute: typeof ReleasesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/register': {
@@ -1714,6 +1734,7 @@ const rootRouteChildren: RootRouteChildren = {
   PairRoute: PairRoute,
   ProjectsRoute: ProjectsRouteWithChildren,
   RegisterRoute: RegisterRoute,
+  ReleasesRoute: ReleasesRoute,
   SettingsRoute: SettingsRouteWithChildren,
   TimeTrackerRoute: TimeTrackerRoute,
   UsageRoute: UsageRoute,

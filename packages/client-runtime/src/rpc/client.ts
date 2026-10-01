@@ -8,6 +8,7 @@ import {
   WS_METHODS,
 } from "@spiritdevs/contracts";
 import { APPLE_WS_METHODS } from "@spiritdevs/contracts/apple";
+import { RELEASE_WS_METHODS } from "@spiritdevs/contracts/releases";
 import { XCODE_WS_METHODS } from "@spiritdevs/contracts/xcode";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -76,7 +77,8 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof APPLE_WS_METHODS.appleIdSubscribe
   | typeof XCODE_WS_METHODS.subscribe
   | typeof COMPUTER_SURFACE_METHODS.subscribe
-  | typeof SIM_BUILD_WS_METHODS.subscribe;
+  | typeof SIM_BUILD_WS_METHODS.subscribe
+  | typeof RELEASE_WS_METHODS.subscribe;
 
 export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.cloudInstallRelayClient
