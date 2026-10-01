@@ -119,6 +119,7 @@ export function DeviceWorkspace(props: {
             visible={props.visible}
             axOverlay={axOverlay}
             control={lease.control}
+            onControlError={lease.reportError}
             allowPhoneView
             onHandle={setHandle}
             renderControls={(view) => (

@@ -55,10 +55,14 @@ Taking control from an agent pauses its device use.
 
 While you are in control, choose **Release control** to go back to watching,
 or **Resume agent** to hand the device back to this conversation's agent.
-Resume agent waits for your control to end, then asks the agent to continue.
-Hiding the panel, switching windows, or closing the device also releases
-control. If the connection to the environment drops, the panel switches to
-watching until it reconnects.
+Resume agent waits for the environment to confirm your control has ended,
+then asks the agent to continue. If that can't be confirmed, the agent is not
+asked, and the panel says why. Hiding the panel, switching to another browser
+tab, minimizing the window, or closing the device also releases control.
+Moving focus to another window while Pathway stays visible does not.
+
+If the connection to the environment drops, your control ends and the panel
+switches to watching. Choose **Take control** again once it reconnects.
 
 If someone else takes control, or your control ends some other way, the panel
 says so and returns to watching. Choose **Take control** again to continue.

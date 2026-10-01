@@ -9,6 +9,7 @@ import {
   type AndroidFoldState,
 } from "./deviceFold";
 import { DeviceDuoGlyph } from "./DeviceDuoGlyph";
+import { deviceControlErrorCode, type DeviceControlCode } from "./deviceControl";
 
 /** Capability comes from the emulator, not its AVD name or screen dimensions. */
 export function DeviceAndroidFoldControls(props: {
@@ -18,6 +19,8 @@ export function DeviceAndroidFoldControls(props: {
   readonly enabled: boolean;
   /** False while watching: posture stays visible but cannot change. */
   readonly canChange: boolean;
+  /** Takes control refusals, so the lease drops input and re-reads state. */
+  readonly onControlError?: ((code: DeviceControlCode) => void) | undefined;
   readonly screenWidth: number | undefined;
   readonly screenHeight: number | undefined;
   readonly onFoldAngle: (angle: number | null) => void;
@@ -66,6 +69,8 @@ export function DeviceAndroidFoldControls(props: {
   const change = (posture: AndroidFoldPosture) => {
     if (busy.current || !props.enabled || !props.canChange) return;
     busy.current = true;
+    // Bound to the lease generation this request carries.
+    const reportControlError = props.onControlError;
     setPending(true);
     setError(null);
     props.onFoldAngle(posture === "closed" ? 0 : 180);
@@ -81,6 +86,8 @@ export function DeviceAndroidFoldControls(props: {
       .catch((cause: unknown) => {
         if (mounted.current) {
           props.onFoldAngle(fold.hingeAngle ?? (fold.posture === "closed" ? 0 : 180));
+          const code = deviceControlErrorCode(cause);
+          if (code && reportControlError) return reportControlError(code);
           setError(
             controller.signal.aborted
               ? "Fold command timed out."

@@ -16,6 +16,14 @@ export const deviceControlErrorCopy: Record<DeviceControlCode, string> = {
     "Pathway couldn't confirm the last input finished. Restart the device tools, then take control again.",
 };
 
+/** A control refusal from a device hub HTTP mutation, read like the RPC error. */
+export class DeviceControlRefusal extends Error {
+  readonly _tag = "DeviceControlError";
+  constructor(readonly code: DeviceControlCode) {
+    super(deviceControlErrorCopy[code]);
+  }
+}
+
 const isDeviceControlCode = (value: unknown): value is DeviceControlCode =>
   typeof value === "string" && Object.hasOwn(deviceControlErrorCopy, value);
 

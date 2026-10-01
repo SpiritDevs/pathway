@@ -4,6 +4,7 @@ import type * as Cause from "effect/Cause";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { randomUUID } from "~/lib/utils";
 import { deviceEnvironment, useDeviceState } from "~/state/device";
+import { useEnvironmentConnectionState } from "~/state/environments";
 import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import {
@@ -15,6 +16,11 @@ import {
 
 /** Leases last 30 seconds on the environment; renew well inside that. */
 export const DEVICE_CONTROL_RENEW_MS = 10_000;
+
+type Lease = { readonly generation: number; readonly connection: number | null };
+
+const DEVICE_CONTROL_DISCONNECTED =
+  "Lost the connection to the environment, which ended your control. Take control again.";
 
 export type DeviceControlView =
   | { readonly kind: "unsupported" }
@@ -28,7 +34,8 @@ export type DeviceControlView =
 /**
  * This viewer's environment control lease for one device. Mount keyed by device; hiding or
  * unmounting releases, and expiry covers a release that never arrives. Input is enabled only
- * while the environment's latest state names this viewer and generation as `held`.
+ * while the environment's latest state names this viewer and generation as `held`, on the same
+ * connection that acquired it.
  */
 export function useDeviceControlLease(options: {
   readonly environmentId: EnvironmentId;
@@ -38,31 +45,39 @@ export function useDeviceControlLease(options: {
 }) {
   const { environmentId, hostId, deviceId, visible } = options;
   const { state, error: stateError, refresh } = useDeviceState(environmentId);
+  const connectionState = useEnvironmentConnectionState(environmentId).data;
+  // The environment drops a viewer's lease with the RPC connection that acquired it.
+  const connection = connectionState?.phase === "connected" ? connectionState.generation : null;
   const acquire = useAtomCommand(deviceEnvironment.acquireControl, { reportFailure: false });
   const renew = useAtomCommand(deviceEnvironment.renewControl, { reportFailure: false });
   const releaseControl = useAtomCommand(deviceEnvironment.releaseControl, {
     reportFailure: false,
   });
   const [viewerId] = useState(randomUUID);
-  const [generation, setGenerationState] = useState<number | null>(null);
+  const [lease, setLeaseState] = useState<Lease | null>(null);
   const [pending, setPending] = useState<"acquire" | "release" | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Cleanup and late RPC results read the newest values, not a render's closure.
-  const generationRef = useRef<number | null>(null);
-  const activeRef = useRef(true);
-  activeRef.current = visible;
-  const setGeneration = (next: number | null) => {
-    generationRef.current = next;
-    setGenerationState(next);
+  const leaseRef = useRef<Lease | null>(null);
+  const connectionRef = useRef(connection);
+  connectionRef.current = connection;
+  // Bumped by every hide and unmount, so an acquisition started before it is handed back.
+  const epochRef = useRef(0);
+  const releasingRef = useRef<Promise<boolean> | null>(null);
+  const setLease = (next: Lease | null) => {
+    leaseRef.current = next;
+    setLeaseState(next);
   };
+  const generation = lease?.generation ?? null;
 
   const supported = state.supportsDeviceControl === true;
-  const unknown = stateError !== null;
+  const unknown = stateError !== null || connection === null;
   const control = currentDeviceController(state, hostId, deviceId);
   const held =
-    generation !== null &&
+    lease !== null &&
+    lease.connection === connection &&
     control?.phase === "held" &&
-    control.generation === generation &&
+    control.generation === lease.generation &&
     control.owner?.kind === "viewer" &&
     control.owner.viewerId === viewerId;
   const active = supported && held && visible && !unknown && pending !== "release";
@@ -77,58 +92,70 @@ export function useDeviceControlLease(options: {
     return code;
   }, []);
 
-  /** Mutations that fail with a control code report it here so the lease state stays honest. */
+  /**
+   * Mutations that fail with a control code report it here, with the generation they were sent
+   * under, so the lease state stays honest. Results from an older lease are ignored.
+   */
   const reportError = useCallback(
-    (code: DeviceControlCode) => {
+    (code: DeviceControlCode, sentWith: number) => {
+      if (leaseRef.current?.generation !== sentWith) return;
       setError(deviceControlErrorCopy[code]);
-      if (deviceControlLost(code)) setGeneration(null);
+      if (deviceControlLost(code)) setLease(null);
       if (code === "stale_generation") refresh();
     },
     [refresh],
   );
 
-  const release = useCallback(async (): Promise<boolean> => {
-    const releasing = generationRef.current;
-    if (releasing === null) return true;
+  /** Resolves true only when the environment acknowledges this viewer's release. */
+  const release = useCallback((): Promise<boolean> => {
+    const releasing = leaseRef.current;
+    if (releasing === null) return releasingRef.current ?? Promise.resolve(true);
     // Input stops before the environment acknowledges, so nothing races the hand-back.
-    setGeneration(null);
+    setLease(null);
     setPending("release");
-    const result = await releaseControl({
+    const request = releaseControl({
       environmentId,
-      input: { hostId, deviceId, viewerId, generation: releasing },
+      input: { hostId, deviceId, viewerId, generation: releasing.generation },
+    }).then((result) => {
+      if (releasingRef.current === request) {
+        releasingRef.current = null;
+        setPending(null);
+      }
+      if (result._tag === "Success") return true;
+      // A lost lease still ends this viewer's input, but it is not an acknowledged hand-back.
+      if (fail(result.cause) === "stale_generation") refresh();
+      return false;
     });
-    setPending(null);
-    if (result._tag === "Success") return true;
-    const code = fail(result.cause);
-    if (code === "stale_generation") refresh();
-    // Losing the lease some other way still means this viewer's input is gone.
-    if (code !== null && deviceControlLost(code)) {
-      setError(null);
-      return true;
-    }
-    return false;
+    releasingRef.current = request;
+    return request;
   }, [deviceId, environmentId, fail, hostId, refresh, releaseControl, viewerId]);
 
   const take = useCallback(async () => {
     if (!supported || unknown || pending !== null) return;
+    const epoch = epochRef.current;
+    const acquiredOn = connectionRef.current;
     setPending("acquire");
     setError(null);
     const result = await acquire({ environmentId, input: { hostId, deviceId, viewerId } });
+    if (epochRef.current !== epoch) {
+      // Hidden or unmounted since asking: hand the lease straight back, even if shown again.
+      if (result._tag === "Success")
+        void releaseControl({
+          environmentId,
+          input: { hostId, deviceId, viewerId, generation: result.value.generation },
+        });
+      return;
+    }
     setPending(null);
     if (result._tag === "Failure") {
       if (fail(result.cause) === "stale_generation") refresh();
       return;
     }
-    const acquired = result.value.generation;
-    if (!activeRef.current) {
-      // Hidden or unmounted while draining: hand the lease straight back.
-      void releaseControl({
-        environmentId,
-        input: { hostId, deviceId, viewerId, generation: acquired },
-      });
+    if (connectionRef.current !== acquiredOn) {
+      setError(DEVICE_CONTROL_DISCONNECTED);
       return;
     }
-    setGeneration(acquired);
+    setLease({ generation: result.value.generation, connection: acquiredOn });
   }, [
     acquire,
     deviceId,
@@ -145,25 +172,34 @@ export function useDeviceControlLease(options: {
 
   // Generations only grow, so a newer one, or ours no longer held, means control moved on.
   useEffect(() => {
-    if (generation === null || control === null) return;
-    if (control.generation < generation) return;
-    if (control.generation === generation && control.phase === "held") return;
-    setGeneration(null);
+    if (lease === null || control === null) return;
+    if (control.generation < lease.generation) return;
+    if (control.generation === lease.generation && control.phase === "held") return;
+    setLease(null);
     setError(
       control.owner?.kind === "viewer" && control.owner.viewerId !== viewerId
         ? "Someone else took control of this device."
         : deviceControlErrorCopy.stale_generation,
     );
-  }, [control, generation, viewerId]);
+  }, [control, lease, viewerId]);
+
+  // A dropped or replaced connection already released the lease on the environment.
+  useEffect(() => {
+    if (lease === null || lease.connection === connection) return;
+    setLease(null);
+    setError(DEVICE_CONTROL_DISCONNECTED);
+  }, [connection, lease]);
 
   useEffect(() => {
     if (proof === null) return;
     const timer = setInterval(() => {
       void renew({ environmentId, input: { hostId, deviceId, ...proof } }).then((result) => {
-        if (result._tag === "Success") return;
+        if (result._tag === "Success" || leaseRef.current?.generation !== proof.generation) return;
         const code = deviceControlErrorCode(result.cause);
-        // A dropped connection leaves the lease to expire; the state stream reports it.
-        if (code) reportError(code);
+        if (code) return reportError(code, proof.generation);
+        // An unconfirmed renewal can no longer vouch for the lease.
+        setLease(null);
+        setError(DEVICE_CONTROL_DISCONNECTED);
       });
     }, DEVICE_CONTROL_RENEW_MS);
     return () => clearInterval(timer);
@@ -172,11 +208,14 @@ export function useDeviceControlLease(options: {
   const releaseRef = useRef(release);
   releaseRef.current = release;
   useEffect(() => {
-    if (!visible) void releaseRef.current();
+    if (visible) return;
+    epochRef.current++;
+    setPending((current) => (current === "acquire" ? null : current));
+    void releaseRef.current();
   }, [visible]);
   useEffect(
     () => () => {
-      activeRef.current = false;
+      epochRef.current++;
       void releaseRef.current();
     },
     [],
@@ -202,7 +241,7 @@ export function useDeviceControlLease(options: {
     control: supported ? proof : undefined,
     view,
     /** Acquired but not yet confirmed by state, or waiting on the previous controller to drain. */
-    acquiring: pending === "acquire" || (generation !== null && !held && !unknown),
+    acquiring: pending === "acquire" || (lease !== null && !held && !unknown),
     releasing: pending === "release",
     error,
     dismissError: () => setError(null),

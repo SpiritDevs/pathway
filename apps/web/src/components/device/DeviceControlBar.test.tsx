@@ -5,9 +5,11 @@ import {
   type DeviceServiceState,
 } from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
-import { act, useEffect } from "react";
+import { withDeviceControl } from "@spiritdevs/client-runtime/device/hub-access";
+import { act, useEffect, type ReactNode } from "react";
 import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { DeviceAndroidFoldControls } from "./DeviceAndroidFoldControls";
 import { DeviceControlBar } from "./DeviceControlBar";
 import {
   DEVICE_CONTROL_RENEW_MS,
@@ -25,6 +27,7 @@ const commands = vi.hoisted(() => ({
   refresh: vi.fn(),
   state: { current: null as unknown },
   stateError: { current: null as string | null },
+  connection: { current: null as unknown },
 }));
 vi.mock("~/state/device", () => ({
   deviceEnvironment: {
@@ -38,6 +41,15 @@ vi.mock("~/state/device", () => ({
     error: commands.stateError.current,
     refresh: commands.refresh,
   }),
+}));
+vi.mock("~/state/environments", () => ({
+  useEnvironmentConnectionState: () => ({ data: commands.connection.current }),
+}));
+vi.mock("~/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => children,
+  TooltipTrigger: (props: { render?: ReactNode; children?: ReactNode }) =>
+    props.render ?? props.children,
+  TooltipPopup: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: "acquire" | "renew" | "release") => commands[command],
@@ -74,6 +86,7 @@ const serviceState = (controls: DeviceControlState[], supported = true) =>
     supportsDeviceControl: supported,
     controls,
   }) as unknown as DeviceServiceState;
+const connected = (generation: number) => ({ phase: "connected", generation });
 const success = (value: DeviceControlState): Result => ({ _tag: "Success", value });
 const failure = (code: DeviceControlError["code"]): Result => ({
   _tag: "Failure",
@@ -137,6 +150,7 @@ beforeEach(() => {
   commands.release.mockResolvedValue(success(control({ phase: "idle" })));
   commands.state.current = serviceState([control({})]);
   commands.stateError.current = null;
+  commands.connection.current = connected(1);
 });
 afterEach(async () => {
   await act(async () => renderer?.unmount());
@@ -296,4 +310,191 @@ it("links to another thread whose agent is in control", async () => {
   await mount();
   expect(text()).toContain("An agent in another thread is in control");
   expect(button("Open thread")).toBeDefined();
+});
+
+async function holding(generation: number) {
+  commands.acquire.mockResolvedValueOnce(success(mine(generation)));
+  await click("Take control");
+  commands.state.current = serviceState([mine(generation)]);
+  await rerender();
+  expect(lease.control?.generation).toBe(generation);
+}
+
+it.each(["stale_generation", "control_held", "control_required"] as const)(
+  "does not resume the agent when release fails with %s",
+  async (code) => {
+    await mount();
+    await holding(8);
+    commands.release.mockResolvedValueOnce(failure(code));
+    await click("Resume agent");
+    expect(resume).not.toHaveBeenCalled();
+    expect(lease.control).toBeNull();
+    expect(lease.error).not.toBeNull();
+  },
+);
+
+it("shares an in-flight release with later callers", async () => {
+  await mount();
+  await holding(8);
+  const released = deferred();
+  commands.release.mockReturnValueOnce(released.promise);
+  let first!: Promise<boolean>;
+  let second!: Promise<boolean>;
+  await act(async () => {
+    first = lease.release();
+  });
+  await act(async () => {
+    second = lease.release();
+  });
+  await act(async () => released.resolve(failure("stale_generation")));
+  expect(await first).toBe(false);
+  expect(await second).toBe(false);
+  expect(commands.release).toHaveBeenCalledOnce();
+});
+
+it("ends control when the environment connection drops or is replaced", async () => {
+  await mount();
+  await holding(8);
+  commands.connection.current = { phase: "backoff", generation: 1 };
+  await rerender();
+  expect(lease.control).toBeNull();
+  expect(text()).toContain("Control status is unavailable");
+  expect(text()).toContain("Lost the connection to the environment");
+  expect(button("Take control").props.disabled).toBe(true);
+
+  // The same snapshot after reconnecting does not restore the old lease.
+  commands.connection.current = connected(2);
+  await rerender();
+  expect(lease.control).toBeNull();
+  expect(button("Take control").props.disabled).toBe(false);
+  await holding(9);
+});
+
+it("drops control when the connection changes while acquiring", async () => {
+  const acquired = deferred();
+  commands.acquire.mockReturnValueOnce(acquired.promise);
+  await mount();
+  await click("Take control");
+  commands.connection.current = connected(2);
+  commands.state.current = serviceState([mine(7)]);
+  await rerender();
+  await act(async () => acquired.resolve(success(mine(7))));
+  expect(lease.control).toBeNull();
+  expect(text()).toContain("Lost the connection to the environment");
+});
+
+it("treats a renewal that fails without a control code as lost control", async () => {
+  vi.useFakeTimers();
+  await mount();
+  await holding(8);
+  commands.renew.mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("gone")) });
+  await act(async () => vi.advanceTimersByTimeAsync(DEVICE_CONTROL_RENEW_MS));
+  expect(lease.control).toBeNull();
+  expect(text()).toContain("Lost the connection to the environment");
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("ignores a late renewal failure from a released lease", async () => {
+  vi.useFakeTimers();
+  await mount();
+  await holding(8);
+  const oldRenew = deferred();
+  commands.renew.mockReturnValueOnce(oldRenew.promise);
+  await act(async () => vi.advanceTimersByTime(DEVICE_CONTROL_RENEW_MS));
+  await click("Release control");
+  commands.state.current = serviceState([control({ generation: 9, phase: "idle", owner: null })]);
+  await rerender();
+  await holding(10);
+  await act(async () => oldRenew.resolve(failure("stale_generation")));
+  expect(lease.control?.generation).toBe(10);
+  expect(commands.refresh).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(1);
+});
+
+it("ignores control errors reported for an older generation", async () => {
+  await mount();
+  await holding(10);
+  await act(async () => lease.reportError("stale_generation", 8));
+  expect(lease.control?.generation).toBe(10);
+  await act(async () => lease.reportError("stale_generation", 10));
+  expect(lease.control).toBeNull();
+  expect(commands.refresh).toHaveBeenCalledOnce();
+});
+
+it("hands back an acquisition hidden and shown again before it returned", async () => {
+  const acquired = deferred();
+  commands.acquire.mockReturnValueOnce(acquired.promise);
+  await mount();
+  await click("Take control");
+  await rerender({ visible: false });
+  await rerender({ visible: true });
+  expect(button("Take control").props.disabled).toBe(false);
+  commands.state.current = serviceState([mine(7)]);
+  await act(async () => acquired.resolve(success(mine(7))));
+  expect(lease.control).toBeNull();
+  expect(commands.release).toHaveBeenCalledWith({
+    environmentId,
+    input: { hostId: "local", deviceId: "phone", viewerId: "viewer-1", generation: 7 },
+  });
+});
+
+it("drops control and re-reads state when a fold is refused as stale", async () => {
+  vi.stubGlobal("window", globalThis);
+  const posts: string[] = [];
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    if (init.method !== "POST")
+      return Response.json({
+        ok: true,
+        fold: { supported: true, posture: "opened", hingeAngle: 180 },
+      });
+    posts.push(url);
+    return new Response("stale_generation", { status: 409 });
+  });
+  const access = {
+    httpBase: "https://environment.test/api/device-hub",
+    wsBase: "wss://environment.test/api/device-hub",
+    query: { hostId: "local" },
+    credentials: true,
+    expiresAt: null,
+  };
+  function FoldProbe() {
+    lease = useDeviceControlLease({
+      environmentId,
+      hostId: "local",
+      deviceId: "phone",
+      visible: true,
+    });
+    const proof = lease.control;
+    return (
+      <DeviceAndroidFoldControls
+        access={withDeviceControl(access, proof ?? null)}
+        deviceId="phone"
+        visible
+        enabled
+        canChange={proof !== null}
+        onControlError={proof ? (code) => lease.reportError(code, proof.generation) : undefined}
+        screenWidth={400}
+        screenHeight={800}
+        onFoldAngle={() => {}}
+      />
+    );
+  }
+  commands.acquire.mockResolvedValueOnce(success(mine(8)));
+  commands.state.current = serviceState([mine(8)]);
+  await act(async () => {
+    renderer = create(<FoldProbe />);
+  });
+  await act(async () => {
+    await lease.take();
+  });
+  const fold = () =>
+    renderer!.root.find(
+      (node) => node.type === "button" && node.props["aria-label"] === "Fold device",
+    );
+  await act(async () => fold().props.onClick());
+  expect(new URL(posts[0]!).searchParams.get("controlGeneration")).toBe("8");
+  expect(commands.refresh).toHaveBeenCalledOnce();
+  expect(lease.control).toBeNull();
+  expect(lease.error).toContain("Your control of this device ended");
+  expect(fold().props.disabled).toBe(true);
 });

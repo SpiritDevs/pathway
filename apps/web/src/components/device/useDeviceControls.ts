@@ -31,7 +31,8 @@ export function useDeviceControls(options: {
   visible: boolean;
   /** Undefined where the environment has no control leases; null while only watching. */
   control?: DeviceControlProof | null | undefined;
-  onControlError?: ((code: DeviceControlCode) => void) | undefined;
+  /** Receives control failures with the generation the action was sent under. */
+  onControlError?: ((code: DeviceControlCode, generation: number) => void) | undefined;
 }) {
   const { environmentId, device, access, visible, control, onControlError } = options;
   const readDetail = useAtomCommand(deviceEnvironment.detail, { reportFailure: false });
@@ -91,13 +92,14 @@ export function useDeviceControls(options: {
   const act = async (body: ActionBody) => {
     if (busy.current || !available) return;
     busy.current = true;
+    const proof = control;
     // A settings read started before this action must not overwrite its confirmed result.
     const revision = ++generation.current;
     setPending(true);
     setError(null);
     return runAction({
       environmentId,
-      input: { ...target, ...(control ? { control } : {}), ...body } as DeviceActionInput,
+      input: { ...target, ...(proof ? { control: proof } : {}), ...body } as DeviceActionInput,
     })
       .then((result) => {
         if (generation.current !== revision) {
@@ -123,7 +125,7 @@ export function useDeviceControls(options: {
         }
         // Control failures belong to the lease, which shows them beside Take control.
         const code = deviceControlErrorCode(result.cause);
-        if (code && onControlError) onControlError(code);
+        if (code && proof && onControlError) onControlError(code, proof.generation);
         else
           setError(code ? deviceControlErrorCopy[code] : formatEnvironmentQueryError(result.cause));
       })

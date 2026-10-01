@@ -16,6 +16,7 @@ import { fitDeviceFrame } from "./deviceFrameLayout";
 import { DeviceDuoViewport } from "./DeviceDuoViewport";
 import { DeviceDuoControls } from "./DeviceDuoControls";
 import { DeviceAndroidFoldControls } from "./DeviceAndroidFoldControls";
+import type { DeviceControlCode } from "./deviceControl";
 import type { DuoControlState } from "@spiritdevs/client-runtime/device/duo-control";
 import { DevicePhoneViewport } from "./DevicePhoneViewport";
 import { DeviceLoadingView } from "./DeviceLoadingView";
@@ -80,6 +81,8 @@ export function DeviceStreamView(props: {
    * leases; null is watch-only, where media keeps streaming and input is never sent.
    */
   readonly control?: DeviceControlProof | null | undefined;
+  /** Control refusals from hub HTTP mutations, with the generation they were sent under. */
+  readonly onControlError?: ((code: DeviceControlCode, generation: number) => void) | undefined;
 }) {
   const [duoControl, setDuoControl] = useState<DuoControlState>({
     pending: false,
@@ -437,6 +440,11 @@ export function DeviceStreamView(props: {
                   visible={props.visible}
                   enabled={status === "streaming"}
                   canChange={inputEnabled}
+                  onControlError={
+                    controlGeneration !== undefined && props.onControlError
+                      ? (code) => props.onControlError?.(code, controlGeneration)
+                      : undefined
+                  }
                   screenWidth={screen?.width}
                   screenHeight={screen?.height}
                   onFoldAngle={setFoldAngle}
