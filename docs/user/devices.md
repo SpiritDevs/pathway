@@ -105,21 +105,27 @@ the chat has several devices open, switch between them from the **…** menu,
 which also has **Reload stream**, **App switcher**, **Back** (Android),
 **Rotate** (iOS), and **Shut down device**.
 
-While the agent is working, the viewer only watches and shows **Agent is using
-the device**. Tap **Take control** to stop the agent's current turn. The viewer
-keeps watching until the turn has stopped, then shows **You have control** and
-your touches reach the device. When you're done, tap **Resume agent**,
-optionally with a message, and the agent continues from the device's current
-state. When the agent is idle, you can use the device without taking control.
+The viewer shows who's in control of the device: you, the agent, someone else,
+or nobody. Only one of them can send input at a time, and the environment
+enforces it. Until you have control, the viewer only watches.
 
-If the agent starts a new turn, for example because someone else sent it a
-message, the viewer goes back to watching and any touch or key you're holding
-is released. While the app is reconnecting to the chat, the viewer only
-watches.
+Tap **Take control** to take the device from whoever has it. The viewer shows
+**Taking control…** while the previous touch or command finishes, then **You
+have control** and your touches reach the device. While you have control,
+nobody else can use the device, including the agent: its device commands are
+refused, but its turn keeps running. When you're done, tap **Resume agent**,
+optionally with a message. The viewer gives up control first, then the agent
+continues from the device's current state.
 
-Taking control stops this chat's agent; it doesn't lock the device. Other
-chats, and anyone else viewing the device while its agent is idle, can still
-use it at the same time.
+You keep control only while the viewer is open. Leaving it, switching apps, or
+switching to another device gives control up, and so does losing the
+connection. If someone else takes control, the viewer
+goes back to watching and any touch or key you're holding is released. While
+the app is reconnecting, the viewer only watches. **Shut down device** is
+available while you have control.
+
+On an environment running an older Pathway release, the viewer only watches
+while the agent is working, and you can use the device once the agent is idle.
 
 The stream pauses when you leave the viewer or switch apps, and reconnects
 when you come back. It works on your local network and over Pathway Connect.

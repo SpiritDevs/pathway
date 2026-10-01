@@ -87,7 +87,7 @@ async function loadPage() {
 describe("native device stream page", () => {
   it("starts the shared client with the native ticket and forwards events", async () => {
     const { page, postMessage, events } = await loadPage();
-    page.start({ platform: "ios", deviceId: "UDID", access, inputEnabled: false });
+    page.start({ platform: "ios", deviceId: "UDID", access, inputEnabled: false, control: null });
     expect(fixture.create).toHaveBeenCalledWith(
       { platform: "ios", deviceId: "UDID", access },
       expect.anything(),
@@ -103,9 +103,32 @@ describe("native device stream page", () => {
     ]);
   });
 
+  it("puts the control proof on the stream's URLs", async () => {
+    const { page } = await loadPage();
+    page.start({
+      platform: "ios",
+      deviceId: "UDID",
+      access: { ...access, query: { ...access.query, viewerId: "old", controlGeneration: "1" } },
+      inputEnabled: true,
+      control: { viewerId: "viewer", generation: 7 },
+    });
+    expect(fixture.create.mock.calls[0]?.[0].access.query).toEqual({
+      wsTicket: "ticket",
+      hostId: "local",
+      viewerId: "viewer",
+      controlGeneration: "7",
+    });
+  });
+
   it("only sends hardware buttons while the user has control", async () => {
     const { page } = await loadPage();
-    page.start({ platform: "android", deviceId: "emulator-5554", access, inputEnabled: false });
+    page.start({
+      platform: "android",
+      deviceId: "emulator-5554",
+      access,
+      inputEnabled: false,
+      control: null,
+    });
     page.command("home");
     expect(fixture.client.pressButton).not.toHaveBeenCalled();
     page.setInputEnabled(true);
@@ -119,7 +142,13 @@ describe("native device stream page", () => {
 
   it("ends the active touch and lifts held keys when control is taken away", async () => {
     const { page, events, frame } = await loadPage();
-    page.start({ platform: "android", deviceId: "emulator-5554", access, inputEnabled: true });
+    page.start({
+      platform: "android",
+      deviceId: "emulator-5554",
+      access,
+      inputEnabled: true,
+      control: null,
+    });
     events().onInputConnected(true);
     const pointer = { pointerId: 1, clientX: 25, clientY: 50, preventDefault: vi.fn() };
     frame().handlers.pointerdown!(pointer);
@@ -152,7 +181,7 @@ describe("native device stream page", () => {
 
   it("ends the active touch when the stream stops", async () => {
     const { page, events, frame } = await loadPage();
-    page.start({ platform: "ios", deviceId: "UDID", access, inputEnabled: true });
+    page.start({ platform: "ios", deviceId: "UDID", access, inputEnabled: true, control: null });
     events().onInputConnected(true);
     frame().handlers.pointerdown!({
       pointerId: 1,

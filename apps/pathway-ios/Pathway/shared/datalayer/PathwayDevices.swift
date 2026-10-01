@@ -1,5 +1,44 @@
 import Foundation
 
+/// One device's control lease, as `subscribeDeviceState` and the control RPCs report it.
+struct PathwayDeviceControlState: Equatable, Sendable {
+    enum Phase: String, Sendable { case idle, held, draining }
+    enum Owner: Equatable, Sendable {
+        case viewer(viewerID: String)
+        case agent
+    }
+
+    let hostID: String
+    let deviceID: String
+    let generation: Int
+    let phase: Phase
+    let owner: Owner?
+
+    init(hostID: String, deviceID: String, generation: Int, phase: Phase, owner: Owner?) {
+        self.hostID = hostID
+        self.deviceID = deviceID
+        self.generation = generation
+        self.phase = phase
+        self.owner = owner
+    }
+
+    init?(_ value: JSONValue) {
+        guard let fields = value.objectValue, let hostID = fields["hostId"]?.stringValue,
+              let deviceID = fields["deviceId"]?.stringValue, let generation = fields["generation"]?.intValue,
+              let phase = fields["phase"]?.stringValue.flatMap(Phase.init(rawValue:)) else { return nil }
+        self.hostID = hostID
+        self.deviceID = deviceID
+        self.generation = generation
+        self.phase = phase
+        let owner = fields["owner"]?.objectValue
+        switch owner?["kind"]?.stringValue {
+        case "viewer": self.owner = owner?["viewerId"]?.stringValue.map { .viewer(viewerID: $0) }
+        case "agent": self.owner = .agent
+        default: self.owner = nil
+        }
+    }
+}
+
 /// The parts of a `subscribeDeviceState` snapshot the thread viewer reads.
 struct PathwayDeviceState: Equatable, Sendable {
     struct Session: Equatable, Sendable {
@@ -21,13 +60,19 @@ struct PathwayDeviceState: Equatable, Sendable {
     let sessions: [Session]
     let devices: [Device]
     let hostLabels: [String: String]
+    /// Whether the environment enforces device control leases. Older environments do not.
+    let supportsDeviceControl: Bool
+    let controls: [PathwayDeviceControlState]
 
-    init(revision: Int, hubBasePath: String, sessions: [Session], devices: [Device], hostLabels: [String: String]) {
+    init(revision: Int, hubBasePath: String, sessions: [Session], devices: [Device], hostLabels: [String: String],
+         supportsDeviceControl: Bool = false, controls: [PathwayDeviceControlState] = []) {
         self.revision = revision
         self.hubBasePath = hubBasePath
         self.sessions = sessions
         self.devices = devices
         self.hostLabels = hostLabels
+        self.supportsDeviceControl = supportsDeviceControl
+        self.controls = controls
     }
 
     init?(_ value: JSONValue) {
@@ -53,6 +98,8 @@ struct PathwayDeviceState: Equatable, Sendable {
             if let id = host.objectValue?["id"]?.stringValue, let label = host.objectValue?["label"]?.stringValue { labels[id] = label }
         }
         hostLabels = labels
+        supportsDeviceControl = fields["supportsDeviceControl"]?.boolValue == true
+        controls = (fields["controls"]?.arrayValue ?? []).compactMap(PathwayDeviceControlState.init)
     }
 }
 
@@ -86,40 +133,209 @@ struct PathwayThreadDevicePreview: Identifiable, Equatable, Sendable {
     static func buttonTitle(count: Int) -> String { count == 1 ? "One device open" : "\(count) devices open" }
 }
 
-/// Who drives the device the viewer shows. The server has no device control lease yet, so this
-/// follows the thread's run, and the viewer accepts input only once the run is known to have stopped.
+/// Who drives the device the viewer shows. Only this viewer's held lease, or an environment
+/// without leases while no run is active, lets touches reach the device.
 enum PathwayDeviceControl: Equatable, Sendable {
-    /// The thread's run state is unknown, for example while it reconnects; the viewer only watches.
+    /// Device or run state is not live, for example while reconnecting; the viewer only watches.
     case unknown
-    /// The agent's run is active; the viewer only watches.
+    /// This viewer asked for control and the previous owner's input is finishing.
+    case taking
+    /// This viewer holds the lease.
+    case you
+    /// An agent run holds the lease, or on an environment without leases, the agent's run is active.
     case agent
-    /// The user interrupted the run and it has not finished stopping; the viewer still only watches.
-    case stopping
-    /// The user stopped the agent's run to drive the device.
-    case user
-    /// No run is active; touches reach the device.
+    /// Another viewer, on this or another client, holds the lease.
+    case viewer
+    /// Nobody holds the lease.
+    case nobody
+    /// The previous owner's input is still finishing.
+    case finishing
+    /// An environment without leases and no active run; touches reach the device unguarded.
     case idle
 
-    /// `interruptedRunID` is the run the user's interrupt was accepted for; any other active run belongs to the agent.
-    static func resolve(runStateKnown: Bool, activeRunID: String?, interruptedRunID: String?) -> Self {
+    /// Control on an environment that enforces leases. `lease` is this viewer's latest acquire or renew
+    /// response, which can be newer than the last snapshot; a newer snapshot supersedes it.
+    static func resolve(_ state: PathwayDeviceState, hostID: String, deviceID: String, viewerID: String,
+                        lease: PathwayDeviceControlState?, acquiring: Bool) -> Self {
+        if acquiring { return .taking }
+        let lease = lease.flatMap { $0.hostID == hostID && $0.deviceID == deviceID ? $0 : nil }
+        let reported = state.controls.first { $0.hostID == hostID && $0.deviceID == deviceID }
+        guard let current = [reported, lease].compactMap({ $0 }).max(by: { $0.generation < $1.generation }) else { return .nobody }
+        switch (current.phase, current.owner) {
+        case (.draining, _): return .finishing
+        case (.held, .agent): return .agent
+        case let (.held, .viewer(id)): return id == viewerID && lease?.generation == current.generation ? .you : .viewer
+        case (.idle, _), (.held, nil): return .nobody
+        }
+    }
+
+    /// Control on an environment without leases: watch-only while the agent's run is active.
+    static func unleased(runStateKnown: Bool, activeRunID: String?) -> Self {
         guard runStateKnown else { return .unknown }
-        if let activeRunID { return activeRunID == interruptedRunID ? .stopping : .agent }
-        return interruptedRunID == nil ? .idle : .user
+        return activeRunID == nil ? .idle : .agent
     }
 
     var label: String {
         switch self {
-        case .unknown: "Reconnecting to the agent…"
-        case .agent: "Agent is using the device"
-        case .stopping: "Stopping the agent…"
-        case .user: "You have control"
+        case .unknown: "Reconnecting to the device…"
+        case .taking: "Taking control…"
+        case .you: "You have control"
+        case .agent: "The agent is using the device"
+        case .viewer: "Someone else is controlling the device"
+        case .nobody: "Nobody is controlling the device"
+        case .finishing: "Finishing the last input…"
         case .idle: "Agent idle — you can use the device"
         }
     }
 
-    var acceptsInput: Bool { self == .user || self == .idle }
+    var acceptsInput: Bool { self == .you || self == .idle }
+    /// Whether Take control applies; environments without leases never offer it.
+    var canTake: Bool { [.agent, .viewer, .nobody, .finishing].contains(self) }
 
     static let defaultResumeMessage = "I'm done with the device. Continue from its current state."
+
+    /// What the viewer says when a device request fails.
+    static func message(for error: Error) -> String {
+        guard case let PathwayRPCError.deviceControl(code, message) = error else { return error.localizedDescription }
+        return switch code {
+        case "control_required": "Take control of the device first."
+        case "control_held": "Someone else is controlling this device."
+        case "stale_generation": "Your control of the device ended. Take control again if you still need it."
+        case "control_draining": "The device is still finishing its last input. Try again in a moment."
+        case "run_stopped": "The agent's run already ended."
+        case "invalid_grant": "The device's control session is no longer valid. Reopen the device and try again."
+        case "input_unconfirmed": "The device may not have received the last input. Restart its device tools before taking control."
+        default: message
+        }
+    }
+}
+
+/// The `{viewerId, generation}` a held lease proves itself with, on input URLs and device mutations.
+struct PathwayDeviceControlProof: Equatable, Sendable {
+    let viewerID: String
+    let generation: Int
+
+    var json: JSONValue { .object(["viewerId": .string(viewerID), "generation": .number(Double(generation))]) }
+    var page: [String: Any] { ["viewerId": viewerID, "generation": generation] }
+}
+
+/// This viewer's device control lease. The environment ties leases to the RPC connection that
+/// acquired them, so one connection lives from acquire to release; closing it releases the lease,
+/// and the lease's 30-second expiry covers a release that never arrives.
+@MainActor @Observable
+final class PathwayDeviceControlLease {
+    struct Connection: Sendable {
+        let request: @Sendable (String, JSONValue) async throws -> JSONValue
+        let close: @Sendable () async -> Void
+    }
+
+    /// Distinct per mounted viewer.
+    let viewerID = UUID().uuidString.lowercased()
+    /// The latest acquire or renew response while this viewer holds the lease.
+    private(set) var lease: PathwayDeviceControlState?
+    private(set) var acquiring = false
+    @ObservationIgnored private var connection: Connection?
+    @ObservationIgnored private var renewal: Task<Void, Never>?
+    /// Bumped by every acquire and release, so a superseded response is dropped.
+    @ObservationIgnored private var epoch = 0
+    @ObservationIgnored private let connect: @MainActor () -> Connection
+
+    static let renewInterval: Duration = .seconds(10)
+
+    init(connect: @escaping @MainActor () -> Connection) { self.connect = connect }
+
+    convenience init(connect client: PathwayConnectClient, environment: PathwayCompanyEnvironment) {
+        self.init {
+            let rpc = PathwayRPCClient(reconnectsSubscriptions: false) { try await client.prepare(environment: environment).webSocketURL }
+            return Connection(
+                // Acquiring waits for the previous owner's input to finish.
+                request: { tag, payload in
+                    try await rpc.request(tag, payload: payload, timeout: tag == "device.acquireControl" ? .seconds(120) : .seconds(30))
+                },
+                close: { await rpc.stop() }
+            )
+        }
+    }
+
+    var proof: PathwayDeviceControlProof? { lease.map { PathwayDeviceControlProof(viewerID: viewerID, generation: $0.generation) } }
+
+    /// Takes the device from whoever has it and keeps the lease renewed until `release`.
+    func acquire(hostID: String, deviceID: String) async throws {
+        try? await release()
+        epoch += 1
+        let epoch = epoch
+        let connection = connect()
+        self.connection = connection
+        acquiring = true
+        defer { if epoch == self.epoch { acquiring = false } }
+        do {
+            let state = try await connection.request("device.acquireControl", .object([
+                "hostId": .string(hostID), "deviceId": .string(deviceID), "viewerId": .string(viewerID)
+            ]))
+            guard epoch == self.epoch else { return }
+            lease = PathwayDeviceControlState(state).flatMap { $0.phase == .held && $0.owner == .viewer(viewerID: viewerID) ? $0 : nil }
+            guard lease != nil else { await drop(); return }
+            renewal = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: Self.renewInterval)
+                    guard !Task.isCancelled else { return }
+                    await self?.renew()
+                }
+            }
+        } catch {
+            if epoch == self.epoch { await drop() }
+            throw error
+        }
+    }
+
+    /// Extends the lease. A refusal means it ended, so the viewer falls back to the latest snapshot.
+    func renew() async {
+        guard let held = lease, let connection else { return }
+        let epoch = epoch
+        do {
+            let state = try await connection.request("device.renewControl", payload(held))
+            guard epoch == self.epoch else { return }
+            if let next = PathwayDeviceControlState(state), next.generation == held.generation, next.phase == .held { lease = next }
+        } catch PathwayRPCError.deviceControl {
+            if epoch == self.epoch { await drop() }
+        } catch {
+            // A transient failure retries on the next tick; expiry or a closed connection ends the lease.
+        }
+    }
+
+    /// Gives the device up and waits for the environment to finish this viewer's input.
+    /// Throws only when the environment could not be reached.
+    func release() async throws {
+        epoch += 1
+        renewal?.cancel()
+        renewal = nil
+        acquiring = false
+        let held = lease, connection = connection
+        lease = nil
+        self.connection = nil
+        guard let connection else { return }
+        // The release finishes even if the caller's task is cancelled, for example when the viewer goes away.
+        try await Task {
+            defer { Task { await connection.close() } }
+            guard let held else { return }
+            do { _ = try await connection.request("device.releaseControl", self.payload(held)) }
+            catch PathwayRPCError.deviceControl {}
+        }.value
+    }
+
+    private func drop() async {
+        renewal?.cancel()
+        renewal = nil
+        lease = nil
+        let connection = connection
+        self.connection = nil
+        await connection?.close()
+    }
+
+    private func payload(_ held: PathwayDeviceControlState) -> JSONValue {
+        .object(["hostId": .string(held.hostID), "deviceId": .string(held.deviceID), "viewerId": .string(viewerID),
+                 "generation": .number(Double(held.generation))])
+    }
 }
 
 /// What the viewer page needs to open one device's media and input through the environment.
@@ -180,6 +396,8 @@ extension PathwayAgentThreadModel {
 @MainActor @Observable
 final class PathwayThreadDevicesModel {
     private(set) var state: PathwayDeviceState?
+    /// False while the subscription reconnects; `state` may then be stale.
+    private(set) var isLive = false
     @ObservationIgnored let threadID: String
     @ObservationIgnored let environment: PathwayCompanyEnvironment
     @ObservationIgnored let connect: PathwayConnectClient
@@ -211,30 +429,34 @@ final class PathwayThreadDevicesModel {
     private func subscribe() async {
         let connect = connect, environment = environment
         let rpc = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
-        defer { Task { await rpc.stop() } }
+        defer { Task { await rpc.stop() }; isLive = false }
         var acceptsAnyRevision = true
         do {
             for try await value in await rpc.subscribe("subscribeDeviceState", payload: .object([:]), bufferingPolicy: .bufferingNewest(1)) {
                 // A reconnect may land on a restarted server whose revisions start over.
-                if value.objectValue?["_pathwayTransport"] != nil { acceptsAnyRevision = true; continue }
+                if value.objectValue?["_pathwayTransport"] != nil { acceptsAnyRevision = true; isLive = false; continue }
                 guard let next = PathwayDeviceState(value) else { continue }
                 if acceptsAnyRevision || next.revision >= (state?.revision ?? .min) {
                     if next != state { state = next }
                     acceptsAnyRevision = false
+                    if !isLive { isLive = true }
                 }
             }
         } catch {}
     }
 
-    /// Closes the thread's session and shuts the simulator or emulator down.
-    func shutDown(_ preview: PathwayThreadDevicePreview) async throws {
+    /// Closes the thread's session and shuts the simulator or emulator down. Environments with
+    /// control leases require this viewer's `control` proof.
+    func shutDown(_ preview: PathwayThreadDevicePreview, control: PathwayDeviceControlProof?) async throws {
         let rpc = PathwayRPCClient(reconnectsSubscriptions: false) { [connect, environment] in
             try await connect.prepare(environment: environment).webSocketURL
         }
         defer { Task { await rpc.stop() } }
-        _ = try await rpc.request("device.close", payload: .object([
+        var payload: [String: JSONValue] = [
             "threadId": .string(threadID), "hostId": .string(preview.hostID),
             "deviceId": .string(preview.deviceID), "shutdown": .bool(true)
-        ]))
+        ]
+        if let control { payload["control"] = control.json }
+        _ = try await rpc.request("device.close", payload: .object(payload))
     }
 }

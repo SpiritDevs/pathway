@@ -22,6 +22,7 @@ final class PathwayDeviceStreamController {
     @ObservationIgnored private var ticketExpiresAt: Date?
     @ObservationIgnored private var refreshesLeft = PathwayDeviceStreamController.maxRefreshes
     @ObservationIgnored private var inputEnabled = false
+    @ObservationIgnored private var proof: PathwayDeviceControlProof?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var preparation: Task<Void, Never>?
     @ObservationIgnored private let prepare: Prepare
@@ -64,7 +65,8 @@ final class PathwayDeviceStreamController {
                 }
                 ticketExpiresAt = expiresAt
                 // Input permission may have changed while the ticket was minted.
-                configuration = ["platform": preview.platform, "deviceId": preview.deviceID, "access": access, "inputEnabled": inputEnabled]
+                configuration = ["platform": preview.platform, "deviceId": preview.deviceID, "access": access,
+                                 "inputEnabled": inputEnabled, "control": proof?.page ?? NSNull()]
                 status = .connecting
                 if self.origin != origin || pageFailed {
                     pageReady = false
@@ -96,6 +98,18 @@ final class PathwayDeviceStreamController {
         inputEnabled = enabled
         configuration?["inputEnabled"] = enabled
         call("window.pathwayDeviceStream.setInputEnabled(enabled)", ["enabled": enabled])
+    }
+
+    /// Input sockets carry the control proof in their URLs, so a new grant restarts the stream with it.
+    /// Renewals keep the proof and losing it needs no reconnect: the environment ignores stale input.
+    func setInput(enabled: Bool, proof: PathwayDeviceControlProof?) {
+        let reconnects = proof != nil && proof != self.proof
+        self.proof = proof
+        configuration?["control"] = proof?.page ?? NSNull()
+        guard reconnects else { setInputEnabled(enabled); return }
+        inputEnabled = enabled
+        configuration?["inputEnabled"] = enabled
+        deliver()
     }
 
     func command(_ button: String) { call("window.pathwayDeviceStream.command(button)", ["button": button]) }
@@ -291,10 +305,9 @@ struct AgentThreadDeviceViewer: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var controller: PathwayDeviceStreamController
+    @State private var lease: PathwayDeviceControlLease
     @State private var selectedID: String?
     @State private var attempt = 0
-    /// The run the user's Take control interrupt was accepted for.
-    @State private var interruptedRunID: String?
     @State private var confirmsTakeControl = false
     @State private var confirmsShutdown = false
     @State private var handBack = ""
@@ -307,15 +320,24 @@ struct AgentThreadDeviceViewer: View {
         _controller = State(initialValue: PathwayDeviceStreamController { [connect = devices.connect, environment = devices.environment] in
             try await connect.prepare(environment: environment)
         })
+        _lease = State(initialValue: PathwayDeviceControlLease(connect: devices.connect, environment: devices.environment))
     }
 
     private var selected: PathwayThreadDevicePreview? {
         devices.previews.first { $0.id == selectedID } ?? devices.previews.first
     }
     private var control: PathwayDeviceControl {
-        .resolve(runStateKnown: model.isSubscriptionReady && model.connectionState == .live,
-                 activeRunID: model.activeRunID, interruptedRunID: interruptedRunID)
+        guard devices.isLive, let state = devices.state, let selected else { return .unknown }
+        guard state.supportsDeviceControl else {
+            return .unleased(runStateKnown: model.isSubscriptionReady && model.connectionState == .live, activeRunID: model.activeRunID)
+        }
+        return .resolve(state, hostID: selected.hostID, deviceID: selected.deviceID, viewerID: lease.viewerID,
+                        lease: lease.lease, acquiring: lease.acquiring)
     }
+    private var input: Input { control == .you ? Input(enabled: true, proof: lease.proof) : Input(enabled: control.acceptsInput, proof: nil) }
+    private struct Input: Equatable { let enabled: Bool; let proof: PathwayDeviceControlProof? }
+    /// Environments with leases only shut a device down for the viewer controlling it.
+    private var canShutDown: Bool { devices.state?.supportsDeviceControl != true || control == .you }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -329,14 +351,13 @@ struct AgentThreadDeviceViewer: View {
             guard scenePhase == .active else { return }
             await devices.watch()
         }
-        .task(id: "\(scenePhase == .active):\(selected?.id ?? ""):\(devices.state?.hubBasePath ?? ""):\(attempt)") { connect() }
-        .onDisappear { controller.stop() }
-        .onChange(of: control.acceptsInput, initial: true) { _, enabled in controller.setInputEnabled(enabled) }
-        .onChange(of: control) { _, control in if control == .agent { interruptedRunID = nil } }
+        .task(id: "\(scenePhase == .active):\(selected?.id ?? ""):\(devices.state?.hubBasePath ?? ""):\(attempt)") { await sync() }
+        .onDisappear { Task { [lease, controller] in try? await lease.release(); controller.stop() } }
+        .onChange(of: input, initial: true) { _, input in controller.setInput(enabled: input.enabled, proof: input.proof) }
         .onChange(of: devices.previews.isEmpty) { _, empty in if empty { dismiss() } }
         .confirmationDialog("Take control of the device?", isPresented: $confirmsTakeControl, titleVisibility: .visible) {
             Button("Take control") { Task { await takeControl() } }
-        } message: { Text("This stops the agent's current turn.") }
+        } message: { Text("Whoever is using it loses control. The agent can't use the device again until you resume it.") }
         .confirmationDialog("Shut down \(selected?.name ?? "this device")?", isPresented: $confirmsShutdown, titleVisibility: .visible) {
             Button("Shut down", role: .destructive) { Task { await shutDown() } }
         } message: { Text("The device closes for this thread and its simulator or emulator stops.") }
@@ -375,13 +396,13 @@ struct AgentThreadDeviceViewer: View {
     private var controlBar: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Circle().fill(control.acceptsInput ? Color.green : control == .unknown ? Color.secondary : Color.orange)
+                Circle().fill(control.acceptsInput ? Color.green : [.unknown, .nobody].contains(control) ? Color.secondary : Color.orange)
                     .frame(width: 8, height: 8)
                 Text(control.label).font(.subheadline).lineLimit(1)
                 Spacer()
-                if control == .agent {
-                    Button("Take control") { confirmsTakeControl = true }
-                        .buttonStyle(.borderedProminent).disabled(isWorking || !model.canInterrupt)
+                if control.canTake || control == .taking {
+                    Button("Take control") { if control == .nobody { Task { await takeControl() } } else { confirmsTakeControl = true } }
+                        .buttonStyle(.borderedProminent).disabled(isWorking || control == .taking)
                         .accessibilityIdentifier("device-take-control")
                 }
             }
@@ -423,8 +444,17 @@ struct AgentThreadDeviceViewer: View {
                 }
                 .disabled(!control.acceptsInput)
                 Button("Shut down device", systemImage: "power", role: .destructive) { confirmsShutdown = true }
+                    .disabled(!canShutDown)
             }
         }
+    }
+
+    /// Gives up control before a hidden viewer or a newly selected device stops its stream.
+    private func sync() async {
+        if let held = lease.lease, scenePhase != .active || held.hostID != selected?.hostID || held.deviceID != selected?.deviceID {
+            try? await lease.release()
+        }
+        connect()
     }
 
     private func connect(refreshingCredentials: Bool = false) {
@@ -434,31 +464,30 @@ struct AgentThreadDeviceViewer: View {
         controller.start(selected, hubBasePath: hubBasePath, refreshingCredentials: refreshingCredentials)
     }
 
-    /// Input stays off until the run the user interrupted is seen to stop.
     private func takeControl() async {
-        guard model.canInterrupt, let runID = model.activeRunID else { return }
+        guard let selected else { return }
         isWorking = true
         defer { isWorking = false }
-        do {
-            try await model.interrupt()
-            interruptedRunID = runID
-        } catch { self.error = error.localizedDescription }
+        do { try await lease.acquire(hostID: selected.hostID, deviceID: selected.deviceID) }
+        catch { self.error = PathwayDeviceControl.message(for: error) }
     }
 
+    /// The agent's follow-up goes out only after the environment finishes this viewer's input.
     private func resumeAgent() async {
         isWorking = true
         defer { isWorking = false }
         do {
+            try await lease.release()
             try await model.resumeAfterDeviceControl(handBack)
             handBack = ""
-            interruptedRunID = nil
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = PathwayDeviceControl.message(for: error) }
     }
 
     private func shutDown() async {
         guard let selected else { return }
         isWorking = true
         defer { isWorking = false }
-        do { try await devices.shutDown(selected) } catch { self.error = error.localizedDescription }
+        do { try await devices.shutDown(selected, control: control == .you ? lease.proof : nil) }
+        catch { self.error = PathwayDeviceControl.message(for: error) }
     }
 }

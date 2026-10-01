@@ -98,6 +98,19 @@ with an error instead of looping. A terminated WebKit content process marks
 the page failed, and the next start loads a new document; callbacks from older
 documents are ignored.
 
+The iOS viewer follows the device control lease contract
+(`device-client-contract.md`). Each mounted viewer generates a `viewerId`,
+acquires, renews every 10 seconds, and releases over one RPC connection that
+lives as long as the lease, because the environment releases a connection's
+grants when it closes. Input is enabled only when the newer of the snapshot's
+`controls` entry and the latest acquire/renew response is `held` by this viewer
+at the generation it was granted. A new grant restarts the page's stream so the
+input socket carries `viewerId` and `controlGeneration`; renewals do not.
+Hiding, backgrounding, or switching devices releases before the stream stops,
+Resume agent awaits the release before dispatching, and a refused renewal drops
+the grant so the snapshot decides. Without `supportsDeviceControl`, the viewer
+falls back to watch-only while the thread's run is active.
+
 Device control on mobile is client-side: the server has no device control
 lease, so the viewer derives control from the thread's run. Unknown run state
 (the thread subscription is not live) and an interrupted run that has not yet

@@ -8,13 +8,18 @@ import {
   type DeviceScreenSize,
   type DeviceStreamClient,
 } from "../../../packages/client-runtime/src/device/stream.ts";
-import type { DeviceHubAccess } from "../../../packages/client-runtime/src/device/hubAccess.ts";
+import {
+  type DeviceHubAccess,
+  withDeviceControl,
+} from "../../../packages/client-runtime/src/device/hubAccess.ts";
 
 export interface DeviceStreamConfiguration {
   readonly platform: "ios" | "android";
   readonly deviceId: string;
   readonly access: DeviceHubAccess;
   readonly inputEnabled: boolean;
+  /** This viewer's held control lease; input URLs carry it. Null while only watching. */
+  readonly control: { readonly viewerId: string; readonly generation: number } | null;
 }
 
 export type DeviceStreamMessage =
@@ -148,7 +153,11 @@ export function start(configuration: DeviceStreamConfiguration) {
 
   let inputConnected = false;
   const client = createDeviceStreamClient(
-    { platform, deviceId: configuration.deviceId, access: configuration.access },
+    {
+      platform,
+      deviceId: configuration.deviceId,
+      access: withDeviceControl(configuration.access, configuration.control),
+    },
     canvas,
     {
       onStatus: (status) => post({ type: "status", status }),
