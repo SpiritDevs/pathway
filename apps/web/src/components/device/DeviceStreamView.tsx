@@ -550,7 +550,8 @@ export function DeviceStreamView(props: {
           )}
           style={{ width: frame.width, height: frame.height }}
           onWheel={(event) => {
-            if (inputEnabled && props.onCrown && !event.ctrlKey) props.onCrown(crownDeltaFromWheel(event));
+            if (inputEnabled && props.onCrown && !event.ctrlKey)
+              props.onCrown(crownDeltaFromWheel(event));
           }}
           onPointerDown={(event) => {
             if (!inputEnabled) return;

@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { parse } from "yaml";
 
@@ -55,8 +56,14 @@ describe("Cua build cache identity", () => {
     it.effect("fingerprints exactly the Cargo flags the cache-miss build runs with", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
         const action = yield* Schema.decodeUnknownEffect(ProvisionAction)(
-          parse(yield* fs.readFileString(".github/actions/provision-cua/action.yml")),
+          parse(
+            yield* fs.readFileString(
+              path.join(repoRoot, ".github/actions/provision-cua/action.yml"),
+            ),
+          ),
         );
         const stepFlags = (name: string) =>
           cuaBuildFlags(action.runs.steps.find((step) => step.name === name)?.env ?? {});

@@ -517,7 +517,9 @@ describe("DesktopRemoteUpdates", () => {
 
         const backgroundCheck = yield* updates.check("poll").pipe(Effect.forkChild);
         yield* Deferred.await(backgroundCheckStarted);
-        assert.equal((yield* updates.getState).status, "checking");
+        // Background polls stay quiet, but still hold the update action an install waits on.
+        assert.equal((yield* updates.getState).status, "downloaded");
+        assert.isTrue(yield* updates.isActionActive);
 
         yield* Queue.offer(commits, {
           version: 1,

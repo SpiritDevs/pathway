@@ -276,7 +276,11 @@ it.effect(
           (yield* f.service.detail({ hostId: "ssh-mac", deviceId: "watch" })).watchPair
             ?.phoneDeviceId,
         ).toBe("phone");
-        yield* controlledAction(f.service, { hostId: "ssh-mac", deviceId: "watch", type: "unpairWatch" });
+        yield* controlledAction(f.service, {
+          hostId: "ssh-mac",
+          deviceId: "watch",
+          type: "unpairWatch",
+        });
         expect(
           (yield* f.service.detail({ hostId: "ssh-mac", deviceId: "watch" })).watchPair,
         ).toBeNull();
@@ -296,20 +300,29 @@ it.effect(
     test((f) =>
       Effect.gen(function* () {
         for (const phoneDeviceId of ["pad", "absent"]) {
-          const error = yield* controlledAction(f.service, { deviceId: "watch", type: "pairWatch", phoneDeviceId })
-            .pipe(Effect.flip);
+          const error = yield* controlledAction(f.service, {
+            deviceId: "watch",
+            type: "pairWatch",
+            phoneDeviceId,
+          }).pipe(Effect.flip);
           expect(error._tag).toBe("DeviceActionUnavailableError");
         }
         f.failPair();
         expect(
-          (yield* controlledAction(f.service, { deviceId: "watch", type: "pairWatch", phoneDeviceId: "phone" })
-            .pipe(Effect.flip))._tag,
+          (yield* controlledAction(f.service, {
+            deviceId: "watch",
+            type: "pairWatch",
+            phoneDeviceId: "phone",
+          }).pipe(Effect.flip))._tag,
         ).toBe("DeviceOperationError");
         const before = f.commands.length;
         f.block("local:ios:phone");
         expect(
-          (yield* controlledAction(f.service, { deviceId: "watch", type: "pairWatch", phoneDeviceId: "phone" })
-            .pipe(Effect.flip))._tag,
+          (yield* controlledAction(f.service, {
+            deviceId: "watch",
+            type: "pairWatch",
+            phoneDeviceId: "phone",
+          }).pipe(Effect.flip))._tag,
         ).toBe("DeviceHostUnavailableError");
         expect(f.commands.slice(before).some((call) => call.args[1] === "pair")).toBe(false);
       }),
@@ -416,12 +429,19 @@ it.effect(
         f.paired.set("ssh-mac", "unavailable-phone");
         f.block("ssh-mac:ios:unavailable-phone");
         expect(
-          (yield* controlledAction(f.service, { hostId: "ssh-mac", deviceId: "watch", type: "unpairWatch" })
-            .pipe(Effect.flip))._tag,
+          (yield* controlledAction(f.service, {
+            hostId: "ssh-mac",
+            deviceId: "watch",
+            type: "unpairWatch",
+          }).pipe(Effect.flip))._tag,
         ).toBe("DeviceHostUnavailableError");
         expect(f.commands.some((command) => command.args[1] === "unpair")).toBe(false);
         f.block("no-block");
-        yield* controlledAction(f.service, { hostId: "ssh-mac", deviceId: "watch", type: "unpairWatch" });
+        yield* controlledAction(f.service, {
+          hostId: "ssh-mac",
+          deviceId: "watch",
+          type: "unpairWatch",
+        });
         expect(f.claims).toContain("ssh-mac:ios:unavailable-phone");
         expect(f.commands.filter((command) => command.args[1] === "unpair")).toEqual([
           { host: "ssh-mac", args: ["simctl", "unpair", "pair1"] },
