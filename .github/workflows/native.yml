@@ -5,6 +5,7 @@ on:
     paths:
       - "apps/pathway-ios/**"
       - "packages/contracts/**"
+      - "packages/client-runtime/src/device/**"
       - "packages/backend/convex/**"
       - "scripts/ios/**"
       - "apps/web/src/terminal/ghostty/**"

@@ -144,7 +144,8 @@ actor PathwayDirectConnections {
         socket.queryItems = [URLQueryItem(name: "wsTicket", value: value)]
         guard let socketURL = socket.url else { throw PathwayConnectError.invalidURL }
         return .init(environmentID: environmentID, label: connection.label, httpBaseURL: connection.baseURL,
-            webSocketURL: socketURL, accessToken: connection.accessToken, proofKeyThumbprint: connection.thumbprint, scopes: connection.scopes)
+            webSocketURL: socketURL, accessToken: connection.accessToken, proofKeyThumbprint: connection.thumbprint, scopes: connection.scopes,
+            ticketExpiresAt: ticket.objectValue?["expiresAt"]?.stringValue.flatMap(pathwayDate(from:)))
     }
 
     func request(environmentID: String, accountKey: String, method: String, path: String, payload: JSONValue? = nil) async throws -> JSONValue {

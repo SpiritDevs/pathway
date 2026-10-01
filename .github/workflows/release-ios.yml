@@ -46,6 +46,7 @@ jobs:
             echo "should_release=true" >> "$GITHUB_OUTPUT"
           elif git diff --quiet "$checkpoint" HEAD -- \
             apps/pathway-ios scripts/ios scripts/configure-pathway-ios.ts \
+            packages/client-runtime/src/device \
             scripts/lib/public-config.ts .github/workflows/release-ios.yml; then
             echo "No iOS changes since the last successful main-branch upload."
             echo "should_release=false" >> "$GITHUB_OUTPUT"

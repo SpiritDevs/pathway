@@ -46,8 +46,12 @@ const post = (message: DeviceStreamMessage) => nativeBridge?.postMessage(message
 
 let activeClient: DeviceStreamClient | null = null;
 let inputEnabled = false;
+// Closes the active gesture and releases held keys; set by `start` for the page's frame.
+let releaseInput = () => {};
 
 export function stop() {
+  releaseInput();
+  releaseInput = () => {};
   activeClient?.stop();
   activeClient = null;
 }
@@ -58,8 +62,10 @@ export function command(button: DeviceStreamCommand) {
   else activeClient?.pressButton(button);
 }
 
+/** Disabling input ends any touch at its last accepted point and lifts held keys. */
 export function setInputEnabled(enabled: boolean) {
   inputEnabled = enabled;
+  if (!enabled) releaseInput();
 }
 
 /** Rotation the iOS stream needs when the simulator reports landscape on a portrait framebuffer. */
@@ -164,13 +170,25 @@ export function start(configuration: DeviceStreamConfiguration) {
   activeClient = client;
 
   let pointerId: number | null = null;
+  let lastPoint = { x: 0, y: 0 };
+  const pressedKeys = new Map<string, KeyboardEvent>();
   const touch = (event: PointerEvent, phase: "begin" | "move" | "end") => {
     const rect = frame.getBoundingClientRect();
-    client.sendTouch(
-      phase,
-      Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
-      Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
-    );
+    lastPoint = {
+      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+    };
+    client.sendTouch(phase, lastPoint.x, lastPoint.y);
+  };
+  releaseInput = () => {
+    if (pointerId !== null) {
+      const id = pointerId;
+      pointerId = null;
+      client.sendTouch("end", lastPoint.x, lastPoint.y);
+      if (frame.hasPointerCapture(id)) frame.releasePointerCapture(id);
+    }
+    for (const event of pressedKeys.values()) client.sendKey(event, "up");
+    pressedKeys.clear();
   };
   frame.addEventListener("pointerdown", (event) => {
     if (!inputEnabled || !inputConnected || pointerId !== null) return;
@@ -181,7 +199,7 @@ export function start(configuration: DeviceStreamConfiguration) {
     touch(event, "begin");
   });
   frame.addEventListener("pointermove", (event) => {
-    if (pointerId === event.pointerId) touch(event, "move");
+    if (inputEnabled && pointerId === event.pointerId) touch(event, "move");
   });
   const endTouch = (event: PointerEvent) => {
     if (pointerId !== event.pointerId) return;
@@ -194,10 +212,12 @@ export function start(configuration: DeviceStreamConfiguration) {
   frame.addEventListener("keydown", (event) => {
     if (!inputEnabled) return;
     event.preventDefault();
+    pressedKeys.set(event.code, event);
     client.sendKey(event, "down");
   });
   frame.addEventListener("keyup", (event) => {
-    if (inputEnabled) client.sendKey(event, "up");
+    if (!pressedKeys.delete(event.code)) return;
+    client.sendKey(event, "up");
   });
   post({ type: "input", connected: false });
   client.start();

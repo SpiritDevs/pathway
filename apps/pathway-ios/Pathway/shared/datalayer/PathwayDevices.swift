@@ -86,31 +86,38 @@ struct PathwayThreadDevicePreview: Identifiable, Equatable, Sendable {
     static func buttonTitle(count: Int) -> String { count == 1 ? "One device open" : "\(count) devices open" }
 }
 
-/// Who drives the device the viewer shows. The server has no device control lease, so this
-/// follows the thread's run: a running agent drives it until the user takes control.
+/// Who drives the device the viewer shows. The server has no device control lease yet, so this
+/// follows the thread's run, and the viewer accepts input only once the run is known to have stopped.
 enum PathwayDeviceControl: Equatable, Sendable {
+    /// The thread's run state is unknown, for example while it reconnects; the viewer only watches.
+    case unknown
     /// The agent's run is active; the viewer only watches.
     case agent
+    /// The user interrupted the run and it has not finished stopping; the viewer still only watches.
+    case stopping
     /// The user stopped the agent's run to drive the device.
     case user
     /// No run is active; touches reach the device.
     case idle
 
-    /// `takenFromRunID` is the run the user interrupted; a different active run hands control back to the agent.
-    static func resolve(agentRunning: Bool, activeRunID: String?, tookControl: Bool, takenFromRunID: String?) -> Self {
-        if agentRunning, !tookControl || activeRunID != takenFromRunID { return .agent }
-        return tookControl ? .user : .idle
+    /// `interruptedRunID` is the run the user's interrupt was accepted for; any other active run belongs to the agent.
+    static func resolve(runStateKnown: Bool, activeRunID: String?, interruptedRunID: String?) -> Self {
+        guard runStateKnown else { return .unknown }
+        if let activeRunID { return activeRunID == interruptedRunID ? .stopping : .agent }
+        return interruptedRunID == nil ? .idle : .user
     }
 
     var label: String {
         switch self {
+        case .unknown: "Reconnecting to the agent…"
         case .agent: "Agent is using the device"
+        case .stopping: "Stopping the agent…"
         case .user: "You have control"
-        case .idle: "Agent idle — you have control"
+        case .idle: "Agent idle — you can use the device"
         }
     }
 
-    var acceptsInput: Bool { self != .agent }
+    var acceptsInput: Bool { self == .user || self == .idle }
 
     static let defaultResumeMessage = "I'm done with the device. Continue from its current state."
 }
@@ -118,11 +125,11 @@ enum PathwayDeviceControl: Equatable, Sendable {
 /// What the viewer page needs to open one device's media and input through the environment.
 /// Media requests cannot carry bearer or DPoP headers, so they carry the connection's `wsTicket`.
 enum PathwayDeviceHubAccess {
-    /// Tickets live five minutes; treat them as expired a little early so a late rejection reads as expiry.
-    static let ticketLifetime: TimeInterval = 270
+    /// Assumed lifetime when the environment does not report the ticket's expiry; tickets live five minutes.
+    static let fallbackTicketLifetime: TimeInterval = 270
 
     /// The `DeviceHubAccess` object the shared stream client reads, or nil when the URLs do not fit.
-    static func make(httpBaseURL: URL, webSocketURL: URL, hubBasePath: String, hostID: String, mintedAt: Date) -> [String: Any]? {
+    static func make(httpBaseURL: URL, webSocketURL: URL, hubBasePath: String, hostID: String, expiresAt: Date) -> [String: Any]? {
         guard var http = URLComponents(url: httpBaseURL, resolvingAgainstBaseURL: false),
               let ticket = URLComponents(url: webSocketURL, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name == "wsTicket" })?.value, !ticket.isEmpty,
@@ -136,7 +143,7 @@ enum PathwayDeviceHubAccess {
             "wsBase": (scheme == "https" ? "wss" : "ws") + httpBase.dropFirst(scheme.count),
             "query": ["wsTicket": ticket, "hostId": hostID],
             "credentials": false,
-            "expiresAt": (mintedAt.timeIntervalSince1970 + ticketLifetime) * 1000
+            "expiresAt": expiresAt.timeIntervalSince1970 * 1000
         ]
     }
 

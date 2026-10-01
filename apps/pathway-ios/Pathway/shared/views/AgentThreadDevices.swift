@@ -6,57 +6,89 @@ import WebKit
 @MainActor @Observable
 final class PathwayDeviceStreamController {
     enum Status: Equatable { case preparing, connecting, streaming, failed(String) }
+    typealias Prepare = @MainActor () async throws -> PathwayPreparedEnvironmentConnection
 
     private(set) var status: Status = .preparing
     private(set) var inputConnected = false
-    /// The origin the page is loaded at; a new origin reloads the page.
+    /// The origin the page is loaded at.
     private(set) var origin: URL?
+    /// Identifies the current document. A new value recreates the web view; callbacks from older pages are ignored.
+    private(set) var page = UUID()
+    /// What the page starts with once it loads; nil while a ticket is being minted.
+    @ObservationIgnored private(set) var configuration: [String: Any]?
     @ObservationIgnored private weak var webView: WKWebView?
     @ObservationIgnored private var pageReady = false
-    @ObservationIgnored private var configuration: [String: Any]?
-    @ObservationIgnored private var lastMint: Date?
+    @ObservationIgnored private var pageFailed = false
+    @ObservationIgnored private var ticketExpiresAt: Date?
+    @ObservationIgnored private var refreshesLeft = PathwayDeviceStreamController.maxRefreshes
     @ObservationIgnored private var inputEnabled = false
+    @ObservationIgnored private var generation = 0
     @ObservationIgnored private var preparation: Task<Void, Never>?
+    @ObservationIgnored private let prepare: Prepare
+    @ObservationIgnored private let now: () -> Date
 
-    /// A rejection this soon after minting means the environment refuses the credentials, not that they expired.
-    static let rejectionWindow: TimeInterval = 10
+    /// Automatic credential refreshes allowed before the stream connects or the user retries.
+    static let maxRefreshes = 2
     static let rejectedMessage = "This environment rejected the device stream credentials."
+    static let expiredMessage = "The device stream's credentials kept expiring."
 
     static let javaScript: String? = Bundle.main.url(forResource: "PathwayDeviceStream", withExtension: "bundle")
         .flatMap { try? String(contentsOf: $0.appendingPathComponent("device-stream.js"), encoding: .utf8) }
 
-    /// Mints a ticket and (re)starts the stream for `preview`.
-    func start(_ preview: PathwayThreadDevicePreview, hubBasePath: String, connect: PathwayConnectClient,
-               environment: PathwayCompanyEnvironment, inputEnabled: Bool) {
+    init(now: @escaping () -> Date = Date.init, prepare: @escaping Prepare) {
+        self.now = now
+        self.prepare = prepare
+    }
+
+    /// Mints a ticket and (re)starts the stream for `preview`. Only a credential refresh after a rejection
+    /// spends the refresh budget; every other start is a fresh attempt.
+    @discardableResult
+    func start(_ preview: PathwayThreadDevicePreview, hubBasePath: String, refreshingCredentials: Bool = false) -> Task<Void, Never> {
         preparation?.cancel()
-        self.inputEnabled = inputEnabled
+        generation += 1
+        let generation = generation
+        if !refreshingCredentials { refreshesLeft = Self.maxRefreshes }
+        // The previous stream, possibly another device, stops and gives up input while the ticket is minted.
+        configuration = nil
+        stopPage()
         status = .preparing
-        preparation = Task {
+        let task = Task { [prepare] in
             do {
-                let prepared = try await connect.prepare(environment: environment)
-                guard !Task.isCancelled else { return }
-                let minted = Date()
+                let prepared = try await prepare()
+                guard generation == self.generation else { return }
+                let expiresAt = prepared.ticketExpiresAt ?? now().addingTimeInterval(PathwayDeviceHubAccess.fallbackTicketLifetime)
                 guard let access = PathwayDeviceHubAccess.make(httpBaseURL: prepared.httpBaseURL, webSocketURL: prepared.webSocketURL,
-                                                              hubBasePath: hubBasePath, hostID: preview.hostID, mintedAt: minted),
+                                                              hubBasePath: hubBasePath, hostID: preview.hostID, expiresAt: expiresAt),
                       let origin = PathwayDeviceHubAccess.origin(prepared.httpBaseURL) else {
                     status = .failed("This environment's address can't stream devices."); return
                 }
-                lastMint = minted
+                ticketExpiresAt = expiresAt
+                // Input permission may have changed while the ticket was minted.
                 configuration = ["platform": preview.platform, "deviceId": preview.deviceID, "access": access, "inputEnabled": inputEnabled]
                 status = .connecting
-                if self.origin != origin { pageReady = false; self.origin = origin } else { deliver() }
-            } catch is CancellationError {
+                if self.origin != origin || pageFailed {
+                    pageReady = false
+                    pageFailed = false
+                    self.origin = origin
+                    page = UUID()
+                } else {
+                    deliver()
+                }
             } catch {
+                guard generation == self.generation, !(error is CancellationError) else { return }
                 status = .failed(error.localizedDescription)
             }
         }
+        preparation = task
+        return task
     }
 
     func stop() {
         preparation?.cancel()
         preparation = nil
+        generation += 1
         configuration = nil
-        webView?.evaluateJavaScript("window.pathwayDeviceStream?.stop()", completionHandler: nil)
+        stopPage()
     }
 
     func setInputEnabled(_ enabled: Bool) {
@@ -70,10 +102,15 @@ final class PathwayDeviceStreamController {
 
     func attach(_ view: WKWebView) { webView = view; pageReady = false }
     func detach(_ view: WKWebView) { if webView === view { webView = nil; pageReady = false } }
-    func didLoad() { pageReady = true; deliver() }
+    func didLoad(page: UUID) {
+        guard page == self.page else { return }
+        pageReady = true
+        deliver()
+    }
 
-    /// Returns true when the owner should mint a fresh ticket and restart.
-    func received(_ message: [String: Any]) -> Bool {
+    /// Returns true when the owner should mint a fresh ticket and restart with `refreshingCredentials`.
+    func received(_ message: [String: Any], page: UUID) -> Bool {
+        guard page == self.page, configuration != nil else { return false }
         switch message["type"] as? String {
         case "status":
             switch message["status"] as? String {
@@ -84,17 +121,31 @@ final class PathwayDeviceStreamController {
         case "input":
             inputConnected = message["connected"] as? Bool ?? false
         case "unauthorized":
-            if let lastMint, Date().timeIntervalSince(lastMint) < Self.rejectionWindow {
-                status = .failed(Self.rejectedMessage)
-                return false
+            if refreshesLeft > 0 {
+                refreshesLeft -= 1
+                return true
             }
-            return true
+            let expired = ticketExpiresAt.map { now() >= $0 } ?? false
+            status = .failed(expired ? Self.expiredMessage : Self.rejectedMessage)
+            return false
         default: break
         }
+        if status == .streaming, inputConnected { refreshesLeft = Self.maxRefreshes }
         return false
     }
 
-    func failed(_ message: String) { pageReady = false; status = .failed(message) }
+    /// The page itself broke; the next start loads a new document.
+    func failed(_ message: String, page: UUID) {
+        guard page == self.page else { return }
+        pageReady = false
+        pageFailed = true
+        status = .failed(message)
+    }
+
+    private func stopPage() {
+        inputConnected = false
+        webView?.evaluateJavaScript("window.pathwayDeviceStream?.stop()", completionHandler: nil)
+    }
 
     private func deliver() {
         guard pageReady, let configuration else { return }
@@ -104,9 +155,10 @@ final class PathwayDeviceStreamController {
 
     private func call(_ script: String, _ arguments: [String: Any]) {
         guard pageReady, let webView else { return }
+        let page = page
         Task { [weak self] in
             do { _ = try await webView.callAsyncJavaScript(script, arguments: arguments, in: nil, contentWorld: .page) }
-            catch { self?.failed("The device viewer stopped: \(error.localizedDescription)") }
+            catch { self?.failed("The device viewer stopped: \(error.localizedDescription)", page: page) }
         }
     }
 }
@@ -115,6 +167,7 @@ final class PathwayDeviceStreamController {
 struct PathwayDeviceStreamWebView: UIViewRepresentable {
     let controller: PathwayDeviceStreamController
     let origin: URL
+    let page: UUID
     let onUnauthorized: () -> Void
 
     static func html(origin: URL) -> String {
@@ -131,7 +184,7 @@ struct PathwayDeviceStreamWebView: UIViewRepresentable {
         """
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeCoordinator() -> Coordinator { Coordinator(self, page: page) }
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
@@ -150,7 +203,7 @@ struct PathwayDeviceStreamWebView: UIViewRepresentable {
         view.scrollView.contentInsetAdjustmentBehavior = .never
         controller.attach(view)
         if PathwayDeviceStreamController.javaScript == nil {
-            controller.failed("The device viewer is missing from this build.")
+            controller.failed("The device viewer is missing from this build.", page: page)
         } else {
             view.loadHTMLString(Self.html(origin: origin), baseURL: origin)
         }
@@ -167,14 +220,16 @@ struct PathwayDeviceStreamWebView: UIViewRepresentable {
 
     @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var parent: PathwayDeviceStreamWebView
-        init(_ parent: PathwayDeviceStreamWebView) { self.parent = parent }
+        /// The document this web view was created for.
+        let page: UUID
+        init(_ parent: PathwayDeviceStreamWebView, page: UUID) { self.parent = parent; self.page = page }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             let origin = message.frameInfo.securityOrigin
             guard message.name == "deviceStream", message.frameInfo.isMainFrame,
                   origin.host == parent.origin.host, origin.protocol == parent.origin.scheme,
                   let fields = message.body as? [String: Any] else { return }
-            if parent.controller.received(fields) { parent.onUnauthorized() }
+            if parent.controller.received(fields, page: page) { parent.onUnauthorized() }
         }
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
@@ -185,12 +240,12 @@ struct PathwayDeviceStreamWebView: UIViewRepresentable {
                 && (url?.path ?? "/").count <= 1
             decisionHandler(allowed ? .allow : .cancel)
         }
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { parent.controller.didLoad() }
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { parent.controller.didLoad(page: page) }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            parent.controller.failed(error.localizedDescription)
+            parent.controller.failed(error.localizedDescription, page: page)
         }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            parent.controller.failed("The device viewer stopped. Reload the stream to reconnect.")
+            parent.controller.failed("The device viewer stopped. Reconnect to reload it.", page: page)
         }
     }
 }
@@ -235,23 +290,31 @@ struct AgentThreadDeviceViewer: View {
     let model: PathwayAgentThreadModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
-    @State private var controller = PathwayDeviceStreamController()
+    @State private var controller: PathwayDeviceStreamController
     @State private var selectedID: String?
     @State private var attempt = 0
-    @State private var tookControl = false
-    @State private var takenFromRunID: String?
+    /// The run the user's Take control interrupt was accepted for.
+    @State private var interruptedRunID: String?
     @State private var confirmsTakeControl = false
     @State private var confirmsShutdown = false
     @State private var handBack = ""
     @State private var error: String?
     @State private var isWorking = false
 
+    init(devices: PathwayThreadDevicesModel, model: PathwayAgentThreadModel) {
+        self.devices = devices
+        self.model = model
+        _controller = State(initialValue: PathwayDeviceStreamController { [connect = devices.connect, environment = devices.environment] in
+            try await connect.prepare(environment: environment)
+        })
+    }
+
     private var selected: PathwayThreadDevicePreview? {
         devices.previews.first { $0.id == selectedID } ?? devices.previews.first
     }
     private var control: PathwayDeviceControl {
-        .resolve(agentRunning: model.canInterrupt, activeRunID: model.activeRunID,
-                 tookControl: tookControl, takenFromRunID: takenFromRunID)
+        .resolve(runStateKnown: model.isSubscriptionReady && model.connectionState == .live,
+                 activeRunID: model.activeRunID, interruptedRunID: interruptedRunID)
     }
 
     var body: some View {
@@ -269,7 +332,7 @@ struct AgentThreadDeviceViewer: View {
         .task(id: "\(scenePhase == .active):\(selected?.id ?? ""):\(devices.state?.hubBasePath ?? ""):\(attempt)") { connect() }
         .onDisappear { controller.stop() }
         .onChange(of: control.acceptsInput, initial: true) { _, enabled in controller.setInputEnabled(enabled) }
-        .onChange(of: control) { _, control in if control == .agent { tookControl = false } }
+        .onChange(of: control) { _, control in if control == .agent { interruptedRunID = nil } }
         .onChange(of: devices.previews.isEmpty) { _, empty in if empty { dismiss() } }
         .confirmationDialog("Take control of the device?", isPresented: $confirmsTakeControl, titleVisibility: .visible) {
             Button("Take control") { Task { await takeControl() } }
@@ -285,8 +348,8 @@ struct AgentThreadDeviceViewer: View {
     @ViewBuilder private var stream: some View {
         ZStack {
             if scenePhase == .active, let origin = controller.origin {
-                PathwayDeviceStreamWebView(controller: controller, origin: origin) { connect() }
-                    .id(origin)
+                PathwayDeviceStreamWebView(controller: controller, origin: origin, page: controller.page) { connect(refreshingCredentials: true) }
+                    .id(controller.page)
                     .accessibilityLabel(selected?.platform == "ios" ? "iOS Simulator screen" : "Android Emulator screen")
             }
             switch controller.status {
@@ -312,16 +375,17 @@ struct AgentThreadDeviceViewer: View {
     private var controlBar: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Circle().fill(control == .agent ? Color.orange : Color.green).frame(width: 8, height: 8)
+                Circle().fill(control.acceptsInput ? Color.green : control == .unknown ? Color.secondary : Color.orange)
+                    .frame(width: 8, height: 8)
                 Text(control.label).font(.subheadline).lineLimit(1)
                 Spacer()
                 if control == .agent {
                     Button("Take control") { confirmsTakeControl = true }
-                        .buttonStyle(.borderedProminent).disabled(isWorking)
+                        .buttonStyle(.borderedProminent).disabled(isWorking || !model.canInterrupt)
                         .accessibilityIdentifier("device-take-control")
                 }
             }
-            if control != .agent {
+            if control.acceptsInput {
                 HStack(spacing: 8) {
                     TextField("Message for the agent (optional)", text: $handBack)
                         .textFieldStyle(.roundedBorder)
@@ -363,23 +427,22 @@ struct AgentThreadDeviceViewer: View {
         }
     }
 
-    private func connect() {
+    private func connect(refreshingCredentials: Bool = false) {
         guard scenePhase == .active, let selected, let hubBasePath = devices.state?.hubBasePath else {
             controller.stop(); return
         }
-        controller.start(selected, hubBasePath: hubBasePath, connect: devices.connect, environment: devices.environment,
-                         inputEnabled: control.acceptsInput)
+        controller.start(selected, hubBasePath: hubBasePath, refreshingCredentials: refreshingCredentials)
     }
 
+    /// Input stays off until the run the user interrupted is seen to stop.
     private func takeControl() async {
+        guard model.canInterrupt, let runID = model.activeRunID else { return }
         isWorking = true
         defer { isWorking = false }
-        takenFromRunID = model.activeRunID
-        tookControl = true
-        do { try await model.interrupt() } catch {
-            tookControl = false
-            self.error = error.localizedDescription
-        }
+        do {
+            try await model.interrupt()
+            interruptedRunID = runID
+        } catch { self.error = error.localizedDescription }
     }
 
     private func resumeAgent() async {
@@ -388,7 +451,7 @@ struct AgentThreadDeviceViewer: View {
         do {
             try await model.resumeAfterDeviceControl(handBack)
             handBack = ""
-            tookControl = false
+            interruptedRunID = nil
         } catch { self.error = error.localizedDescription }
     }
 

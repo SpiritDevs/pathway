@@ -7,6 +7,8 @@ const fixture = vi.hoisted(() => ({
     rotate: vi.fn(),
     pressButton: vi.fn(),
     setMjpegImage: vi.fn(),
+    sendTouch: vi.fn(),
+    sendKey: vi.fn(),
   },
   create: vi.fn(),
 }));
@@ -28,12 +30,33 @@ const access = {
   expiresAt: 1,
 };
 
-const element = () => ({
-  style: {},
-  setAttribute: vi.fn(),
-  append: vi.fn(),
-  addEventListener: vi.fn(),
-});
+interface FakeElement {
+  handlers: Record<string, (event: unknown) => void>;
+  captured: Set<number>;
+  releasePointerCapture: ReturnType<typeof vi.fn>;
+}
+
+function element(): FakeElement & Record<string, unknown> {
+  const fake = {
+    style: {},
+    handlers: {} as FakeElement["handlers"],
+    captured: new Set<number>(),
+    setAttribute: vi.fn(),
+    append: vi.fn(),
+    focus: vi.fn(),
+    addEventListener: (name: string, handler: (event: unknown) => void) => {
+      fake.handlers[name] = handler;
+    },
+    setPointerCapture: (id: number) => fake.captured.add(id),
+    hasPointerCapture: (id: number) => fake.captured.has(id),
+    releasePointerCapture: vi.fn((id: number) => {
+      fake.captured.delete(id);
+      fake.handlers.lostpointercapture?.({ pointerId: id });
+    }),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 200 }),
+  };
+  return fake;
+}
 
 async function loadPage() {
   const postMessage = vi.fn();
@@ -42,8 +65,13 @@ async function loadPage() {
     addEventListener: vi.fn(),
   };
   vi.stubGlobal("window", windowStub);
+  const elements: FakeElement[] = [];
   vi.stubGlobal("document", {
-    createElement: vi.fn(element),
+    createElement: vi.fn(() => {
+      const fake = element();
+      elements.push(fake);
+      return fake;
+    }),
     body: { replaceChildren: vi.fn() },
   });
   let events: { onUnauthorized: () => void; onInputConnected: (connected: boolean) => void };
@@ -52,7 +80,8 @@ async function loadPage() {
     return fixture.client;
   });
   const page = await import("./entry.ts");
-  return { page, postMessage, events: () => events };
+  const frame = () => elements.find((fake) => fake.handlers.pointerdown)!;
+  return { page, postMessage, events: () => events, frame };
 }
 
 describe("native device stream page", () => {
@@ -85,6 +114,54 @@ describe("native device stream page", () => {
     expect(fixture.client.pressButton).toHaveBeenCalledWith("back");
     expect(fixture.client.rotate).toHaveBeenCalledOnce();
     page.stop();
+    expect(fixture.client.stop).toHaveBeenCalledOnce();
+  });
+
+  it("ends the active touch and lifts held keys when control is taken away", async () => {
+    const { page, events, frame } = await loadPage();
+    page.start({ platform: "android", deviceId: "emulator-5554", access, inputEnabled: true });
+    events().onInputConnected(true);
+    const pointer = { pointerId: 1, clientX: 25, clientY: 50, preventDefault: vi.fn() };
+    frame().handlers.pointerdown!(pointer);
+    const key = { code: "KeyA", key: "a", preventDefault: vi.fn() };
+    frame().handlers.keydown!(key);
+
+    page.setInputEnabled(false);
+    frame().handlers.pointermove!({ ...pointer, clientX: 75, clientY: 150 });
+    frame().handlers.pointerup!({ ...pointer, clientX: 75, clientY: 150 });
+    frame().handlers.keyup!(key);
+
+    expect(fixture.client.sendTouch.mock.calls).toEqual([
+      ["begin", 0.25, 0.25],
+      ["end", 0.25, 0.25],
+    ]);
+    expect(frame().releasePointerCapture).toHaveBeenCalledWith(1);
+    expect(frame().captured.size).toBe(0);
+    expect(fixture.client.sendKey.mock.calls).toEqual([
+      [key, "down"],
+      [key, "up"],
+    ]);
+
+    // A new gesture needs control again.
+    frame().handlers.pointerdown!({ ...pointer, pointerId: 2 });
+    expect(fixture.client.sendTouch).toHaveBeenCalledTimes(2);
+    page.setInputEnabled(true);
+    frame().handlers.pointerdown!({ ...pointer, pointerId: 2 });
+    expect(fixture.client.sendTouch).toHaveBeenLastCalledWith("begin", 0.25, 0.25);
+  });
+
+  it("ends the active touch when the stream stops", async () => {
+    const { page, events, frame } = await loadPage();
+    page.start({ platform: "ios", deviceId: "UDID", access, inputEnabled: true });
+    events().onInputConnected(true);
+    frame().handlers.pointerdown!({
+      pointerId: 1,
+      clientX: 50,
+      clientY: 100,
+      preventDefault: vi.fn(),
+    });
+    page.stop();
+    expect(fixture.client.sendTouch).toHaveBeenLastCalledWith("end", 0.5, 0.5);
     expect(fixture.client.stop).toHaveBeenCalledOnce();
   });
 

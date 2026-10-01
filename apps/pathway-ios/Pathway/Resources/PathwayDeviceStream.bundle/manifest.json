@@ -1,6 +1,6 @@
 {
   "inputs": {
-    "apps/pathway-ios/device-stream/entry.ts": "1e6e9d587ab54cf52db13a8e00b1ab0369812c151b25a80297271426cc928f1b",
+    "apps/pathway-ios/device-stream/entry.ts": "a68353995779e1deec503706cf8cfcc267b2690b73120631de929bd9a8aa72cf",
     "packages/client-runtime/src/device/duoControl.ts": "22c4eb6d76375d344d4ed52c444ca35f6e73b104221fc4968aff08fd925cfd81",
     "packages/client-runtime/src/device/frame.ts": "609191b358e7e6051b18912904ded4414107a832bebd718264fbbb6bc8de2d91",
     "packages/client-runtime/src/device/hubAccess.ts": "2845734b7ae1c6c40ec231a6504f207a9d0c4153360af57970cb874612b6b48f",
@@ -10,6 +10,6 @@
   },
   "outputs": {
     "Info.plist": "a90552eed8d1fb8fda6eb78da4bf59b750ccd10ea4ab5a6456de17fa9ff1a63e",
-    "device-stream.js": "2f45e30e47f454b792a4f6528707770e8b79b28096532e4f179c29e579a665ea"
+    "device-stream.js": "d716ccfcc9237334b84cc11b1f494205513579b5d44c870e669d1c24f2ea2582"
   }
 }

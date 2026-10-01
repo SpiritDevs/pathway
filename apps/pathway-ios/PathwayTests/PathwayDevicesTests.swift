@@ -55,39 +55,43 @@ struct PathwayDevicesTests {
         #expect(state?.sessions.isEmpty == true)
     }
 
-    @Test func controlFollowsTheRunUntilTheUserTakesIt() {
-        #expect(PathwayDeviceControl.resolve(agentRunning: true, activeRunID: "run-1", tookControl: false, takenFromRunID: nil) == .agent)
-        #expect(PathwayDeviceControl.resolve(agentRunning: true, activeRunID: "run-1", tookControl: true, takenFromRunID: "run-1") == .user)
-        #expect(PathwayDeviceControl.resolve(agentRunning: false, activeRunID: nil, tookControl: true, takenFromRunID: "run-1") == .user)
-        #expect(PathwayDeviceControl.resolve(agentRunning: false, activeRunID: nil, tookControl: false, takenFromRunID: nil) == .idle)
+    @Test func inputWaitsForTheInterruptedRunToStop() {
+        // A disconnected thread may still be running, so the viewer only watches.
+        #expect(PathwayDeviceControl.resolve(runStateKnown: false, activeRunID: nil, interruptedRunID: nil) == .unknown)
+        #expect(PathwayDeviceControl.resolve(runStateKnown: false, activeRunID: nil, interruptedRunID: "run-1") == .unknown)
+        #expect(PathwayDeviceControl.resolve(runStateKnown: true, activeRunID: "run-1", interruptedRunID: nil) == .agent)
+        // An accepted interrupt is not control until the run stops.
+        #expect(PathwayDeviceControl.resolve(runStateKnown: true, activeRunID: "run-1", interruptedRunID: "run-1") == .stopping)
+        #expect(PathwayDeviceControl.resolve(runStateKnown: true, activeRunID: nil, interruptedRunID: "run-1") == .user)
+        #expect(PathwayDeviceControl.resolve(runStateKnown: true, activeRunID: nil, interruptedRunID: nil) == .idle)
         // A new run takes the device back.
-        #expect(PathwayDeviceControl.resolve(agentRunning: true, activeRunID: "run-2", tookControl: true, takenFromRunID: "run-1") == .agent)
-        #expect(!PathwayDeviceControl.agent.acceptsInput)
-        #expect(PathwayDeviceControl.idle.acceptsInput)
+        #expect(PathwayDeviceControl.resolve(runStateKnown: true, activeRunID: "run-2", interruptedRunID: "run-1") == .agent)
+        #expect([PathwayDeviceControl.unknown, .agent, .stopping].allSatisfy { !$0.acceptsInput })
+        #expect([PathwayDeviceControl.user, .idle].allSatisfy { $0.acceptsInput })
     }
 
     @Test func buildsHubAccessFromTheConnectionTicket() throws {
-        let minted = Date(timeIntervalSince1970: 1_000)
+        let expires = Date(timeIntervalSince1970: 1_300)
         let access = try #require(PathwayDeviceHubAccess.make(
             httpBaseURL: URL(string: "https://relay.example/env/abc/")!,
             webSocketURL: URL(string: "wss://relay.example/env/abc/ws?wsTicket=ticket-1")!,
-            hubBasePath: "/api/device-hub", hostID: "ssh-mini", mintedAt: minted))
+            hubBasePath: "/api/device-hub", hostID: "ssh-mini", expiresAt: expires))
         #expect(access["httpBase"] as? String == "https://relay.example/api/device-hub")
         #expect(access["wsBase"] as? String == "wss://relay.example/api/device-hub")
         #expect(access["query"] as? [String: String] == ["wsTicket": "ticket-1", "hostId": "ssh-mini"])
         #expect(access["credentials"] as? Bool == false)
-        #expect(access["expiresAt"] as? Double == (1_000 + PathwayDeviceHubAccess.ticketLifetime) * 1000)
+        #expect(access["expiresAt"] as? Double == 1_300_000)
 
         let local = try #require(PathwayDeviceHubAccess.make(
             httpBaseURL: URL(string: "http://192.168.1.4:3773")!, webSocketURL: URL(string: "ws://192.168.1.4:3773/ws?wsTicket=t")!,
-            hubBasePath: "/api/device-hub", hostID: "local", mintedAt: minted))
+            hubBasePath: "/api/device-hub", hostID: "local", expiresAt: expires))
         #expect(local["wsBase"] as? String == "ws://192.168.1.4:3773/api/device-hub")
         #expect(PathwayDeviceHubAccess.origin(URL(string: "https://relay.example/env/abc/?x=1")!)?.absoluteString == "https://relay.example/")
     }
 
     @Test func refusesAccessWithoutATicket() {
         #expect(PathwayDeviceHubAccess.make(httpBaseURL: URL(string: "https://env.example")!, webSocketURL: URL(string: "wss://env.example/ws")!,
-                                            hubBasePath: "/api/device-hub", hostID: "local", mintedAt: .now) == nil)
+                                            hubBasePath: "/api/device-hub", hostID: "local", expiresAt: .now) == nil)
     }
 
     @Test func pageAllowsOnlyItsOwnOrigin() {
@@ -96,12 +100,102 @@ struct PathwayDevicesTests {
         #expect(html.contains("script-src 'none'"))
     }
 
-    @Test func refreshesAnExpiredTicketButNotAFreshRejection() {
-        let controller = PathwayDeviceStreamController()
-        #expect(controller.received(["type": "unauthorized"]))
-        #expect(!controller.received(["type": "input", "connected": true]))
-        #expect(controller.inputConnected)
-        _ = controller.received(["type": "status", "status": "streaming"])
+    private let iPhone = PathwayThreadDevicePreview(hostID: "local", deviceID: "UDID-1", platform: "ios", name: "iPhone 17", detail: "")
+    private let pixel = PathwayThreadDevicePreview(hostID: "local", deviceID: "emulator-5554", platform: "android", name: "Pixel", detail: "")
+
+    private func prepared(ticket: String = "ticket", expiresAt: Date? = nil) -> PathwayPreparedEnvironmentConnection {
+        .init(environmentID: "environment", label: "Mac", httpBaseURL: URL(string: "https://env.example")!,
+              webSocketURL: URL(string: "wss://env.example/ws?wsTicket=\(ticket)")!, accessToken: "token",
+              proofKeyThumbprint: "thumbprint", scopes: [], ticketExpiresAt: expiresAt)
+    }
+
+    @Test func refreshesCredentialsABoundedNumberOfTimesUntilTheStreamConnects() async {
+        var clock = Date(timeIntervalSince1970: 1_000)
+        let connection = prepared(expiresAt: Date(timeIntervalSince1970: 1_300))
+        let controller = PathwayDeviceStreamController(now: { clock }) { connection }
+        await controller.start(iPhone, hubBasePath: "/api/device-hub").value
+        let page = controller.page
+        // However slowly each rejection arrives, a failing sequence refreshes at most `maxRefreshes` times.
+        for _ in 0..<PathwayDeviceStreamController.maxRefreshes {
+            clock += 60
+            #expect(controller.received(["type": "unauthorized"], page: page))
+            await controller.start(iPhone, hubBasePath: "/api/device-hub", refreshingCredentials: true).value
+        }
+        #expect(!controller.received(["type": "unauthorized"], page: page))
+        #expect(controller.status == .failed(PathwayDeviceStreamController.rejectedMessage))
+
+        // An explicit retry starts a new sequence; a working stream refills it.
+        await controller.start(iPhone, hubBasePath: "/api/device-hub").value
+        #expect(controller.received(["type": "unauthorized"], page: page))
+        await controller.start(iPhone, hubBasePath: "/api/device-hub", refreshingCredentials: true).value
+        _ = controller.received(["type": "status", "status": "streaming"], page: page)
+        _ = controller.received(["type": "input", "connected": true], page: page)
+        #expect(controller.status == .streaming)
+        for _ in 0..<PathwayDeviceStreamController.maxRefreshes {
+            #expect(controller.received(["type": "unauthorized"], page: page))
+            await controller.start(iPhone, hubBasePath: "/api/device-hub", refreshingCredentials: true).value
+        }
+        // Past the ticket's real expiry the failure reads as expiry.
+        clock = Date(timeIntervalSince1970: 2_000)
+        #expect(!controller.received(["type": "unauthorized"], page: page))
+        #expect(controller.status == .failed(PathwayDeviceStreamController.expiredMessage))
+    }
+
+    @Test func usesTheInputPermissionCurrentWhenTheTicketArrives() async {
+        let gate = DevicePrepareGate()
+        let controller = PathwayDeviceStreamController { try await gate.prepare() }
+        controller.setInputEnabled(true)
+        let pending = controller.start(iPhone, hubBasePath: "/api/device-hub")
+        await gate.waitUntilPending(1)
+        #expect(controller.configuration == nil)
+        // The agent starts a run while the ticket is minted.
+        controller.setInputEnabled(false)
+        gate.release(prepared())
+        await pending.value
+        #expect(controller.configuration?["inputEnabled"] as? Bool == false)
+        #expect(controller.configuration?["deviceId"] as? String == "UDID-1")
+    }
+
+    @Test func aSupersededTicketNeverStartsTheOldDevice() async {
+        let gate = DevicePrepareGate()
+        let controller = PathwayDeviceStreamController { try await gate.prepare() }
+        let first = controller.start(iPhone, hubBasePath: "/api/device-hub")
+        await gate.waitUntilPending(1)
+        let second = controller.start(pixel, hubBasePath: "/api/device-hub")
+        await gate.waitUntilPending(2)
+        // The first request ignores cancellation and returns after the switch.
+        gate.release(prepared(ticket: "late"))
+        await first.value
+        #expect(controller.configuration == nil)
+        gate.release(prepared(ticket: "current"))
+        await second.value
+        #expect(controller.configuration?["deviceId"] as? String == "emulator-5554")
+        #expect((controller.configuration?["access"] as? [String: Any])?["query"] as? [String: String]
+            == ["wsTicket": "current", "hostId": "local"])
+    }
+
+    @Test func reconnectAfterTheViewerStopsLoadsANewPage() async {
+        let connection = prepared()
+        let controller = PathwayDeviceStreamController { connection }
+        await controller.start(iPhone, hubBasePath: "/api/device-hub").value
+        let first = controller.page
+        #expect(controller.origin?.absoluteString == "https://env.example/")
+        controller.didLoad(page: first)
+
+        // Rotating credentials keeps the page.
+        await controller.start(iPhone, hubBasePath: "/api/device-hub", refreshingCredentials: true).value
+        #expect(controller.page == first)
+
+        // WebKit terminates the page's content process.
+        controller.failed("The device viewer stopped.", page: first)
+        await controller.start(iPhone, hubBasePath: "/api/device-hub").value
+        #expect(controller.page != first)
+        #expect(controller.status == .connecting)
+        // The terminated page's late callbacks change nothing.
+        _ = controller.received(["type": "status", "status": "streaming"], page: first)
+        controller.failed("late", page: first)
+        #expect(controller.status == .connecting)
+        _ = controller.received(["type": "status", "status": "streaming"], page: controller.page)
         #expect(controller.status == .streaming)
     }
 
@@ -121,5 +215,20 @@ struct PathwayDevicesTests {
         #expect(dispatched["text"] == .string(PathwayDeviceControl.defaultResumeMessage))
         #expect(dispatched["creationSource"] == .string("mobile"))
         #expect(dispatched["dispatchMode"]?.objectValue?["type"] == .string("start_immediately"))
+    }
+}
+
+/// Holds ticket requests until the test releases them, oldest first.
+@MainActor private final class DevicePrepareGate {
+    private var pending: [CheckedContinuation<PathwayPreparedEnvironmentConnection, Error>] = []
+
+    func prepare() async throws -> PathwayPreparedEnvironmentConnection {
+        try await withCheckedThrowingContinuation { pending.append($0) }
+    }
+    func waitUntilPending(_ count: Int) async {
+        while pending.count < count { await Task.yield() }
+    }
+    func release(_ connection: PathwayPreparedEnvironmentConnection) {
+        pending.removeFirst().resume(returning: connection)
     }
 }

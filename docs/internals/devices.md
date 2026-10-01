@@ -90,12 +90,21 @@ iOS bundles it with `scripts/ios/build-device-stream.mjs` into
 `PathwayDeviceStream.bundle` (CI checks the bundle with `--check`) and runs it
 in a WKWebView whose empty document is loaded at the environment's origin, so
 media and input are same-origin and WebCodecs gets a secure context over
-HTTPS. The app mints the ticket and passes it in as `DeviceHubAccess`; an
-`unauthorized` reply makes it mint a fresh one, except right after minting,
-when it reports the rejection instead of looping. Device control on mobile is
-client-side: the server has no device control lease, so the viewer derives
-watch-only versus user control from the thread's active run, and **Take
-control** interrupts that run.
+HTTPS. The app mints the ticket and passes it in as `DeviceHubAccess`, with
+`expiresAt` taken from the ticket response. An `unauthorized` reply makes it
+mint a fresh one at most twice per failing sequence; the budget refills once
+media and input both connect or the user retries, so a refused stream stops
+with an error instead of looping. A terminated WebKit content process marks
+the page failed, and the next start loads a new document; callbacks from older
+documents are ignored.
+
+Device control on mobile is client-side: the server has no device control
+lease, so the viewer derives control from the thread's run. Unknown run state
+(the thread subscription is not live) and an interrupted run that has not yet
+stopped are both watch-only; input is enabled only once no run is active.
+Disabling input ends the active touch at its last point and releases held keys.
+This does not fence other clients, other threads, or agent device commands
+already in flight.
 
 ## Upstream version and tool inventory
 

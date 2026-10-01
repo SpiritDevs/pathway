@@ -48,6 +48,8 @@ struct PathwayPreparedEnvironmentConnection: Sendable {
     let accessToken: String
     let proofKeyThumbprint: String
     let scopes: Set<String>
+    /// When the `wsTicket` in `webSocketURL` expires, as the environment reported it.
+    var ticketExpiresAt: Date?
 
     func threadOperationWebSocketURL() throws -> URL {
         guard scopes.contains("orchestration:operate") else { throw PathwayConnectError.scopeMismatch }
@@ -98,6 +100,7 @@ private struct PathwayRemoteEnvironmentDescriptor: Decodable, Sendable {
 
 private struct PathwayWebSocketTicket: Decodable, Sendable {
     let ticket: String
+    let expiresAt: String?
 }
 
 private struct PathwayConnectErrorBody: Decodable, Sendable {
@@ -193,7 +196,7 @@ actor PathwayConnectClient {
             thumbprint: thumbprint,
             scopes: Self.environmentScopes(computerOperateScope: descriptor.capabilities?["computerOperateScope"]?.boolValue == true)
         )
-        let socketURL = try await webSocketURL(
+        let (socketURL, ticketExpiresAt) = try await webSocketURL(
             endpoint: bootstrap.endpoint,
             accessToken: accessToken.accessToken,
             thumbprint: thumbprint
@@ -205,7 +208,8 @@ actor PathwayConnectClient {
             webSocketURL: socketURL,
             accessToken: accessToken.accessToken,
             proofKeyThumbprint: thumbprint,
-            scopes: Set(accessToken.scope.split(separator: " ").map(String.init))
+            scopes: Set(accessToken.scope.split(separator: " ").map(String.init)),
+            ticketExpiresAt: ticketExpiresAt
         )
     }
 
@@ -402,7 +406,7 @@ private extension PathwayConnectClient {
         endpoint managedEndpoint: PathwayManagedEndpoint,
         accessToken: String,
         thumbprint: String
-    ) async throws -> URL {
+    ) async throws -> (URL, Date?) {
         guard
             let httpBaseURL = managedEndpoint.httpBaseURL,
             let socketBaseURL = managedEndpoint.webSocketBaseURL,
@@ -436,7 +440,7 @@ private extension PathwayConnectClient {
         queryItems.append(URLQueryItem(name: "wsTicket", value: ticket.ticket))
         components?.queryItems = queryItems
         guard let result = components?.url else { throw PathwayConnectError.invalidURL }
-        return result
+        return (result, ticket.expiresAt.flatMap(pathwayDate(from:)))
     }
 
     private var relayOrigin: URL {
