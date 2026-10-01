@@ -40,6 +40,8 @@ The model picker shows favourites first, groups models by provider, and marks th
 
 The thread menu at the top includes Rename, Pin or Unpin, Settle or Reopen, Force settle, Snooze or Wake, and Regenerate title when the connected environment supports them. Copy the workspace path, branch, thread ID, or conversation from the same menu. Archive and Delete ask for confirmation; archived threads can be restored.
 
+The menu's **Lineage** section lists the thread this one is listed under and the threads listed under it, including threads on your other machines. Tap one to open it. **Set parent…** searches your threads to list this one under, and **Move to threads list** returns it to your threads list.
+
 A thread still waiting to start includes **Cancel queued thread** in that same menu. This action disappears once the environment accepts the thread. Stop a running agent with the composer’s Stop control. Finished queue entries can be removed from the thread list.
 
 Thread rows show compact status labels so you can scan for Working, Preparing, Queued, Waiting, Question, Approval, Review plan, Failed, Stopped, or Ready. A pending question or approval takes priority over background work. Status labels use text as well as color and update with the environment's thread state.

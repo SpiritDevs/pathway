@@ -1,12 +1,25 @@
 import Foundation
 import Observation
 
+/// A thread to list another under; `environmentId` only when it lives on another environment.
+struct PathwayThreadParent: Equatable, Sendable {
+    let threadId: String
+    let environmentId: String?
+
+    init(_ parent: PathwayAgentThread, for child: PathwayAgentThread) {
+        threadId = parent.threadId
+        environmentId = parent.environmentId == child.environmentId ? nil : parent.environmentId
+    }
+}
+
 enum PathwayThreadAction: Equatable, Sendable {
     case pin, unpin, settle, reopen, wake, forceSettle, regenerateTitle
     case sleep(until: Date)
     case rename(String), archive, restore, delete, reorder(String)
     case keepConversation, attachProject(String), discardAndSettle
     case settleAfterCompletion(Bool)
+    /// Lists the thread under a parent, or with `nil` moves it to the threads list.
+    case setParent(PathwayThreadParent?)
 
     func command(threadID: String, commandID: String = UUID().uuidString.lowercased()) -> JSONValue {
         var fields: [String: JSONValue] = [
@@ -45,6 +58,15 @@ enum PathwayThreadAction: Equatable, Sendable {
         case let .settleAfterCompletion(enabled):
             type = "thread.settle-after-completion.set"
             fields["enabled"] = .bool(enabled)
+        case let .setParent(parent):
+            type = "thread.parent.set"
+            fields["parent"] = parent.map { parent in
+                var reference: [String: JSONValue] = ["threadId": .string(parent.threadId)]
+                if let environmentId = parent.environmentId {
+                    reference["environmentId"] = .string(environmentId)
+                }
+                return .object(reference)
+            } ?? .null
         case .reopen:
             type = "thread.unsettle"
             fields["reason"] = .string("user")
@@ -101,6 +123,13 @@ struct PathwayOptimisticThreadAction {
         case .keepConversation: result.shell.temporary = false
         case let .attachProject(projectID): result.shell.projectId = projectID
         case let .settleAfterCompletion(enabled): result.shell.settleAfterCompletion = enabled
+        case let .setParent(parent):
+            var lineage = thread.shell.lineage
+                ?? PathwayThreadLineage(rootThreadId: thread.threadId, parentThreadId: nil, relationshipToParent: nil)
+            lineage.parentThreadId = parent?.threadId
+            lineage.parentEnvironmentId = parent?.environmentId
+            lineage.relationshipToParent = nil
+            result.shell.lineage = lineage
         case .regenerateTitle: break // The generated title is only known to the server.
         }
         return result
@@ -125,6 +154,10 @@ struct PathwayOptimisticThreadAction {
         case .keepConversation: return !shell.isTemporary
         case let .attachProject(projectID): return shell.projectId == projectID
         case let .settleAfterCompletion(enabled): return (shell.settleAfterCompletion == true) == enabled
+        case let .setParent(parent):
+            return shell.lineage?.relationshipToParent == nil
+                && shell.lineage?.parentThreadId == parent?.threadId
+                && shell.lineage?.parentEnvironmentId == parent?.environmentId
         case .regenerateTitle: return true
         }
     }

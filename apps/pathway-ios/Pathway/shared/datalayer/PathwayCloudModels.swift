@@ -138,8 +138,10 @@ struct PathwayRuntimeRequestSummary: Codable, Equatable, Sendable {
 
 struct PathwayThreadLineage: Codable, Equatable, Sendable {
     let rootThreadId: String
-    let parentThreadId: String?
-    let relationshipToParent: String?
+    var parentThreadId: String?
+    var relationshipToParent: String?
+    /// Set when the parent lives on another environment.
+    var parentEnvironmentId: String? = nil
 }
 
 struct PathwayPullRequestAttachment: Codable, Equatable, Sendable {
@@ -156,7 +158,7 @@ struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let modelSelection: PathwayModelSelection
     let runtimeMode: String
     let interactionMode: String
-    let lineage: PathwayThreadLineage?
+    var lineage: PathwayThreadLineage?
     let locations: [String]?
     let branch: String?
     let worktreePath: String?
@@ -208,6 +210,13 @@ struct PathwayAgentThread: Equatable, Identifiable, Sendable {
 
     var id: String { "\(companyId):\(environmentId):\(shell.id)" }
     var threadId: String { shell.id }
+    /// Identifies the thread across environments, matching `parentKey`.
+    var lineageKey: String { "\(environmentId):\(shell.id)" }
+    /// The parent's `lineageKey`, which may be on another environment.
+    var parentKey: String? {
+        guard let parentThreadId = shell.lineage?.parentThreadId else { return nil }
+        return "\(shell.lineage?.parentEnvironmentId ?? environmentId):\(parentThreadId)"
+    }
 
     var sortDate: Date {
         pathwayDate(from: shell.updatedAt) ?? Date(timeIntervalSince1970: cloudUpdatedAt / 1000)

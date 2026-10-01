@@ -29,10 +29,13 @@ struct PathwayThreadLifecyclePartition {
             .filter { $0.shell.deletedAt == nil }
             .sorted(by: PathwayAgentThread.isOrderedBefore)
 
+        // An attached thread lists under its parent's Lineage, but returns once that parent is gone.
+        let listed = Set(all.filter { $0.shell.archivedAt == nil }.map(\.lineageKey))
         var active: [PathwayAgentThread] = []
         var snoozed: [PathwayAgentThread] = []
         var settled: [PathwayAgentThread] = []
         for thread in all {
+            if let parentKey = thread.parentKey, listed.contains(parentKey) { continue }
             switch thread.lifecycleSection(
                 at: now,
                 autoSettleAfterDays: autoSettleAfterDays,

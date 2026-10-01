@@ -312,6 +312,10 @@ struct PathwayTests {
 
 // swiftlint:disable:next function_body_length
 func makeAgentThread(
+    id: String = "thread-1",
+    environmentId: String = "environment-1",
+    parentThreadId: String? = nil,
+    parentEnvironmentId: String? = nil,
     latestRunCompletedAt: String? = "2026-08-29T02:00:00.000Z",
     archivedAt: String? = nil,
     settledOverride: String? = nil,
@@ -326,10 +330,10 @@ func makeAgentThread(
 ) -> PathwayAgentThread {
     PathwayAgentThread(
         companyId: "company-1",
-        environmentId: "environment-1",
+        environmentId: environmentId,
         cloudProjectId: "cloud-project-1",
         shell: PathwayAgentThreadShell(
-            id: "thread-1",
+            id: id,
             projectId: "project-1",
             title: "Thread",
             providerInstanceId: "codex-work",
@@ -341,9 +345,10 @@ func makeAgentThread(
             runtimeMode: "full-access",
             interactionMode: "default",
             lineage: PathwayThreadLineage(
-                rootThreadId: "thread-1",
-                parentThreadId: relationshipToParent == nil ? nil : "parent-1",
-                relationshipToParent: relationshipToParent
+                rootThreadId: id,
+                parentThreadId: parentThreadId ?? (relationshipToParent == nil ? nil : "parent-1"),
+                relationshipToParent: relationshipToParent,
+                parentEnvironmentId: parentEnvironmentId
             ),
             locations: ["agents"],
             branch: branch,
