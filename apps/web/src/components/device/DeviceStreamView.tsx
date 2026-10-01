@@ -1,4 +1,5 @@
-import type { DevicePlatform, EnvironmentId } from "@spiritdevs/contracts";
+import type { DeviceControlProof, DevicePlatform, EnvironmentId } from "@spiritdevs/contracts";
+import { withDeviceControl } from "@spiritdevs/client-runtime/device/hub-access";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
@@ -39,7 +40,11 @@ export interface DeviceViewControls {
   readonly showFlat: () => void;
   readonly resetView: () => void;
   readonly foldingControls?: ReactNode;
-  readonly keyboard: { readonly attached: boolean; readonly toggle: () => void } | null;
+  readonly keyboard: {
+    readonly attached: boolean;
+    readonly disabled: boolean;
+    readonly toggle: () => void;
+  } | null;
 }
 
 export interface DeviceStreamHandle {
@@ -70,6 +75,11 @@ export function DeviceStreamView(props: {
   readonly axOverlay?: boolean;
   readonly onHandle?: (handle: DeviceStreamHandle | null) => void;
   readonly onScreen?: (screen: DeviceScreenSize | null) => void;
+  /**
+   * The environment control proof. Undefined keeps unfenced input for environments without
+   * leases; null is watch-only, where media keeps streaming and input is never sent.
+   */
+  readonly control?: DeviceControlProof | null | undefined;
 }) {
   const [duoControl, setDuoControl] = useState<DuoControlState>({
     pending: false,
@@ -93,14 +103,31 @@ export function DeviceStreamView(props: {
   const onInputCancel = useCallback((cancel: (() => void) | null) => {
     cancelPhoneInputRef.current = cancel;
   }, []);
-  const access = useDeviceHubAccess(props.environmentId, props.hostId);
+  const hubAccess = useDeviceHubAccess(props.environmentId, props.hostId);
   const accessError = useDeviceHubAccessError(props.environmentId);
+  const inputEnabled = props.control !== null;
+  const inputEnabledRef = useRef(inputEnabled);
+  inputEnabledRef.current = inputEnabled;
+  const controlViewer = props.control?.viewerId;
+  const controlGeneration = props.control?.generation;
+  const access = useMemo(
+    () =>
+      hubAccess && controlViewer !== undefined && controlGeneration !== undefined
+        ? withDeviceControl(hubAccess, { viewerId: controlViewer, generation: controlGeneration })
+        : hubAccess,
+    [controlGeneration, controlViewer, hubAccess],
+  );
+  // Input sockets carry the control generation from their URL, so each acquisition reconnects.
+  // Releasing does not: the socket stays a watcher and later reconnects omit the proof.
+  const proofKeyRef = useRef<string | null>(null);
+  if (controlViewer !== undefined && controlGeneration !== undefined)
+    proofKeyRef.current = `${controlViewer}\n${controlGeneration}`;
   // The client reads the newest access on every (re)connect, so rotating a
-  // ticket does not restart a healthy stream; only a new hub or host does.
+  // ticket does not restart a healthy stream; only a new hub, host or control generation does.
   const accessRef = useRef(access);
   accessRef.current = access;
   const accessKey = access
-    ? `${access.httpBase}\n${access.query.hostId ?? ""}\n${access.credentials}`
+    ? `${access.httpBase}\n${access.query.hostId ?? ""}\n${access.credentials}\n${proofKeyRef.current ?? ""}`
     : null;
   // Set when the hub rejected the credential; the stream restarts once access changes.
   const rejectedRef = useRef<{ readonly expiresAt: number | null } | null>(null);
@@ -149,7 +176,7 @@ export function DeviceStreamView(props: {
       return;
     }
     let latestAccess = initialAccess;
-    const client = createDeviceStreamClient(
+    const stream = createDeviceStreamClient(
       {
         platform: props.platform,
         deviceId: props.deviceId,
@@ -195,6 +222,7 @@ export function DeviceStreamView(props: {
         },
       },
     );
+    const client = gateDeviceInput(stream, () => inputEnabledRef.current);
     clientRef.current = client;
     setMjpegUrl(null);
     setInputState({ connected: false });
@@ -220,6 +248,13 @@ export function DeviceStreamView(props: {
     props.platform,
     props.visible,
   ]);
+
+  // Losing control ends local gestures; the environment finishes any held input itself.
+  useEffect(() => {
+    if (inputEnabled) return;
+    pointerActive.current = false;
+    cancelPhoneInput();
+  }, [cancelPhoneInput, inputEnabled]);
 
   // Displayed aspect ratio (width / height) of the device as the user sees it.
   const aspect = useMemo(() => {
@@ -401,6 +436,7 @@ export function DeviceStreamView(props: {
                   deviceId={props.deviceId}
                   visible={props.visible}
                   enabled={status === "streaming"}
+                  canChange={inputEnabled}
                   screenWidth={screen?.width}
                   screenHeight={screen?.height}
                   onFoldAngle={setFoldAngle}
@@ -409,7 +445,7 @@ export function DeviceStreamView(props: {
                 <DeviceDuoControls
                   screen={screen}
                   state={duoControl}
-                  enabled={inputState.connected}
+                  enabled={inputState.connected && inputEnabled}
                   onCommand={(command) => {
                     cancelPhoneInput();
                     clientRef.current?.controlDuo(command);
@@ -420,7 +456,9 @@ export function DeviceStreamView(props: {
               showPhone && keyboardSource
                 ? {
                     attached: keyboardAttached,
+                    disabled: !inputEnabled,
                     toggle: () => {
+                      if (!inputEnabledRef.current) return;
                       cancelPhoneInput();
                       if (!keyboardAttached && screen?.orientation !== "landscape_right")
                         clientRef.current?.setOrientation("landscape_right");
@@ -444,7 +482,7 @@ export function DeviceStreamView(props: {
         role="application"
         aria-label={`${props.platform === "ios" ? "iOS Simulator" : "Android Emulator"} screen`}
         onKeyDown={(event) => {
-          if (event.target !== event.currentTarget) return;
+          if (event.target !== event.currentTarget || !inputEnabled) return;
           if (event.metaKey && !["r", "R"].includes(event.key)) return;
           event.preventDefault();
           clientRef.current?.sendKey(event.nativeEvent, "down");
@@ -458,6 +496,7 @@ export function DeviceStreamView(props: {
           className={cn("relative select-none", showPhone && "invisible pointer-events-none")}
           style={{ width: frame.width, height: frame.height }}
           onPointerDown={(event) => {
+            if (!inputEnabled) return;
             event.currentTarget.setPointerCapture(event.pointerId);
             (event.currentTarget.parentElement as HTMLElement | null)?.focus();
             pointerActive.current = true;
@@ -626,6 +665,27 @@ export function DeviceStreamView(props: {
     </div>
   );
 }
+
+const gateDeviceInput = (
+  client: DeviceStreamClient,
+  enabled: () => boolean,
+): DeviceStreamClient => {
+  const gate =
+    <A extends ReadonlyArray<unknown>>(send: (...args: A) => void) =>
+    (...args: A) => {
+      if (enabled()) send(...args);
+    };
+  return {
+    ...client,
+    sendTouch: gate(client.sendTouch),
+    sendRawTouch: gate(client.sendRawTouch),
+    sendKey: gate(client.sendKey),
+    pressButton: gate(client.pressButton),
+    rotate: gate(client.rotate),
+    setOrientation: gate(client.setOrientation),
+    controlDuo: gate(client.controlDuo),
+  };
+};
 
 function DeviceControlsSlot(props: {
   renderControls: (view: DeviceViewControls) => ReactNode;

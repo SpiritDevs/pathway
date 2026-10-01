@@ -1,5 +1,6 @@
 import type { DeviceHubAccess } from "@spiritdevs/client-runtime/state/deviceHubAccess";
 import { withDeviceHubQuery } from "@spiritdevs/client-runtime/state/deviceHubAccess";
+import { deviceControlErrorCode, deviceControlErrorCopy } from "./deviceControl";
 
 export type AndroidFoldPosture = "closed" | "opened";
 
@@ -55,6 +56,10 @@ const foldRequest = async (
   // again every few seconds would never change that.
   if (!posture && (response.status === 404 || response.status === 501)) {
     return { supported: false, posture: null, hingeAngle: null };
+  }
+  if (response.status === 409) {
+    const code = deviceControlErrorCode((await response.text().catch(() => "")).trim());
+    throw new Error(code ? deviceControlErrorCopy[code] : "Fold command was refused.");
   }
   if (!response.ok) {
     const payload: unknown = await response.json().catch(() => null);

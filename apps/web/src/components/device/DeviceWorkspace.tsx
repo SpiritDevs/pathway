@@ -1,25 +1,31 @@
-import type { DeviceSummary, EnvironmentId } from "@spiritdevs/contracts";
+import type { DeviceControlProof, DeviceSummary, EnvironmentId } from "@spiritdevs/contracts";
 import { useEffect, useRef, useState } from "react";
 import {
   captureDeviceScreenshot,
   DeviceScreenshotError,
 } from "@spiritdevs/client-runtime/device/screenshot";
 import { refreshDeviceHubAccess, useDeviceHubAccess } from "~/state/device";
+import { DeviceControlBar } from "./DeviceControlBar";
 import { DeviceControlsRail } from "./DeviceControlsRail";
 import { DeviceStreamView, type DeviceStreamHandle } from "./DeviceStreamView";
 import { DeviceToolsPanel } from "./DeviceToolsPanel";
+import { useDeviceControlLease } from "./useDeviceControlLease";
 import { useDeviceControls } from "./useDeviceControls";
 
 /** Keyed by environment and device; the screen, quick controls and drawer share the same session. */
 export function DeviceWorkspace(props: {
   environmentId: EnvironmentId;
+  threadId: string;
   device: DeviceSummary;
   hostLabel: string;
   hostDiagnostics: string | undefined;
   visible: boolean;
   onFloat?: (() => void) | undefined;
   onClose: () => void;
-  onPowerOff: () => void;
+  onPowerOff: (control: DeviceControlProof | undefined) => void;
+  onOpenThread: (threadId: string) => void;
+  /** Starts the thread's continuation; called only after control is released. */
+  onResumeAgent?: (() => void) | undefined;
 }) {
   const [handle, setHandle] = useState<DeviceStreamHandle | null>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -29,7 +35,19 @@ export function DeviceWorkspace(props: {
   const captureRef = useRef<AbortController | null>(null);
   const downloadRef = useRef<string | null>(null);
   const access = useDeviceHubAccess(props.environmentId, props.device.hostId);
-  const controls = useDeviceControls({ ...props, access });
+  const lease = useDeviceControlLease({
+    environmentId: props.environmentId,
+    hostId: props.device.hostId,
+    deviceId: props.device.id,
+    visible: props.visible,
+  });
+  const controls = useDeviceControls({
+    ...props,
+    access,
+    control: lease.control,
+    onControlError: lease.reportError,
+  });
+  const watching = lease.control === null;
   useEffect(() => {
     if (!access || !props.visible) captureRef.current?.abort();
     return () => {
@@ -79,6 +97,12 @@ export function DeviceWorkspace(props: {
   return (
     <>
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        <DeviceControlBar
+          lease={lease}
+          threadId={props.threadId}
+          onOpenThread={props.onOpenThread}
+          onResumeAgent={props.onResumeAgent}
+        />
         {screenshotError || (controls.error && !toolsOpen) ? (
           <p role="alert" className="px-3 py-2 text-xs text-destructive">
             {screenshotError ?? controls.error}
@@ -94,12 +118,13 @@ export function DeviceWorkspace(props: {
             hostId={props.device.hostId}
             visible={props.visible}
             axOverlay={axOverlay}
+            control={lease.control}
             allowPhoneView
             onHandle={setHandle}
             renderControls={(view) => (
               <DeviceControlsRail
                 platform={props.device.platform}
-                handle={handle}
+                handle={watching && handle ? { ...handle, inputConnected: false } : handle}
                 view={view}
                 controls={controls}
                 screenshotPending={screenshotPending}
@@ -108,7 +133,8 @@ export function DeviceWorkspace(props: {
                 onTools={() => setToolsOpen(!toolsOpen)}
                 onFloat={props.onFloat}
                 onClose={props.onClose}
-                onPowerOff={props.onPowerOff}
+                onPowerOff={() => props.onPowerOff(lease.control ?? undefined)}
+                powerOffDisabled={watching}
               />
             )}
           />

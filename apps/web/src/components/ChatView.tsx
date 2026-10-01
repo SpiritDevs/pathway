@@ -6438,6 +6438,35 @@ function ChatViewContent(props: ChatViewProps) {
       );
     }
   }, [activeThreadRef, browserTakeoverId, releaseBrowserTakeoverMutation]);
+  // The device panel releases control before calling this, so the run's device_open succeeds.
+  const resumeDeviceAgent = useCallback(async () => {
+    if (!activeThread || !activeThreadRef) return;
+    const createdAt = new Date().toISOString();
+    const result = await startThreadTurn({
+      environmentId: activeThreadRef.environmentId,
+      input: {
+        threadId: activeThread.id,
+        message: {
+          messageId: newMessageId(),
+          role: "user",
+          text: "I've handed the device back to you. Continue where you left off.",
+          attachments: [],
+        },
+        modelSelection: activeThread.modelSelection,
+        titleSeed: activeThread.title,
+        runtimeMode: activeThread.runtimeMode,
+        interactionMode: activeThread.interactionMode,
+        createdAt,
+      },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      setThreadError(
+        activeThread.id,
+        error instanceof Error ? error.message : "Failed to resume the agent.",
+      );
+    }
+  }, [activeThread, activeThreadRef, setThreadError, startThreadTurn]);
   const browserTakeoverBanner = useMemo<ComposerBannerStackItem | null>(() => {
     if (browserTakeoverDescriptor === null) return null;
     return browserTakeoverBannerItem(browserTakeoverDescriptor, {
@@ -9651,6 +9680,7 @@ function ChatViewContent(props: ChatViewProps) {
           threadRef={activeThreadRef}
           surface={activeRightPanelSurface}
           visible={rightPanelOpen}
+          onResumeAgent={() => void resumeDeviceAgent()}
           onDismissSetup={() =>
             useRightPanelStore.getState().closeSurface(activeThreadRef, activeRightPanelSurface.id)
           }

@@ -16,6 +16,8 @@ export function DeviceAndroidFoldControls(props: {
   readonly deviceId: string;
   readonly visible: boolean;
   readonly enabled: boolean;
+  /** False while watching: posture stays visible but cannot change. */
+  readonly canChange: boolean;
   readonly screenWidth: number | undefined;
   readonly screenHeight: number | undefined;
   readonly onFoldAngle: (angle: number | null) => void;
@@ -62,7 +64,7 @@ export function DeviceAndroidFoldControls(props: {
   if (!fold?.supported || !props.visible) return null;
 
   const change = (posture: AndroidFoldPosture) => {
-    if (busy.current || !props.enabled) return;
+    if (busy.current || !props.enabled || !props.canChange) return;
     busy.current = true;
     setPending(true);
     setError(null);
@@ -106,7 +108,7 @@ export function DeviceAndroidFoldControls(props: {
                 variant={fold.posture === "closed" ? "secondary" : "ghost"}
                 aria-label="Fold device"
                 aria-pressed={fold.posture === "closed"}
-                disabled={pending || !props.enabled}
+                disabled={pending || !props.enabled || !props.canChange}
                 onClick={() => change("closed")}
               />
             }
@@ -123,7 +125,7 @@ export function DeviceAndroidFoldControls(props: {
                 variant={fold.posture === "opened" ? "secondary" : "ghost"}
                 aria-label="Unfold device"
                 aria-pressed={fold.posture === "opened"}
-                disabled={pending || !props.enabled}
+                disabled={pending || !props.enabled || !props.canChange}
                 onClick={() => change("opened")}
               />
             }
