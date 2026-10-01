@@ -10,6 +10,7 @@ import {
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import { DeviceService } from "../../../device/DeviceService.ts";
+import { ProjectionStoreV2 } from "../../../orchestration-v2/ProjectionStore.ts";
 import { ServerSettingsService, layerTest } from "../../../serverSettings.ts";
 import { makeAllToolkitsTestHandler } from "../../McpHttpServer.ts";
 import type { McpInvocationScope } from "../../McpInvocationContext.ts";
@@ -107,7 +108,7 @@ it.effect(
             }),
           readiness: unexpected,
           readinessIfSupported: unexpected,
-          agentReadinessIfSupported: unexpected,
+          agentReadinessIfSupported: () => Effect.succeed(null),
           currentReadiness: unexpected,
           list: Effect.sync(() => {
             reads++;
@@ -127,6 +128,19 @@ it.effect(
         });
         const handler = yield* makeAllToolkitsTestHandler.pipe(
           Effect.provideService(DeviceService, service),
+          // device_open reads only the caller's active run.
+          Effect.provideService(ProjectionStoreV2, {
+            getThreadProjection: () =>
+              Effect.succeed({
+                runs: [
+                  {
+                    id: "run",
+                    status: "running",
+                    providerInstanceId: invocation.providerInstanceId,
+                  },
+                ],
+              }),
+          } as unknown as ProjectionStoreV2["Service"]),
         );
         const client = new Client(
           { name: "device-test", version: "1.0.0" },

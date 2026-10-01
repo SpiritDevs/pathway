@@ -1,6 +1,7 @@
 // @effect-diagnostics preferSchemaOverJson:off - JSON represents the external simctl/helper fixture boundary.
 import { expect, it } from "@effect/vitest";
 import {
+  LOCAL_DEVICE_HOST_ID,
   DEFAULT_SERVER_SETTINGS,
   ThreadId,
   type DeviceFamily,
@@ -12,7 +13,8 @@ import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { DeviceHost, type DeviceHostReady } from "./DeviceHost.ts";
-import { makeWithHosts } from "./DeviceService.ts";
+import { DeviceControlCaller } from "./DeviceControl.ts";
+import { type DeviceService, makeWithHosts } from "./DeviceService.ts";
 
 const fixture = Effect.fn("watchTvFixture")(function* () {
   const commands: { host: string; args: ReadonlyArray<string> }[] = [];
@@ -176,6 +178,23 @@ const test = <E>(body: (f: Effect.Success<ReturnType<typeof fixture>>) => Effect
     yield* body(yield* fixture());
   }).pipe(Effect.provideService(ServerSettingsService, settings), Effect.scoped);
 
+const viewer = { kind: "viewer" as const, sessionId: "session" };
+
+/** Device actions need a held viewer lease since device control. */
+const controlledAction = (
+  service: DeviceService["Service"],
+  input: Parameters<DeviceService["Service"]["action"]>[0],
+) =>
+  Effect.gen(function* () {
+    const held = yield* service.control.acquire(
+      { hostId: input.hostId ?? LOCAL_DEVICE_HOST_ID, deviceId: input.deviceId },
+      { ...viewer, viewerId: "viewer" },
+    );
+    return yield* service
+      .action({ ...input, control: { viewerId: "viewer", generation: held.generation } })
+      .pipe(Effect.provideService(DeviceControlCaller, viewer));
+  });
+
 it.effect("discovers all families and emits UI capabilities without leaking origins", () =>
   test((f) =>
     Effect.gen(function* () {
@@ -244,7 +263,7 @@ it.effect(
     test((f) =>
       Effect.gen(function* () {
         for (let i = 0; i < 2; i++)
-          yield* f.service.action({
+          yield* controlledAction(f.service, {
             hostId: "ssh-mac",
             deviceId: "watch",
             type: "pairWatch",
@@ -257,7 +276,7 @@ it.effect(
           (yield* f.service.detail({ hostId: "ssh-mac", deviceId: "watch" })).watchPair
             ?.phoneDeviceId,
         ).toBe("phone");
-        yield* f.service.action({ hostId: "ssh-mac", deviceId: "watch", type: "unpairWatch" });
+        yield* controlledAction(f.service, { hostId: "ssh-mac", deviceId: "watch", type: "unpairWatch" });
         expect(
           (yield* f.service.detail({ hostId: "ssh-mac", deviceId: "watch" })).watchPair,
         ).toBeNull();
@@ -277,22 +296,19 @@ it.effect(
     test((f) =>
       Effect.gen(function* () {
         for (const phoneDeviceId of ["pad", "absent"]) {
-          const error = yield* f.service
-            .action({ deviceId: "watch", type: "pairWatch", phoneDeviceId })
+          const error = yield* controlledAction(f.service, { deviceId: "watch", type: "pairWatch", phoneDeviceId })
             .pipe(Effect.flip);
           expect(error._tag).toBe("DeviceActionUnavailableError");
         }
         f.failPair();
         expect(
-          (yield* f.service
-            .action({ deviceId: "watch", type: "pairWatch", phoneDeviceId: "phone" })
+          (yield* controlledAction(f.service, { deviceId: "watch", type: "pairWatch", phoneDeviceId: "phone" })
             .pipe(Effect.flip))._tag,
         ).toBe("DeviceOperationError");
         const before = f.commands.length;
         f.block("local:ios:phone");
         expect(
-          (yield* f.service
-            .action({ deviceId: "watch", type: "pairWatch", phoneDeviceId: "phone" })
+          (yield* controlledAction(f.service, { deviceId: "watch", type: "pairWatch", phoneDeviceId: "phone" })
             .pipe(Effect.flip))._tag,
         ).toBe("DeviceHostUnavailableError");
         expect(f.commands.slice(before).some((call) => call.args[1] === "pair")).toBe(false);
@@ -341,7 +357,7 @@ it.effect("serializes pairing from simultaneous callers and pairs before Watch b
     Effect.gen(function* () {
       yield* Effect.all(
         [
-          f.service.action({
+          controlledAction(f.service, {
             hostId: "ssh-mac",
             deviceId: "watch",
             type: "pairWatch",
@@ -400,18 +416,17 @@ it.effect(
         f.paired.set("ssh-mac", "unavailable-phone");
         f.block("ssh-mac:ios:unavailable-phone");
         expect(
-          (yield* f.service
-            .action({ hostId: "ssh-mac", deviceId: "watch", type: "unpairWatch" })
+          (yield* controlledAction(f.service, { hostId: "ssh-mac", deviceId: "watch", type: "unpairWatch" })
             .pipe(Effect.flip))._tag,
         ).toBe("DeviceHostUnavailableError");
         expect(f.commands.some((command) => command.args[1] === "unpair")).toBe(false);
         f.block("no-block");
-        yield* f.service.action({ hostId: "ssh-mac", deviceId: "watch", type: "unpairWatch" });
+        yield* controlledAction(f.service, { hostId: "ssh-mac", deviceId: "watch", type: "unpairWatch" });
         expect(f.claims).toContain("ssh-mac:ios:unavailable-phone");
         expect(f.commands.filter((command) => command.args[1] === "unpair")).toEqual([
           { host: "ssh-mac", args: ["simctl", "unpair", "pair1"] },
         ]);
-        yield* f.service.action({
+        yield* controlledAction(f.service, {
           hostId: "ssh-mac",
           deviceId: "watch",
           type: "pairWatch",
