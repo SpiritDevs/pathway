@@ -26,6 +26,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { AppleIdSignIn, useXcodeHost } from "../xcode/XcodeSetup";
 import { CompanySettingsEmptyState } from "./company/CompanySettingsShared";
 import { useCompanySettings } from "./company/useCompanySettings";
 import {
@@ -117,6 +118,8 @@ export function AppleAccountsSettings() {
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  // The Apple ID just added asks for its password straight away.
+  const [signInId, setSignInId] = useState<string | null>(null);
   const list = accounts.data ?? [];
   const selected = list.find((account) => account.id === selectedId) ?? list[0] ?? null;
 
@@ -152,9 +155,12 @@ export function AppleAccountsSettings() {
           {adding && client ? (
             <AddAccountForm
               context={context}
+              accounts={list}
               onDone={(account) => {
                 setAdding(false);
-                if (account) setSelectedId(account.id);
+                if (!account) return;
+                setSelectedId(account.id);
+                setSignInId(account.id);
               }}
             />
           ) : null}
@@ -169,7 +175,7 @@ export function AppleAccountsSettings() {
             <p className="text-sm text-muted-foreground">Loading Apple accounts…</p>
           ) : list.length === 0 && !adding ? (
             <p className="text-sm text-muted-foreground">
-              No Apple IDs yet. Add one to connect its Developer teams.
+              No Apple IDs yet. Add one and sign in to bring in its Developer teams.
             </p>
           ) : null}
           {list.length > 0 ? (
@@ -180,7 +186,10 @@ export function AppleAccountsSettings() {
                     <button
                       type="button"
                       aria-current={account.id === selected?.id}
-                      onClick={() => setSelectedId(account.id)}
+                      onClick={() => {
+                        setSelectedId(account.id);
+                        setSignInId(null);
+                      }}
                       className={cn(
                         "w-full rounded-md border px-3 py-2 text-left text-sm hover:bg-accent/50",
                         account.id === selected?.id
@@ -189,18 +198,32 @@ export function AppleAccountsSettings() {
                       )}
                     >
                       <span className="block truncate font-medium">{account.displayName}</span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {account.email}
+                      {account.displayName === account.email ? null : (
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {account.email}
+                        </span>
+                      )}
+                      <span className="mt-1 flex flex-wrap gap-1">
+                        <Badge variant="outline" size="sm">
+                          {scopeLabel(account.scope, context.companyName)}
+                        </Badge>
+                        {account.verifiedAt === null ? (
+                          <Badge variant="warning" size="sm">
+                            Not signed in
+                          </Badge>
+                        ) : null}
                       </span>
-                      <Badge variant="outline" size="sm" className="mt-1">
-                        {scopeLabel(account.scope, context.companyName)}
-                      </Badge>
                     </button>
                   </li>
                 ))}
               </ul>
               {selected ? (
-                <AccountDetail key={selected.id} account={selected} context={context} />
+                <AccountDetail
+                  key={selected.id}
+                  account={selected}
+                  context={context}
+                  autoFocusSignIn={selected.id === signInId}
+                />
               ) : null}
             </div>
           ) : null}
@@ -273,25 +296,36 @@ export function AppleEnvironmentPicker({
   );
 }
 
+/** Asks only for the email; the account then signs in to Apple, which fills in its teams. */
 function AddAccountForm({
   context,
+  accounts,
   onDone,
 }: {
   context: AppleCompanyContext;
+  accounts: ReadonlyArray<AppleAccount>;
   onDone: (account: AppleAccount | null) => void;
 }) {
   const client = useAppleAccountsClient();
   const [email, setEmail] = useState("");
-  const [displayName, setDisplayName] = useState("");
   const [shareWithCompany, setShareWithCompany] = useState(false);
   const [busy, setBusy] = useState(false);
   const save = async () => {
     if (!client || busy) return;
+    const trimmed = email.trim();
+    // Adding an Apple ID that is already here continues with that one instead of failing.
+    const existing = accounts.find(
+      (account) => account.email.toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (existing) {
+      onDone(existing);
+      return;
+    }
     setBusy(true);
     try {
       const account = await client.mutation(appleAccountFunctions.createAccount, {
-        email: email.trim(),
-        displayName: displayName.trim() || email.trim(),
+        email: trimmed,
+        displayName: trimmed,
         ...(shareWithCompany && context.tetherCompany
           ? { scope: { kind: "company" as const, companyId: context.tetherCompany.id } }
           : {}),
@@ -307,35 +341,27 @@ function AddAccountForm({
   };
   return (
     <form
-      className="grid gap-3 rounded-md border p-3 sm:grid-cols-2"
+      className="space-y-3 rounded-md border p-3"
       onSubmit={(event) => {
         event.preventDefault();
         void save();
       }}
     >
-      <label className="space-y-1 text-xs">
-        Apple ID email
+      <label className="block max-w-sm space-y-1 text-xs">
+        Apple ID
         <Input
           required
+          autoFocus
           type="email"
-          autoComplete="off"
+          autoComplete="username"
+          placeholder="name@example.com"
           disabled={busy}
           value={email}
           onChange={(event) => setEmail(event.target.value)}
         />
       </label>
-      <label className="space-y-1 text-xs">
-        Display name
-        <Input
-          disabled={busy}
-          placeholder="Optional"
-          value={displayName}
-          maxLength={200}
-          onChange={(event) => setDisplayName(event.target.value)}
-        />
-      </label>
       {context.tetherCompany ? (
-        <label className="flex items-center gap-2 text-xs sm:col-span-2">
+        <label className="flex items-center gap-2 text-xs">
           <input
             type="checkbox"
             checked={shareWithCompany}
@@ -345,9 +371,13 @@ function AddAccountForm({
           Share with {context.tetherCompany.name}
         </label>
       ) : null}
-      <div className="flex gap-2 sm:col-span-2">
+      <p className="text-xs text-muted-foreground">
+        Next, sign in with your Apple ID password and verification code. Pathway then adds your
+        Developer teams for you.
+      </p>
+      <div className="flex gap-2">
         <Button type="submit" size="sm" disabled={busy || !email.trim()}>
-          {busy ? "Adding…" : "Add Apple ID"}
+          {busy ? "Adding…" : "Continue"}
         </Button>
         <Button
           type="button"
@@ -366,9 +396,11 @@ function AddAccountForm({
 function AccountDetail({
   account,
   context,
+  autoFocusSignIn,
 }: {
   account: AppleAccount;
   context: AppleCompanyContext;
+  autoFocusSignIn: boolean;
 }) {
   const client = useAppleAccountsClient();
   const teams = useAppleCloudQuery(client, appleAccountFunctions.listTeams, {
@@ -379,7 +411,21 @@ function AccountDetail({
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [scopeError, setScopeError] = useState<string | null>(null);
   const [addingTeam, setAddingTeam] = useState(false);
+  // `verifiedAt` while a refresh was asked for; a newer sign-in moves it on and closes the form.
+  const [refreshFrom, setRefreshFrom] = useState<number | null>(null);
+  const refreshing = refreshFrom !== null && refreshFrom === account.verifiedAt;
   useEffect(() => setDisplayName(account.displayName), [account.displayName]);
+  const seenVerifiedAt = useRef(account.verifiedAt);
+  useEffect(() => {
+    if (account.verifiedAt !== null && account.verifiedAt !== seenVerifiedAt.current) {
+      toastManager.add({
+        type: "success",
+        title: "Signed in to Apple",
+        description: "Developer teams for this Apple ID are up to date.",
+      });
+    }
+    seenVerifiedAt.current = account.verifiedAt;
+  }, [account.verifiedAt]);
 
   const update = async (next: { displayName: string; scope: AppleAccount["scope"] }) => {
     if (!client || busy) return;
@@ -449,14 +495,29 @@ function AccountDetail({
 
   return (
     <div className="min-w-0 space-y-4 rounded-md border p-3">
-      <div>
-        <p className="truncate text-sm font-medium">{account.email}</p>
-        <p className="text-xs text-muted-foreground">
-          {account.verifiedAt === null
-            ? "Not verified yet — Apple ID sign-in arrives with managed Xcode."
-            : `Verified ${relativeTime(account.verifiedAt)}`}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{account.email}</p>
+          <p className="text-xs text-muted-foreground">
+            {account.verifiedAt === null
+              ? "Not signed in yet"
+              : `Teams synced from Apple ${relativeTime(account.verifiedAt)}`}
+          </p>
+        </div>
+        {account.verifiedAt !== null && !refreshing ? (
+          <Button size="xs" variant="outline" onClick={() => setRefreshFrom(account.verifiedAt)}>
+            <RefreshCwIcon />
+            Refresh teams
+          </Button>
+        ) : null}
       </div>
+      <AppleIdTeamSignIn
+        account={account}
+        context={context}
+        refreshing={refreshing}
+        autoFocus={autoFocusSignIn || refreshing}
+        onCancelRefresh={() => setRefreshFrom(null)}
+      />
       <SettingsRow
         title="Display name"
         control={
@@ -536,8 +597,9 @@ function AccountDetail({
           <p className="text-xs text-muted-foreground">Loading teams…</p>
         ) : teams.data.length === 0 && !addingTeam ? (
           <p className="text-xs text-muted-foreground">
-            Add each Developer team you use with this Apple ID. The team ID is in the Membership
-            details of your Apple Developer account.
+            {account.verifiedAt === null
+              ? "Sign in above and Pathway adds your teams. If your Apple ID uses a security key or a work sign-in, add each team yourself instead; the team ID is in the Membership details of your Apple Developer account."
+              : "Apple did not list any Developer teams for this Apple ID. If you belong to one, add it with its team ID from the Membership details of your Apple Developer account."}
           </p>
         ) : (
           teams.data.map((team) => (
@@ -570,6 +632,66 @@ function AccountDetail({
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Signs the account in on the chosen environment so Apple lists its Developer teams. Open until the
+ * account is verified, while a refresh is asked for, or while any client is mid sign-in.
+ */
+function AppleIdTeamSignIn({
+  account,
+  context,
+  refreshing,
+  autoFocus,
+  onCancelRefresh,
+}: {
+  account: AppleAccount;
+  context: AppleCompanyContext;
+  refreshing: boolean;
+  autoFocus: boolean;
+  onCancelRefresh: () => void;
+}) {
+  const environmentId = context.environmentId;
+  const companyId = appleRpcCompanyId(account.scope, context.contentCompanyId);
+  const target = useMemo(
+    () => (companyId === null ? null : { companyId, accountId: account.id }),
+    [companyId, account.id],
+  );
+  const host = useXcodeHost(environmentId);
+  const session = useEnvironmentQuery(
+    environmentId !== null && target !== null
+      ? appleEnvironment.idSession({ environmentId, input: target })
+      : null,
+  );
+  const state = session.data?.state;
+  const verified = account.verifiedAt !== null;
+  if (verified && !refreshing && state !== "authenticating" && state !== "challenge") return null;
+  if (environmentId === null || target === null) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Connect to an environment to sign in to this Apple ID.
+      </p>
+    );
+  }
+  const hostName = host.mac ?? host.label;
+  return (
+    <div className="space-y-2 rounded-md border border-primary/30 bg-primary/5 p-3">
+      <p className="text-sm font-medium">
+        {verified ? "Sign in again to refresh your teams" : "Sign in to add your Developer teams"}
+      </p>
+      <AppleIdSignIn
+        environmentId={environmentId}
+        target={target}
+        email={account.email}
+        session={session}
+        hostName={hostName}
+        signInAgain={refreshing}
+        onCancelSignInAgain={onCancelRefresh}
+        autoFocus={autoFocus}
+        prompt={`Enter the password for ${account.email}. ${hostName} signs in to Apple and Pathway adds every Developer team on this Apple ID. Your password is used for this sign-in only and is never stored.`}
+      />
     </div>
   );
 }

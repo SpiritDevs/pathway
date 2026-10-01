@@ -256,7 +256,8 @@ function formatClockTime(epochMs: number): string {
  * Signs the environment in to an Apple ID: password, then Apple's two-factor code. The password
  * goes to the environment for this attempt only; every watching client sees the same challenge.
  * `signInAgain` asks for a password even though the session reads as signed in, for a session Apple
- * has already rejected.
+ * has already rejected. `prompt` replaces the Xcode download explanation above the password field;
+ * `autoFocus` focuses the password when the user has just asked to sign in.
  */
 export function AppleIdSignIn({
   environmentId,
@@ -266,6 +267,8 @@ export function AppleIdSignIn({
   hostName,
   signInAgain = false,
   onCancelSignInAgain,
+  prompt,
+  autoFocus = false,
 }: {
   environmentId: EnvironmentId;
   target: XcodeTarget;
@@ -274,6 +277,8 @@ export function AppleIdSignIn({
   hostName: string;
   signInAgain?: boolean;
   onCancelSignInAgain?: () => void;
+  prompt?: string;
+  autoFocus?: boolean;
 }) {
   const stage = appleIdSignInStage(session, signInAgain);
   const data = session.data;
@@ -328,8 +333,12 @@ export function AppleIdSignIn({
       environmentId={environmentId}
       target={target}
       email={email}
-      hostName={hostName}
       notice={notice}
+      prompt={
+        prompt ??
+        `Sign in to ${email} so ${hostName} can download Xcode from Apple. Your password is used for this sign-in only and is never stored.`
+      }
+      autoFocus={autoFocus}
       onCancel={signInAgain ? onCancelSignInAgain : undefined}
     />
   );
@@ -372,15 +381,17 @@ function AppleIdPasswordForm({
   environmentId,
   target,
   email,
-  hostName,
   notice,
+  prompt,
+  autoFocus,
   onCancel,
 }: {
   environmentId: EnvironmentId;
   target: XcodeTarget;
   email: string;
-  hostName: string;
   notice: string | null;
+  prompt: string;
+  autoFocus: boolean;
   onCancel: (() => void) | undefined;
 }) {
   const start = useAtomCommand(appleEnvironment.idStart, { reportFailure: false });
@@ -403,10 +414,7 @@ function AppleIdPasswordForm({
           {notice}
         </p>
       ) : null}
-      <p className="text-sm text-muted-foreground">
-        Sign in to {email} so {hostName} can download Xcode from Apple. Your password is used for
-        this sign-in only and is never stored.
-      </p>
+      <p className="text-sm text-muted-foreground">{prompt}</p>
       {/* Lets password managers pair the password with the Apple ID. */}
       <input type="email" autoComplete="username" value={email} readOnly hidden />
       <label className="block max-w-sm space-y-1 text-xs">
@@ -414,6 +422,7 @@ function AppleIdPasswordForm({
         <Input
           type="password"
           autoComplete="current-password"
+          autoFocus={autoFocus}
           required
           disabled={action.pending !== null}
           value={password}

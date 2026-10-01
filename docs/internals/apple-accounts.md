@@ -1,6 +1,6 @@
 # Apple accounts and App Store Connect
 
-COR-100 ships Apple account management in Settings → Apple accounts and app linking in Project settings → App Store Connect, backed by Cloud metadata and environment RPCs. COR-101 adds the environment Apple ID sign-in and Xcode installer backend; its client screens are separate work. Import schemas from `@spiritdevs/contracts/apple` and cloud references from `api.appleIntegrations`.
+COR-100 ships Apple account management in Settings → Apple accounts and app linking in Project settings → App Store Connect, backed by Cloud metadata and environment RPCs. COR-101 adds the environment Apple ID sign-in and Xcode installer backend. Settings → Apple accounts creates an account from its email alone, then signs it in on the selected environment so `appleSessions.save` records the discovered Developer teams; manual `upsertTeam` remains for accounts Apple sign-in cannot handle. Import schemas from `@spiritdevs/contracts/apple` and cloud references from `api.appleIntegrations`.
 
 An Apple account belongs to a Pathway user by default. A user can add several Apple IDs, each with several Developer teams. Tethering an account to a company shares it with that company. Each team has one replaceable ASC API key. Apple ID sign-in sets `verifiedAt` and discovers Developer teams when Apple exposes them. Manually entered team metadata is not proof of Apple ID membership; validating an ASC key proves that key can list apps, not that its issuer matches a manually entered Developer team ID.
 
