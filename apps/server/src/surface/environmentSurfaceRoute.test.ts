@@ -292,7 +292,9 @@ it.layer(NodeServices.layer)("environment surface route", (it) => {
         }),
     );
   }
-  it.effect("computer authenticates, streams binary frames and tears down on session revocation", () =>
+  it.effect(
+    "computer authenticates, streams binary frames and tears down on session revocation",
+    () =>
       Effect.gen(function* () {
         const subscribed = yield* Deferred.make<SurfaceSink>();
         const released = yield* Deferred.make<void>();
