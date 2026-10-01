@@ -1,11 +1,7 @@
 import {
   ChevronRightIcon,
   ChevronsLeftRightEllipsisIcon,
-  Code2Icon,
   CopyIcon,
-  HardDriveIcon,
-  LaptopIcon,
-  MonitorIcon,
   MoreVerticalIcon,
   PencilIcon,
   PlugIcon,
@@ -13,7 +9,6 @@ import {
   PlusIcon,
   QrCodeIcon,
   RefreshCwIcon,
-  ServerIcon,
   TerminalIcon,
   Trash2Icon,
 } from "lucide-react";
@@ -42,7 +37,6 @@ import {
   type DesktopWslState,
   type EnvironmentId,
   type ExecutionEnvironmentCapabilities,
-  type ExecutionEnvironmentDeviceKind,
 } from "@spiritdevs/contracts";
 import { connectionNoticeText, connectionStatusText } from "@spiritdevs/client-runtime/connection";
 import {
@@ -53,6 +47,11 @@ import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import {
+  EnvironmentDeviceIcon,
+  inferredEnvironmentDeviceKind,
+  isDevelopmentEnvironment,
+} from "../EnvironmentDeviceIcon";
 import { cn } from "../../lib/utils";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
 import { resolveRelayClerkTokenOptions } from "../../cloud/publicConfig";
@@ -1466,51 +1465,6 @@ type SavedBackendListRowProps = {
   onDisconnect: (environmentId: EnvironmentId) => void;
   onRemove: (environmentId: EnvironmentId) => void;
 };
-
-function inferredEnvironmentDeviceKind(
-  environment: EnvironmentPresentation,
-): ExecutionEnvironmentDeviceKind {
-  const advertised = environment.descriptor?.device?.kind;
-  if (advertised && advertised !== "unknown") return advertised;
-  const candidate =
-    `${environment.descriptor?.device?.model ?? ""} ${environment.label}`.toLowerCase();
-  if (candidate.includes("macbook") || candidate.includes("laptop")) return "laptop";
-  if (
-    candidate.includes("mac studio") ||
-    candidate.includes("mac mini") ||
-    candidate.includes("mac pro") ||
-    candidate.includes("imac") ||
-    candidate.includes("desktop")
-  ) {
-    return "desktop";
-  }
-  return advertised ?? "unknown";
-}
-
-function isDevelopmentEnvironment(environment: EnvironmentPresentation): boolean {
-  return (
-    environment.descriptor?.runtime?.mode === "development" ||
-    (import.meta.env.DEV && environment.entry.target._tag === "PrimaryConnectionTarget")
-  );
-}
-
-function EnvironmentDeviceIcon({ environment }: { environment: EnvironmentPresentation }) {
-  const className = "size-4";
-  if (isDevelopmentEnvironment(environment)) {
-    return <Code2Icon className={className} />;
-  }
-  switch (inferredEnvironmentDeviceKind(environment)) {
-    case "desktop":
-      return <MonitorIcon className={className} />;
-    case "laptop":
-      return <LaptopIcon className={className} />;
-    case "server":
-      return <ServerIcon className={className} />;
-    case "virtual":
-    case "unknown":
-      return <HardDriveIcon className={className} />;
-  }
-}
 
 function environmentRuntimeLabel(environment: EnvironmentPresentation): string {
   if (isDevelopmentEnvironment(environment)) return "Development server";
