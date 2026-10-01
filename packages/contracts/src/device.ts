@@ -532,7 +532,12 @@ const DeviceTarget = {
   deviceId: DeviceId,
 };
 
-export const DeviceInputInput = Schema.Struct({ ...DeviceTarget, input: DeviceInput });
+export const DeviceInputInput = Schema.Struct({
+  ...DeviceTarget,
+  input: DeviceInput,
+  /** Required for viewer RPCs. Agent tools use the authenticated active run. */
+  control: Schema.optional(DeviceControlProof),
+});
 export type DeviceInputInput = typeof DeviceInputInput.Type;
 
 export const DeviceActionInput = Schema.Union([

@@ -253,3 +253,37 @@ both acknowledged and legacy input. TV rejects digitizer events before native
 calls. One bounded queue per device serializes dispatch and skips work from
 closed sockets. See [review fixes and remaining work](watch-tv-review-fixes.md)
 for active-touch cleanup, native acknowledgement and artifact-reproducibility gaps.
+
+## Watch/TV and device-control integration
+
+Watch Crown, Watch buttons and TV remote input now share the managed input path
+with touch. `DeviceInputChannel` accepts the semantic TV tag `0x13`; the process-local
+adapter wraps it in the same `0x7e` request / `0xfe` receipt protocol. The installed
+family boundary receives a managed-call flag, validates input, and propagates native
+or validation failures to that receipt. It never translates TV input to digitizer events.
+
+`DeviceService.input` uses `control.mutation`, including completion uncertainty and
+handoff draining. The WebSocket RPC supplies its authenticated viewer identity and
+accepts `control: { viewerId, generation }`. MCP `device_input` supplies the active
+thread/run identity through `activeDeviceRun`. No lease policy, generation rule or
+agent reacquisition semantics changed.
+
+The installed boundary changed, so manifest revision 4 pins hub
+`0.12.0-pathway.3` on local and SSH hosts. Existing helpers must update/restart through
+the normal tool-sync path. Client wire examples are in
+[device-client-contract.md](device-client-contract.md#watch-and-tv-backend-contract-cor-103--cor-104).
+The native Watch acknowledgement and artifact reproducibility follow-ups in
+[watch-tv-review-fixes.md](watch-tv-review-fixes.md) remain open.
+
+Verification for this integration: `vp test run apps/server/src/device/*.test.ts
+apps/server/src/mcp/toolkits/device/*.test.ts packages/contracts/src/device.test.ts
+apps/server/src/ws.test.ts` passed 227 tests in 34 files. The tests mock process,
+transport and native/helper boundaries, including execution of both production
+patches together, ownership refusals, active-run MCP input and handoff draining.
+The retained upstream npm artifact also passed checksum verification, both patches,
+and syntax checks for both helper entry points. No simulators or dev servers ran.
+
+The contracts typecheck and scoped lint passed. The server typecheck has only the
+pre-existing `effect(instanceOfSchema)` error in `OrchestratorMcpService.ts:799`,
+unchanged from base `99493e246`. Both checks used `vp exec tsgo --noEmit -p
+<scope>/tsconfig.json --tsBuildInfoFile /dev/null`.

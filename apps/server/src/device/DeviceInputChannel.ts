@@ -112,7 +112,7 @@ export const makeDeviceInputChannel = Effect.fn("DeviceInputChannel.make")(funct
       if (
         platform === "ios" &&
         (typeof frame === "string" ||
-          ![3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].includes(frame[0] ?? -1))
+          ![3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19].includes(frame[0] ?? -1))
       )
         return Effect.void;
       return lock

@@ -3362,7 +3362,7 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "device",
           }),
         [WS_METHODS.deviceInput]: (input) =>
-          observeRpcEffect(WS_METHODS.deviceInput, deviceService.input(input), {
+          observeRpcEffect(WS_METHODS.deviceInput, viewerCall(deviceService.input(input)), {
             "rpc.aggregate": "device",
           }),
         [WS_METHODS.deviceAction]: (input) =>

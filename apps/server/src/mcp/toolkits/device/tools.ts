@@ -104,7 +104,7 @@ const DeviceInputTool = Tool.make("device_input", {
   parameters: DeviceInputInput,
   success: Schema.Struct({ ok: Schema.Boolean }),
   failure: DeviceToolError,
-  dependencies,
+  dependencies: [...dependencies, ProjectionStoreV2],
 })
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false);
