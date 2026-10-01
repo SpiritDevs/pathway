@@ -102,6 +102,20 @@ describe("ClientSettings primary navigation view order", () => {
   });
 });
 
+describe("ClientSettings primary navigation pins", () => {
+  it("keeps optional pages in overflow until pinned", () => {
+    expect(decodeClientSettings({}).primaryNavigationPinnedDestinations).toEqual([]);
+    expect(
+      decodeClientSettingsPatch({ primaryNavigationPinnedDestinations: ["projects", "email"] })
+        .primaryNavigationPinnedDestinations,
+    ).toEqual(["projects", "email"]);
+    expect(
+      decodeClientSettingsPatch({ primaryNavigationPinnedDestinations: [] })
+        .primaryNavigationPinnedDestinations,
+    ).toEqual([]);
+  });
+});
+
 describe("ClientSettings word wrap", () => {
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);

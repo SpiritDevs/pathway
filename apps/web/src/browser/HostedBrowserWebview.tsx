@@ -237,6 +237,13 @@ export function HostedBrowserWebview(props: {
     return () => window.cancelAnimationFrame(frameId);
   }, [syncContentPresentation]);
 
+  // A focused page owns every key. Hidden tabs stay mounted offscreen, so hand
+  // focus back to the app when this one leaves view.
+  useEffect(() => {
+    const webview = webviewRef.current;
+    if (!active && webview && document.activeElement === webview) webview.blur();
+  }, [active]);
+
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;

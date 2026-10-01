@@ -13,8 +13,18 @@ function scoreSlashCommandItem(
   const primaryValue =
     item.type === "slash-command" ? item.command.toLowerCase() : item.command.name.toLowerCase();
   const description = item.description.toLowerCase();
+  const label = item.label.toLowerCase().replace(/^\//, "");
 
   const scores = [
+    scoreQueryMatch({
+      value: label,
+      query,
+      exactBase: 0,
+      prefixBase: 2,
+      boundaryBase: 4,
+      includesBase: 6,
+      boundaryMarkers: [" ", "-", "_", "/"],
+    }),
     scoreQueryMatch({
       value: primaryValue,
       query,

@@ -10,6 +10,7 @@ import {
   partitionStashAttachments,
   usePromptStashStore,
   writePromptStashStorageForTest,
+  rehydratePromptStashForTest,
   type PromptStashEntry,
 } from "./promptStashStore";
 
@@ -150,6 +151,34 @@ describe("promptStashStore", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["keep"]);
   });
 
+  it("reads multiple prompts repeatedly without consuming or reordering them", () => {
+    const store = usePromptStashStore.getState();
+    const first = makeEntry({ id: "first" });
+    const second = makeEntry({ id: "second" });
+    store.stashEntry(first);
+    store.stashEntry(second);
+    expect(store.getEntry("first")).toEqual(first);
+    expect(store.getEntry("first")).toEqual(first);
+    expect(store.getEntry("second")).toEqual(second);
+    expect(store.getEntry("missing")).toBeNull();
+    expect(usePromptStashStore.getState().entries).toEqual([second, first]);
+  });
+
+  it("persists multiple prompts in order across hydration and explicit deletion", () => {
+    const store = usePromptStashStore.getState();
+    store.stashEntry(makeEntry({ id: "first" }));
+    store.stashEntry(makeEntry({ id: "second" }));
+    const entries = usePromptStashStore.getState().entries;
+    usePromptStashStore.setState({ entries: [] });
+    rehydratePromptStashForTest();
+    expect(usePromptStashStore.getState().entries).toEqual(entries);
+    expect(store.getEntry("first")?.prompt).toBe("prompt first");
+    store.takeEntry("second");
+    usePromptStashStore.setState({ entries: [] });
+    rehydratePromptStashForTest();
+    expect(usePromptStashStore.getState().entries.map((entry) => entry.id)).toEqual(["first"]);
+  });
+
   it("finalizeEntryImages attaches images and clears the pending count", () => {
     const store = usePromptStashStore.getState();
     store.stashEntry({
@@ -192,7 +221,7 @@ describe("promptStashStore", () => {
   it("finalizeEntryImages reports false when the entry was already taken", () => {
     const store = usePromptStashStore.getState();
     store.stashEntry({ ...makeEntry({ id: "racing" }), pendingImageCount: 1 });
-    // Restored (or deleted) while its images were still encoding.
+    // Deleted while its images were still encoding.
     store.takeEntry("racing");
 
     const { attached } = store.finalizeEntryImages("racing", {

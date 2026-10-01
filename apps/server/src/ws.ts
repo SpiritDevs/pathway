@@ -130,6 +130,7 @@ import * as EmailCapture from "./email/EmailCaptureService.ts";
 import * as EmailTrigger from "./email/EmailTriggerService.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
+import { ProviderAutomaticUpdates } from "./provider/providerAutomaticUpdates.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import { makeIssueImportRpcHandlers } from "./cloud/issueImport/rpc.ts";
@@ -747,6 +748,7 @@ const makeWsRpcLayer = (
       const modelManifest = yield* ModelManifest;
       const providerInstanceRegistry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
+      const providerAutomaticUpdates = yield* ProviderAutomaticUpdates;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
@@ -1795,10 +1797,9 @@ const makeWsRpcLayer = (
               const manifest = input.forceModelCatalogRefresh
                 ? yield* modelManifest.forceRefresh
                 : undefined;
-              const providers = yield* input.instanceId !== undefined &&
-              !input.forceModelCatalogRefresh
-                ? providerRegistry.refreshInstance(input.instanceId)
-                : providerRegistry.refresh();
+              const providers = yield* providerAutomaticUpdates.check(
+                input.forceModelCatalogRefresh ? undefined : input.instanceId,
+              );
               return {
                 providers,
                 ...(manifest ? { modelCatalogUpdatedAt: manifest.updatedAt } : {}),
@@ -3221,6 +3222,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const pullRequests = yield* PullRequestService.PullRequestService;
     const remoteBrowser = yield* RemoteBrowser;
     const providerUsageUpdates = yield* makeSharedProviderUsageSubscription();
+    const providerAutomaticUpdates = yield* ProviderAutomaticUpdates;
+    const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -3244,7 +3247,13 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             usageRecoveryRpcLayer,
           ).pipe(
             Layer.provideMerge(RpcSerialization.layerJson),
-            Layer.provide(ProviderMaintenanceRunner.layer),
+            Layer.provide(
+              Layer.succeed(
+                ProviderMaintenanceRunner.ProviderMaintenanceRunner,
+                providerMaintenanceRunner,
+              ),
+            ),
+            Layer.provide(Layer.succeed(ProviderAutomaticUpdates, providerAutomaticUpdates)),
             Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
             Layer.provide(Layer.succeed(RemoteBrowser, remoteBrowser)),
             // One server-lifetime service means clients share the same PR caches, and a WS

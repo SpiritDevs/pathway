@@ -35,6 +35,10 @@ The agent works in whichever browser you are watching. Opening the remote browse
 
 Take browser control before interacting while the agent is working. Use **Take over to assist agent** in the browser panel or above the composer. Resume the agent when you are finished. Any client watching the remote browser can take control. For a local tab, only the desktop showing that tab can take control. A failed attempt to open a browser without a tab does not offer takeover.
 
+### Keyboard in the desktop browser
+
+While you are using a page in a local tab, your keys go to that page, the way they would in any browser. Select all, copy, cut, paste, undo and redo work in its fields. Pathway's own shortcuts, such as Settings, Close Window and zoom, wait until you click back into the app or switch to another view. The menu bar items still work when you click them.
+
 ## Saved logins
 
 Settings → General → Passwords stores website logins in your Pathway account. On iOS, open Passwords from the browser to manage saved logins. The vault uses encryption on Pathway's servers and synchronizes through your account.

@@ -43,7 +43,7 @@ import {
   WandSparklesIcon,
   XIcon,
 } from "lucide-react";
-import { useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
+import { useCanGoBack, useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 
 import { useDictationAvailability } from "../../dictation/useDictation";
 import { dictationSettingsPathVisible } from "../dictation/dictationUi";
@@ -178,6 +178,15 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     };
   }, [companySettings.companyId, integrationsClient, integrationsRead, workspaceKind]);
   const navigate = useNavigate();
+  const router = useRouter();
+  const prepareSection = useCallback(
+    (to: SettingsSearchPath) => {
+      // Warm only the page code. Settings queries and permission checks still run on navigation.
+      const route = router.looseRoutesById[to];
+      if (route) void router.loadRouteChunk(route)?.catch(() => undefined);
+    },
+    [router],
+  );
   const currentHash = useLocation({ select: (location) => location.hash });
   const canGoBack = useCanGoBack();
   const { isMobile, setOpenMobile, open, setOpen } = useSidebar();
@@ -202,10 +211,11 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   useEffect(() => {
     const result = results[activeResultIndex];
     if (!result) return;
+    if (isSearching) prepareSection(result.to);
     document
       .getElementById(`settings-search-result-${result.id}`)
       ?.scrollIntoView({ block: "nearest" });
-  }, [activeResultIndex, results]);
+  }, [activeResultIndex, isSearching, prepareSection, results]);
 
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -242,12 +252,13 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
 
   const handleSectionClick = useCallback(
     (to: SettingsPath) => {
+      prepareSection(to);
       if (isMobile) {
         setOpenMobile(false);
       }
       void navigate({ to, hash: "", replace: true, hashScrollIntoView: false });
     },
-    [isMobile, navigate, setOpenMobile],
+    [isMobile, navigate, prepareSection, setOpenMobile],
   );
   const selectSettingsScope = useCallback(
     (scope: typeof companySettings.settingsCompanyScope) => {
@@ -271,6 +282,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   }, []);
   const handleSearchResultClick = useCallback(
     (item: SettingsSearchItem) => {
+      prepareSection(item.to);
       clearSearch();
       if (isMobile) {
         setOpenMobile(false);
@@ -282,7 +294,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       }
       void navigate({ to: item.to, hash: targetId, replace: true, hashScrollIntoView: false });
     },
-    [clearSearch, currentHash, isMobile, navigate, pathname, setOpenMobile],
+    [clearSearch, currentHash, isMobile, navigate, pathname, prepareSection, setOpenMobile],
   );
   const handleSearchKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
@@ -444,6 +456,9 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                     isActive={index === activeResultIndex}
                     className="h-auto min-h-10 items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
                     onMouseMove={() => setActiveResultIndex(index)}
+                    onMouseEnter={() => prepareSection(item.to)}
+                    onFocus={() => prepareSection(item.to)}
+                    onTouchStart={() => prepareSection(item.to)}
                     onClick={() => handleSearchResultClick(item)}
                   >
                     <SettingsSectionIcon to={item.to} />
@@ -485,6 +500,9 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                         <SidebarMenuItem key={to}>
                           <SidebarMenuButton
                             isActive={isActive}
+                            onMouseEnter={() => prepareSection(to)}
+                            onFocus={() => prepareSection(to)}
+                            onTouchStart={() => prepareSection(to)}
                             onClick={() => handleSectionClick(to)}
                           >
                             <Icon />

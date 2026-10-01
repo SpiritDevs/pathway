@@ -10,7 +10,21 @@ headings, and fenced code blocks appear formatted, and their markers stay visibl
 color so you can still edit them. The agent receives exactly the markdown you typed. Very long
 messages, such as large pastes, stay unformatted so typing remains fast.
 
-Use the paperclip beside Send to add attachments. Their previews appear above the input in a
+Use the plus button on the left of the input to open the Add menu. It grows out of the top of
+the message field and covers the environment controls while open. The Add section holds
+attachments, Goal, Plan mode, Computer use (when the environment supports it), and Stash
+prompts. Your skills follow. Search to find an item. Stash prompts opens your stashed prompts:
+stash the current draft, restore a prompt into this thread, or delete one. Until you have a
+stashed prompt, the Add section shows Stash current prompt instead, and only when the input
+has something to stash.
+
+Each save adds a separate prompt, newest first, and clears its text and attachments from the
+input. Restoring adds to your current draft and keeps the saved prompt for reuse. The stash
+saves on this device and holds up to 20 prompts. Adding a 21st removes the oldest and shows
+a notice. Select the X beside a saved prompt to delete it.
+
+Choose Files and folders to upload files from your device or reference a file or folder
+in the selected environment's project. Attachment previews appear above the input in a
 separate scrollable area, so a long draft or several attachments cannot fill the conversation.
 You can still preview and remove attachments, inspect upload status, and retry failed uploads.
 
@@ -28,8 +42,12 @@ Checkout and branch controls sit above the input. Model, reasoning, and permissi
 controls in the options menu. These menus do not expand the composer. The same layout applies
 to new threads and existing conversations, including phone-sized web windows.
 
-Conversations without a project omit the Build/Plan toggle from the web and desktop
-composer, including its compact options menu.
+Choose Goal in the Add menu to change the footer's Build control to Goal. The input prompts
+you to describe your goal and define measurable outcomes. Goal asks the agent to work toward
+those outcomes and report progress in the message you send. The selection stays with your
+draft, including after a reload. Choose Build to leave Goal, or choose Plan mode to plan first.
+
+Conversations without a project omit the Build/Plan toggle unless Goal is selected.
 
 Notices above the checkout controls form a stack, with each card behind the first appearing
 narrower. Hover over the notices or focus their controls to lift the stack and reveal more notices.
@@ -41,6 +59,11 @@ When you send the first message with **New worktree** selected, a workspace prep
 appears beside your message. It shows preparation, checkout progress, and the setup action as
 they happen. Once the workspace is ready for the agent, the card disappears and the Working
 timer starts. Setup failures stay visible so you can inspect them.
+
+Typing `/`, `$`, or `@` opens the same panel as the plus button, growing out of the top of
+the input. `/` lists tools first (Goal, Plan mode, Build mode, Computer use, and Model), then
+provider commands, then skills. `$` lists skills only. `@` lists tools, then project files and
+folders. Keep typing to filter, use the arrow keys to move, and press Enter to choose.
 
 Type `$` to pick a skill. Claude skill suggestions come from the selected project or
 worktree and provider account. They refresh when you open the menu. With Claude, Pathway translates the selected `$name` into
@@ -54,9 +77,9 @@ Earlier user-only skills cannot run through that tool, so send each in its own m
 Claude skill names come from their directory names, and a user skill takes precedence
 over a project skill with the same name.
 
-Provider slash commands appear only when `/` starts the whole message, where the
-provider can expand them. Pathway's `/model`, `/plan`, and `/default` commands
-remain available at the beginning of any line.
+Provider commands appear only when `/` starts the whole message, where the
+provider can expand them. Tools remain available after `/` at the beginning of any line.
+Choosing Computer use always places `/computer-use` at the start of the message.
 
 ## Action palette
 

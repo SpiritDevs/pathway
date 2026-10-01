@@ -22,6 +22,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { assetEnvironment } from "../state/assets";
 import { attachmentEnvironment } from "../state/attachments";
 import { readPreparedConnection } from "../state/session";
+import { usePromptStashStore } from "../promptStashStore";
 import type { AttachmentUploadState, ReadyAttachmentUpload } from "./attachmentUploadState";
 
 const MAX_UPLOADS_PER_ENVIRONMENT = 3;
@@ -92,7 +93,35 @@ export async function verifyReadyAttachmentUpload(input: {
   return upload;
 }
 
-function removePending(environmentId: EnvironmentId, attachmentId: string): void {
+function removePending(
+  environmentId: EnvironmentId,
+  attachmentId: string,
+  releasedComposerAttachmentId?: string,
+): void {
+  // Restored drafts share the saved upload. Removing a draft must keep the stash usable.
+  if (
+    usePromptStashStore
+      .getState()
+      .entries.some((entry) =>
+        entry.attachments.some(
+          (attachment) =>
+            attachment.type === "file" &&
+            attachment.environmentId === environmentId &&
+            attachment.attachmentId === attachmentId,
+        ),
+      ) ||
+    Object.values(useComposerDraftStore.getState().draftsByThreadKey).some((draft) =>
+      draft.images.some(
+        (attachment) =>
+          attachment.type === "file" &&
+          attachment.id !== releasedComposerAttachmentId &&
+          attachment.uploadEnvironmentId === environmentId &&
+          attachment.uploadedAttachmentId === attachmentId,
+      ),
+    )
+  ) {
+    return;
+  }
   deletePendingAttachmentUpload({
     registry: appAtomRegistry,
     remove: attachmentEnvironment.remove,
@@ -383,23 +412,23 @@ export function cancelAttachmentUpload(id: string): void {
   const index = queue.indexOf(job);
   if (index !== -1) queue.splice(index, 1);
   job.abort?.();
-  if (job.mintedAttachmentId) removePending(job.environmentId, job.mintedAttachmentId);
+  if (job.mintedAttachmentId) removePending(job.environmentId, job.mintedAttachmentId, id);
   job.resolveSettled();
 }
 
 export function releaseAttachmentUpload(id: string): void {
   const upload = readAttachmentUpload(id);
   cancelAttachmentUpload(id);
-  if (upload?.status === "ready") removePending(upload.environmentId, upload.attachmentId);
+  if (upload?.status === "ready") removePending(upload.environmentId, upload.attachmentId, id);
   else if (upload?.status === "failed" && upload.attachmentId) {
-    removePending(upload.environmentId, upload.attachmentId);
+    removePending(upload.environmentId, upload.attachmentId, id);
   }
   clearUploadState(id);
 }
 
 export function releaseDraftAttachment(file: ComposerFileAttachment): void {
   if (file.uploadEnvironmentId !== undefined && file.uploadedAttachmentId !== undefined) {
-    removePending(file.uploadEnvironmentId, file.uploadedAttachmentId);
+    removePending(file.uploadEnvironmentId, file.uploadedAttachmentId, file.id);
   }
   releaseAttachmentUpload(file.id);
 }
@@ -425,7 +454,7 @@ export function retryAttachmentUpload(input: {
   const previous = readAttachmentUpload(input.file.id);
   cancelAttachmentUpload(input.file.id);
   if (previous?.status === "failed" && previous.attachmentId) {
-    removePending(previous.environmentId, previous.attachmentId);
+    removePending(previous.environmentId, previous.attachmentId, input.file.id);
   }
   clearUploadState(input.file.id);
   startAttachmentUpload(input);

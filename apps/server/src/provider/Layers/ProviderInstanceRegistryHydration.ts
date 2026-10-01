@@ -57,13 +57,19 @@ import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.t
 import { ProviderInstanceRegistryMutator } from "../Services/ProviderInstanceRegistryMutator.ts";
 import { ProviderInstanceRegistryMutableLayer } from "./ProviderInstanceRegistryLive.ts";
 import {
+  ProviderMaintenanceActivity,
+  layer as activityLayer,
+  trackProviderActivity,
+} from "../providerMaintenanceActivity.ts";
+import {
   type ProviderOrchestrationAdapterInfrastructure,
   ProviderOrchestrationAdapterInfrastructureLive,
 } from "./ProviderOrchestrationAdapterInfrastructure.ts";
 
 type ProviderInstanceRegistryHydrationEnv =
   | Exclude<BuiltInDriversEnv, ProviderOrchestrationAdapterInfrastructure>
-  | ServerSettingsService;
+  | ServerSettingsService
+  | ProviderMaintenanceActivity;
 
 /**
  * Synthesize a `ProviderInstanceConfigMap` from a `ServerSettings` snapshot.
@@ -157,13 +163,14 @@ const SettingsWatcherLive = Layer.effectDiscard(
  * The mutator tag is technically also exposed; only this module imports
  * it, so the visibility leak is harmless in practice.
  */
-export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
+const ProviderInstanceRegistryHydrationBase: Layer.Layer<
   ProviderInstanceRegistry,
   never,
   ProviderInstanceRegistryHydrationEnv
 > = Layer.unwrap(
   Effect.gen(function* () {
     const serverSettings = yield* ServerSettingsService;
+    const activity = yield* ProviderMaintenanceActivity;
     const initialSettings: ServerSettings | undefined = yield* serverSettings.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
@@ -173,10 +180,20 @@ export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
         : deriveProviderInstanceConfigMap(initialSettings);
 
     const mutableLayer = ProviderInstanceRegistryMutableLayer({
-      drivers: BUILT_IN_DRIVERS,
+      drivers: BUILT_IN_DRIVERS.map((driver) => ({
+        ...driver,
+        create: (input) =>
+          driver
+            .create(input)
+            .pipe(Effect.map((instance) => trackProviderActivity(instance, activity))),
+      })),
       configMap: initialConfigMap,
     }).pipe(Layer.provide(ProviderOrchestrationAdapterInfrastructureLive));
 
     return SettingsWatcherLive.pipe(Layer.provideMerge(mutableLayer));
   }),
 ) as Layer.Layer<ProviderInstanceRegistry, never, ProviderInstanceRegistryHydrationEnv>;
+
+export const ProviderInstanceRegistryHydrationLive = ProviderInstanceRegistryHydrationBase.pipe(
+  Layer.provideMerge(activityLayer),
+);

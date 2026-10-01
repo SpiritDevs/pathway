@@ -249,6 +249,7 @@ type PersistedComposerDraftTestState = {
       elementContexts?: Array<Record<string, unknown>>;
       issueContexts?: Array<Record<string, unknown>>;
       reviewComments?: Array<Record<string, unknown>>;
+      goalMode?: boolean;
     }
   >;
 };
@@ -2349,6 +2350,38 @@ describe("composerDraftStore runtime and interaction settings", () => {
 
   beforeEach(() => {
     resetComposerDraftStore();
+  });
+
+  it("retains an empty Goal draft through persistence and clears it on return to Build", () => {
+    const store = useComposerDraftStore.getState();
+    store.setGoalMode(threadRef, true);
+    expect(store.getComposerDraft(threadRef)?.goalMode).toBe(true);
+    expect(captureComposerDraft(threadRef).goalMode).toBe(true);
+    const persisted = flushComposerDraftStorage();
+    expect(
+      persisted.draftsByThreadKey?.[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.goalMode,
+    ).toBe(true);
+    const rehydrated = useComposerDraftStore.persist
+      .getOptions()
+      .merge?.(persisted, useComposerDraftStore.getState());
+    expect(
+      rehydrated?.draftsByThreadKey[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.goalMode,
+    ).toBe(true);
+    store.setGoalMode(threadRef, false);
+    expect(store.getComposerDraft(threadRef)).toBeNull();
+  });
+
+  it("keeps Goal scoped to its environment and preserves it when a message is cleared", () => {
+    const store = useComposerDraftStore.getState();
+    store.setGoalMode(threadRef, true);
+    store.setPrompt(threadRef, "Describe measurable outcomes");
+    store.clearComposerContent(threadRef);
+    expect(store.getComposerDraft(threadRef)?.goalMode).toBe(true);
+    expect(
+      store.getComposerDraft(scopeThreadRef(OTHER_TEST_ENVIRONMENT_ID, threadId))?.goalMode,
+    ).toBeUndefined();
+    store.setGoalMode(threadRef, false);
+    expect(store.getComposerDraft(threadRef)).toBeNull();
   });
 
   it("stores runtime mode overrides in the composer draft", () => {

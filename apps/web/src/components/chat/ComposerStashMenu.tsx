@@ -6,23 +6,11 @@ import { cn } from "~/lib/utils";
 import { type PromptStashEntry } from "../../promptStashStore";
 import { Command, CommandGroup, CommandGroupLabel, CommandItem, CommandList } from "../ui/command";
 import { Button } from "../ui/button";
-
-const SNIPPET_MAX_CHARS = 90;
+import { stashEntrySnippet } from "./composerPromptStash.logic";
 
 /** Images that did not make it into the entry, whatever the reason. */
 function missingImageCount(entry: PromptStashEntry): number {
   return entry.droppedImageNames.length + (entry.unreadableImageNames?.length ?? 0);
-}
-
-function stashEntrySnippet(entry: PromptStashEntry): string {
-  const trimmed = entry.prompt.trim().replace(/\s+/g, " ");
-  if (trimmed.length > 0) {
-    return trimmed.length > SNIPPET_MAX_CHARS ? `${trimmed.slice(0, SNIPPET_MAX_CHARS)}…` : trimmed;
-  }
-  const attachmentCount = entry.attachments.length + entry.droppedImageNames.length;
-  return attachmentCount > 0
-    ? `(${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"})`
-    : "(empty)";
 }
 
 /**

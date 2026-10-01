@@ -490,8 +490,21 @@ export function ProviderInstanceCard({
   onFavoriteModelsChange,
   onModelOrderChange,
   onRunUpdate,
-  isUpdating = false,
+  isUpdating: isUpdateRequested = false,
 }: ProviderInstanceCardProps) {
+  const updateState = liveProvider?.updateState;
+  const isUpdating =
+    isUpdateRequested || updateState?.status === "queued" || updateState?.status === "running";
+  const updateStatusLabel =
+    updateState?.status === "queued"
+      ? "Waiting until idle"
+      : updateState?.status === "running"
+        ? "Updating…"
+        : updateState?.status === "succeeded"
+          ? "Updated"
+          : updateState?.status === "failed" || updateState?.status === "unchanged"
+            ? "Update needs attention"
+            : null;
   const enabled = instance.enabled ?? true;
   // The server-reported status wins when present; otherwise fall back to
   // "disabled"/"warning" based on the local `enabled` flag so the dot
@@ -728,6 +741,24 @@ export function ProviderInstanceCard({
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               {titleHeadNode}
               {versionCodeNode}
+              {updateStatusLabel ? (
+                <span
+                  role="status"
+                  className={cn(
+                    "text-xs",
+                    updateState?.status === "failed" || updateState?.status === "unchanged"
+                      ? "text-warning"
+                      : "text-muted-foreground",
+                  )}
+                  title={
+                    updateState?.status === "succeeded"
+                      ? "New sessions use the updated provider. No restart is needed."
+                      : (updateState?.message ?? undefined)
+                  }
+                >
+                  {updateStatusLabel}
+                </span>
+              ) : null}
               {versionAdvisory ? (
                 <Popover>
                   <PopoverTrigger
@@ -744,7 +775,7 @@ export function ProviderInstanceCard({
                         )}
                         aria-label="Update available — view details"
                       >
-                        <ArrowUpCircleIcon className="size-3.5 [animation:bounce_2.4s_ease-in-out_3] motion-reduce:animate-none" />
+                        <ArrowUpCircleIcon className="size-3.5" />
                       </Button>
                     }
                   />
@@ -756,7 +787,7 @@ export function ProviderInstanceCard({
                     <div className="grid min-w-0 gap-3">
                       <div className="grid gap-0.5">
                         <p className="text-[13px] font-semibold leading-tight text-foreground">
-                          Update available
+                          {updateStatusLabel ?? "Update available"}
                         </p>
                         <p
                           className={cn(
@@ -766,7 +797,7 @@ export function ProviderInstanceCard({
                               : "text-muted-foreground",
                           )}
                         >
-                          {versionAdvisory.detail}
+                          {updateState?.message ?? versionAdvisory.detail}
                         </p>
                       </div>
                       {onRunUpdate ? (
@@ -779,7 +810,14 @@ export function ProviderInstanceCard({
                           onClick={onRunUpdate}
                         >
                           {isUpdating ? <LoaderIcon className="animate-spin" /> : <DownloadIcon />}
-                          {isUpdating ? "Updating" : "Update now"}
+                          {updateState?.status === "queued"
+                            ? "Waiting until idle"
+                            : isUpdating
+                              ? "Updating"
+                              : updateState?.status === "failed" ||
+                                  updateState?.status === "unchanged"
+                                ? "Retry update"
+                                : "Update now"}
                         </Button>
                       ) : null}
                       {onRunUpdate && updateCommand ? (

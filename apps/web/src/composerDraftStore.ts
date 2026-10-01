@@ -192,6 +192,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
+  goalMode: Schema.optionalKey(Schema.Boolean),
   computerControlMode: Schema.optionalKey(Schema.Literals(["off", "request", "chat"])),
   computerControlGeneration: Schema.optionalKey(Schema.Number),
 });
@@ -354,6 +355,7 @@ export interface ComposerThreadDraftState {
   activeProvider: ProviderInstanceId | null;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
+  goalMode?: boolean;
   /** Explicit Computer intent for this draft; absent until the user chooses one. */
   computerControlMode?: ComposerComputerControlMode | undefined;
   /** The thread's Computer revocation generation that intent was formed against. */
@@ -593,6 +595,7 @@ interface ComposerDraftStoreState {
     threadRef: ComposerThreadTarget,
     interactionMode: ProviderInteractionMode | null | undefined,
   ) => void;
+  setGoalMode: (threadRef: ComposerThreadTarget, enabled: boolean) => void;
   setComputerControlMode: (
     threadRef: ComposerThreadTarget,
     mode: ComposerComputerControlMode,
@@ -956,6 +959,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
     draft.interactionMode === null &&
+    !draft.goalMode &&
     draft.computerControlMode === undefined &&
     draft.computerControlGeneration === undefined
   );
@@ -2028,6 +2032,7 @@ function normalizePersistedDraftsByThreadId(
         ? draftCandidate.interactionMode
         : null;
     const computerControlMode = normalizeComputerControlMode(draftCandidate.computerControlMode);
+    const goalMode = draftCandidate.goalMode === true;
     const computerControlGeneration = normalizeComputerControlGeneration(
       draftCandidate.computerControlGeneration,
     );
@@ -2093,6 +2098,7 @@ function normalizePersistedDraftsByThreadId(
       !hasModelData &&
       !runtimeMode &&
       !interactionMode &&
+      !goalMode &&
       computerControlMode === undefined &&
       computerControlGeneration === undefined
     ) {
@@ -2125,6 +2131,7 @@ function normalizePersistedDraftsByThreadId(
         : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
+      ...(goalMode ? { goalMode: true } : {}),
       ...(computerControlMode === undefined ? {} : { computerControlMode }),
       ...(computerControlGeneration === undefined ? {} : { computerControlGeneration }),
     };
@@ -2248,6 +2255,7 @@ function toPersistedThreadDraft(
       : {}),
     ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
     ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
+    ...(draft.goalMode ? { goalMode: true } : {}),
     ...(draft.computerControlMode === undefined
       ? {}
       : { computerControlMode: draft.computerControlMode }),
@@ -2304,6 +2312,7 @@ function partializeComposerDraftStoreState(
       !hasModelData &&
       draft.runtimeMode === null &&
       draft.interactionMode === null &&
+      !draft.goalMode &&
       draft.computerControlMode === undefined &&
       draft.computerControlGeneration === undefined
     ) {
@@ -2582,6 +2591,7 @@ function toHydratedThreadDraft(
     activeProvider,
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
+    ...(persistedDraft.goalMode ? { goalMode: true } : {}),
     ...(persistedDraft.computerControlMode === undefined
       ? {}
       : { computerControlMode: persistedDraft.computerControlMode }),
@@ -3413,6 +3423,19 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             } else {
               nextDraftsByThreadKey[threadKey] = nextDraft;
             }
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
+        setGoalMode: (threadRef, enabled) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (!threadKey) return;
+          set((state) => {
+            const base = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
+            if (Boolean(base.goalMode) === enabled) return state;
+            const nextDraft = { ...base, goalMode: enabled };
+            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) delete nextDraftsByThreadKey[threadKey];
+            else nextDraftsByThreadKey[threadKey] = nextDraft;
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },

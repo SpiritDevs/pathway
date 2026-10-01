@@ -21,6 +21,7 @@ import { HostProcessEnvironment, HostProcessPlatform } from "@spiritdevs/shared/
 import { SpawnExecutableResolution } from "@spiritdevs/shared/shell";
 
 import { ProviderRegistry, type ProviderRegistryShape } from "./Services/ProviderRegistry.ts";
+import * as ProviderMaintenanceActivity from "./providerMaintenanceActivity.ts";
 import * as ProviderMaintenanceRunner from "./providerMaintenanceRunner.ts";
 import {
   makeProviderMaintenanceCapabilities,
@@ -208,6 +209,7 @@ const makeTestRunner = (registry: ProviderRegistryShape) =>
       ProviderMaintenanceRunner.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
+            ProviderMaintenanceActivity.layer,
             Layer.succeed(ProviderRegistry, registry),
             Layer.succeed(ProviderVersionCache, new Map()),
           ),
@@ -217,6 +219,30 @@ const makeTestRunner = (registry: ProviderRegistryShape) =>
   );
 
 describe("providerMaintenanceRunner", () => {
+  it.effect("skips an automatic update that is no longer eligible after waiting", () => {
+    const calls: string[] = [];
+    return Effect.gen(function* () {
+      const { registry } = yield* makeRegistry(baseNativeCliProvider);
+      const updater = yield* makeTestRunner(registry);
+      const result = yield* updater.updateProvider(NATIVE_CLI_DRIVER, {
+        beforeRun: Effect.succeed(false),
+      });
+      assert.deepStrictEqual(calls, []);
+      assert.isUndefined(result.providers[0]?.updateState);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NonWindowsPlatform,
+          latestVersionHttpClient("0.0.0"),
+          mockSpawnerLayer((command) => {
+            calls.push(command);
+            return {};
+          }),
+        ),
+      ),
+    );
+  });
+
   it.effect("runs the allowlisted provider update command and records success", () => {
     const calls: Array<{ command: string; args: ReadonlyArray<string> }> = [];
     return Effect.gen(function* () {

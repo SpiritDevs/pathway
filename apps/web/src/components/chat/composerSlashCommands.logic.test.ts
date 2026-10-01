@@ -8,20 +8,21 @@ import {
 } from "./composerSlashCommands.logic";
 
 describe("buildBuiltInSlashCommandItems", () => {
-  it("offers /computer-use exactly once where Computer is supported", () => {
+  it("offers Computer use exactly once where Computer is supported", () => {
     const items = buildBuiltInSlashCommandItems({ computerUseAvailable: true });
-    expect(items.map((item) => item.label)).toEqual([
-      "/model",
-      "/plan",
-      "/default",
-      "/computer-use",
+    expect(items.map((item) => item.command)).toEqual([
+      "goal",
+      "plan",
+      "default",
+      "computer-use",
+      "model",
     ]);
     expect(items.filter((item) => item.command === "computer-use")).toEqual([
       {
         id: "slash:computer-use",
         type: "slash-command",
         command: "computer-use",
-        label: "/computer-use",
+        label: "Computer use",
         description: "Use Pathway Computer for this request only",
       },
     ]);

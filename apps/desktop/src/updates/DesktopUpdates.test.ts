@@ -78,6 +78,7 @@ describe("DesktopUpdates", () => {
 
           yield* TestClock.adjust(Duration.millis(15_000));
           assert.equal(harness.checkCount(), 1);
+          assert.deepEqual(harness.providerChecks, []);
         }),
       );
 
@@ -250,6 +251,7 @@ describe("DesktopUpdates", () => {
         yield* updates.configure;
 
         yield* updates.check("manual");
+        assert.deepEqual(harness.providerChecks, ["check-provider-updates"]);
 
         const state = yield* updates.getState;
         const loggedAnnotation = loggedAnnotations.at(-1);

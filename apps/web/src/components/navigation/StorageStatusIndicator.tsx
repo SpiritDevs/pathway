@@ -1,7 +1,7 @@
 import { useAuth } from "@clerk/react";
 import { useNavigate } from "@tanstack/react-router";
 import { isInAlertQuietHours } from "@spiritdevs/client-runtime/thread-alerts";
-import type { EnvironmentId, StoragePressure } from "@spiritdevs/contracts";
+import type { StoragePressure } from "@spiritdevs/contracts";
 import { HardDriveIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useClientSettings, useClientSettingsHydrated } from "../../hooks/useSettings";
@@ -13,6 +13,8 @@ import { toastManager } from "../ui/toast";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
+import type { EnvironmentPresentation } from "../../state/environments";
+import { EnvironmentDeviceIcon } from "../EnvironmentDeviceIcon";
 
 const lastPressures = new Map<string, StoragePressure>();
 
@@ -128,8 +130,7 @@ export function StorageStatusIndicator() {
             {pressures.map(({ environment, pressure, last }) => (
               <StorageEnvironmentRow
                 key={environment.environmentId}
-                environmentId={environment.environmentId}
-                label={environment.label}
+                environment={environment}
                 pressure={pressure}
                 lastPressure={last?.pressure}
                 enabled={
@@ -160,18 +161,17 @@ export function StorageStatusIndicator() {
 }
 
 function StorageEnvironmentRow({
-  environmentId,
-  label,
+  environment,
   pressure,
   lastPressure,
   enabled,
 }: {
-  environmentId: EnvironmentId;
-  label: string;
+  environment: EnvironmentPresentation;
   pressure: StoragePressure;
   lastPressure: StoragePressure | undefined;
   enabled: boolean;
 }) {
+  const { environmentId, label } = environment;
   const snapshot = useEnvironmentQuery(
     enabled ? serverEnvironment.storageSnapshot({ environmentId, input: {} }) : null,
   );
@@ -193,7 +193,7 @@ function StorageEnvironmentRow({
   return (
     <div className="space-y-1 border-t py-2 first:border-t-0">
       <div className="flex min-w-0 items-center gap-2">
-        <HardDriveIcon className={`size-4 shrink-0 ${color}`} />
+        <EnvironmentDeviceIcon environment={environment} className={`size-4 shrink-0 ${color}`} />
         <span className="min-w-0 flex-1 truncate text-sm" title={label}>
           {label}
         </span>

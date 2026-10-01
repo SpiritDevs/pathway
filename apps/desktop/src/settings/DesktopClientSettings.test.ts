@@ -43,6 +43,7 @@ const clientSettings: ClientSettings = {
   loadBalancingWeights: { "environment-1": 100, "environment-2": 0 },
   planModeEnabled: false,
   persistComposerContextStrip: true,
+  primaryNavigationPinnedDestinations: ["projects", "email"],
   primaryNavigationViewOrder: [
     "threads",
     "projects",

@@ -122,6 +122,13 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
 }
 
 @media (min-width: 768px) {
+  /* Pane containers clip their contents, so the outer pane owns the shadow.
+     Torn-out windows have a content frame without a pane container. */
+  [data-pane-frame],
+  [data-app-content-frame]:not([data-pane-frame] *) {
+    box-shadow: var(--workspace-frame-shadow);
+  }
+
   [data-app-content-frame] > [data-slot="sidebar-inset"] {
     height: 100%;
     min-height: 0;
@@ -212,6 +219,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
   --color-message-action-foreground: var(--message-action-foreground);
   --color-message-action-hover: var(--message-action-hover);
   --color-sidebar: var(--sidebar);
+  --color-workspace-frame: var(--workspace-frame);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-muted-foreground: var(--sidebar-muted-foreground);
   --color-sidebar-control-surface: var(--sidebar-control-surface);
@@ -740,6 +748,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
   .chat-composer-glass-shell {
     --chat-composer-glass-surface: var(--card);
     --chat-composer-outline: rgb(0 0 0 / 8%);
+    --chat-composer-top-radius: 22px;
 
     position: relative;
     isolation: isolate;
@@ -750,7 +759,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
     position: absolute;
     z-index: 0;
     inset: 0;
-    border-radius: 22px;
+    border-radius: var(--chat-composer-top-radius) var(--chat-composer-top-radius) 22px 22px;
     background: color-mix(
       in srgb,
       var(--chat-composer-glass-surface) var(--glass-opacity),
@@ -772,13 +781,18 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
      * strip is inset 1.375rem per side, so the step-in positions and their
      * curve controls stay in rem to keep tracking it at non-default interface
      * font sizes; the composer's 22px top radius and the strip's 16px bottom
-     * radius are px by design.
+     * radius are px by design. The top radius drops to 0 while the add menu
+     * is attached above the composer.
      */
     clip-path: shape(
-      from 0 22px,
-      curve to 22px 0 with 0 9.85px / 9.85px 0,
-      line to calc(100% - 22px) 0,
-      curve to 100% 22px with calc(100% - 9.85px) 0 / 100% 9.85px,
+      from 0 var(--chat-composer-top-radius),
+      curve to var(--chat-composer-top-radius) 0 with 0
+        calc(var(--chat-composer-top-radius) * 0.4477) /
+        calc(var(--chat-composer-top-radius) * 0.4477) 0,
+      line to calc(100% - var(--chat-composer-top-radius)) 0,
+      curve to 100% var(--chat-composer-top-radius) with
+        calc(100% - var(--chat-composer-top-radius) * 0.4477) 0 / 100%
+        calc(var(--chat-composer-top-radius) * 0.4477),
       line to 100% calc(100% - var(--chat-composer-context-extension) - 1.375rem),
       curve to calc(100% - 1.375rem) calc(100% - var(--chat-composer-context-extension)) with 100%
         calc(100% - var(--chat-composer-context-extension) - 0.6156rem) / calc(100% - 0.6156rem)
@@ -793,7 +807,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
       curve to 0 calc(100% - var(--chat-composer-context-extension) - 1.375rem) with 0.6156rem
         calc(100% - var(--chat-composer-context-extension)) / 0
         calc(100% - var(--chat-composer-context-extension) - 0.6156rem),
-      line to 0 22px,
+      line to 0 var(--chat-composer-top-radius),
       close
     );
   }
@@ -915,7 +929,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
   @supports not (clip-path: shape(from 0 0, line to 1px 1px)) {
     .chat-composer-glass-shell-with-context::before {
       inset-block-end: var(--chat-composer-context-extension);
-      border-radius: 22px;
+      border-radius: var(--chat-composer-top-radius) var(--chat-composer-top-radius) 22px 22px;
       clip-path: none;
     }
 
@@ -1229,7 +1243,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
   @supports not (clip-path: shape(from 0 0, line to 1px 1px)) {
     .chat-composer-glass-shell-with-context::before {
       inset-block-end: var(--chat-composer-context-extension);
-      border-radius: 22px;
+      border-radius: var(--chat-composer-top-radius) var(--chat-composer-top-radius) 22px 22px;
       clip-path: none;
     }
 
@@ -1551,6 +1565,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
   --radius: 0.625rem;
   --background: var(--color-zinc-25);
   --app-chrome-background: var(--background);
+  --workspace-frame: rgb(246 246 246);
+  --workspace-frame-shadow: 0 2px 8px rgb(0 0 0 / 10%), 0 0 2px rgb(0 0 0 / 6%);
   --toolbar-background: var(--app-chrome-background);
   --toolbar-foreground: var(--foreground);
   --toolbar-border: var(--border);
@@ -1623,6 +1639,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
        Surfaces lift from this base instead of starting from a milky gray. */
     --background: var(--color-neutral-950);
     --app-chrome-background: var(--background);
+    --workspace-frame: var(--sidebar);
+    --workspace-frame-shadow: 0 2px 8px rgb(0 0 0 / 30%), 0 0 2px rgb(0 0 0 / 20%);
     --surface-raised: var(--secondary);
     --foreground: var(--color-neutral-100);
     --card: color-mix(in srgb, var(--background) 97%, var(--color-white));
@@ -2900,6 +2918,49 @@ label:has(> select#reasoning-effort) select {
   padding-inline: 0.625rem;
   font-size: 0.875rem;
   border-radius: var(--control-radius);
+}
+
+/* The add menu grows out of the composer's top edge, so the seam corners go square. */
+.chat-composer-glass-shell:has([data-composer-add-menu-open="true"]) {
+  --chat-composer-top-radius: 0px;
+}
+
+.chat-composer-attached-panel {
+  /* Opaque on purpose: the panel covers the conversation, and backdrop blur is not guaranteed here. */
+  background: var(--chat-composer-glass-surface);
+}
+
+/* Dark workspace chrome: the navigation rail, top bar and the padding around the content
+   frame share one gray, with the thread list a step darker. Pathway Chat keeps
+   its branded surfaces. */
+html.dark:not([data-theme-id="pathway-chat"]) {
+  --workspace-frame: #242424;
+}
+/* The content card (conversation, its header, and other pages) and the right panel, which
+   renders outside it, share the darkest gray. */
+html.dark:not([data-theme-id="pathway-chat"]) [data-app-content-frame],
+html.dark:not([data-theme-id="pathway-chat"]) [data-preview-panel-mode] {
+  --background: #181818;
+}
+html.dark:not([data-theme-id="pathway-chat"]) [data-app-sidebar] {
+  --sidebar: #1d1d1d;
+  --sidebar-stage-fade: var(--sidebar);
+}
+/* Pairing screens sit on a flat gray in dark mode, without the tinted glow. */
+html.dark:not([data-theme-id="pathway-chat"]) .pairing-surface {
+  background: #181818;
+}
+html.dark:not([data-theme-id="pathway-chat"]) .pairing-surface-glow {
+  display: none;
+}
+/* Opaque so the composer and its context strip read as one exact gray over any
+   conversation background. */
+html.dark:not([data-theme-id="pathway-chat"]) .chat-composer-glass-shell {
+  --chat-composer-glass-surface: #242424;
+  --glass-opacity: 100%;
+}
+html.dark:not([data-theme-id="pathway-chat"]) .chat-composer-context-strip-top::before {
+  background: #242424;
 }
 
 /* Attached drawers share the companion's border; only the outer corners stay rounded. */

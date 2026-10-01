@@ -48,6 +48,44 @@ export function isHostedStaticApp(url: URL = new URL(window.location.href)): boo
   return hostedOrigin !== null && url.origin === hostedOrigin;
 }
 
+const CLIENT_ONLY_STORAGE_KEY = "pathway:client-only";
+
+/** Whether this browser chose to skip pairing with the server that serves it. */
+export function isClientOnlyChosen(): boolean {
+  try {
+    return window.localStorage.getItem(CLIENT_ONLY_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Remembers the pairing screen choice; callers reload so the connection layer follows it. */
+export function setClientOnlyChosen(chosen: boolean): void {
+  try {
+    if (chosen) {
+      window.localStorage.setItem(CLIENT_ONLY_STORAGE_KEY, "1");
+    } else {
+      window.localStorage.removeItem(CLIENT_ONLY_STORAGE_KEY);
+    }
+  } catch {
+    // Storage can be unavailable in private modes; the choice then lasts only for this page.
+  }
+}
+
+/** Undoes "Use as a client" and opens the pairing form for the server that serves this page. */
+export function pairWithServingEnvironment(): void {
+  setClientOnlyChosen(false);
+  window.location.assign("/pair");
+}
+
+/**
+ * True when the app only connects to saved environments: the hosted app, or a self-hosted
+ * origin whose pairing screen was answered with "Use as a client".
+ */
+export function runsWithoutServingEnvironment(url: URL = new URL(window.location.href)): boolean {
+  return isHostedStaticApp(url) || isClientOnlyChosen();
+}
+
 export function readHostedPairingRequest(url: URL = new URL(window.location.href)) {
   const host = url.searchParams.get("host")?.trim() ?? "";
   const token = getPairingTokenFromUrl(url)?.trim() ?? "";

@@ -105,10 +105,11 @@ import {
 } from "../../promptStashStore";
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
+import { appendStashedPrompt } from "./composerPromptStash.logic";
 import { compressImageForStash, compressImageToByteLimit } from "../../lib/imageCompression";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { getTerminalFocusOwner } from "../../lib/terminalFocus";
-import { resolveShortcutCommand } from "../../keybindings";
+import { resolveShortcutCommand, shortcutLabelForCommand } from "../../keybindings";
 import {
   type TerminalContextDraft,
   type TerminalContextSelection,
@@ -129,6 +130,8 @@ import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
+import { ComposerAddMenu, ComposerAddMenuButton, type ComposerAddAction } from "./ComposerAddMenu";
+import { composerAddSkillItems, GOAL_COMPOSER_PLACEHOLDER } from "./composerAddMenu.logic";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
@@ -266,7 +269,8 @@ import {
   CircleAlertIcon,
   LoaderCircleIcon,
   FileTextIcon,
-  PaperclipIcon,
+  MonitorIcon,
+  TargetIcon,
   PencilRulerIcon,
   type LucideIcon,
   LockIcon,
@@ -366,6 +370,7 @@ const terminalContextIdListsEqual = (
 
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
   showInteractionModeToggle: boolean;
+  goalMode: boolean;
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
   hideInteractionModeLabel: boolean;
@@ -377,42 +382,55 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   const RuntimeModeIcon = runtimeModeOption.icon;
   const interactionModeTooltip =
     props.disabledReason ??
-    (props.interactionMode === "plan"
-      ? "Plan mode — click to return to normal build mode"
-      : "Default mode — click to enter plan mode");
-  const interactionModeToggle = props.showInteractionModeToggle ? (
-    <>
-      <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
-      <Tooltip>
-        <TooltipTrigger render={<span className="inline-flex" title={props.disabledReason} />}>
-          <ComposerControl
-            className={cn(
-              "shrink-0 whitespace-nowrap",
-              props.interactionMode === "plan"
-                ? "bg-blue-500/10 text-blue-400 hover:bg-blue-500/15 hover:text-blue-300"
-                : "text-muted-foreground/70 hover:text-foreground/80",
-            )}
-            type="button"
-            onClick={() => {
-              if (!props.disabledReason) props.onToggleInteractionMode();
-            }}
-            disabled={Boolean(props.disabledReason)}
-            aria-label={interactionModeTooltip}
-          >
-            {props.interactionMode === "plan" ? (
-              <ComposerControlIcon icon={PencilRulerIcon} className="text-current opacity-100" />
-            ) : (
-              <ComposerControlIcon icon={BotIcon} opticalSize="large" />
-            )}
-            <span className={props.hideInteractionModeLabel ? "sr-only" : "sr-only sm:not-sr-only"}>
-              {props.interactionMode === "plan" ? "Plan" : "Build"}
-            </span>
-          </ComposerControl>
-        </TooltipTrigger>
-        <TooltipPopup side="top">{interactionModeTooltip}</TooltipPopup>
-      </Tooltip>
-    </>
-  ) : null;
+    (props.goalMode
+      ? "Goal mode, click to return to Build"
+      : props.interactionMode === "plan"
+        ? "Plan mode — click to return to normal build mode"
+        : "Default mode — click to enter plan mode");
+  const interactionModeToggle =
+    props.showInteractionModeToggle || props.goalMode ? (
+      <>
+        <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline-flex" title={props.disabledReason} />}>
+            <ComposerControl
+              className={cn(
+                "shrink-0 whitespace-nowrap",
+                props.goalMode || props.interactionMode === "plan"
+                  ? "bg-blue-500/10 text-blue-400 hover:bg-blue-500/15 hover:text-blue-300"
+                  : "text-muted-foreground/70 hover:text-foreground/80",
+              )}
+              type="button"
+              onClick={() => {
+                if (!props.disabledReason) props.onToggleInteractionMode();
+              }}
+              disabled={Boolean(props.disabledReason)}
+              aria-label={interactionModeTooltip}
+            >
+              {props.goalMode ? (
+                <ComposerControlIcon icon={TargetIcon} className="text-current opacity-100" />
+              ) : props.interactionMode === "plan" ? (
+                <ComposerControlIcon icon={PencilRulerIcon} className="text-current opacity-100" />
+              ) : (
+                <ComposerControlIcon icon={BotIcon} opticalSize="large" />
+              )}
+              <span
+                className={
+                  props.goalMode
+                    ? undefined
+                    : props.hideInteractionModeLabel
+                      ? "sr-only"
+                      : "sr-only sm:not-sr-only"
+                }
+              >
+                {props.goalMode ? "Goal" : props.interactionMode === "plan" ? "Plan" : "Build"}
+              </span>
+            </ComposerControl>
+          </TooltipTrigger>
+          <TooltipPopup side="top">{interactionModeTooltip}</TooltipPopup>
+        </Tooltip>
+      </>
+    ) : null;
 
   return (
     <>
@@ -499,6 +517,7 @@ export interface ChatComposerHandle {
   /** Get the current prompt/effort/model state for use in send. */
   getSendContext: () => {
     prompt: string;
+    goalMode: boolean;
     images: ComposerAttachment[];
     terminalContexts: TerminalContextDraft[];
     elementContexts: ElementContextDraft[];
@@ -791,6 +810,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Store subscriptions (prompt / images / terminal contexts)
   // ------------------------------------------------------------------
   const composerDraft = useComposerThreadDraft(composerDraftTarget);
+  const goalMode = composerDraft.goalMode === true;
+  const setGoalMode = useComposerDraftStore((store) => store.setGoalMode);
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
   const composerTerminalContexts = composerDraft.terminalContexts;
@@ -1107,6 +1128,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const [composerMenuAnchor, setComposerMenuAnchor] = useState<HTMLDivElement | null>(null);
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
+  const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
+  const [addMenuPathQuery, setAddMenuPathQuery] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIsAddMenuOpen(false);
+    setAddMenuPathQuery(null);
+  }, [environmentId, activeThreadId, draftId, selectedInstanceId, gitCwd]);
   const [stashPulse, setStashPulse] = useState<{ key: number; active: boolean }>({
     key: 0,
     active: false,
@@ -1235,10 +1263,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     cwd: isPathTrigger ? gitCwd : null,
     query: isPathTrigger ? pathTriggerQuery : null,
   });
+  const addMenuPaths = useComposerPathSearch({
+    environmentId,
+    cwd: isAddMenuOpen && addMenuPathQuery !== null ? gitCwd : null,
+    query: isAddMenuOpen ? addMenuPathQuery : null,
+  });
 
   const needsClaudeCatalog =
     selectedProvider === "claudeAgent" &&
-    (composerTriggerKind === "skill" || composerTriggerKind === "slash-command");
+    (isAddMenuOpen || composerTriggerKind === "skill" || composerTriggerKind === "slash-command");
   const scopedCatalog = useEnvironmentQuery(
     needsClaudeCatalog && environmentId !== null
       ? serverEnvironment.composerCatalog({
@@ -1256,6 +1289,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     pendingUserInputs.length > 0 ||
     (showPlanFollowUpPrompt && activeProposedPlan !== null);
   const computerUseAvailable = useComputerSupport(environmentId);
+  const addMenuSkills = useMemo(
+    () =>
+      composerAddSkillItems({ provider: selectedProvider, skills: composerCatalog?.skills ?? [] }),
+    [selectedProvider, composerCatalog],
+  );
   const computerControlSetting = useComputerControlSetting(environmentId);
   const computerControlEffortHint = useComputerControlEffortHint({
     draftTarget: composerDraftTarget,
@@ -1274,20 +1312,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
+    const toolItems = buildBuiltInSlashCommandItems({
+      computerUseAvailable,
+    }) satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
+    const skillItems = (query: string) =>
+      searchProviderSkills(composerCatalog?.skills ?? [], query).map((skill) => ({
+        id: `skill:${selectedProvider}:${skill.name}`,
+        type: "skill" as const,
+        provider: selectedProvider,
+        skill,
+        label: formatProviderSkillDisplayName(skill),
+        description:
+          skill.shortDescription ??
+          skill.description ??
+          (skill.scope ? `${skill.scope} skill` : "Run provider skill"),
+      }));
     if (composerTrigger.kind === "path") {
-      return workspaceEntries.entries.map((entry) => ({
+      // Tools lead, but only by plain name matches so file searches stay uncluttered.
+      const toolQuery = composerTrigger.query.trim().toLowerCase();
+      const matchingTools = toolItems.filter((item) =>
+        `${item.label} ${item.command}`.toLowerCase().includes(toolQuery),
+      );
+      const fileItems = workspaceEntries.entries.map((entry) => ({
         id: `path:${entry.kind}:${entry.path}`,
-        type: "path",
+        type: "path" as const,
         path: entry.path,
         pathKind: entry.kind,
         label: basenameOfPath(entry.path),
         description: entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))),
       }));
+      return [...matchingTools, ...fileItems];
     }
     if (composerTrigger.kind === "slash-command") {
-      const builtInSlashCommandItems = buildBuiltInSlashCommandItems({
-        computerUseAvailable,
-      }) satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
       const providerSlashCommandItems = (composerCatalog?.slashCommands ?? [])
         .filter((command) => !shouldHideProviderNativeSlashCommand(command.name))
         .map((command) => ({
@@ -1299,23 +1355,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           description: command.description ?? command.input?.hint ?? "Run provider command",
         }));
       const query = composerTrigger.query.trim().toLowerCase();
-      const slashCommandItems = [...builtInSlashCommandItems, ...providerSlashCommandItems];
-      return searchSlashCommandItems(slashCommandItems, query, composerTrigger.rangeStart === 0);
+      const commandItems = searchSlashCommandItems(
+        [...toolItems, ...providerSlashCommandItems],
+        query,
+        composerTrigger.rangeStart === 0,
+      );
+      // Tools first, then provider commands, then skills.
+      return [
+        ...commandItems.filter((item) => item.type === "slash-command"),
+        ...commandItems.filter((item) => item.type === "provider-slash-command"),
+        ...skillItems(composerTrigger.query),
+      ];
     }
     if (composerTrigger.kind === "skill") {
-      return searchProviderSkills(composerCatalog?.skills ?? [], composerTrigger.query).map(
-        (skill) => ({
-          id: `skill:${selectedProvider}:${skill.name}`,
-          type: "skill" as const,
-          provider: selectedProvider,
-          skill,
-          label: formatProviderSkillDisplayName(skill),
-          description:
-            skill.shortDescription ??
-            skill.description ??
-            (skill.scope ? `${skill.scope} skill` : "Run provider skill"),
-        }),
-      );
+      return skillItems(composerTrigger.query);
     }
     return [];
   }, [
@@ -1387,11 +1440,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (needsClaudeCatalog && scopedCatalog.error)
       return "Could not load this project's commands. Close and reopen the menu to retry.";
     if (composerTriggerKind === "skill") {
-      return "No skills found. Try / to browse provider commands.";
+      return "No matching skills.";
     }
     return composerTriggerKind === "path"
-      ? "No matching files or folders."
-      : "No matching command.";
+      ? "No matching tools, files, or folders."
+      : "No matching tools, commands, or skills.";
   }, [composerTriggerKind, needsClaudeCatalog, scopedCatalog.error]);
 
   // ------------------------------------------------------------------
@@ -1907,18 +1960,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           return;
         }
         if (item.command === "computer-use") {
-          const replacement = "/computer-use ";
-          const applied = applyPromptReplacement(
-            trigger.rangeStart,
-            trigger.rangeEnd,
-            replacement,
-            { expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd) },
-          );
+          // The server only reads /computer-use from the start of the message.
+          const expectedText = snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd);
+          const applied =
+            trigger.rangeStart === 0
+              ? applyPromptReplacement(0, trigger.rangeEnd, "/computer-use ", { expectedText })
+              : applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+                  expectedText,
+                }) && applyPromptReplacement(0, 0, "/computer-use ");
           if (applied) {
             setComposerHighlightedItemId(null);
           }
           return;
         }
+        setGoalMode(composerDraftTarget, item.command === "goal");
         void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -1965,7 +2020,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
     },
-    [applyPromptReplacement, handleInteractionModeChange, resolveActiveComposerTrigger],
+    [
+      applyPromptReplacement,
+      handleInteractionModeChange,
+      resolveActiveComposerTrigger,
+      composerDraftTarget,
+      setGoalMode,
+    ],
   );
 
   const onComposerMenuItemHighlighted = useCallback(
@@ -2136,7 +2197,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     event: KeyboardEvent,
   ) => {
     if (key === "Tab" && event.shiftKey) {
-      toggleInteractionMode();
+      if (goalMode) {
+        setGoalMode(composerDraftTarget, false);
+        handleInteractionModeChange("default");
+      } else {
+        toggleInteractionMode();
+      }
       return true;
     }
     const { trigger } = resolveActiveComposerTrigger();
@@ -2182,6 +2248,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // whole point.
   const stashQueue = usePromptStashStore((state) => state.entries);
   const stashEntryToQueue = usePromptStashStore((state) => state.stashEntry);
+  const getStashEntry = usePromptStashStore((state) => state.getEntry);
   const takeStashEntry = usePromptStashStore((state) => state.takeEntry);
   const finalizeStashEntryImages = usePromptStashStore((state) => state.finalizeEntryImages);
 
@@ -2207,30 +2274,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }, []);
 
   const restoreStashEntry = useCallback(
-    (entry: PromptStashEntry) => {
-      // Remove first so a double activation (click + Enter) can't restore twice.
-      const { entry: taken, durable } = takeStashEntry(entry.id);
-      if (!taken) return;
-      if (!durable) {
-        toastManager.add({
-          type: "warning",
-          title: "Restored prompt may reappear in the stash",
-          description:
-            "Browser storage rejected the update, so this entry could still be there after a reload.",
-          data: { hideCopyButton: true },
-        });
-      }
+    (selectedEntry: PromptStashEntry) => {
+      const entry = getStashEntry(selectedEntry.id);
+      if (!entry || entry.pendingImageCount || pendingUserInputs.length > 0) return;
       setIsStashMenuOpen(false);
 
       const currentPrompt = promptRef.current;
-      // An attachment-only stash must not append blank lines to whatever is
-      // already in the composer.
-      const nextPrompt =
-        entry.prompt.length === 0
-          ? currentPrompt
-          : currentPrompt.trim().length
-            ? `${currentPrompt.replace(/\s+$/, "")}\n\n${entry.prompt}`
-            : entry.prompt;
+      const nextPrompt = appendStashedPrompt(currentPrompt, entry.prompt);
       const promptChanged = nextPrompt !== currentPrompt;
       if (promptChanged) {
         promptRef.current = nextPrompt;
@@ -2266,27 +2316,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               }),
             ),
         );
-        // Anything past the attachment limit cannot be restored. The entry is
-        // already out of the queue, so report the overflow by name instead of
-        // discarding it silently.
+        // Report overflow by name; the saved attachments remain in the stash.
         unrestoredImageNames = pending.slice(capacity).map((attachment) => attachment.name);
-        const restoredImages = hydrateImagesFromPersisted(pending.slice(0, capacity));
+        const restoredImages = hydrateImagesFromPersisted(
+          pending.slice(0, capacity).map((attachment) => ({ ...attachment, id: randomUUID() })),
+        );
         if (restoredImages.length > 0) {
           addComposerDraftImages(composerDraftTarget, restoredImages);
-        }
-        const restoredIds = new Set(pending.slice(0, capacity).map((attachment) => attachment.id));
-        for (const attachment of entry.attachments) {
-          if (
-            attachment.type === "file" &&
-            !restoredIds.has(attachment.id) &&
-            attachment.attachmentId !== undefined &&
-            attachment.environmentId !== undefined
-          ) {
-            releasePersistedAttachmentUpload({
-              environmentId: attachment.environmentId as EnvironmentId,
-              attachmentId: attachment.attachmentId,
-            });
-          }
         }
       }
 
@@ -2327,6 +2363,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         window.requestAnimationFrame(() => {
           composerEditorRef.current?.focusAtEnd();
         });
+      } else {
+        scheduleComposerFocus();
       }
     },
     [
@@ -2335,7 +2373,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerImagesRef,
       promptRef,
       setComposerDraftPrompt,
-      takeStashEntry,
+      getStashEntry,
+      pendingUserInputs.length,
+      scheduleComposerFocus,
     ],
   );
 
@@ -3015,6 +3055,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
       getSendContext: () => ({
         prompt: promptRef.current,
+        goalMode,
         images: composerImagesRef.current,
         terminalContexts: composerTerminalContextsRef.current,
         elementContexts: composerElementContextsRef.current,
@@ -3064,34 +3105,137 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedProvider,
       selectedProviderModels,
       compactThreadContext,
+      goalMode,
     ],
   );
 
+  const chooseComposerMode = (mode: "goal" | "plan" | "default") => {
+    if (composerControlsDisabledReason || pendingUserInputs.length > 0) return;
+    handleInteractionModeChange(mode === "plan" ? "plan" : "default");
+    setGoalMode(composerDraftTarget, mode === "goal");
+    scheduleComposerFocus();
+  };
+  const toggleComposerMode = () => {
+    if (goalMode) chooseComposerMode("default");
+    else toggleInteractionMode();
+  };
+  const insertFromAddMenu = (text: string, atStart = false) => {
+    const snapshot = readComposerSnapshot();
+    const cursor = atStart ? 0 : snapshot.expandedCursor;
+    const prefix = cursor > 0 && !/\s/.test(snapshot.value[cursor - 1] ?? "") ? " " : "";
+    applyPromptReplacement(cursor, cursor, `${prefix}${text} `);
+    setComposerTrigger(null);
+  };
+  const modeDisabled = Boolean(composerControlsDisabledReason) || pendingUserInputs.length > 0;
+  const addActions: ComposerAddAction[] = [
+    {
+      id: "goal",
+      label: "Goal",
+      description: "Describe a goal and measurable outcomes",
+      icon: <TargetIcon className="size-4" />,
+      disabled: modeDisabled,
+      run: () => chooseComposerMode("goal"),
+    },
+    {
+      id: "plan-mode",
+      label: "Plan mode",
+      description: "Turn plan mode on",
+      icon: <PencilRulerIcon className="size-4" />,
+      disabled: modeDisabled || !composerProviderControls.showInteractionModeToggle,
+      run: () => chooseComposerMode("plan"),
+    },
+    ...(computerUseAvailable
+      ? [
+          {
+            id: "computer-use",
+            label: "Computer use",
+            description: "Use Pathway Computer for this request",
+            icon: <MonitorIcon className="size-4" />,
+            disabled: pendingUserInputs.length > 0,
+            run: () => insertFromAddMenu("/computer-use", true),
+          },
+        ]
+      : []),
+    ...(goalMode || interactionMode === "plan"
+      ? [
+          {
+            id: "build-mode",
+            label: "Build mode",
+            description: "Return to Build",
+            icon: <BotIcon className="size-4" />,
+            disabled: modeDisabled,
+            run: () => chooseComposerMode("default"),
+          },
+        ]
+      : []),
+  ];
+  const setAddMenuOpen = (open: boolean) => {
+    setIsAddMenuOpen(open);
+    if (!open) {
+      setAddMenuPathQuery(null);
+      return;
+    }
+    setIsStashMenuOpen(false);
+    setComposerTrigger(null);
+  };
   const attachmentButton = (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            className="shrink-0 rounded-full text-muted-foreground/80"
-            aria-label="Attach files"
-            disabled={
-              isConnecting ||
-              projectSelectionRequired ||
-              (pendingUserInputs.length > 0 &&
-                (!questionAttachments.enabled || activePendingIsResponding))
-            }
-            onClick={() => attachmentInputRef.current?.click()}
-          >
-            <PaperclipIcon className="size-4" />
-          </Button>
-        }
-      />
-      <TooltipPopup side="top">Attach files</TooltipPopup>
-    </Tooltip>
+    <ComposerAddMenuButton
+      open={isAddMenuOpen}
+      disabled={isConnecting || projectSelectionRequired}
+      onOpenChange={setAddMenuOpen}
+    />
   );
+  const addMenu = isAddMenuOpen && !isComposerApprovalState && (
+    <ComposerAddMenu
+      attachmentDisabled={
+        pendingUserInputs.length > 0 && (!questionAttachments.enabled || activePendingIsResponding)
+      }
+      actions={addActions}
+      skills={pendingUserInputs.length > 0 ? [] : addMenuSkills}
+      skillsLoading={needsClaudeCatalog && scopedCatalog.isPending}
+      skillsError={
+        needsClaudeCatalog && scopedCatalog.error ? "Unable to load this project's skills." : null
+      }
+      onSelectSkill={(item) => insertFromAddMenu(`$${item.skill.name}`)}
+      stashEntries={stashQueue}
+      stashShortcut={shortcutLabelForCommand(keybindings, "composer.stash")}
+      stashRestoreDisabled={pendingUserInputs.length > 0}
+      stashDisabled={
+        isSendBusy ||
+        pendingUserInputs.length > 0 ||
+        (prompt.trim().length === 0 && composerImages.length === 0)
+      }
+      onStash={() => void stashCurrentPrompt()}
+      onRestoreStash={restoreStashEntry}
+      onDeleteStash={deleteStashEntry}
+      onAttachFiles={() => attachmentInputRef.current?.click()}
+      paths={addMenuPaths.entries}
+      pathsLoading={addMenuPaths.isPending}
+      pathsError={addMenuPaths.error}
+      canBrowsePaths={Boolean(gitCwd) && pendingUserInputs.length === 0}
+      onPathQueryChange={setAddMenuPathQuery}
+      onAttachPath={(path) => insertFromAddMenu(serializeComposerFileLink(path))}
+      onClose={(restoreFocus) => {
+        setAddMenuOpen(false);
+        if (restoreFocus) scheduleComposerFocus();
+      }}
+    />
+  );
+  // Typing /, $, or @ opens the same attached panel as the + button.
+  const attachedMenu =
+    addMenu ||
+    (composerMenuOpen && !isComposerApprovalState && (
+      <ComposerCommandMenu
+        items={composerMenuItems}
+        resolvedTheme={resolvedTheme}
+        isLoading={isComposerMenuLoading}
+        triggerKind={composerTriggerKind}
+        emptyStateText={composerMenuEmptyState}
+        activeItemId={activeComposerMenuItem?.id ?? null}
+        onHighlightedItemChange={onComposerMenuItemHighlighted}
+        onSelect={onSelectComposerItem}
+      />
+    ));
   const primaryActions = (
     <ComposerPrimaryActions
       compact
@@ -3129,6 +3273,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       onSubmit={submitComposer}
       className="mx-auto w-full min-w-0 max-w-3xl"
       data-chat-composer-form="true"
+      data-composer-add-menu-open={attachedMenu ? "true" : undefined}
     >
       <input
         ref={attachmentInputRef}
@@ -3143,6 +3288,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       <div
         className={cn(
           "group rounded-[22px] p-px transition-colors duration-200",
+          attachedMenu && "rounded-t-none",
           composerProviderState.composerFrameClassName,
         )}
         onDragEnterCapture={composerMentionDragHandlers.onDragEnter}
@@ -3153,12 +3299,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         <div
           data-chat-composer-content-sized="true"
           className={cn(
-            "rounded-[28px] border border-border/60 shadow-sm transition-[background-color] duration-200",
+            "relative rounded-[28px] border border-border/60 shadow-sm transition-[background-color] duration-200",
+            attachedMenu && "rounded-t-none",
             isDragOverComposer ? "bg-accent/45 ring-1 ring-primary/70" : null,
             environmentUnavailable || projectSelectionRequired ? "opacity-75" : null,
             composerProviderState.composerSurfaceClassName,
           )}
         >
+          {attachedMenu}
           {activePendingApproval ? (
             <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
               <ComposerPendingApprovalPanel
@@ -3220,32 +3368,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 )
               : null}
 
-            {isStashMenuOpen && !composerMenuOpen && !isComposerApprovalState && (
+            {isStashMenuOpen && !isAddMenuOpen && !composerMenuOpen && !isComposerApprovalState && (
               <ComposerCommandMenuLayer anchor={composerMenuAnchor} shortcutScope={shortcutScope}>
                 <ComposerStashMenu
                   entries={stashQueue}
                   onRestore={restoreStashEntry}
                   onDelete={deleteStashEntry}
                   onClose={() => setIsStashMenuOpen(false)}
-                />
-              </ComposerCommandMenuLayer>
-            )}
-
-            {composerMenuOpen && !isComposerApprovalState && (
-              <ComposerCommandMenuLayer anchor={composerMenuAnchor} shortcutScope={shortcutScope}>
-                <ComposerCommandMenu
-                  items={composerMenuItems}
-                  resolvedTheme={resolvedTheme}
-                  isLoading={isComposerMenuLoading}
-                  triggerKind={composerTriggerKind}
-                  groupSlashCommandSections={
-                    composerTrigger?.kind === "slash-command" &&
-                    composerTrigger.query.trim().length === 0
-                  }
-                  emptyStateText={composerMenuEmptyState}
-                  activeItemId={activeComposerMenuItem?.id ?? null}
-                  onHighlightedItemChange={onComposerMenuItemHighlighted}
-                  onSelect={onSelectComposerItem}
                 />
               </ComposerCommandMenuLayer>
             )}
@@ -3507,49 +3636,54 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             >
               <div
                 className={cn(
-                  "min-w-0 flex-1 self-center",
+                  "flex min-w-0 flex-1 items-end gap-2 self-center",
                   composerFooterHasWideActions && "basis-full",
                 )}
               >
-                <ComposerPromptEditor
-                  editorRef={composerEditorRef}
-                  value={
-                    isComposerApprovalState
-                      ? ""
-                      : activePendingProgress
-                        ? activePendingProgress.customAnswer
-                        : prompt
-                  }
-                  cursor={composerCursor}
-                  terminalContexts={
-                    !isComposerApprovalState && pendingUserInputs.length === 0
-                      ? composerTerminalContexts
-                      : []
-                  }
-                  skills={composerCatalog?.skills ?? []}
-                  className="min-h-[1lh] max-h-[min(6lh,22dvh)] overscroll-contain"
-                  onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
-                  onChange={onPromptChange}
-                  onCommandKeyDown={onComposerCommandKey}
-                  onPaste={onComposerPaste}
-                  placeholder={
-                    isComposerApprovalState
-                      ? (activePendingApproval?.detail ??
-                        "Resolve this approval request to continue")
-                      : activePendingProgress
-                        ? "Type your own answer, or leave this blank to use the selected option"
-                        : showPlanFollowUpPrompt && activeProposedPlan
-                          ? "Add feedback to refine the plan, or leave this blank to implement it"
-                          : projectSelectionRequired
-                            ? "Choose a project above to start a thread"
-                            : noProviderAvailable
-                              ? providerAvailabilityCopy.placeholder
-                              : phase === "disconnected"
-                                ? DISCONNECTED_COMPOSER_PLACEHOLDER
-                                : "Ask anything, @tag files/folders, $use skills, or / for commands"
-                  }
-                  disabled={isConnecting || isComposerApprovalState || projectSelectionRequired}
-                />
+                {!isComposerApprovalState && attachmentButton}
+                <div className="min-w-0 flex-1 self-center">
+                  <ComposerPromptEditor
+                    editorRef={composerEditorRef}
+                    value={
+                      isComposerApprovalState
+                        ? ""
+                        : activePendingProgress
+                          ? activePendingProgress.customAnswer
+                          : prompt
+                    }
+                    cursor={composerCursor}
+                    terminalContexts={
+                      !isComposerApprovalState && pendingUserInputs.length === 0
+                        ? composerTerminalContexts
+                        : []
+                    }
+                    skills={composerCatalog?.skills ?? []}
+                    className="min-h-[1lh] max-h-[min(6lh,22dvh)] overscroll-contain"
+                    onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
+                    onChange={onPromptChange}
+                    onCommandKeyDown={onComposerCommandKey}
+                    onPaste={onComposerPaste}
+                    placeholder={
+                      isComposerApprovalState
+                        ? (activePendingApproval?.detail ??
+                          "Resolve this approval request to continue")
+                        : activePendingProgress
+                          ? "Type your own answer, or leave this blank to use the selected option"
+                          : showPlanFollowUpPrompt && activeProposedPlan
+                            ? "Add feedback to refine the plan, or leave this blank to implement it"
+                            : projectSelectionRequired
+                              ? "Choose a project above to start a thread"
+                              : noProviderAvailable
+                                ? providerAvailabilityCopy.placeholder
+                                : phase === "disconnected"
+                                  ? DISCONNECTED_COMPOSER_PLACEHOLDER
+                                  : goalMode
+                                    ? GOAL_COMPOSER_PLACEHOLDER
+                                    : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                    }
+                    disabled={isConnecting || isComposerApprovalState || projectSelectionRequired}
+                  />
+                </div>
               </div>
               {!isComposerApprovalState && (
                 <div
@@ -3558,7 +3692,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     composerFooterHasWideActions && "ml-auto",
                   )}
                 >
-                  {attachmentButton}
                   {primaryActions}
                 </div>
               )}
@@ -3635,6 +3768,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
               {isComposerFooterCompact ? (
                 <CompactComposerControlsMenu
+                  goalMode={goalMode}
                   interactionMode={interactionMode}
                   runtimeMode={runtimeMode}
                   showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
@@ -3642,7 +3776,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   {...(composerControlsDisabledReason
                     ? { disabledReason: composerControlsDisabledReason }
                     : {})}
-                  onToggleInteractionMode={toggleInteractionMode}
+                  onComposerModeChange={chooseComposerMode}
                   onRuntimeModeChange={handleRuntimeModeChange}
                 />
               ) : (
@@ -3654,6 +3788,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     </>
                   ) : null}
                   <ComposerFooterModeControls
+                    goalMode={goalMode}
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     interactionMode={interactionMode}
                     runtimeMode={runtimeMode}
@@ -3661,7 +3796,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     {...(composerControlsDisabledReason
                       ? { disabledReason: composerControlsDisabledReason }
                       : {})}
-                    onToggleInteractionMode={toggleInteractionMode}
+                    onToggleInteractionMode={toggleComposerMode}
                     onRuntimeModeChange={handleRuntimeModeChange}
                   />
                 </>

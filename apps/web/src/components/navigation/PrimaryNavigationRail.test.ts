@@ -9,8 +9,29 @@ import {
   resolvePrimaryNavigationDestination,
   resolvePrimaryNavigationRailWidth,
   resolvePrimaryNavigationViewOrder,
+  resolvePinnedPrimaryNavigationDestinations,
   resolveRememberedThreadRoute,
 } from "./PrimaryNavigationRail";
+
+describe("primary navigation pins", () => {
+  it("allows every optional page to remain in overflow", () => {
+    expect(resolvePinnedPrimaryNavigationDestinations([])).toEqual([]);
+  });
+
+  it("ignores duplicates, fixed pages, and unknown destinations", () => {
+    expect(
+      resolvePinnedPrimaryNavigationDestinations([
+        "email",
+        "projects",
+        "projects",
+        "dashboard",
+        "threads",
+        "settings",
+        "unknown",
+      ]),
+    ).toEqual(["projects", "email"]);
+  });
+});
 
 describe("formatNavigationBadgeCount", () => {
   it("keeps small counts exact", () => {
