@@ -1,3 +1,4 @@
+// @effect-diagnostics globalDate:off - Tests build hub tickets relative to wall-clock expiry.
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {

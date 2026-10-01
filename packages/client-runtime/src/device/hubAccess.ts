@@ -1,3 +1,4 @@
+// @effect-diagnostics globalDate:off - Media URLs are checked outside an Effect runtime, like the live stream.
 /** Credentials for media requests that cannot set bearer or DPoP headers. */
 export interface DeviceHubAccess {
   /** Absolute environment URL ending in `/api/device-hub`. */
