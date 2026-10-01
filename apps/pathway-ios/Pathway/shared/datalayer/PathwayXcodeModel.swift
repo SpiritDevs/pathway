@@ -32,6 +32,10 @@ final class PathwayXcodeModel {
 
     /// The command in flight, keyed so its button can say what it is doing.
     private(set) var pending: String?
+    /// Who owns `pending` and `actionError`. Switching accounts or superseding a command detaches
+    /// it, so its late result cannot clear or fail another command's state.
+    private var command: Command?
+    private var commandCount = 0
     private(set) var actionError: String?
     /// The host stays in needs-admin while its prompt is open; this remembers which step was approved.
     private(set) var approvedStep: String?
@@ -89,6 +93,9 @@ final class PathwayXcodeModel {
         return PathwayXcodeRules.usable(status) != nil && !PathwayXcodeRules.isActive(job)
     }
 
+    /// Cancel stays usable while `apple.id.start` is still waiting on Apple.
+    var canCancelSignIn: Bool { pending == nil || pending == "start" }
+
     var awaitingAdminPrompt: Bool {
         let key = PathwayXcodeRules.adminStepKey(job)
         return key != nil && PathwayXcodeRules.nextAdminApproval(approvedStep, job: job) == key
@@ -113,8 +120,11 @@ final class PathwayXcodeModel {
         let arguments: JSONValue = accountsCompanyID.map { .object(["companyId": .string($0)]) } ?? .object([:])
         do {
             for try await value in cloudSubscribe("appleIntegrations:listAccounts", arguments) {
+                let previous = target
                 accounts = try Self.decode([PathwayAppleAccount].self, from: value)
                 accountsError = nil
+                // Removing the chosen account falls back to another; its snapshots must not carry over.
+                if target != previous { resetLive() }
             }
         } catch is CancellationError {
         } catch {
@@ -174,6 +184,8 @@ final class PathwayXcodeModel {
         viewError = nil
         approvedStep = nil
         replacingSession = nil
+        command = nil
+        pending = nil
         actionError = nil
     }
 
@@ -209,7 +221,8 @@ final class PathwayXcodeModel {
         guard let target else { return }
         var payload = target.payload
         payload["flowId"] = .string(flowID)
-        await run("cancel-sign-in", fallback: "Could not cancel sign-in.", method: "apple.id.cancel", payload: payload)
+        await run("cancel-sign-in", fallback: "Could not cancel sign-in.", method: "apple.id.cancel", payload: payload,
+                  supersedes: "start")
     }
 
     func signOut() async {
@@ -267,24 +280,39 @@ final class PathwayXcodeModel {
         return await run(key, fallback: fallback, method: method, payload: payload)
     }
 
-    /// One command at a time, keeping its pending key and a safe error message.
+    /// One command at a time, keeping its pending key and a safe error message. `supersedes` lets a
+    /// command take over from one still in flight, whose result is then ignored.
     @discardableResult
     private func run(
-        _ key: String, fallback: String, method: String, payload: [String: JSONValue], timeout: Duration = .seconds(30)
+        _ key: String, fallback: String, method: String, payload: [String: JSONValue], timeout: Duration = .seconds(30),
+        supersedes: String? = nil
     ) async -> Bool {
-        guard pending == nil else { return false }
+        guard let target, pending == nil || pending == supersedes else { return false }
+        commandCount += 1
+        let owner = Command(id: commandCount, target: target)
+        command = owner
         pending = key
         actionError = nil
-        defer { pending = nil }
+        defer {
+            if command == owner {
+                command = nil
+                pending = nil
+            }
+        }
         do {
             _ = try await request(method, .object(payload), timeout)
-            return true
+            return command == owner
         } catch is CancellationError {
             return false
         } catch {
-            actionError = Self.describe(error, fallback: fallback)
+            if command == owner { actionError = Self.describe(error, fallback: fallback) }
             return false
         }
+    }
+
+    private struct Command: Equatable {
+        let id: Int
+        let target: PathwayXcodeTarget
     }
 
     /// Xcode, Apple and environment-authorization errors carry a message that is safe to show.

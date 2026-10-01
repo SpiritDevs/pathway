@@ -112,10 +112,21 @@ struct PathwayXcodeSetupTests {
         #expect(PathwayXcodeRules.formatBytes(50 * 1024 * 1024) == "50 MB")
         #expect(PathwayXcodeRules.formatBytes(3.25 * gib) == "3.3 GB")
         #expect(PathwayXcodeRules.formatBytes(120 * gib) == "120 GB")
+        #expect(PathwayXcodeRules.formatBytes(2.75 * gib) == "2.8 GB")
         #expect(PathwayXcodeRules.formatEta(30) == "less than a minute left")
         #expect(PathwayXcodeRules.formatEta(6 * 60) == "about 6 min left")
         #expect(PathwayXcodeRules.formatEta(72 * 60) == "about 1 h 12 min left")
         #expect(PathwayXcodeRules.formatEta(120 * 60) == "about 2 h left")
+    }
+
+    /// Expectations are Node's `toFixed(1)`: exact halves round up, near-halves follow the double's value.
+    @Test func roundsTenthsLikeJavaScript() {
+        let cases: [(Double, String)] = [
+            (3.25, "3.3"), (2.75, "2.8"), (1.25, "1.3"), (1.45, "1.4"), (1.05, "1.1"), (12.35, "12.3"), (99.95, "100.0"), (5, "5.0"),
+        ]
+        for (value, expected) in cases {
+            #expect(PathwayXcodeRules.toFixed1(value) == expected, "\(value)")
+        }
     }
 
     @Test func describesDownloadsWithAndWithoutSize() {

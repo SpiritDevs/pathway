@@ -211,7 +211,7 @@ private struct PathwayAppleIdSignIn: View {
                 Button(model.pending == "cancel-sign-in" ? "Cancelling…" : "Cancel") {
                     Task { await model.cancelSignIn(flowID: flowID) }
                 }
-                .disabled(model.pending != nil)
+                .disabled(!model.canCancelSignIn)
                 PathwayXcodeActionError(model: model)
             }
         case .challenge:

@@ -132,10 +132,20 @@ enum PathwayXcodeRules {
             value /= 1024
             unit += 1
         }
-        let number = value >= 100 || unit < 2
-            ? String(Int(value.rounded(.toNearestOrAwayFromZero)))
-            : String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), value)
+        let number = value >= 100 || unit < 2 ? String(Int(value.rounded(.toNearestOrAwayFromZero))) : toFixed1(value)
         return "\(number) \(units[unit])"
+    }
+
+    /// JavaScript's `toFixed(1)` for 0 ≤ value < 100: the nearest tenth of the exact double, with
+    /// halfway cases rounding up. `%.1f` rounds those to even, so 3.25 would print as 3.2.
+    static func toFixed1(_ value: Double) -> String {
+        // `fma` rounds once, so the sign of value × 10 − x is exact and decides each comparison.
+        var tenths = (value * 10).rounded(.down)
+        if fma(value, 10, -tenths) < 0 { tenths -= 1 }
+        if fma(value, 10, -(tenths + 1)) >= 0 { tenths += 1 }
+        if fma(value, 10, -(tenths + 0.5)) >= 0 { tenths += 1 }
+        let whole = Int(tenths)
+        return "\(whole / 10).\(whole % 10)"
     }
 
     static func formatEta(_ seconds: Double) -> String {
