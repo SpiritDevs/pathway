@@ -74,4 +74,10 @@ When the install finishes, the Devices view refreshes and shows your simulators.
 
 Each Mac runs one Xcode job at a time. To start another install, finish or cancel the current job. If someone else is installing with a different Apple ID, Pathway tells you the Mac is busy.
 
-Managing Xcode from the iPhone and iPad app is not available yet.
+## On iPhone, iPad and Vision Pro
+
+Open **Settings → Xcode** in the Pathway app and choose the environment under **Manage Xcode on**. Everything above works the same way: sign in to your Apple ID, install a version, approve admin prompts on the Mac, cancel, retry, switch versions and add platforms. The screen updates only while it is open.
+
+Admin approval still happens on the Mac itself. Approving from your phone opens the macOS password prompt on that Mac, so someone there needs to enter an administrator password.
+
+To add an Apple ID to Pathway, use Settings → Apple accounts in the web or desktop app. Once added, it appears in the mobile app.
