@@ -63,6 +63,10 @@
       "types": "./src/state/apple.ts",
       "default": "./src/state/apple.ts"
     },
+    "./state/releases": {
+      "types": "./src/state/releases.ts",
+      "default": "./src/state/releases.ts"
+    },
     "./state/xcode": {
       "types": "./src/state/xcode.ts",
       "default": "./src/state/xcode.ts"

@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import { FolderKanbanIcon, SettingsIcon } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { FolderKanbanIcon, RocketIcon, SettingsIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { companyListAtom } from "~/cloud/activeCompany";
@@ -175,10 +176,20 @@ function ProjectDashboard({ project }: { readonly project: WorkspaceProject }) {
       <WorkspaceViewFrame
         title={project.displayName}
         actions={
-          <Button size="xs" variant="outline" onClick={() => setConfigOpen(true)}>
-            <SettingsIcon className="size-3.5" />
-            Configure
-          </Button>
+          <>
+            <Button
+              size="xs"
+              variant="outline"
+              render={<Link to="/releases" search={{ project: project.projectKey }} />}
+            >
+              <RocketIcon className="size-3.5" />
+              Releases
+            </Button>
+            <Button size="xs" variant="outline" onClick={() => setConfigOpen(true)}>
+              <SettingsIcon className="size-3.5" />
+              Configure
+            </Button>
+          </>
         }
       >
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">

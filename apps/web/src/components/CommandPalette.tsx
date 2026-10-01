@@ -89,6 +89,7 @@ import {
   MessageSquareIcon,
   MonitorIcon,
   PaletteIcon,
+  RocketIcon,
   ServerIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -2198,6 +2199,28 @@ function OpenCommandPaletteDialog(props: {
         requestSimulatorRun(scopeThreadRef(activeThread.environmentId, activeThread.id));
       },
     });
+  actionItems.push({
+    kind: "action",
+    value: "action:open-releases",
+    searchTerms: ["releases", "archive", "upload", "testflight", "app store", "submit for review"],
+    title: "Open Releases",
+    description: "Archive a project and send it to TestFlight or App Review",
+    icon: <RocketIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/releases", search: {} });
+    },
+  });
+  actionItems.push({
+    kind: "action",
+    value: "action:open-organizer",
+    searchTerms: ["organizer", "builds", "testers", "archives", "testflight", "review status"],
+    title: "Open Organizer",
+    description: "Builds, TestFlight testers, review status and local archives",
+    icon: <RocketIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/releases", search: { tab: "organizer" } });
+    },
+  });
   if (activeThread && alertMutations && alertPolicies !== null && alertPoliciesReady)
     actionItems.push({
       kind: "action",

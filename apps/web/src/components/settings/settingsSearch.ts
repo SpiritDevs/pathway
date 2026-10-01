@@ -864,6 +864,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "apple-accounts",
   },
   {
+    id: "apple-release-publishing",
+    title: "Allow publishing to TestFlight and App Review",
+    to: "/settings/apple",
+    targetId: "apple-accounts",
+    searchTerms: ["publishing", "releases", "upload", "submit for review", "organizer"],
+  },
+  {
     id: "xcode-install",
     title: "Install Xcode",
     to: "/settings/xcode",

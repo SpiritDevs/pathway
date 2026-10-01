@@ -1,3 +1,8 @@
+import { ReleaseRuntime, type ReleaseBackend, releaseTarget } from "../releases/ReleaseRuntime.ts";
+import { ReleaseAccess } from "../releases/ReleaseAccess.ts";
+import { MacReleaseHost, releaseError } from "../releases/ReleaseHost.ts";
+import { fileReleaseStore } from "../releases/ReleaseStore.ts";
+import { ReleaseIntent } from "@spiritdevs/contracts/releases";
 import { HostProcessPlatform, HostProcessArchitecture } from "@spiritdevs/shared/hostProcess";
 import * as Path from "effect/Path";
 import type { AppleSessionBackend, AppleSessionTarget } from "@spiritdevs/backend/appleSession";
@@ -20,6 +25,7 @@ import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "../cloud/environ
 import { convexErrorCode, type ConvexServiceTokenProvider } from "../cloud/convexServiceToken.ts";
 import { AppleRuntime, type AppleBackend } from "./AppleRuntime.ts";
 
+const decodeReleaseIntent = Schema.decodeUnknownSync(ReleaseIntent);
 const decodeIntegration = Schema.decodeUnknownSync(AppleIntegration);
 const decodeHealth = Schema.decodeUnknownSync(Schema.Array(AppleEnvironmentHealth));
 
@@ -27,7 +33,7 @@ const decodeHealth = Schema.decodeUnknownSync(Schema.Array(AppleEnvironmentHealt
 export function makeAppleBackend(
   convexUrl: string,
   tokens: ConvexServiceTokenProvider,
-): AppleBackend & { sessions: AppleSessionBackend } {
+): AppleBackend & { sessions: AppleSessionBackend; releases: ReleaseBackend } {
   async function call<A>(run: (client: ConvexHttpClient) => Promise<A>): Promise<A> {
     const token = await Effect.runPromise(tokens.token);
     const client = new ConvexHttpClient(convexUrl);
@@ -41,12 +47,89 @@ export function makeAppleBackend(
       return await run(client);
     }
   }
+  async function releaseCall<A>(run: (client: ConvexHttpClient) => Promise<A>): Promise<A> {
+    try {
+      return await call(run);
+    } catch (error) {
+      const code = convexErrorCode(error);
+      if (code === "publishing-disabled")
+        throw releaseError("publishing-disabled", "Publishing is disabled for this app.");
+      if (code === "confirmation-required")
+        throw releaseError(
+          "confirmation-required",
+          "Confirm this exact release in the client before continuing.",
+        );
+      if (code === "stale-controller-lease")
+        throw releaseError("stale-lease", "The release lease expired. Prepare a new attempt.");
+      if (code === "release-busy")
+        throw releaseError(
+          "busy",
+          "Another environment is allocating a build number. Retry shortly.",
+        );
+      if (code === "invalid-arguments")
+        throw releaseError("invalid-input", "Check the release version and action fields.");
+      if (code === "permission-denied" || code === "not-a-member")
+        throw appleFailure("forbidden", "You no longer have permission to publish this app.");
+      throw appleFailure("cloud-unavailable", "Could not verify publishing with Pathway Cloud.");
+    }
+  }
   const targetArgs = (input: { companyId: string; accountId: string; teamId: string }) => ({
     companyId: input.companyId,
     accountId: input.accountId,
     teamId: input.teamId,
   });
   return {
+    releases: {
+      prepare: async (target, caller, action) =>
+        decodeReleaseIntent(
+          await releaseCall((client) =>
+            client.mutation(api.appleReleases.prepare, {
+              ...releaseTarget(target),
+              caller,
+              action:
+                action.kind === "testflight"
+                  ? { ...action, groupIds: [...action.groupIds] }
+                  : action,
+            }),
+          ),
+        ),
+      consume: async (target, caller, intentId) =>
+        decodeReleaseIntent(
+          await releaseCall((client) =>
+            client.mutation(api.appleReleases.consume, {
+              ...releaseTarget(target),
+              caller,
+              intentId,
+            }),
+          ),
+        ),
+      checkExecution: async (target, caller, intentId) => {
+        await releaseCall((client) =>
+          client.query(api.appleReleases.checkExecution, {
+            ...releaseTarget(target),
+            caller,
+            intentId,
+          }),
+        );
+      },
+      acquireBuildLease: (target, caller, version) =>
+        releaseCall((client) =>
+          client.action(api.appleReleases.acquireBuildLease, {
+            ...releaseTarget(target),
+            caller,
+            version,
+          }),
+        ),
+      allocateBuildNumber: (target, caller, version, token) =>
+        releaseCall((client) =>
+          client.action(api.appleReleases.allocateBuildNumber, {
+            ...releaseTarget(target),
+            caller,
+            version,
+            token,
+          }),
+        ),
+    },
     authorizeCaller: async (input) => {
       try {
         await call((client) => client.query(api.appleIntegrations.authorizeRuntimeCaller, input));
@@ -143,9 +226,13 @@ export const makeXcodeAccountCheck =
 
 /** Initialization is shared by callers and retried after failure, only when Apple is used. */
 function lazyBackend(
-  initialize: () => Promise<AppleBackend & { sessions: AppleSessionBackend }>,
-): AppleBackend & { sessions: AppleSessionBackend } {
-  let pending: Promise<AppleBackend & { sessions: AppleSessionBackend }> | null = null;
+  initialize: () => Promise<
+    AppleBackend & { sessions: AppleSessionBackend; releases: ReleaseBackend }
+  >,
+): AppleBackend & { sessions: AppleSessionBackend; releases: ReleaseBackend } {
+  let pending: Promise<
+    AppleBackend & { sessions: AppleSessionBackend; releases: ReleaseBackend }
+  > | null = null;
   const get = () => {
     pending ??= initialize().catch((error: unknown) => {
       pending = null;
@@ -154,6 +241,13 @@ function lazyBackend(
     return pending;
   };
   return {
+    releases: {
+      prepare: async (...args) => (await get()).releases.prepare(...args),
+      consume: async (...args) => (await get()).releases.consume(...args),
+      checkExecution: async (...args) => (await get()).releases.checkExecution(...args),
+      acquireBuildLease: async (...args) => (await get()).releases.acquireBuildLease(...args),
+      allocateBuildNumber: async (...args) => (await get()).releases.allocateBuildNumber(...args),
+    },
     authorizeCaller: async (input) => (await get()).authorizeCaller(input),
     sessions: {
       status: async (target) => (await get()).sessions.status(target),
@@ -182,7 +276,14 @@ export const makeConfiguredAppleServices = Effect.fn("apple.runtime.make")(funct
         "Link this environment to Pathway Cloud before using Apple services.",
       ),
     );
-  let backend: AppleBackend & { sessions: AppleSessionBackend } = {
+  let backend: AppleBackend & { sessions: AppleSessionBackend; releases: ReleaseBackend } = {
+    releases: {
+      prepare: unavailable,
+      consume: unavailable,
+      checkExecution: unavailable,
+      acquireBuildLease: unavailable,
+      allocateBuildNumber: unavailable,
+    },
     authorizeCaller: unavailable,
     sessions: { status: unavailable, save: unavailable, read: unavailable, revoke: unavailable },
     accountStatus: unavailable,
@@ -214,8 +315,18 @@ export const makeConfiguredAppleServices = Effect.fn("apple.runtime.make")(funct
     undefined,
     makeXcodeAccountCheck(backend),
   );
+  const descriptor = yield* (yield* ServerEnvironment.ServerEnvironment).getDescriptor;
+  const releaseRoot = path.join(server.stateDir, "releases");
+  const releases = new ReleaseRuntime({
+    host: new MacReleaseHost(releaseRoot, platform),
+    store: fileReleaseStore(path.join(releaseRoot, "state.json")),
+    access: new ReleaseAccess(backend),
+    cloud: backend.releases,
+    environment: { id: environmentId, label: descriptor.label },
+  });
+  yield* Effect.addFinalizer(() => Effect.promise(() => releases.dispose()));
   yield* Effect.addFinalizer(() => Effect.promise(() => xcode.dispose()));
   yield* Effect.addFinalizer(() => Effect.sync(() => sessions.dispose()));
   yield* Effect.addFinalizer(() => Effect.sync(() => runtime.dispose()));
-  return { runtime, sessions, xcode };
+  return { runtime, sessions, xcode, releases };
 });

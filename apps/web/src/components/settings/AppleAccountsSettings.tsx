@@ -3,6 +3,7 @@ import type { CompanyId } from "@spiritdevs/contracts/company";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import * as Cause from "effect/Cause";
+import { Link } from "@tanstack/react-router";
 import { PlusIcon, RefreshCwIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -49,6 +50,10 @@ import {
   resolveSelectedProviderEnvironmentId,
 } from "./ProviderSettingsPanel.logic";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import {
+  PUBLISHING_DESCRIPTION,
+  ReleasePublishingToggle,
+} from "../releases/ReleasePublishingToggle";
 
 function reportAppleError(
   title: string,
@@ -1106,13 +1111,25 @@ function TeamApps({
 }) {
   const apps = useEnvironmentQuery(appleEnvironment.listApps({ environmentId, input: target }));
   return (
-    <AppList
-      title="Apps"
-      apps={apps.data}
-      error={apps.error}
-      isPending={apps.isPending}
-      onRefresh={apps.refresh}
-    />
+    <div className="space-y-1">
+      <AppList
+        title="Apps"
+        apps={apps.data}
+        error={apps.error}
+        isPending={apps.isPending}
+        onRefresh={apps.refresh}
+        // Publishing is off by default; each switch is the app's Cloud setting, shared by every device.
+        renderAction={(app) => (
+          <ReleasePublishingToggle target={{ ...target, appId: app.id }} appName={app.name} />
+        )}
+      />
+      <p className="text-xs text-muted-foreground">
+        {PUBLISHING_DESCRIPTION}{" "}
+        <Link className="underline" to="/releases" search={{}}>
+          Open Releases
+        </Link>
+      </p>
+    </div>
   );
 }
 

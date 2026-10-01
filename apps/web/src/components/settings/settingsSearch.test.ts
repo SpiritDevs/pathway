@@ -200,6 +200,10 @@ describe("SETTINGS_NAV_GROUPS", () => {
       id: "apple-api-key",
       to: "/settings/apple",
     });
+    expect(searchSettings("publishing")[0]).toMatchObject({
+      id: "apple-release-publishing",
+      to: "/settings/apple",
+    });
     expect(searchSettings("members and invitations")[0]).toMatchObject({
       id: "company-members",
       to: "/settings/company-members",
