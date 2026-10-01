@@ -463,4 +463,133 @@ describe("DesktopTelemetryPublisher", () => {
       }).pipe(Effect.provide(layer));
     }),
   );
+
+  it.effect("replaces non-finite Electron metrics so the snapshot survives JSON", () =>
+    Effect.gen(function* () {
+      const metrics = [
+        processMetric({
+          type: "Browser",
+          cpu: {
+            percentCPUUsage: Number.NaN,
+            cumulativeCPUUsage: Number.POSITIVE_INFINITY,
+            idleWakeupsPerSecond: Number.NaN,
+          },
+        }),
+      ];
+      yield* Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        yield* demandSnapshot(publisher);
+
+        // The hello, then the replayed snapshot with processes.
+        const encoded = yield* publisher.encoded.pipe(Stream.take(2), Stream.runCollect);
+        const snapshot = yield* decodeLine(encoded[1]!);
+        if (snapshot.type !== "desktopTelemetry") {
+          return assert.fail("Expected a telemetry snapshot.");
+        }
+        const process = snapshot.electronProcesses[0];
+        assert.equal(process?.cpuPercent, 0);
+        assert.equal(process?.idleWakeupsPerSecond, 0);
+        assert.isUndefined(process?.cumulativeCpuSeconds);
+      }).pipe(Effect.provide(staticPublisherLayer(metrics)));
+    }),
+  );
+
+  it.effect("drops a message that fails to encode and keeps the stream open", () =>
+    Effect.gen(function* () {
+      // An Electron process type the contract does not know yet.
+      const metrics = [
+        processMetric({ type: "Unknown Future Type" as Electron.ProcessMetric["type"] }),
+      ];
+      yield* Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        yield* demandSnapshot(publisher);
+
+        // The unencodable snapshot is replayed first; the report must still arrive.
+        const reportFiber = yield* publisher.encoded.pipe(
+          Stream.mapEffect(decodeLine),
+          Stream.filter((message) => message.type === "desktopUpdateStatus"),
+          Stream.runHead,
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        yield* publisher.publishUpdateReport({
+          version: 1,
+          type: "desktopUpdateStatus",
+          requestId: "req-1",
+          outcome: "up-to-date",
+          state: {
+            enabled: true,
+            status: "up-to-date",
+            channel: "latest",
+            currentVersion: "1.2.3",
+            hostArch: "arm64",
+            appArch: "arm64",
+            runningUnderArm64Translation: false,
+            availableVersion: null,
+            downloadedVersion: null,
+            releaseNotes: [],
+            downloadPercent: null,
+            checkedAt: null,
+            message: null,
+            errorContext: null,
+            canRetry: false,
+          },
+        });
+        const report = Option.getOrThrow(yield* Fiber.join(reportFiber));
+        if (report.type !== "desktopUpdateStatus") {
+          return assert.fail("Expected a desktop update status report.");
+        }
+        assert.equal(report.requestId, "req-1");
+      }).pipe(Effect.provide(staticPublisherLayer(metrics)));
+    }),
+  );
 });
+
+const decodeTelemetry = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(DesktopHostTelemetryMessage),
+);
+const lineDecoder = new TextDecoder();
+const decodeLine = (bytes: Uint8Array) => decodeTelemetry(lineDecoder.decode(bytes).trim());
+
+function processMetric(
+  overrides: Partial<Pick<Electron.ProcessMetric, "type" | "cpu">>,
+): Electron.ProcessMetric {
+  return {
+    pid: 4_242,
+    type: "Browser",
+    creationTime: 1_000,
+    name: "electron",
+    cpu: { percentCPUUsage: 1, cumulativeCPUUsage: 1, idleWakeupsPerSecond: 1 },
+    memory: { workingSetSize: 1, peakWorkingSetSize: 1 },
+    ...overrides,
+  } as Electron.ProcessMetric;
+}
+
+function staticPublisherLayer(metrics: ReadonlyArray<Electron.ProcessMetric>) {
+  const powerLayer = Layer.succeed(
+    ElectronPowerMonitor.ElectronPowerMonitor,
+    ElectronPowerMonitor.ElectronPowerMonitor.of({
+      isOnBatteryPower: Effect.succeed(false),
+      getSystemIdleTime: Effect.succeed(0),
+      getSystemIdleState: () => Effect.succeed("active"),
+      getCurrentThermalState: Effect.succeed("nominal"),
+      onSimpleEvent: () => Effect.void,
+      onThermalStateChange: () => Effect.void,
+      onSpeedLimitChange: () => Effect.void,
+    }),
+  );
+  return DesktopTelemetryPublisher.layer.pipe(
+    Layer.provide(Layer.mergeAll(makeElectronAppLayer(metrics), powerLayer)),
+  );
+}
+
+/** Turns on diagnostics demand and waits for the snapshot that samples Electron processes. */
+const demandSnapshot = (
+  publisher: DesktopTelemetryPublisher.DesktopTelemetryPublisher["Service"],
+) =>
+  Effect.gen(function* () {
+    const snapshotFiber = yield* Stream.runHead(publisher.changes).pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    yield* publisher.handleControl({ version: 1, type: "setDiagnosticsDemand", enabled: true });
+    yield* Fiber.join(snapshotFiber);
+  });

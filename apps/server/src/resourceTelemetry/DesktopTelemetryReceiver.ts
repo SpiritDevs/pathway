@@ -19,6 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
@@ -268,6 +269,12 @@ function messageVersion(value: unknown): number | undefined {
   return typeof version === "number" ? version : undefined;
 }
 
+function messageType(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const type = Reflect.get(value, "type");
+  return typeof type === "string" ? type : undefined;
+}
+
 export const writeAllToFileDescriptor = Effect.fn(
   "resourceTelemetry.desktopTelemetryReceiver.writeAllToFileDescriptor",
 )(function* (fd: number, payload: Buffer) {
@@ -515,12 +522,12 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
         onError: (cause) => new DesktopTelemetryStreamFailed({ fd, cause }),
       }).pipe(
         Stream.pipeThroughChannel(Ndjson.decode({ ignoreEmptyLines: true })),
-        Stream.mapEffect(
+        Stream.filterMapEffect(
           (
             value,
           ): Effect.Effect<
-            DesktopHostTelemetryMessageValue,
-            DesktopTelemetryProtocolMismatch | DesktopTelemetryDecodeFailed
+            Result.Result<DesktopHostTelemetryMessageValue, void>,
+            DesktopTelemetryProtocolMismatch
           > => {
             const version = messageVersion(value);
             if (version !== undefined && version !== 1) {
@@ -531,8 +538,18 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
                 }),
               );
             }
+            // Skip a message the schema rejects (e.g. a non-finite metric the
+            // desktop serialized as null). Ending the stream here would close
+            // the update channel until the server restarts.
             return decodeMessage(value).pipe(
-              Effect.mapError((cause) => new DesktopTelemetryDecodeFailed({ cause })),
+              Effect.map(Result.succeed),
+              Effect.catch((cause) =>
+                Effect.logWarning("Skipped undecodable desktop telemetry message", {
+                  fd,
+                  type: messageType(value),
+                  cause: cause.message,
+                }).pipe(Effect.as(Result.failVoid)),
+              ),
             );
           },
         ),
@@ -579,22 +596,21 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
           ),
         );
       }),
-      Effect.andThen(
-        updateHealth(
-          (current): DesktopTelemetryReceiverHealth => ({
-            ...current,
-            status: "stopped",
-            lastError: Option.some(new DesktopTelemetryStreamClosed({ fd }).message),
-          }),
-        ),
-      ),
-      Effect.catch((error) =>
-        updateHealth(
-          (current): DesktopTelemetryReceiverHealth => ({
-            ...current,
-            status: "degraded",
-            lastError: Option.some(error.message),
-          }),
+      Effect.as(new DesktopTelemetryStreamClosed({ fd }).message),
+      Effect.catch((error) => Effect.succeed(error.message)),
+      // The reader never restarts, so record why it stopped where the stale
+      // check will not overwrite it.
+      Effect.flatMap((reason) =>
+        Effect.logWarning("Desktop telemetry stream stopped", { fd, reason }).pipe(
+          Effect.andThen(
+            updateHealth(
+              (current): DesktopTelemetryReceiverHealth => ({
+                ...current,
+                status: "stopped",
+                lastError: Option.some(reason),
+              }),
+            ),
+          ),
         ),
       ),
       Effect.ensuring(closeUpdateReports),

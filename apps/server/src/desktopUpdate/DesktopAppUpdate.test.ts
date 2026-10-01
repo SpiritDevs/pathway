@@ -93,6 +93,11 @@ const makeHarness = Effect.fn("test.make_desktop_app_update_harness")(function* 
     Effect.provide(
       Layer.mergeAll(
         DesktopTelemetryReceiver.layerTest({
+          health: Effect.succeed({
+            status: "stopped",
+            lastSampleAt: Option.none(),
+            lastError: Option.some("Desktop telemetry stream on fd 4 closed."),
+          }),
           requestDesktopUpdate: (requestId) =>
             Deferred.succeed(requestIdDeferred, requestId).pipe(Effect.asVoid),
           cancelDesktopUpdate: (requestId) =>
@@ -211,13 +216,13 @@ it.layer(NodeServices.layer)("desktop app update", (it) => {
     }),
   );
 
-  it.effect("fails when the desktop stops reporting before a terminal outcome", () =>
+  it.effect("fails with the telemetry error when the desktop stops reporting", () =>
     Effect.gen(function* () {
       const { service, requested, canceledRequestIds } = yield* makeHarness({
         reports: (requestId) => [report(requestId, makeState({ status: "checking" }))],
       });
       expect((yield* service.run(() => Effect.void).pipe(Effect.flip)).reason).toBe(
-        "The desktop app stopped reporting its update.",
+        "The desktop app stopped reporting its update. Desktop telemetry stream on fd 4 closed.",
       );
       expect(canceledRequestIds).toEqual([yield* requested]);
     }),
