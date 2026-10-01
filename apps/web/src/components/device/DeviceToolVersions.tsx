@@ -11,7 +11,7 @@ export function DeviceToolVersions({
 }: {
   tools: ToolVersions | undefined;
   action?: ReactNode;
-  kind?: keyof ToolVersions;
+  kind?: "hub" | "agent";
   owner?: string | undefined;
   error?: string | undefined;
 }) {
