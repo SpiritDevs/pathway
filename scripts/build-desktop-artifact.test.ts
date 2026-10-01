@@ -10,6 +10,8 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import serverPackageJson from "../apps/server/package.json" with { type: "json" };
+
 import {
   BackendDeployKeyMissingError,
   BackendDeployKeyUnrecognizedError,
@@ -281,6 +283,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         effect: "4.0.0-beta.59",
       },
     );
+  });
+
+  it("keeps workspace packages out of the server's staged runtime dependencies", () => {
+    // The server bundle inlines workspace packages; the staged install cannot resolve them.
+    const workspaceDependencies = Object.entries(serverPackageJson.dependencies).filter(
+      ([, version]) => version.startsWith("workspace:"),
+    );
+    assert.deepStrictEqual(workspaceDependencies, []);
   });
 
   it("carries only staged dependency patch metadata into staged desktop installs", () => {
