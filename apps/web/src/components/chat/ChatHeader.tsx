@@ -30,47 +30,63 @@ interface ChatHeaderProps {
   temporary?: boolean;
   onSelectConversation?: () => void;
   onProjectChange: (projectRef: ScopedProjectRef) => void | Promise<void>;
-  onOpenThread: (threadId: ThreadId) => void;
+  onOpenThread: (threadId: ThreadId, environmentId?: EnvironmentId) => void;
   onRenameThread?: (title: string) => void;
 }
 
 export interface ThreadBreadcrumbAncestor {
   readonly id: ThreadId;
   readonly title: string;
+  readonly environmentId: EnvironmentId;
 }
 
 export interface ThreadWithLineage extends ThreadBreadcrumbAncestor {
-  readonly environmentId: EnvironmentId;
   readonly forkedFrom?: {
     readonly type: string;
     readonly threadId?: ThreadId;
   } | null;
   readonly lineage: {
     readonly parentThreadId: ThreadId | null;
+    readonly parentEnvironmentId?: EnvironmentId | undefined;
   };
 }
 
-export function breadcrumbParentThreadId(thread: ThreadWithLineage): ThreadId | null {
-  return thread.forkedFrom?.type === "run" && thread.forkedFrom.threadId !== undefined
-    ? thread.forkedFrom.threadId
-    : thread.lineage.parentThreadId;
+export interface ThreadBreadcrumbParent {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}
+
+/** A fork's source run when it has one, else the lineage parent, which may be on another environment. */
+export function breadcrumbParent(thread: ThreadWithLineage): ThreadBreadcrumbParent | null {
+  if (thread.forkedFrom?.type === "run" && thread.forkedFrom.threadId !== undefined) {
+    return { environmentId: thread.environmentId, threadId: thread.forkedFrom.threadId };
+  }
+  return thread.lineage.parentThreadId === null
+    ? null
+    : {
+        environmentId: thread.lineage.parentEnvironmentId ?? thread.environmentId,
+        threadId: thread.lineage.parentThreadId,
+      };
 }
 
 /** Walks breadcrumb parents through `lookup`, stopping at a missing parent or a cycle. */
 export function walkThreadBreadcrumbAncestors(
   activeThread: ThreadWithLineage,
-  lookup: (threadId: ThreadId) => ThreadWithLineage | undefined,
+  lookup: (parent: ThreadBreadcrumbParent) => ThreadWithLineage | undefined,
 ): ReadonlyArray<ThreadBreadcrumbAncestor> {
   const ancestors: ThreadBreadcrumbAncestor[] = [];
-  const visited = new Set<ThreadId>([activeThread.id]);
-  let parentThreadId = breadcrumbParentThreadId(activeThread);
+  const key = (ref: ThreadBreadcrumbParent) => `${ref.environmentId}:${ref.threadId}`;
+  const visited = new Set([
+    key({ environmentId: activeThread.environmentId, threadId: activeThread.id }),
+  ]);
+  let parentRef = breadcrumbParent(activeThread);
 
-  while (parentThreadId !== null && !visited.has(parentThreadId)) {
-    visited.add(parentThreadId);
-    const parent = lookup(parentThreadId);
+  while (parentRef !== null && !visited.has(key(parentRef))) {
+    visited.add(key(parentRef));
+    const parent = lookup(parentRef);
     if (parent === undefined) break;
-    ancestors.unshift({ id: parent.id, title: parent.title });
-    parentThreadId = breadcrumbParentThreadId(parent);
+    ancestors.unshift({ id: parent.id, title: parent.title, environmentId: parent.environmentId });
+    parentRef = breadcrumbParent(parent);
   }
 
   return ancestors;
@@ -82,12 +98,12 @@ export function resolveThreadBreadcrumbAncestors(
 ): ReadonlyArray<ThreadBreadcrumbAncestor> {
   if (activeThread === null || activeThread === undefined) return [];
 
-  const threadsById = new Map(
-    threads
-      .filter((thread) => thread.environmentId === activeThread.environmentId)
-      .map((thread) => [thread.id, thread] as const),
+  const threadsByKey = new Map(
+    threads.map((thread) => [`${thread.environmentId}:${thread.id}`, thread] as const),
   );
-  return walkThreadBreadcrumbAncestors(activeThread, (threadId) => threadsById.get(threadId));
+  return walkThreadBreadcrumbAncestors(activeThread, (parent) =>
+    threadsByKey.get(`${parent.environmentId}:${parent.threadId}`),
+  );
 }
 
 export const ChatHeader = memo(function ChatHeader({
@@ -238,14 +254,17 @@ export const ChatHeader = memo(function ChatHeader({
             </li>
           ) : null}
           {threadAncestors.map((ancestor) => (
-            <li key={ancestor.id} className="inline-flex min-w-0 shrink items-center gap-2">
+            <li
+              key={`${ancestor.environmentId}:${ancestor.id}`}
+              className="inline-flex min-w-0 shrink items-center gap-2"
+            >
               <Tooltip>
                 <TooltipTrigger
                   render={
                     <button
                       type="button"
                       aria-label={`Go to ancestor thread ${ancestor.title}`}
-                      onClick={() => onOpenThread(ancestor.id)}
+                      onClick={() => onOpenThread(ancestor.id, ancestor.environmentId)}
                       className="min-w-0 max-w-40 cursor-pointer truncate rounded-sm text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                     />
                   }

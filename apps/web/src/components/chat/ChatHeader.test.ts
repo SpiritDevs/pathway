@@ -11,6 +11,7 @@ function thread(input: {
   readonly parentId?: string | null;
   readonly forkParentId?: string;
   readonly environment?: string;
+  readonly parentEnvironment?: string;
 }) {
   return {
     id: ThreadId.make(input.id),
@@ -25,6 +26,9 @@ function thread(input: {
         input.parentId === undefined || input.parentId === null
           ? null
           : ThreadId.make(input.parentId),
+      ...(input.parentEnvironment === undefined
+        ? {}
+        : { parentEnvironmentId: EnvironmentId.make(input.parentEnvironment) }),
     },
   };
 }
@@ -36,8 +40,8 @@ describe("thread header breadcrumb ancestry", () => {
     const grandchild = thread({ id: "grandchild", title: "Grandchild", parentId: "child" });
 
     expect(resolveThreadBreadcrumbAncestors(grandchild, [child, grandchild, root])).toEqual([
-      { id: root.id, title: "Root" },
-      { id: child.id, title: "Child" },
+      { id: root.id, title: "Root", environmentId: root.environmentId },
+      { id: child.id, title: "Child", environmentId: child.environmentId },
     ]);
   });
 
@@ -48,7 +52,7 @@ describe("thread header breadcrumb ancestry", () => {
     const first = thread({ id: "first", title: "First", parentId: "second" });
     const second = thread({ id: "second", title: "Second", parentId: "first" });
     expect(resolveThreadBreadcrumbAncestors(first, [first, second])).toEqual([
-      { id: second.id, title: "Second" },
+      { id: second.id, title: "Second", environmentId: second.environmentId },
     ]);
   });
 
@@ -63,7 +67,21 @@ describe("thread header breadcrumb ancestry", () => {
     });
 
     expect(resolveThreadBreadcrumbAncestors(child, [lineageParent, forkParent, child])).toEqual([
-      { id: forkParent.id, title: "Fork parent" },
+      { id: forkParent.id, title: "Fork parent", environmentId: forkParent.environmentId },
+    ]);
+  });
+
+  it("follows a parent on another environment", () => {
+    const remoteParent = thread({ id: "parent", title: "On the laptop", environment: "laptop" });
+    const child = thread({
+      id: "child",
+      title: "Child",
+      parentId: "parent",
+      parentEnvironment: "laptop",
+    });
+
+    expect(resolveThreadBreadcrumbAncestors(child, [remoteParent, child])).toEqual([
+      { id: remoteParent.id, title: "On the laptop", environmentId: remoteParent.environmentId },
     ]);
   });
 
@@ -73,7 +91,7 @@ describe("thread header breadcrumb ancestry", () => {
     const child = thread({ id: "child", title: "Child", parentId: "root" });
 
     expect(resolveThreadBreadcrumbAncestors(child, [remoteRoot, root, child])).toEqual([
-      { id: root.id, title: "Local root" },
+      { id: root.id, title: "Local root", environmentId: root.environmentId },
     ]);
   });
 });
