@@ -272,7 +272,7 @@ struct PathwayComputerSurfaceSession: Equatable, Sendable {
 enum PathwayComputerSurfaceInput {
     /// Maps a location in an aspect-fitted box to desktop points, excluding letterboxing.
     static func point(_ location: CGPoint, in box: CGSize, screen: CGSize) -> CGPoint? {
-        PathwayRemoteBrowserFrame.point(location, in: box, width: screen.width, height: screen.height)
+        PathwayRemoteBrowserGeometry.point(location, in: box, page: screen)
     }
 
     static func click(_ point: CGPoint, button: String = "left", clickCount: Int = 1) -> JSONValue {
