@@ -581,6 +581,53 @@ it("retires the recovery error once the device recovers and another viewer takes
   expect(commands.restart).not.toHaveBeenCalled();
 });
 
+it("drops a refusal that arrives after the device recovered since it was asked", async () => {
+  commands.state.current = serviceState([
+    control({ generation: 12, phase: "draining", owner: null }),
+  ]);
+  const acquired = deferred();
+  commands.acquire.mockReturnValue(acquired.promise);
+  await mount();
+  await click("Take control");
+
+  // Another client recovers and takes the device before the refusal comes back.
+  commands.state.current = serviceState([
+    control({
+      generation: 14,
+      owner: { kind: "viewer", sessionId: "other", viewerId: "other-viewer" },
+    }),
+  ]);
+  await rerender();
+  await act(async () => acquired.resolve(failure("input_unconfirmed")));
+  expect(text()).not.toContain("couldn't confirm");
+  expect(lease.canRecover).toBe(false);
+  expect(maybeButton("Restart device tools")).toBeUndefined();
+});
+
+it("keeps the recovery error while state is loading, failing or missing the device", async () => {
+  const draining = serviceState([control({ generation: 12, phase: "draining", owner: null })]);
+  commands.state.current = draining;
+  commands.acquire.mockResolvedValue(failure("input_unconfirmed"));
+  await mount();
+  await click("Take control");
+  expect(lease.canRecover).toBe(true);
+
+  for (const missing of [
+    () => (commands.state.current = null),
+    () => (commands.state.current = { ...draining, controls: [] }),
+    () => (commands.stateError.current = "Request failed"),
+    () => (commands.state.current = { ...draining, controls: undefined }),
+  ]) {
+    missing();
+    await rerender();
+    commands.state.current = draining;
+    commands.stateError.current = null;
+    await rerender();
+    expect(text()).toContain("couldn't confirm");
+    expect(lease.canRecover).toBe(true);
+  }
+});
+
 it("ignores a late restart failure once recovery retired its error", async () => {
   commands.state.current = serviceState([control({ phase: "draining", owner: null })]);
   commands.connection.current = connected(1);

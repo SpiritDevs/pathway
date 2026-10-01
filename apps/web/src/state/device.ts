@@ -157,6 +157,7 @@ export type DeviceControlSelection = {
   readonly supported: boolean;
   readonly supportsToolRestart: boolean;
   readonly error: string | null;
+  /** Null while state loads or lacks the device's record, which says nothing about its phase. */
   readonly control: Pick<DeviceControlState, "generation" | "phase" | "owner"> | null;
 };
 
@@ -171,6 +172,54 @@ export function useDeviceControlSelection(
   );
   const refresh = useAtomRefresh(deviceStateAtom(environmentId));
   return { ...selection, refresh };
+}
+
+export type DeviceThreadSessions = {
+  readonly sessions: ReadonlyArray<DeviceSession>;
+  /** The devices those sessions name that state already describes. */
+  readonly devices: ReadonlyArray<DeviceSummary>;
+};
+
+/** One thread's device sessions, or null until state loads. */
+export function selectDeviceThreadSessions(
+  state: DeviceServiceState | null,
+  threadId: string,
+): DeviceThreadSessions | null {
+  if (state === null) return null;
+  const sessions = state.sessions.filter((session) => session.threadId === threadId);
+  const devices = state.devices.filter((device) =>
+    sessions.some((session) => session.hostId === device.hostId && session.deviceId === device.id),
+  );
+  return { sessions, devices };
+}
+
+const deviceThreadSessionsAtom = Atom.family((key: string) => {
+  const [environmentId, threadId] = key.split("\u0000") as [EnvironmentId, string];
+  return Atom.make((get) =>
+    selectDeviceThreadSessions(
+      Option.getOrNull(AsyncResult.value(get(deviceStateAtom(environmentId)))),
+      threadId,
+    ),
+  ).pipe(Atom.withEquality(Equal.equals), Atom.withLabel(`device-thread-sessions:${key}`));
+});
+
+const NO_THREAD_SESSIONS_ATOM = Atom.make<DeviceThreadSessions | null>(null).pipe(
+  Atom.withLabel("device-thread-sessions:none"),
+);
+
+/**
+ * A thread's device sessions. Equal snapshots keep their identity, so the thread view skips
+ * lease renewals and other threads' sessions.
+ */
+export function useDeviceThreadSessions(
+  environmentId: EnvironmentId | null,
+  threadId: string | null,
+): DeviceThreadSessions | null {
+  return useAtomValue(
+    environmentId === null || threadId === null
+      ? NO_THREAD_SESSIONS_ATOM
+      : deviceThreadSessionsAtom(`${environmentId}\u0000${threadId}`),
+  );
 }
 
 const TICKET_RENEW_MARGIN_MS = 60_000;

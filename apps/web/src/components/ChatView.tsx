@@ -6467,6 +6467,8 @@ function ChatViewContent(props: ChatViewProps) {
       );
     }
   }, [activeThread, activeThreadRef, setThreadError, startThreadTurn]);
+  // Stable, so lease renewals don't re-render the device panel through this prop.
+  const handleResumeDeviceAgent = useCallback(() => void resumeDeviceAgent(), [resumeDeviceAgent]);
   const browserTakeoverBanner = useMemo<ComposerBannerStackItem | null>(() => {
     if (browserTakeoverDescriptor === null) return null;
     return browserTakeoverBannerItem(browserTakeoverDescriptor, {
@@ -9680,7 +9682,7 @@ function ChatViewContent(props: ChatViewProps) {
           threadRef={activeThreadRef}
           surface={activeRightPanelSurface}
           visible={rightPanelOpen}
-          onResumeAgent={() => void resumeDeviceAgent()}
+          onResumeAgent={handleResumeDeviceAgent}
           onDismissSetup={() =>
             useRightPanelStore.getState().closeSurface(activeThreadRef, activeRightPanelSurface.id)
           }

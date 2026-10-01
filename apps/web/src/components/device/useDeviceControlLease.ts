@@ -2,7 +2,11 @@ import type { DeviceControlProof, EnvironmentId } from "@spiritdevs/contracts";
 import type * as Cause from "effect/Cause";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { randomUUID } from "~/lib/utils";
-import { deviceEnvironment, useDeviceControlSelection } from "~/state/device";
+import {
+  type DeviceControlSelection,
+  deviceEnvironment,
+  useDeviceControlSelection,
+} from "~/state/device";
 import { useEnvironmentConnectionState } from "~/state/environments";
 import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -20,13 +24,24 @@ export const DEVICE_CONTROL_RENEW_MS = 10_000;
 
 type Lease = { readonly generation: number; readonly connection: number | null };
 
+/** A device's control as an explicit state record showed it. */
+type Observed = { readonly generation: number; readonly draining: boolean };
+
+const observe = (control: DeviceControlSelection["control"]): Observed | null =>
+  control === null
+    ? null
+    : { generation: control.generation, draining: control.phase === "draining" };
+
 type LeaseError = {
   readonly message: string;
   readonly code: DeviceControlCode | null;
   /** Set for `input_unconfirmed`: the device whose recovery retires this error. */
   readonly fence: DeviceControlFence | null;
-  /** The fenced device's control when the error arrived, which state may not reflect yet. */
-  readonly since: { readonly generation: number | null; readonly draining: boolean } | null;
+  /**
+   * The fenced device's control from when the failed request was sent, or else from the first
+   * record seen after it. Recovery is judged against this, not against when the result arrived.
+   */
+  readonly since: Observed | null;
   /** Survives the `since` updates, so a late restart result can tell its error still stands. */
   readonly token: object;
 };
@@ -73,53 +88,61 @@ export function useDeviceControlLease(options: {
   const [error, setErrorState] = useState<LeaseError | null>(null);
   const [recovering, setRecovering] = useState(false);
   // `input_unconfirmed` names the device it fenced; refusals without one mean this device.
+  // `sentWith` is this device's control when the failed request went out.
   const leaseError = useCallback(
-    (message: string, code: DeviceControlCode | null, fence?: DeviceControlFence | null) => ({
-      message,
-      code,
-      fence: fence ?? (code === "input_unconfirmed" ? { hostId, deviceId } : null),
-      since: null,
-      token: {},
-    }),
+    (
+      message: string,
+      code: DeviceControlCode | null,
+      fence?: DeviceControlFence | null,
+      sentWith: Observed | null = null,
+    ): LeaseError => {
+      const fenced = fence ?? (code === "input_unconfirmed" ? { hostId, deviceId } : null);
+      const own = fenced?.hostId === hostId && fenced.deviceId === deviceId;
+      return { message, code, fence: fenced, since: own ? sentWith : null, token: {} };
+    },
     [deviceId, hostId],
   );
   const setError = useCallback(
-    (message: string | null, code: DeviceControlCode | null = null) =>
-      setErrorState(message === null ? null : leaseError(message, code)),
+    (message: string | null, code: DeviceControlCode | null = null, sentWith?: Observed) =>
+      setErrorState(message === null ? null : leaseError(message, code, null, sentWith)),
     [leaseError],
   );
   const errorFrom = useCallback(
-    (cause: Cause.Cause<unknown>) => {
+    (cause: Cause.Cause<unknown>, sentWith: Observed | null) => {
       const code = deviceControlErrorCode(cause);
       return leaseError(
         code ? deviceControlErrorCopy[code] : formatEnvironmentQueryError(cause),
         code,
         deviceControlFence(cause),
+        sentWith,
       );
     },
     [leaseError],
   );
   // A fenced device's error and restart action last until that device recovers, by anyone's
-  // hand: it stops draining after state showed it draining or moved past where the error found it.
+  // hand: it stops draining after state showed it draining or moved past `since`. Only an
+  // explicit record counts; a loading, failed or missing read keeps the error.
   const fence = error?.fence ?? null;
   const fenced = useDeviceControlSelection(
     environmentId,
     fence?.hostId ?? hostId,
     fence?.deviceId ?? deviceId,
   );
-  if (error !== null && fence !== null && fenced.error === null) {
-    const generation = fenced.control?.generation ?? null;
-    const draining = fenced.control?.phase === "draining";
+  const record = fence !== null && fenced.error === null ? observe(fenced.control) : null;
+  if (error !== null && record !== null) {
     const { since } = error;
-    if (since === null) setErrorState({ ...error, since: { generation, draining } });
-    else if (draining && !since.draining)
-      setErrorState({ ...error, since: { ...since, draining } });
-    else if (!draining && (since.draining || generation !== since.generation)) setErrorState(null);
+    if (since === null) setErrorState({ ...error, since: record });
+    else if (record.draining && !since.draining)
+      setErrorState({ ...error, since: { ...since, draining: true } });
+    else if (!record.draining && (since.draining || record.generation !== since.generation))
+      setErrorState(null);
   }
   // Cleanup and late RPC results read the newest values, not a render's closure.
   const leaseRef = useRef<Lease | null>(null);
   const connectionRef = useRef(connection);
   connectionRef.current = connection;
+  const controlRef = useRef(control);
+  controlRef.current = control;
   // Bumped by every hide and unmount, so an acquisition started before it is handed back.
   const epochRef = useRef(0);
   const releasingRef = useRef<Promise<boolean> | null>(null);
@@ -145,8 +168,8 @@ export function useDeviceControlLease(options: {
   );
 
   const fail = useCallback(
-    (cause: Cause.Cause<unknown>) => {
-      const next = errorFrom(cause);
+    (cause: Cause.Cause<unknown>, sentWith: Observed | null) => {
+      const next = errorFrom(cause, sentWith);
       setErrorState(next);
       return next.code;
     },
@@ -160,7 +183,7 @@ export function useDeviceControlLease(options: {
   const reportError = useCallback(
     (code: DeviceControlCode, sentWith: number) => {
       if (leaseRef.current?.generation !== sentWith) return;
-      setError(deviceControlErrorCopy[code], code);
+      setError(deviceControlErrorCopy[code], code, { generation: sentWith, draining: false });
       if (deviceControlLost(code)) setLease(null);
       if (code === "stale_generation") refresh();
     },
@@ -171,6 +194,7 @@ export function useDeviceControlLease(options: {
   const release = useCallback((): Promise<boolean> => {
     const releasing = leaseRef.current;
     if (releasing === null) return releasingRef.current ?? Promise.resolve(true);
+    const sentWith = observe(controlRef.current);
     // Input stops before the environment acknowledges, so nothing races the hand-back.
     setLease(null);
     setPending("release");
@@ -184,7 +208,7 @@ export function useDeviceControlLease(options: {
       }
       if (result._tag === "Success") return true;
       // A lost lease still ends this viewer's input, but it is not an acknowledged hand-back.
-      if (fail(result.cause) === "stale_generation") refresh();
+      if (fail(result.cause, sentWith) === "stale_generation") refresh();
       return false;
     });
     releasingRef.current = request;
@@ -195,6 +219,7 @@ export function useDeviceControlLease(options: {
     if (!supported || unknown || pending !== null) return;
     const epoch = epochRef.current;
     const acquiredOn = connectionRef.current;
+    const sentWith = observe(controlRef.current);
     setPending("acquire");
     setError(null);
     const result = await acquire({ environmentId, input: { hostId, deviceId, viewerId } });
@@ -209,7 +234,7 @@ export function useDeviceControlLease(options: {
     }
     setPending(null);
     if (result._tag === "Failure") {
-      if (fail(result.cause) === "stale_generation") refresh();
+      if (fail(result.cause, sentWith) === "stale_generation") refresh();
       return;
     }
     if (connectionRef.current !== acquiredOn) {
@@ -242,9 +267,17 @@ export function useDeviceControlLease(options: {
     });
     setRecovering(false);
     // The error and its button stay up during the restart, so the way out never disappears.
-    // A result for an error already retired or replaced changes nothing.
-    const next = result._tag === "Failure" ? errorFrom(result.cause) : null;
-    setErrorState((current) => (current?.token === started.token ? next : current));
+    // A result for an error already retired or replaced changes nothing; a failure that fences
+    // the same device keeps the baseline the restart was sent under.
+    setErrorState((current) => {
+      if (current?.token !== started.token) return current;
+      if (result._tag === "Success") return null;
+      const next = errorFrom(result.cause, null);
+      const same =
+        next.fence?.hostId === current.fence?.hostId &&
+        next.fence?.deviceId === current.fence?.deviceId;
+      return same ? { ...next, since: current.since } : next;
+    });
   }, [environmentId, error, errorFrom, restartTools]);
 
   // Generations only grow, so a newer one, or ours no longer held, means control moved on.
