@@ -1,3 +1,4 @@
+import { releaseTarget, releaseAction } from "./lib/releaseValidators.ts";
 import {
   appleFailure,
   appleTeamType,
@@ -948,6 +949,37 @@ export default defineSchema({
   // Company-owned integrations and durable automation
   // ---------------------------------------------------------------------------
 
+  appleReleasePolicies: defineTable({
+    teamId: v.id("appleTeams"),
+    appId: v.string(),
+    enabled: v.boolean(),
+    revision: v.number(),
+  }).index("by_team_app", ["teamId", "appId"]),
+  appleReleaseIntents: defineTable({
+    id: v.string(),
+    target: v.object(releaseTarget),
+    environmentId: v.string(),
+    action: releaseAction,
+    state: v.union(
+      v.literal("pending"),
+      v.literal("approved"),
+      v.literal("consumed"),
+      v.literal("cancelled"),
+    ),
+    expiresAt: v.number(),
+    accountRevision: v.number(),
+    keyRevision: v.number(),
+    policyRevision: v.number(),
+    approvedBy: v.union(v.id("users"), v.null()),
+  }).index("by_domain_id", ["id"]),
+  appleBuildCounters: defineTable({
+    appId: v.string(),
+    version: v.string(),
+    lastNumber: v.number(),
+    environmentId: v.string(),
+    token: v.string(),
+    expiresAt: v.number(),
+  }).index("by_app_version", ["appId", "version"]),
   appleAccounts: defineTable({
     id: v.string(),
     ownerUserId: v.id("users"),

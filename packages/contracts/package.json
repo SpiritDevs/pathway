@@ -99,6 +99,10 @@
     "./simBuild": {
       "types": "./src/simBuild.ts",
       "import": "./src/simBuild.ts"
+    },
+    "./releases": {
+      "types": "./src/releases.ts",
+      "import": "./src/releases.ts"
     }
   },
   "scripts": {

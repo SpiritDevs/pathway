@@ -1,4 +1,5 @@
 import { SimBuildRpcs } from "./simBuild.ts";
+import { ReleaseRpcs } from "./releases.ts";
 import { XcodeRpcs } from "./xcode.ts";
 import { AppleRpcs } from "./apple.ts";
 import {
@@ -2639,4 +2640,5 @@ export const WsRpcGroup = RpcGroup.make(
   .merge(AppleRpcs)
   .merge(XcodeRpcs)
   .merge(SimBuildRpcs)
+  .merge(ReleaseRpcs)
   .merge(WsComputerRpcGroup);

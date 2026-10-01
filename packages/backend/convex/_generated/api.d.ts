@@ -16,6 +16,7 @@ import type * as aiOrchestratorJobs from "../aiOrchestratorJobs.js";
 import type * as aiOrchestratorPush from "../aiOrchestratorPush.js";
 import type * as aiOrchestratorReviews from "../aiOrchestratorReviews.js";
 import type * as aiOrchestrators from "../aiOrchestrators.js";
+import type * as appleReleases from "../appleReleases.js";
 import type * as appleSessions from "../appleSessions.js";
 import type * as appleIntegrations from "../appleIntegrations.js";
 import type * as browserPasswords from "../browserPasswords.js";
@@ -105,6 +106,7 @@ declare const fullApi: ApiFromModules<{
   aiOrchestratorPush: typeof aiOrchestratorPush;
   aiOrchestratorReviews: typeof aiOrchestratorReviews;
   aiOrchestrators: typeof aiOrchestrators;
+  appleReleases: typeof appleReleases;
   appleSessions: typeof appleSessions;
   appleIntegrations: typeof appleIntegrations;
   browserPasswords: typeof browserPasswords;

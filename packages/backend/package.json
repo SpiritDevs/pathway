@@ -70,6 +70,10 @@
     "./appStoreConnectApi": {
       "types": "./src/appStoreConnectApi.ts",
       "import": "./src/appStoreConnectApi.ts"
+    },
+    "./appStoreReleaseApi": {
+      "types": "./src/appStoreReleaseApi.ts",
+      "import": "./src/appStoreReleaseApi.ts"
     }
   },
   "scripts": {

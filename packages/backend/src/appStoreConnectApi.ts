@@ -167,7 +167,11 @@ export class AppStoreConnectClient {
   clearCache(): void {
     this.#cache.clear();
   }
-  async #request(path: string, body?: unknown): Promise<unknown> {
+  protected async request(
+    path: string,
+    body?: unknown,
+    method = body === undefined ? "GET" : "POST",
+  ): Promise<unknown> {
     if (this.#credential === null)
       throw appleFailure(
         "credential-changed",
@@ -199,7 +203,7 @@ export class AppStoreConnectClient {
     let response: Response;
     try {
       response = await this.#http(url.href, {
-        method: body === undefined ? "GET" : "POST",
+        method,
         headers: {
           authorization: `Bearer ${this.#token.value}`,
           ...(body === undefined ? {} : { "content-type": "application/json" }),
@@ -229,6 +233,10 @@ export class AppStoreConnectClient {
         );
       throw appleFailure("request-failed", "App Store Connect could not complete the request.");
     }
+    if (response.status === 204) {
+      this.#lastVerifiedAt = this.#now();
+      return null;
+    }
     try {
       const body: unknown = await response.json();
       this.#lastVerifiedAt = this.#now();
@@ -237,7 +245,7 @@ export class AppStoreConnectClient {
       throw appleFailure("invalid-response", "App Store Connect returned invalid JSON.");
     }
   }
-  async #pages<A>(
+  protected async pages<A>(
     path: string,
     decode: (value: unknown) => { items: A[]; next: string | null },
   ): Promise<A[]> {
@@ -256,7 +264,7 @@ export class AppStoreConnectClient {
       if (visited.has(href) || visited.size >= 1000)
         throw appleFailure("invalid-response", "App Store Connect pagination did not finish.");
       visited.add(href);
-      const raw = await this.#request(href);
+      const raw = await this.request(href);
       let page: { items: A[]; next: string | null };
       try {
         page = decode(raw);
@@ -286,7 +294,7 @@ export class AppStoreConnectClient {
     identifier: string;
     platform: typeof AppleBundleId.Type.platform;
   }): Promise<typeof AppleBundleId.Type> {
-    const raw = await this.#request("/v1/bundleIds", {
+    const raw = await this.request("/v1/bundleIds", {
       data: {
         type: "bundleIds",
         attributes: { name: input.name, identifier: input.identifier, platform: input.platform },
@@ -303,7 +311,7 @@ export class AppStoreConnectClient {
     }
   }
   listApps(): Promise<AppleApp[]> {
-    return this.#pages("/v1/apps?limit=200&fields[apps]=name,bundleId", (raw) => {
+    return this.pages("/v1/apps?limit=200&fields[apps]=name,bundleId", (raw) => {
       const page = decodeApps(raw);
       return {
         items: page.data.map((a) => ({
@@ -316,7 +324,7 @@ export class AppStoreConnectClient {
     });
   }
   listBuilds(appId: string): Promise<AppleBuild[]> {
-    return this.#pages(
+    return this.pages(
       `/v1/builds?filter[app]=${encodeURIComponent(appId)}&include=preReleaseVersion&fields[builds]=version,processingState,expirationDate,uploadedDate,preReleaseVersion&fields[preReleaseVersions]=version&limit=200&sort=-uploadedDate`,
       (raw) => {
         const page = decodeBuilds(raw);
@@ -336,7 +344,7 @@ export class AppStoreConnectClient {
     );
   }
   listBetaGroups(appId: string): Promise<AppleBetaGroup[]> {
-    return this.#pages(
+    return this.pages(
       `/v1/betaGroups?filter[app]=${encodeURIComponent(appId)}&limit=200`,
       (raw) => {
         const page = decodeGroups(raw);

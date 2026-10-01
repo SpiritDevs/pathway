@@ -1,4 +1,5 @@
 import { SIM_BUILD_WS_METHODS } from "@spiritdevs/contracts/simBuild";
+import { RELEASE_WS_METHODS } from "@spiritdevs/contracts/releases";
 import { XCODE_WS_METHODS } from "@spiritdevs/contracts/xcode";
 import { APPLE_WS_METHODS } from "@spiritdevs/contracts/apple";
 import { COMPUTER_SURFACE_METHODS } from "@spiritdevs/contracts";
@@ -38,6 +39,13 @@ export const RPC_REQUIRED_SCOPES = {
   [SIM_BUILD_WS_METHODS.cancel]: AuthOrchestrationOperateScope,
   [SIM_BUILD_WS_METHODS.subscribe]: AuthOrchestrationReadScope,
 
+  [RELEASE_WS_METHODS.archive]: AuthOrchestrationOperateScope,
+  [RELEASE_WS_METHODS.prepare]: AuthOrchestrationOperateScope,
+  [RELEASE_WS_METHODS.execute]: AuthOrchestrationOperateScope,
+  [RELEASE_WS_METHODS.cancel]: AuthOrchestrationOperateScope,
+  [RELEASE_WS_METHODS.localStatus]: AuthOrchestrationReadScope,
+  [RELEASE_WS_METHODS.subscribe]: AuthOrchestrationReadScope,
+  [RELEASE_WS_METHODS.refresh]: AuthOrchestrationReadScope,
   [XCODE_WS_METHODS.status]: AuthOrchestrationReadScope,
   [XCODE_WS_METHODS.subscribe]: AuthOrchestrationReadScope,
   [XCODE_WS_METHODS.install]: AuthOrchestrationOperateScope,
