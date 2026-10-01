@@ -63,6 +63,8 @@ export function StorageStatusIndicator() {
       if (entry.pressure === "unknown") continue;
       const { environment, pressure } = entry;
       const key = `pathway:storage-pressure:${userId}:${environment.environmentId}`;
+      const openCleanup = () =>
+        navigate({ to: "/settings/archived", search: { environment: environment.environmentId } });
       void claimTransition(key, pressure).then(async (transition) => {
         if (!active || !transition) return;
         const title =
@@ -80,7 +82,7 @@ export function StorageStatusIndicator() {
           description,
           actionProps: {
             children: "Review storage",
-            onClick: () => void navigate({ to: "/settings/archived" }),
+            onClick: () => void openCleanup(),
           },
         });
         if (
@@ -95,7 +97,7 @@ export function StorageStatusIndicator() {
               body: description,
               target: { kind: "storage", environmentId: environment.environmentId },
             },
-            () => void navigate({ to: "/settings/archived" }),
+            () => void openCleanup(),
             () => active,
           ).catch(() => {});
         }
@@ -125,34 +127,28 @@ export function StorageStatusIndicator() {
       />
       <PopoverPopup align="end" className="w-80">
         <div className="w-full min-w-0">
-          <h3 className="px-3 pt-3 pb-2 text-sm font-medium">Environment storage</h3>
-          <div className="max-h-80 overflow-y-auto px-3">
-            {pressures.map(({ environment, pressure, last }) => (
+          <h3 className="px-3 pt-3 pb-1 text-sm font-medium">Environment storage</h3>
+          <div className="max-h-80 overflow-y-auto p-1.5">
+            {low.map(({ environment, displayedPressure, stale }) => (
               <StorageEnvironmentRow
                 key={environment.environmentId}
                 environment={environment}
-                pressure={pressure}
-                lastPressure={last?.pressure}
+                critical={displayedPressure === "critical"}
+                stale={stale}
                 enabled={
                   open &&
                   environment.connection.phase === "connected" &&
                   environment.serverConfig?.environment.capabilities.storageManagement === true
                 }
+                onSelect={() => {
+                  setOpen(false);
+                  void navigate({
+                    to: "/settings/archived",
+                    search: { environment: environment.environmentId },
+                  });
+                }}
               />
             ))}
-          </div>
-          <div className="border-t p-2">
-            <Button
-              className="w-full"
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                setOpen(false);
-                void navigate({ to: "/settings/archived" });
-              }}
-            >
-              Storage &amp; cleanup settings
-            </Button>
           </div>
         </div>
       </PopoverPopup>
@@ -162,48 +158,40 @@ export function StorageStatusIndicator() {
 
 function StorageEnvironmentRow({
   environment,
-  pressure,
-  lastPressure,
+  critical,
+  stale,
   enabled,
+  onSelect,
 }: {
   environment: EnvironmentPresentation;
-  pressure: StoragePressure;
-  lastPressure: StoragePressure | undefined;
+  critical: boolean;
+  stale: boolean;
   enabled: boolean;
+  onSelect: () => void;
 }) {
   const { environmentId, label } = environment;
   const snapshot = useEnvironmentQuery(
     enabled ? serverEnvironment.storageSnapshot({ environmentId, input: {} }) : null,
   );
-  const displayedPressure = pressure === "unknown" ? lastPressure : pressure;
-  const color =
-    displayedPressure === "critical"
-      ? "text-destructive"
-      : displayedPressure === "warning"
-        ? "text-warning"
-        : "text-muted-foreground";
-  const status =
-    displayedPressure === "critical"
-      ? "Critical storage"
-      : displayedPressure === "warning"
-        ? "Low storage"
-        : displayedPressure === "healthy"
-          ? "Healthy"
-          : "Unavailable";
+  const color = critical ? "text-destructive" : "text-warning";
   return (
-    <div className="space-y-1 border-t py-2 first:border-t-0">
+    <button
+      type="button"
+      className="block w-full space-y-1 rounded-lg px-1.5 py-2 text-left outline-none hover:bg-foreground/6 focus-visible:ring-2 focus-visible:ring-ring"
+      onClick={onSelect}
+    >
       <div className="flex min-w-0 items-center gap-2">
         <EnvironmentDeviceIcon environment={environment} className={`size-4 shrink-0 ${color}`} />
         <span className="min-w-0 flex-1 truncate text-sm" title={label}>
           {label}
         </span>
-        <span className={`shrink-0 text-xs ${color}`}>{status}</span>
+        <span className={`shrink-0 text-xs ${color}`}>
+          {critical ? "Critical storage" : "Low storage"}
+        </span>
       </div>
-      {pressure === "unknown" ? (
+      {stale ? (
         <p className="text-xs text-muted-foreground">
-          {lastPressure
-            ? "Last known reading · current storage unavailable"
-            : "Current storage unavailable"}
+          Last known reading · current storage unavailable
         </p>
       ) : snapshot.data?.volumes.length ? (
         snapshot.data.volumes.map((volume) => (
@@ -217,6 +205,6 @@ function StorageEnvironmentRow({
           {snapshot.isPending ? "Loading capacity…" : "Capacity unavailable"}
         </p>
       )}
-    </div>
+    </button>
   );
 }

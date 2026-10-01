@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { activeCompanyIdAtom, companyListAtom } from "../../cloud/activeCompany";
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import {
   ArchiveRestoreIcon,
   CheckIcon,
@@ -466,7 +466,8 @@ export function StorageDashboardPanel() {
   const [showDefaults, setShowDefaults] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const activeEnvironmentId = useActiveEnvironmentId();
-  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<EnvironmentId | null>(null);
+  const { environment: selectedEnvironmentId } = useSearch({ from: "/settings/archived" });
+  const navigate = useNavigate({ from: "/settings/archived" });
   const [selectedWorktrees, setSelectedWorktrees] = useState<ReadonlySet<string>>(new Set());
   const [secondaryView, setSecondaryView] = useState<"unlinked" | "empty" | "archived">("unlinked");
   const [query, setQuery] = useState("");
@@ -783,7 +784,10 @@ export function StorageDashboardPanel() {
               entry={entry}
               selected={entry === selectedEntry}
               onSelect={() => {
-                setSelectedEnvironmentId(entry.environment.environmentId);
+                void navigate({
+                  search: { environment: entry.environment.environmentId },
+                  replace: true,
+                });
                 setPage(0);
                 setSelectedWorktrees(new Set());
               }}

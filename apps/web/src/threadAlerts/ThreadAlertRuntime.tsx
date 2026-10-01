@@ -173,7 +173,7 @@ export function ThreadAlertRuntime() {
           );
           return;
         }
-        await navigate({ to: "/settings/archived" });
+        await navigate({ to: "/settings/archived", search: { environment: target.environmentId } });
         return;
       }
       const thread = threadMap.get(alertThreadScopeKey(target.environmentId, target.threadId));
