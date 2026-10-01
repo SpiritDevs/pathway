@@ -123,14 +123,16 @@ release keeps the hand-back message for a retry, and `input_unconfirmed` offers
 ## Upstream version and tool inventory
 
 The backend follows t3code `d15210cd3da79f9a1a495a6309d912d76362a046`.
-Device Hub is pinned to `0.12.0-pathway.1` (upstream npm `0.12.0` plus the
+Device Hub is pinned to `0.12.0-pathway.2` (upstream npm `0.12.0` plus the
 checksum-verified Watch/TV patch) and agent-device to `0.21.12`.
 serve-sim and serve-emu are vendored inside that exact Hub package; upstream
 has no separate serve-sim install pin. The earlier Duo archive override and
 physical-orientation patch are removed. The Watch/TV patch is applied to a
 staging directory before the completed-install marker, identically on local and
-SSH hosts. On macOS it compiles a small TV input helper with the selected Xcode.
-A checksum or compiler failure never publishes the new install.
+SSH hosts. The patch checks the three JavaScript bundles and prebuilt native addon.
+These checks pin patch inputs, not the complete npm dependency graph. TV input
+compiles its separate helper on first use, so hub installation does not require
+an Apple compiler. `tools.tvInputBuild` reports its status independently.
 
 `device.list({ inspectOnly: true })` returns per-host `tools.hub` and
 `tools.agent` inventories, each with `requiredVersion`, `installedVersions`
@@ -236,7 +238,7 @@ companions and ownership checks for both devices. Watch agent control uses the
 native MCP tools because agent-device 0.21.12 has no watchOS XCTest backend.
 
 TV capture uses the unmodified native addon's IOSurface capture path. TV button
-input uses a small DTUHID XPC helper compiled during installation. The serve-sim
+input uses a small DTUHID XPC helper compiled on first TV input. The serve-sim
 session lazily owns one helper process, reused across viewer and agent inputs;
 closing the session stops that child. Process failure rejects outstanding input,
 and the next press starts a new connection. The queue is bounded and each press
@@ -245,3 +247,9 @@ requires an acknowledgement. No raw touch events are generated for TV.
 See the [UI contract](device-client-contract.md#watch-and-tv-backend-contract-cor-103--cor-104)
 and the [capture spike and upstream note](watch-tv-simulator-spike.md) for the
 verified toolchain, native protocol, patch boundaries and remaining runtime proof.
+
+The public helper socket applies runtime-derived family and payload validation to
+both acknowledged and legacy input. TV rejects digitizer events before native
+calls. One bounded queue per device serializes dispatch and skips work from
+closed sockets. See [review fixes and remaining work](watch-tv-review-fixes.md)
+for active-touch cleanup, native acknowledgement and artifact-reproducibility gaps.

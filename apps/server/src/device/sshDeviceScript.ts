@@ -91,7 +91,12 @@ const versions = () => {
   agent: toolVersions('agent-device', agentVersion, 'bin/agent-device.mjs', { ...read(path.join(state, 'agent.json')), ...read(path.join(state, 'daemon.json')) }),
   };
   if (!result.hub || !result.agent) return undefined;
-  return { ...result, serveSim: { requiredVersion: 'expo-device-hub@' + hubVersion, installedVersions: result.hub.installedVersions.map(version => 'expo-device-hub@' + version), runningVersion: result.hub.runningVersion ? 'expo-device-hub@' + result.hub.runningVersion : null } };
+  const tvBinary = path.join(cacheRoot, 'tools', 'expo-device-hub', hubVersion, 'node_modules/expo-device-hub/vendor/serve-sim/dist/native/pathway-tv-input');
+  let tvInputBuild = read(tvBinary + '.json');
+  if (!['notBuilt','ready','unavailable'].includes(tvInputBuild?.status)) tvInputBuild = undefined;
+  if (tvInputBuild?.status === 'ready' && !fs.existsSync(tvBinary)) tvInputBuild = { status:'unavailable', reason:'TV input executable is missing. Retry TV input to rebuild it.' };
+  if (tvInputBuild) tvInputBuild = { status:tvInputBuild.status, ...(typeof tvInputBuild.reason === 'string' ? { reason:tvInputBuild.reason } : {}) };
+  return { ...result, ...(tvInputBuild ? { tvInputBuild } : {}), serveSim: { requiredVersion: 'expo-device-hub@' + hubVersion, installedVersions: result.hub.installedVersions.map(version => 'expo-device-hub@' + version), runningVersion: result.hub.runningVersion ? 'expo-device-hub@' + result.hub.runningVersion : null } };
 };
 const stopHub = hub => {
   if (!hub || hub.owner !== owner) return;

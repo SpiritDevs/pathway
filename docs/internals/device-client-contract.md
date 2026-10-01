@@ -22,7 +22,7 @@ omitting it from `device.close` matches all hosts in that thread.
 | `device.shutdown`      | `{ hostId?: string, deviceId: string, platform: "ios" \| "android" }`                           | void                                              | operate                        |
 | `device.detail`        | `{ hostId?: string, deviceId: string }`                                                         | `DeviceDetail`                                    | read                           |
 | `device.action`        | `{ hostId?: string, deviceId: string, ...action }`                                              | refreshed `DeviceDetail`                          | operate                        |
-| `device.input`         | `{ hostId?: string, deviceId: string, input: DeviceInput }`                                     | void (native acknowledgement)                     | operate                        |
+| `device.input`         | `{ hostId?: string, deviceId: string, input: DeviceInput }`                                     | void (helper acknowledgement)                     | operate                        |
 | `subscribeDeviceState` | `{}`                                                                                            | stream of complete `DeviceServiceState` snapshots | read                           |
 
 Scopes are `orchestration:read` and `orchestration:operate`. `device.list({})`
@@ -317,7 +317,7 @@ Older runtimes/toolchains can still fail to start capture or input; surface the
 operation failure, never substitute a placeholder stream.
 
 `device.input({ hostId, deviceId, input })` is an operate-scope RPC returning void
-only after the helper acknowledges native input. `createDeviceEnvironmentAtoms(...).input`
+only after the helper acknowledges the input call. `createDeviceEnvironmentAtoms(...).input`
 uses the selected environment. Input targets must be booted and owned by that
 environment. Unsupported device/input combinations fail before invoking helpers.
 The same shape is available as the `device_input` MCP tool. This RPC targets
@@ -349,8 +349,10 @@ For continuous controls, reuse the existing authenticated helper WebSocket at
 Wrap it as one binary message: byte `0x12`, then UTF-8 JSON
 `{ id: "unique-request-id", ...deviceSimulatorInputPacket(input) }`. The helper
 responds on tag `0x12` with `{ id, ok, error? }`. Match ids, bound pending requests,
-and reject them when the socket closes. Ack means native dispatch completed;
-it is not evidence that the app rendered the expected result. TV's inner tag
+and reject them when the socket closes. TV acknowledgements include a native service barrier. Watch acknowledgements
+currently mean the addon method returned; some native skip paths return normally.
+They do not prove dispatch or a rendered result. See the native follow-up in
+[the review report](watch-tv-review-fixes.md). TV's inner tag
 `0x13` is handled only inside this envelope. Never send TV input via the legacy
 raw `0x04` digitizer button path. Cancel input on disconnect/revocation and do not
 replay pending presses on reconnect. This uses the existing authenticated proxy
@@ -379,3 +381,16 @@ or explicit device id. Watch returns `agentDevice: null` and instructions for
 CLI launcher with `--platform ios --target tv --udid ...` and the existing
 host/thread config flags. The common toolkit exposes these tools to every
 provider, under the existing capability and current consent checks.
+
+`tools.tvInputBuild` optionally reports the required hub install's native TV input
+state: `{ status: "notBuilt" | "ready" | "unavailable", reason?: string }`.
+It is independent of hub installation and is refreshed by tool inspection. First
+TV input builds the executable; missing compiler errors affect TV input only.
+The helper validates all input against its own simctl runtime metadata and bounds
+pending input to 64 calls per device. Old clients' TV digitizer messages are rejected.
+
+Queued input is cancelled by socket closure, including authorization revocation.
+Already active touch contacts are not released automatically yet. RPC input still
+uses one socket per message, so a begin/move/end sequence has no connection-owned
+gesture lifetime. The required ownership/lifetime change is documented in the
+[review follow-up](watch-tv-review-fixes.md#deferred-work).

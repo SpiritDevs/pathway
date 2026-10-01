@@ -1,5 +1,8 @@
 # Watch / TV simulator spike and upstream patch note
 
+For the later `0.12.0-pathway.2` review fixes and remaining gaps, see
+[watch-tv-review-fixes.md](watch-tv-review-fixes.md). This note records the original spike.
+
 COR-103 / COR-104, 2026-10-01. This records a local backend spike; no upstream PR
 or issue was opened. No Pathway dev server, browser or mobile UI was launched.
 

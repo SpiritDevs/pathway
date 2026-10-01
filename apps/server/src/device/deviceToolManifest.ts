@@ -8,10 +8,10 @@ import type {
 
 /** Release-owned pins. Change this file when deliberately upgrading the device stack. */
 export const DEVICE_TOOL_MANIFEST = {
-  revision: "2",
-  hub: "0.12.0-pathway.1",
+  revision: "3",
+  hub: "0.12.0-pathway.2",
   agent: "0.21.12",
-  serveSim: "expo-device-hub@0.12.0-pathway.1",
+  serveSim: "expo-device-hub@0.12.0-pathway.2",
   recommendedXcode: "26.0",
   recommendedRuntimes: [
     { platform: "ios", version: "26.0" },

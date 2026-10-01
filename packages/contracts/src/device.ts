@@ -248,7 +248,15 @@ export const DeviceCheckRequirementsResult = Schema.Struct({
 });
 export type DeviceCheckRequirementsResult = typeof DeviceCheckRequirementsResult.Type;
 
+/** Build status for TV input in the required hub install, independent of hub installation. */
+export const DeviceTvInputBuild = Schema.Struct({
+  status: Schema.Literals(["notBuilt", "ready", "unavailable"]),
+  reason: Schema.optional(Schema.String),
+});
+export type DeviceTvInputBuild = typeof DeviceTvInputBuild.Type;
+
 export const DeviceToolVersions = Schema.Struct({
+  tvInputBuild: Schema.optional(DeviceTvInputBuild),
   serveSim: Schema.optional(DeviceToolVersion),
   hub: DeviceToolVersion,
   agent: DeviceToolVersion,

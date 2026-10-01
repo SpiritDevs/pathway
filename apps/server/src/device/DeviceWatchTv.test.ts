@@ -391,3 +391,33 @@ it.effect("refuses input on a stopped target and respects another environment's 
     }),
   ),
 );
+
+it.effect(
+  "unpairs an unavailable companion without bypassing its environment lease, then pairs a replacement",
+  () =>
+    test((f) =>
+      Effect.gen(function* () {
+        f.paired.set("ssh-mac", "unavailable-phone");
+        f.block("ssh-mac:ios:unavailable-phone");
+        expect(
+          (yield* f.service
+            .action({ hostId: "ssh-mac", deviceId: "watch", type: "unpairWatch" })
+            .pipe(Effect.flip))._tag,
+        ).toBe("DeviceHostUnavailableError");
+        expect(f.commands.some((command) => command.args[1] === "unpair")).toBe(false);
+        f.block("no-block");
+        yield* f.service.action({ hostId: "ssh-mac", deviceId: "watch", type: "unpairWatch" });
+        expect(f.claims).toContain("ssh-mac:ios:unavailable-phone");
+        expect(f.commands.filter((command) => command.args[1] === "unpair")).toEqual([
+          { host: "ssh-mac", args: ["simctl", "unpair", "pair1"] },
+        ]);
+        yield* f.service.action({
+          hostId: "ssh-mac",
+          deviceId: "watch",
+          type: "pairWatch",
+          phoneDeviceId: "phone",
+        });
+        expect(f.paired.get("ssh-mac")).toBe("phone");
+      }),
+    ),
+);

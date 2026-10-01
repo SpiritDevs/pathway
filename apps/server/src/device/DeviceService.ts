@@ -763,14 +763,16 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
 
   const deviceLeaseKey = (device: DeviceSummary) =>
     `${device.platform}:${device.platform === "android" && !device.physical ? device.name : device.id}`;
-  const claimDevice: DeviceService["Service"]["claimDevice"] = Effect.fn(
-    "DeviceService.claimDevice",
-  )(function* (hostId, deviceId) {
+  // Existing pairs may reference an unavailable runtime. Its UDID still needs a lease.
+  const claimDeviceLease = Effect.fn("DeviceService.claimDeviceLease")(function* (
+    hostId: DeviceHostId,
+    deviceId: DeviceId,
+    key: string,
+  ) {
     const host = yield* resolveHost(hostId);
     const { state } = yield* SynchronizedRef.get(stateRef);
     const device = findDevice(state, host.id, deviceId);
-    if (!device) return yield* new DeviceNotFoundError({ hostId: host.id, deviceId });
-    const owner = yield* host.acquireDevice(deviceLeaseKey(device)).pipe(
+    const owner = yield* host.acquireDevice(key).pipe(
       Effect.mapError(
         (cause) =>
           new DeviceOperationError({
@@ -792,7 +794,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
         reason: `In use by ${owner.environmentLabel}. Stop device support in that environment to release it.`,
       });
     }
-    if (device.inUseBy)
+    if (device?.inUseBy)
       yield* publish((current) => ({
         ...current,
         devices: current.devices.map((value) =>
@@ -801,6 +803,15 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
             : value,
         ),
       }));
+  });
+  const claimDevice: DeviceService["Service"]["claimDevice"] = Effect.fn(
+    "DeviceService.claimDevice",
+  )(function* (hostId, deviceId) {
+    const host = yield* resolveHost(hostId);
+    const { state } = yield* SynchronizedRef.get(stateRef);
+    const device = findDevice(state, host.id, deviceId);
+    if (!device) return yield* new DeviceNotFoundError({ hostId: host.id, deviceId });
+    yield* claimDeviceLease(host.id, device.id, deviceLeaseKey(device));
   });
 
   const findDevice = (
@@ -1259,7 +1270,11 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
               Effect.gen(function* () {
                 const pair = yield* readWatchPair(ready, device.id);
                 if (pair) {
-                  yield* claimDevice(ready.hostId, pair.phoneDeviceId);
+                  yield* claimDeviceLease(
+                    ready.hostId,
+                    pair.phoneDeviceId,
+                    `ios:${pair.phoneDeviceId}`,
+                  );
                   yield* runSimctl(ready, "unpairWatch", ["unpair", pair.pairId]);
                 }
               }),

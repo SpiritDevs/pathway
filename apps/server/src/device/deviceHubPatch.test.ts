@@ -11,10 +11,11 @@ const index = `async function listIosSimulators() {
 // The fixtures contain only the pinned anchors. Filesystem and hashing are the mocked install boundary.
 const source = (
   socket: string,
-) => `const runtimePattern=/SimRuntime\\.(iOS|watchOS|visionOS|xrOS)-/;
+) => `${socket === "U" ? "#!/usr/bin/env node\n" : ""}const runtimePattern=/SimRuntime\\.(iOS|watchOS|visionOS|xrOS)-/;
 class Session { phase="running"; close(){this.phase="stopped";} async handleHidMessage($,${socket}){} }
 globalThis.Session=Session;`;
 const files = {
+  "/hub/vendor/serve-sim/dist/native/serve-sim-native.node": "native",
   "/hub/dist/server/index.mjs": index,
   "/hub/vendor/serve-sim/dist/middleware.js": source("v"),
   "/hub/vendor/serve-sim/dist/serve-sim.js": source("U"),
@@ -23,24 +24,21 @@ const hashes = [
   "1cdba1c07d8d6e66c97aef700f4372d8bcae34ba0160b1059f62b20d123e1266",
   "2c82e875e1cf33b0ec98dd2d6e25271e487d9bc6e162b1c4d86e647bc82dcd9c",
   "d30d6f03320a98682d988df5231aaedd177e44d7867fe8b856ea4a7af34de24e",
+  "27732f7fbc01c1fdd97f1b850d072cb4b57991e3177fde084a1e6e6c0b061628",
 ];
-function patch(wrongHash = false, compileFails = false) {
+function patch(wrongHash = false, wrongNative = false) {
   const writes = new Map<string, string>();
   let hash = 0;
   const context = NodeVM.createContext({
     process: { platform: "darwin" },
     require: (name: string) => {
-      if (name === "node:child_process")
-        return {
-          execFileSync: () => {
-            if (compileFails) throw new Error("compiler unavailable");
-          },
-        };
       if (name === "node:path") return { join: (...parts: string[]) => parts.join("/") };
       if (name === "node:crypto")
         return {
           createHash: () => ({
-            update: () => ({ digest: () => (wrongHash ? "changed" : hashes[hash++]) }),
+            update: () => ({
+              digest: () => (wrongHash || (wrongNative && hash === 3) ? "changed" : hashes[hash++]),
+            }),
           }),
         };
       if (name === "node:fs")
@@ -66,7 +64,7 @@ it("fails before publishing any files if the upstream checksum changes", () => {
 it("patches both helper entry points and includes never-used Watch and TV devices", async () => {
   const fixture = patch();
   fixture.run();
-  expect(fixture.writes.size).toBe(5);
+  expect(fixture.writes.size).toBe(8);
   const changed = fixture.writes.get("/hub/dist/server/index.mjs")!;
   expect(changed).toContain('["iOS", "watchOS", "tvOS"].includes');
   expect(changed).not.toContain("lastUsedAt !== undefined");
@@ -104,137 +102,25 @@ it("patches both helper entry points and includes never-used Watch and TV device
   for (const file of ["middleware.js", "serve-sim.js"]) {
     const code = fixture.writes.get(`/hub/vendor/serve-sim/dist/${file}`)!;
     expect(code).toContain("watchOS|tvOS");
-    expect(code).toContain("await h.digitalCrown(p.delta)");
-    expect(code).toContain("await h.buttonHid(p.page,p.usage");
+    expect(() => new NodeVM.Script(code.replace(/^import.*\n/gm, ""))).not.toThrow();
+    if (file === "serve-sim.js") expect(code.startsWith("#!/usr/bin/env node\n")).toBe(true);
+    expect(code).toContain("createPathwaySimulatorInput(this)");
+    expect(code).toContain("pathwayLegacyHidMessage");
   }
 });
 
-it("acknowledges native completion and returns native errors through the helper socket", async () => {
-  const fixture = patch();
-  fixture.run();
-  for (const file of ["middleware.js", "serve-sim.js"]) {
-    const context = NodeVM.createContext({ Buffer });
-    NodeVM.runInContext(
-      fixture.writes.get(`/hub/vendor/serve-sim/dist/${file}`)!.replace(/^import.*\n/, ""),
-      context,
-    );
-    const session = NodeVM.runInContext("new Session()", context) as {
-      hid: { handle: { digitalCrown: (delta: number) => Promise<void> } };
-      waitForCapture: () => Promise<void>;
-      handleHidMessage: (data: Buffer, ws: { send: (data: Buffer) => void }) => Promise<void>;
-    };
-    let complete!: () => void;
-    const delivered = new Promise<void>((resolve) => {
-      complete = resolve;
-    });
-    const deltas: number[] = [];
-    session.waitForCapture = async () => {};
-    session.hid = {
-      handle: {
-        digitalCrown: (delta) => {
-          deltas.push(delta);
-          return delivered;
-        },
-      },
-    };
-    const responses: Buffer[] = [];
-    const packet = Buffer.concat([
-      Buffer.from([18]),
-      Buffer.from(JSON.stringify({ id: "one", tag: 10, payload: { delta: -2 } })),
-    ]);
-    const running = session.handleHidMessage(packet, {
-      send: (data) => {
-        responses.push(data);
-      },
-    });
-    await Promise.resolve();
-    expect(responses).toHaveLength(0);
-    complete();
-    await running;
-    expect(deltas).toEqual([-2]);
-    expect(JSON.parse(responses[0]!.subarray(1).toString())).toEqual({ id: "one", ok: true });
-    session.hid.handle.digitalCrown = async () => {
-      throw new Error("native unavailable");
-    };
-    await session.handleHidMessage(packet, {
-      send: (data) => {
-        responses.push(data);
-      },
-    });
-    expect(JSON.parse(responses[1]!.subarray(1).toString())).toMatchObject({
-      ok: false,
-      error: "Error: native unavailable",
-    });
-  }
-});
-
-it("does not publish patched entry points when native compilation fails", () => {
+it("rejects a changed native addon before publishing any patch files", () => {
   const fixture = patch(false, true);
-  expect(() => fixture.run()).toThrow("compiler unavailable");
-  expect(fixture.writes.has("/hub/dist/server/index.mjs")).toBe(false);
+  expect(() => fixture.run()).toThrow("checksum mismatch: native addon");
+  expect(fixture.writes.size).toBe(0);
 });
-
-it("routes TV through its separate native process and closes it with the capture session", async () => {
+it("installs shared hub sources on an Android-only Mac without invoking a compiler", () => {
   const fixture = patch();
   fixture.run();
-  for (const file of ["middleware.js", "serve-sim.js"]) {
-    const calls: string[] = [];
-    const context = NodeVM.createContext({
-      Buffer,
-      createPathwayTvInput: (udid: string) => {
-        calls.push(udid);
-        return {
-          send: async (button: string) => {
-            calls.push(button);
-          },
-          close: () => {
-            calls.push("closed");
-          },
-        };
-      },
-    });
-    NodeVM.runInContext(
-      fixture.writes.get(`/hub/vendor/serve-sim/dist/${file}`)!.replace(/^import.*\n/, ""),
-      context,
-    );
-    const session = NodeVM.runInContext("new Session()", context) as {
-      udid: string;
-      hid: { handle: object };
-      waitForCapture: () => Promise<void>;
-      handleHidMessage: (data: Buffer, ws: { send: (data: Buffer) => void }) => Promise<void>;
-      close: () => void;
-    };
-    session.udid = "tv-udid";
-    session.hid = { handle: {} }; // No digitizer API is available on this target.
-    session.waitForCapture = async () => {};
-    const responses: Buffer[] = [];
-    const packet = Buffer.concat([
-      Buffer.from([18]),
-      Buffer.from(JSON.stringify({ id: "tv", tag: 19, payload: { button: "select" } })),
-    ]);
-    await session.handleHidMessage(packet, {
-      send: (data) => {
-        responses.push(data);
-      },
-    });
-    expect(JSON.parse(responses[0]!.subarray(1).toString())).toEqual({ id: "tv", ok: true });
-    let captured!: () => void;
-    session.waitForCapture = () =>
-      new Promise<void>((resolve) => {
-        captured = resolve;
-      });
-    const late = session.handleHidMessage(packet, {
-      send: (data) => {
-        responses.push(data);
-      },
-    });
-    session.close();
-    captured();
-    await late;
-    expect(JSON.parse(responses[1]!.subarray(1).toString())).toMatchObject({
-      ok: false,
-      error: "Error: Simulator session is closed",
-    });
-    expect(calls).toEqual(["tv-udid", "select", "closed"]);
-  }
+  expect(fixture.writes.get("/hub/vendor/serve-sim/dist/native/pathway-tv-input.json")).toBe(
+    '{"status":"notBuilt"}',
+  );
+  expect(fixture.writes.get("/hub/vendor/serve-sim/dist/pathway-tv-build.mjs")).toContain(
+    "ensurePathwayTvInput",
+  );
 });
