@@ -14,7 +14,6 @@ import {
 import { isElectron } from "../../env";
 import { cn, isMacPlatform } from "../../lib/utils";
 import { PathwayConnectProfileButton } from "../clerk/PathwayConnectSidebarSignIn";
-import { ProviderUpdateLaunchNotification } from "../ProviderUpdateLaunchNotification";
 import { Button } from "../ui/button";
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -191,7 +190,7 @@ export function WorkspaceTopBar() {
   return (
     <header
       className={cn(
-        "hidden min-h-11 shrink-0 items-center justify-between bg-sidebar pr-4 md:flex",
+        "hidden min-h-11 shrink-0 items-center justify-between bg-workspace-frame pr-4 md:flex",
         isMacDesktop ? "pl-8" : "pl-2",
         isElectron && "drag-region",
       )}
@@ -200,7 +199,6 @@ export function WorkspaceTopBar() {
     >
       <WorkspaceHistoryControls />
       <div className="flex items-center gap-2">
-        <ProviderUpdateLaunchNotification />
         <StorageStatusIndicator />
         <SyncStatusIndicator />
         <TimeTrackerIndicator />

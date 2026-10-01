@@ -21,9 +21,13 @@ import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import { ProviderMaintenanceActivity } from "./providerMaintenanceActivity.ts";
 import { ProviderRegistry } from "./Services/ProviderRegistry.ts";
 import { makeProviderMaintenanceCommandCoordinator } from "./providerMaintenanceCommandCoordinator.ts";
-import { enrichProviderSnapshotWithVersionAdvisory } from "./providerMaintenance.ts";
+import {
+  ProviderVersionCache,
+  enrichProviderSnapshotWithVersionAdvisory,
+} from "./providerMaintenance.ts";
 import type { ProviderMaintenanceCapabilities } from "./providerMaintenance.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
@@ -48,6 +52,7 @@ export interface ProviderMaintenanceRunnerShape {
           readonly provider: ProviderDriverKind;
           readonly instanceId?: ProviderInstanceId | undefined;
         },
+    options?: { readonly beforeRun: Effect.Effect<boolean> },
   ) => Effect.Effect<ServerProviderUpdatedPayload, ServerProviderUpdateError>;
 }
 
@@ -199,8 +204,10 @@ function makeUpdateState(input: {
 
 export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
   const providerRegistry = yield* ProviderRegistry;
+  const activity = yield* ProviderMaintenanceActivity;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
+  const versionCache = yield* ProviderVersionCache;
   const runMaintenanceCommand = (command: string, args: ReadonlyArray<string>) =>
     runProviderMaintenanceCommandWithSpawner({
       spawner,
@@ -258,7 +265,10 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             enrichProviderSnapshotWithVersionAdvisory(
               refreshedProvider,
               maintenanceCapabilities,
-            ).pipe(Effect.provideService(HttpClient.HttpClient, httpClient)),
+            ).pipe(
+              Effect.provideService(HttpClient.HttpClient, httpClient),
+              Effect.provideService(ProviderVersionCache, versionCache),
+            ),
           {
             concurrency: "unbounded",
           },
@@ -286,7 +296,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
 
   const updateProvider: ProviderMaintenanceRunnerShape["updateProvider"] = Effect.fn(
     "ProviderMaintenanceRunner.updateProvider",
-  )(function* (target) {
+  )(function* (target, options) {
     const provider = typeof target === "string" ? target : target.provider;
     const instanceId =
       typeof target === "string"
@@ -316,7 +326,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
         status: "queued",
         startedAt: null,
         finishedAt: null,
-        message: "Waiting for another provider update to finish.",
+        message: "Waiting for provider sessions and other updates to finish.",
       }),
     ).pipe(Effect.asVoid);
 
@@ -328,6 +338,9 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
 
         const runCommandAndVerify = Effect.fn("ProviderMaintenanceRunner.runCommandAndVerify")(
           function* () {
+            if (options && !(yield* options.beforeRun)) {
+              return { providers: yield* setUpdateState(null) };
+            }
             const startedAt = yield* nowIso;
             yield* Ref.set(startedAtRef, startedAt);
             yield* setUpdateState(
@@ -403,6 +416,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
         targetKey,
         lockKey: update.lockKey,
         onQueued: setQueuedState,
+        withAvailability: (run) => activity.whenIdle(provider, run),
         run: runProviderUpdate(),
       })
       .pipe(

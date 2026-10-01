@@ -55,7 +55,7 @@ describe("WorkspaceTopBar", () => {
     const markup = renderToStaticMarkup(<WorkspaceTopBar />);
 
     expect(markup).toContain('data-workspace-top-bar=""');
-    expect(markup).toContain('data-testid="provider-update-notice"');
+    expect(markup).not.toContain('data-testid="provider-update-notice"');
     expect(markup).toContain('data-testid="profile-button"');
     expect(markup).toContain('data-testid="time-tracker"');
     expect(markup).toContain('data-testid="storage-status"');

@@ -1,3 +1,4 @@
+import { useCheckProviderUpdates } from "../ProviderUpdateCheckCoordinator";
 import { BrowserPasswordsSettings } from "./BrowserPasswordsSettings";
 import { ChevronRightIcon, SettingsIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
@@ -216,6 +217,7 @@ function AboutVersionTitle() {
 }
 
 function AboutVersionSection() {
+  const checkProviders = useCheckProviderUpdates();
   const updateState = useDesktopUpdateState();
   const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
   const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
@@ -256,7 +258,26 @@ function AboutVersionSection() {
 
   const handleButtonClick = useCallback(async () => {
     const bridge = window.desktopBridge;
-    if (!bridge) return;
+    if (!bridge) {
+      if (isUpdateActionPending) return;
+      setIsUpdateActionPending(true);
+      try {
+        const result = await checkProviders();
+        if (result.failed > 0) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not check all provider updates",
+              description:
+                "Check the connection and your permissions for each environment in Settings → Providers.",
+            }),
+          );
+        }
+      } finally {
+        setIsUpdateActionPending(false);
+      }
+      return;
+    }
 
     const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
 
@@ -337,14 +358,15 @@ function AboutVersionSection() {
           }),
         );
       });
-  }, [isUpdateActionPending, updateState]);
+  }, [checkProviders, isUpdateActionPending, updateState]);
 
   const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
   const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState) : null;
   const buttonDisabled =
-    action === "none"
+    hasDesktopBridge &&
+    (action === "none"
       ? !canCheckForUpdate(updateState)
-      : isDesktopUpdateButtonDisabled(updateState);
+      : isDesktopUpdateButtonDisabled(updateState));
 
   const actionLabel: Record<string, string> = { download: "Download", install: "Install" };
   const statusLabel: Record<string, string> = {
@@ -374,7 +396,7 @@ function AboutVersionSection() {
                   disabled={buttonDisabled || isUpdateActionPending}
                   onClick={handleButtonClick}
                 >
-                  {buttonLabel}
+                  {isUpdateActionPending && !hasDesktopBridge ? "Checking…" : buttonLabel}
                 </Button>
               }
             />
@@ -2173,7 +2195,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("provider-update-checks")}
-          description="Check installed provider CLIs for newer available versions."
+          description="Check provider versions and automatically install supported updates when their sessions and background jobs are idle."
           resetAction={
             settings.enableProviderUpdateChecks !==
             DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks ? (

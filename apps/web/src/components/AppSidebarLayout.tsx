@@ -1,3 +1,4 @@
+import { ProviderUpdateCheckCoordinator } from "./ProviderUpdateCheckCoordinator";
 import { ThreadQueueRuntime } from "../cloud/threadQueue";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
@@ -268,8 +269,9 @@ function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
   }, [navigate, pathname]);
 
   return (
-    <div className="flex h-dvh min-h-0 w-full" style={shellStyle}>
+    <div className="flex h-dvh min-h-0 w-full bg-workspace-frame" style={shellStyle}>
       <ThreadQueueRuntime />
+      <ProviderUpdateCheckCoordinator />
       <ProjectProjectionRetention />
       {isChildWindow ? null : (
         <PrimaryNavigationRail
@@ -277,7 +279,7 @@ function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
           onExpandedChange={setPrimaryNavigationExpanded}
         />
       )}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-sidebar surface-grain">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-workspace-frame dark:surface-grain">
         <WorkspaceTopBar />
         <div
           className={cn(
@@ -332,7 +334,7 @@ export function WorkspaceFrame({ children }: { children: ReactNode }) {
 
   return (
     <SidebarProvider
-      className="relative min-h-0! min-w-0 flex-1 overflow-hidden rounded-t-xl bg-background shadow-[0_-4px_12px_rgb(0_0_0/0.06)] md:rounded-xl md:border md:border-sidebar-border md:shadow-sm/5 dark:shadow-[0_-4px_12px_rgb(0_0_0/0.24)] dark:md:shadow-sm/5"
+      className="relative min-h-0! min-w-0 flex-1 overflow-hidden rounded-t-xl bg-background shadow-[0_-4px_12px_rgb(0_0_0/0.06)] md:rounded-xl md:border md:border-sidebar-border md:shadow-none dark:shadow-[0_-4px_12px_rgb(0_0_0/0.24)] dark:md:shadow-none"
       data-app-content-frame=""
       defaultOpen
       hoverReveal

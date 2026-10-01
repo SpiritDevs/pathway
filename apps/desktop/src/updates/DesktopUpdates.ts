@@ -411,6 +411,9 @@ export const make = Effect.gen(function* () {
     if (actionReservation === "acquire" && !(yield* tryStartUpdateAction("check"))) return false;
 
     const check = Effect.gen(function* () {
+      if (reason !== "poll" && reason !== "startup") {
+        yield* electronWindow.sendAll(IpcChannels.MENU_ACTION_CHANNEL, "check-provider-updates");
+      }
       // Background polls stay invisible; only the updater's answer changes state.
       if (reason !== "poll") {
         const checkedAt = yield* currentIsoTimestamp;
@@ -968,6 +971,7 @@ export const make = Effect.gen(function* () {
     check: Effect.fn("desktop.updates.check")(function* (reason: string) {
       yield* Effect.annotateCurrentSpan({ reason });
       if (!(yield* Ref.get(updaterConfiguredRef))) {
+        yield* electronWindow.sendAll(IpcChannels.MENU_ACTION_CHANNEL, "check-provider-updates");
         return {
           checked: false,
           state: yield* Ref.get(updateStateRef),

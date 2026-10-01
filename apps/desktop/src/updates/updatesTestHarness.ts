@@ -43,6 +43,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   const feedUrls: ElectronUpdater.ElectronUpdaterFeedUrl[] = [];
   const listeners = new Map<string, Set<(...args: readonly unknown[]) => void>>();
   const sentStates: DesktopUpdateState[] = [];
+  const providerChecks: string[] = [];
   const installSteps: string[] = [];
 
   const addListener = (eventName: string, listener: (...args: readonly unknown[]) => void) => {
@@ -114,9 +115,13 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     prepareReveal: () => Effect.succeed(false),
     cancelPreparedReveal: () => Effect.void,
     reveal: () => Effect.void,
-    sendAll: (_channel, state) =>
+    sendAll: (channel, state) =>
       Effect.sync(() => {
-        sentStates.push(state as DesktopUpdateState);
+        if (channel === "desktop:menu-action") {
+          providerChecks.push(state as string);
+        } else {
+          sentStates.push(state as DesktopUpdateState);
+        }
       }),
     destroyAll: Effect.sync(() => {
       installSteps.push("destroyAll");
@@ -235,6 +240,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
         0,
       ),
     sentStates,
+    providerChecks,
     emit: (eventName: string, payload?: unknown) => {
       for (const listener of listeners.get(eventName) ?? []) {
         listener(payload);

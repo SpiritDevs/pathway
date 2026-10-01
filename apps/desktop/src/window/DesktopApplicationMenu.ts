@@ -98,6 +98,7 @@ const handleCheckForUpdatesMenuClick = Effect.gen(function* () {
   const electronDialog = yield* ElectronDialog.ElectronDialog;
   const disabledReason = yield* updates.disabledReason;
   if (Option.isSome(disabledReason)) {
+    yield* updates.check("menu");
     yield* logUpdaterInfo("manual update check requested, but updates are disabled", {
       disabledReason: disabledReason.value,
     });
