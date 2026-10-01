@@ -188,9 +188,9 @@ const toolError = (error: DeviceError | DeviceToolUnavailableError) => error;
 const handlers = {
   device_input: (input) =>
     Effect.gen(function* () {
-      yield* requireDeviceAccess;
+      const caller = yield* activeDeviceRun;
       const devices = yield* DeviceService.DeviceService;
-      yield* devices.input(input);
+      yield* devices.input(input).pipe(Effect.provideService(DeviceControlCaller, caller));
       return { ok: true };
     }).pipe(Effect.mapError(toolError)),
   device_action: (input) =>

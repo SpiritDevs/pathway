@@ -20,11 +20,11 @@ export function createPathwaySimulatorInput(session) {
   const finite = (value, min, max) => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
   const integer = (value, min, max) => Number.isInteger(value) && finite(value, min, max);
   const oneOf = (value, values) => values.includes(value);
-  const validate = (kind, tag, p, envelope) => {
+  const validate = (kind, tag, p, envelope, managed) => {
     const touch = oneOf(p.type, ['begin','move','end']);
     let valid = false;
     if (kind === 'tv') {
-      if (tag !== 19 || !envelope) throw Error('TV accepts only semantic remote buttons');
+      if (tag !== 19 || !(envelope || managed)) throw Error('TV accepts only semantic remote buttons');
       valid = oneOf(p.button, ['up','down','left','right','select','menu','back','playPause','home']);
     } else {
       if (kind === 'watch' && ![3,4,10].includes(tag)) throw Error('Input is unavailable on Watch');
@@ -53,9 +53,10 @@ export function createPathwaySimulatorInput(session) {
     if (!valid) throw Error('Invalid or unsupported simulator input');
   };
   return {
-    async handle(data, socket, legacy) {
+    async handle(data, socket, legacy, managed = false) {
       let request, envelope = data[0] === 18;
       const reply = (ok, error) => {
+        if (managed) return;
         if (socket.readyState !== 1) return;
         if (envelope || !ok) socket.send(Buffer.concat([Buffer.from([18]),Buffer.from(JSON.stringify({ id: request?.id ?? null, ok, ...(error ? { error: String(error) } : {}) }))]));
       };
@@ -76,7 +77,7 @@ export function createPathwaySimulatorInput(session) {
           family ??= readSimulatorFamily(session.udid);
           const kind = await family; connected();
           const { tag, payload: p } = request;
-          validate(kind, tag, p, envelope);
+          validate(kind, tag, p, envelope, managed);
           const h = session.hid.handle;
           if (tag === 3) session.recordTouchEvent?.(p);
           else if ([4,5,6,10,11].includes(tag)) session.recordHidEvent?.(tag,p);
@@ -102,7 +103,7 @@ export function createPathwaySimulatorInput(session) {
         });
         tail = operation.catch(() => {});
         try { await operation; reply(true); } finally { pending--; }
-      } catch (error) { reply(false,error); }
+      } catch (error) { if (managed) throw error; reply(false,error); }
     },
     close() { closed = true; },
   };

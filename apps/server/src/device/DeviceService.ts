@@ -1254,7 +1254,15 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
           reason: "command_failed",
           cause: "Open and boot this device before sending input.",
         });
-      yield* sendInput(ready, device.id, input.input);
+      const target = { hostId: ready.hostId, deviceId: device.id };
+      yield* control.mutation(
+        target,
+        input.control,
+        sendInput(ready, device.id, input.input).pipe(
+          Effect.mapError(() => DeviceControl.controlError(target, "input_unconfirmed")),
+          Effect.tapError(() => control.uncertain(target)),
+        ),
+      );
     },
   );
 

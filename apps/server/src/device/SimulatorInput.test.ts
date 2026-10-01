@@ -29,7 +29,7 @@ class HelperSocket extends EventTarget {
     this.closed = true;
   }
   reply(value: object) {
-    const frame = Buffer.concat([Buffer.from([18]), Buffer.from(JSON.stringify(value))]);
+    const frame = Buffer.concat([Buffer.from([254]), Buffer.from(JSON.stringify(value))]);
     this.dispatchEvent(new MessageEvent("message", { data: Uint8Array.from(frame).buffer }));
   }
 }
@@ -66,14 +66,17 @@ it.effect("uses the selected host's forwarded origin and waits for native acknow
     expect(socket.url.origin).toBe("ws://ssh-forward.test:40123");
     expect(socket.url.searchParams.get("device")).toBe("watch id");
     expect(done).toBe(false);
+    expect(socket.sent[0]?.[0]).toBe(126);
     expect(JSON.parse(Buffer.from(socket.sent[0]!).subarray(1).toString())).toEqual({
-      id: "input",
-      tag: 10,
-      payload: { delta: 5 },
+      id: 1,
+      packet: Buffer.concat([
+        Buffer.from([10]),
+        Buffer.from(JSON.stringify({ delta: 5 })),
+      ]).toString("base64"),
     });
-    socket.reply({ id: "different", ok: true });
+    socket.reply({ id: 2, ok: true });
     expect(done).toBe(false);
-    socket.reply({ id: "input", ok: true });
+    socket.reply({ id: 1, ok: true });
     yield* Fiber.join(pending);
     expect(socket.closed).toBe(true);
   }),
@@ -84,7 +87,7 @@ it.effect("surfaces helper failures and early closes instead of reporting input 
     vi.stubGlobal("WebSocket", HelperSocket);
     for (const mode of ["error", "close", "native"] as const) {
       HelperSocket.opened = (socket) => {
-        if (mode === "native") socket.reply({ id: "input", ok: false, error: "HID unavailable" });
+        if (mode === "native") socket.reply({ id: 1, ok: false, error: "HID unavailable" });
         else socket.dispatchEvent(new Event(mode));
       };
       const error = yield* sendSimulatorInput(ready, "tv", {

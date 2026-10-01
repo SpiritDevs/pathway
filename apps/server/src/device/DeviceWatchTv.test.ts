@@ -1,22 +1,36 @@
 // @effect-diagnostics preferSchemaOverJson:off - JSON represents the external simctl/helper fixture boundary.
 import { expect, it } from "@effect/vitest";
+import { afterEach, vi } from "vite-plus/test";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { managedSimulator } from "./managedSimulator.testkit.ts";
+import { sendSimulatorInput } from "./SimulatorInput.ts";
+import { makeAllToolkitsTestHandler } from "../mcp/McpHttpServer.ts";
+import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
+import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+
 import {
   LOCAL_DEVICE_HOST_ID,
   DEFAULT_SERVER_SETTINGS,
   ThreadId,
+  RunId,
+  EnvironmentId,
+  ProviderDriverKind,
+  ProviderInstanceId,
   type DeviceFamily,
   type DeviceInput,
   type DeviceSummary,
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
+import * as Scope from "effect/Scope";
+import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { DeviceHost, type DeviceHostReady } from "./DeviceHost.ts";
 import { DeviceControlCaller } from "./DeviceControl.ts";
-import { type DeviceService, makeWithHosts } from "./DeviceService.ts";
+import { DeviceService, makeWithHosts } from "./DeviceService.ts";
 
-const fixture = Effect.fn("watchTvFixture")(function* () {
+const fixture = Effect.fn("watchTvFixture")(function* (sendInput?: typeof sendSimulatorInput) {
   const commands: { host: string; args: ReadonlyArray<string> }[] = [];
   const requests: string[] = [];
   const inputs: { origin: string; id: string; input: DeviceInput }[] = [];
@@ -107,10 +121,11 @@ const fixture = Effect.fn("watchTvFixture")(function* () {
     undefined,
     undefined,
     undefined,
-    (ready, id, input) =>
-      Effect.sync(() => {
-        inputs.push({ origin: ready.hub.origin, id, input });
-      }),
+    sendInput ??
+      ((ready, id, input) =>
+        Effect.sync(() => {
+          inputs.push({ origin: ready.hub.origin, id, input });
+        })),
   ).pipe(
     Effect.provideService(
       HttpClient.HttpClient,
@@ -173,10 +188,15 @@ const settings = ServerSettingsService.of({
   streamChanges: Stream.empty,
   subscribeChanges: Effect.succeed(Stream.empty),
 });
-const test = <E>(body: (f: Effect.Success<ReturnType<typeof fixture>>) => Effect.Effect<void, E>) =>
+const test = <E>(
+  body: (f: Effect.Success<ReturnType<typeof fixture>>) => Effect.Effect<void, E, Scope.Scope>,
+  realInput = false,
+) =>
   Effect.gen(function* () {
-    yield* body(yield* fixture());
+    yield* body(yield* fixture(realInput ? sendSimulatorInput : undefined));
   }).pipe(Effect.provideService(ServerSettingsService, settings), Effect.scoped);
+
+afterEach(() => vi.unstubAllGlobals());
 
 const viewer = { kind: "viewer" as const, sessionId: "session" };
 
@@ -192,6 +212,20 @@ const controlledAction = (
     );
     return yield* service
       .action({ ...input, control: { viewerId: "viewer", generation: held.generation } })
+      .pipe(Effect.provideService(DeviceControlCaller, viewer));
+  });
+
+const controlledInput = (
+  service: DeviceService["Service"],
+  input: Parameters<DeviceService["Service"]["input"]>[0],
+) =>
+  Effect.gen(function* () {
+    const held = yield* service.control.acquire(
+      { hostId: input.hostId ?? LOCAL_DEVICE_HOST_ID, deviceId: input.deviceId },
+      { ...viewer, viewerId: "viewer" },
+    );
+    return yield* service
+      .input({ ...input, control: { viewerId: "viewer", generation: held.generation } })
       .pipe(Effect.provideService(DeviceControlCaller, viewer));
   });
 
@@ -338,12 +372,12 @@ it.effect("routes crown and Siri input to the host and rejects cross-family cont
         deviceId: "watch",
         platform: "ios",
       });
-      yield* f.service.input({
+      yield* controlledInput(f.service, {
         hostId: "ssh-mac",
         deviceId: "watch",
         input: { kind: "digitalCrown", delta: -10 },
       });
-      yield* f.service.input({
+      yield* controlledInput(f.service, {
         hostId: "ssh-mac",
         deviceId: "tv",
         input: { kind: "remoteButton", button: "playPause" },
@@ -357,7 +391,9 @@ it.effect("routes crown and Siri input to the host and rejects cross-family cont
         ["watch", { kind: "remoteButton", button: "home" }],
       ] as const) {
         expect(
-          (yield* f.service.input({ hostId: "ssh-mac", deviceId, input }).pipe(Effect.flip))._tag,
+          (yield* controlledInput(f.service, { hostId: "ssh-mac", deviceId, input }).pipe(
+            Effect.flip,
+          ))._tag,
         ).toBe("DeviceOperationError");
       }
       expect(f.inputs).toHaveLength(2);
@@ -409,7 +445,10 @@ it.effect("refuses input on a stopped target and respects another environment's 
         deviceId: "watch",
         platform: "ios",
       });
-      yield* f.service.input({ deviceId: "watch", input: { kind: "watchButton", button: "side" } });
+      yield* controlledInput(f.service, {
+        deviceId: "watch",
+        input: { kind: "watchButton", button: "side" },
+      });
       f.block("local:ios:watch");
       expect(
         (yield* f.service
@@ -454,5 +493,249 @@ it.effect(
         });
         expect(f.paired.get("ssh-mac")).toBe("phone");
       }),
+    ),
+);
+
+const controlledInputs = [
+  { kind: "digitalCrown", delta: -10 },
+  { kind: "watchButton", button: "side" },
+  { kind: "remoteButton", button: "playPause" },
+] as const;
+
+for (const input of controlledInputs) {
+  it.effect(
+    `${input.kind} RPC requires a current holder and completes through the managed helper`,
+    () =>
+      test(
+        (f) =>
+          Effect.gen(function* () {
+            const helper = managedSimulator();
+            vi.stubGlobal("WebSocket", helper.WebSocket);
+            const target = {
+              hostId: "ssh-mac",
+              deviceId: input.kind === "remoteButton" ? "tv" : "watch",
+            };
+            yield* f.service.open({
+              ...target,
+              threadId: ThreadId.make("thread"),
+              platform: "ios",
+            });
+            const held = yield* f.service.control.acquire(target, {
+              ...viewer,
+              viewerId: "holder",
+            });
+            const control = { viewerId: "holder", generation: held.generation };
+            const call = (proof: typeof control | undefined, sessionId = viewer.sessionId) =>
+              f.service
+                .input({
+                  ...target,
+                  input,
+                  ...(proof ? { control: proof } : {}),
+                })
+                .pipe(Effect.provideService(DeviceControlCaller, { kind: "viewer", sessionId }));
+            for (const [request, code] of [
+              [call(undefined), "control_required"],
+              [call({ ...control, viewerId: "non-holder" }), "control_held"],
+              [call(control, "another-session"), "control_held"],
+              [call({ ...control, generation: held.generation - 1 }), "stale_generation"],
+            ] as const) {
+              expect(yield* request.pipe(Effect.flip)).toMatchObject({
+                _tag: "DeviceControlError",
+                ...target,
+                code,
+              });
+            }
+            expect(helper.calls).toEqual([]);
+            yield* call(control);
+            expect(helper.calls).toHaveLength(1);
+            expect(helper.receipts[0]?.[0]).toBe(254);
+            expect(JSON.parse(helper.receipts[0]!.subarray(1).toString())).toEqual({
+              id: 1,
+              ok: true,
+            });
+            yield* f.service.control.acquire(target, { ...viewer, viewerId: "replacement" });
+            expect(yield* call(control).pipe(Effect.flip)).toMatchObject({
+              _tag: "DeviceControlError",
+              code: "stale_generation",
+            });
+            expect(helper.calls).toHaveLength(1);
+          }),
+        true,
+      ),
+  );
+}
+
+it.effect("the input RPC fences ownership when native completion fails", () =>
+  test(
+    (f) =>
+      Effect.gen(function* () {
+        const helper = managedSimulator();
+        helper.beforeInput(async () => {
+          throw Error("native unavailable");
+        });
+        vi.stubGlobal("WebSocket", helper.WebSocket);
+        yield* f.service.open({
+          threadId: ThreadId.make("thread"),
+          deviceId: "watch",
+          platform: "ios",
+        });
+        const error = yield* controlledInput(f.service, {
+          deviceId: "watch",
+          input: controlledInputs[0],
+        }).pipe(Effect.flip);
+        expect(error).toMatchObject({ _tag: "DeviceControlError", code: "input_unconfirmed" });
+        expect(
+          yield* f.service.control
+            .acquire({ hostId: "local", deviceId: "watch" }, { ...viewer, viewerId: "next" })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "DeviceControlError", code: "input_unconfirmed" });
+      }),
+    true,
+  ),
+);
+
+it.effect("MCP Crown, Watch button and TV remote derive control from the active run", () =>
+  test(
+    (f) =>
+      Effect.gen(function* () {
+        const helper = managedSimulator();
+        vi.stubGlobal("WebSocket", helper.WebSocket);
+        const invocation: McpInvocationScope = {
+          environmentId: EnvironmentId.make("test"),
+          threadId: ThreadId.make("thread"),
+          providerSessionId: "session",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          providerDriverKind: ProviderDriverKind.make("codex"),
+          capabilities: new Set(["device"]),
+          issuedAt: 1,
+        };
+        let run = RunId.make("run");
+        let active = true;
+        const handler = yield* makeAllToolkitsTestHandler.pipe(
+          Effect.provideService(DeviceService, f.service),
+          Effect.provideService(ProjectionStoreV2, {
+            getThreadProjection: () =>
+              Effect.sync(() => ({
+                runs: active
+                  ? [
+                      {
+                        id: run,
+                        status: "running",
+                        providerInstanceId: invocation.providerInstanceId,
+                      },
+                    ]
+                  : [],
+              })),
+          } as unknown as ProjectionStoreV2["Service"]),
+        );
+        const client = yield* Effect.acquireRelease(
+          Effect.promise(async () => {
+            const client = new Client(
+              { name: "watch-tv-control-test", version: "1.0.0" },
+              { capabilities: {}, versionNegotiation: { mode: "legacy" } },
+            );
+            await client.connect(
+              new StreamableHTTPClientTransport(new URL("http://device.test/mcp"), {
+                fetch: (url, init) =>
+                  handler.fetch(
+                    new Request(typeof url === "string" ? url : url.href, init),
+                    invocation,
+                  ),
+              }),
+            );
+            return client;
+          }),
+          (client) => Effect.promise(() => client.close()).pipe(Effect.orDie),
+        );
+        for (const input of controlledInputs) {
+          const target = {
+            hostId: "ssh-mac",
+            deviceId: input.kind === "remoteButton" ? "tv" : "watch",
+          };
+          yield* f.service.open({ ...target, threadId: invocation.threadId, platform: "ios" });
+          const call = () =>
+            Effect.promise(() =>
+              client.callTool({ name: "device_input", arguments: { ...target, input } }),
+            );
+          active = false;
+          const inactive = yield* call();
+          expect(inactive.isError).toBe(true);
+          expect(inactive.content).toEqual([
+            { type: "text", text: expect.stringContaining("active agent run") },
+          ]);
+          active = true;
+          const held = yield* f.service.control.acquire(target, { ...viewer, viewerId: "human" });
+          const denied = yield* call();
+          expect(denied.isError).toBe(true);
+          expect(denied.content).toEqual([
+            { type: "text", text: expect.stringContaining("Another viewer or agent run") },
+          ]);
+          yield* f.service.control.release({
+            ...target,
+            owner: { ...viewer, viewerId: "human" },
+            generation: held.generation,
+          });
+          const before = helper.calls.length;
+          expect((yield* call()).isError).toBe(false);
+          expect(helper.calls).toHaveLength(before + 1);
+          const ownerRun = run;
+          run = RunId.make("non-holder");
+          expect((yield* call()).isError).toBe(true);
+          run = ownerRun;
+          yield* f.service.control.stopRun(invocation.threadId, run);
+          expect((yield* call()).isError).toBe(true);
+          // A later run can acquire only after the old run has drained.
+          run = RunId.make(`${input.kind}-next`);
+          expect((yield* call()).isError).toBe(false);
+          yield* f.service.control.stopRun(invocation.threadId, run);
+          run = RunId.make(`${input.kind}-following`);
+        }
+        expect(helper.calls).toHaveLength(6);
+      }),
+    true,
+  ),
+);
+
+it.effect(
+  "viewer takeover drains an accepted Crown RPC before acknowledging the new generation",
+  () =>
+    test(
+      (f) =>
+        Effect.gen(function* () {
+          const helper = managedSimulator();
+          vi.stubGlobal("WebSocket", helper.WebSocket);
+          const started = Promise.withResolvers<void>();
+          const complete = Promise.withResolvers<void>();
+          helper.beforeInput(() => {
+            started.resolve();
+            return complete.promise;
+          });
+          const target = { hostId: "ssh-mac", deviceId: "watch" };
+          yield* f.service.open({ ...target, threadId: ThreadId.make("thread"), platform: "ios" });
+          const pending = yield* controlledInput(f.service, {
+            ...target,
+            input: controlledInputs[0],
+          }).pipe(Effect.forkChild);
+          yield* Effect.promise(() => started.promise);
+          let acquired = false;
+          const takeover = yield* f.service.control
+            .acquire(target, { ...viewer, viewerId: "replacement" })
+            .pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  acquired = true;
+                }),
+              ),
+              Effect.forkChild({ startImmediately: true }),
+            );
+          expect(acquired).toBe(false);
+          expect(
+            (yield* f.service.control.state).find((state) => state.deviceId === "watch")?.phase,
+          ).toBe("draining");
+          complete.resolve();
+          yield* Fiber.join(pending);
+          expect((yield* Fiber.join(takeover)).owner).toMatchObject({ viewerId: "replacement" });
+        }),
+      true,
     ),
 );

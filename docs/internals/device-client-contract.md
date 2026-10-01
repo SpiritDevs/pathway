@@ -22,7 +22,7 @@ omitting it from `device.close` matches all hosts in that thread.
 | `device.shutdown`      | `{ hostId?: string, deviceId: string, platform: "ios" \| "android" }`                           | void                                              | operate                        |
 | `device.detail`        | `{ hostId?: string, deviceId: string }`                                                         | `DeviceDetail`                                    | read                           |
 | `device.action`        | `{ hostId?: string, deviceId: string, ...action }`                                              | refreshed `DeviceDetail`                          | operate                        |
-| `device.input`         | `{ hostId?: string, deviceId: string, input: DeviceInput }`                                     | void (helper acknowledgement)                     | operate                        |
+| `device.input`         | `{ hostId?: string, deviceId: string, input: DeviceInput, control?: DeviceControlProof }`       | void (helper acknowledgement)                     | operate                        |
 | `subscribeDeviceState` | `{}`                                                                                            | stream of complete `DeviceServiceState` snapshots | read                           |
 
 Scopes are `orchestration:read` and `orchestration:operate`. `device.list({})`
@@ -240,7 +240,7 @@ a watcher, including Android's multiplexed media/input socket. Rejected input do
 not close that socket. The wire formats between clients and the environment stay
 the existing vendor formats; the iOS receipt extension is internal to the proxy.
 
-`device.action`, `device.shutdown`, and `device.close({ shutdown: true })` accept
+`device.input`, `device.action`, `device.shutdown`, and `device.close({ shutdown: true })` accept
 `control: { viewerId, generation }` and require a matching viewer lease. Closing a
 thread's device session without shutdown remains available to watchers. `device.open`
 still opens a viewing session and grants the viewer no control.
@@ -316,11 +316,18 @@ The current native capture supports TV, so its streaming capability is supported
 Older runtimes/toolchains can still fail to start capture or input; surface the
 operation failure, never substitute a placeholder stream.
 
-`device.input({ hostId, deviceId, input })` is an operate-scope RPC returning void
+`device.input({ hostId, deviceId, input, control: { viewerId, generation } })` is an operate-scope RPC returning void
 only after the helper acknowledges the input call. `createDeviceEnvironmentAtoms(...).input`
 uses the selected environment. Input targets must be booted and owned by that
-environment. Unsupported device/input combinations fail before invoking helpers.
-The same shape is available as the `device_input` MCP tool. This RPC targets
+environment. Viewer calls require the current control proof on every request, including
+Crown, Watch buttons and TV remote presses. The environment supplies the authenticated
+session ID. Missing proof returns `control_required`, a non-holder returns
+`control_held`, and a superseded generation returns `stale_generation`, under the
+same rules as touch. Unsupported device/input combinations fail before invoking helpers.
+The `device_input` MCP tool resolves its caller from the authenticated active thread/run,
+like the managed device CLI. Agents do not supply viewer proof. Existing control policy
+allows that run to acquire an idle device, denies another holder, and rejects stopped
+runs. Every accepted call participates in generation checks and handoff draining. This RPC targets
 Apple simulators; Android touch continues to use the existing serve-emu socket.
 
 ```ts
@@ -345,18 +352,31 @@ the viewer is focused; let text fields and other app shortcuts keep their keys.
 
 For continuous controls, reuse the existing authenticated helper WebSocket at
 `/vendor/serve-sim/helper/ws?device=...`, using the media-ticket rules above.
-`deviceSimulatorInputPacket(input)` produces the **inner** `{ tag, payload }`.
-Wrap it as one binary message: byte `0x12`, then UTF-8 JSON
-`{ id: "unique-request-id", ...deviceSimulatorInputPacket(input) }`. The helper
-responds on tag `0x12` with `{ id, ok, error? }`. Match ids, bound pending requests,
-and reject them when the socket closes. TV acknowledgements include a native service barrier. Watch acknowledgements
-currently mean the addon method returned; some native skip paths return normally.
-They do not prove dispatch or a rendered result. See the native follow-up in
-[the review report](watch-tv-review-fixes.md). TV's inner tag
-`0x13` is handled only inside this envelope. Never send TV input via the legacy
-raw `0x04` digitizer button path. Cancel input on disconnect/revocation and do not
-replay pending presses on reconnect. This uses the existing authenticated proxy
-and host selection; it introduces no client-visible helper address.
+Include `hostId`, `wsTicket`, `viewerId` and `controlGeneration` on the environment
+proxy URL, as for touch. Reconnect after acquiring a new generation. Do not put a
+proof inside an input frame.
+
+`deviceSimulatorInputPacket(input)` produces `{ tag, payload }`. Send the vendor
+frame directly: one byte `tag`, followed by UTF-8 `JSON.stringify(payload)`.
+
+- Crown: `0x0a` + `{"delta":-10}`.
+- Watch side: `0x04` + `{"page":12,"usage":149}`; Crown press uses usage `64`.
+- TV remote: `0x13` + `{"button":"select"}`. Only semantic button names are accepted;
+  the TV digitizer path remains blocked.
+
+The proxy owns completion tracking. Internally it sends `0x7e` followed by
+`{ id: <integer>, packet: <base64 vendor frame> }` and consumes the helper's
+`0xfe` receipt `{ id, ok }`. Neither envelope belongs in the client implementation.
+The previous Watch/TV `0x12` format is no longer used. A persistent socket does not
+return per-input receipts to the client; use `device.input` when the caller needs
+an acknowledged result. Do not wait for `0x12` replies.
+
+TV acknowledgements include a native service barrier. Watch acknowledgements mean
+the addon method returned; some native skip paths return normally. They do not prove
+dispatch or a rendered result. See [the review report](watch-tv-review-fixes.md).
+Cancel input on disconnect/revocation and do not replay presses on reconnect.
+All paths retain the authenticated environment proxy and selected host; no raw
+helper address is exposed.
 
 Pairing uses `device.action` (or the `device_action` MCP tool):
 

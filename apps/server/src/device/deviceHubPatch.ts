@@ -35,7 +35,7 @@ function patchDeviceHub(root) {
       text = replace(text, 'SimRuntime\\.(iOS|watchOS|visionOS|xrOS)-', 'SimRuntime\\.(iOS|watchOS|tvOS|visionOS|xrOS)-');
       const signature = file.endsWith('middleware.js') ? 'async handleHidMessage($,v){' : 'async handleHidMessage($,U){';
       const socket = file.endsWith('middleware.js') ? 'v' : 'U';
-      const handler = 'this.pathwayInput??=createPathwaySimulatorInput(this);return this.pathwayInput.handle($,'+socket+', (data,ws)=>this.pathwayLegacyHidMessage(data,ws));}async pathwayLegacyHidMessage($,'+socket+'){' ;
+      const handler = 'this.pathwayInput??=createPathwaySimulatorInput(this);return this.pathwayInput.handle($,'+socket+', (data,ws)=>this.pathwayLegacyHidMessage(data,ws),arguments[2]===true);}async pathwayLegacyHidMessage($,'+socket+'){' ;
       text = replace(text, signature, signature + handler);
       text = replace(text, 'this.phase="stopped"', 'this.pathwayInput?.close();this.pathwayTvInput?.close();this.phase="stopped"');
       const inputImport = 'import { createPathwaySimulatorInput } from "./pathway-simulator-input.mjs";\n';
