@@ -13,7 +13,7 @@ import {
 } from "react";
 import { RouterContextProvider, useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 
-import { getLocalStorageItem, useLocalStorage } from "../hooks/useLocalStorage";
+import { getLocalStorageItem } from "../hooks/useLocalStorage";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { cn } from "../lib/utils";
@@ -24,9 +24,8 @@ import { useThreadVisitedMigration } from "../hooks/useThreadVisitedMigration";
 import ThreadSidebar from "./Sidebar";
 import { ContextualSidebarHeader } from "./sidebar/ContextualSidebarHeader";
 import {
-  PRIMARY_NAVIGATION_EXPANDED_STORAGE_KEY,
+  PRIMARY_NAVIGATION_RAIL_WIDTH,
   PrimaryNavigationRail,
-  resolvePrimaryNavigationRailWidth,
 } from "./navigation/PrimaryNavigationRail";
 import { WorkspaceTopBar } from "./navigation/WorkspaceTopBar";
 import {
@@ -237,15 +236,8 @@ function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
   // Seeds server-side visited tracking from this browser's localStorage the
   useThreadVisitedMigration();
   const pathname = useLocation({ select: (location) => location.pathname });
-  const [isPrimaryNavigationExpanded, setPrimaryNavigationExpanded] = useLocalStorage(
-    PRIMARY_NAVIGATION_EXPANDED_STORAGE_KEY,
-    false,
-    Schema.Boolean,
-  );
   const shellStyle = {
-    "--primary-navigation-rail-width": isChildWindow
-      ? "0px"
-      : resolvePrimaryNavigationRailWidth(isPrimaryNavigationExpanded),
+    "--primary-navigation-rail-width": isChildWindow ? "0px" : PRIMARY_NAVIGATION_RAIL_WIDTH,
   } as CSSProperties;
 
   useEffect(() => {
@@ -273,12 +265,7 @@ function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
       <ThreadQueueRuntime />
       <ProviderUpdateCheckCoordinator />
       <ProjectProjectionRetention />
-      {isChildWindow ? null : (
-        <PrimaryNavigationRail
-          expanded={isPrimaryNavigationExpanded}
-          onExpandedChange={setPrimaryNavigationExpanded}
-        />
-      )}
+      {isChildWindow ? null : <PrimaryNavigationRail />}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-workspace-frame dark:surface-grain">
         <WorkspaceTopBar />
         <div

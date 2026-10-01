@@ -3,11 +3,8 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   formatNavigationBadgeCount,
   movePrimaryNavigationDestination,
-  PRIMARY_NAVIGATION_COMPACT_WIDTH,
-  PRIMARY_NAVIGATION_EXPANDED_WIDTH,
   PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS,
   resolvePrimaryNavigationDestination,
-  resolvePrimaryNavigationRailWidth,
   resolvePrimaryNavigationViewOrder,
   resolvePinnedPrimaryNavigationDestinations,
   resolveRememberedThreadRoute,
@@ -68,16 +65,6 @@ describe("resolvePrimaryNavigationDestination", () => {
     ["/settings/connections", "settings"],
   ] as const)("maps %s to %s", (pathname, destination) => {
     expect(resolvePrimaryNavigationDestination(pathname)).toBe(destination);
-  });
-});
-
-describe("resolvePrimaryNavigationRailWidth", () => {
-  it("uses the compact width when minimized", () => {
-    expect(resolvePrimaryNavigationRailWidth(false)).toBe(PRIMARY_NAVIGATION_COMPACT_WIDTH);
-  });
-
-  it("uses the expanded width when labels are visible", () => {
-    expect(resolvePrimaryNavigationRailWidth(true)).toBe(PRIMARY_NAVIGATION_EXPANDED_WIDTH);
   });
 });
 

@@ -25,7 +25,8 @@ interface ChatHeaderProps {
   activeProjectRef: ScopedProjectRef | null;
   projectSelectionEnabled: boolean;
   threadAncestors: ReadonlyArray<ThreadBreadcrumbAncestor>;
-  rightPanelOpen: boolean;
+  /** Only the thread details toggle shares the header (the other panel toggles live elsewhere). */
+  compactTitlebarControls: boolean;
   retentionControlVisible?: boolean;
   temporary?: boolean;
   onSelectConversation?: () => void;
@@ -123,7 +124,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeProjectRef,
   projectSelectionEnabled,
   threadAncestors,
-  rightPanelOpen,
+  compactTitlebarControls,
   onProjectChange,
   onOpenThread,
   onRenameThread,
@@ -180,10 +181,10 @@ export const ChatHeader = memo(function ChatHeader({
       className={cn(
         "flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
         retentionControlVisible
-          ? rightPanelOpen
+          ? compactTitlebarControls
             ? "pr-40"
             : "pr-52"
-          : rightPanelOpen
+          : compactTitlebarControls
             ? "pr-10"
             : "pr-24",
       )}

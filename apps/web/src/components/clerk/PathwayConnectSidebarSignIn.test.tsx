@@ -96,6 +96,7 @@ describe("PathwayConnectProfileButton", () => {
     expect(markup).toContain("corey@example.test");
     expect(markup).toContain("Provider usage");
     expect(markup).toContain("Connected provider limits");
+    expect(markup).toContain("Settings");
     expect(markup).toContain("Manage account");
     expect(markup).toContain("Sign out");
     expect(markup).not.toContain("cl-userButton");

@@ -10,6 +10,7 @@ import {
   PREVIEW_PANEL_MIN_WIDTH,
   PREVIEW_PANEL_WIDTH_STORAGE_KEY,
 } from "./preview/PreviewPanelShell";
+import { isInWorkspaceTopBarActions } from "./navigation/WorkspaceTopBar";
 import { RightPanelResizeHandle } from "./preview/RightPanelResizeHandle";
 import { Sheet, SheetPopup } from "./ui/sheet";
 
@@ -86,10 +87,17 @@ export function RightPanelSheet(props: {
   return (
     <Sheet
       open={props.open}
-      onOpenChange={(open) => {
-        if (!open) {
-          props.onClose();
+      onOpenChange={(open, eventDetails) => {
+        if (open) return;
+        // The top bar's panel toggles sit above the overlay and act on the sheet themselves.
+        if (
+          eventDetails.reason === "outside-press" &&
+          isInWorkspaceTopBarActions(eventDetails.event.target)
+        ) {
+          eventDetails.cancel();
+          return;
         }
+        props.onClose();
       }}
     >
       <SheetPopup

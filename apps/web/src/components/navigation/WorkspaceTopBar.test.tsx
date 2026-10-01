@@ -26,52 +26,21 @@ vi.mock("../ui/menu", () => ({
   MenuPopup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
-vi.mock("../clerk/PathwayConnectSidebarSignIn", () => ({
-  PathwayConnectProfileButton: () => <button data-testid="profile-button">Profile</button>,
-}));
-
-vi.mock("../ProviderUpdateLaunchNotification", () => ({
-  ProviderUpdateLaunchNotification: () => (
-    <button data-testid="provider-update-notice">Update Claude</button>
-  ),
-}));
-
-vi.mock("../timeTracker/TimeTrackerIndicator", () => ({
-  TimeTrackerIndicator: () => <button data-testid="time-tracker">Timers</button>,
-}));
-
-vi.mock("./StorageStatusIndicator", () => ({
-  StorageStatusIndicator: () => <button data-testid="storage-status">Storage</button>,
-}));
-
-vi.mock("./SyncStatusIndicator", () => ({
-  SyncStatusIndicator: () => <span data-testid="sync-status">Sync</span>,
-}));
-
 import { WorkspaceTopBar } from "./WorkspaceTopBar";
 
 describe("WorkspaceTopBar", () => {
-  it("keeps the Clerk profile control visible at the top right of desktop workspaces", () => {
+  it("holds only history navigation; account and status controls live in the rail", () => {
     const markup = renderToStaticMarkup(<WorkspaceTopBar />);
 
     expect(markup).toContain('data-workspace-top-bar=""');
-    expect(markup).not.toContain('data-testid="provider-update-notice"');
-    expect(markup).toContain('data-testid="profile-button"');
-    expect(markup).toContain('data-testid="time-tracker"');
-    expect(markup).toContain('data-testid="storage-status"');
-    expect(markup).toContain('data-testid="sync-status"');
-    expect(markup.indexOf('data-testid="time-tracker"')).toBeLessThan(
-      markup.indexOf('data-testid="profile-button"'),
-    );
-    // History controls sit on the left, so the bar spreads its two children and
-    // the profile button lands at the right edge.
+    expect(markup).not.toContain("Open profile menu");
+    expect(markup).not.toContain('aria-label="Environment storage"');
     expect(markup).toContain('aria-label="History navigation"');
     expect(markup).toContain('aria-label="Back"');
     expect(markup).toContain('aria-label="Forward"');
     expect(markup).not.toContain("Back history");
     expect(markup).not.toContain("Forward history");
     expect(markup.match(/disabled=""/g)).toHaveLength(2);
-    expect(markup).toContain("justify-between");
     expect(markup).toContain("pr-4");
     expect(markup).toContain("md:flex");
   });

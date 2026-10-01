@@ -21,6 +21,7 @@ import {
   RefreshCwIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import {
   filterPullRequestsByInvolvement,
@@ -61,6 +62,7 @@ import {
   sourceControlProjectEntries,
 } from "../components/sourceControl/sourceControlSidebar.logic";
 import { InlineRightPanelPortal } from "../components/preview/InlineRightPanelPresence";
+import { useWorkspaceTopBarActionsHost } from "../components/navigation/WorkspaceTopBar";
 import { RightPanelSheet } from "../components/RightPanelSheet";
 import { RightPanelTabs, type PullRequestTabStatus } from "../components/RightPanelTabs";
 import {
@@ -268,6 +270,7 @@ function PullRequestsRouteView() {
   const [rightPanelPoppedOut, setRightPanelPoppedOut] = useState(false);
   const viewportRequiresRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const narrowPane = useIsNarrowPane();
+  const workspaceTopBarActionsHost = useWorkspaceTopBarActionsHost(pullRequestsSupported);
   const shouldUseRightPanelSheet = viewportRequiresRightPanelSheet || narrowPane;
   const desktopRightPanelPoppedOut = rightPanelPoppedOut && !shouldUseRightPanelSheet;
   const rightPanelUsesSheet = shouldPresentRightPanelAsSheet({
@@ -1025,8 +1028,13 @@ function PullRequestsRouteView() {
       onChange={(query) => updateSearch({ q: query || undefined })}
     />
   );
-  const panelToggleControls = (
+  const renderPanelToggleControls = (
+    panelTogglesInTopBar: boolean,
+    rightPanelDocked = rightPanelState.isOpen,
+    onToggleRightPanel = toggleRightPanel,
+  ) => (
     <PanelLayoutControls
+      showRightPanelControl={!panelTogglesInTopBar}
       showTerminalControl={false}
       showThreadPanelControl={false}
       terminalAvailable={false}
@@ -1038,19 +1046,21 @@ function PullRequestsRouteView() {
       threadPanelHasAttention={false}
       onToggleThreadPanel={() => undefined}
       rightPanelAvailable={rightPanelState.surfaces.length > 0}
-      rightPanelOpen={rightPanelState.isOpen}
+      rightPanelOpen={rightPanelDocked}
       rightPanelShortcutLabel={null}
       liveAgentCount={0}
       onToggleTerminal={() => undefined}
-      onToggleRightPanel={toggleRightPanel}
+      onToggleRightPanel={onToggleRightPanel}
     />
   );
+  // The sheet covers the page, so it keeps its own right panel toggle.
+  const panelToggleControls = renderPanelToggleControls(false);
   const openPanelControls = (
     <div className="workspace-titlebar-controls z-50 mr-px gap-1 [-webkit-app-region:no-drag]">
-      {rightPanelState.isOpen && !rightPanelUsesSheet ? (
+      {rightPanelState.isOpen && !rightPanelUsesSheet && workspaceTopBarActionsHost === null ? (
         <RightPanelPopOutControl poppedOut={false} onToggle={toggleRightPanelPoppedOut} />
       ) : null}
-      {panelToggleControls}
+      {renderPanelToggleControls(workspaceTopBarActionsHost !== null)}
     </div>
   );
   const poppedOutPanelControls = (
@@ -1351,6 +1361,28 @@ function PullRequestsRouteView() {
           }}
         />
       ) : null}
+      {workspaceTopBarActionsHost
+        ? createPortal(
+            <>
+              {rightPanelState.isOpen && (!rightPanelUsesSheet || desktopRightPanelPoppedOut) ? (
+                <RightPanelPopOutControl
+                  poppedOut={desktopRightPanelPoppedOut}
+                  onToggle={
+                    desktopRightPanelPoppedOut ? toggleRightPanel : toggleRightPanelPoppedOut
+                  }
+                  hidesWhenPoppedOut
+                />
+              ) : null}
+              {/* Docked and popped out are exclusive: only the current mode's toggle is pressed. */}
+              {renderPanelToggleControls(
+                false,
+                rightPanelState.isOpen && !desktopRightPanelPoppedOut,
+                desktopRightPanelPoppedOut ? toggleRightPanelPoppedOut : toggleRightPanel,
+              )}
+            </>,
+            workspaceTopBarActionsHost,
+          )
+        : null}
       <div className="relative flex min-h-0 flex-1">
         {pullRequestsSupported && rightPanelState.isOpen ? openPanelControls : null}
         <PullRequestsColumn {...columnProps} />
@@ -1372,7 +1404,12 @@ function PullRequestsRouteView() {
           >
             {renderPullRequestPanel(
               "sheet",
-              desktopRightPanelPoppedOut ? poppedOutPanelControls : panelToggleControls,
+              // With the top bar showing, the dock and right panel toggles stay in its corner.
+              desktopRightPanelPoppedOut
+                ? workspaceTopBarActionsHost === null
+                  ? poppedOutPanelControls
+                  : null
+                : panelToggleControls,
             )}
           </RightPanelSheet>
         ) : null}

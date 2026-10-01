@@ -95,7 +95,7 @@ function ConfiguredPathwayConnectProfileButton() {
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label={`Open profile menu for ${displayName}`}
-          className="rounded-lg p-1 outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring data-popup-open:bg-sidebar-row-hover"
+          className="rounded-full p-0.5 outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring data-popup-open:bg-sidebar-row-hover"
         >
           <img
             alt={`${displayName}'s profile image`}
@@ -105,7 +105,7 @@ function ConfiguredPathwayConnectProfileButton() {
             title={displayName}
           />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-64" sideOffset={6}>
+        <DropdownMenuContent align="end" className="w-64" side="right" sideOffset={10}>
           <div className="flex min-w-0 items-center gap-3 px-2 py-2">
             <img
               alt=""
@@ -200,6 +200,10 @@ function ConfiguredPathwayConnectProfileButton() {
               <ConnectedProviderUsageMenu onRequestRedeem={setResetSelection} />
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+          <DropdownMenuItem onClick={() => void navigate({ to: "/settings" })}>
+            <SettingsIcon />
+            <span>Settings</span>
+          </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() =>
               openUserProfile(

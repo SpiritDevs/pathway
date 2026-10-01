@@ -127,7 +127,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { useNavigate } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -203,6 +203,7 @@ import { useTheme } from "../hooks/useTheme";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useWorkspaceTopBarActionsHost } from "./navigation/WorkspaceTopBar";
 import { useElementWidth } from "../hooks/useElementWidth";
 import { usePreviewPanelInlineSize } from "../hooks/usePreviewPanelInlineSize";
 import {
@@ -645,6 +646,9 @@ const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
   '[contenteditable="true"]',
   '[contenteditable="plaintext-only"]',
   '[role="textbox"]',
+  // The desktop preview's annotation editor lives in a closed shadow root, so its
+  // textarea surfaces here only as this host element.
+  "[data-pathway-annotation-ui]",
 ].join(",");
 const TYPE_TO_FOCUS_INTERACTIVE_SELECTOR = [
   "button",
@@ -1862,6 +1866,7 @@ function ChatViewContent(props: ChatViewProps) {
   const splitWindow = useIsSplitWindow();
   const viewportRequiresRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const narrowPane = useIsNarrowPane();
+  const workspaceTopBarActionsHost = useWorkspaceTopBarActionsHost(!isPanelPresentation);
   const shouldUseRightPanelSheet = viewportRequiresRightPanelSheet || narrowPane;
   // The shell's terminal hosts sit below the whole pane row, so a split window
   // keeps each pane's terminal inside its own page.
@@ -9985,7 +9990,8 @@ function ChatViewContent(props: ChatViewProps) {
       : {}),
     threadPanelShortcutLabel: shortcutLabelForCommand(keybindings, "threadPanel.toggle"),
     threadPanelHasAttention: activeEnvironmentUnavailableState !== null,
-    rightPanelAvailable: activeWorkspaceRoot !== undefined,
+    // Browser, agents and side chat need no workspace; the launcher disables the rest.
+    rightPanelAvailable: activeThreadRef !== null,
     rightPanelOpen,
     rightPanelShortcutLabel: shortcutLabelForCommand(keybindings, "rightPanel.toggle"),
     // Suppressed while the Agents surface is visible: the roster itself is
@@ -9996,14 +10002,43 @@ function ChatViewContent(props: ChatViewProps) {
     onToggleThreadPanel: toggleThreadPanel,
     onToggleRightPanel: toggleRightPanel,
   } satisfies PanelLayoutControlsProps;
-  const panelToggleControls = (
+  const renderPanelToggleControls = (panelTogglesInTopBar: boolean) => (
     <PanelLayoutControls
       {...panelToggleControlProps}
       settleAfterCompletionActive={activeThreadSettleAfterCompletion}
       onCancelSettleAfterCompletion={() => void handleCancelSettleAfterCompletion()}
       showThreadPanelControl={!inlineRightPanelOwnsTitleBar}
+      showTerminalControl={!panelTogglesInTopBar}
+      showRightPanelControl={!panelTogglesInTopBar}
     />
   );
+  const panelToggleControls = renderPanelToggleControls(workspaceTopBarActionsHost !== null);
+  // The right panel's controls sit in the window's top-right corner while the top bar is
+  // showing, and the terminal drawer is left to its shortcut; the thread header keeps the
+  // thread-scoped controls.
+  const workspaceTopBarPanelToggles = workspaceTopBarActionsHost
+    ? createPortal(
+        <>
+          {canPopOutRightPanel ? (
+            <RightPanelPopOutControl
+              poppedOut={rightPanelPoppedOut}
+              onToggle={rightPanelPoppedOut ? closePreviewPanel : toggleRightPanelPoppedOut}
+              hidesWhenPoppedOut
+            />
+          ) : null}
+          {/* Docked and popped out are exclusive here: only the current mode's toggle is
+              pressed, pressing it hides the panel, and pressing the other switches mode. */}
+          <PanelLayoutControls
+            {...panelToggleControlProps}
+            rightPanelOpen={rightPanelOpen && !rightPanelPoppedOut}
+            onToggleRightPanel={rightPanelPoppedOut ? toggleRightPanelPoppedOut : toggleRightPanel}
+            showThreadPanelControl={false}
+            showTerminalControl={false}
+          />
+        </>,
+        workspaceTopBarActionsHost,
+      )
+    : null;
   const threadPanelHeaderControl = (
     <div className="workspace-titlebar-controls z-50 [-webkit-app-region:no-drag]">
       <PanelLayoutControls
@@ -10022,16 +10057,22 @@ function ChatViewContent(props: ChatViewProps) {
           : "workspace-titlebar-controls mr-px",
       )}
     >
-      {rightPanelOpen && !rightPanelUsesSheet ? (
+      {rightPanelOpen && !rightPanelUsesSheet && workspaceTopBarActionsHost === null ? (
         <RightPanelPopOutControl poppedOut={false} onToggle={toggleRightPanelPoppedOut} />
       ) : null}
       {panelToggleControls}
     </div>
   );
-  const poppedOutRightPanelControls = (
+  // The sheet covers the page, so it keeps every toggle rather than leaning on the top bar.
+  const sheetPanelToggleControls = renderPanelToggleControls(false);
+  // With the top bar showing, the dock and right panel toggles stay put in its corner and
+  // the popped-out panel keeps only the thread controls the hidden header would show.
+  const poppedOutRightPanelControls = workspaceTopBarActionsHost ? (
+    panelToggleControls
+  ) : (
     <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
       <RightPanelPopOutControl poppedOut onToggle={toggleRightPanelPoppedOut} />
-      {panelToggleControls}
+      {sheetPanelToggleControls}
     </div>
   );
   const sideChatThreadPanelControl = isPanelPresentation ? (
@@ -10058,6 +10099,7 @@ function ChatViewContent(props: ChatViewProps) {
       data-side-chat-surface={isPanelPresentation ? "true" : undefined}
     >
       {sideChatThreadPanelControl}
+      {workspaceTopBarPanelToggles}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden">
         {/* Top bar */}
         {!isPanelPresentation ? (
@@ -10096,7 +10138,9 @@ function ChatViewContent(props: ChatViewProps) {
                 ? { onSelectConversation: handleSelectConversation }
                 : {})}
               threadAncestors={threadBreadcrumbAncestors}
-              rightPanelOpen={inlineRightPanelOwnsTitleBar}
+              compactTitlebarControls={
+                inlineRightPanelOwnsTitleBar || workspaceTopBarActionsHost !== null
+              }
               onProjectChange={handleHeaderProjectChange}
               onOpenThread={onOpenRelatedThread}
               {...(isServerThread ? { onRenameThread: handleRenameActiveThread } : {})}
@@ -10762,7 +10806,7 @@ function ChatViewContent(props: ChatViewProps) {
             // the sheet opens.
             layoutControls={
               <div className="mr-px flex items-center">
-                {rightPanelPoppedOut ? poppedOutRightPanelControls : panelToggleControls}
+                {rightPanelPoppedOut ? poppedOutRightPanelControls : sheetPanelToggleControls}
               </div>
             }
             surfaces={rightPanelState.surfaces}
