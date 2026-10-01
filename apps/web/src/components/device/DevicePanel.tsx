@@ -23,6 +23,8 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { DeviceLoadingView } from "./DeviceLoadingView";
 import { DeviceSetup } from "./DeviceSetup";
 import { DeviceWorkspace } from "./DeviceWorkspace";
+import { shouldOfferXcodeSetup } from "./deviceXcodeSetup.logic";
+import { useXcodeHost, XcodeSetupFlow } from "../xcode/XcodeSetup";
 import { PreviewPanelShell, type PreviewPanelMode } from "../preview/PreviewPanelShell";
 
 const platformLabel = (platform: DevicePlatform) =>
@@ -141,6 +143,9 @@ export function DevicePanel(props: {
     Object.values(state.hostStatuses).some(
       (host) => host.status === "installing" || host.status === "starting",
     );
+  const xcodeHost = useXcodeHost(environmentId);
+  // Setup sits above the list so Android devices stay reachable while Xcode installs.
+  const offerXcode = loaded && !hostBusy && shouldOfferXcodeSetup(state, xcodeHost.support);
   const unavailablePlatforms = state.hosts.flatMap((host) =>
     host.platforms
       .filter((platform) => !platform.available)
@@ -238,13 +243,23 @@ export function DevicePanel(props: {
           />
         ) : (
           <div className="flex size-full flex-col overflow-y-auto px-5 py-8 text-sm text-muted-foreground">
+            {offerXcode ? (
+              <div className="mb-6 text-foreground">
+                <XcodeSetupFlow
+                  environmentId={environmentId}
+                  visible={props.visible && pageVisible}
+                  // Re-inventory once Xcode is usable; simulators then replace this setup.
+                  onReady={() => void list({ environmentId, input: {} })}
+                />
+              </div>
+            ) : null}
             <div
               className={cn(
                 "mx-auto flex w-full max-w-xl flex-col gap-6",
                 grouped.length === 0 && "my-auto items-center text-center",
               )}
             >
-              {grouped.length === 0 ? (
+              {grouped.length === 0 && !offerXcode ? (
                 <>
                   <Smartphone className="size-6 opacity-60" />
                   <p className="max-w-sm">
