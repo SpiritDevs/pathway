@@ -215,6 +215,33 @@ actor PathwayConnectClient {
 
     // swiftlint:enable opening_brace
 
+    /// A fresh `wsTicket` minted with `connection`'s access token, so the socket it opens belongs to the
+    /// same authenticated environment session. Every `prepare` through Pathway Connect opens a new session.
+    func refreshingTicket(_ connection: PathwayPreparedEnvironmentConnection) async throws -> PathwayPreparedEnvironmentConnection {
+        let target = endpoint(connection.httpBaseURL, path: ["api", "auth", "websocket-ticket"])
+        let proof = try await signer.proof(method: "POST", url: target, accessToken: connection.accessToken)
+        guard proof.thumbprint == connection.proofKeyThumbprint else { throw PathwayConnectError.invalidProofKey }
+        var request = URLRequest(url: target)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("DPoP \(connection.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(proof.value, forHTTPHeaderField: "DPoP")
+        let ticket: PathwayWebSocketTicket = try await send(request, as: PathwayWebSocketTicket.self)
+        guard var components = URLComponents(url: connection.webSocketURL, resolvingAgainstBaseURL: false) else {
+            throw PathwayConnectError.invalidURL
+        }
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "wsTicket" }
+        queryItems.append(URLQueryItem(name: "wsTicket", value: ticket.ticket))
+        components.queryItems = queryItems
+        guard let socketURL = components.url else { throw PathwayConnectError.invalidURL }
+        return PathwayPreparedEnvironmentConnection(
+            environmentID: connection.environmentID, label: connection.label, httpBaseURL: connection.httpBaseURL,
+            webSocketURL: socketURL, accessToken: connection.accessToken, proofKeyThumbprint: connection.proofKeyThumbprint,
+            scopes: connection.scopes, ticketExpiresAt: ticket.expiresAt.flatMap(pathwayDate(from:))
+        )
+    }
+
     func authenticatedRequest(environment: PathwayCompanyEnvironment, method: String, path: String) async throws -> URLRequest {
         let connection = try await prepare(environment: environment)
         guard let url = URL(string: path, relativeTo: connection.httpBaseURL)?.absoluteURL,

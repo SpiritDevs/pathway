@@ -98,15 +98,20 @@ struct PathwayDevicesTests {
         #expect(try resolve([control(5, "held", owner: agent)], lease: control(4, "held", owner: viewer("me"))) == .agent)
         #expect(try resolve([control(4, "held", owner: viewer("me"), device: "UDID-2")],
                             lease: control(4, "held", owner: viewer("me"), device: "UDID-2")) == .nobody)
-        let all: [PathwayDeviceControl] = [.unknown, .taking, .you, .agent, .viewer, .nobody, .finishing, .idle]
-        #expect(all.filter { $0.acceptsInput } == [.you, .idle])
+        let all: [PathwayDeviceControl] = [.unknown, .taking, .you, .agent, .viewer, .nobody, .finishing, .unsupported]
+        #expect(all.filter { $0.acceptsInput } == [.you])
     }
 
-    @Test func environmentsWithoutLeasesWatchWhileTheAgentRuns() {
-        #expect(PathwayDeviceControl.unleased(runStateKnown: false, activeRunID: nil) == .unknown)
-        #expect(PathwayDeviceControl.unleased(runStateKnown: true, activeRunID: "run-1") == .agent)
-        #expect(PathwayDeviceControl.unleased(runStateKnown: true, activeRunID: nil) == .idle)
-        #expect(!PathwayDeviceControl.idle.canTake)
+    @Test func environmentsWithoutLeasesOnlyWatch() throws {
+        let unleased = try #require(state(sessions: [session("thread-1", device: "UDID-1", openedAt: "2026-01-01T00:00:00Z")]))
+        #expect(!unleased.supportsDeviceControl)
+        let held = PathwayDeviceControlState(control(4, "held", owner: viewer("me")))
+        for acquiring in [false, true] {
+            #expect(PathwayDeviceControl.resolve(unleased, hostID: "local", deviceID: "UDID-1", viewerID: "me",
+                                                 lease: held, acquiring: acquiring) == .unsupported)
+        }
+        #expect(!PathwayDeviceControl.unsupported.acceptsInput)
+        #expect(!PathwayDeviceControl.unsupported.canTake)
     }
 
     @Test func explainsEachControlRefusal() {
@@ -120,7 +125,7 @@ struct PathwayDevicesTests {
 
     @Test func leaseRenewsOnItsConnectionAndReleasesBeforeClosingIt() async throws {
         let server = FakeDeviceControlServer()
-        let lease = PathwayDeviceControlLease { server.connection() }
+        let lease = server.lease()
         server.respond = { tag, _ in
             switch tag {
             case "device.releaseControl": self.control(8, "idle")
@@ -143,25 +148,140 @@ struct PathwayDevicesTests {
 
     @Test func aRefusedRenewalEndsTheLease() async throws {
         let server = FakeDeviceControlServer()
-        let lease = PathwayDeviceControlLease { server.connection() }
+        let lease = server.lease()
         server.respond = { _, _ in self.control(7, "held", owner: self.viewer(lease.viewerID)) }
         try await lease.acquire(hostID: "local", deviceID: "UDID-1")
         server.respond = { _, _ in throw PathwayRPCError.deviceControl(code: "stale_generation", message: "") }
         await lease.renew()
         #expect(lease.proof == nil)
         #expect(server.closed == 1)
+        #expect(lease.notice == PathwayDeviceControl.message(for: PathwayRPCError.deviceControl(code: "stale_generation", message: "")))
         // Nothing is held, so release has nothing to send.
         try await lease.release()
         #expect(server.calls.count == 2)
     }
 
+    @Test func losingTheConnectionEndsTheLease() async throws {
+        let server = FakeDeviceControlServer()
+        let lease = server.lease()
+        server.respond = { _, _ in self.control(7, "held", owner: self.viewer(lease.viewerID)) }
+        try await lease.acquire(hostID: "local", deviceID: "UDID-1")
+        // A renewal that can't reach the environment is not transient: the socket's leases are gone.
+        server.respond = { _, _ in throw PathwayRPCError.disconnected }
+        await lease.renew()
+        #expect(lease.proof == nil)
+        #expect(lease.notice == PathwayDeviceControl.lostConnectionMessage)
+
+        // A socket that closes on its own ends the lease without any request failing.
+        lease.notice = nil
+        server.respond = { _, _ in self.control(9, "held", owner: self.viewer(lease.viewerID)) }
+        try await lease.acquire(hostID: "local", deviceID: "UDID-1")
+        #expect(lease.proof?.generation == 9)
+        server.dropSocket()
+        while lease.proof != nil { await Task.yield() }
+        #expect(lease.notice == PathwayDeviceControl.lostConnectionMessage)
+        #expect(lease.target == nil)
+
+        // Device state that stops being live ends it too.
+        try await lease.acquire(hostID: "local", deviceID: "UDID-1")
+        await lease.invalidate()
+        #expect(lease.proof == nil)
+        await server.waitUntilClosed(3)
+    }
+
+    @Test func releasingWhileTakingControlHandsTheLateGrantBack() async throws {
+        let server = FakeDeviceControlServer()
+        let lease = server.lease()
+        server.holdsAcquire = true
+        server.respond = { tag, _ in
+            tag == "device.releaseControl" ? self.control(8, "idle") : self.control(7, "held", owner: self.viewer(lease.viewerID))
+        }
+        let taking = Task { try await lease.acquire(hostID: "local", deviceID: "UDID-1") }
+        await server.waitUntilAcquiring()
+        #expect(lease.acquiring)
+        #expect(lease.target == .init(hostID: "local", deviceID: "UDID-1"))
+        // The viewer is hidden or switches devices while the previous owner's input finishes.
+        try await lease.release()
+        #expect(!lease.acquiring)
+        #expect(lease.target == nil)
+        server.grant()
+        try await taking.value
+        #expect(lease.proof == nil)
+        #expect(server.calls.map(\.0) == ["device.acquireControl", "device.releaseControl"])
+        #expect(server.calls[1].1.objectValue?["generation"] == .number(7))
+        #expect(server.closed == 1)
+    }
+
+    @Test func aRefusedReleaseIsNotAHandBack() async throws {
+        let server = FakeDeviceControlServer()
+        let lease = server.lease()
+        server.respond = { _, _ in self.control(7, "held", owner: self.viewer(lease.viewerID)) }
+        try await lease.acquire(hostID: "local", deviceID: "UDID-1")
+        server.respond = { _, _ in throw PathwayRPCError.deviceControl(code: "input_unconfirmed", message: "") }
+        do {
+            try await lease.release()
+            Issue.record("The refused release was reported as acknowledged.")
+        } catch {
+            #expect(PathwayDeviceControl.needsToolRestart(error))
+        }
+        // Input stops either way.
+        #expect(lease.proof == nil)
+        await server.waitUntilClosed(1)
+    }
+
+    @Test func mutationsAndStreamTicketsUseTheLeasesSession() async throws {
+        let server = FakeDeviceControlServer()
+        let lease = server.lease()
+        // Without a lease, mutations are refused locally and the stream watches on its own session.
+        await #expect(throws: PathwayRPCError.self) { try await lease.request("device.close", [:]) }
+        #expect(try await lease.ticketed().accessToken == "watching")
+        server.respond = { _, _ in self.control(7, "held", owner: self.viewer(lease.viewerID)) }
+        try await lease.acquire(hostID: "local", deviceID: "UDID-1")
+        #expect(try await lease.ticketed().accessToken == "lease")
+        _ = try await lease.request("device.close", ["hostId": .string("local"), "deviceId": .string("UDID-1")])
+        #expect(server.calls.last?.0 == "device.close")
+        #expect(server.calls.last?.1.objectValue?["control"] == PathwayDeviceControlProof(viewerID: lease.viewerID, generation: 7).json)
+        #expect(server.opened == 1)
+
+        // A session that can no longer mint tickets ends the lease.
+        server.ticketFails = true
+        await #expect(throws: PathwayConnectError.self) { try await lease.ticketed() }
+        #expect(lease.proof == nil)
+        #expect(lease.notice == PathwayDeviceControl.lostConnectionMessage)
+    }
+
+    @Test func aSessionOpensOnceAndRefreshesTicketsWithinIt() async throws {
+        let counter = DeviceSessionCounter()
+        let session = PathwayDeviceEnvironmentSession(
+            open: { await counter.open() },
+            refresh: { connection in await counter.refresh(connection) }
+        )
+        async let first = session.ticketed()
+        async let second = session.ticketed()
+        let tickets = try await [first, second].map(\.webSocketURL.query)
+        let third = try await session.ticketed()
+        #expect(await counter.opened == 1)
+        #expect(Set(tickets) == ["wsTicket=opened", "wsTicket=refreshed-1"])
+        #expect(third.webSocketURL.query == "wsTicket=refreshed-2")
+        #expect(third.accessToken == "session-token")
+    }
+
     @Test func aNewGrantReconnectsTheStreamWithItsProof() async {
-        let controller = PathwayDeviceStreamController { self.prepared() }
+        var minted = 0
+        let controller = PathwayDeviceStreamController { minted += 1; return self.prepared(ticket: "ticket-\(minted)") }
         await controller.start(iPhone, hubBasePath: "/api/device-hub").value
         #expect(controller.configuration?["control"] is NSNull)
+        // The input socket needs a ticket from the session that holds the lease, not the watching one.
         controller.setInput(enabled: true, proof: PathwayDeviceControlProof(viewerID: "me", generation: 4))
+        while controller.configuration == nil { await Task.yield() }
+        #expect(minted == 2)
+        #expect((controller.configuration?["access"] as? [String: Any])?["query"] as? [String: String]
+            == ["wsTicket": "ticket-2", "hostId": "local"])
         #expect(controller.configuration?["inputEnabled"] as? Bool == true)
         #expect((controller.configuration?["control"] as? [String: Any])?["generation"] as? Int == 4)
+        // Renewals keep the proof and the stream.
+        controller.setInput(enabled: true, proof: PathwayDeviceControlProof(viewerID: "me", generation: 4))
+        #expect(minted == 2)
         controller.setInput(enabled: false, proof: nil)
         #expect(controller.configuration?["inputEnabled"] as? Bool == false)
         #expect(controller.configuration?["control"] is NSNull)
@@ -330,23 +450,74 @@ struct PathwayDevicesTests {
     }
 }
 
+/// Opens one fake environment session and refreshes tickets within it.
+private actor DeviceSessionCounter {
+    private(set) var opened = 0
+    private var refreshed = 0
+
+    func open() async -> PathwayPreparedEnvironmentConnection {
+        opened += 1
+        await Task.yield()
+        return Self.connection(ticket: "opened")
+    }
+    func refresh(_ connection: PathwayPreparedEnvironmentConnection) -> PathwayPreparedEnvironmentConnection {
+        refreshed += 1
+        return Self.connection(ticket: "refreshed-\(refreshed)", token: connection.accessToken)
+    }
+    static func connection(ticket: String, token: String = "session-token") -> PathwayPreparedEnvironmentConnection {
+        .init(environmentID: "environment", label: "Mac", httpBaseURL: URL(string: "https://env.example")!,
+              webSocketURL: URL(string: "wss://env.example/ws?wsTicket=\(ticket)")!, accessToken: token,
+              proofKeyThumbprint: "thumbprint", scopes: [], ticketExpiresAt: nil)
+    }
+}
+
 /// Answers device control RPCs and counts the connections the lease opens and closes.
 @MainActor private final class FakeDeviceControlServer {
     var respond: (String, JSONValue) throws -> JSONValue = { _, _ in .null }
+    /// Holds acquire requests until `grant`, like an environment waiting for the previous owner's input.
+    var holdsAcquire = false
+    var ticketFails = false
     private(set) var calls: [(String, JSONValue)] = []
     private(set) var opened = 0
     private(set) var closed = 0
+    private var held: CheckedContinuation<Void, Never>?
+    private var socket: CheckedContinuation<Void, Never>?
 
+    func lease() -> PathwayDeviceControlLease {
+        PathwayDeviceControlLease(watching: { DeviceSessionCounter.connection(ticket: "watching", token: "watching") }) { self.connection() }
+    }
     func connection() -> PathwayDeviceControlLease.Connection {
         opened += 1
-        return .init(request: { tag, payload in try await self.handle(tag, payload) }, close: { await self.close() })
+        return .init(
+            request: { tag, payload in try await self.handle(tag, payload) },
+            ticketed: { try await self.ticket() },
+            closed: { await self.waitForSocket() },
+            close: { await self.close() }
+        )
     }
     func waitUntilClosed(_ count: Int) async {
         while closed < count { await Task.yield() }
     }
-    private func handle(_ tag: String, _ payload: JSONValue) throws -> JSONValue {
+    func waitUntilAcquiring() async {
+        while held == nil { await Task.yield() }
+    }
+    func grant() { held?.resume(); held = nil }
+    func dropSocket() { socket?.resume(); socket = nil }
+
+    private func handle(_ tag: String, _ payload: JSONValue) async throws -> JSONValue {
         calls.append((tag, payload))
+        if tag == "device.acquireControl", holdsAcquire { await withCheckedContinuation { held = $0 } }
         return try respond(tag, payload)
     }
-    private func close() { closed += 1 }
+    private func ticket() throws -> PathwayPreparedEnvironmentConnection {
+        if ticketFails { throw PathwayConnectError.response(status: 401, message: "expired", traceID: nil) }
+        return DeviceSessionCounter.connection(ticket: "lease", token: "lease")
+    }
+    private func waitForSocket() async {
+        await withCheckedContinuation { socket = $0 }
+    }
+    private func close() {
+        closed += 1
+        dropSocket()
+    }
 }

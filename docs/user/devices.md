@@ -115,17 +115,20 @@ have control** and your touches reach the device. While you have control,
 nobody else can use the device, including the agent: its device commands are
 refused, but its turn keeps running. When you're done, tap **Resume agent**,
 optionally with a message. The viewer gives up control first, then the agent
-continues from the device's current state.
+continues from the device's current state. If the environment doesn't confirm
+the hand-back, the agent isn't resumed and your message stays: take control
+again, then tap **Resume agent**. When the environment can't confirm the last
+input finished, the viewer offers **Restart device tools** first.
 
 You keep control only while the viewer is open. Leaving it, switching apps, or
-switching to another device gives control up, and so does losing the
-connection. If someone else takes control, the viewer
+switching to another device gives control up, even while you're still taking
+it, and so does losing the connection. Take control again once it's back. If someone else takes control, the viewer
 goes back to watching and any touch or key you're holding is released. While
 the app is reconnecting, the viewer only watches. **Shut down device** is
 available while you have control.
 
-On an environment running an older Pathway release, the viewer only watches
-while the agent is working, and you can use the device once the agent is idle.
+On an environment running an older Pathway release, the viewer only watches.
+Update the environment to take control from your iPhone or iPad.
 
 The stream pauses when you leave the viewer or switch apps, and reconnects
 when you come back. It works on your local network and over Pathway Connect.

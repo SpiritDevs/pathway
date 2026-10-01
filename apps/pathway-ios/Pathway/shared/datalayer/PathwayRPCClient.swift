@@ -114,6 +114,7 @@ actor PathwayRPCClient {
     private var subscriptionGate = PathwayRPCSubscriptionGate()
     private var subscriptionContinuation: AsyncThrowingStream<JSONValue, Error>.Continuation?
     private var subscriptionBufferingPolicy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy = .bufferingOldest(256)
+    private var closeWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         session: URLSession = .shared,
@@ -205,6 +206,19 @@ actor PathwayRPCClient {
         }
     }
 
+    /// Returns once the open socket closes or the client stops, or at once when no socket is open.
+    /// The environment ties some state, such as device control leases, to one socket's lifetime.
+    func waitUntilClosed() async {
+        guard socket != nil else { return }
+        await withCheckedContinuation { closeWaiters.append($0) }
+    }
+
+    private func socketClosed() {
+        let waiters = closeWaiters
+        closeWaiters = []
+        for waiter in waiters { waiter.resume() }
+    }
+
     func stop() {
         desired = false
         loopTask?.cancel()
@@ -214,6 +228,7 @@ actor PathwayRPCClient {
         awaitingKeepaliveResponse = false
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
+        socketClosed()
         connectionID = nil
         subscriptionRequestID = nil
         subscriptionGate.reset()
@@ -270,6 +285,7 @@ actor PathwayRPCClient {
 
     private func install(_ task: URLSessionWebSocketTask, id: UUID) {
         socket?.cancel(with: .goingAway, reason: nil)
+        socketClosed()
         socket = task
         connectionID = id
         awaitingKeepaliveResponse = false
@@ -372,6 +388,7 @@ actor PathwayRPCClient {
         }
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
+        socketClosed()
         connectionID = nil
         keepaliveTask?.cancel()
         keepaliveTask = nil

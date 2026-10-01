@@ -133,16 +133,15 @@ struct PathwayThreadDevicePreview: Identifiable, Equatable, Sendable {
     static func buttonTitle(count: Int) -> String { count == 1 ? "One device open" : "\(count) devices open" }
 }
 
-/// Who drives the device the viewer shows. Only this viewer's held lease, or an environment
-/// without leases while no run is active, lets touches reach the device.
+/// Who drives the device the viewer shows. Only this viewer's held lease lets touches reach the device.
 enum PathwayDeviceControl: Equatable, Sendable {
-    /// Device or run state is not live, for example while reconnecting; the viewer only watches.
+    /// Device state is not live, for example while reconnecting; the viewer only watches.
     case unknown
     /// This viewer asked for control and the previous owner's input is finishing.
     case taking
     /// This viewer holds the lease.
     case you
-    /// An agent run holds the lease, or on an environment without leases, the agent's run is active.
+    /// An agent run holds the lease.
     case agent
     /// Another viewer, on this or another client, holds the lease.
     case viewer
@@ -150,13 +149,14 @@ enum PathwayDeviceControl: Equatable, Sendable {
     case nobody
     /// The previous owner's input is still finishing.
     case finishing
-    /// An environment without leases and no active run; touches reach the device unguarded.
-    case idle
+    /// The environment has no control leases, so nobody can prove who drives the device; the viewer only watches.
+    case unsupported
 
     /// Control on an environment that enforces leases. `lease` is this viewer's latest acquire or renew
     /// response, which can be newer than the last snapshot; a newer snapshot supersedes it.
     static func resolve(_ state: PathwayDeviceState, hostID: String, deviceID: String, viewerID: String,
                         lease: PathwayDeviceControlState?, acquiring: Bool) -> Self {
+        guard state.supportsDeviceControl else { return .unsupported }
         if acquiring { return .taking }
         let lease = lease.flatMap { $0.hostID == hostID && $0.deviceID == deviceID ? $0 : nil }
         let reported = state.controls.first { $0.hostID == hostID && $0.deviceID == deviceID }
@@ -169,12 +169,6 @@ enum PathwayDeviceControl: Equatable, Sendable {
         }
     }
 
-    /// Control on an environment without leases: watch-only while the agent's run is active.
-    static func unleased(runStateKnown: Bool, activeRunID: String?) -> Self {
-        guard runStateKnown else { return .unknown }
-        return activeRunID == nil ? .idle : .agent
-    }
-
     var label: String {
         switch self {
         case .unknown: "Reconnecting to the device…"
@@ -184,15 +178,21 @@ enum PathwayDeviceControl: Equatable, Sendable {
         case .viewer: "Someone else is controlling the device"
         case .nobody: "Nobody is controlling the device"
         case .finishing: "Finishing the last input…"
-        case .idle: "Agent idle — you can use the device"
+        case .unsupported: "Watching — update this environment to take control"
         }
     }
 
-    var acceptsInput: Bool { self == .you || self == .idle }
-    /// Whether Take control applies; environments without leases never offer it.
+    var acceptsInput: Bool { self == .you }
     var canTake: Bool { [.agent, .viewer, .nobody, .finishing].contains(self) }
 
     static let defaultResumeMessage = "I'm done with the device. Continue from its current state."
+    static let lostConnectionMessage = "Lost the connection to the environment, which ended your control. Take control again."
+
+    /// Whether the refusal needs the device tools restarted before anyone can take control again.
+    static func needsToolRestart(_ error: Error) -> Bool {
+        if case PathwayRPCError.deviceControl("input_unconfirmed", _) = error { return true }
+        return false
+    }
 
     /// What the viewer says when a device request fails.
     static func message(for error: Error) -> String {
@@ -219,39 +219,91 @@ struct PathwayDeviceControlProof: Equatable, Sendable {
     var page: [String: Any] { ["viewerId": viewerID, "generation": generation] }
 }
 
-/// This viewer's device control lease. The environment ties leases to the RPC connection that
-/// acquired them, so one connection lives from acquire to release; closing it releases the lease,
-/// and the lease's 30-second expiry covers a release that never arrives.
+/// One authenticated environment session. The environment only accepts a lease's proof from the
+/// session that acquired it, and every Pathway Connect `prepare` opens a new session, so the lease's
+/// socket, its stream tickets and its mutations all take tickets from one of these.
+actor PathwayDeviceEnvironmentSession {
+    typealias Prepared = PathwayPreparedEnvironmentConnection
+    private let open: @Sendable () async throws -> Prepared
+    private let refresh: @Sendable (Prepared) async throws -> Prepared
+    private var opening: Task<Prepared, Error>?
+    /// Whether the ticket that came with opening the session is still unused; tickets are single-use.
+    private var unusedTicket = false
+
+    init(open: @escaping @Sendable () async throws -> Prepared, refresh: @escaping @Sendable (Prepared) async throws -> Prepared) {
+        self.open = open
+        self.refresh = refresh
+    }
+
+    /// The session's connection with a ticket nobody has used yet.
+    func ticketed() async throws -> Prepared {
+        let opening = opening ?? {
+            let task = Task { try await open() }
+            self.opening = task
+            unusedTicket = true
+            return task
+        }()
+        let prepared: Prepared
+        do { prepared = try await opening.value } catch {
+            if self.opening == opening { self.opening = nil }
+            throw error
+        }
+        if unusedTicket { unusedTicket = false; return prepared }
+        return try await refresh(prepared)
+    }
+}
+
+/// This viewer's device control lease. The environment ties a lease to the session and socket that
+/// acquired it, so one connection lives from acquire to release; closing it releases the lease, and the
+/// lease's 30-second expiry covers a release that never arrives.
 @MainActor @Observable
 final class PathwayDeviceControlLease {
+    typealias Prepared = PathwayPreparedEnvironmentConnection
     struct Connection: Sendable {
         let request: @Sendable (String, JSONValue) async throws -> JSONValue
+        /// A fresh ticket in the connection's session, for the stream's media and input.
+        let ticketed: @Sendable () async throws -> Prepared
+        /// Returns once the socket has closed.
+        let closed: @Sendable () async -> Void
         let close: @Sendable () async -> Void
     }
+    struct Target: Equatable, Sendable { let hostID: String; let deviceID: String }
 
     /// Distinct per mounted viewer.
     let viewerID = UUID().uuidString.lowercased()
     /// The latest acquire or renew response while this viewer holds the lease.
     private(set) var lease: PathwayDeviceControlState?
     private(set) var acquiring = false
+    /// The device this viewer holds or is taking.
+    private(set) var target: Target?
+    /// Why the lease ended without this viewer giving it up.
+    var notice: String?
     @ObservationIgnored private var connection: Connection?
-    @ObservationIgnored private var renewal: Task<Void, Never>?
-    /// Bumped by every acquire and release, so a superseded response is dropped.
+    @ObservationIgnored private var watchers: [Task<Void, Never>] = []
+    /// Bumped whenever the lease starts or ends, so a superseded response is dropped.
     @ObservationIgnored private var epoch = 0
     @ObservationIgnored private let connect: @MainActor () -> Connection
+    @ObservationIgnored private let watching: @Sendable () async throws -> Prepared
 
     static let renewInterval: Duration = .seconds(10)
 
-    init(connect: @escaping @MainActor () -> Connection) { self.connect = connect }
+    init(watching: @escaping @Sendable () async throws -> Prepared, connect: @escaping @MainActor () -> Connection) {
+        self.watching = watching
+        self.connect = connect
+    }
 
     convenience init(connect client: PathwayConnectClient, environment: PathwayCompanyEnvironment) {
-        self.init {
-            let rpc = PathwayRPCClient(reconnectsSubscriptions: false) { try await client.prepare(environment: environment).webSocketURL }
+        self.init(watching: { try await client.prepare(environment: environment) }) {
+            let session = PathwayDeviceEnvironmentSession(open: { try await client.prepare(environment: environment) },
+                                                          refresh: { try await client.refreshingTicket($0) })
+            let rpc = PathwayRPCClient(reconnectsSubscriptions: false) { try await session.ticketed().webSocketURL }
             return Connection(
                 // Acquiring waits for the previous owner's input to finish.
                 request: { tag, payload in
                     try await rpc.request(tag, payload: payload, timeout: tag == "device.acquireControl" ? .seconds(120) : .seconds(30))
                 },
+                ticketed: { try await session.ticketed() },
+                closed: { await rpc.waitUntilClosed() },
                 close: { await rpc.stop() }
             )
         }
@@ -259,36 +311,65 @@ final class PathwayDeviceControlLease {
 
     var proof: PathwayDeviceControlProof? { lease.map { PathwayDeviceControlProof(viewerID: viewerID, generation: $0.generation) } }
 
-    /// Takes the device from whoever has it and keeps the lease renewed until `release`.
+    /// Credentials for the stream. While this viewer holds the lease they come from its session, the only
+    /// one whose input the environment accepts; failing to refresh them there ends the lease.
+    func ticketed() async throws -> Prepared {
+        guard lease != nil, let connection else { return try await watching() }
+        let epoch = epoch
+        do { return try await connection.ticketed() } catch {
+            if epoch == self.epoch, !(error is CancellationError) { await end(Self.lostConnection) }
+            throw error
+        }
+    }
+
+    /// Takes the device from whoever has it and keeps the lease renewed until it is released or lost.
+    /// Returns without a lease when released or ended first; a grant that arrives late is handed straight back.
     func acquire(hostID: String, deviceID: String) async throws {
         try? await release()
         epoch += 1
         let epoch = epoch
         let connection = connect()
         self.connection = connection
+        target = Target(hostID: hostID, deviceID: deviceID)
         acquiring = true
-        defer { if epoch == self.epoch { acquiring = false } }
+        notice = nil
+        let response: JSONValue
         do {
-            let state = try await connection.request("device.acquireControl", .object([
+            response = try await connection.request("device.acquireControl", .object([
                 "hostId": .string(hostID), "deviceId": .string(deviceID), "viewerId": .string(viewerID)
             ]))
-            guard epoch == self.epoch else { return }
-            lease = PathwayDeviceControlState(state).flatMap { $0.phase == .held && $0.owner == .viewer(viewerID: viewerID) ? $0 : nil }
-            guard lease != nil else { await drop(); return }
-            renewal = Task { [weak self] in
+        } catch {
+            guard epoch == self.epoch else { await connection.close(); return }
+            await end(nil)
+            throw error
+        }
+        let granted = PathwayDeviceControlState(response).flatMap { $0.phase == .held && $0.owner == .viewer(viewerID: viewerID) ? $0 : nil }
+        guard epoch == self.epoch else {
+            if let granted { _ = try? await connection.request("device.releaseControl", payload(granted)) }
+            await connection.close()
+            return
+        }
+        acquiring = false
+        guard let granted else { await end(nil); return }
+        lease = granted
+        watchers = [
+            Task { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(for: Self.renewInterval)
                     guard !Task.isCancelled else { return }
                     await self?.renew()
                 }
+            },
+            // The environment releases a closed socket's leases, so this viewer's input stops counting.
+            Task { [weak self] in
+                await connection.closed()
+                guard let self, epoch == self.epoch else { return }
+                await self.end(Self.lostConnection)
             }
-        } catch {
-            if epoch == self.epoch { await drop() }
-            throw error
-        }
+        ]
     }
 
-    /// Extends the lease. A refusal means it ended, so the viewer falls back to the latest snapshot.
+    /// Extends the lease. Any failure ends it: a refusal says so, and a lost socket already released it.
     func renew() async {
         guard let held = lease, let connection else { return }
         let epoch = epoch
@@ -296,40 +377,64 @@ final class PathwayDeviceControlLease {
             let state = try await connection.request("device.renewControl", payload(held))
             guard epoch == self.epoch else { return }
             if let next = PathwayDeviceControlState(state), next.generation == held.generation, next.phase == .held { lease = next }
-        } catch PathwayRPCError.deviceControl {
-            if epoch == self.epoch { await drop() }
         } catch {
-            // A transient failure retries on the next tick; expiry or a closed connection ends the lease.
+            guard epoch == self.epoch, !(error is CancellationError) else { return }
+            if case PathwayRPCError.deviceControl = error { await end(PathwayDeviceControl.message(for: error)) }
+            else { await end(Self.lostConnection) }
         }
     }
 
-    /// Gives the device up and waits for the environment to finish this viewer's input.
-    /// Throws only when the environment could not be reached.
+    /// Gives the device up. Returns once the environment acknowledges and has finished this viewer's
+    /// input, and throws when it refused or could not be reached; input stops either way. Releasing while
+    /// control is still being taken abandons it, and its grant is handed back when it arrives.
     func release() async throws {
         epoch += 1
-        renewal?.cancel()
-        renewal = nil
-        acquiring = false
-        let held = lease, connection = connection
-        lease = nil
-        self.connection = nil
-        guard let connection else { return }
+        let held = lease, connection = connection, wasAcquiring = acquiring
+        clear()
+        guard let connection, !wasAcquiring else { return }
         // The release finishes even if the caller's task is cancelled, for example when the viewer goes away.
         try await Task {
             defer { Task { await connection.close() } }
             guard let held else { return }
-            do { _ = try await connection.request("device.releaseControl", self.payload(held)) }
-            catch PathwayRPCError.deviceControl {}
+            _ = try await connection.request("device.releaseControl", self.payload(held))
         }.value
     }
 
-    private func drop() async {
-        renewal?.cancel()
-        renewal = nil
+    /// Ends the lease without asking, for example when the environment's device state stops being live.
+    /// Closing the socket releases it on the environment.
+    func invalidate() async {
+        guard lease != nil || acquiring else { return }
+        await end(Self.lostConnection)
+    }
+
+    /// Sends a device mutation with this viewer's proof over the lease's socket.
+    func request(_ tag: String, _ fields: [String: JSONValue]) async throws -> JSONValue {
+        guard let proof, let connection else {
+            throw PathwayRPCError.deviceControl(code: "control_required", message: "Take control of the device first.")
+        }
+        var fields = fields
+        fields["control"] = proof.json
+        return try await connection.request(tag, .object(fields))
+    }
+
+    private static let lostConnection = PathwayDeviceControl.lostConnectionMessage
+
+    private func end(_ notice: String?) async {
+        epoch += 1
+        let connection = connection, wasAcquiring = acquiring
+        clear()
+        if let notice { self.notice = notice }
+        // A pending acquire closes its own connection once it returns.
+        if !wasAcquiring { await connection?.close() }
+    }
+
+    private func clear() {
+        for watcher in watchers { watcher.cancel() }
+        watchers = []
         lease = nil
-        let connection = connection
-        self.connection = nil
-        await connection?.close()
+        acquiring = false
+        target = nil
+        connection = nil
     }
 
     private func payload(_ held: PathwayDeviceControlState) -> JSONValue {
@@ -445,18 +550,27 @@ final class PathwayThreadDevicesModel {
         } catch {}
     }
 
-    /// Closes the thread's session and shuts the simulator or emulator down. Environments with
-    /// control leases require this viewer's `control` proof.
-    func shutDown(_ preview: PathwayThreadDevicePreview, control: PathwayDeviceControlProof?) async throws {
+    /// Closes the thread's session and shuts the simulator or emulator down. Environments with control
+    /// leases take this only from the controlling viewer, over its lease's own session.
+    func shutDown(_ preview: PathwayThreadDevicePreview, lease: PathwayDeviceControlLease?) async throws {
+        let fields: [String: JSONValue] = [
+            "threadId": .string(threadID), "hostId": .string(preview.hostID),
+            "deviceId": .string(preview.deviceID), "shutdown": .bool(true)
+        ]
+        if let lease { _ = try await lease.request("device.close", fields) }
+        else { _ = try await request("device.close", .object(fields)) }
+    }
+
+    /// Restarts a host's device helpers, which clears input the environment could not confirm.
+    func restartTools(hostID: String) async throws {
+        _ = try await request("device.restartTools", .object(["hostId": .string(hostID)]))
+    }
+
+    private func request(_ tag: String, _ payload: JSONValue) async throws -> JSONValue {
         let rpc = PathwayRPCClient(reconnectsSubscriptions: false) { [connect, environment] in
             try await connect.prepare(environment: environment).webSocketURL
         }
         defer { Task { await rpc.stop() } }
-        var payload: [String: JSONValue] = [
-            "threadId": .string(threadID), "hostId": .string(preview.hostID),
-            "deviceId": .string(preview.deviceID), "shutdown": .bool(true)
-        ]
-        if let control { payload["control"] = control.json }
-        _ = try await rpc.request("device.close", payload: .object(payload))
+        return try await rpc.request(tag, payload: payload, timeout: .seconds(60))
     }
 }

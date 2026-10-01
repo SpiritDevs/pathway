@@ -25,6 +25,8 @@ final class PathwayDeviceStreamController {
     @ObservationIgnored private var proof: PathwayDeviceControlProof?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var preparation: Task<Void, Never>?
+    /// What the stream was last started for, so a new control grant can start it again.
+    @ObservationIgnored private var current: (preview: PathwayThreadDevicePreview, hubBasePath: String)?
     @ObservationIgnored private let prepare: Prepare
     @ObservationIgnored private let now: () -> Date
 
@@ -48,6 +50,7 @@ final class PathwayDeviceStreamController {
         preparation?.cancel()
         generation += 1
         let generation = generation
+        current = (preview, hubBasePath)
         if !refreshingCredentials { refreshesLeft = Self.maxRefreshes }
         // The previous stream, possibly another device, stops and gives up input while the ticket is minted.
         configuration = nil
@@ -88,6 +91,7 @@ final class PathwayDeviceStreamController {
     func stop() {
         preparation?.cancel()
         preparation = nil
+        current = nil
         generation += 1
         configuration = nil
         stopPage()
@@ -100,16 +104,16 @@ final class PathwayDeviceStreamController {
         call("window.pathwayDeviceStream.setInputEnabled(enabled)", ["enabled": enabled])
     }
 
-    /// Input sockets carry the control proof in their URLs, so a new grant restarts the stream with it.
-    /// Renewals keep the proof and losing it needs no reconnect: the environment ignores stale input.
+    /// Input sockets carry the control proof in their URLs and need a ticket from the session holding the
+    /// lease, so a new grant restarts the stream with fresh credentials. Renewals keep the proof, and losing
+    /// it needs no reconnect: the environment ignores stale input.
     func setInput(enabled: Bool, proof: PathwayDeviceControlProof?) {
         let reconnects = proof != nil && proof != self.proof
         self.proof = proof
         configuration?["control"] = proof?.page ?? NSNull()
-        guard reconnects else { setInputEnabled(enabled); return }
+        guard reconnects, let current else { setInputEnabled(enabled); return }
         inputEnabled = enabled
-        configuration?["inputEnabled"] = enabled
-        deliver()
+        start(current.preview, hubBasePath: current.hubBasePath)
     }
 
     func command(_ button: String) { call("window.pathwayDeviceStream.command(button)", ["button": button]) }
@@ -311,16 +315,18 @@ struct AgentThreadDeviceViewer: View {
     @State private var confirmsTakeControl = false
     @State private var confirmsShutdown = false
     @State private var handBack = ""
+    /// Resume was asked for but the environment did not acknowledge the hand-back, so the agent was not resumed.
+    @State private var handBackFailed = false
+    @State private var restartsTools = false
     @State private var error: String?
     @State private var isWorking = false
 
     init(devices: PathwayThreadDevicesModel, model: PathwayAgentThreadModel) {
         self.devices = devices
         self.model = model
-        _controller = State(initialValue: PathwayDeviceStreamController { [connect = devices.connect, environment = devices.environment] in
-            try await connect.prepare(environment: environment)
-        })
-        _lease = State(initialValue: PathwayDeviceControlLease(connect: devices.connect, environment: devices.environment))
+        let lease = PathwayDeviceControlLease(connect: devices.connect, environment: devices.environment)
+        _controller = State(initialValue: PathwayDeviceStreamController { try await lease.ticketed() })
+        _lease = State(initialValue: lease)
     }
 
     private var selected: PathwayThreadDevicePreview? {
@@ -328,13 +334,10 @@ struct AgentThreadDeviceViewer: View {
     }
     private var control: PathwayDeviceControl {
         guard devices.isLive, let state = devices.state, let selected else { return .unknown }
-        guard state.supportsDeviceControl else {
-            return .unleased(runStateKnown: model.isSubscriptionReady && model.connectionState == .live, activeRunID: model.activeRunID)
-        }
         return .resolve(state, hostID: selected.hostID, deviceID: selected.deviceID, viewerID: lease.viewerID,
                         lease: lease.lease, acquiring: lease.acquiring)
     }
-    private var input: Input { control == .you ? Input(enabled: true, proof: lease.proof) : Input(enabled: control.acceptsInput, proof: nil) }
+    private var input: Input { control == .you ? Input(enabled: true, proof: lease.proof) : Input(enabled: false, proof: nil) }
     private struct Input: Equatable { let enabled: Bool; let proof: PathwayDeviceControlProof? }
     /// Environments with leases only shut a device down for the viewer controlling it.
     private var canShutDown: Bool { devices.state?.supportsDeviceControl != true || control == .you }
@@ -353,6 +356,8 @@ struct AgentThreadDeviceViewer: View {
         }
         .task(id: "\(scenePhase == .active):\(selected?.id ?? ""):\(devices.state?.hubBasePath ?? ""):\(attempt)") { await sync() }
         .onDisappear { Task { [lease, controller] in try? await lease.release(); controller.stop() } }
+        // The lease's socket may have outlived the environment's device state; nothing proves it is still held.
+        .onChange(of: devices.isLive) { _, live in if !live { Task { await lease.invalidate() } } }
         .onChange(of: input, initial: true) { _, input in controller.setInput(enabled: input.enabled, proof: input.proof) }
         .onChange(of: devices.previews.isEmpty) { _, empty in if empty { dismiss() } }
         .confirmationDialog("Take control of the device?", isPresented: $confirmsTakeControl, titleVisibility: .visible) {
@@ -361,9 +366,15 @@ struct AgentThreadDeviceViewer: View {
         .confirmationDialog("Shut down \(selected?.name ?? "this device")?", isPresented: $confirmsShutdown, titleVisibility: .visible) {
             Button("Shut down", role: .destructive) { Task { await shutDown() } }
         } message: { Text("The device closes for this thread and its simulator or emulator stops.") }
-        .alert("Couldn't update the device", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-            Button("OK") { error = nil }
-        } message: { Text(error ?? "") }
+        .alert("Couldn't update the device", isPresented: Binding(get: { (error ?? lease.notice) != nil },
+                                                                 set: { if !$0 { error = nil; lease.notice = nil; restartsTools = false } })) {
+            if restartsTools, let hostID = selected?.hostID {
+                Button("Restart device tools") { Task { await restartTools(hostID: hostID) } }
+                Button("Cancel", role: .cancel) {}
+            } else {
+                Button("OK") {}
+            }
+        } message: { Text(error ?? lease.notice ?? "") }
     }
 
     @ViewBuilder private var stream: some View {
@@ -396,7 +407,7 @@ struct AgentThreadDeviceViewer: View {
     private var controlBar: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Circle().fill(control.acceptsInput ? Color.green : [.unknown, .nobody].contains(control) ? Color.secondary : Color.orange)
+                Circle().fill(control.acceptsInput ? Color.green : [.unknown, .nobody, .unsupported].contains(control) ? Color.secondary : Color.orange)
                     .frame(width: 8, height: 8)
                 Text(control.label).font(.subheadline).lineLimit(1)
                 Spacer()
@@ -406,13 +417,17 @@ struct AgentThreadDeviceViewer: View {
                         .accessibilityIdentifier("device-take-control")
                 }
             }
-            if control.acceptsInput {
+            if control.acceptsInput || handBackFailed {
                 HStack(spacing: 8) {
                     TextField("Message for the agent (optional)", text: $handBack)
                         .textFieldStyle(.roundedBorder)
                     Button("Resume agent") { Task { await resumeAgent() } }
-                        .buttonStyle(.bordered).disabled(isWorking)
+                        .buttonStyle(.bordered).disabled(isWorking || !control.acceptsInput)
                         .accessibilityIdentifier("device-resume-agent")
+                }
+                if handBackFailed, !control.acceptsInput {
+                    Text("The device wasn't handed back. Take control again, then resume the agent.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
@@ -449,9 +464,9 @@ struct AgentThreadDeviceViewer: View {
         }
     }
 
-    /// Gives up control before a hidden viewer or a newly selected device stops its stream.
+    /// Gives up control, held or still being taken, before a hidden viewer or a newly selected device stops its stream.
     private func sync() async {
-        if let held = lease.lease, scenePhase != .active || held.hostID != selected?.hostID || held.deviceID != selected?.deviceID {
+        if let target = lease.target, scenePhase != .active || target != selected.map({ .init(hostID: $0.hostID, deviceID: $0.deviceID) }) {
             try? await lease.release()
         }
         connect()
@@ -469,25 +484,47 @@ struct AgentThreadDeviceViewer: View {
         isWorking = true
         defer { isWorking = false }
         do { try await lease.acquire(hostID: selected.hostID, deviceID: selected.deviceID) }
-        catch { self.error = PathwayDeviceControl.message(for: error) }
+        catch {
+            restartsTools = PathwayDeviceControl.needsToolRestart(error)
+            self.error = PathwayDeviceControl.message(for: error)
+        }
     }
 
-    /// The agent's follow-up goes out only after the environment finishes this viewer's input.
+    /// The agent's follow-up goes out only once the environment acknowledges the hand-back, which it does
+    /// after finishing this viewer's input. Otherwise the message stays for a retry after taking control again.
     private func resumeAgent() async {
         isWorking = true
         defer { isWorking = false }
         do {
             try await lease.release()
+        } catch {
+            handBackFailed = true
+            restartsTools = PathwayDeviceControl.needsToolRestart(error)
+            self.error = PathwayDeviceControl.message(for: error)
+            return
+        }
+        handBackFailed = false
+        do {
             try await model.resumeAfterDeviceControl(handBack)
             handBack = ""
-        } catch { self.error = PathwayDeviceControl.message(for: error) }
+        } catch { self.error = error.localizedDescription }
     }
 
     private func shutDown() async {
         guard let selected else { return }
         isWorking = true
         defer { isWorking = false }
-        do { try await devices.shutDown(selected, control: control == .you ? lease.proof : nil) }
-        catch { self.error = PathwayDeviceControl.message(for: error) }
+        do { try await devices.shutDown(selected, lease: devices.state?.supportsDeviceControl == true ? lease : nil) }
+        catch {
+            restartsTools = PathwayDeviceControl.needsToolRestart(error)
+            self.error = PathwayDeviceControl.message(for: error)
+        }
+    }
+
+    private func restartTools(hostID: String) async {
+        isWorking = true
+        defer { isWorking = false }
+        do { try await devices.restartTools(hostID: hostID) }
+        catch { self.error = error.localizedDescription }
     }
 }
