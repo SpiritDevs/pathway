@@ -27,6 +27,7 @@ import { Route as CalendarRouteImport } from './routes/calendar'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
+import { Route as SettingsXcodeRouteImport } from './routes/settings.xcode'
 import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
 import { Route as SettingsTimeTrackerRouteImport } from './routes/settings.time-tracker'
 import { Route as SettingsSyncRouteImport } from './routes/settings.sync'
@@ -175,6 +176,11 @@ const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => ProjectsRoute,
+} as any)
+const SettingsXcodeRoute = SettingsXcodeRouteImport.update({
+  id: '/xcode',
+  path: '/xcode',
+  getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsUsageRoute = SettingsUsageRouteImport.update({
   id: '/usage',
@@ -556,6 +562,7 @@ export interface FileRoutesByFullPath {
   '/settings/sync': typeof SettingsSyncRoute
   '/settings/time-tracker': typeof SettingsTimeTrackerRoute
   '/settings/usage': typeof SettingsUsageRoute
+  '/settings/xcode': typeof SettingsXcodeRoute
   '/projects/': typeof ProjectsIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -633,6 +640,7 @@ export interface FileRoutesByTo {
   '/settings/sync': typeof SettingsSyncRoute
   '/settings/time-tracker': typeof SettingsTimeTrackerRoute
   '/settings/usage': typeof SettingsUsageRoute
+  '/settings/xcode': typeof SettingsXcodeRoute
   '/projects': typeof ProjectsIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -713,6 +721,7 @@ export interface FileRoutesById {
   '/settings/sync': typeof SettingsSyncRoute
   '/settings/time-tracker': typeof SettingsTimeTrackerRoute
   '/settings/usage': typeof SettingsUsageRoute
+  '/settings/xcode': typeof SettingsXcodeRoute
   '/projects/': typeof ProjectsIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -793,6 +802,7 @@ export interface FileRouteTypes {
     | '/settings/sync'
     | '/settings/time-tracker'
     | '/settings/usage'
+    | '/settings/xcode'
     | '/projects/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
@@ -870,6 +880,7 @@ export interface FileRouteTypes {
     | '/settings/sync'
     | '/settings/time-tracker'
     | '/settings/usage'
+    | '/settings/xcode'
     | '/projects'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
@@ -949,6 +960,7 @@ export interface FileRouteTypes {
     | '/settings/sync'
     | '/settings/time-tracker'
     | '/settings/usage'
+    | '/settings/xcode'
     | '/projects/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
@@ -1115,6 +1127,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/projects/'
       preLoaderRoute: typeof ProjectsIndexRouteImport
       parentRoute: typeof ProjectsRoute
+    }
+    '/settings/xcode': {
+      id: '/settings/xcode'
+      path: '/xcode'
+      fullPath: '/settings/xcode'
+      preLoaderRoute: typeof SettingsXcodeRouteImport
+      parentRoute: typeof SettingsRoute
     }
     '/settings/usage': {
       id: '/settings/usage'
@@ -1608,6 +1627,7 @@ interface SettingsRouteChildren {
   SettingsSyncRoute: typeof SettingsSyncRoute
   SettingsTimeTrackerRoute: typeof SettingsTimeTrackerRoute
   SettingsUsageRoute: typeof SettingsUsageRoute
+  SettingsXcodeRoute: typeof SettingsXcodeRoute
   SettingsAppearanceActionPaletteRoute: typeof SettingsAppearanceActionPaletteRoute
   SettingsDictationDictionaryRoute: typeof SettingsDictationDictionaryRoute
   SettingsDictationHistoryRoute: typeof SettingsDictationHistoryRoute
@@ -1664,6 +1684,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsSyncRoute: SettingsSyncRoute,
   SettingsTimeTrackerRoute: SettingsTimeTrackerRoute,
   SettingsUsageRoute: SettingsUsageRoute,
+  SettingsXcodeRoute: SettingsXcodeRoute,
   SettingsAppearanceActionPaletteRoute: SettingsAppearanceActionPaletteRoute,
   SettingsDictationDictionaryRoute: SettingsDictationDictionaryRoute,
   SettingsDictationHistoryRoute: SettingsDictationHistoryRoute,

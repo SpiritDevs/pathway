@@ -12,6 +12,7 @@ const NOW = 1_800_000_000_000;
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
   "../convex/_generated/server.js": () => import("../convex/_generated/server.js"),
+  "../convex/appleSessions.ts": () => import("../convex/appleSessions.ts"),
   "../convex/appleIntegrations.ts": () => import("../convex/appleIntegrations.ts"),
 };
 const apps = {
@@ -682,6 +683,7 @@ describe("Apple account cloud custody", () => {
         const storedAccount = (await ctx.db.query("appleAccounts").collect())[0]!;
         await ctx.db.insert("appleAccountSessions", {
           accountId: storedAccount._id,
+          accountRevision: storedAccount.revision,
           revision: 1,
           expiresAt: NOW + 30_000,
           keyId: "test-seal",
@@ -832,5 +834,122 @@ describe("Apple account cloud custody", () => {
     await expect(
       env.query(internal.appleIntegrations.runtimeCredentialRecord, lease),
     ).rejects.toThrow("no longer current");
+  });
+  it("seals Apple ID cookies, verifies the account, discovers teams and leases only to authorized environments", async () => {
+    const { t, owner, account, runtimeTarget } = await setup();
+    const env = environment(t, "env-a");
+    const target = { accountId: account.id, companyId: COMPANY };
+    const credential = {
+      cookies: [
+        {
+          key: "myacinfo",
+          value: "PRIVATE-SESSION-COOKIE",
+          domain: ".apple.com",
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          expires: null,
+        },
+      ],
+    };
+    const current = await env.query(api.appleSessions.status, target);
+    const saved = await env.action(api.appleSessions.save, {
+      ...target,
+      credential,
+      accountRevision: current.accountRevision,
+      revision: current.revision,
+      expiresAt: NOW + 60_000,
+      teams: [{ teamId: "DISCOVERED", name: "Discovered team", type: "organization" }],
+    });
+    expect(saved.revision).toBe(1);
+    expect(
+      (await owner.query(api.appleIntegrations.accountStatus, { accountId: account.id }))
+        .verifiedAt,
+    ).toBe(NOW);
+    expect(
+      await owner.query(api.appleIntegrations.listTeams, { accountId: account.id }),
+    ).toContainEqual({
+      accountId: account.id,
+      teamId: "DISCOVERED",
+      name: "Discovered team",
+      type: "organization",
+    });
+    const stored = await t.run((ctx) => ctx.db.query("appleAccountSessions").collect());
+    expect(JSON.stringify(stored)).not.toContain("PRIVATE-SESSION-COOKIE");
+    const leased = await environment(t, "env-b").action(api.appleSessions.read, target);
+    expect(leased.credential).toEqual(credential);
+    expect(leased.leaseExpiresAt).toBe(NOW + 30_000);
+    await expect(
+      environment(t, "not-owners-env").action(api.appleSessions.read, target),
+    ).rejects.toThrow();
+    await expect(owner.action(api.appleSessions.read, target)).rejects.toThrow();
+    await env.mutation(api.appleSessions.revoke, { ...target, revision: saved.revision });
+    await expect(env.action(api.appleSessions.read, target)).rejects.toThrow();
+    await expect(
+      env.action(api.appleSessions.save, {
+        ...target,
+        credential,
+        accountRevision: current.accountRevision,
+        revision: current.revision,
+        expiresAt: NOW + 60_000,
+        teams: [],
+      }),
+    ).rejects.toThrow();
+    expect(
+      (await env.query(api.appleIntegrations.status, runtimeTarget)).integration.connected,
+    ).toBe(true);
+  });
+  it("expires Apple sessions and fences them when account scope or registration changes", async () => {
+    const { t, owner, account } = await setup();
+    const env = environment(t, "env-a");
+    const target = { accountId: account.id, companyId: COMPANY };
+    const credential = {
+      cookies: [
+        {
+          key: "myacinfo",
+          value: "cookie",
+          domain: ".apple.com",
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          expires: null,
+        },
+      ],
+    };
+    await env.action(api.appleSessions.save, {
+      ...target,
+      credential,
+      accountRevision: account.revision,
+      revision: 0,
+      expiresAt: NOW + 1000,
+      teams: [],
+    });
+    vi.setSystemTime(NOW + 1001);
+    await expect(env.action(api.appleSessions.read, target)).rejects.toThrow();
+    vi.setSystemTime(NOW);
+    await owner.mutation(api.appleIntegrations.updateAccount, {
+      accountId: account.id,
+      expectedRevision: account.revision,
+      displayName: "Shared",
+      scope: { kind: "company", companyId: COMPANY },
+    });
+    await expect(env.action(api.appleSessions.read, target)).rejects.toThrow();
+    const meta = await env.query(api.appleSessions.status, target);
+    await env.action(api.appleSessions.save, {
+      ...target,
+      credential,
+      accountRevision: meta.accountRevision,
+      revision: meta.revision,
+      expiresAt: NOW + 60_000,
+      teams: [],
+    });
+    await t.run(async (ctx) => {
+      const reg = await ctx.db
+        .query("environmentRegistrations")
+        .filter((q) => q.eq(q.field("environmentId"), "env-a"))
+        .unique();
+      await ctx.db.patch(reg!._id, { state: "revoked" });
+    });
+    await expect(env.action(api.appleSessions.read, target)).rejects.toThrow();
   });
 });

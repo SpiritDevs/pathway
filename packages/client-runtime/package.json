@@ -63,6 +63,14 @@
       "types": "./src/state/apple.ts",
       "default": "./src/state/apple.ts"
     },
+    "./state/xcode": {
+      "types": "./src/state/xcode.ts",
+      "default": "./src/state/xcode.ts"
+    },
+    "./state/xcodeSetup": {
+      "types": "./src/state/xcodeSetup.ts",
+      "default": "./src/state/xcodeSetup.ts"
+    },
     "./state/assets": {
       "types": "./src/state/assets.ts",
       "default": "./src/state/assets.ts"

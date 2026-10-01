@@ -5,7 +5,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HttpServerRequest } from "effect/unstable/http";
 import { RpcTest } from "effect/unstable/rpc";
-import { AuthOrchestrationReadScope, EnvironmentId } from "@spiritdevs/contracts";
+import {
+  AuthOrchestrationReadScope,
+  EnvironmentId,
+  type AuthEnvironmentScope,
+} from "@spiritdevs/contracts";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { AppleRpcs, APPLE_WS_METHODS, type AppleIntegration } from "@spiritdevs/contracts/apple";
 import * as ServerConfig from "../config.ts";
@@ -16,7 +20,44 @@ import { resolveAppleCaller } from "../auth/appleCaller.ts";
 import { CLOUD_LINKED_USER_ID } from "../cloud/config.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { AppleRuntime, type AppleBackend } from "./AppleRuntime.ts";
+import { AppleIdSession } from "./AppleIdSession.ts";
+import { XcodeInstall } from "../xcode/XcodeInstall.ts";
+import { makeXcodeRpcLayer } from "../xcode/xcodeRpc.ts";
+import { XcodeRpcs } from "@spiritdevs/contracts/xcode";
 import { makeAppleRpcLayer } from "./appleRpc.ts";
+
+const makeTestServices = (runtime: AppleRuntime, scopes: readonly AuthEnvironmentScope[]) => {
+  const unused = async (): Promise<never> => {
+    throw new Error("Unexpected session access");
+  };
+  const sessions = new AppleIdSession({
+    status: unused,
+    read: unused,
+    save: unused,
+    revoke: unused,
+  });
+  const xcode = new XcodeInstall(
+    {
+      supported: false,
+      inspect: async () => ({
+        host: "needs-mac",
+        installed: [],
+        available: [],
+        runtimes: [],
+        disk: { freeBytes: null, requiredBytes: 0 },
+        error: null,
+      }),
+      needsAdmin: () => false,
+      installPath: unused,
+      run: unused,
+    },
+    { load: async () => null, save: unused },
+  );
+  return Layer.mergeAll(
+    makeAppleRpcLayer(runtime, scopes, sessions),
+    makeXcodeRpcLayer(xcode, runtime, scopes),
+  );
+};
 
 const makeAuthLayer = () => {
   const config = ServerConfig.layerTest(process.cwd(), { prefix: "pathway-apple-rpc-test-" });
@@ -109,9 +150,16 @@ it.layer(NodeServices.layer)("Apple RPC session identity", (it) => {
         yield* Effect.addFinalizer(() => Effect.sync(() => runtime.dispose()));
         const response = yield* Effect.gen(function* () {
           const client = yield* RpcTest.makeClient(AppleRpcs);
+          const xcode = yield* RpcTest.makeClient(XcodeRpcs);
+          const xcodeResult = yield* Effect.result(xcode["xcode.status"](target));
+          expect(xcodeResult).toMatchObject(
+            kind === "unknown-ticket" || kind === "unverified-request"
+              ? { _tag: "Failure", failure: { code: "forbidden" } }
+              : { _tag: "Success", success: { host: "needs-mac" } },
+          );
           return yield* Effect.result(client[APPLE_WS_METHODS.status](target));
         }).pipe(
-          Effect.provide(makeAppleRpcLayer(runtime, session.scopes)),
+          Effect.provide(makeTestServices(runtime, session.scopes)),
           Effect.provideService(HttpServerRequest.HttpServerRequest, request),
         );
         expect(authenticate).not.toHaveBeenCalled();
@@ -121,7 +169,7 @@ it.layer(NodeServices.layer)("Apple RPC session identity", (it) => {
           expect(backend.status).not.toHaveBeenCalled();
         } else {
           expect(response).toMatchObject({ _tag: "Success", success: { integration } });
-          expect(backend.authorizeCaller).toHaveBeenCalledTimes(2);
+          expect(backend.authorizeCaller).toHaveBeenCalledTimes(4);
           expect(backend.authorizeCaller).toHaveBeenCalledWith({
             companyId: target.companyId,
             accountId: target.accountId,
@@ -246,6 +294,8 @@ it.layer(NodeServices.layer)("Apple RPC session identity", (it) => {
         yield* Effect.addFinalizer(() => Effect.sync(() => runtime.dispose()));
         yield* Effect.gen(function* () {
           const client = yield* RpcTest.makeClient(AppleRpcs);
+          const xcode = yield* RpcTest.makeClient(XcodeRpcs);
+          yield* xcode["xcode.status"](target);
           yield* client[APPLE_WS_METHODS.status](target);
           expect(backend.authorizeCaller).toHaveBeenCalledWith(
             expect.objectContaining({ caller: { clerkSubject: "owner-a" } }),
@@ -258,11 +308,15 @@ it.layer(NodeServices.layer)("Apple RPC session identity", (it) => {
           yield* secrets.set(CLOUD_LINKED_USER_ID, new TextEncoder().encode("owner-b"));
           const relinked = yield* Effect.result(client[APPLE_WS_METHODS.status](target));
           expect(relinked).toMatchObject({ _tag: "Failure", failure: { code: "forbidden" } });
+          expect(yield* Effect.result(xcode["xcode.status"](target))).toMatchObject({
+            _tag: "Failure",
+            failure: { code: "forbidden" },
+          });
           expect(yield* resolveAppleCaller(session)).toBeNull();
           expect(backend.authorizeCaller).not.toHaveBeenCalled();
           expect(backend.status).not.toHaveBeenCalled();
         }).pipe(
-          Effect.provide(makeAppleRpcLayer(runtime, session.scopes)),
+          Effect.provide(makeTestServices(runtime, session.scopes)),
           Effect.provideService(HttpServerRequest.HttpServerRequest, request),
         );
       }).pipe(Effect.provide(makeAuthLayer())),

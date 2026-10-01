@@ -1,3 +1,11 @@
+import { HostProcessPlatform, HostProcessArchitecture } from "@spiritdevs/shared/hostProcess";
+import * as Path from "effect/Path";
+import type { AppleSessionBackend, AppleSessionTarget } from "@spiritdevs/backend/appleSession";
+import { ServerConfig } from "../config.ts";
+import { AppleIdSession } from "./AppleIdSession.ts";
+import { XcodeInstall } from "../xcode/XcodeInstall.ts";
+import { MacXcodeHost } from "../xcode/XcodeHost.ts";
+import { fileXcodeJobStore } from "../xcode/XcodeJobStore.ts";
 import { api } from "@spiritdevs/backend/convexApi";
 import { AppleIntegration, AppleEnvironmentHealth } from "@spiritdevs/contracts/apple";
 import { appleFailure } from "@spiritdevs/backend/appStoreConnectApi";
@@ -19,7 +27,7 @@ const decodeHealth = Schema.decodeUnknownSync(Schema.Array(AppleEnvironmentHealt
 export function makeAppleBackend(
   convexUrl: string,
   tokens: ConvexServiceTokenProvider,
-): AppleBackend {
+): AppleBackend & { sessions: AppleSessionBackend } {
   async function call<A>(run: (client: ConvexHttpClient) => Promise<A>): Promise<A> {
     const token = await Effect.runPromise(tokens.token);
     const client = new ConvexHttpClient(convexUrl);
@@ -47,6 +55,22 @@ export function makeAppleBackend(
           throw appleFailure("forbidden", "You do not have permission to use this Apple account.");
         throw error;
       }
+    },
+    sessions: {
+      status: (target) => call((client) => client.query(api.appleSessions.status, target)),
+      save: (target, input) =>
+        call((client) =>
+          client.action(api.appleSessions.save, {
+            ...target,
+            ...input,
+            teams: [...input.teams],
+            credential: { cookies: [...input.credential.cookies] },
+          }),
+        ),
+      read: (target) => call((client) => client.action(api.appleSessions.read, target)),
+      revoke: async (target, revision) => {
+        await call((client) => client.mutation(api.appleSessions.revoke, { ...target, revision }));
+      },
     },
     accountStatus: (input) =>
       call((client) =>
@@ -94,9 +118,34 @@ export function makeAppleBackend(
   };
 }
 
+/** A confirmed custody denial can release an orphaned host job. Network/auth outages cannot. */
+export const makeXcodeAccountCheck =
+  (backend: Pick<AppleBackend, "accountStatus">) =>
+  async (target: AppleSessionTarget): Promise<boolean> => {
+    try {
+      await backend.accountStatus({ companyId: target.companyId, accountId: target.accountId });
+      return true;
+    } catch (error) {
+      if (
+        [
+          "entity-not-found",
+          "company-not-found",
+          "company-unavailable",
+          "permission-denied",
+          "environment-not-registered",
+          "environment-key-mismatch",
+        ].includes(convexErrorCode(error) ?? "")
+      )
+        return false;
+      throw error;
+    }
+  };
+
 /** Initialization is shared by callers and retried after failure, only when Apple is used. */
-function lazyBackend(initialize: () => Promise<AppleBackend>): AppleBackend {
-  let pending: Promise<AppleBackend> | null = null;
+function lazyBackend(
+  initialize: () => Promise<AppleBackend & { sessions: AppleSessionBackend }>,
+): AppleBackend & { sessions: AppleSessionBackend } {
+  let pending: Promise<AppleBackend & { sessions: AppleSessionBackend }> | null = null;
   const get = () => {
     pending ??= initialize().catch((error: unknown) => {
       pending = null;
@@ -106,6 +155,12 @@ function lazyBackend(initialize: () => Promise<AppleBackend>): AppleBackend {
   };
   return {
     authorizeCaller: async (input) => (await get()).authorizeCaller(input),
+    sessions: {
+      status: async (target) => (await get()).sessions.status(target),
+      save: async (target, input) => (await get()).sessions.save(target, input),
+      read: async (target) => (await get()).sessions.read(target),
+      revoke: async (target, revision) => (await get()).sessions.revoke(target, revision),
+    },
     accountStatus: async (input) => (await get()).accountStatus(input),
     status: async (target) => (await get()).status(target),
     heartbeat: async (target) => (await get()).heartbeat(target),
@@ -117,7 +172,7 @@ function lazyBackend(initialize: () => Promise<AppleBackend>): AppleBackend {
 }
 
 /** Constructed once by the WS route, disposed with the server scope. No background network work. */
-export const makeConfiguredAppleRuntime = Effect.fn("apple.runtime.make")(function* () {
+export const makeConfiguredAppleServices = Effect.fn("apple.runtime.make")(function* () {
   const config = yield* resolveCloudSyncConfig;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
   const unavailable = () =>
@@ -127,8 +182,9 @@ export const makeConfiguredAppleRuntime = Effect.fn("apple.runtime.make")(functi
         "Link this environment to Pathway Cloud before using Apple services.",
       ),
     );
-  let backend: AppleBackend = {
+  let backend: AppleBackend & { sessions: AppleSessionBackend } = {
     authorizeCaller: unavailable,
+    sessions: { status: unavailable, save: unavailable, read: unavailable, revoke: unavailable },
     accountStatus: unavailable,
     status: unavailable,
     heartbeat: unavailable,
@@ -146,6 +202,20 @@ export const makeConfiguredAppleRuntime = Effect.fn("apple.runtime.make")(functi
     backend = lazyBackend(() => Effect.runPromise(initialize));
   }
   const runtime = new AppleRuntime({ backend, environmentId });
+  const sessions = new AppleIdSession(backend.sessions);
+  const server = yield* ServerConfig;
+  const path = yield* Path.Path;
+  const root = path.join(server.stateDir, "xcode");
+  const platform = yield* HostProcessPlatform;
+  const arch = yield* HostProcessArchitecture;
+  const xcode = new XcodeInstall(
+    new MacXcodeHost(root, sessions, { platform, arch }),
+    fileXcodeJobStore(path.join(root, "job.json")),
+    undefined,
+    makeXcodeAccountCheck(backend),
+  );
+  yield* Effect.addFinalizer(() => Effect.promise(() => xcode.dispose()));
+  yield* Effect.addFinalizer(() => Effect.sync(() => sessions.dispose()));
   yield* Effect.addFinalizer(() => Effect.sync(() => runtime.dispose()));
-  return runtime;
+  return { runtime, sessions, xcode };
 });

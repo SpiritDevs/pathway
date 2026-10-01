@@ -193,13 +193,25 @@ export const AppleIdFlowInput = Schema.Struct({
   ...AppleEnvironmentAccountInput.fields,
   flowId: Schema.String,
 });
+export const AppleIdRequestCodeInput = Schema.Struct({
+  ...AppleIdFlowInput.fields,
+  phoneNumberId: Schema.Int,
+});
 export const AppleIdSessionState = Schema.Union([
   Schema.Struct({ state: Schema.Literal("signed-out") }),
+  Schema.Struct({
+    state: Schema.Literal("authenticating"),
+    flowId: Schema.String,
+    expiresAt: CloudTimestamp,
+  }),
+  Schema.Struct({ state: Schema.Literal("failed"), error: AppleFailure }),
   Schema.Struct({
     state: Schema.Literal("challenge"),
     flowId: Schema.String,
     expiresAt: CloudTimestamp,
     destination: Schema.NullOr(Schema.String),
+    kind: Schema.Literals(["trusted-device", "sms", "sms-choice"]),
+    phoneNumbers: Schema.Array(Schema.Struct({ id: Schema.Int, destination: Schema.String })),
   }),
   Schema.Struct({ state: Schema.Literal("authenticated"), expiresAt: CloudTimestamp }),
   Schema.Struct({ state: Schema.Literal("expired") }),
@@ -213,6 +225,7 @@ export const APPLE_WS_METHODS = {
   listApps: "apple.listApps",
   listBuilds: "apple.listBuilds",
   listBetaGroups: "apple.listBetaGroups",
+  appleIdRequestCode: "apple.id.requestCode",
   appleIdStart: "apple.id.start",
   appleIdComplete: "apple.id.complete",
   appleIdCancel: "apple.id.cancel",
@@ -222,6 +235,11 @@ export const APPLE_WS_METHODS = {
 } as const;
 const error = Schema.Union([AppleError, EnvironmentAuthorizationError]);
 export const AppleRpcs = RpcGroup.make(
+  Rpc.make(APPLE_WS_METHODS.appleIdRequestCode, {
+    payload: AppleIdRequestCodeInput,
+    success: AppleIdSessionState,
+    error,
+  }),
   Rpc.make(APPLE_WS_METHODS.registerBundleId, {
     payload: AppleRegisterBundleIdInput,
     success: AppleBundleId,

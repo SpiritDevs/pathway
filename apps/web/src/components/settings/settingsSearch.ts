@@ -27,6 +27,7 @@ export type SettingsPath =
   | "/settings/calendars"
   | "/settings/environments"
   | "/settings/apple"
+  | "/settings/xcode"
   | "/settings/integrations"
   | "/settings/providers"
   | "/settings/scheduled-tasks"
@@ -119,6 +120,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/calendars": "Calendars",
   "/settings/environments": "Environments",
   "/settings/apple": "Apple accounts",
+  "/settings/xcode": "Xcode",
   "/settings/dictation": "Set up dictation",
   "/settings/dictation/models": "Models",
   "/settings/dictation/history": "History",
@@ -181,6 +183,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/calendars",
       "/settings/environments",
       "/settings/apple",
+      "/settings/xcode",
     ],
   },
   {
@@ -859,6 +862,27 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Apple Developer teams",
     to: "/settings/apple",
     targetId: "apple-accounts",
+  },
+  {
+    id: "xcode-install",
+    title: "Install Xcode",
+    to: "/settings/xcode",
+    targetId: "xcode",
+    searchTerms: ["xcode", "simulator", "ios", "download", "apple id"],
+  },
+  {
+    id: "xcode-select",
+    title: "Select Xcode version",
+    to: "/settings/xcode",
+    targetId: "xcode-installed",
+    searchTerms: ["xcode-select", "switch xcode", "beta"],
+  },
+  {
+    id: "xcode-platforms",
+    title: "Xcode platforms and simulator runtimes",
+    to: "/settings/xcode",
+    targetId: "xcode-platforms",
+    searchTerms: ["runtimes", "watchos", "tvos", "ios simulator"],
   },
   {
     id: "add-environment",
