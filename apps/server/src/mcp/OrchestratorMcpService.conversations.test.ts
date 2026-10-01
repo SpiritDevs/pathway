@@ -82,6 +82,8 @@ const remoteSends: Array<string> = [];
 const remoteThreadsLayer = Layer.succeed(
   RemoteThreads,
   RemoteThreads.of({
+    launchTargets: Effect.succeed([]),
+    launchGrant: () => Effect.succeed(null),
     read: (threadId, sourcesFor) =>
       Effect.sync(() => {
         if (threadId !== remoteThreadId || remoteProjection === null) return null;

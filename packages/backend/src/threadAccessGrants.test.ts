@@ -1,4 +1,7 @@
-/** Environment-issued, account-scoped connect grants for reading or messaging a thread elsewhere. */
+/**
+ * Environment-issued, account-scoped connect grants for reading or messaging a thread elsewhere,
+ * or starting one in a project elsewhere.
+ */
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -21,6 +24,7 @@ const modules = {
 const CALLER = "env-caller";
 const TARGET = "env-target";
 const THREAD = "thread-elsewhere";
+const PROJECT = "project-elsewhere";
 const NOW = 1_700_000_000_000;
 
 function harness() {
@@ -189,7 +193,37 @@ async function seed(
       shell: {},
       updatedAt: NOW,
     });
-    return { targetMembershipId: other.membershipId, targetRegistrationId: targetRegistration };
+    const cloudProjectId = await ctx.db.insert("cloudProjects", {
+      id: "0198fa00-0000-7000-8000-000000000501",
+      companyId: other.companyId,
+      name: "pathway",
+      description: "",
+      teamIds: [],
+      defaultWorkflowOwner: null,
+      preferredBindingId: null,
+      archivedAt: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+    });
+    const bindingId = await ctx.db.insert("environmentBindings", {
+      id: "0198fa00-0000-7000-8000-000000000601",
+      companyId: other.companyId,
+      cloudProjectId,
+      environmentId: TARGET,
+      localProjectId: PROJECT,
+      localWorkspaceRoot: "/Users/owner/pathway",
+      status: "active",
+      lastSeenAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    return {
+      targetMembershipId: other.membershipId,
+      targetRegistrationId: targetRegistration,
+      cloudProjectId,
+      bindingId,
+    };
   });
 }
 
@@ -361,6 +395,84 @@ describe("thread access grants", () => {
           }),
         ).resolves.toMatchObject({ status: "accepted", permission, threadAccess: access });
       }
+    });
+  });
+
+  describe("project launches", () => {
+    const LAUNCH = ["remoteAgents.dispatch", "remoteAgents.control"];
+    const launch = (t: Harness, localProjectId = PROJECT) =>
+      asEnvironment(t).action(api.connectGrants.issueProjectLaunch, {
+        environmentId: TARGET,
+        localProjectId,
+      });
+
+    it("lists the other environments and projects the account may start threads in", async () => {
+      const t = harness();
+      await seed(t, LAUNCH);
+      await expect(asEnvironment(t).query(api.connectGrants.launchTargets, {})).resolves.toEqual([
+        {
+          environmentId: TARGET,
+          label: TARGET,
+          lastSeenAt: NOW,
+          updateRequired: false,
+          projects: [
+            { localProjectId: PROJECT, name: "pathway", workspaceRoot: "/Users/owner/pathway" },
+          ],
+        },
+      ]);
+    });
+
+    it("grants a send-scoped launch that the relay redeems as the account's member", async () => {
+      const t = harness();
+      const { targetMembershipId } = await seed(t, LAUNCH);
+      const grant = await launch(t);
+      await expect(
+        asRelay(t).mutation(api.connectGrants.validate, {
+          tokenHash: await hashConnectGrantToken(grant!.token),
+          signsThreadAccessMintScopes: true,
+        }),
+      ).resolves.toMatchObject({
+        status: "accepted",
+        environmentId: TARGET,
+        permission: "remoteAgents.control",
+        threadAccess: "send",
+      });
+      const stored = await t.run(async (ctx) => ctx.db.query("connectGrants").unique());
+      expect(stored?.grantedMembershipId).toBe(targetMembershipId);
+    });
+
+    it("needs both dispatch and control", async () => {
+      for (const permissions of [["remoteAgents.dispatch"], ["remoteAgents.control"]]) {
+        const t = harness();
+        await seed(t, permissions);
+        await expect(launch(t)).resolves.toBeNull();
+        await expect(asEnvironment(t).query(api.connectGrants.launchTargets, {})).resolves.toEqual(
+          [],
+        );
+      }
+    });
+
+    it("skips unknown, archived, and inactive project checkouts", async () => {
+      const t = harness();
+      const { cloudProjectId, bindingId } = await seed(t, LAUNCH);
+      await expect(launch(t, "project-missing")).resolves.toBeNull();
+      await t.run((ctx) => ctx.db.patch(cloudProjectId, { archivedAt: NOW }));
+      await expect(launch(t)).resolves.toBeNull();
+      await t.run(async (ctx) => {
+        await ctx.db.patch(cloudProjectId, { archivedAt: null });
+        await ctx.db.patch(bindingId, { status: "stale" });
+      });
+      await expect(launch(t)).resolves.toBeNull();
+      expect(await t.run((ctx) => ctx.db.query("connectGrants").collect())).toEqual([]);
+    });
+
+    it("asks for an update on targets that cannot narrow the grant", async () => {
+      const t = harness();
+      await seed(t, LAUNCH, { targetReadGrants: "absent" });
+      await expect(asEnvironment(t).query(api.connectGrants.launchTargets, {})).resolves.toEqual([
+        expect.objectContaining({ environmentId: TARGET, updateRequired: true }),
+      ]);
+      await expect(launch(t)).rejects.toThrow(/cannot limit remote access/u);
     });
   });
 });

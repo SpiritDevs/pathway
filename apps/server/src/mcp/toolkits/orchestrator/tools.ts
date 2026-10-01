@@ -10,6 +10,7 @@ import {
   OrchestratorMcpDelegateTaskResult,
   OrchestratorMcpDeleteScheduledTaskInput,
   OrchestratorMcpDeleteScheduledTaskResult,
+  OrchestratorMcpEnvironmentListResult,
   OrchestratorMcpFailure,
   OrchestratorMcpListScheduledTasksResult,
   OrchestratorMcpScheduleTaskInput,
@@ -95,7 +96,7 @@ export const OrchestratorCapabilitiesTool = Tool.make("orchestrator_capabilities
 
 export const DelegateTaskTool = Tool.make("delegate_task", {
   description:
-    "Delegate one task to a Pathway-owned child agent/subagent of THIS thread and run it with only the supplied task prompt, without copying parent conversation history. Use this whenever the user asks for an agent, subagent, worker, delegated task, or parallel help—including cross-provider work. For cross-provider work, set target to the requested provider and model; do not launch that provider's CLI through Bash or a same-provider wrapper because Pathway cannot attribute the nested process correctly. Set targetEnvironmentId only for explicit cross-environment execution; targetProjectId enables the direct path, cloudProjectId enables durable fallback, and connectGrantToken is a caller-supplied single-use direct-connect grant. Remote calls return a dispatch acknowledgement rather than a local child-task handle. The childThreadId is backing storage, not an ordinary top-level thread. Provider, model, model options (see orchestrator_capabilities), runtime mode, and interaction mode inherit unless target overrides them. Prefer mode='async' for long work; mode='wait' blocks until completion or timeout. An async child's completion wakes this thread with a continuation message naming the task (queued behind any turn in progress), so end the turn instead of polling or spawning watchers; use task_status only when the result is needed mid-turn.",
+    "Delegate one task to a Pathway-owned child agent/subagent of THIS thread and run it with only the supplied task prompt, without copying parent conversation history. Use this whenever the user asks for an agent, subagent, worker, delegated task, or parallel help—including cross-provider work. For cross-provider work, set target to the requested provider and model; do not launch that provider's CLI through Bash or a same-provider wrapper because Pathway cannot attribute the nested process correctly. To run the task on another of the user's environments, pass targetEnvironmentId and targetProjectId from pathway_environments_list; Pathway authorizes the launch as the user. Remote calls return the remote threadId rather than a local child-task handle; follow it with pathway_thread_read or pathway_thread_send. The childThreadId is backing storage, not an ordinary top-level thread. Provider, model, model options (see orchestrator_capabilities), runtime mode, and interaction mode inherit unless target overrides them. Prefer mode='async' for long work; mode='wait' blocks until completion or timeout. An async child's completion wakes this thread with a continuation message naming the task (queued behind any turn in progress), so end the turn instead of polling or spawning watchers; use task_status only when the result is needed mid-turn.",
   parameters: OrchestratorMcpDelegateTaskInput,
   success: OrchestratorMcpDelegateTaskOutcome,
   failure: OrchestratorMcpFailure,
@@ -105,6 +106,19 @@ export const DelegateTaskTool = Tool.make("delegate_task", {
   .annotate(Tool.Title, "Delegate a child task")
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
+
+export const EnvironmentsListTool = Tool.make("pathway_environments_list", {
+  description:
+    "List the user's other Pathway environments (machines) and the projects on each where you may start work with delegate_task's targetEnvironmentId and targetProjectId. The current environment is not listed.",
+  success: OrchestratorMcpEnvironmentListResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "List Pathway environments")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
 
 export const TaskStatusTool = Tool.make("task_status", {
   description:
@@ -332,6 +346,7 @@ export const OrchestratorToolkit = Toolkit.make(
   ProviderAllowanceTool,
   AllocateAllowanceTool,
   OrchestratorCapabilitiesTool,
+  EnvironmentsListTool,
   DelegateTaskTool,
   TaskStatusTool,
   TaskCancelTool,

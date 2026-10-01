@@ -17,7 +17,7 @@ import {
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
-import { CloudProjectId, EnvironmentCommandId } from "./cloudProject.ts";
+import { EnvironmentCommandId } from "./cloudProject.ts";
 import {
   ScheduledTaskRunStatus,
   ScheduledTaskSchedule,
@@ -172,25 +172,13 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   targetEnvironmentId: Schema.optional(
     EnvironmentId.annotate({
       description:
-        "Environment that should own and execute this task. Omit for the current environment.",
+        "Another environment that should own and execute this task, from pathway_environments_list. Omit for the current environment.",
     }),
   ),
   targetProjectId: Schema.optional(
     ProjectId.annotate({
       description:
-        "Target-environment local project id for a direct launch. Required when direct delivery is attempted.",
-    }),
-  ),
-  cloudProjectId: Schema.optional(
-    CloudProjectId.annotate({
-      description:
-        "Company cloud-project id used by durable fallback when the target cannot be reached directly.",
-    }),
-  ),
-  connectGrantToken: Schema.optional(
-    TrimmedNonEmptyString.annotate({
-      description:
-        "Caller-supplied, single-use connect grant for one direct environment connection attempt.",
+        "That environment's project id, from pathway_environments_list. Required with targetEnvironmentId.",
     }),
   ),
 });
@@ -235,6 +223,24 @@ export const OrchestratorMcpDelegateTaskOutcome = Schema.Union([
   OrchestratorMcpRemoteDelegateTaskResult,
 ]);
 export type OrchestratorMcpDelegateTaskOutcome = typeof OrchestratorMcpDelegateTaskOutcome.Type;
+
+export const OrchestratorMcpEnvironment = Schema.Struct({
+  environmentId: EnvironmentId,
+  label: Schema.String,
+  lastSeenAt: Schema.NullOr(Schema.Number),
+  updateRequired: Schema.Boolean.annotate({
+    description: "The environment runs a Pathway too old to accept remote tasks.",
+  }),
+  projects: Schema.Array(
+    Schema.Struct({ projectId: ProjectId, name: Schema.String, workspaceRoot: Schema.String }),
+  ),
+});
+export type OrchestratorMcpEnvironment = typeof OrchestratorMcpEnvironment.Type;
+
+export const OrchestratorMcpEnvironmentListResult = Schema.Struct({
+  environments: Schema.Array(OrchestratorMcpEnvironment),
+});
+export type OrchestratorMcpEnvironmentListResult = typeof OrchestratorMcpEnvironmentListResult.Type;
 
 export const OrchestratorMcpTaskStatusInput = Schema.Struct({
   taskId: NodeId,
