@@ -33,6 +33,7 @@ struct AgentThreadsView: View {
     @State private var renameText = ""
     @State private var deletingThread: PathwayAgentThread?
     @State private var attachingThread: PathwayAgentThread?
+    @State private var parentingThread: PathwayAgentThread?
     @State private var focuses = PathwayFocusModel()
     @State private var creatingFocus = false
     @State private var creatingProject = false
@@ -109,6 +110,15 @@ struct AgentThreadsView: View {
         .sheet(item: $attachingThread) { thread in
             PathwayAttachProjectView(thread: thread) { projectID in
                 perform(.attachProject(projectID), on: thread)
+            }
+        }
+        .sheet(item: $parentingThread) { thread in
+            AgentThreadParentPicker(
+                thread: thread,
+                threads: appModel.cloud.threads,
+                environmentLabel: { appModel.cloud.environmentLabel(companyId: $0.companyId, environmentId: $0.environmentId) }
+            ) { parent in
+                perform(.setParent(PathwayThreadParent(parent, for: thread)), on: thread)
             }
         }
     }
@@ -562,6 +572,12 @@ struct AgentThreadsView: View {
             }
             Button("Archive", systemImage: "archivebox") { perform(.archive, on: thread) }.disabled(thread.isRunning)
         }
+        if supportsThreadParent(thread) {
+            Button("Set parent…", systemImage: "arrow.turn.down.right") { parentingThread = thread }
+            if thread.shell.lineage?.parentThreadId != nil {
+                Button("Move to threads list", systemImage: "list.bullet") { perform(.setParent(nil), on: thread) }
+            }
+        }
         Button("Delete", systemImage: "trash", role: .destructive) { deletingThread = thread }.disabled(thread.isRunning)
     }
 
@@ -585,6 +601,12 @@ struct AgentThreadsView: View {
                 }
             }
         }
+    }
+
+    private func supportsThreadParent(_ thread: PathwayAgentThread) -> Bool {
+        appModel.cloud.environments.first {
+            $0.companyId == thread.companyId && $0.environment.environmentId == thread.environmentId
+        }?.environment.descriptor.capabilities?["threadParent"]?.boolValue == true
     }
 
     private func supportsConversations(_ thread: PathwayAgentThread) -> Bool {
@@ -1102,6 +1124,8 @@ struct AgentThreadConversationView: View {
     @State private var viewportIsBeyondContent = false
     private let workspaceRoot: String?
     @State private var childDestination: AgentThreadDestination?
+    @State private var lineageThreadID: String?
+    @State private var showsParentPicker = false
     @State private var isOpeningChild = false
     @State private var showsChanges = false
     @State private var navigationError: String?
@@ -1405,6 +1429,22 @@ struct AgentThreadConversationView: View {
         .navigationDestination(item: $childDestination) { destination in
             AgentThreadConversationView(model: destination.model, workspaceRoot: destination.workspaceRoot)
         }
+        .navigationDestination(item: $lineageThreadID) { threadID in
+            if let thread = appModel.cloud.threadForNavigation(id: threadID) {
+                AgentThreadDetailRoute(thread: thread)
+            } else {
+                ContentUnavailableView("Thread unavailable", systemImage: "bubble.left.and.bubble.right")
+            }
+        }
+        .sheet(isPresented: $showsParentPicker) {
+            AgentThreadParentPicker(
+                thread: actionThread,
+                threads: appModel.cloud.threads,
+                environmentLabel: { appModel.cloud.environmentLabel(companyId: $0.companyId, environmentId: $0.environmentId) }
+            ) { parent in
+                performLifecycle(.setParent(PathwayThreadParent(parent, for: actionThread)))
+            }
+        }
         .alert("Couldn’t update thread", isPresented: Binding(get: { navigationError != nil }, set: { if !$0 { navigationError = nil } })) {
             Button("OK") { navigationError = nil }
         } message: { Text(navigationError ?? "") }
@@ -1617,6 +1657,7 @@ struct AgentThreadConversationView: View {
             Button("Delete thread", systemImage: "trash", role: .destructive) { showsDelete = true }
                 .disabled(model.activeRunID != nil || model.isSending || isUpdatingLifecycle)
         }
+        lineageSection
         if !model.subagents.isEmpty {
             Section("Subagents") {
                 ForEach(model.subagents) { agent in
@@ -1628,6 +1669,30 @@ struct AgentThreadConversationView: View {
             }
         }
     } label: { Image(systemName: "ellipsis") }
+    }
+    /// The parent and listed-under threads, on any environment. Subagents keep their own section.
+    @ViewBuilder private var lineageSection: some View {
+        let lineage = PathwayThreadParents.lineage(of: actionThread, in: appModel.cloud.threads)
+        let children = lineage.children.filter { $0.shell.lineage?.relationshipToParent != "subagent" }
+        let canSetParent = supportsThreadAction("threadParent")
+        if lineage.parent != nil || !children.isEmpty || canSetParent {
+            Section("Lineage") {
+                if let parent = lineage.parent {
+                    Button(parent.shell.title, systemImage: "arrow.turn.left.up") { lineageThreadID = parent.id }
+                }
+                ForEach(children) { child in
+                    Button(child.shell.title, systemImage: "arrow.turn.down.right") { lineageThreadID = child.id }
+                }
+                if canSetParent {
+                    Button("Set parent…", systemImage: "arrow.turn.down.right") { showsParentPicker = true }
+                        .disabled(isUpdatingLifecycle)
+                    if actionThread.shell.lineage?.parentThreadId != nil {
+                        Button("Move to threads list", systemImage: "list.bullet") { performLifecycle(.setParent(nil)) }
+                            .disabled(isUpdatingLifecycle)
+                    }
+                }
+            }
+        }
     }
     private var isThreadSettled: Bool {
         appModel.cloud.settledThreads.contains { $0.id == model.thread.id }

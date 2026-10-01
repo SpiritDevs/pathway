@@ -22,6 +22,72 @@ struct PathwayThreadActionsTests {
         #expect(sleep?["snoozedUntil"]?.stringValue.flatMap(pathwayDate) == wakeDate)
     }
 
+    @Test func encodesParentCommands() {
+        let child = makeAgentThread(id: "child")
+        let here = makeAgentThread(id: "here")
+        let elsewhere = makeAgentThread(id: "elsewhere", environmentId: "environment-2")
+
+        let local = PathwayThreadAction.setParent(PathwayThreadParent(here, for: child))
+            .command(threadID: "child", commandID: "command").objectValue
+        #expect(local?["type"]?.stringValue == "thread.parent.set")
+        #expect(local?["parent"] == .object(["threadId": .string("here")]))
+
+        let remote = PathwayThreadAction.setParent(PathwayThreadParent(elsewhere, for: child))
+            .command(threadID: "child").objectValue
+        #expect(remote?["parent"] == .object(["threadId": .string("elsewhere"), "environmentId": .string("environment-2")]))
+
+        let toList = PathwayThreadAction.setParent(nil).command(threadID: "child").objectValue
+        #expect(toList?["parent"] == .null)
+    }
+
+    @Test func listsAttachedThreadsUnderAListedParent() {
+        let parent = makeAgentThread(id: "parent")
+        let attached = makeAgentThread(id: "attached", parentThreadId: "parent")
+        let remote = makeAgentThread(
+            id: "remote", environmentId: "environment-2", parentThreadId: "parent",
+            parentEnvironmentId: "environment-1"
+        )
+        let orphan = makeAgentThread(id: "orphan", parentThreadId: "gone")
+
+        let partition = PathwayThreadLifecyclePartition(threads: [parent, attached, remote, orphan], now: Date())
+        let listed = partition.active + partition.snoozed + partition.settled
+        #expect(Set(listed.map(\.threadId)) == ["parent", "orphan"])
+
+        let lineage = PathwayThreadParents.lineage(of: parent, in: partition.all)
+        #expect(Set(lineage.children.map(\.threadId)) == ["attached", "remote"])
+        #expect(PathwayThreadParents.lineage(of: remote, in: partition.all).parent?.threadId == "parent")
+    }
+
+    @Test func parentCandidatesSkipTheThreadAndEverythingBeneathIt() {
+        let target = makeAgentThread(id: "target")
+        let child = makeAgentThread(id: "child", parentThreadId: "target")
+        let grandchild = makeAgentThread(
+            id: "grandchild", environmentId: "environment-2", parentThreadId: "child",
+            parentEnvironmentId: "environment-1"
+        )
+        let sibling = makeAgentThread(id: "sibling")
+        let archived = makeAgentThread(id: "archived", archivedAt: "2026-08-29T03:00:00.000Z")
+
+        let candidates = PathwayThreadParents.candidates(
+            for: target, in: [target, child, grandchild, sibling, archived]
+        )
+        #expect(candidates.map(\.threadId) == ["sibling"])
+    }
+
+    @Test func optimisticParentChangeIsReflectedOnceDiscoveryAgrees() {
+        let child = makeAgentThread(id: "child", relationshipToParent: "subagent")
+        let parent = makeAgentThread(id: "parent", environmentId: "environment-2")
+        let overlay = PathwayOptimisticThreadAction(
+            threadID: child.id, action: .setParent(PathwayThreadParent(parent, for: child)), date: Date()
+        )
+        let moved = overlay.applying(to: child)
+        #expect(moved.shell.lineage?.relationshipToParent == nil)
+        #expect(moved.parentKey == "environment-2:parent")
+        #expect(moved.shell.lineage?.rootThreadId == "child")
+        #expect(!overlay.isReflected(in: child))
+        #expect(overlay.isReflected(in: moved))
+    }
+
     @Test func preventsDuplicateActionsAndClearsBusyStateOnFailure() async {
         let actions = PathwayThreadActions()
         var duplicated = false
