@@ -103,13 +103,30 @@ describe("Stash prompts submenu", () => {
     );
   });
 
-  it("opens when empty and offers stashing without allowing an empty save", () => {
-    const { openStash } = setup({ stashEntries: [], stashDisabled: true });
-    const tree = openStash();
-    expect(row(tree, "stash-current").props.disabled).toBe(true);
-    expect(visitElements(tree, (element) => element.type === "p")?.props.children).toContain(
-      "Nothing stashed yet",
-    );
+  it("replaces the submenu with a direct stash action until something is stashed", () => {
+    const { props, render } = setup({ stashEntries: [] });
+    expect(() => row(render(), "stash")).toThrow();
+    activate(row(render(), "stash-current"));
+    expect(props.onStash).toHaveBeenCalledOnce();
+  });
+
+  it("hides stashing entirely when nothing is stashed and the draft is empty", () => {
+    const { render } = setup({ stashEntries: [], stashDisabled: true });
+    expect(() => row(render(), "stash")).toThrow();
+    expect(() => row(render(), "stash-current")).toThrow();
+  });
+
+  it("returns to Add after deleting the last stashed prompt", () => {
+    const { props, openStash, render } = setup({ stashEntries: [saved("only")] });
+    const button = visitElements(
+      row(openStash(), "only"),
+      (element) => element.props["aria-label"] === "Delete stashed prompt",
+    )!;
+    (button.props.onClick as (event: { stopPropagation: () => void }) => void)({
+      stopPropagation: vi.fn(),
+    });
+    expect(props.onDeleteStash).toHaveBeenCalledOnce();
+    expect(row(render(), "attachments")).toBeTruthy();
   });
 
   it("restores the selected prompt and closes without deleting it", () => {

@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, ReactNode, RefObject } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ProjectEntry } from "@spiritdevs/contracts";
 import {
@@ -39,9 +39,12 @@ export interface ComposerAddAction {
   run: () => void;
 }
 
-const ROW_CLASS =
+export const ROW_CLASS =
   "h-8 gap-2.5 rounded-xl px-2.5 py-0 text-sm [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground";
-const GROUP_LABEL_CLASS = "px-2.5 pt-2.5 pb-1 text-[13px] font-normal text-muted-foreground";
+export const GROUP_LABEL_CLASS = "px-2.5 pt-2.5 pb-1 text-[13px] font-normal text-muted-foreground";
+/** The surface shared by every panel that grows out of the composer's top edge. */
+export const ATTACHED_PANEL_CLASS =
+  "chat-composer-attached-panel absolute -inset-x-px bottom-[calc(100%+1px)] z-20 max-h-(--add-menu-max-height) overflow-hidden rounded-t-[22px] border border-b-0 border-border/60 shadow-[0_-12px_28px_-20px_rgb(0_0_0/0.35)]";
 const PANEL_MAX_HEIGHT_PX = 416;
 const PANEL_TOP_GAP_PX = 8;
 
@@ -55,6 +58,32 @@ function measureAvailableHeight(panel: HTMLElement): number {
   const boundary = overlay?.offsetParent ?? overlay;
   const boundaryTop = boundary ? boundary.getBoundingClientRect().top : 0;
   return Math.min(PANEL_MAX_HEIGHT_PX, composerTop - boundaryTop - PANEL_TOP_GAP_PX);
+}
+
+/** Caps an attached panel at the room above the composer, tracking resizes. */
+export function useAttachedPanelHeightStyle(
+  panelRef: RefObject<HTMLElement | null>,
+): CSSProperties | undefined {
+  const [maxHeight, setMaxHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const update = () => setMaxHeight(Math.max(0, measureAvailableHeight(panel)));
+    update();
+    window.addEventListener("resize", update);
+    const observer =
+      typeof ResizeObserver === "undefined" || !panel.parentElement
+        ? null
+        : new ResizeObserver(update);
+    if (panel.parentElement) observer?.observe(panel.parentElement);
+    return () => {
+      window.removeEventListener("resize", update);
+      observer?.disconnect();
+    };
+  }, [panelRef]);
+  return maxHeight === null
+    ? undefined
+    : ({ "--add-menu-max-height": `${maxHeight}px` } as CSSProperties);
 }
 
 /** The composer's left-hand + button; it only toggles the attached panel. */
@@ -115,27 +144,10 @@ export function ComposerAddMenu(props: {
 }) {
   const [view, setView] = useState<"main" | "attachments" | "paths" | "stash">("main");
   const [query, setQuery] = useState("");
-  const [maxHeight, setMaxHeight] = useState<number | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const heightStyle = useAttachedPanelHeightStyle(panelRef);
   const onCloseRef = useRef(props.onClose);
   onCloseRef.current = props.onClose;
-
-  useLayoutEffect(() => {
-    const panel = panelRef.current;
-    if (!panel) return;
-    const update = () => setMaxHeight(Math.max(0, measureAvailableHeight(panel)));
-    update();
-    window.addEventListener("resize", update);
-    const observer =
-      typeof ResizeObserver === "undefined" || !panel.parentElement
-        ? null
-        : new ResizeObserver(update);
-    if (panel.parentElement) observer?.observe(panel.parentElement);
-    return () => {
-      window.removeEventListener("resize", update);
-      observer?.disconnect();
-    };
-  }, []);
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -231,6 +243,8 @@ export function ComposerAddMenu(props: {
           }}
           onClick={(event) => {
             event.stopPropagation();
+            // Deleting the last prompt leaves nothing to show here.
+            if (props.stashEntries.length === 1) changeView("main");
             props.onDeleteStash(entry);
           }}
         >
@@ -238,6 +252,18 @@ export function ComposerAddMenu(props: {
         </Button>
       </CommandItem>
     ));
+  const stashCurrentRow = matches("Stash current prompt", "save draft later") ? (
+    <CommandItem
+      value="stash-current"
+      disabled={props.stashDisabled}
+      className={ROW_CLASS}
+      onClick={() => select(props.onStash)}
+    >
+      <BookmarkPlusIcon />
+      <span className="flex-1">Stash current prompt</span>
+      {props.stashShortcut ? <CommandShortcut>{props.stashShortcut}</CommandShortcut> : null}
+    </CommandItem>
+  ) : null;
 
   return (
     <div
@@ -246,12 +272,8 @@ export function ComposerAddMenu(props: {
       role="dialog"
       aria-label="Add to message"
       data-composer-add-menu="true"
-      style={
-        maxHeight === null
-          ? undefined
-          : ({ "--add-menu-max-height": `${maxHeight}px` } as CSSProperties)
-      }
-      className="chat-composer-attached-panel absolute -inset-x-px bottom-[calc(100%+1px)] z-20 max-h-(--add-menu-max-height) overflow-hidden rounded-t-[22px] border border-b-0 border-border/60 shadow-[0_-12px_28px_-20px_rgb(0_0_0/0.35)]"
+      style={heightStyle}
+      className={ATTACHED_PANEL_CLASS}
       onKeyDown={(event) => {
         // The panel lives inside the composer form; Enter must never submit the prompt.
         if (event.key === "Enter") event.preventDefault();
@@ -314,7 +336,11 @@ export function ComposerAddMenu(props: {
                   </CommandItem>
                 ) : null}
                 {actionRows(props.actions)}
-                {matches("Stash prompts", "save draft later restore") ? (
+                {props.stashEntries.length === 0 ? (
+                  props.stashDisabled ? null : (
+                    stashCurrentRow
+                  )
+                ) : matches("Stash prompts", "save draft later restore") ? (
                   <CommandItem
                     value="stash"
                     className={ROW_CLASS}
@@ -322,11 +348,9 @@ export function ComposerAddMenu(props: {
                   >
                     <BookmarkIcon />
                     <span className="flex-1">Stash prompts</span>
-                    {props.stashEntries.length > 0 ? (
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {props.stashEntries.length}
-                      </span>
-                    ) : null}
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {props.stashEntries.length}
+                    </span>
                     <ChevronRightIcon />
                   </CommandItem>
                 ) : null}
@@ -382,26 +406,9 @@ export function ComposerAddMenu(props: {
           ) : view === "stash" ? (
             <CommandGroup>
               <CommandGroupLabel className={GROUP_LABEL_CLASS}>Stashed prompts</CommandGroupLabel>
-              {matches("Stash current prompt", "save draft") ? (
-                <CommandItem
-                  value="stash-current"
-                  disabled={props.stashDisabled}
-                  className={ROW_CLASS}
-                  onClick={() => select(props.onStash)}
-                >
-                  <BookmarkPlusIcon />
-                  <span className="flex-1">Stash current prompt</span>
-                  {props.stashShortcut ? (
-                    <CommandShortcut>{props.stashShortcut}</CommandShortcut>
-                  ) : null}
-                </CommandItem>
-              ) : null}
+              {stashCurrentRow}
               {stashRows}
-              {props.stashEntries.length === 0 ? (
-                <p className="px-2.5 py-1.5 text-sm text-muted-foreground">
-                  Nothing stashed yet. Stashed prompts can be restored into any thread.
-                </p>
-              ) : stashRows.length === 0 ? (
+              {stashRows.length === 0 ? (
                 <p role="status" className="px-2.5 py-1.5 text-sm text-muted-foreground">
                   No matching stashed prompts.
                 </p>

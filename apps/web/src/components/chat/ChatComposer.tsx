@@ -1312,20 +1312,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
+    const toolItems = buildBuiltInSlashCommandItems({
+      computerUseAvailable,
+    }) satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
+    const skillItems = (query: string) =>
+      searchProviderSkills(composerCatalog?.skills ?? [], query).map((skill) => ({
+        id: `skill:${selectedProvider}:${skill.name}`,
+        type: "skill" as const,
+        provider: selectedProvider,
+        skill,
+        label: formatProviderSkillDisplayName(skill),
+        description:
+          skill.shortDescription ??
+          skill.description ??
+          (skill.scope ? `${skill.scope} skill` : "Run provider skill"),
+      }));
     if (composerTrigger.kind === "path") {
-      return workspaceEntries.entries.map((entry) => ({
+      // Tools lead, but only by plain name matches so file searches stay uncluttered.
+      const toolQuery = composerTrigger.query.trim().toLowerCase();
+      const matchingTools = toolItems.filter((item) =>
+        `${item.label} ${item.command}`.toLowerCase().includes(toolQuery),
+      );
+      const fileItems = workspaceEntries.entries.map((entry) => ({
         id: `path:${entry.kind}:${entry.path}`,
-        type: "path",
+        type: "path" as const,
         path: entry.path,
         pathKind: entry.kind,
         label: basenameOfPath(entry.path),
         description: entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))),
       }));
+      return [...matchingTools, ...fileItems];
     }
     if (composerTrigger.kind === "slash-command") {
-      const builtInSlashCommandItems = buildBuiltInSlashCommandItems({
-        computerUseAvailable,
-      }) satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
       const providerSlashCommandItems = (composerCatalog?.slashCommands ?? [])
         .filter((command) => !shouldHideProviderNativeSlashCommand(command.name))
         .map((command) => ({
@@ -1337,23 +1355,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           description: command.description ?? command.input?.hint ?? "Run provider command",
         }));
       const query = composerTrigger.query.trim().toLowerCase();
-      const slashCommandItems = [...builtInSlashCommandItems, ...providerSlashCommandItems];
-      return searchSlashCommandItems(slashCommandItems, query, composerTrigger.rangeStart === 0);
+      const commandItems = searchSlashCommandItems(
+        [...toolItems, ...providerSlashCommandItems],
+        query,
+        composerTrigger.rangeStart === 0,
+      );
+      // Tools first, then provider commands, then skills.
+      return [
+        ...commandItems.filter((item) => item.type === "slash-command"),
+        ...commandItems.filter((item) => item.type === "provider-slash-command"),
+        ...skillItems(composerTrigger.query),
+      ];
     }
     if (composerTrigger.kind === "skill") {
-      return searchProviderSkills(composerCatalog?.skills ?? [], composerTrigger.query).map(
-        (skill) => ({
-          id: `skill:${selectedProvider}:${skill.name}`,
-          type: "skill" as const,
-          provider: selectedProvider,
-          skill,
-          label: formatProviderSkillDisplayName(skill),
-          description:
-            skill.shortDescription ??
-            skill.description ??
-            (skill.scope ? `${skill.scope} skill` : "Run provider skill"),
-        }),
-      );
+      return skillItems(composerTrigger.query);
     }
     return [];
   }, [
@@ -1425,11 +1440,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (needsClaudeCatalog && scopedCatalog.error)
       return "Could not load this project's commands. Close and reopen the menu to retry.";
     if (composerTriggerKind === "skill") {
-      return "No skills found. Try / to browse provider commands.";
+      return "No matching skills.";
     }
     return composerTriggerKind === "path"
-      ? "No matching files or folders."
-      : "No matching command.";
+      ? "No matching tools, files, or folders."
+      : "No matching tools, commands, or skills.";
   }, [composerTriggerKind, needsClaudeCatalog, scopedCatalog.error]);
 
   // ------------------------------------------------------------------
@@ -1945,19 +1960,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           return;
         }
         if (item.command === "computer-use") {
-          const replacement = "/computer-use ";
-          const applied = applyPromptReplacement(
-            trigger.rangeStart,
-            trigger.rangeEnd,
-            replacement,
-            { expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd) },
-          );
+          // The server only reads /computer-use from the start of the message.
+          const expectedText = snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd);
+          const applied =
+            trigger.rangeStart === 0
+              ? applyPromptReplacement(0, trigger.rangeEnd, "/computer-use ", { expectedText })
+              : applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+                  expectedText,
+                }) && applyPromptReplacement(0, 0, "/computer-use ");
           if (applied) {
             setComposerHighlightedItemId(null);
           }
           return;
         }
-        setGoalMode(composerDraftTarget, false);
+        setGoalMode(composerDraftTarget, item.command === "goal");
         void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -3205,6 +3221,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }}
     />
   );
+  // Typing /, $, or @ opens the same attached panel as the + button.
+  const attachedMenu =
+    addMenu ||
+    (composerMenuOpen && !isComposerApprovalState && (
+      <ComposerCommandMenu
+        items={composerMenuItems}
+        resolvedTheme={resolvedTheme}
+        isLoading={isComposerMenuLoading}
+        triggerKind={composerTriggerKind}
+        emptyStateText={composerMenuEmptyState}
+        activeItemId={activeComposerMenuItem?.id ?? null}
+        onHighlightedItemChange={onComposerMenuItemHighlighted}
+        onSelect={onSelectComposerItem}
+      />
+    ));
   const primaryActions = (
     <ComposerPrimaryActions
       compact
@@ -3242,7 +3273,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       onSubmit={submitComposer}
       className="mx-auto w-full min-w-0 max-w-3xl"
       data-chat-composer-form="true"
-      data-composer-add-menu-open={addMenu ? "true" : undefined}
+      data-composer-add-menu-open={attachedMenu ? "true" : undefined}
     >
       <input
         ref={attachmentInputRef}
@@ -3257,7 +3288,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       <div
         className={cn(
           "group rounded-[22px] p-px transition-colors duration-200",
-          addMenu && "rounded-t-none",
+          attachedMenu && "rounded-t-none",
           composerProviderState.composerFrameClassName,
         )}
         onDragEnterCapture={composerMentionDragHandlers.onDragEnter}
@@ -3269,13 +3300,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           data-chat-composer-content-sized="true"
           className={cn(
             "relative rounded-[28px] border border-border/60 shadow-sm transition-[background-color] duration-200",
-            addMenu && "rounded-t-none",
+            attachedMenu && "rounded-t-none",
             isDragOverComposer ? "bg-accent/45 ring-1 ring-primary/70" : null,
             environmentUnavailable || projectSelectionRequired ? "opacity-75" : null,
             composerProviderState.composerSurfaceClassName,
           )}
         >
-          {addMenu}
+          {attachedMenu}
           {activePendingApproval ? (
             <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
               <ComposerPendingApprovalPanel
@@ -3344,25 +3375,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   onRestore={restoreStashEntry}
                   onDelete={deleteStashEntry}
                   onClose={() => setIsStashMenuOpen(false)}
-                />
-              </ComposerCommandMenuLayer>
-            )}
-
-            {composerMenuOpen && !isAddMenuOpen && !isComposerApprovalState && (
-              <ComposerCommandMenuLayer anchor={composerMenuAnchor} shortcutScope={shortcutScope}>
-                <ComposerCommandMenu
-                  items={composerMenuItems}
-                  resolvedTheme={resolvedTheme}
-                  isLoading={isComposerMenuLoading}
-                  triggerKind={composerTriggerKind}
-                  groupSlashCommandSections={
-                    composerTrigger?.kind === "slash-command" &&
-                    composerTrigger.query.trim().length === 0
-                  }
-                  emptyStateText={composerMenuEmptyState}
-                  activeItemId={activeComposerMenuItem?.id ?? null}
-                  onHighlightedItemChange={onComposerMenuItemHighlighted}
-                  onSelect={onSelectComposerItem}
                 />
               </ComposerCommandMenuLayer>
             )}

@@ -14,31 +14,34 @@ export interface BuiltInSlashCommandItem {
   readonly description: string;
 }
 
-/** Pathway-owned slash commands, in menu order. */
+/**
+ * Pathway-owned tools, in menu order. They match the + menu's names; typing the
+ * command after `/` still finds them.
+ */
 export function buildBuiltInSlashCommandItems(input: {
   /** Whether this environment's server could ever drive a desktop. */
   readonly computerUseAvailable: boolean;
 }): BuiltInSlashCommandItem[] {
   return [
     {
-      id: "slash:model",
+      id: "slash:goal",
       type: "slash-command",
-      command: "model",
-      label: "/model",
-      description: "Switch response model for this thread",
+      command: "goal",
+      label: "Goal",
+      description: "Describe a goal and measurable outcomes",
     },
     {
       id: "slash:plan",
       type: "slash-command",
       command: "plan",
-      label: "/plan",
+      label: "Plan mode",
       description: "Switch this thread into plan mode",
     },
     {
       id: "slash:default",
       type: "slash-command",
       command: "default",
-      label: "/default",
+      label: "Build mode",
       description: "Switch this thread back to normal build mode",
     },
     ...(input.computerUseAvailable
@@ -47,11 +50,18 @@ export function buildBuiltInSlashCommandItems(input: {
             id: "slash:computer-use",
             type: "slash-command" as const,
             command: "computer-use" as const,
-            label: "/computer-use",
+            label: "Computer use",
             description: "Use Pathway Computer for this request only",
           },
         ]
       : []),
+    {
+      id: "slash:model",
+      type: "slash-command",
+      command: "model",
+      label: "Model",
+      description: "Switch response model for this thread",
+    },
   ];
 }
 

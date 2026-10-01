@@ -14,7 +14,9 @@ Use the plus button on the left of the input to open the Add menu. It grows out 
 the message field and covers the environment controls while open. The Add section holds
 attachments, Goal, Plan mode, Computer use (when the environment supports it), and Stash
 prompts. Your skills follow. Search to find an item. Stash prompts opens your stashed prompts:
-stash the current draft, restore a prompt into this thread, or delete one.
+stash the current draft, restore a prompt into this thread, or delete one. Until you have a
+stashed prompt, the Add section shows Stash current prompt instead, and only when the input
+has something to stash.
 
 Each save adds a separate prompt, newest first, and clears its text and attachments from the
 input. Restoring adds to your current draft and keeps the saved prompt for reuse. The stash
@@ -58,6 +60,11 @@ appears beside your message. It shows preparation, checkout progress, and the se
 they happen. Once the workspace is ready for the agent, the card disappears and the Working
 timer starts. Setup failures stay visible so you can inspect them.
 
+Typing `/`, `$`, or `@` opens the same panel as the plus button, growing out of the top of
+the input. `/` lists tools first (Goal, Plan mode, Build mode, Computer use, and Model), then
+provider commands, then skills. `$` lists skills only. `@` lists tools, then project files and
+folders. Keep typing to filter, use the arrow keys to move, and press Enter to choose.
+
 Type `$` to pick a skill. Claude skill suggestions come from the selected project or
 worktree and provider account. They refresh when you open the menu. With Claude, Pathway translates the selected `$name` into
 a direct skill invocation, including when it appears mid-message. Skills reserved
@@ -70,9 +77,9 @@ Earlier user-only skills cannot run through that tool, so send each in its own m
 Claude skill names come from their directory names, and a user skill takes precedence
 over a project skill with the same name.
 
-Provider slash commands appear only when `/` starts the whole message, where the
-provider can expand them. Pathway's `/model`, `/plan`, and `/default` commands
-remain available at the beginning of any line.
+Provider commands appear only when `/` starts the whole message, where the
+provider can expand them. Tools remain available after `/` at the beginning of any line.
+Choosing Computer use always places `/computer-use` at the start of the message.
 
 ## Action palette
 
