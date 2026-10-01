@@ -97,6 +97,44 @@ Restart an existing agent session after granting access. Turning access off
 revokes it for current agent sessions too; your own Device panel is
 unaffected.
 
+## On iPhone and iPad
+
+When a chat has a device open, a **One device open** (or **N devices open**)
+button appears above the composer. Tap it to watch the device full screen. If
+the chat has several devices open, switch between them from the **…** menu,
+which also has **Reload stream**, **App switcher**, **Back** (Android),
+**Rotate** (iOS), and **Shut down device**.
+
+The viewer shows who's in control of the device: you, the agent, someone else,
+or nobody. Only one of them can send input at a time, and the environment
+enforces it. Until you have control, the viewer only watches.
+
+Tap **Take control** to take the device from whoever has it. The viewer shows
+**Taking control…** while the previous touch or command finishes, then **You
+have control** and your touches reach the device. While you have control,
+nobody else can use the device, including the agent: its device commands are
+refused, but its turn keeps running. When you're done, tap **Resume agent**,
+optionally with a message. The viewer gives up control first, then the agent
+continues from the device's current state. If the environment doesn't confirm
+the hand-back, the agent isn't resumed and your message stays: take control
+again, then tap **Resume agent**. When the environment can't confirm the last
+input finished, the viewer offers **Restart device tools** first.
+
+You keep control only while the viewer is open. Leaving it, switching apps, or
+switching to another device gives control up, even while you're still taking
+it, and so does losing the connection. Take control again once it's back. If someone else takes control, the viewer
+goes back to watching and any touch or key you're holding is released. While
+the app is reconnecting, the viewer only watches. **Shut down device** is
+available while you have control.
+
+On an environment running an older Pathway release, the viewer only watches.
+Update the environment to take control from your iPhone or iPad.
+
+The stream pauses when you leave the viewer or switch apps, and reconnects
+when you come back. It works on your local network and over Pathway Connect.
+If the environment keeps refusing the stream, the viewer stops and offers
+**Reconnect**.
+
 ## Settings
 
 Manage devices in **Settings → Integrations → Devices**. Choose the

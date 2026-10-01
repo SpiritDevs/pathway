@@ -3,7 +3,7 @@ import Foundation
 /// The conversation and its pushed browser share a subscription, but hidden destinations do not.
 @MainActor
 final class PathwayThreadSubscriptionLifetime {
-    enum Owner: Hashable { case conversation, browser }
+    enum Owner: Hashable { case conversation, browser, devices }
     private var owners: Set<Owner> = []
     private var running = false
     private let start: @MainActor () -> Void

@@ -81,6 +81,10 @@ jobs:
       - name: Test
         run: vp run --parallel --concurrency-limit 4 --filter '!@spiritdevs/pathway' --filter '!@spiritdevs/monorepo' test
 
+      # apps/pathway-ios has no package test task.
+      - name: Test iOS device stream page
+        run: vp test run apps/pathway-ios/device-stream/entry.test.ts
+
   # apps/server sets `fileParallelism: false`, so its files run strictly
   # one at a time. Sharding spreads them over separate runners instead of
   # separate workers, so no two server test files ever share a machine and the

@@ -40,6 +40,7 @@ export default defineConfig({
       "apps/web/public/mockServiceWorker.js",
       "apps/web/src/lib/vendor/qrcodegen.ts",
       "apps/pathway-ios/Pathway/Resources/PathwayTerminal.bundle/**",
+      "apps/pathway-ios/Pathway/Resources/PathwayDeviceStream.bundle/**",
       "*.icon/**",
     ],
     sortPackageJson: {},

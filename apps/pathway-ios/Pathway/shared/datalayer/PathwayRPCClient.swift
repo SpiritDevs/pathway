@@ -10,6 +10,8 @@ enum PathwayRPCError: LocalizedError, Sendable {
     case protocolViolation(String)
     case remote(String)
     case rejected(message: String, detail: String)
+    /// A device control lease refused the request; `code` is the contract's `DeviceControlError` code.
+    case deviceControl(code: String, message: String)
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +20,7 @@ enum PathwayRPCError: LocalizedError, Sendable {
         case let .protocolViolation(message): message
         case let .remote(message): message
         case let .rejected(message, _): message
+        case let .deviceControl(_, message): message
         }
     }
 }
@@ -111,6 +114,7 @@ actor PathwayRPCClient {
     private var subscriptionGate = PathwayRPCSubscriptionGate()
     private var subscriptionContinuation: AsyncThrowingStream<JSONValue, Error>.Continuation?
     private var subscriptionBufferingPolicy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy = .bufferingOldest(256)
+    private var closeWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         session: URLSession = .shared,
@@ -202,6 +206,19 @@ actor PathwayRPCClient {
         }
     }
 
+    /// Returns once the open socket closes or the client stops, or at once when no socket is open.
+    /// The environment ties some state, such as device control leases, to one socket's lifetime.
+    func waitUntilClosed() async {
+        guard socket != nil else { return }
+        await withCheckedContinuation { closeWaiters.append($0) }
+    }
+
+    private func socketClosed() {
+        let waiters = closeWaiters
+        closeWaiters = []
+        for waiter in waiters { waiter.resume() }
+    }
+
     func stop() {
         desired = false
         loopTask?.cancel()
@@ -211,6 +228,7 @@ actor PathwayRPCClient {
         awaitingKeepaliveResponse = false
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
+        socketClosed()
         connectionID = nil
         subscriptionRequestID = nil
         subscriptionGate.reset()
@@ -267,6 +285,7 @@ actor PathwayRPCClient {
 
     private func install(_ task: URLSessionWebSocketTask, id: UUID) {
         socket?.cancel(with: .goingAway, reason: nil)
+        socketClosed()
         socket = task
         connectionID = id
         awaitingKeepaliveResponse = false
@@ -369,6 +388,7 @@ actor PathwayRPCClient {
         }
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
+        socketClosed()
         connectionID = nil
         keepaliveTask?.cancel()
         keepaliveTask = nil
@@ -516,6 +536,10 @@ actor PathwayRPCClient {
 
     private static func remoteError(_ exit: PathwayRPCExit) -> PathwayRPCError {
         let message = remoteMessage(exit)
+        if let error = exit.cause?.compactMap({ $0.error?.objectValue }).first(where: { $0["_tag"]?.stringValue == "DeviceControlError" }),
+           let code = error["code"]?.stringValue {
+            return .deviceControl(code: code, message: message)
+        }
         if let detail = exit.cause?.compactMap({ $0.error?.objectValue?["detail"]?.stringValue }).first {
             return .rejected(message: message, detail: detail)
         }

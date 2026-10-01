@@ -48,6 +48,8 @@ struct PathwayPreparedEnvironmentConnection: Sendable {
     let accessToken: String
     let proofKeyThumbprint: String
     let scopes: Set<String>
+    /// When the `wsTicket` in `webSocketURL` expires, as the environment reported it.
+    var ticketExpiresAt: Date?
 
     func threadOperationWebSocketURL() throws -> URL {
         guard scopes.contains("orchestration:operate") else { throw PathwayConnectError.scopeMismatch }
@@ -98,6 +100,7 @@ private struct PathwayRemoteEnvironmentDescriptor: Decodable, Sendable {
 
 private struct PathwayWebSocketTicket: Decodable, Sendable {
     let ticket: String
+    let expiresAt: String?
 }
 
 private struct PathwayConnectErrorBody: Decodable, Sendable {
@@ -193,7 +196,7 @@ actor PathwayConnectClient {
             thumbprint: thumbprint,
             scopes: Self.environmentScopes(computerOperateScope: descriptor.capabilities?["computerOperateScope"]?.boolValue == true)
         )
-        let socketURL = try await webSocketURL(
+        let (socketURL, ticketExpiresAt) = try await webSocketURL(
             endpoint: bootstrap.endpoint,
             accessToken: accessToken.accessToken,
             thumbprint: thumbprint
@@ -205,11 +208,39 @@ actor PathwayConnectClient {
             webSocketURL: socketURL,
             accessToken: accessToken.accessToken,
             proofKeyThumbprint: thumbprint,
-            scopes: Set(accessToken.scope.split(separator: " ").map(String.init))
+            scopes: Set(accessToken.scope.split(separator: " ").map(String.init)),
+            ticketExpiresAt: ticketExpiresAt
         )
     }
 
     // swiftlint:enable opening_brace
+
+    /// A fresh `wsTicket` minted with `connection`'s access token, so the socket it opens belongs to the
+    /// same authenticated environment session. Every `prepare` through Pathway Connect opens a new session.
+    func refreshingTicket(_ connection: PathwayPreparedEnvironmentConnection) async throws -> PathwayPreparedEnvironmentConnection {
+        let target = endpoint(connection.httpBaseURL, path: ["api", "auth", "websocket-ticket"])
+        let proof = try await signer.proof(method: "POST", url: target, accessToken: connection.accessToken)
+        guard proof.thumbprint == connection.proofKeyThumbprint else { throw PathwayConnectError.invalidProofKey }
+        var request = URLRequest(url: target)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("DPoP \(connection.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(proof.value, forHTTPHeaderField: "DPoP")
+        let ticket: PathwayWebSocketTicket = try await send(request, as: PathwayWebSocketTicket.self)
+        guard var components = URLComponents(url: connection.webSocketURL, resolvingAgainstBaseURL: false) else {
+            throw PathwayConnectError.invalidURL
+        }
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "wsTicket" }
+        queryItems.append(URLQueryItem(name: "wsTicket", value: ticket.ticket))
+        components.queryItems = queryItems
+        guard let socketURL = components.url else { throw PathwayConnectError.invalidURL }
+        return PathwayPreparedEnvironmentConnection(
+            environmentID: connection.environmentID, label: connection.label, httpBaseURL: connection.httpBaseURL,
+            webSocketURL: socketURL, accessToken: connection.accessToken, proofKeyThumbprint: connection.proofKeyThumbprint,
+            scopes: connection.scopes, ticketExpiresAt: ticket.expiresAt.flatMap(pathwayDate(from:))
+        )
+    }
 
     func authenticatedRequest(environment: PathwayCompanyEnvironment, method: String, path: String) async throws -> URLRequest {
         let connection = try await prepare(environment: environment)
@@ -402,7 +433,7 @@ private extension PathwayConnectClient {
         endpoint managedEndpoint: PathwayManagedEndpoint,
         accessToken: String,
         thumbprint: String
-    ) async throws -> URL {
+    ) async throws -> (URL, Date?) {
         guard
             let httpBaseURL = managedEndpoint.httpBaseURL,
             let socketBaseURL = managedEndpoint.webSocketBaseURL,
@@ -436,7 +467,7 @@ private extension PathwayConnectClient {
         queryItems.append(URLQueryItem(name: "wsTicket", value: ticket.ticket))
         components?.queryItems = queryItems
         guard let result = components?.url else { throw PathwayConnectError.invalidURL }
-        return result
+        return (result, ticket.expiresAt.flatMap(pathwayDate(from:)))
     }
 
     private var relayOrigin: URL {

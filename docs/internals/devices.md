@@ -85,6 +85,41 @@ headless browsers reject that profile, and WebCodecs is secure-context only, so
 clients should probe `isConfigSupported` and fall back to the MJPEG endpoint on
 iOS. Android has no MJPEG; clients should report that they cannot decode it.
 
+The web viewer and the native iOS app share `client-runtime/device/stream.ts`.
+iOS bundles it with `scripts/ios/build-device-stream.mjs` into
+`PathwayDeviceStream.bundle` (CI checks the bundle with `--check`) and runs it
+in a WKWebView whose empty document is loaded at the environment's origin, so
+media and input are same-origin and WebCodecs gets a secure context over
+HTTPS. The app mints the ticket and passes it in as `DeviceHubAccess`, with
+`expiresAt` taken from the ticket response. An `unauthorized` reply makes it
+mint a fresh one at most twice per failing sequence; the budget refills once
+media and input both connect or the user retries, so a refused stream stops
+with an error instead of looping. A terminated WebKit content process marks
+the page failed, and the next start loads a new document; callbacks from older
+documents are ignored.
+
+The iOS viewer follows the device control lease contract
+(`device-client-contract.md`). Each mounted viewer generates a `viewerId`,
+acquires, renews every 10 seconds, and releases over one RPC connection that
+lives as long as the lease, because the environment releases a connection's
+grants when it closes. The environment also checks the authenticated session,
+and every Pathway Connect `prepare` opens a new one, so the lease's connection
+opens one session (`PathwayDeviceEnvironmentSession`) and mints further tickets
+within it: the stream's tickets while the lease is held, and mutations such as
+`device.close` go over the lease's socket. Input is enabled only when the newer
+of the snapshot's `controls` entry and the latest acquire/renew response is
+`held` by this viewer at the generation it was granted. A new grant restarts the
+page's stream with a ticket from the lease's session so the input socket carries
+`viewerId` and `controlGeneration`; renewals do not.
+
+Hiding, backgrounding, or switching devices releases the lease, including one
+still being acquired; a grant that arrives afterwards is released at once. Any
+renewal failure, the lease socket closing, a failed ticket refresh, or device
+state going non-live drops the lease, and only a new grant restores input.
+Resume agent dispatches only after the release is acknowledged; a refused
+release keeps the hand-back message for a retry, and `input_unconfirmed` offers
+`device.restartTools`. Without `supportsDeviceControl`, the viewer only watches.
+
 ## Upstream version and tool inventory
 
 The backend follows t3code `d15210cd3da79f9a1a495a6309d912d76362a046`.
