@@ -393,5 +393,5 @@ is separate from durable local delivery and from provider startup.
 ## Thread lineage
 
 **Attached thread**:
-A thread whose lineage names a parent but no fork or subagent relationship (`relationshipToParent: null`). It lists under its parent in Lineage rather than in the sidebar, and returns to the sidebar once that parent is gone. It has none of the fork or subagent behavior, such as merge-back, completion delivery, or cascading delete. `lineage.parentEnvironmentId` is set when the parent lives on another environment, as with a thread started there by `delegate_task`.
+A thread whose lineage names a parent but no fork or subagent relationship (`relationshipToParent: null`). It lists under its parent in Lineage rather than in the sidebar, and returns to the sidebar once that parent is gone. It has none of the fork or subagent behavior, such as merge-back, completion delivery, or cascading delete. `thread.parent.set` makes any thread an attached thread, or with a null parent returns it to the sidebar. Neither changes `rootThreadId`, which still scopes the conversation folder. `lineage.parentEnvironmentId` is set when the parent lives on another environment, as with a thread started there by `delegate_task`.
 _Avoid_: Linked thread, child thread (when no subagent is meant)

@@ -27,6 +27,8 @@ import {
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadSendInput,
   OrchestratorMcpThreadSendResult,
+  OrchestratorMcpThreadSetParentInput,
+  OrchestratorMcpThreadSetParentResult,
   OrchestratorMcpThreadStartInput,
   OrchestratorMcpThreadWaitInput,
   OrchestratorMcpThreadWaitResult,
@@ -263,6 +265,19 @@ export const ThreadSendTool = Tool.make("pathway_thread_send", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
+export const ThreadSetParentTool = Tool.make("pathway_thread_set_parent", {
+  description:
+    "Move a Pathway thread, by thread ID, on this environment or another of the user's environments. Give parentThreadId to list it under that thread in Lineage instead of the user's threads list, or null to move it back to the threads list. Moving a subagent stops it reporting back to its parent, and a running subagent cannot be moved. clientRequestId makes retries idempotent.",
+  parameters: OrchestratorMcpThreadSetParentInput,
+  success: OrchestratorMcpThreadSetParentResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Move a Pathway thread")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
+
 export const ThreadWaitTool = Tool.make("pathway_thread_wait", {
   description:
     "Wait for a Pathway thread run to reach a terminal durable state. Without runId, the latest run at call time is selected; an idle thread returns immediately. Timeout does not interrupt work, so call again or use pathway_thread_read/list after timedOut=true. Waiting reports status only and does not acknowledge a delegated result.",
@@ -359,6 +374,7 @@ export const OrchestratorToolkit = Toolkit.make(
   ThreadListTool,
   ThreadReadTool,
   ThreadSendTool,
+  ThreadSetParentTool,
   ThreadWaitTool,
   ThreadInterruptTool,
 );

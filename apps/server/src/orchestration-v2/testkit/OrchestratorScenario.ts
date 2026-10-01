@@ -136,6 +136,7 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
     case "thread.project.attach":
     case "thread.temporary.set":
     case "thread.metadata.update":
+    case "thread.parent.set":
     case "thread.title.regeneration.complete":
     case "thread.browser-takeover.request":
     case "thread.browser-takeover.transition":

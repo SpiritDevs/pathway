@@ -54,6 +54,13 @@ describe("buildThreadActionMenuItems", () => {
     ).toEqual(["rename", "mark-unread", "copy-path", "copy-thread-id", "archive", "delete"]);
   });
 
+  it("offers set parent on supporting servers, and moving back only to listed-under threads", () => {
+    const supported = { ...baseState, supports: { ...baseState.supports, parent: true } };
+    expect(ids(baseState)).not.toContain("set-parent");
+    expect(ids(supported)).toContain("set-parent");
+    expect(ids(supported)).not.toContain("move-to-threads-list");
+    expect(ids({ ...supported, hasParent: true })).toContain("move-to-threads-list");
+  });
   it("includes branch items only for threads with a branch", () => {
     const withBranch = ids({ ...baseState, branch: "feat/menu" });
     expect(withBranch).toContain("new-thread-on-branch");

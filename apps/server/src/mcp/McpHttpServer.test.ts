@@ -477,7 +477,7 @@ it.effect("serves every production Pathway toolkit through one endpoint", () =>
       const actual = listed.tools.map(({ name }) => name).sort();
       const expected = [...PATHWAY_MCP_TOOL_NAMES].sort();
 
-      expect(expected).toHaveLength(99);
+      expect(expected).toHaveLength(100);
       expect(actual).toEqual(
         expect.arrayContaining([
           "device_build_discover",

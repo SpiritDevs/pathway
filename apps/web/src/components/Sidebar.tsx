@@ -240,6 +240,7 @@ import {
 } from "../providerInstances";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import { openThreadParentPicker } from "../threadParentBus";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import {
@@ -2181,6 +2182,7 @@ export default function Sidebar() {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const setThreadParent = useAtomCommand(threadEnvironment.setParent);
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({
@@ -4002,7 +4004,11 @@ export default function Sidebar() {
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
               isRunning: threadRuntimeIsActive(thread.runtime),
+              hasParent: thread.lineage.parentThreadId !== null,
               supports: {
+                parent:
+                  serverConfigs.get(thread.environmentId)?.environment.capabilities.threadParent ===
+                  true,
                 settlement: supportsSettlement,
                 forceSettlement:
                   serverConfigs.get(threadRef.environmentId)?.environment.capabilities
@@ -4111,6 +4117,15 @@ export default function Sidebar() {
           case "mark-unread":
             markThreadUnread(threadKey, thread.latestRun?.completedAt);
             return;
+          case "set-parent":
+            openThreadParentPicker(threadRef);
+            return;
+          case "move-to-threads-list":
+            await setThreadParent({
+              environmentId: threadRef.environmentId,
+              input: { threadId: threadRef.threadId, parent: null },
+            });
+            return;
           case "copy-path":
             if (!threadWorkspacePath) {
               toastManager.add(
@@ -4212,6 +4227,7 @@ export default function Sidebar() {
       markThreadUnread,
       projectCwdByKey,
       serverConfigs,
+      setThreadParent,
       startThreadRename,
       updateThreadMetadata,
       timestampFormat,

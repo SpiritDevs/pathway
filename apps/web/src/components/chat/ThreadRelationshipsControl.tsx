@@ -12,7 +12,13 @@ import {
   canDetachThreadProviderSession,
   resolveLatestMergeBackRun,
 } from "@spiritdevs/client-runtime/state/thread-workflows";
-import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@spiritdevs/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import type {
+  ContextMenuItem,
+  EnvironmentId,
+  OrchestrationV2ThreadShell,
+  ThreadId,
+} from "@spiritdevs/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowRightIcon,
@@ -20,6 +26,7 @@ import {
   CheckIcon,
   CornerDownRightIcon,
   CornerLeftUpIcon,
+  ListIcon,
   GitForkIcon,
   GitMergeIcon,
   LoaderCircleIcon,
@@ -39,6 +46,9 @@ import {
 } from "react";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
+import { readLocalApi } from "../../localApi";
+import { environmentServerConfigsAtom } from "../../state/server";
+import { openThreadParentPicker } from "../../threadParentBus";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { useThreadProjection, useThreadShells } from "../../state/entities";
@@ -180,6 +190,8 @@ function useThreadRelationshipsModel(props: {
     };
   }, [archivedShells, projection, props.environmentId, threadShells]);
   const navigate = useNavigate();
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const setParent = useAtomCommand(threadEnvironment.setParent);
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack);
   const settleThread = useAtomCommand(threadEnvironment.settle);
   const stopSession = useAtomCommand(threadEnvironment.stopSession);
@@ -251,6 +263,46 @@ function useThreadRelationshipsModel(props: {
     });
   };
 
+  // "Set parent…" and "Move to threads list" for the open thread or any row.
+  const parentMenuItems = (
+    threadId: ThreadId,
+  ): ReadonlyArray<ContextMenuItem<ThreadParentMenuAction>> => {
+    const thread =
+      threadId === props.threadId
+        ? (projection?.thread ?? null)
+        : (graph.nodes.get(threadId)?.thread ?? null);
+    const environmentId = environmentByThreadId.get(threadId) ?? props.environmentId;
+    if (
+      thread === null ||
+      serverConfigs.get(environmentId)?.environment.capabilities.threadParent !== true
+    )
+      return [];
+    return [
+      { id: "set-parent", label: "Set parent…" },
+      ...(thread.lineage.parentThreadId === null
+        ? []
+        : [{ id: "move-to-threads-list" as const, label: "Move to threads list" }]),
+    ];
+  };
+
+  const runParentMenuAction = (threadId: ThreadId, action: ThreadParentMenuAction) => {
+    const environmentId = environmentByThreadId.get(threadId) ?? props.environmentId;
+    if (action === "set-parent") {
+      openThreadParentPicker({ environmentId, threadId });
+      return;
+    }
+    void setParent({ environmentId, input: { threadId, parent: null } });
+  };
+
+  const showParentContextMenu = (threadId: ThreadId, position: { x: number; y: number }) => {
+    const items = parentMenuItems(threadId);
+    const api = readLocalApi();
+    if (items.length === 0 || !api) return;
+    void api.contextMenu.show(items, position).then((action) => {
+      if (action !== null) runParentMenuAction(threadId, action);
+    });
+  };
+
   const openChat = (threadId: ThreadId) => {
     useRightPanelStore.getState().openThread(ref, threadId);
   };
@@ -313,7 +365,10 @@ function useThreadRelationshipsModel(props: {
     mergeTargetThreadId,
     openChat,
     openThread,
+    parentMenuItems,
     parentTitle,
+    runParentMenuAction,
+    showParentContextMenu,
     settleChat,
     settlingThreadId,
     showMore,
@@ -323,6 +378,8 @@ function useThreadRelationshipsModel(props: {
     visibleRows,
   } as const;
 }
+
+type ThreadParentMenuAction = "set-parent" | "move-to-threads-list";
 
 type ThreadRelationshipsModel = ReturnType<typeof useThreadRelationshipsModel>;
 const ThreadRelationshipsContext = createContext<ThreadRelationshipsModel | null>(null);
@@ -350,9 +407,11 @@ export function ThreadChatsPanel() {
     graph,
     hiddenChatCount,
     openChat,
+    parentMenuItems,
     settleChat,
     settlingThreadId,
     showMoreChats,
+    showParentContextMenu,
     visibleChatRows,
   } = useThreadRelationshipsContext();
 
@@ -384,7 +443,15 @@ export function ThreadChatsPanel() {
           const ChatIcon = isSideChat ? MessagesSquareIcon : GitForkIcon;
           const label = isSideChat ? "Side chat" : "Forked";
           return (
-            <li key={threadId} className="group flex h-9 items-center rounded-lg">
+            <li
+              key={threadId}
+              className="group flex h-9 items-center rounded-lg"
+              onContextMenu={(event) => {
+                if (parentMenuItems(threadId).length === 0) return;
+                event.preventDefault();
+                showParentContextMenu(threadId, { x: event.clientX, y: event.clientY });
+              }}
+            >
               <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
                 <Tooltip>
                   <TooltipTrigger
@@ -438,6 +505,22 @@ export function ThreadChatsPanel() {
   ) : null;
 }
 
+function ThreadParentMenuItems(props: {
+  readonly items: ReadonlyArray<ContextMenuItem<ThreadParentMenuAction>>;
+  readonly onAction: (action: ThreadParentMenuAction) => void;
+}) {
+  return props.items.map((item) => (
+    <MenuItem key={item.id} onClick={() => props.onAction(item.id)}>
+      {item.id === "set-parent" ? (
+        <CornerDownRightIcon className="size-3.5" />
+      ) : (
+        <ListIcon className="size-3.5" />
+      )}
+      {item.label}
+    </MenuItem>
+  ));
+}
+
 export function ThreadLineagePanel() {
   const {
     busyAction,
@@ -451,11 +534,15 @@ export function ThreadLineagePanel() {
     merge,
     mergeTargetThreadId,
     openThread,
+    parentMenuItems,
     parentTitle,
+    runParentMenuAction,
     showMore,
+    showParentContextMenu,
     threadId: currentThreadId,
     visibleRows,
   } = useThreadRelationshipsContext();
+  const currentThreadMenuItems = parentMenuItems(currentThreadId);
 
   return lineageRows.length > 0 ? (
     <section
@@ -471,7 +558,7 @@ export function ThreadLineagePanel() {
           Lineage
         </h3>
         <div className="flex shrink-0 items-center gap-1">
-          {canDetach ? (
+          {canDetach || currentThreadMenuItems.length > 0 ? (
             <Menu>
               <MenuTrigger
                 render={
@@ -487,10 +574,16 @@ export function ThreadLineagePanel() {
                 <MoreHorizontalIcon className="size-3.5" />
               </MenuTrigger>
               <MenuPopup align="end" className={THREAD_DETAILS_PANEL_MENU_POPUP_CLASS}>
-                <MenuItem onClick={() => void detach()}>
-                  <UnplugIcon className="size-3.5" />
-                  Disconnect agent session
-                </MenuItem>
+                <ThreadParentMenuItems
+                  items={currentThreadMenuItems}
+                  onAction={(action) => runParentMenuAction(currentThreadId, action)}
+                />
+                {canDetach ? (
+                  <MenuItem onClick={() => void detach()}>
+                    <UnplugIcon className="size-3.5" />
+                    Disconnect agent session
+                  </MenuItem>
+                ) : null}
               </MenuPopup>
             </Menu>
           ) : null}
@@ -535,8 +628,17 @@ export function ThreadLineagePanel() {
               <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
             </>
           );
+          const rowMenuItems = parentMenuItems(threadId);
           return (
-            <li key={threadId} className="group flex h-9 items-center rounded-lg">
+            <li
+              key={threadId}
+              className="group flex h-9 items-center rounded-lg"
+              onContextMenu={(event) => {
+                if (rowMenuItems.length === 0) return;
+                event.preventDefault();
+                showParentContextMenu(threadId, { x: event.clientX, y: event.clientY });
+              }}
+            >
               {isMergeTarget ? (
                 <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
                   <Tooltip>
@@ -614,6 +716,31 @@ export function ThreadLineagePanel() {
                   </TooltipPopup>
                 </Tooltip>
               )}
+              {rowMenuItems.length > 0 ? (
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        className={cn(
+                          THREAD_DETAILS_PANEL_ICON_ACTION_CLASS,
+                          "shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[popup-open]:opacity-100",
+                        )}
+                        aria-label={`More actions for ${threadTitle}`}
+                      />
+                    }
+                  >
+                    <MoreHorizontalIcon className="size-3.5" />
+                  </MenuTrigger>
+                  <MenuPopup align="end" className={THREAD_DETAILS_PANEL_MENU_POPUP_CLASS}>
+                    <ThreadParentMenuItems
+                      items={rowMenuItems}
+                      onAction={(action) => runParentMenuAction(threadId, action)}
+                    />
+                  </MenuPopup>
+                </Menu>
+              ) : null}
             </li>
           );
         })}
