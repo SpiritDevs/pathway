@@ -9,7 +9,7 @@ import type {
 } from "@spiritdevs/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { Smartphone, X } from "lucide-react";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { useRightPanelStore, type RightPanelSurface } from "~/rightPanelStore";
 import { Button } from "~/components/ui/button";
@@ -19,7 +19,7 @@ import { WizardPopup } from "~/components/ui/wizard";
 import { Spinner } from "~/components/ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
-import { deviceEnvironment, useDeviceState } from "~/state/device";
+import { deviceEnvironment, useDeviceState, useDeviceWorkspaceTarget } from "~/state/device";
 import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
@@ -75,22 +75,10 @@ export function DevicePanel(props: {
     void list({ environmentId, input: {} });
   }, [environmentId, list, loaded, props.visible, hostDisabled]);
 
-  const sessions = useMemo(
-    () => state.sessions.filter((session) => session.threadId === threadId),
-    [state.sessions, threadId],
-  );
-  const activeSession = props.surface.target
-    ? sessions.find(
-        (session) =>
-          session.deviceId === props.surface.target?.deviceId &&
-          session.hostId === props.surface.target.hostId,
-      )
-    : undefined;
-  const activeDevice = activeSession
-    ? state.devices.find(
-        (device) => device.hostId === activeSession.hostId && device.id === activeSession.deviceId,
-      )
-    : undefined;
+  // Selected apart from the whole state, so the stream subtree skips unrelated publications.
+  const workspace = useDeviceWorkspaceTarget(environmentId, threadId, props.surface.target);
+  const activeSession = workspace?.session;
+  const activeDevice = workspace?.device;
 
   const grouped = useMemo(() => groupDevices(state), [state]);
 
@@ -123,32 +111,49 @@ export function DevicePanel(props: {
   };
 
   // Closing the view leaves the simulator running; power-off is explicit.
-  const closeActive = (powerOff: boolean, control?: DeviceControlProof) => {
-    if (!powerOff) {
-      useRightPanelStore.getState().closeSurface(props.threadRef, props.surface.id);
-      return;
-    }
-    if (!activeSession) return;
-    setOperationError(null);
-    void close({
-      environmentId,
-      input: {
-        threadId,
-        hostId: activeSession.hostId,
-        deviceId: activeSession.deviceId,
-        shutdown: powerOff,
-        ...(control ? { control } : {}),
-      },
-    }).then((result) => {
-      if (result._tag === "Failure") {
-        const code = deviceControlErrorCode(result.cause);
-        if (code === "stale_generation") refresh();
-        setOperationError(
-          code ? deviceControlErrorCopy[code] : formatEnvironmentQueryError(result.cause),
-        );
-      } else useRightPanelStore.getState().closeSurface(props.threadRef, props.surface.id);
-    });
-  };
+  const { threadRef, surface } = props;
+  const closeActive = useCallback(
+    (powerOff: boolean, control?: DeviceControlProof) => {
+      if (!powerOff) {
+        useRightPanelStore.getState().closeSurface(threadRef, surface.id);
+        return;
+      }
+      if (!activeSession) return;
+      setOperationError(null);
+      void close({
+        environmentId,
+        input: {
+          threadId,
+          hostId: activeSession.hostId,
+          deviceId: activeSession.deviceId,
+          shutdown: powerOff,
+          ...(control ? { control } : {}),
+        },
+      }).then((result) => {
+        if (result._tag === "Failure") {
+          const code = deviceControlErrorCode(result.cause);
+          if (code === "stale_generation") refresh();
+          setOperationError(
+            code ? deviceControlErrorCopy[code] : formatEnvironmentQueryError(result.cause),
+          );
+        } else useRightPanelStore.getState().closeSurface(threadRef, surface.id);
+      });
+    },
+    [activeSession, close, environmentId, refresh, surface.id, threadId, threadRef],
+  );
+  const onClose = useCallback(() => closeActive(false), [closeActive]);
+  const onPowerOff = useCallback(
+    (control: DeviceControlProof | undefined) => closeActive(true, control),
+    [closeActive],
+  );
+  const onOpenThread = useCallback(
+    (ownerThreadId: string) =>
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(scopeThreadRef(environmentId, ThreadId.make(ownerThreadId))),
+      }),
+    [environmentId, navigate],
+  );
 
   const bootingDevices =
     state.bootingDevices?.filter((device) => device.threadId === threadId) ?? [];
@@ -224,27 +229,18 @@ export function DevicePanel(props: {
         </div>
       ) : null}
       <div className="@container relative flex min-h-0 flex-1">
-        {activeDevice && activeSession ? (
+        {workspace && activeDevice ? (
           <DeviceWorkspace
             key={`${environmentId}\u0000${deviceKey(activeDevice)}`}
             environmentId={environmentId}
             threadId={threadId}
             device={activeDevice}
-            hostLabel={
-              state.hosts.find((host) => host.id === activeDevice.hostId)?.label ?? "Device host"
-            }
+            hostLabel={workspace.hostLabel}
             hostDiagnostics={state.hostStatusDetail}
             visible={props.visible && pageVisible}
-            onClose={() => closeActive(false)}
-            onPowerOff={(control) => closeActive(true, control)}
-            onOpenThread={(ownerThreadId) =>
-              void navigate({
-                to: "/$environmentId/$threadId",
-                params: buildThreadRouteParams(
-                  scopeThreadRef(environmentId, ThreadId.make(ownerThreadId)),
-                ),
-              })
-            }
+            onClose={onClose}
+            onPowerOff={onPowerOff}
+            onOpenThread={onOpenThread}
             onResumeAgent={props.onResumeAgent}
           />
         ) : pendingDevice || hostBusy || (!loaded && !stateError) ? (

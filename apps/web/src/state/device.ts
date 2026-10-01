@@ -7,7 +7,13 @@ import {
   deviceHubAccessAt,
   resolveDeviceHubCredentials,
 } from "@spiritdevs/client-runtime/state/deviceHubAccess";
-import type { DeviceControlState, DeviceServiceState, EnvironmentId } from "@spiritdevs/contracts";
+import type {
+  DeviceControlState,
+  DeviceServiceState,
+  DeviceSession,
+  DeviceSummary,
+  EnvironmentId,
+} from "@spiritdevs/contracts";
 import * as Equal from "effect/Equal";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -91,6 +97,56 @@ const deviceControlSelectionAtom = Atom.family((key: string) => {
     selectDeviceControl(get(deviceStateAtom(environmentId)), hostId, deviceId),
   ).pipe(Atom.withEquality(Equal.equals), Atom.withLabel(`device-control-selection:${key}`));
 });
+
+export type DeviceWorkspaceTarget = {
+  readonly session: DeviceSession;
+  readonly device: DeviceSummary;
+  readonly hostLabel: string;
+};
+
+/**
+ * The thread's open device, its session and host label. Equal snapshots keep their identity, so
+ * the workspace and its stream skip publications that only move control or other devices.
+ */
+const deviceWorkspaceTargetAtom = Atom.family((key: string) => {
+  const [environmentId, threadId, hostId, deviceId] = key.split("\u0000") as [
+    EnvironmentId,
+    string,
+    string,
+    string,
+  ];
+  return Atom.make((get): DeviceWorkspaceTarget | null => {
+    const state = Option.getOrNull(AsyncResult.value(get(deviceStateAtom(environmentId))));
+    const session = state?.sessions.find(
+      (entry) =>
+        entry.threadId === threadId && entry.hostId === hostId && entry.deviceId === deviceId,
+    );
+    const device = session
+      ? state?.devices.find((entry) => entry.hostId === hostId && entry.id === deviceId)
+      : undefined;
+    if (!state || !session || !device) return null;
+    const hostLabel = state.hosts.find((host) => host.id === hostId)?.label ?? "Device host";
+    return { session, device, hostLabel };
+  }).pipe(Atom.withEquality(Equal.equals), Atom.withLabel(`device-workspace-target:${key}`));
+});
+
+const NO_WORKSPACE_TARGET_ATOM = Atom.make<DeviceWorkspaceTarget | null>(null).pipe(
+  Atom.withLabel("device-workspace-target:none"),
+);
+
+export function useDeviceWorkspaceTarget(
+  environmentId: EnvironmentId,
+  threadId: string,
+  target: { readonly hostId: string; readonly deviceId: string } | null | undefined,
+): DeviceWorkspaceTarget | null {
+  return useAtomValue(
+    target
+      ? deviceWorkspaceTargetAtom(
+          `${environmentId}\u0000${threadId}\u0000${target.hostId}\u0000${target.deviceId}`,
+        )
+      : NO_WORKSPACE_TARGET_ATOM,
+  );
+}
 
 export type DeviceControlSelection = {
   readonly supported: boolean;

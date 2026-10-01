@@ -1,5 +1,5 @@
 import type { DeviceControlProof, DeviceSummary, EnvironmentId } from "@spiritdevs/contracts";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   captureDeviceScreenshot,
   DeviceScreenshotError,
@@ -12,8 +12,11 @@ import { DeviceToolsPanel } from "./DeviceToolsPanel";
 import { useDeviceControlLease } from "./useDeviceControlLease";
 import { useDeviceControls } from "./useDeviceControls";
 
-/** Keyed by environment and device; the screen, quick controls and drawer share the same session. */
-export function DeviceWorkspace(props: {
+/**
+ * Keyed by environment and device; the screen, quick controls and drawer share the same session.
+ * Memoized so the panel's device-state publications reach the stream only through changed props.
+ */
+export const DeviceWorkspace = memo(function DeviceWorkspace(props: {
   environmentId: EnvironmentId;
   threadId: string;
   device: DeviceSummary;
@@ -155,4 +158,4 @@ export function DeviceWorkspace(props: {
       ) : null}
     </>
   );
-}
+});

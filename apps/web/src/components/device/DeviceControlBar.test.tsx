@@ -555,3 +555,92 @@ it("does not offer a helper restart for other control errors or without restart 
   await click("Take control");
   expect(maybeButton("Restart device tools")).toBeUndefined();
 });
+
+it("retires the recovery error once the device recovers and another viewer takes it", async () => {
+  commands.state.current = serviceState([
+    control({ generation: 12, phase: "draining", owner: null }),
+  ]);
+  commands.connection.current = connected(1);
+  commands.acquire.mockResolvedValue(failure("input_unconfirmed"));
+  await mount();
+  await click("Take control");
+  expect(lease.canRecover).toBe(true);
+
+  // Another client restarts the helpers and takes the device.
+  commands.state.current = serviceState([
+    control({
+      generation: 14,
+      owner: { kind: "viewer", sessionId: "other", viewerId: "other-viewer" },
+    }),
+  ]);
+  await rerender();
+  expect(text()).toContain("Someone else is in control");
+  expect(text()).not.toContain("couldn't confirm");
+  expect(lease.canRecover).toBe(false);
+  expect(maybeButton("Restart device tools")).toBeUndefined();
+  expect(commands.restart).not.toHaveBeenCalled();
+});
+
+it("ignores a late restart failure once recovery retired its error", async () => {
+  commands.state.current = serviceState([control({ phase: "draining", owner: null })]);
+  commands.connection.current = connected(1);
+  commands.acquire.mockResolvedValue(failure("input_unconfirmed"));
+  await mount();
+  await click("Take control");
+  const restart = deferred();
+  commands.restart.mockReturnValue(restart.promise);
+  await click("Restart device tools");
+
+  commands.state.current = serviceState([control({ generation: 4, phase: "idle", owner: null })]);
+  await rerender();
+  expect(text()).not.toContain("couldn't confirm");
+  await act(async () => restart.resolve(failure("input_unconfirmed")));
+  expect(text()).not.toContain("couldn't confirm");
+  expect(lease.canRecover).toBe(false);
+});
+
+it("follows the device a restart failure names, not just this panel's device", async () => {
+  const other = (phase: DeviceControlState["phase"]) =>
+    control({ hostId: "remote", deviceId: "tablet", phase, owner: null });
+  commands.state.current = serviceState([
+    control({ phase: "draining", owner: null }),
+    other("draining"),
+  ]);
+  commands.connection.current = connected(1);
+  commands.acquire.mockResolvedValue(failure("input_unconfirmed"));
+  await mount();
+  await click("Take control");
+  commands.restart.mockResolvedValue({
+    _tag: "Failure",
+    cause: Cause.fail(
+      new DeviceControlError({
+        hostId: "remote",
+        deviceId: "tablet",
+        code: "input_unconfirmed",
+        message: "input_unconfirmed",
+      }),
+    ),
+  });
+  await click("Restart device tools");
+  expect(commands.restart).toHaveBeenLastCalledWith({ environmentId, input: { hostId: "local" } });
+  expect(lease.canRecover).toBe(true);
+
+  // This panel's device recovering doesn't retire the tablet's error...
+  commands.state.current = serviceState([
+    control({ phase: "idle", owner: null }),
+    other("draining"),
+  ]);
+  await rerender();
+  expect(text()).toContain("couldn't confirm");
+  const restart = deferred();
+  commands.restart.mockReturnValue(restart.promise);
+  await click("Restart device tools");
+  expect(commands.restart).toHaveBeenLastCalledWith({ environmentId, input: { hostId: "remote" } });
+
+  // ...but the tablet recovering does, before the restart even answers.
+  commands.state.current = serviceState([control({ phase: "idle", owner: null }), other("idle")]);
+  await rerender();
+  expect(text()).not.toContain("couldn't confirm");
+  await act(async () => restart.resolve(failure("input_unconfirmed")));
+  expect(text()).not.toContain("couldn't confirm");
+});
