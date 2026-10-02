@@ -1,7 +1,7 @@
 import { DeviceHostUpdates } from "./DeviceHostUpdates";
 import type { DevicePlatform, DeviceServiceState, EnvironmentId } from "@spiritdevs/contracts";
 import { Check, CircleAlert } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { DialogClose } from "~/components/ui/dialog";
@@ -122,6 +122,7 @@ export function DeviceSetup(props: {
           <section className="space-y-3 text-sm">
             <h3 className="font-medium">Check simulator support</h3>
             <DevicePlatformSetup
+              environmentId={props.environmentId}
               state={props.state}
               checking={pending === "check"}
               disabled={!enabled || busy || pending !== null}
@@ -225,15 +226,25 @@ export function DeviceHubSetupStatus({
 }
 
 function DevicePlatformSetup(props: {
+  readonly environmentId: EnvironmentId;
   readonly state: DeviceServiceState;
   readonly checking: boolean;
   readonly disabled: boolean;
   readonly onCheck: () => void;
 }) {
+  const android = platformSetupStatus(props.state, "android");
   return (
     <div className="space-y-3">
       <PlatformStatus platform="iOS" status={platformSetupStatus(props.state, "ios")} />
-      <PlatformStatus platform="Android" status={platformSetupStatus(props.state, "android")} />
+      <PlatformStatus platform="Android" status={android}>
+        {android.ready ? null : (
+          <AndroidInstallAction
+            environmentId={props.environmentId}
+            state={props.state}
+            disabled={props.disabled}
+          />
+        )}
+      </PlatformStatus>
       <p className="text-xs text-muted-foreground">
         You can use either platform. Fixing a missing platform does not block the other one.
       </p>
@@ -285,10 +296,66 @@ export function AgentDeviceSetupStatus(props: {
   return null;
 }
 
+/**
+ * One-click Android setup on an environment host that supports it. The install runs on
+ * the environment and reports through device state, so every client shows its progress.
+ */
+export function AndroidInstallAction(props: {
+  readonly environmentId: EnvironmentId;
+  readonly state: DeviceServiceState;
+  readonly disabled?: boolean;
+}) {
+  const installPlatform = useAtomCommand(deviceEnvironment.installPlatform);
+  const [starting, setStarting] = useState(false);
+  const host = props.state.hosts.find((candidate) =>
+    candidate.platforms.some((platform) => platform.platform === "android" && platform.installable),
+  );
+  if (!host) return null;
+  const install = props.state.platformInstalls?.find(
+    (value) => value.hostId === host.id && value.platform === "android",
+  );
+  if (install?.status === "installing")
+    return (
+      <p role="status" className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+        <Spinner className="size-3 shrink-0" />
+        {install.detail}
+      </p>
+    );
+  return (
+    <div className="mt-2 space-y-2">
+      {install?.status === "failed" ? (
+        <p role="alert" className="text-xs text-destructive">
+          {install.detail}
+        </p>
+      ) : null}
+      <div className="flex items-center gap-3">
+        <Button
+          size="sm"
+          disabled={props.disabled || starting}
+          onClick={() => {
+            setStarting(true);
+            void installPlatform({
+              environmentId: props.environmentId,
+              input: { hostId: host.id, platform: "android" },
+            }).finally(() => setStarting(false));
+          }}
+        >
+          {starting ? <Spinner className="size-3" /> : null}
+          {install?.status === "failed" ? "Try again" : "Set up Android"}
+        </Button>
+        <span className="text-xs text-muted-foreground">
+          Downloads what's missing, up to a few GB.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function PlatformStatus(props: {
   readonly platform: string;
   readonly status: { readonly ready: boolean; readonly message: string };
   readonly compact?: boolean;
+  readonly children?: ReactNode;
 }) {
   const Icon = props.status.ready ? Check : CircleAlert;
   return (
@@ -306,6 +373,7 @@ export function PlatformStatus(props: {
         <p className="text-xs text-muted-foreground">
           {props.compact && props.status.ready ? "Ready" : props.status.message}
         </p>
+        {props.children}
       </div>
     </div>
   );

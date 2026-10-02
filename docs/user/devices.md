@@ -21,8 +21,20 @@ Simulators run on the machine that hosts the environment. iOS needs macOS
 with Xcode. Android needs the SDK Platform-Tools, Android Emulator, and
 Command-line Tools, plus a virtual device created in Android Studio's Device
 Manager. Pathway detects standard SDK locations; set `ANDROID_HOME` for a
-custom location. The panel explains missing dependencies. After installing
-them, restart the environment and refresh devices.
+custom location. The panel explains missing dependencies.
+
+On a Mac or an x64 Linux environment, choose **Set up Android** in setup or
+in the Device panel to install what's missing in one step. Pathway downloads
+the Command-line Tools, Platform-Tools, Emulator, and an Android system image
+into the existing SDK (or the standard location if there is none), and
+creates a Pixel virtual device if you have none. It accepts the Android SDK
+licenses for you. It uses an installed Java 17 or newer, including Android
+Studio's, and downloads a Java runtime only if none is found. The download can
+reach a few GB and runs on the environment, so you can close the panel while
+it finishes. Every connected app shows its progress, and **Try again** resumes
+a failed setup. Once it finishes, Android shows as available and the new
+device appears in the picker. If you install the SDK yourself instead, restart
+the environment and refresh devices.
 
 The screen is interactive: click and drag to touch, type while the screen is
 focused, and use the control rail for Home, Back, and Recents on Android,

@@ -23,6 +23,23 @@ proxy, and the MCP tools only see a hub origin and an agent-device endpoint.
 SSH hosts forward both endpoints to server loopback. Every proxied request
 also carries the host id; device ids alone are not unique across hosts.
 
+## One-click Android setup
+
+`device.installPlatform` starts
+[`androidSdkInstall.ts`](../../apps/server/src/device/androidSdkInstall.ts) on
+the local host. The local host advertises it with `installable` on its Android
+availability; SSH hosts and Windows do not. The RPC returns immediately and the
+install runs in the device service's scope, so it outlives the caller. Progress
+and failures are published as `platformInstalls` in device state, and success
+removes the entry and re-lists devices. The installer plans from what is on
+disk: it adds the pinned Command-line Tools zip (with its SHA-1 checked) when
+`cmdline-tools/latest` is missing, lets sdkmanager install Platform-Tools, the
+Emulator, and the manifest's Android runtime image, and creates one AVD only
+when none exist. sdkmanager needs Java 17+, so the installer prefers
+`JAVA_HOME`, Android Studio's JBR, and the system JDK, and falls back to a
+Temurin JRE in the device cache. If the install creates the SDK root, helpers
+restart so their `ANDROID_HOME` and `PATH` pick it up.
+
 ## The hub is never exposed
 
 serve-sim has a shell-exec route whose token is readable from its own

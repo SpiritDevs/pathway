@@ -543,6 +543,7 @@ const CoreWsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.deviceConfigure,
   WS_METHODS.deviceUpdateTools,
   WS_METHODS.deviceRestartTools,
+  WS_METHODS.deviceInstallPlatform,
   WS_METHODS.deviceCheckRequirements,
   WS_METHODS.deviceList,
   WS_METHODS.deviceTestHost,
@@ -3313,6 +3314,10 @@ const makeWsRpcLayer = (
           }),
         [WS_METHODS.deviceUpdateTools]: (input) =>
           observeRpcEffect(WS_METHODS.deviceUpdateTools, deviceService.updateTools(input), {
+            "rpc.aggregate": "device",
+          }),
+        [WS_METHODS.deviceInstallPlatform]: (input) =>
+          observeRpcEffect(WS_METHODS.deviceInstallPlatform, deviceService.installPlatform(input), {
             "rpc.aggregate": "device",
           }),
         [WS_METHODS.deviceCheckRequirements]: (input) =>

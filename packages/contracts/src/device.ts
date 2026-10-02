@@ -173,6 +173,8 @@ export const DevicePlatformAvailability = Schema.Struct({
   platform: DevicePlatform,
   available: Schema.Boolean,
   reason: Schema.optional(Schema.String),
+  /** The host can install what this platform is missing with `device.installPlatform`. */
+  installable: Schema.optional(Schema.Boolean),
 });
 export type DevicePlatformAvailability = typeof DevicePlatformAvailability.Type;
 
@@ -223,6 +225,13 @@ export const DeviceUpdateToolsInput = Schema.Struct({
   ),
 });
 export type DeviceUpdateToolsInput = typeof DeviceUpdateToolsInput.Type;
+
+/** Installs a platform's missing SDK pieces and a first virtual device on one host. */
+export const DeviceInstallPlatformInput = Schema.Struct({
+  hostId: Schema.optional(DeviceHostId),
+  platform: Schema.Literal("android"),
+});
+export type DeviceInstallPlatformInput = typeof DeviceInstallPlatformInput.Type;
 
 /** Restart selected running helpers without closing device sessions or releasing ownership. */
 export const DeviceRestartToolsInput = DeviceUpdateToolsInput;
@@ -386,6 +395,17 @@ export const DeviceServiceState = Schema.Struct({
   sessions: Schema.Array(DeviceSession),
   bootingDevices: Schema.optional(
     Schema.Array(Schema.Struct({ ...DeviceSummary.fields, threadId: ThreadId })),
+  ),
+  /** Platform installs in progress or failed. A finished install leaves no entry. */
+  platformInstalls: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        hostId: DeviceHostId,
+        platform: DevicePlatform,
+        status: Schema.Literals(["installing", "failed"]),
+        detail: Schema.String,
+      }),
+    ),
   ),
   onboardingCompleted: Schema.Boolean,
   agentAccessEnabled: Schema.Boolean,

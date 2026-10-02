@@ -57,6 +57,13 @@ export function createDeviceEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    /** Installs a platform's missing SDK pieces; progress arrives as `platformInstalls` state. */
+    installPlatform: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:device:install-platform",
+      tag: WS_METHODS.deviceInstallPlatform,
+      scheduler,
+      concurrency,
+    }),
     /** Restarts selected running helpers; the environment keeps sessions and simulator leases. */
     restartTools: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:device:restart-tools",

@@ -7,6 +7,8 @@ import { inspectLocalDeviceSdks } from "./deviceSdkInventory.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { pruneLocalDeviceTools } from "./deviceToolMaintenance.ts";
 import { deviceToolInstallMessage } from "@spiritdevs/contracts";
+import { canInstallAndroidSdk, installAndroidSdk } from "./androidSdkInstall.ts";
+import { DEVICE_TOOL_MANIFEST } from "./deviceToolManifest.ts";
 /**
  * The device host that is this machine.
  *
@@ -26,7 +28,11 @@ import {
   LOCAL_DEVICE_HOST_ID,
 } from "@spiritdevs/contracts";
 import { waitForHttpReady } from "@spiritdevs/shared/httpReadiness";
-import { HostProcessEnvironment, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
+import {
+  HostProcessArchitecture,
+  HostProcessEnvironment,
+  HostProcessPlatform,
+} from "@spiritdevs/shared/hostProcess";
 import { resolveNodeExecutable, type NodeRuntimeUnavailableError } from "./nodeRuntime.ts";
 import * as NetService from "@spiritdevs/shared/Net";
 import { isCommandAvailable } from "@spiritdevs/shared/shell";
@@ -234,8 +240,11 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const environment = yield* HostProcessEnvironment;
   const hostPlatform = yield* HostProcessPlatform;
-  const sdk = yield* androidSdk;
-  const hostEnvironment = deviceHostEnvironment(environment, sdk.root, hostPlatform, path);
+  const hostArch = yield* HostProcessArchitecture;
+  // Reassigned after a one-click Android install creates or completes the SDK.
+  let sdk = yield* androidSdk;
+  let hostEnvironment = deviceHostEnvironment(environment, sdk.root, hostPlatform, path);
+  const androidInstallable = canInstallAndroidSdk(hostPlatform, hostArch);
   const startLock = yield* Semaphore.make(1);
   const runningRef = yield* Ref.make<RunningHost | null>(null);
   const restartDelayRef = yield* Ref.make(0);
@@ -248,7 +257,10 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
     );
-    return reason === null ? { platform, available: true } : { platform, available: false, reason };
+    const installable = platform === "android" && androidInstallable ? { installable: true } : {};
+    return reason === null
+      ? { platform, available: true, ...installable }
+      : { platform, available: false, reason, ...installable };
   });
 
   let sdkInventory: DeviceHostSummary["sdkInventory"];
@@ -839,6 +851,35 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       );
       return { ...host, sdkInventory };
     }),
+    ...(androidInstallable
+      ? {
+          installAndroid: (onProgress: (detail: string) => Effect.Effect<void>) =>
+            Effect.gen(function* () {
+              const previousRoot = sdk.root;
+              yield* installAndroidSdk({
+                sdkRoot: sdk.root,
+                apiLevel:
+                  DEVICE_TOOL_MANIFEST.recommendedRuntimes.find(
+                    (runtime) => runtime.platform === "android",
+                  )?.version ?? "36",
+                cacheDir: cacheBaseDir,
+                environment,
+                platform: hostPlatform,
+                arch: hostArch,
+                onProgress,
+              });
+              sdk = yield* androidSdk.pipe(
+                Effect.provideService(HostProcessEnvironment, environment),
+              );
+              hostEnvironment = deviceHostEnvironment(environment, sdk.root, hostPlatform, path);
+              return sdk.root !== previousRoot;
+            }).pipe(
+              Effect.provideService(FileSystem.FileSystem, fs),
+              Effect.provideService(Path.Path, path),
+              Effect.provideService(ProcessRunner.ProcessRunner, runner),
+            ),
+        }
+      : {}),
     acquireDevice: (key) => leaseOperation(() => leases.acquire(key)),
     deviceOwners: (keys) => leaseOperation(() => leases.inspectMany(keys)),
     updateTools: (tools) =>

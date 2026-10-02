@@ -53,7 +53,7 @@ vi.mock("@spiritdevs/client-runtime/device/stream", () => ({
 }));
 vi.mock("./DeviceHostUpdates", () => ({ DeviceHostUpdates: () => null }));
 vi.mock("./DeviceToolDriftBanner", () => ({ DeviceToolDriftBanner: () => null }));
-vi.mock("./DeviceSetup", () => ({ DeviceSetup: () => null }));
+vi.mock("./DeviceSetup", () => ({ DeviceSetup: () => null, AndroidInstallAction: () => null }));
 vi.mock("./DeviceControlsRail", () => ({ DeviceControlsRail: () => null }));
 vi.mock("./DeviceToolsPanel", () => ({ DeviceToolsPanel: () => null }));
 vi.mock("./SimBuildBar", () => ({ SimBuildBar: () => null }));

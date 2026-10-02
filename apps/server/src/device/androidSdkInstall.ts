@@ -148,6 +148,26 @@ export const installAndroidSdk = Effect.fn("AndroidSdkInstall.install")(function
       timeout: DOWNLOAD_TIMEOUT,
     });
 
+  // Unpack beside the destination: renames across filesystems (a tmpfs /tmp) fail.
+  const stagingBeside = (destination: string, reason: string) => {
+    const staging = `${destination}.staging`;
+    return fs
+      .remove(staging, { recursive: true, force: true })
+      .pipe(
+        Effect.andThen(fs.makeDirectory(staging, { recursive: true })),
+        Effect.as(staging),
+        Effect.mapError(fail(reason)),
+      );
+  };
+  const replaceWith = (source: string, destination: string, reason: string) =>
+    fs
+      .remove(destination, { recursive: true, force: true })
+      .pipe(
+        Effect.andThen(fs.rename(source, destination)),
+        Effect.andThen(fs.remove(`${destination}.staging`, { recursive: true, force: true })),
+        Effect.mapError(fail(reason)),
+      );
+
   const avdHome =
     input.environment.ANDROID_AVD_HOME ??
     path.join(input.environment.ANDROID_USER_HOME ?? path.join(home, ".android"), "avd");
@@ -197,18 +217,22 @@ export const installAndroidSdk = Effect.fn("AndroidSdkInstall.install")(function
         return yield* new AndroidSdkInstallError({
           reason: "The Command-line Tools download didn't match its checksum. Try again.",
         });
+      const latest = path.join(root, "cmdline-tools", "latest");
+      const staging = yield* stagingBeside(
+        latest,
+        `Couldn't install Command-line Tools into ${root}.`,
+      );
       yield* run("Couldn't unpack Android SDK Command-line Tools.", "unzip", [
         "-q",
         zip,
         "-d",
-        work,
+        staging,
       ]);
-      const latest = path.join(root, "cmdline-tools", "latest");
-      yield* fs.remove(latest, { recursive: true, force: true }).pipe(Effect.ignore);
-      yield* fs
-        .makeDirectory(path.dirname(latest), { recursive: true })
-        .pipe(Effect.flatMap(() => fs.rename(path.join(work, "cmdline-tools"), latest)))
-        .pipe(Effect.mapError(fail(`Couldn't install Command-line Tools into ${root}.`)));
+      yield* replaceWith(
+        path.join(staging, "cmdline-tools"),
+        latest,
+        `Couldn't install Command-line Tools into ${root}.`,
+      );
     }
 
     const env = { ...input.environment, JAVA_HOME: javaHome, ANDROID_HOME: root };
@@ -311,10 +335,7 @@ export const installAndroidSdk = Effect.fn("AndroidSdkInstall.install")(function
         `https://api.adoptium.net/v3/binary/latest/21/ga/${os}/${arch}/jre/hotspot/normal/eclipse`,
         archive,
       );
-      const extracted = path.join(work, "jre");
-      yield* fs
-        .makeDirectory(extracted, { recursive: true })
-        .pipe(Effect.mapError(fail("Couldn't unpack the Java runtime.")));
+      const extracted = yield* stagingBeside(managed, "Couldn't install the Java runtime.");
       yield* run("Couldn't unpack the Java runtime.", "tar", [
         "-xzf",
         archive,
@@ -323,11 +344,7 @@ export const installAndroidSdk = Effect.fn("AndroidSdkInstall.install")(function
         "--strip-components",
         "1",
       ]);
-      yield* fs.remove(managed, { recursive: true, force: true }).pipe(Effect.ignore);
-      yield* fs
-        .makeDirectory(path.dirname(managed), { recursive: true })
-        .pipe(Effect.flatMap(() => fs.rename(extracted, managed)))
-        .pipe(Effect.mapError(fail("Couldn't install the Java runtime.")));
+      yield* replaceWith(extracted, managed, "Couldn't install the Java runtime.");
       const javaHome =
         context.platform === "darwin" ? path.join(managed, "Contents", "Home") : managed;
       if (!(yield* usable(javaHome)))

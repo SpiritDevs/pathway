@@ -22,6 +22,7 @@ import {
   type DeviceActionInput,
   type DeviceUpdateToolsInput,
   type DeviceRestartToolsInput,
+  type DeviceInstallPlatformInput,
   type DeviceCheckRequirementsInput,
   type DeviceCheckRequirementsResult,
   type DeviceCloseInput,
@@ -157,6 +158,13 @@ export class DeviceService extends Context.Service<
     readonly restartTools: (
       input: DeviceRestartToolsInput,
     ) => Effect.Effect<DeviceServiceState, DeviceError>;
+    /**
+     * Starts a platform install on one host and returns at once. Progress, failure and
+     * the refreshed device list arrive through `subscribe`; the install outlives the caller.
+     */
+    readonly installPlatform: (
+      input: DeviceInstallPlatformInput,
+    ) => Effect.Effect<DeviceServiceState, DeviceError>;
     readonly checkRequirements: (
       input: DeviceCheckRequirementsInput,
     ) => Effect.Effect<DeviceCheckRequirementsResult, DeviceError>;
@@ -248,6 +256,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
 ) {
   const settings = yield* ServerSettings.ServerSettingsService;
   const lifecycleLock = yield* Semaphore.make(1);
+  const serviceScope = yield* Scope.Scope;
   const watchPairLock = yield* Semaphore.make(1);
   const readDeviceSettings = settings.getSettings.pipe(
     Effect.map((value) => ({
@@ -1368,6 +1377,50 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     return yield* inspect;
   });
 
+  const installingPlatforms = new Set<string>();
+  const installPlatform: DeviceService["Service"]["installPlatform"] = Effect.fn(
+    "DeviceService.installPlatform",
+  )(function* (input) {
+    const host = yield* resolveHost(input.hostId);
+    if (!host.installAndroid)
+      return yield* new DeviceHostUnavailableError({
+        hostId: host.id,
+        reason: "Android setup is unavailable on this host. Install the Android SDK manually.",
+      });
+    const install = host.installAndroid;
+    const key = `${host.id}:${input.platform}`;
+    if (installingPlatforms.has(key)) return (yield* SynchronizedRef.get(stateRef)).state;
+    installingPlatforms.add(key);
+    const setInstall = (entry: { status: "installing" | "failed"; detail: string } | null) =>
+      publish((state) => ({
+        ...state,
+        platformInstalls: [
+          ...(state.platformInstalls ?? []).filter(
+            (value) => value.hostId !== host.id || value.platform !== input.platform,
+          ),
+          ...(entry ? [{ hostId: host.id, platform: input.platform, ...entry }] : []),
+        ],
+      }));
+    // Release before publishing the outcome so a retry right after a failure starts.
+    const finish = (entry: { status: "failed"; detail: string } | null) =>
+      Effect.sync(() => installingPlatforms.delete(key)).pipe(Effect.andThen(setInstall(entry)));
+    const started = yield* setInstall({ status: "installing", detail: "Preparing Android setup…" });
+    yield* Effect.gen(function* () {
+      const restart = yield* install((detail) =>
+        setInstall({ status: "installing", detail }).pipe(Effect.asVoid),
+      );
+      // A newly created SDK is only on the helpers' PATH after they restart.
+      if (restart) yield* restartTools({ hostId: host.id }).pipe(Effect.ignore);
+      yield* finish(null);
+      yield* list.pipe(Effect.ignore);
+    }).pipe(
+      Effect.catch((error) => finish({ status: "failed", detail: error.reason })),
+      Effect.ensuring(Effect.sync(() => installingPlatforms.delete(key))),
+      Effect.forkIn(serviceScope),
+    );
+    return started;
+  });
+
   return {
     ...DeviceService.of({
       control,
@@ -1443,6 +1496,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
         }),
       updateTools,
       restartTools,
+      installPlatform,
       updateTool: (tool) => updateTools({ tools: [tool] }),
       retryHost,
       inspect,

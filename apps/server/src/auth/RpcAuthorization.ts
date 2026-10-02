@@ -201,6 +201,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.deviceList]: AuthOrchestrationReadScope,
   [WS_METHODS.deviceUpdateTools]: AuthOrchestrationOperateScope,
   [WS_METHODS.deviceRestartTools]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deviceInstallPlatform]: AuthOrchestrationOperateScope,
   [WS_METHODS.deviceCheckRequirements]: AuthOrchestrationReadScope,
   [WS_METHODS.deviceOpen]: AuthOrchestrationOperateScope,
   [WS_METHODS.deviceClose]: AuthOrchestrationOperateScope,

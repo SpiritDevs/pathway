@@ -27,6 +27,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import { NodeRuntimeUnavailableError } from "./nodeRuntime.ts";
+import { AndroidSdkInstallError } from "./androidSdkInstall.ts";
 
 import { type DeviceService, makeWithHosts, stateStream } from "./DeviceService.ts";
 
@@ -1536,3 +1537,98 @@ for (const recovery of ["restart", "restart-failed", "disable", "stop", "deadlin
       }).pipe(Effect.scoped),
   );
 }
+
+describe("DeviceService.installPlatform", () => {
+  const waitFor = (
+    changes: PubSub.Subscription<DeviceServiceState>,
+    predicate: (state: DeviceServiceState) => boolean,
+  ): Effect.Effect<DeviceServiceState> =>
+    PubSub.take(changes).pipe(
+      Effect.flatMap((state) =>
+        predicate(state) ? Effect.succeed(state) : waitFor(changes, predicate),
+      ),
+    );
+
+  it.effect("returns at once and publishes progress until the install finishes", () =>
+    Effect.gen(function* () {
+      const finish = yield* Deferred.make<void>();
+      let installs = 0;
+      const { service } = yield* fixture(
+        Effect.void,
+        undefined,
+        false,
+        undefined,
+        false,
+        undefined,
+        {
+          installAndroid: (onProgress) =>
+            Effect.gen(function* () {
+              installs++;
+              yield* onProgress("Downloading the Android Emulator…");
+              yield* Deferred.await(finish);
+              return false;
+            }),
+        },
+      );
+      const changes = yield* service.subscribe;
+      const started = yield* service.installPlatform({ platform: "android" });
+      expect(started.platformInstalls).toEqual([
+        {
+          hostId: LOCAL_DEVICE_HOST_ID,
+          platform: "android",
+          status: "installing",
+          detail: "Preparing Android setup…",
+        },
+      ]);
+      yield* waitFor(
+        changes,
+        (state) => state.platformInstalls?.[0]?.detail === "Downloading the Android Emulator…",
+      );
+      // A second click or client joins the running install instead of starting another.
+      yield* service.installPlatform({ platform: "android" });
+      yield* Deferred.succeed(finish, undefined);
+      yield* waitFor(changes, (state) => state.platformInstalls?.length === 0);
+      expect(installs).toBe(1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps a failed install visible with its reason and allows a retry", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const { service } = yield* fixture(
+        Effect.void,
+        undefined,
+        false,
+        undefined,
+        false,
+        undefined,
+        {
+          installAndroid: () =>
+            Effect.suspend(() =>
+              ++attempts === 1
+                ? Effect.fail(new AndroidSdkInstallError({ reason: "Couldn't download." }))
+                : Effect.succeed(false),
+            ),
+        },
+      );
+      const changes = yield* service.subscribe;
+      yield* service.installPlatform({ platform: "android" });
+      const failed = yield* waitFor(
+        changes,
+        (state) => state.platformInstalls?.[0]?.status === "failed",
+      );
+      expect(failed.platformInstalls?.[0]?.detail).toBe("Couldn't download.");
+      yield* service.installPlatform({ platform: "android" });
+      yield* waitFor(changes, (state) => state.platformInstalls?.length === 0);
+      expect(attempts).toBe(2);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("rejects hosts that cannot install Android", () =>
+    Effect.gen(function* () {
+      const { service } = yield* fixture();
+      const error = yield* service.installPlatform({ platform: "android" }).pipe(Effect.flip);
+      expect(error._tag).toBe("DeviceHostUnavailableError");
+    }).pipe(Effect.scoped),
+  );
+});

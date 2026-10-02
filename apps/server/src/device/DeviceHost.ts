@@ -20,6 +20,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { NodeRuntimeUnavailableError } from "./nodeRuntime.ts";
+import type { AndroidSdkInstallError } from "./androidSdkInstall.ts";
 
 export class DeviceHostError extends Schema.TaggedErrorClass<DeviceHostError>()("DeviceHostError", {
   hostId: Schema.String,
@@ -91,6 +92,13 @@ export class DeviceHost extends Context.Service<
       (DeviceHostReady & { agentDevice?: AgentDeviceEndpoint }) | null,
       DeviceHostError | DeviceHostTimeoutError | NodeRuntimeUnavailableError
     >;
+    /**
+     * Installs what Android is missing on this host. Succeeds with true when running
+     * helpers must restart to see a newly created SDK.
+     */
+    readonly installAndroid?: (
+      onProgress: (detail: string) => Effect.Effect<void>,
+    ) => Effect.Effect<boolean, AndroidSdkInstallError>;
     readonly acquireDevice: (key: string) => Effect.Effect<DeviceOwnership | null, DeviceHostError>;
     readonly deviceOwners: (
       keys: ReadonlyArray<string>,
