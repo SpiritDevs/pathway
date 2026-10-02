@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  type CrampedSidebarState,
+  resolveCrampedSidebarState,
   resolveInitialThreadSidebarWidth,
   THREAD_MAIN_CONTENT_MIN_WIDTH,
   THREAD_SIDEBAR_DEFAULT_WIDTH,
@@ -30,5 +32,33 @@ describe("thread sidebar width", () => {
 
   it("keeps the sidebar minimum when the whole layout is narrower than its minimums", () => {
     expect(resolveInitialThreadSidebarWidth(900, 700)).toBe(THREAD_SIDEBAR_MIN_WIDTH);
+  });
+});
+
+describe("cramped thread sidebar", () => {
+  const sidebarWidth = THREAD_SIDEBAR_DEFAULT_WIDTH;
+  const roomy = sidebarWidth + THREAD_MAIN_CONTENT_MIN_WIDTH;
+  const cramped = roomy - 1;
+  const initial: CrampedSidebarState = { open: true, autoCollapsed: false, cramped: false };
+  const resize = (state: CrampedSidebarState, ...widths: number[]) =>
+    widths.reduce(
+      (current, width) => resolveCrampedSidebarState(current, width, sidebarWidth),
+      state,
+    );
+
+  it("collapses when the main content gets cramped and reopens when the room returns", () => {
+    const collapsed = resize(initial, roomy, cramped);
+    expect(collapsed).toEqual({ open: false, autoCollapsed: true, cramped: true });
+    expect(resize(collapsed, cramped - 100, roomy)).toEqual(initial);
+  });
+
+  it("keeps a sidebar the user reopened while cramped", () => {
+    const reopened = { ...resize(initial, cramped), open: true, autoCollapsed: false };
+    expect(resize(reopened, cramped - 50, cramped - 10)).toEqual(reopened);
+  });
+
+  it("does not reopen a sidebar the user had closed", () => {
+    const closed = { ...initial, open: false };
+    expect(resize(closed, cramped, roomy)).toEqual({ ...closed, cramped: false });
   });
 });

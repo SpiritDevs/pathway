@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   formatTrackedDuration,
+  formatTrackedDurationBadge,
   startOfLocalWeek,
   totalDuration,
   trackedActivityDuration,
@@ -14,6 +15,11 @@ describe("formatTrackedDuration", () => {
     expect(formatTrackedDuration(65_000)).toBe("1m");
     expect(formatTrackedDuration(3_725_000)).toBe("1h 02m");
     expect(formatTrackedDuration(3_725_000, true)).toBe("01:02:05");
+  });
+
+  it("keeps badge durations to one unit", () => {
+    expect(formatTrackedDurationBadge(65_000)).toBe("1m");
+    expect(formatTrackedDurationBadge(3_725_000)).toBe("1h");
   });
 });
 

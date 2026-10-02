@@ -9,7 +9,11 @@ import { hasClerkPublicConfig } from "../../cloud/publicConfig";
 import { useBusinessToolsCloud, useBusinessToolsQuery } from "../contacts/businessToolsCloud";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
-import { formatTrackedDuration, trackedActivityDuration } from "./timeTracker.logic";
+import {
+  formatTrackedDuration,
+  formatTrackedDurationBadge,
+  trackedActivityDuration,
+} from "./timeTracker.logic";
 import { useTimeTrackerClock } from "./useTimeTrackerClock";
 
 function isAwaitingConnection(session: TrackedActivitySession, now: number) {
@@ -154,26 +158,14 @@ function ConfiguredTimeTrackerIndicator() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        render={<Button variant="ghost" />}
-        aria-label={`Time tracker${running ? `, ${running} running` : sessions.length ? `, ${sessions.length} paused` : ""}`}
-        className="h-auto w-9 flex-col gap-1 rounded-full px-0 py-1.5 text-muted-foreground [-webkit-app-region:no-drag]"
+        render={<Button variant="ghost" size="icon-sm" />}
+        aria-label={`Time tracker, ${running} running, ${formatTrackedDuration(duration)}`}
+        className="rounded-full [-webkit-app-region:no-drag]"
       >
-        <Clock3Icon className={`size-4 ${running ? "text-primary" : ""}`} />
-        {sessions.length ? (
-          <>
-            {/* The rail is too narrow for "1h 05m" on one line, so hours and minutes stack. */}
-            <span className="flex flex-col font-mono text-[10px] leading-3 tabular-nums">
-              {formatTrackedDuration(duration)
-                .split(" ")
-                .map((part) => (
-                  <span key={part}>{part}</span>
-                ))}
-            </span>
-            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] leading-3 font-medium text-primary">
-              {sessions.length}
-            </span>
-          </>
-        ) : null}
+        <Clock3Icon className="size-4 text-primary" />
+        <span className="absolute -right-1 -bottom-1 rounded-full bg-primary px-1 font-mono text-[9px] leading-3.5 font-medium text-primary-foreground tabular-nums ring-2 ring-sidebar">
+          {formatTrackedDurationBadge(duration)}
+        </span>
       </PopoverTrigger>
       <PopoverPopup
         align="end"

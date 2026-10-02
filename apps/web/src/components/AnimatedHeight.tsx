@@ -2,9 +2,18 @@
 
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { cn } from "~/lib/utils";
+
 const HEIGHT_TRANSITION_FALLBACK_MS = 250;
 
-export function AnimatedHeight({ children }: { readonly children: ReactNode }) {
+// With `anchor="bottom"` the content's bottom edge stays put and growth is revealed from the top.
+export function AnimatedHeight({
+  children,
+  anchor = "top",
+}: {
+  readonly children: ReactNode;
+  readonly anchor?: "top" | "bottom";
+}) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [heightState, setHeightState] = useState<{
     readonly height: number | null;
@@ -72,7 +81,10 @@ export function AnimatedHeight({ children }: { readonly children: ReactNode }) {
   return (
     <div
       data-slot="animated-height"
-      className="transition-[height] duration-200 ease-out motion-reduce:transition-none"
+      className={cn(
+        "transition-[height] duration-200 ease-out motion-reduce:transition-none",
+        anchor === "bottom" && "flex flex-col justify-end",
+      )}
       style={
         heightState.height === null
           ? undefined
@@ -85,7 +97,9 @@ export function AnimatedHeight({ children }: { readonly children: ReactNode }) {
         );
       }}
     >
-      <div ref={contentRef}>{children}</div>
+      <div ref={contentRef} className={anchor === "bottom" ? "shrink-0" : undefined}>
+        {children}
+      </div>
     </div>
   );
 }

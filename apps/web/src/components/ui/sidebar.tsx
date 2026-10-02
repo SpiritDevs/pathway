@@ -55,6 +55,8 @@ type SidebarContextProps = {
   startHoverReveal: () => void;
   stopHoverReveal: () => void;
   toggleSidebar: () => void;
+  /** Dismisses a sidebar shown floating by toggling it while `overlay` is set. */
+  closeOverlay: () => void;
 };
 
 type SidebarResizableOptions = {
@@ -114,6 +116,7 @@ function SidebarProvider({
   open: openProp,
   onOpenChange: setOpenProp,
   hoverReveal = false,
+  overlay = false,
   className,
   style,
   children,
@@ -121,6 +124,8 @@ function SidebarProvider({
 }: React.ComponentProps<"div"> & {
   defaultOpen?: boolean;
   hoverReveal?: boolean;
+  /** Toggling a collapsed sidebar floats it over the content instead of docking it. */
+  overlay?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
@@ -129,6 +134,8 @@ function SidebarProvider({
   // Previewing is deliberately separate from `open`: it must neither persist
   // nor expand the sidebar gap while the panel floats over the workspace.
   const [hoverRevealed, setHoverRevealed] = React.useState(false);
+  // Shown floating like a preview, but stays until dismissed rather than following the pointer.
+  const [overlayOpen, setOverlayOpen] = React.useState(false);
   const hoverRevealCloseTimerRef = React.useRef<number | null>(null);
 
   // This is the internal state of the sidebar.
@@ -157,8 +164,38 @@ function SidebarProvider({
 
   // Helper to toggle the sidebar.
   const toggleSidebar = React.useCallback(() => {
-    return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open);
-  }, [isMobile, setOpen]);
+    if (isMobile) return setOpenMobile((open) => !open);
+    if (overlay && !open) return setOverlayOpen((overlayOpen) => !overlayOpen);
+    return setOpen((open) => !open);
+  }, [isMobile, open, overlay, setOpen]);
+
+  const closeOverlay = React.useCallback(() => setOverlayOpen(false), []);
+
+  React.useEffect(() => {
+    if (!overlayOpen) return;
+    if (!overlay || open || isMobile) {
+      setOverlayOpen(false);
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest(SIDEBAR_HOVER_REVEAL_KEEP_SELECTOR)
+      ) {
+        return;
+      }
+      setOverlayOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOverlayOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isMobile, open, overlay, overlayOpen]);
 
   // We add a state so that we can do data-state="expanded" or "collapsed".
   // This makes it easier to style the sidebar with Tailwind classes.
@@ -234,7 +271,8 @@ function SidebarProvider({
     () => ({
       isMobile,
       hoverRevealEnabled: hoverReveal,
-      hoverRevealed,
+      hoverRevealed: hoverRevealed || overlayOpen,
+      closeOverlay,
       open,
       openMobile,
       setOpen,
@@ -246,10 +284,12 @@ function SidebarProvider({
     }),
     [
       hoverReveal,
+      closeOverlay,
       hoverRevealed,
       isMobile,
       open,
       openMobile,
+      overlayOpen,
       setOpen,
       startHoverReveal,
       state,

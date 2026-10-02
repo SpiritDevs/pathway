@@ -24,6 +24,12 @@ export function formatTrackedDuration(durationMs: number, showSeconds = false): 
   return `${hours}h ${String(minutes).padStart(2, "0")}m`;
 }
 
+// The single largest unit, for badges too narrow for "1h 05m".
+export function formatTrackedDurationBadge(durationMs: number): string {
+  const minutes = Math.max(0, Math.floor(durationMs / 60_000));
+  return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h`;
+}
+
 export function totalDuration(entries: readonly TimeEntry[], since: Date): number {
   const sinceMs = since.getTime();
   return entries.reduce(

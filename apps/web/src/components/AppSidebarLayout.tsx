@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import {
   lazy,
   Suspense,
+  useCallback,
   useEffect,
   useState,
   useSyncExternalStore,
@@ -41,6 +42,8 @@ import { PaneRow } from "../panes/PaneRow";
 import { isPaneFocused, useFocusedPaneRouter, usePaneId } from "../panes/usePaneFocus";
 import { isChildWindow } from "../panes/windowMode";
 import {
+  type CrampedSidebarState,
+  resolveCrampedSidebarState,
   resolveInitialThreadSidebarWidth,
   resolveThreadSidebarMaximumWidth,
   THREAD_MAIN_CONTENT_MIN_WIDTH,
@@ -295,6 +298,42 @@ function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
 }
 
 /**
+ * The sidebar's open state, collapsing it while a narrow frame (a wide right panel, a
+ * small window) would leave the main content cramped and reopening it once there is room.
+ */
+function useCrampedSidebarOpen(sidebarWidth: number) {
+  const [state, setState] = useState<CrampedSidebarState>({
+    open: true,
+    autoCollapsed: false,
+    cramped: false,
+  });
+  const [frame, setFrame] = useState<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!frame) return;
+    const observer = new ResizeObserver(() =>
+      setState((previous) => resolveCrampedSidebarState(previous, frame.clientWidth, sidebarWidth)),
+    );
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [frame, sidebarWidth]);
+
+  const onOpenChange = useCallback(
+    (open: boolean) => setState((previous) => ({ ...previous, open, autoCollapsed: false })),
+    [],
+  );
+
+  return { open: state.open, cramped: state.cramped, onOpenChange, frameRef: setFrame };
+}
+
+/** Like the mobile sheet, a floating sidebar gets out of the way once the pane navigates. */
+function CloseSidebarOverlayOnNavigation({ pathname }: { pathname: string }) {
+  const { closeOverlay } = useSidebar();
+  useEffect(() => closeOverlay(), [closeOverlay, pathname]);
+  return null;
+}
+
+/**
  * One pane's card: the page with its contextual sidebar, which follows the
  * router the frame renders under. Split, every pane has its own frame, so each
  * sidebar collapses on its own. A side pane's root route renders one around its
@@ -318,12 +357,17 @@ export function WorkspaceFrame({ children }: { children: ReactNode }) {
   // that would otherwise refresh a render-time snapshot.
   const viewportWidth = useSyncExternalStore(subscribeToViewportWidth, readViewportWidth);
   const sidebarMaximumWidth = resolveThreadSidebarMaximumWidth(viewportWidth);
+  const { open, cramped, onOpenChange, frameRef } = useCrampedSidebarOpen(sidebarWidth);
 
   return (
     <SidebarProvider
       className="relative min-h-0! min-w-0 flex-1 overflow-hidden rounded-t-xl bg-background shadow-[0_-4px_12px_rgb(0_0_0/0.06)] md:rounded-xl md:border md:border-sidebar-border md:shadow-none dark:shadow-[0_-4px_12px_rgb(0_0_0/0.24)] dark:md:shadow-none"
       data-app-content-frame=""
-      defaultOpen
+      ref={frameRef}
+      open={open}
+      onOpenChange={onOpenChange}
+      // Cramped, the toggle shows the sidebar floating rather than taking room back.
+      overlay={cramped}
       hoverReveal
       style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
@@ -368,6 +412,7 @@ export function WorkspaceFrame({ children }: { children: ReactNode }) {
           <SidebarRail />
         </Sidebar>
       ) : null}
+      <CloseSidebarOverlayOnNavigation pathname={pathname} />
       {children}
       {shouldRenderSecondarySidebar ? <SidebarControl useArtworkContrast /> : null}
     </SidebarProvider>

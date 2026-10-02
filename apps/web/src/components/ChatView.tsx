@@ -214,6 +214,7 @@ import {
 } from "../rightPanelLayout";
 import { isPaneFocused, useIsNarrowPane, useIsSplitWindow, usePaneId } from "../panes/usePaneFocus";
 import {
+  isBlankBrowserSurface,
   isRemoteBrowserSurface,
   pullRequestSurfaceId,
   selectActiveRightPanel,
@@ -4786,6 +4787,11 @@ function ChatViewContent(props: ChatViewProps) {
       useRightPanelStore.getState().openBrowser(activeThreadRef, activeTabId);
       return;
     }
+    const blank = rightPanelState.surfaces.find(isBlankBrowserSurface);
+    if (blank) {
+      useRightPanelStore.getState().activateSurface(activeThreadRef, blank.id);
+      return;
+    }
     createBrowserSurface();
   }, [
     activePreviewState.activeTabId,
@@ -5130,6 +5136,13 @@ function ChatViewContent(props: ChatViewProps) {
       rightPanelState.surfaces,
       syncActivePreviewSurface,
     ],
+  );
+  const moveRightPanelSurface = useCallback(
+    (surface: RightPanelSurface, toIndex: number) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().moveSurface(activeThreadRef, surface.id, toIndex);
+    },
+    [activeThreadRef],
   );
   const closeRightPanelSurfacesToRight = useCallback(
     (surface: RightPanelSurface) => {
@@ -10748,6 +10761,7 @@ function ChatViewContent(props: ChatViewProps) {
               onCloseSurface={closeRightPanelSurface}
               onCloseOtherSurfaces={closeOtherRightPanelSurfaces}
               onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
+              onMoveSurface={moveRightPanelSurface}
               onCloseAllSurfaces={closeAllRightPanelSurfaces}
               onCopyFilePath={copyRightPanelFilePath}
               onAddDevice={
@@ -10814,6 +10828,7 @@ function ChatViewContent(props: ChatViewProps) {
             onCloseSurface={closeRightPanelSurface}
             onCloseOtherSurfaces={closeOtherRightPanelSurfaces}
             onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
+            onMoveSurface={moveRightPanelSurface}
             onCloseAllSurfaces={closeAllRightPanelSurfaces}
             onCopyFilePath={copyRightPanelFilePath}
             onAddDevice={

@@ -14,6 +14,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
+import { randomUUID } from "./lib/utils";
 import type { ThreadPanelPresentation } from "./rightPanelLayout";
 import { remoteBrowserEnabled } from "./browser/browserPlacement";
 
@@ -41,7 +42,8 @@ export type DeviceSurfaceTarget = {
 export type RightPanelSurface =
   | { id: `device:${string}`; kind: "device"; target?: DeviceSurfaceTarget }
   | { id: `browser:${string}`; kind: "preview"; resourceId: string }
-  | { id: "browser:new"; kind: "preview"; resourceId: null }
+  /** A blank browser tab; any number can be open until each one loads a page. */
+  | { id: `browser:new:${string}`; kind: "preview"; resourceId: null }
   /** The thread environment's own browser, streamed; its tabs live on the environment. */
   | { id: typeof REMOTE_BROWSER_SURFACE_ID; kind: "preview"; resourceId: null }
   | {
@@ -88,6 +90,13 @@ export type RightPanelSurface =
   | { id: `thread:${string}`; kind: "thread"; resourceId: ThreadId };
 
 export const REMOTE_BROWSER_SURFACE_ID = "remote-browser";
+
+/** A blank new tab, as opposed to a page or the remote browser. */
+export function isBlankBrowserSurface(surface: RightPanelSurface | null | undefined): boolean {
+  return (
+    surface?.kind === "preview" && surface.resourceId === null && !isRemoteBrowserSurface(surface)
+  );
+}
 
 export function isRemoteBrowserSurface(
   surface: { readonly id: string } | null | undefined,
@@ -152,6 +161,8 @@ interface RightPanelStoreState {
   activateTerminal: (ref: ScopedThreadRef, surfaceId: string, terminalId: string) => void;
   closeTerminal: (ref: ScopedThreadRef, surfaceId: string, terminalId: string) => void;
   activateSurface: (ref: ScopedThreadRef, surfaceId: string) => void;
+  /** Moves a tab to `toIndex` in the tab strip. */
+  moveSurface: (ref: ScopedThreadRef, surfaceId: string, toIndex: number) => void;
   closeSurface: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeOtherSurfaces: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeSurfacesToRight: (ref: ScopedThreadRef, surfaceId: string) => void;
@@ -212,7 +223,26 @@ export function deviceSurfaceId(
 const browserSurface = (tabId: string | null): RightPanelSurface =>
   tabId
     ? { id: `browser:${tabId}`, kind: "preview", resourceId: tabId }
-    : { id: "browser:new", kind: "preview", resourceId: null };
+    : { id: `browser:new:${randomUUID()}`, kind: "preview", resourceId: null };
+
+/** Shows a browser page, letting it take the place of the blank tab the user is looking at. */
+const showBrowserSurface = (
+  current: ThreadRightPanelState,
+  surface: RightPanelSurface,
+): ThreadRightPanelState => {
+  const blank = current.surfaces.find(
+    (entry) => entry.id === current.activeSurfaceId && isBlankBrowserSurface(entry),
+  );
+  if (!blank) return upsertSurface(current, surface);
+  const exists = current.surfaces.some((entry) => entry.id === surface.id);
+  return {
+    isOpen: true,
+    surfaces: exists
+      ? current.surfaces.filter((entry) => entry !== blank)
+      : current.surfaces.map((entry) => (entry === blank ? surface : entry)),
+    activeSurfaceId: surface.id,
+  };
+};
 
 const fileSurface = (
   relativePath: string,
@@ -580,24 +610,20 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       openBrowser: (ref, tabId) =>
         set((state) =>
-          updateThread(state, ref, (current) => {
-            const surface = browserSurface(tabId);
-            const withoutPlaceholder = tabId
-              ? current.surfaces.filter((entry) => entry.id !== "browser:new")
-              : current.surfaces;
-            return upsertSurface({ ...current, surfaces: withoutPlaceholder }, surface);
-          }),
+          updateThread(state, ref, (current) =>
+            tabId
+              ? showBrowserSurface(current, browserSurface(tabId))
+              : upsertSurface(current, browserSurface(null)),
+          ),
         ),
       openRemoteBrowser: (ref) =>
         set((state) =>
           updateThread(state, ref, (current) =>
-            upsertSurface(
-              {
-                ...current,
-                surfaces: current.surfaces.filter((entry) => entry.id !== "browser:new"),
-              },
-              { id: REMOTE_BROWSER_SURFACE_ID, kind: "preview", resourceId: null },
-            ),
+            showBrowserSurface(current, {
+              id: REMOTE_BROWSER_SURFACE_ID,
+              kind: "preview",
+              resourceId: null,
+            }),
           ),
         ),
       openPullRequest: (ref, target) =>
@@ -730,6 +756,16 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               : current,
           ),
         ),
+      moveSurface: (ref, surfaceId, toIndex) =>
+        set((state) =>
+          updateThread(state, ref, (current) => {
+            const fromIndex = current.surfaces.findIndex((surface) => surface.id === surfaceId);
+            if (fromIndex < 0 || fromIndex === toIndex) return current;
+            const surfaces = current.surfaces.toSpliced(fromIndex, 1);
+            surfaces.splice(toIndex, 0, current.surfaces[fromIndex]!);
+            return { ...current, surfaces };
+          }),
+        ),
       closeSurface: (ref, surfaceId) =>
         set((state) =>
           updateThread(state, ref, (current) => {
@@ -793,7 +829,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             const existingBrowser = current.surfaces.filter(
               (surface): surface is Extract<RightPanelSurface, { kind: "preview" }> =>
                 surface.kind === "preview" &&
-                (surface.id === "browser:new" ||
+                (isBlankBrowserSurface(surface) ||
                   validIds.has(surface.id) ||
                   (remoteBrowserEnabled && isRemoteBrowserSurface(surface))),
             );

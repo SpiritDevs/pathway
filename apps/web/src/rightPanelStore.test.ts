@@ -572,35 +572,68 @@ describe("rightPanelStore", () => {
     });
   });
 
+  const blankTab = {
+    id: expect.stringMatching(/^browser:new:/),
+    kind: "preview",
+    resourceId: null,
+  };
+  const panelState = () =>
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+
   it("opens an empty panel on a new browser tab", () => {
     useRightPanelStore.getState().toggleVisibility(refA);
-    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+    expect(panelState()).toEqual({
       isOpen: true,
-      activeSurfaceId: "browser:new",
-      surfaces: [{ id: "browser:new", kind: "preview", resourceId: null }],
+      activeSurfaceId: panelState().surfaces[0]?.id,
+      surfaces: [blankTab],
     });
 
     useRightPanelStore.getState().toggleVisibility(refA);
-    expect(
-      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).isOpen,
-    ).toBe(false);
+    expect(panelState().isOpen).toBe(false);
   });
 
   it("keeps a new browser tab until a session takes its place", () => {
     const store = useRightPanelStore.getState();
     store.openBrowser(refA, null);
     store.reconcileBrowserSurfaces(refA, []);
-    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+    expect(panelState()).toEqual({
       isOpen: true,
-      activeSurfaceId: "browser:new",
-      surfaces: [{ id: "browser:new", kind: "preview", resourceId: null }],
+      activeSurfaceId: panelState().surfaces[0]?.id,
+      surfaces: [blankTab],
     });
 
     store.openBrowser(refA, "tab-1");
-    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+    expect(panelState()).toEqual({
       isOpen: true,
       activeSurfaceId: "browser:tab-1",
       surfaces: [{ id: "browser:tab-1", kind: "preview", resourceId: "tab-1" }],
+    });
+  });
+
+  it("opens a separate blank tab each time and replaces only the one being viewed", () => {
+    const store = useRightPanelStore.getState();
+    store.openBrowser(refA, "tab-1");
+    store.openBrowser(refA, null);
+    store.openBrowser(refA, null);
+    const [, first, second] = panelState().surfaces;
+    expect(panelState().surfaces).toEqual([
+      { id: "browser:tab-1", kind: "preview", resourceId: "tab-1" },
+      blankTab,
+      blankTab,
+    ]);
+    expect(first?.id).not.toBe(second?.id);
+    expect(panelState().activeSurfaceId).toBe(second?.id);
+
+    store.activateSurface(refA, first!.id);
+    store.openBrowser(refA, "tab-2");
+    expect(panelState()).toEqual({
+      isOpen: true,
+      activeSurfaceId: "browser:tab-2",
+      surfaces: [
+        { id: "browser:tab-1", kind: "preview", resourceId: "tab-1" },
+        { id: "browser:tab-2", kind: "preview", resourceId: "tab-2" },
+        second,
+      ],
     });
   });
 
@@ -608,10 +641,10 @@ describe("rightPanelStore", () => {
     const store = useRightPanelStore.getState();
     store.openBrowser(refA, "stale-tab");
     store.reconcileBrowserSurfaces(refA, []);
-    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+    expect(panelState()).toEqual({
       isOpen: true,
-      activeSurfaceId: "browser:new",
-      surfaces: [{ id: "browser:new", kind: "preview", resourceId: null }],
+      activeSurfaceId: panelState().surfaces[0]?.id,
+      surfaces: [blankTab],
     });
   });
 
@@ -834,6 +867,22 @@ describe("rightPanelStore", () => {
       activeSurfaceId: "browser:tab-a",
       surfaces: [{ id: "browser:tab-a", kind: "preview", resourceId: "tab-a" }],
     });
+  });
+
+  it("moves a tab without changing which one is active", () => {
+    useRightPanelStore.getState().openBrowser(refA, "tab-a");
+    useRightPanelStore.getState().openFile(refA, "src/index.ts");
+    useRightPanelStore.getState().openTerminal(refA, "term-1");
+
+    useRightPanelStore.getState().moveSurface(refA, "browser:tab-a", 2);
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual([
+      "file:src/index.ts",
+      "terminal:term-1",
+      "browser:tab-a",
+    ]);
+    expect(state.activeSurfaceId).toBe("terminal:term-1");
   });
 
   it("closing all surfaces closes the panel", () => {

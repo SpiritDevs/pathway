@@ -1,3 +1,7 @@
+import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
+import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import type {
   ContextMenuItem,
   PreviewSessionSnapshot,
@@ -16,8 +20,10 @@ import {
   Monitor,
   Plus,
   TerminalSquare,
+  X,
 } from "lucide-react";
 import {
+  type ComponentProps,
   createContext,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
@@ -42,7 +48,6 @@ import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { ScrollArea } from "~/components/ui/scroll-area";
-import { PanelTabCloseButton } from "~/components/ui/panel-tab-close-button";
 import { useTheme } from "~/hooks/useTheme";
 import { useIsSplitWindow } from "~/panes/usePaneFocus";
 import { useWorkspaceTopBarPanelTabsHost } from "./navigation/WorkspaceTopBar";
@@ -70,6 +75,8 @@ interface RightPanelTabsProps {
   threadTitlesById?: ReadonlyMap<string, string>;
   onActivate: (surface: RightPanelSurface) => void;
   onCloseSurface: (surface: RightPanelSurface) => void;
+  /** Dragging tabs reorders them; without this they stay put. */
+  onMoveSurface?: ((surface: RightPanelSurface, toIndex: number) => void) | undefined;
   onCloseOtherSurfaces: (surface: RightPanelSurface) => void;
   onCloseSurfacesToRight: (surface: RightPanelSurface) => void;
   onCloseAllSurfaces: () => void;
@@ -571,6 +578,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     [props],
   );
 
+  const tabDragSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  );
+  const handleTabDragEnd = useCallback(
+    ({ active, over }: DragEndEvent) => {
+      const surface = props.surfaces.find((entry) => entry.id === active.id);
+      const toIndex = props.surfaces.findIndex((entry) => entry.id === over?.id);
+      if (surface && toIndex >= 0) props.onMoveSurface?.(surface, toIndex);
+    },
+    [props],
+  );
+
   useEffect(() => {
     const activeTab = tabListRef.current?.querySelector<HTMLElement>("[data-active-tab='true']");
     activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -597,74 +616,102 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       <ScrollArea
         ref={tabListRef}
         scrollFade
+        hideScrollbars
         className="min-w-0 flex-1 rounded-none [-webkit-app-region:no-drag]"
         data-right-panel-tab-list
       >
-        <div className="flex h-full w-max min-w-full items-center gap-1">
-          {props.surfaces.map((surface) => {
-            const active = surface.id === props.activeSurfaceId;
-            const pending = props.pendingSurfaceIds.has(surface.id);
-            const title = resolveRightPanelSurfaceTitle(
-              surface,
-              props.previewSessions,
-              props.terminalLabelsById,
-              props.threadTitlesById,
-              props.browserLabels,
-            );
-            return (
-              <div
-                key={surface.id}
-                data-active-tab={active}
-                onMouseDown={handleTabMouseDown}
-                onAuxClick={(event) => handleTabAuxClick(event, surface)}
-                onContextMenu={(event) => void handleTabContextMenu(event, surface)}
-                className={cn(
-                  "cursor-pointer group/tab flex h-6 max-w-36 shrink-0 items-center gap-0.5 rounded-md pr-2 pl-1.5 text-xs",
-                  // The accent fill vanishes on the top bar's gray, so it uses the rail's.
-                  active
-                    ? inTopBar
-                      ? "bg-sidebar-foreground/10 text-foreground"
-                      : "bg-accent text-foreground"
-                    : cn(
-                        "text-muted-foreground hover:text-foreground",
-                        inTopBar ? "hover:bg-sidebar-foreground/6" : "hover:bg-accent/60",
-                      ),
-                )}
-              >
-                <PanelTabCloseButton
-                  label={`Close ${title}`}
-                  onClick={() => props.onCloseSurface(surface)}
-                >
-                  <SurfaceIcon
-                    surface={surface}
-                    sessions={props.previewSessions}
-                    theme={resolvedTheme}
-                    pullRequestStatuses={props.pullRequestStatuses}
-                  />
-                  {pending ? (
-                    <span
-                      className="absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full bg-current"
-                      aria-hidden
-                    />
-                  ) : null}
-                </PanelTabCloseButton>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        className="cursor-pointer flex min-w-0 items-center"
-                        onClick={() => props.onActivate(surface)}
-                      >
-                        <span className="truncate">{title}</span>
-                      </button>
-                    }
-                  />
-                  <TooltipPopup>{title}</TooltipPopup>
-                </Tooltip>
-              </div>
-            );
-          })}
+        <div
+          className="flex h-full w-full items-center gap-1"
+          // Without a scrollbar, a mouse wheel scrolls the strip sideways.
+          onWheel={(event) => {
+            if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+            event.currentTarget.parentElement?.scrollBy({ left: event.deltaY });
+          }}
+        >
+          <DndContext
+            sensors={tabDragSensors}
+            modifiers={[restrictToHorizontalAxis]}
+            onDragEnd={handleTabDragEnd}
+          >
+            <SortableContext
+              items={props.surfaces.map((surface) => surface.id)}
+              strategy={horizontalListSortingStrategy}
+              disabled={!props.onMoveSurface}
+            >
+              {props.surfaces.map((surface) => {
+                const active = surface.id === props.activeSurfaceId;
+                const pending = props.pendingSurfaceIds.has(surface.id);
+                const title = resolveRightPanelSurfaceTitle(
+                  surface,
+                  props.previewSessions,
+                  props.terminalLabelsById,
+                  props.threadTitlesById,
+                  props.browserLabels,
+                );
+                return (
+                  <SortableTab
+                    key={surface.id}
+                    id={surface.id}
+                    data-active-tab={active}
+                    onMouseDown={handleTabMouseDown}
+                    onAuxClick={(event) => handleTabAuxClick(event, surface)}
+                    onContextMenu={(event) => void handleTabContextMenu(event, surface)}
+                    // Tabs share the strip down to a minimum, then the strip scrolls.
+                    className={cn(
+                      "group/tab flex h-7 w-56 min-w-24 shrink items-center rounded-lg text-xs",
+                      active
+                        ? "bg-background text-foreground shadow-xs ring-1 ring-border/70 dark:ring-white/8"
+                        : cn(
+                            "text-muted-foreground hover:text-foreground",
+                            inTopBar ? "hover:bg-sidebar-foreground/6" : "hover:bg-accent/60",
+                          ),
+                    )}
+                  >
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <button
+                            type="button"
+                            className="cursor-pointer flex h-full min-w-0 flex-1 items-center gap-2 pr-1 pl-2.5"
+                            onClick={() => props.onActivate(surface)}
+                          >
+                            <span className="relative flex size-3.5 shrink-0 items-center justify-center">
+                              <SurfaceIcon
+                                surface={surface}
+                                sessions={props.previewSessions}
+                                theme={resolvedTheme}
+                                pullRequestStatuses={props.pullRequestStatuses}
+                              />
+                              {pending ? (
+                                <span
+                                  className="absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full bg-current"
+                                  aria-hidden
+                                />
+                              ) : null}
+                            </span>
+                            <span className="truncate">{title}</span>
+                          </button>
+                        }
+                      />
+                      <TooltipPopup>{title}</TooltipPopup>
+                    </Tooltip>
+                    <button
+                      type="button"
+                      aria-label={`Close ${title}`}
+                      onClick={() => props.onCloseSurface(surface)}
+                      className={cn(
+                        "cursor-pointer mr-1.5 flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground",
+                        !active &&
+                          "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100",
+                      )}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </SortableTab>
+                );
+              })}
+            </SortableContext>
+          </DndContext>
           {props.surfaces.length > 0 && newTabAction ? (
             <Tooltip>
               <TooltipTrigger
@@ -672,7 +719,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   <button
                     type="button"
                     className={cn(
-                      "cursor-pointer relative inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40",
+                      "cursor-pointer relative inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40",
                       inTopBar ? "hover:bg-sidebar-foreground/6" : "hover:bg-accent",
                     )}
                     aria-label="New tab"
@@ -723,5 +770,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         )}
       </div>
     </PreviewPanelShell>
+  );
+}
+
+function SortableTab({ id, className, style, ...props }: ComponentProps<"div"> & { id: string }) {
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      {...props}
+      {...listeners}
+      className={cn(className, "touch-none", isDragging && "relative z-10")}
+      style={{ ...style, transform: CSS.Translate.toString(transform), transition }}
+    />
   );
 }

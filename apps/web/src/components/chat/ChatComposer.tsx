@@ -124,7 +124,7 @@ import { ComposerPendingElementContexts } from "./ComposerPendingElementContexts
 import { ComposerPendingIssueContexts } from "./ComposerPendingIssueContexts";
 import { ComposerPendingReviewComments } from "./ComposerPendingReviewComments";
 import { ComposerPreviewAnnotationCards } from "./ComposerPreviewAnnotationCards";
-import { shouldUseCompactComposerFooter } from "../composerFooterLayout";
+import { type ComposerFooterFit, resolveComposerFooterFit } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
@@ -373,7 +373,6 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   goalMode: boolean;
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
-  hideInteractionModeLabel: boolean;
   disabledReason?: string;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -414,17 +413,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
               ) : (
                 <ComposerControlIcon icon={BotIcon} opticalSize="large" />
               )}
-              <span
-                className={
-                  props.goalMode
-                    ? undefined
-                    : props.hideInteractionModeLabel
-                      ? "sr-only"
-                      : "sr-only sm:not-sr-only"
-                }
-              >
-                {props.goalMode ? "Goal" : props.interactionMode === "plan" ? "Plan" : "Build"}
-              </span>
+              {props.goalMode ? "Goal" : props.interactionMode === "plan" ? "Plan" : "Build"}
             </ComposerControl>
           </TooltipTrigger>
           <TooltipPopup side="top">{interactionModeTooltip}</TooltipPopup>
@@ -1124,7 +1113,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     null,
   );
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
-  const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
+  const [composerFooterFit, setComposerFooterFit] = useState<ComposerFooterFit>({
+    compact: false,
+    fullWidth: 0,
+  });
+  const isComposerFooterCompact = composerFooterFit.compact;
+  const [composerFooterControls, setComposerFooterControls] = useState<HTMLDivElement | null>(null);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const [composerMenuAnchor, setComposerMenuAnchor] = useState<HTMLDivElement | null>(null);
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
@@ -1655,32 +1649,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }, [draftId, activeThreadId, promptRef]);
 
   // ------------------------------------------------------------------
-  // Footer compact layout observation
+  // Composer height observation
   // ------------------------------------------------------------------
   useLayoutEffect(() => {
     const composerForm = composerFormRef.current;
     if (!composerForm) return;
-    const measureComposerFormWidth = () => composerForm.clientWidth;
-    const measureFooterCompactness = () => {
-      const composerFormWidth = measureComposerFormWidth();
-      const footerCompact = shouldUseCompactComposerFooter(composerFormWidth);
-      return {
-        footerCompact,
-      };
-    };
-
     composerFormHeightRef.current = composerForm.clientHeight;
-    const initialCompactness = measureFooterCompactness();
-    setIsComposerFooterCompact(initialCompactness.footerCompact);
     if (typeof ResizeObserver === "undefined") return;
 
     const observer = new ResizeObserver((entries) => {
       const [entry] = entries;
       if (!entry) return;
-      const nextCompactness = measureFooterCompactness();
-      setIsComposerFooterCompact((previous) =>
-        previous === nextCompactness.footerCompact ? previous : nextCompactness.footerCompact,
-      );
       const nextHeight = entry.contentRect.height;
       const previousHeight = composerFormHeightRef.current;
       composerFormHeightRef.current = nextHeight;
@@ -1700,6 +1679,34 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     scheduleStickToBottom,
     shouldAutoScrollRef,
   ]);
+
+  // ------------------------------------------------------------------
+  // Footer compact layout observation
+  // ------------------------------------------------------------------
+  const hasEnvironmentControl = Boolean(props.environmentControl);
+  useLayoutEffect(() => {
+    const composerForm = composerFormRef.current;
+    if (!composerForm || !composerFooterControls) return;
+    const measure = () => {
+      const composerWidth = composerForm.clientWidth;
+      const overflow = composerFooterControls.scrollWidth - composerFooterControls.clientWidth;
+      setComposerFooterFit((previous) =>
+        resolveComposerFooterFit(previous, composerWidth, overflow),
+      );
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+
+    // The controls themselves are observed so a longer model name or a newly
+    // shown control re-measures without the composer resizing.
+    const observer = new ResizeObserver(measure);
+    observer.observe(composerForm);
+    observer.observe(composerFooterControls);
+    for (const control of composerFooterControls.children) observer.observe(control);
+    return () => {
+      observer.disconnect();
+    };
+  }, [composerFooterControls, hasEnvironmentControl, isComposerFooterCompact]);
 
   // ------------------------------------------------------------------
   // Attachment persist effect
@@ -3717,7 +3724,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               isComposerFooterCompact ? "gap-1.5" : "gap-2 sm:gap-0",
             )}
           >
-            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div
+              ref={setComposerFooterControls}
+              className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            >
               {noProviderAvailable ? (
                 <Button
                   type="button"
@@ -3792,7 +3802,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     interactionMode={interactionMode}
                     runtimeMode={runtimeMode}
-                    hideInteractionModeLabel={Boolean(props.environmentControl)}
                     {...(composerControlsDisabledReason
                       ? { disabledReason: composerControlsDisabledReason }
                       : {})}
