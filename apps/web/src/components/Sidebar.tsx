@@ -4344,7 +4344,7 @@ export default function Sidebar() {
       <DraftSendReconciliation activeDraftId={routeDraftIdForRows} />
       <SidebarContent
         scrollAreaRef={focusSwipe.viewportRef}
-        className="gap-0 overflow-x-clip"
+        className="min-h-full gap-0 overflow-x-clip"
         fixedHeader={
           // Lifted above the stage backdrop, whose fade bleeds below the
           // header and would otherwise paint across the search row's outline.
@@ -4614,7 +4614,7 @@ export default function Sidebar() {
       >
         <SidebarGroup
           ref={focusSwipe.contentRef}
-          className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0"
+          className="flex-1 ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0"
         >
           {loadingThreads.map((thread) =>
             lifecycleCapabilities.get(thread.environmentId)?.threadSettlement === true ? (
@@ -4740,7 +4740,14 @@ export default function Sidebar() {
               closeDelay={0}
               timeout={400}
             >
-              <ul key={activeFocusId} role="list" className="flex flex-col gap-px">
+              <ul
+                key={activeFocusId}
+                role="list"
+                className={cn(
+                  "flex flex-col gap-px",
+                  snoozedThreads.length + settledThreads.length > 0 && "flex-1",
+                )}
+              >
                 {(() => {
                   const renderThreadRow = (
                     thread: EnvironmentThreadShell,
@@ -5026,6 +5033,13 @@ export default function Sidebar() {
                           })}
                         </SortableContext>
                       </DndContext>,
+                    );
+                  }
+                  // The shelves sink to the bottom of the sidebar when the
+                  // list is short; once it overflows they simply trail it.
+                  if (snoozedThreads.length > 0 || settledThreads.length > 0) {
+                    items.push(
+                      <li key="shelves-spacer" aria-hidden className="flex-1 list-none" />,
                     );
                   }
                   // Snoozed shelf: between the inbox and Settled — out of the
