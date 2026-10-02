@@ -832,10 +832,14 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
 });
 
 // Draft sessions with user content, surfaced above the pinned block so an
-// interrupted "new thread" stays one click away. Self-contained (own store
-// subscription + closing divider) so per-keystroke composer updates
-// re-render only this block, never the whole sidebar. Vanishes at count 0.
+// interrupted "new thread" stays one click away. Rendered twice: unsent
+// drafts above the pinned block (with a closing divider), and `sending`
+// drafts at the head of the active list, where the server row lands, so the
+// handoff happens in place. Self-contained (own store subscription) so
+// per-keystroke composer updates re-render only this block, never the whole
+// sidebar. Vanishes at count 0.
 const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
+  sending: boolean;
   projectDisplayNameByKey: ReadonlyMap<string, string>;
   projectCwdByKey: ReadonlyMap<string, string | null>;
   projectFaviconPathByKey: ReadonlyMap<string, string | null | undefined>;
@@ -895,7 +899,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
         scopedProjectKeys: props.scopedProjectKeys,
         includeConversations: props.includeConversations,
         activeCompanyId: props.activeCompanyId,
-      }),
+      }).filter((row) => (row.session.pendingSend != null) === props.sending),
     [
       draftThreadsByThreadKey,
       draftsByThreadKey,
@@ -906,6 +910,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
       props.scopedProjectKeys,
       props.includeConversations,
       props.activeCompanyId,
+      props.sending,
     ],
   );
   const handleDiscard = useCallback(
@@ -940,11 +945,13 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
           />
         );
       })}
-      <li
-        aria-hidden
-        data-testid="sidebar-draft-divider"
-        className="mx-2.5 my-1.5 h-px list-none bg-sidebar-border/60"
-      />
+      {props.sending ? null : (
+        <li
+          aria-hidden
+          data-testid="sidebar-draft-divider"
+          className="mx-2.5 my-1.5 h-px list-none bg-sidebar-border/60"
+        />
+      )}
     </>
   );
 });
@@ -4882,6 +4889,7 @@ export default function Sidebar() {
                     />,
                     <SidebarDraftBlock
                       key="draft-sessions"
+                      sending={false}
                       projectDisplayNameByKey={projectDisplayNameByKey}
                       projectCwdByKey={projectCwdByKey}
                       projectFaviconPathByKey={projectFaviconPathByKey}
@@ -4968,6 +4976,22 @@ export default function Sidebar() {
                       />,
                     );
                   }
+                  // Sent drafts head the active list, where their server row lands
+                  // (newest first), so the handoff doesn't jump across Pinned.
+                  items.push(
+                    <SidebarDraftBlock
+                      key="sending-draft-sessions"
+                      sending
+                      projectDisplayNameByKey={projectDisplayNameByKey}
+                      projectCwdByKey={projectCwdByKey}
+                      projectFaviconPathByKey={projectFaviconPathByKey}
+                      scopedProjectKeys={scopedProjectKeys}
+                      includeConversations={includeConversations}
+                      activeCompanyId={activeCompanyId}
+                      routeDraftId={routeDraftIdForRows}
+                      onNavigateToDraft={navigateToDraft}
+                    />,
+                  );
                   // Active rows are sortable in Custom order: unlike pins the order
                   // is client-local, so there is no server capability to gate on.
                   // Automatic sorts render plain rows.
