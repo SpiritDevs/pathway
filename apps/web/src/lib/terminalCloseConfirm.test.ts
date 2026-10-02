@@ -31,7 +31,7 @@ describe("terminal close confirmation", () => {
 
     expect(isTerminalCloseConfirmPending()).toBe(false);
 
-    const confirmation = confirmTerminalClose(["Terminal 1"]);
+    const confirmation = confirmTerminalClose([{ label: "Terminal 1", running: true }]);
     expect(isTerminalCloseConfirmPending()).toBe(true);
 
     settle(true);
@@ -48,7 +48,7 @@ describe("terminal close confirmation", () => {
         }),
     );
 
-    const confirmation = confirmTerminalClose(["Terminal 1"]);
+    const confirmation = confirmTerminalClose([{ label: "Terminal 1", running: true }]);
     expect(isTerminalCloseConfirmPending()).toBe(true);
 
     reject(new Error("dialog failed"));
@@ -56,10 +56,26 @@ describe("terminal close confirmation", () => {
     expect(isTerminalCloseConfirmPending()).toBe(false);
   });
 
-  it("names every terminal in a multi-terminal close", async () => {
+  it("closes idle terminals without asking", async () => {
+    await expect(
+      confirmTerminalClose([
+        { label: "Terminal 1", running: false },
+        { label: "Terminal 2", running: false },
+      ]),
+    ).resolves.toBe(true);
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it("names every running terminal in a multi-terminal close", async () => {
     confirmMock.mockResolvedValue(true);
 
-    await expect(confirmTerminalClose(["Terminal 1", "Development server"])).resolves.toBe(true);
+    await expect(
+      confirmTerminalClose([
+        { label: "Terminal 1", running: true },
+        { label: "Idle shell", running: false },
+        { label: "Development server", running: true },
+      ]),
+    ).resolves.toBe(true);
     expect(confirmMock).toHaveBeenCalledWith(
       [
         "Close 2 terminals?",
@@ -72,7 +88,9 @@ describe("terminal close confirmation", () => {
   it("closes without prompting when no local API is available", async () => {
     readLocalApiMock.mockReturnValue(undefined);
 
-    await expect(confirmTerminalClose(["Terminal 1"])).resolves.toBe(true);
+    await expect(confirmTerminalClose([{ label: "Terminal 1", running: true }])).resolves.toBe(
+      true,
+    );
     expect(confirmMock).not.toHaveBeenCalled();
   });
 });

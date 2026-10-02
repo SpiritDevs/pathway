@@ -7,14 +7,23 @@ export function isTerminalCloseConfirmPending(): boolean {
   return pendingConfirmations > 0;
 }
 
+export interface TerminalCloseTarget {
+  readonly label: string;
+  /** Whether a command is running in the shell; idle shells close without asking. */
+  readonly running: boolean;
+}
+
 /**
  * Confirmation for terminal close actions: drawer buttons, panel buttons, the
  * `terminal.close` keybinding, and single or bulk closes from the tab strip.
+ * Only terminals with a running command are named; with none, it resolves at once.
  * Auto-exit cleanup skips this path and closes directly.
  */
 export async function confirmTerminalClose(
-  labels: readonly [string, ...string[]],
+  terminals: ReadonlyArray<TerminalCloseTarget>,
 ): Promise<boolean> {
+  const labels = terminals.filter((terminal) => terminal.running).map((terminal) => terminal.label);
+  if (labels.length === 0) return true;
   const localApi = readLocalApi();
   if (!localApi) return true;
   pendingConfirmations += 1;

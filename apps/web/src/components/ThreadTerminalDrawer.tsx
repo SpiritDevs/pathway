@@ -76,7 +76,7 @@ import { readLocalApi } from "~/localApi";
 import { confirmTerminalClose } from "~/lib/terminalCloseConfirm";
 import { useClientSettings } from "../hooks/useSettings";
 import { useLocalStorage } from "../hooks/useLocalStorage";
-import { useAttachedTerminalSession } from "../state/terminalSessions";
+import { useAttachedTerminalSession, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { serverEnvironment } from "../state/server";
 import { previewEnvironment } from "../state/preview";
 import { terminalEnvironment } from "../state/terminal";
@@ -1362,14 +1362,20 @@ export default function ThreadTerminalDrawer({
   const onNewTerminalAction = useCallback(() => {
     onNewTerminal();
   }, [onNewTerminal]);
+  const runningTerminalIds = useThreadRunningTerminalIds({
+    environmentId: threadRef.environmentId,
+    threadId: threadRef.threadId,
+  });
   const confirmCloseTerminal = useCallback(
     (terminalId: string) => {
       const label = terminalLabelById.get(terminalId) ?? getTerminalLabel(terminalId);
-      void confirmTerminalClose([label]).then((confirmed) => {
-        if (confirmed) onCloseTerminal(terminalId);
-      });
+      void confirmTerminalClose([{ label, running: runningTerminalIds.includes(terminalId) }]).then(
+        (confirmed) => {
+          if (confirmed) onCloseTerminal(terminalId);
+        },
+      );
     },
-    [onCloseTerminal, terminalLabelById],
+    [onCloseTerminal, runningTerminalIds, terminalLabelById],
   );
 
   useEffect(() => {

@@ -4990,23 +4990,28 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeRightPanelSurface, activeThreadRef, closeTerminalMutation, storeCloseTerminal],
   );
+  const terminalCloseTarget = useCallback(
+    (terminalId: string) => ({
+      label: activeTerminalLabelsById.get(terminalId) ?? getTerminalLabel(terminalId),
+      running: runningTerminalIds.includes(terminalId),
+    }),
+    [activeTerminalLabelsById, runningTerminalIds],
+  );
   const requestCloseTerminal = useCallback(
     (terminalId: string) => {
-      const label = activeTerminalLabelsById.get(terminalId) ?? getTerminalLabel(terminalId);
-      void confirmTerminalClose([label]).then((confirmed) => {
+      void confirmTerminalClose([terminalCloseTarget(terminalId)]).then((confirmed) => {
         if (confirmed) closeTerminal(terminalId);
       });
     },
-    [activeTerminalLabelsById, closeTerminal],
+    [closeTerminal, terminalCloseTarget],
   );
   const requestClosePanelTerminal = useCallback(
     (terminalId: string) => {
-      const label = activeTerminalLabelsById.get(terminalId) ?? getTerminalLabel(terminalId);
-      void confirmTerminalClose([label]).then((confirmed) => {
+      void confirmTerminalClose([terminalCloseTarget(terminalId)]).then((confirmed) => {
         if (confirmed) closePanelTerminal(terminalId);
       });
     },
-    [activeTerminalLabelsById, closePanelTerminal],
+    [closePanelTerminal, terminalCloseTarget],
   );
   const activateRightPanelSurface = useCallback(
     (surface: RightPanelSurface) => {
@@ -5102,20 +5107,13 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const confirmRightPanelSurfaceClose = useCallback(
     (surfaces: readonly RightPanelSurface[]) => {
-      const labels = surfaces.flatMap((surface) =>
-        surface.kind === "terminal"
-          ? surface.terminalIds.map(
-              (terminalId) =>
-                activeTerminalLabelsById.get(terminalId) ?? getTerminalLabel(terminalId),
-            )
-          : [],
+      return confirmTerminalClose(
+        surfaces.flatMap((surface) =>
+          surface.kind === "terminal" ? surface.terminalIds.map(terminalCloseTarget) : [],
+        ),
       );
-      const [firstLabel, ...otherLabels] = labels;
-      return firstLabel === undefined
-        ? Promise.resolve(true)
-        : confirmTerminalClose([firstLabel, ...otherLabels]);
     },
-    [activeTerminalLabelsById],
+    [terminalCloseTarget],
   );
   const syncActivePreviewSurface = useCallback(() => {
     if (!activeThreadRef) return;
@@ -5139,24 +5137,15 @@ function ChatViewContent(props: ChatViewProps) {
         finishClose();
         return;
       }
-      const activeLabel =
-        activeTerminalLabelsById.get(surface.activeTerminalId) ??
-        getTerminalLabel(surface.activeTerminalId);
-      const otherLabels = surface.terminalIds
-        .filter((terminalId) => terminalId !== surface.activeTerminalId)
-        .map(
-          (terminalId) => activeTerminalLabelsById.get(terminalId) ?? getTerminalLabel(terminalId),
-        );
-      void confirmTerminalClose([activeLabel, ...otherLabels]).then((confirmed) => {
+      const terminalIds = [
+        surface.activeTerminalId,
+        ...surface.terminalIds.filter((terminalId) => terminalId !== surface.activeTerminalId),
+      ];
+      void confirmTerminalClose(terminalIds.map(terminalCloseTarget)).then((confirmed) => {
         if (confirmed) finishClose();
       });
     },
-    [
-      activeThreadRef,
-      activeTerminalLabelsById,
-      cleanupRightPanelSurfaces,
-      syncActivePreviewSurface,
-    ],
+    [activeThreadRef, cleanupRightPanelSurfaces, syncActivePreviewSurface, terminalCloseTarget],
   );
   const closeOtherRightPanelSurfaces = useCallback(
     (surface: RightPanelSurface) => {
