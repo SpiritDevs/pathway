@@ -23,6 +23,8 @@ import { FocusProjectKey, type FocusId } from "@spiritdevs/contracts/focus";
 import { FolderIcon, PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { unboundEnvironmentProjects } from "~/cloud/agentThreadReadModel";
+import { companyRegistryReplicasAtom } from "~/cloud/companyRegistryReplica";
 import { activeFocusIdAtom, focusListAtom, focusMutationsAtom } from "~/cloud/focusReadModel";
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
@@ -130,6 +132,11 @@ export function CreateProjectDialog({
 }) {
   const { environments } = useEnvironments();
   const projects = useUnscopedProjects();
+  const replicas = useAtomValue(companyRegistryReplicasAtom);
+  const unboundProjects = useMemo(
+    () => unboundEnvironmentProjects(projects, replicas),
+    [projects, replicas],
+  );
   const projectGroups = useProjectGroups();
   const workspaceProjects = useWorkspaceProjects();
   const focuses = useAtomValue(focusListAtom);
@@ -223,7 +230,9 @@ export function CreateProjectDialog({
         ),
       occupiedWorkspaceRootsFor: (id) =>
         projects.flatMap((project) =>
-          project.environmentId === id && project.workspaceRoot !== null
+          project.environmentId === id &&
+          project.workspaceRoot !== null &&
+          !unboundProjects.includes(project)
             ? [project.workspaceRoot]
             : [],
         ),
@@ -382,7 +391,14 @@ export function CreateProjectDialog({
           setProgress(
             folders.length > 1 ? `Adding folder ${index + 1} of ${folders.length}…` : "Creating…",
           );
-          const projectId: ProjectId = newProjectId();
+          // A create that failed after the server made the project leaves it holding the root.
+          const leftover = unboundProjects.find(
+            (project) =>
+              project.environmentId === folder.environmentId &&
+              workspaceRoot !== null &&
+              project.workspaceRoot === workspaceRoot,
+          );
+          const projectId: ProjectId = leftover?.id ?? newProjectId();
           const assignmentKey = scopedProjectKey(scopeProjectRef(folder.environmentId, projectId));
           pendingKeys.push(assignmentKey);
           markProjectAutomaticAssignmentPending(assignmentKey, {
@@ -392,17 +408,30 @@ export function CreateProjectDialog({
               ? { matchRepository: false }
               : {}),
           });
-          const outcome = await quickCreateProject({
-            environmentId: folder.environmentId,
-            projectId,
-            plan: {
-              kind: "create",
-              title: created.title,
-              workspaceRoot,
-              createWorkspaceRootIfMissing: folder.createIfMissing,
-              initializeGit: false,
-            },
-          });
+          const outcome =
+            leftover !== undefined
+              ? {
+                  ok: true as const,
+                  value: {
+                    environmentId: leftover.environmentId,
+                    projectId: leftover.id,
+                    title: created.title,
+                    workspaceRoot: leftover.workspaceRoot,
+                    internalWorkspaceRoot: leftover.internalWorkspaceRoot ?? null,
+                    repositoryIdentity: leftover.repositoryIdentity ?? null,
+                  },
+                }
+              : await quickCreateProject({
+                  environmentId: folder.environmentId,
+                  projectId,
+                  plan: {
+                    kind: "create",
+                    title: created.title,
+                    workspaceRoot,
+                    createWorkspaceRootIfMissing: folder.createIfMissing,
+                    initializeGit: false,
+                  },
+                });
           if (!outcome.ok) throw new Error(outcome.message ?? "The project could not be created.");
           results.push(outcome.value);
 

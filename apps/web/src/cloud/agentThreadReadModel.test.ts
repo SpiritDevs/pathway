@@ -19,6 +19,7 @@ import {
   companyScopedEnvironmentSnapshot,
   companyScopedEnvironmentThreads,
   environmentBindingMatchesProject,
+  unboundEnvironmentProjects,
 } from "./agentThreadReadModel";
 
 const COMPANY_ID = CompanyId.make("company-one");
@@ -341,6 +342,29 @@ describe("cloud Agent Thread read model", () => {
         ENVIRONMENT_ID,
       ),
     ).toEqual([]);
+  });
+
+  it("finds local projects that no company binds", () => {
+    const bound = {
+      ...cloudEnvironmentProjectsFromReplicas(
+        new Map([[COMPANY_ID, replica(cloudProject, binding)]]),
+        ENVIRONMENT_ID,
+      )[0]!,
+      environmentId: ENVIRONMENT_ID,
+    };
+    const leftover = {
+      ...bound,
+      id: ProjectId.make("leftover-local-project"),
+      workspaceRoot: "/work/leftover",
+      repositoryIdentity: null,
+    };
+    const replicas = new Map([
+      [COMPANY_ID, replica(cloudProject, binding)],
+      [OTHER_COMPANY_ID, replica(otherCloudProject, otherBinding)],
+    ]);
+
+    expect(unboundEnvironmentProjects([bound, leftover], replicas)).toEqual([leftover]);
+    expect(unboundEnvironmentProjects([bound, leftover], new Map())).toEqual([]);
   });
 
   it("still matches the same repository across different environments", () => {

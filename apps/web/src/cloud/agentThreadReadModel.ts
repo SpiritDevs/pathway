@@ -139,6 +139,35 @@ export function companyScopedEnvironmentProjects(
   return changed ? scoped : projects;
 }
 
+/**
+ * Local projects that no company shows: a create that reached the server but never its company.
+ * The server still holds their roots, so a new project at the same root adopts one instead.
+ */
+export function unboundEnvironmentProjects<
+  P extends OrchestrationProjectShell & { readonly environmentId: EnvironmentId },
+>(
+  projects: ReadonlyArray<P>,
+  replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
+): ReadonlyArray<P> {
+  // Without replicas nothing is known about bindings yet; treat every project as spoken for.
+  if (replicas.size === 0) return EMPTY_PROJECTS as ReadonlyArray<P>;
+  const shown = new Set<string>();
+  for (const environmentId of new Set(projects.map((project) => project.environmentId))) {
+    const local = projects.filter((project) => project.environmentId === environmentId);
+    for (const companyId of replicas.keys()) {
+      for (const project of companyScopedEnvironmentProjects(
+        local,
+        companyId,
+        replicas,
+        environmentId,
+      )) {
+        shown.add(`${environmentId}:${project.id}`);
+      }
+    }
+  }
+  return projects.filter((project) => !shown.has(`${project.environmentId}:${project.id}`));
+}
+
 export function companyScopedEnvironmentThreads(
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
   companyId: CompanyId | null,
