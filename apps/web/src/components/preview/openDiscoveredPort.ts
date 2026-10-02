@@ -5,7 +5,7 @@ import {
 } from "@spiritdevs/client-runtime/state/runtime";
 import { AsyncResult } from "effect/unstable/reactivity";
 
-import { readEnvironmentOnThisMachine } from "~/browser/browserPlacement";
+import { readEnvironmentOnThisMachine, remoteBrowserEnabled } from "~/browser/browserPlacement";
 import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
 import type { OpenPreviewMutation } from "~/browser/openFileInPreview";
 import { openRemoteBrowser } from "~/browser/remoteBrowserStore";
@@ -23,7 +23,7 @@ export async function openDiscoveredPort<E>(input: {
   readonly port: DiscoveredLocalServer;
   readonly openPreview: OpenPreviewMutation<E>;
 }): Promise<AtomCommandResult<void, E>> {
-  if (!readEnvironmentOnThisMachine(input.threadRef.environmentId)) {
+  if (remoteBrowserEnabled && !readEnvironmentOnThisMachine(input.threadRef.environmentId)) {
     openRemoteBrowser(input.threadRef, { url: input.port.url });
     return AsyncResult.success(undefined);
   }

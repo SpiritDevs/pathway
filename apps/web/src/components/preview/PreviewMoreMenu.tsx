@@ -1,7 +1,7 @@
 "use client";
 
 import type { DesktopPreviewColorScheme } from "@spiritdevs/contracts";
-import { Minus, MoreVertical, Plus as PlusIcon, RotateCcw } from "lucide-react";
+import { Minus, MoreHorizontal, Plus as PlusIcon, RotateCcw } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
 import {
@@ -54,8 +54,8 @@ interface Props {
 
 /**
  * Three-dot menu in the chrome row. Wires Hard reload, DevTools, zoom
- * controls, and storage-clearing actions. Only mounted by `PreviewView`
- * when the desktop bridge is present, so we can call it unconditionally.
+ * controls, and storage-clearing actions. Without the desktop bridge the
+ * menu still opens so the chrome reads the same, but every action is disabled.
  */
 export function PreviewMoreMenu({
   tabId,
@@ -67,13 +67,13 @@ export function PreviewMoreMenu({
   nativePictureInPicture,
   onNativePictureInPicture,
 }: Props) {
-  if (!previewBridge) return null;
   const bridge = previewBridge;
-  const tabDisabled = !tabId || !hasWebContents;
-  const callTab = (op: (tabId: string) => Promise<void>) => () => {
-    if (!tabId) return;
-    void op(tabId).catch(() => undefined);
-  };
+  const tabDisabled = !bridge || !tabId || !hasWebContents;
+  const callTab =
+    (op: (bridge: NonNullable<typeof previewBridge>, tabId: string) => Promise<void>) => () => {
+      if (!bridge || !tabId) return;
+      void op(bridge, tabId).catch(() => undefined);
+    };
 
   const zoomLabel = `${Math.round(zoomFactor * 100)}%`;
   return (
@@ -83,29 +83,88 @@ export function PreviewMoreMenu({
           render={
             <MenuTrigger
               render={
-                <Button variant="ghost" size="icon-xs" type="button" aria-label="Preview menu" />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 rounded-full border-border/70"
+                  type="button"
+                  aria-label="Preview menu"
+                />
               }
             />
           }
         >
-          <MoreVertical />
+          <MoreHorizontal />
         </TooltipTrigger>
         <TooltipPopup>More</TooltipPopup>
       </Tooltip>
-      <MenuPopup align="end" sideOffset={6} className="min-w-56">
-        <MenuItem onClick={callTab(bridge.hardReload)} disabled={tabDisabled}>
+      <MenuPopup align="end" sideOffset={6} className="min-w-64">
+        <MenuItem onClick={callTab((b, id) => b.hardReload(id))} disabled={tabDisabled}>
           Hard reload
         </MenuItem>
-        <MenuItem onClick={callTab(bridge.openDevTools)} disabled={tabDisabled}>
+        <MenuItem onClick={callTab((b, id) => b.openDevTools(id))} disabled={tabDisabled}>
           Open DevTools
+        </MenuItem>
+        <MenuSeparator />
+        {/*
+          Zoom row: label + inline control cluster. `closeOnClick=false`
+          keeps the menu open while the user clicks the +/− buttons.
+        */}
+        <MenuItem
+          closeOnClick={false}
+          onClick={(event: React.MouseEvent) => event.preventDefault()}
+          className="justify-between data-highlighted:bg-transparent"
+          disabled={tabDisabled}
+        >
+          <span>Zoom</span>
+          <span className="flex items-center gap-1.5">
+            <span className="flex h-7 items-center rounded-md border border-border/70">
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                className="h-full rounded-none rounded-s-md"
+                onClick={callTab((b, id) => b.zoomOut(id))}
+                aria-label="Zoom out"
+                disabled={tabDisabled}
+              >
+                <Minus />
+              </Button>
+              <span className="flex h-full min-w-12 items-center justify-center border-x border-border/70 px-1 text-xs tabular-nums">
+                {zoomLabel}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                className="h-full rounded-none rounded-e-md"
+                onClick={callTab((b, id) => b.zoomIn(id))}
+                aria-label="Zoom in"
+                disabled={tabDisabled}
+              >
+                <PlusIcon />
+              </Button>
+            </span>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              onClick={callTab((b, id) => b.resetZoom(id))}
+              aria-label="Reset zoom"
+              disabled={tabDisabled}
+            >
+              <RotateCcw />
+            </Button>
+          </span>
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem onClick={onToggleDeviceToolbar} disabled={tabDisabled}>
+          {deviceToolbarVisible ? "Hide device toolbar" : "Show device toolbar"}
         </MenuItem>
         <MenuItem onClick={onNativePictureInPicture} disabled={tabDisabled}>
           {nativePictureInPicture
             ? "Close separate preview window"
             : "Open separate preview window"}
-        </MenuItem>
-        <MenuItem onClick={onToggleDeviceToolbar} disabled={tabDisabled}>
-          {deviceToolbarVisible ? "Hide device toolbar" : "Show device toolbar"}
         </MenuItem>
         <MenuSub>
           <MenuSubTrigger disabled={tabDisabled}>Appearance</MenuSubTrigger>
@@ -113,7 +172,7 @@ export function PreviewMoreMenu({
             <MenuRadioGroup
               value={colorScheme}
               onValueChange={(value) => {
-                if (!tabId) return;
+                if (!bridge || !tabId) return;
                 void bridge
                   .setColorScheme(tabId, value as DesktopPreviewColorScheme)
                   .catch(() => undefined);
@@ -128,59 +187,16 @@ export function PreviewMoreMenu({
           </MenuSubPopup>
         </MenuSub>
         <MenuSeparator />
-        {/*
-          Zoom row: label + inline control cluster. `closeOnClick=false`
-          keeps the menu open while the user clicks the +/− buttons.
-        */}
         <MenuItem
-          closeOnClick={false}
-          onClick={(event: React.MouseEvent) => event.preventDefault()}
-          className="justify-between"
-          disabled={tabDisabled}
+          onClick={() => void bridge?.clearCookies().catch(() => undefined)}
+          disabled={!bridge}
         >
-          <span>Zoom</span>
-          <span className="flex items-center gap-1">
-            <Button
-              variant="outline"
-              size="icon-xs"
-              type="button"
-              onClick={callTab(bridge.zoomOut)}
-              aria-label="Zoom out"
-              disabled={tabDisabled}
-            >
-              <Minus />
-            </Button>
-            <span className="min-w-12 text-center text-xs tabular-nums text-muted-foreground">
-              {zoomLabel}
-            </span>
-            <Button
-              variant="outline"
-              size="icon-xs"
-              type="button"
-              onClick={callTab(bridge.zoomIn)}
-              aria-label="Zoom in"
-              disabled={tabDisabled}
-            >
-              <PlusIcon />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              type="button"
-              onClick={callTab(bridge.resetZoom)}
-              aria-label="Reset zoom"
-              className="[:hover,[data-pressed]]:bg-foreground/10"
-              disabled={tabDisabled}
-            >
-              <RotateCcw />
-            </Button>
-          </span>
-        </MenuItem>
-        <MenuSeparator />
-        <MenuItem onClick={() => void bridge.clearCookies().catch(() => undefined)}>
           Clear cookies
         </MenuItem>
-        <MenuItem onClick={() => void bridge.clearCache().catch(() => undefined)}>
+        <MenuItem
+          onClick={() => void bridge?.clearCache().catch(() => undefined)}
+          disabled={!bridge}
+        >
           Clear cache
         </MenuItem>
       </MenuPopup>

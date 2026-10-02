@@ -14,6 +14,12 @@ import { appAtomRegistry } from "~/rpc/atomRegistry";
  */
 export type BrowserPlacement = "local" | "remote";
 
+/**
+ * The streamed environment browser is switched off until the local browser can reach
+ * a remote machine's localhost. Flip this to bring every remote entry point back.
+ */
+export const remoteBrowserEnabled = false;
+
 /** Only the desktop app has a browser of its own. */
 export const hasLocalBrowser = previewBridge !== null;
 
@@ -45,7 +51,7 @@ export function useEnvironmentOnThisMachine(environmentId: EnvironmentId | null)
 
 /** Tabs open where `localhost` means the environment: locally only on this machine. */
 export function readDefaultBrowserPlacement(environmentId: EnvironmentId): BrowserPlacement {
-  return readEnvironmentOnThisMachine(environmentId) ? "local" : "remote";
+  return !remoteBrowserEnabled || readEnvironmentOnThisMachine(environmentId) ? "local" : "remote";
 }
 
 /** "This Mac" reads better than a hostname for the machine the user is sitting at. */

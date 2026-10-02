@@ -61,6 +61,11 @@ interface Props {
 
 const NOOP = () => {};
 
+/** A bordered pill that groups toolbar buttons, as in a browser's chrome. */
+const PILL_CLASS_NAME =
+  "flex h-8 shrink-0 items-center rounded-full border border-border/70 bg-background p-px";
+const PILL_BUTTON_CLASS_NAME = "rounded-full";
+
 export function PreviewChromeRow({
   url,
   loading,
@@ -107,14 +112,18 @@ export function PreviewChromeRow({
 
   return (
     <div className="relative">
-      <form onSubmit={submit} className="surface-subheader gap-1 px-2" data-surface-subheader>
-        <div className="flex items-center gap-0.5" role="group" aria-label="Navigation">
+      <form
+        onSubmit={submit}
+        className="flex h-12 min-h-12 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-2.5"
+      >
+        <div className={PILL_CLASS_NAME} role="group" aria-label="Navigation">
           <Tooltip>
             <TooltipTrigger
               render={
                 <Button
                   variant="ghost"
-                  size="icon-xs"
+                  size="icon-sm"
+                  className={PILL_BUTTON_CLASS_NAME}
                   onClick={canGoBack ? onBack : NOOP}
                   disabled={!canGoBack}
                   aria-label="Back"
@@ -131,7 +140,8 @@ export function PreviewChromeRow({
               render={
                 <Button
                   variant="ghost"
-                  size="icon-xs"
+                  size="icon-sm"
+                  className={PILL_BUTTON_CLASS_NAME}
                   onClick={canGoForward ? onForward : NOOP}
                   disabled={!canGoForward}
                   aria-label="Forward"
@@ -143,12 +153,14 @@ export function PreviewChromeRow({
             </TooltipTrigger>
             <TooltipPopup>Forward</TooltipPopup>
           </Tooltip>
+          <div aria-hidden className="mx-0.5 h-4 w-px bg-border" />
           <Tooltip>
             <TooltipTrigger
               render={
                 <Button
                   variant="ghost"
-                  size="icon-xs"
+                  size="icon-sm"
+                  className={PILL_BUTTON_CLASS_NAME}
                   onClick={refreshDisabled ? NOOP : onRefresh}
                   disabled={refreshDisabled}
                   aria-label={loading ? "Stop" : "Refresh"}
@@ -162,7 +174,14 @@ export function PreviewChromeRow({
           </Tooltip>
         </div>
 
-        <InputGroup variant="ghost" className="group/address h-7 flex-1 rounded-md">
+        <InputGroup
+          variant="ghost"
+          className={cn(
+            "group/address h-8 flex-1 rounded-full border-border/70 bg-background",
+            // The settled URL sits centered; once focused for typing it is left-aligned.
+            !inputFocused && "[&_input]:text-center",
+          )}
+        >
           <Tooltip>
             <TooltipTrigger
               render={
@@ -191,11 +210,10 @@ export function PreviewChromeRow({
                       inputRef.current?.blur();
                     }
                   }}
-                  placeholder="Search or enter URL"
+                  placeholder="Search or enter a URL"
                   spellCheck={false}
                   disabled={inputDisabled}
                   data-preview-url-input
-                  size="sm"
                 />
               }
             />
@@ -225,80 +243,86 @@ export function PreviewChromeRow({
           ) : null}
         </InputGroup>
 
-        {onPickElement ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant={pickActive ? "secondary" : "ghost"}
-                  size="icon-xs"
-                  onClick={onPickElement}
-                  disabled={pickDisabled}
-                  aria-label={pickActive ? "Cancel annotation" : "Annotate preview"}
-                  aria-pressed={pickActive ? "true" : "false"}
-                  type="button"
-                />
-              }
-            >
-              <MousePointerClick className={cn(pickActive && "text-primary")} />
-            </TooltipTrigger>
-            <TooltipPopup>
-              {pickDisabled && pickDisabledReason
-                ? pickDisabledReason
-                : pickActive
-                  ? "Cancel annotation (Esc)"
-                  : "Annotate elements, regions, and drawings"}
-            </TooltipPopup>
-          </Tooltip>
-        ) : null}
-        {onCapture ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant={recording ? "secondary" : "ghost"}
-                  size="icon-xs"
-                  onClick={(event) => onCapture(event.shiftKey)}
-                  aria-label={recording ? "Stop recording" : "Capture screenshot"}
-                  type="button"
-                  className="relative"
-                  disabled={captureDisabled}
-                />
-              }
-            >
-              <Camera className={cn(recording && "text-destructive")} />
-              {recording ? (
-                <span className="absolute right-0.5 top-0.5 size-1.5 animate-status-pulse rounded-full bg-destructive" />
-              ) : null}
-            </TooltipTrigger>
-            <TooltipPopup>
-              {recording ? "Stop recording" : "Screenshot · Shift-click to record"}
-            </TooltipPopup>
-          </Tooltip>
-        ) : null}
-        {onPictureInPicture ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant={pictureInPicture ? "secondary" : "ghost"}
-                  size="icon-xs"
-                  onClick={onPictureInPicture}
-                  aria-label={
-                    pictureInPicture ? "Close floating preview" : "Float preview over chat"
+        {onPickElement || onCapture || onPictureInPicture ? (
+          <div className={PILL_CLASS_NAME} role="group" aria-label="Page tools">
+            {onPickElement ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant={pickActive ? "secondary" : "ghost"}
+                      size="icon-sm"
+                      onClick={onPickElement}
+                      className={PILL_BUTTON_CLASS_NAME}
+                      disabled={pickDisabled}
+                      aria-label={pickActive ? "Cancel annotation" : "Annotate preview"}
+                      aria-pressed={pickActive ? "true" : "false"}
+                      type="button"
+                    />
                   }
-                  aria-pressed={pictureInPicture ? "true" : "false"}
-                  type="button"
-                  disabled={pictureInPictureDisabled}
-                />
-              }
-            >
-              <PictureInPicture2 className={cn(pictureInPicture && "text-primary")} />
-            </TooltipTrigger>
-            <TooltipPopup>
-              {pictureInPicture ? "Close floating preview" : "Float preview over chat"}
-            </TooltipPopup>
-          </Tooltip>
+                >
+                  <MousePointerClick className={cn(pickActive && "text-primary")} />
+                </TooltipTrigger>
+                <TooltipPopup>
+                  {pickDisabled && pickDisabledReason
+                    ? pickDisabledReason
+                    : pickActive
+                      ? "Cancel annotation (Esc)"
+                      : "Annotate elements, regions, and drawings"}
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {onCapture ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant={recording ? "secondary" : "ghost"}
+                      size="icon-sm"
+                      onClick={(event) => onCapture(event.shiftKey)}
+                      aria-label={recording ? "Stop recording" : "Capture screenshot"}
+                      type="button"
+                      className={cn(PILL_BUTTON_CLASS_NAME, "relative")}
+                      disabled={captureDisabled}
+                    />
+                  }
+                >
+                  <Camera className={cn(recording && "text-destructive")} />
+                  {recording ? (
+                    <span className="absolute right-1 top-1 size-1.5 animate-status-pulse rounded-full bg-destructive" />
+                  ) : null}
+                </TooltipTrigger>
+                <TooltipPopup>
+                  {recording ? "Stop recording" : "Screenshot · Shift-click to record"}
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {onPictureInPicture ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant={pictureInPicture ? "secondary" : "ghost"}
+                      size="icon-sm"
+                      onClick={onPictureInPicture}
+                      aria-label={
+                        pictureInPicture ? "Close floating preview" : "Float preview over chat"
+                      }
+                      aria-pressed={pictureInPicture ? "true" : "false"}
+                      type="button"
+                      className={PILL_BUTTON_CLASS_NAME}
+                      disabled={pictureInPictureDisabled}
+                    />
+                  }
+                >
+                  <PictureInPicture2 className={cn(pictureInPicture && "text-primary")} />
+                </TooltipTrigger>
+                <TooltipPopup>
+                  {pictureInPicture ? "Close floating preview" : "Float preview over chat"}
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
+          </div>
         ) : null}
         {trailingActions}
       </form>

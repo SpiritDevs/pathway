@@ -15,6 +15,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
 import type { ThreadPanelPresentation } from "./rightPanelLayout";
+import { remoteBrowserEnabled } from "./browser/browserPlacement";
 
 export const RIGHT_PANEL_KINDS = [
   "diff",
@@ -283,13 +284,21 @@ const upsertSurface = (
   activeSurfaceId: activate ? surface.id : current.activeSurfaceId,
 });
 
+/** An open panel always shows a tab: the first one, or a new browser tab when none are left. */
+const withOpenTab = (state: ThreadRightPanelState): ThreadRightPanelState => {
+  if (!state.isOpen) return state;
+  if (state.surfaces.length === 0) return upsertSurface(state, browserSurface(null));
+  if (state.surfaces.some((surface) => surface.id === state.activeSurfaceId)) return state;
+  return { ...state, activeSurfaceId: state.surfaces[0]?.id ?? null };
+};
+
 const updateThreadStateMap = (
   byThreadKey: Record<string, ThreadRightPanelState>,
   threadKey: string,
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
 ): Record<string, ThreadRightPanelState> => {
   const current = byThreadKey[threadKey] ?? EMPTY_THREAD_STATE;
-  const next = updater(current);
+  const next = withOpenTab(updater(current));
   if (!next.isOpen && next.activeSurfaceId === null && next.surfaces.length === 0) {
     if (!(threadKey in byThreadKey)) return byThreadKey;
     const { [threadKey]: _removed, ...rest } = byThreadKey;
@@ -784,8 +793,9 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             const existingBrowser = current.surfaces.filter(
               (surface): surface is Extract<RightPanelSurface, { kind: "preview" }> =>
                 surface.kind === "preview" &&
-                surface.id !== "browser:new" &&
-                (validIds.has(surface.id) || isRemoteBrowserSurface(surface)),
+                (surface.id === "browser:new" ||
+                  validIds.has(surface.id) ||
+                  (remoteBrowserEnabled && isRemoteBrowserSurface(surface))),
             );
             const knownIds = new Set(existingBrowser.map((surface) => surface.id));
             const added = tabIds
@@ -874,10 +884,9 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       toggleVisibility: (ref) =>
         set((state) =>
-          updateThread(state, ref, (current) => ({
-            ...current,
-            isOpen: !current.isOpen,
-          })),
+          updateThread(state, ref, (current) =>
+            current.isOpen ? { ...current, isOpen: false } : { ...current, isOpen: true },
+          ),
         ),
       toggle: (ref, kind) =>
         set((state) =>

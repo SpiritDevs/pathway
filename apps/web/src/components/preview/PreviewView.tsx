@@ -30,6 +30,7 @@ import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
 import {
   type BrowserPlacement,
   localMachineLabel,
+  remoteBrowserEnabled,
   useEnvironmentOnThisMachine,
 } from "~/browser/browserPlacement";
 import { openRemoteBrowser } from "~/browser/remoteBrowserStore";
@@ -93,7 +94,7 @@ const localApi = typeof window === "undefined" ? null : ensureLocalApi();
 export function PreviewView(props: Props) {
   const key = `${props.threadRef.environmentId}:${props.threadRef.threadId}`;
   // Only the desktop has a local browser; every other client browses remotely.
-  if (props.placement === "remote" || !previewBridge) {
+  if (remoteBrowserEnabled && (props.placement === "remote" || !previewBridge)) {
     return (
       <RemoteBrowserView
         key={key}
@@ -103,6 +104,7 @@ export function PreviewView(props: Props) {
       />
     );
   }
+  // Without the desktop, the local browser shows its chrome and empty state but loads nothing.
   return <DesktopPreviewView key={key} {...props} />;
 }
 
@@ -152,7 +154,8 @@ function DesktopPreviewView({
     };
   }, []);
 
-  const tabId = requestedTabId ?? previewState.activeTabId;
+  // A null tab is a blank new tab; only an unspecified one follows the thread's active tab.
+  const tabId = requestedTabId === undefined ? previewState.activeTabId : requestedTabId;
   const runtimeTabId = tabId
     ? previewRuntimeTabId(threadRef, previewState.serverEpoch, tabId)
     : null;
@@ -197,9 +200,12 @@ function DesktopPreviewView({
         return true;
       }
       const result = await openPreviewSession({ openPreview: open, threadRef, url: resolvedUrl });
-      return result._tag === "Success";
+      if (result._tag !== "Success") return false;
+      // A blank new tab becomes the tab it just opened.
+      if (tabId === null) useRightPanelStore.getState().openBrowser(threadRef, result.value.tabId);
+      return true;
     },
-    [open, runtimeTabId, threadRef],
+    [open, runtimeTabId, tabId, threadRef],
   );
 
   const navigateLocally = useCallback(
@@ -225,7 +231,7 @@ function DesktopPreviewView({
       }
       // This tab's localhost is this machine, not the environment's. Offer both
       // rather than silently loading the wrong server.
-      if (!environmentOnThisMachine && URL.canParse(normalized)) {
+      if (remoteBrowserEnabled && !environmentOnThisMachine && URL.canParse(normalized)) {
         const { host, hostname } = new URL(normalized);
         if (isLoopbackHost(hostname)) {
           const toastId = toastManager.add(
@@ -263,7 +269,7 @@ function DesktopPreviewView({
   const handleOpenServerUrl = useCallback(
     async (next: string) => {
       // Discovered servers listen on the environment; only its own browser can reach them.
-      if (!environmentOnThisMachine) {
+      if (remoteBrowserEnabled && !environmentOnThisMachine) {
         openRemoteBrowser(threadRef, { url: next });
         return;
       }
@@ -769,18 +775,16 @@ function DesktopPreviewView({
           isUnreachable ? "Page didn't load — pick unavailable until the page renders" : undefined
         }
         trailingActions={
-          previewBridge ? (
-            <PreviewMoreMenu
-              tabId={runtimeTabId}
-              hasWebContents={desktopOverlay?.hasWebContents ?? false}
-              zoomFactor={desktopOverlay?.zoomFactor ?? 1}
-              colorScheme={desktopOverlay?.colorScheme ?? "system"}
-              deviceToolbarVisible={viewport._tag !== "fill"}
-              onToggleDeviceToolbar={handleToggleDeviceToolbar}
-              nativePictureInPicture={desktopOverlay?.pictureInPicture ?? false}
-              onNativePictureInPicture={handleNativePictureInPicture}
-            />
-          ) : null
+          <PreviewMoreMenu
+            tabId={runtimeTabId}
+            hasWebContents={desktopOverlay?.hasWebContents ?? false}
+            zoomFactor={desktopOverlay?.zoomFactor ?? 1}
+            colorScheme={desktopOverlay?.colorScheme ?? "system"}
+            deviceToolbarVisible={viewport._tag !== "fill"}
+            onToggleDeviceToolbar={handleToggleDeviceToolbar}
+            nativePictureInPicture={desktopOverlay?.pictureInPicture ?? false}
+            onNativePictureInPicture={handleNativePictureInPicture}
+          />
         }
       />
 

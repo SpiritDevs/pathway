@@ -23,6 +23,7 @@ import { type WorkspaceHistoryEntry, workspaceHistoryTracker } from "./workspace
 
 const HISTORY_LONG_PRESS_MS = 500;
 const ACTIONS_HOST_SELECTOR = "[data-workspace-top-bar-actions]";
+const PANEL_TABS_HOST_SELECTOR = "[data-workspace-top-bar-panel-tabs]";
 
 /** Whether an event target sits among the top bar's portalled window-level controls. */
 export function isInWorkspaceTopBarActions(target: EventTarget | null): boolean {
@@ -35,13 +36,25 @@ export function isInWorkspaceTopBarActions(target: EventTarget | null): boolean 
  * focused, so callers keep their controls inline instead.
  */
 export function useWorkspaceTopBarActionsHost(enabled: boolean): HTMLElement | null {
+  return useWorkspaceTopBarHost(ACTIONS_HOST_SELECTOR, enabled);
+}
+
+/**
+ * The stretch of the top bar left of the actions, for the inline right panel to lift
+ * its tab strip into. Null under the same conditions as the actions host.
+ */
+export function useWorkspaceTopBarPanelTabsHost(enabled: boolean): HTMLElement | null {
+  return useWorkspaceTopBarHost(PANEL_TABS_HOST_SELECTOR, enabled);
+}
+
+function useWorkspaceTopBarHost(selector: string, enabled: boolean): HTMLElement | null {
   const focused = useIsFocusedPane();
   const barVisible = useMediaQuery("md");
   const [host, setHost] = useState<HTMLElement | null>(null);
 
   useLayoutEffect(() => {
-    setHost(document.querySelector<HTMLElement>(ACTIONS_HOST_SELECTOR));
-  }, []);
+    setHost(document.querySelector<HTMLElement>(selector));
+  }, [selector]);
 
   return enabled && focused && barVisible ? host : null;
 }
@@ -220,6 +233,7 @@ export function WorkspaceTopBar() {
       data-workspace-top-bar=""
     >
       <WorkspaceHistoryControls />
+      <div className="flex min-w-0 flex-1 self-stretch" data-workspace-top-bar-panel-tabs="" />
       {/* Above the right panel sheet's overlay, so its toggles stay usable while it is open.
           Pressed and hover fills match the rail's, since the accent fill vanishes on this gray. */}
       <div
