@@ -409,11 +409,13 @@ final class PathwayCloudModel {
         return unavailable.isEmpty ? .updated : .unavailable(unavailable)
     }
 
+    /// Reachability only: the socket was just closed by `retry()`, so this pays for a cold relay
+    /// connection and must not also wait for the issue subscription's first chunk.
     private func refreshEnvironment(_ environment: PathwayCompanyEnvironment, connect: PathwayConnectClient, generation: Int) async throws {
         try Task.checkCancellation()
         guard lifecycleGeneration == generation else { throw CancellationError() }
         _ = try await issueEnvironmentClient.request(environment: environment, connect: connect,
-            method: "server.getConfig", payload: .object([:]), timeout: .seconds(5))
+            method: "server.getConfig", payload: .object([:]), requiresSubscription: false, timeout: .seconds(10))
     }
 
     func stop(clearContent: Bool = true) async {

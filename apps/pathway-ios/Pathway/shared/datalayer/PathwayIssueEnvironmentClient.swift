@@ -29,6 +29,7 @@ final class PathwayIssueEnvironmentClient {
         connect: PathwayConnectClient,
         method: String,
         payload: JSONValue,
+        requiresSubscription: Bool = true,
         timeout: Duration = .seconds(30)
     ) async throws -> JSONValue {
         let key = environment.id
@@ -72,7 +73,7 @@ final class PathwayIssueEnvironmentClient {
             }
         }
         // Reconnect repeats this gate because protocol negotiation belongs to the socket.
-        let result = try await rpc.request(method, payload: payload, requiresSubscription: true,
+        let result = try await rpc.request(method, payload: payload, requiresSubscription: requiresSubscription,
                                            waitForSubscription: true, timeout: timeout)
         guard clientIDs[key] == clientID, !Task.isCancelled else { throw CancellationError() }
         return result
