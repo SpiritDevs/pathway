@@ -30,7 +30,7 @@ import { ThreadId } from "@spiritdevs/contracts";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { deviceControlErrorCode, deviceControlErrorCopy } from "./deviceControl";
 import { DeviceLoadingView } from "./DeviceLoadingView";
-import { DeviceSetup } from "./DeviceSetup";
+import { AndroidInstallAction, DeviceSetup } from "./DeviceSetup";
 import { DeviceWorkspace } from "./DeviceWorkspace";
 import { SimBuildBar } from "./SimBuildBar";
 import { shouldOfferXcodeSetup } from "./deviceXcodeSetup.logic";
@@ -167,8 +167,6 @@ export function DevicePanel(props: {
     [environmentId, navigate],
   );
 
-  const bootingDevices =
-    state.bootingDevices?.filter((device) => device.threadId === threadId) ?? [];
   const hostReady = Object.values(state.hostStatuses).some((host) => host.status === "ready");
   const hostBusy =
     !hostReady &&
@@ -192,6 +190,12 @@ export function DevicePanel(props: {
     host.platforms
       .filter((platform) => !platform.available)
       .map((platform) => ({ ...platform, hostId: host.id, hostLabel: host.label })),
+  );
+  const androidUnavailable = unavailablePlatforms.some(
+    (platform) => platform.platform === "android",
+  );
+  const androidInstallable = state.hosts.some((host) =>
+    host.platforms.some((platform) => platform.platform === "android" && platform.installable),
   );
 
   if (loaded && (!state.onboardingCompleted || hostDisabled)) {
@@ -219,21 +223,8 @@ export function DevicePanel(props: {
           </Button>
         </div>
       ) : null}
-      {hostReady && !activeDevice && state.hostStatusDetail ? (
-        <div
-          role="status"
-          className="whitespace-pre-line border-b px-3 py-2 text-xs text-muted-foreground"
-        >
-          {state.hostStatusDetail}
-        </div>
-      ) : null}
       <DeviceHostUpdates state={state} environmentId={environmentId} />
       <DeviceToolDriftBanner state={state} environmentId={environmentId} />
-      {bootingDevices.length > 0 ? (
-        <div role="status" className="border-b px-3 py-2 text-xs text-muted-foreground">
-          Starting {bootingDevices.map((device) => device.name).join(", ")}… This can take a minute.
-        </div>
-      ) : null}
       {operationError ? (
         <div
           role="alert"
@@ -429,11 +420,17 @@ export function DevicePanel(props: {
               ) : null}
               {hostReady &&
               !state.devices.some((device) => device.platform === "android") &&
-              !unavailablePlatforms.some((platform) => platform.platform === "android") ? (
-                <p className="max-w-sm text-xs">
-                  No Android virtual devices found. Create one in Android Studio's Device Manager,
-                  then refresh.
-                </p>
+              (!androidUnavailable || androidInstallable) ? (
+                <div className="max-w-sm text-xs">
+                  <p>
+                    {androidUnavailable
+                      ? "Android isn't set up on this environment."
+                      : androidInstallable
+                        ? "No Android virtual devices found."
+                        : "No Android virtual devices found. Create one in Android Studio's Device Manager, then refresh."}
+                  </p>
+                  <AndroidInstallAction environmentId={environmentId} state={state} />
+                </div>
               ) : null}
               {loaded && !hostBusy ? (
                 <Button
