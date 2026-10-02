@@ -28,6 +28,8 @@ Unlinked worktrees appear in a separate section for manual review. For a project
 
 Choose **Policy** on an environment card. Scheduled cleanup starts off. When you enable it, select **7, 14, 30, or 60 days**. Pathway counts continuous archived or settled eligibility; resuming work resets the clock. The environment saves your inactive-thread preference when you save the policy so it can identify settled threads without an open client.
 
+To keep the thread list clean, turn on **Delete settled threads** in the same policy and choose **7, 14, 30, or 60 days** (default 14). A thread that stays settled that long is permanently deleted along with its worktree, its Pathway-created branch, and its attachments. Pinned, snoozed, archived, and temporary threads are never deleted this way. Pathway also skips threads with uncommitted changes, unpushed commits, or an open terminal, and checks them again later. Resuming a thread resets its clock. Deleted threads cannot be restored.
+
 Cleanup runs on that environment even when the dashboard is closed. Each environment keeps its own policy. **Cleanup defaults** saves a reusable template for your account on the current client. Apply those defaults to selected environments, or choose **Use saved defaults** in an environment's policy. Saving defaults does not enable cleanup on newly connected environments. Offline policy changes are skipped and must be retried explicitly.
 
 ## Respond to low storage

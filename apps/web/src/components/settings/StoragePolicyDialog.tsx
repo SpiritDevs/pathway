@@ -42,6 +42,7 @@ export function StoragePolicyDialog({
   const [isSaving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const savePolicy = useAtomCommand(serverEnvironment.storageSetPolicy);
+  const deleteSettledAfterDays = policy.deleteSettledAfterDays ?? 14;
   const invalidThresholds =
     policy.warningBytes <= policy.criticalBytes || policy.warningPercent <= policy.criticalPercent;
   const set = <K extends keyof StoragePolicy>(key: K, value: StoragePolicy[K]) =>
@@ -161,6 +162,54 @@ export function StoragePolicyDialog({
             and databases. Conversation history and the branch are kept. Use Keep worktree to
             protect a folder.
           </p>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <label htmlFor="storage-delete-settled" className="text-sm font-medium">
+                Delete settled threads
+              </label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Permanently delete threads that stay settled, along with their worktrees, branches,
+                and attachments.
+              </p>
+            </div>
+            <Switch
+              id="storage-delete-settled"
+              checked={policy.deleteSettledThreads === true}
+              onCheckedChange={(value) => set("deleteSettledThreads", value)}
+              disabled={isSaving}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <label htmlFor="storage-delete-age" className="text-sm">
+              Delete after
+            </label>
+            <Select
+              value={deleteSettledAfterDays}
+              onValueChange={(value) => {
+                if (value === 7 || value === 14 || value === 30 || value === 60)
+                  set("deleteSettledAfterDays", value);
+              }}
+              disabled={isSaving || policy.deleteSettledThreads !== true}
+            >
+              <SelectTrigger id="storage-delete-age" className="w-36">
+                <SelectValue>{deleteSettledAfterDays} days settled</SelectValue>
+              </SelectTrigger>
+              <SelectPopup>
+                {([7, 14, 30, 60] as const).map((days) => (
+                  <SelectItem key={days} value={days}>
+                    {days} days settled
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          </div>
+          {policy.deleteSettledThreads === true && (
+            <p className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-3 text-xs leading-relaxed">
+              Deleted threads cannot be restored. Pinned, snoozed, and temporary threads, threads
+              with uncommitted or unpushed work, and threads with an open terminal are skipped.
+              Resuming a thread resets its clock.
+            </p>
+          )}
           <fieldset className="space-y-3">
             <legend className="mb-2 text-sm font-medium">Available storage thresholds</legend>
             <p className="text-xs text-muted-foreground">

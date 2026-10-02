@@ -1,6 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import { DEFAULT_STORAGE_POLICY } from "@spiritdevs/contracts";
-import { storagePressure, eligibilityBlockers, validateStoragePolicy } from "./policy.ts";
+import * as DateTime from "effect/DateTime";
+import {
+  storagePressure,
+  eligibilityBlockers,
+  settledThreadDeletionDue,
+  validateStoragePolicy,
+} from "./policy.ts";
 import {
   leaseStorageWorkspace,
   useStorageWorkspace,
@@ -87,5 +93,26 @@ describe("workspace leases", () => {
     markStorageWorkspaceRemoved("/fixture/reclaimed", false);
     const release = useStorageWorkspace("/fixture/reclaimed");
     release();
+  });
+});
+
+describe("settled thread deletion", () => {
+  const now = Date.parse("2026-10-03T00:00:00.000Z");
+  const daysAgo = (days: number) =>
+    DateTime.formatIso(DateTime.makeUnsafe(now - days * 86_400_000));
+  const policy = { ...DEFAULT_STORAGE_POLICY, deleteSettledThreads: true };
+  const settled = { status: "settled" as const, temporary: false, eligibleSince: daysAgo(14) };
+  it("defaults to off and to 14 days", () => {
+    expect(settledThreadDeletionDue(settled, DEFAULT_STORAGE_POLICY, now)).toBe(false);
+    expect(settledThreadDeletionDue(settled, policy, now)).toBe(true);
+    expect(settledThreadDeletionDue({ ...settled, eligibleSince: daysAgo(13) }, policy, now)).toBe(
+      false,
+    );
+  });
+  it("only deletes settled, non-temporary threads", () => {
+    expect(settledThreadDeletionDue({ ...settled, status: "archived" }, policy, now)).toBe(false);
+    expect(settledThreadDeletionDue({ ...settled, status: "snoozed" }, policy, now)).toBe(false);
+    expect(settledThreadDeletionDue({ ...settled, temporary: true }, policy, now)).toBe(false);
+    expect(settledThreadDeletionDue({ ...settled, eligibleSince: null }, policy, now)).toBe(false);
   });
 });

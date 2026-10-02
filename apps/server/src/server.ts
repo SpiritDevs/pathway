@@ -559,6 +559,7 @@ const OrchestrationApplicationLayerLive = CheckpointDiffQuery.layer.pipe(
 );
 
 const StorageManagementLayerLive = StorageManagement.layer.pipe(
+  Layer.provide(ThreadWorkspaceServiceLayerLive),
   Layer.provide(GitWorkflowLayerLive),
   Layer.provide(OrchestrationApplicationLayerLive),
   Layer.provide(TerminalLayerLive),

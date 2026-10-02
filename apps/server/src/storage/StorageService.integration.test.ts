@@ -106,6 +106,7 @@ function inputsFor(
   return {
     config: { stateDir: value.stateDir },
     threads: {
+      dispatch: () => Effect.die("Unexpected thread dispatch"),
       getShellSnapshot: () =>
         Effect.succeed({
           schemaVersion: 1,
@@ -122,6 +123,83 @@ function inputsFor(
     ...overrides,
   };
 }
+
+describe("settled thread deletion", () => {
+  const settledThread = (value: Effect.Success<typeof fixture>, settledDaysAgo: number) => ({
+    ...value.thread,
+    archivedAt: null,
+    settledAt: DateTime.makeUnsafe(Date.now() - settledDaysAgo * 86_400_000),
+  });
+  const run = (
+    value: Effect.Success<typeof fixture>,
+    options: { settledDaysAgo: number; enabled: boolean; unfinishedGitWork?: boolean },
+  ) =>
+    Effect.gen(function* () {
+      const thread = settledThread(value, options.settledDaysAgo);
+      const deleted: string[] = [];
+      const base = inputsFor(value);
+      const service = yield* makeStorageService.pipe(
+        Effect.provideService(
+          StorageServiceInputs,
+          inputsFor(value, {
+            threads: {
+              ...base.threads,
+              getShellSnapshot: () =>
+                Effect.succeed({
+                  schemaVersion: 1,
+                  snapshotSequence: 0,
+                  threads: [thread],
+                  archivedThreads: [],
+                }),
+              getThreadProjection: () =>
+                Effect.succeed({
+                  thread: { ...thread, ownedWorktreePath: value.worktree },
+                } as never),
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  deleted.push(`${command.type}:${"threadId" in command ? command.threadId : ""}`);
+                  return {} as never;
+                }),
+            },
+            workspaces: {
+              hasUnfinishedGitWork: () => Effect.succeed(options.unfinishedGitWork === true),
+            },
+          }),
+        ),
+        Effect.provideService(ServerActivation, Effect.never),
+      );
+      yield* service.setPolicy({
+        ...(yield* service.snapshot).policy,
+        deleteSettledThreads: options.enabled,
+      });
+      yield* service.monitor;
+      return deleted;
+    });
+
+  it.effect("deletes a thread once it has stayed settled past the policy window", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const value = yield* fixture;
+        expect(yield* run(value, { settledDaysAgo: 15, enabled: true })).toEqual([
+          `thread.delete:${value.thread.id}`,
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("keeps threads that are not due, have unfinished Git work, or are switched off", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const value = yield* fixture;
+        expect(yield* run(value, { settledDaysAgo: 10, enabled: true })).toEqual([]);
+        expect(
+          yield* run(value, { settledDaysAgo: 15, enabled: true, unfinishedGitWork: true }),
+        ).toEqual([]);
+        expect(yield* run(value, { settledDaysAgo: 15, enabled: false })).toEqual([]);
+      }),
+    ),
+  );
+});
 
 describe("storage service lifecycle", () => {
   it.effect(
@@ -141,6 +219,7 @@ describe("storage service lifecycle", () => {
               StorageServiceInputs,
               inputsFor(value, {
                 threads: {
+                  dispatch: () => Effect.die("Unexpected thread dispatch"),
                   getShellSnapshot: () =>
                     Effect.succeed({
                       schemaVersion: 1,
@@ -252,6 +331,7 @@ describe("storage service lifecycle", () => {
               StorageServiceInputs,
               inputsFor(value, {
                 threads: {
+                  dispatch: () => Effect.die("Unexpected thread dispatch"),
                   getShellSnapshot: () =>
                     Effect.sync(() => {
                       shellReads++;
@@ -395,6 +475,7 @@ describe("storage service lifecycle", () => {
             StorageServiceInputs,
             inputsFor(value, {
               threads: {
+                dispatch: () => Effect.die("Unexpected thread dispatch"),
                 getThreadProjection: () => Effect.die("Unavailable"),
                 getShellSnapshot: () =>
                   Effect.sync(() => {
@@ -453,6 +534,7 @@ describe("storage service lifecycle", () => {
             StorageServiceInputs,
             inputsFor(value, {
               threads: {
+                dispatch: () => Effect.die("Unexpected thread dispatch"),
                 getThreadProjection: () => Effect.die("Unavailable"),
                 getShellSnapshot: () =>
                   Effect.gen(function* () {

@@ -247,6 +247,8 @@ function EnvironmentCapacityCard({
                 {snapshot.policy.enabled
                   ? `Cleanup after ${snapshot.policy.afterDays} days`
                   : "Scheduled cleanup off"}
+                {snapshot.policy.deleteSettledThreads === true &&
+                  ` · Delete settled threads after ${snapshot.policy.deleteSettledAfterDays ?? 14} days`}
               </p>
             </>
           ) : (

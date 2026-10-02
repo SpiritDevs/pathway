@@ -1,4 +1,4 @@
-import type { StoragePolicy, StoragePressure } from "@spiritdevs/contracts";
+import type { StoragePolicy, StoragePressure, StorageThread } from "@spiritdevs/contracts";
 
 export function storagePressure(
   available: number,
@@ -16,6 +16,21 @@ export function storagePressure(
 export function validateStoragePolicy(policy: StoragePolicy): void {
   if (policy.criticalBytes > policy.warningBytes || policy.criticalPercent > policy.warningPercent)
     throw new Error("Critical limits must not exceed warning limits.");
+}
+
+export const OPEN_TERMINAL_BLOCKER = "Open terminal in this workspace";
+
+/** Whether a settled thread has stayed settled long enough for automatic deletion. */
+export function settledThreadDeletionDue(
+  thread: Pick<StorageThread, "status" | "temporary" | "eligibleSince">,
+  policy: StoragePolicy,
+  now: number,
+): boolean {
+  if (policy.deleteSettledThreads !== true) return false;
+  if (thread.status !== "settled" || thread.temporary === true || thread.eligibleSince === null)
+    return false;
+  const afterDays = policy.deleteSettledAfterDays ?? 14;
+  return now - Date.parse(thread.eligibleSince) >= afterDays * 86_400_000;
 }
 
 export function eligibilityBlockers(input: {
@@ -41,7 +56,7 @@ export function eligibilityBlockers(input: {
   if (input.snoozed) reasons.push("Snoozed thread");
   if (input.temporary) reasons.push("Temporary thread uses its existing retention policy");
   if (input.pinned || input.keep) reasons.push("Keep worktree or pinned thread");
-  if (input.terminal) reasons.push("Open terminal in this workspace");
+  if (input.terminal) reasons.push(OPEN_TERMINAL_BLOCKER);
   if (input.dirty) reasons.push("Uncommitted or untracked files");
   if (input.unpublished) reasons.push("Unpublished commits");
   if (

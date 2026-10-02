@@ -8,6 +8,8 @@ export const StoragePolicy = Schema.Struct({
   enabled: Schema.Boolean,
   autoSettleAfterDays: Schema.optional(Schema.NullOr(NonNegativeInt)),
   afterDays: Schema.Literals([7, 14, 30, 60]),
+  deleteSettledThreads: Schema.optional(Schema.Boolean),
+  deleteSettledAfterDays: Schema.optional(Schema.Literals([7, 14, 30, 60])),
   warningBytes: NonNegativeInt,
   criticalBytes: NonNegativeInt,
   warningPercent: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
@@ -18,6 +20,8 @@ export const DEFAULT_STORAGE_POLICY: StoragePolicy = {
   enabled: false,
   autoSettleAfterDays: 3,
   afterDays: 30,
+  deleteSettledThreads: false,
+  deleteSettledAfterDays: 14,
   warningBytes: 20_000_000_000,
   criticalBytes: 10_000_000_000,
   warningPercent: 10,
@@ -46,6 +50,7 @@ export const StorageThread = Schema.Struct({
   eligibleSince: Schema.NullOr(Schema.String),
   reclaimedAt: Schema.NullOr(Schema.String),
 });
+export type StorageThread = typeof StorageThread.Type;
 export const StorageWorktree = Schema.Struct({
   id: Schema.String,
   path: Schema.String,

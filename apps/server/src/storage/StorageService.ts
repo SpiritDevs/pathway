@@ -6,6 +6,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import * as NodeCrypto from "node:crypto";
 import {
+  CommandId,
   DEFAULT_STORAGE_POLICY,
   StorageError,
   StoragePolicy,
@@ -27,9 +28,17 @@ import { ProjectionProjectRepository } from "../persistence/Services/ProjectionP
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { ServerConfig } from "../config.ts";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
+import { ThreadWorkspaceService } from "../orchestration-v2/ThreadWorkspaceService.ts";
+import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
 import { TerminalManager } from "../terminal/Manager.ts";
 import { forkParked } from "../serverActivation.ts";
-import { eligibilityBlockers, storagePressure, validateStoragePolicy } from "./policy.ts";
+import {
+  OPEN_TERMINAL_BLOCKER,
+  eligibilityBlockers,
+  settledThreadDeletionDue,
+  storagePressure,
+  validateStoragePolicy,
+} from "./policy.ts";
 import { leaseStorageWorkspace, markStorageWorkspaceRemoved } from "./workspaceLease.ts";
 
 const execute = NodeUtil.promisify(NodeChildProcess.execFile);
@@ -207,7 +216,11 @@ export class StorageServiceInputs extends Context.Service<
   {
     config: Pick<ServerConfig["Service"], "stateDir">;
     threadDataBytes?: (threadId: ThreadId) => Effect.Effect<number, StorageError>;
-    threads: Pick<ThreadManagementService["Service"], "getShellSnapshot" | "getThreadProjection">;
+    threads: Pick<
+      ThreadManagementService["Service"],
+      "dispatch" | "getShellSnapshot" | "getThreadProjection"
+    >;
+    workspaces?: Pick<(typeof ThreadWorkspaceService)["Service"], "hasUnfinishedGitWork">;
     terminals: Pick<TerminalManager["Service"], "listMetadata">;
     workflow: Pick<GitWorkflowService["Service"], "status">;
     projects: Pick<ProjectionProjectRepository["Service"], "listAll">;
@@ -215,7 +228,7 @@ export class StorageServiceInputs extends Context.Service<
 >()("@spiritdevs/pathway/storage/StorageService/StorageServiceInputs") {}
 
 export const makeStorageService = Effect.gen(function* () {
-  const { config, threads, terminals, workflow, projects, threadDataBytes } =
+  const { config, threads, terminals, workflow, projects, threadDataBytes, workspaces } =
     yield* StorageServiceInputs;
   const scope = yield* Scope.Scope;
   const runtime = yield* Effect.context<never>();
@@ -309,6 +322,7 @@ export const makeStorageService = Effect.gen(function* () {
   const changeRequests = new Map<string, { state: string | null; at: number }>();
   const threadSizes = new Map<string, { bytes: number | null; at: number }>();
   const sizes = new Map<string, { bytes: number | null; at: string }>();
+  const deletionDeferredAt = new Map<string, number>();
 
   async function refresh(force = false): Promise<StorageSnapshot> {
     if (refreshing) return refreshing;
@@ -556,7 +570,7 @@ export const makeStorageService = Effect.gen(function* () {
                 (terminal, index) =>
                   terminal.status !== "exited" && inside(path, terminalPaths[index]!),
               )
-                ? ["Open terminal in this workspace"]
+                ? [OPEN_TERMINAL_BLOCKER]
                 : [],
               removed: false,
             });
@@ -965,9 +979,60 @@ export const makeStorageService = Effect.gen(function* () {
     );
     return result;
   });
+  // Deleting a thread force-removes its owned worktree and branch, so threads with unique Git work
+  // are skipped and rechecked later rather than deleted.
+  const deleteSettledThreads = Effect.gen(function* () {
+    if (!workspaces) return;
+    const { snapshot, now } = yield* io(async () => ({
+      snapshot: await refresh(),
+      now: Date.now(),
+    }));
+    for (const row of snapshot.threads) {
+      if (!settledThreadDeletionDue(row, state.policy, now)) continue;
+      if (now - (deletionDeferredAt.get(row.threadId) ?? 0) < 15 * 60_000) continue;
+      const worktree = snapshot.worktrees.find((entry) => entry.id === row.worktreeId);
+      if (worktree?.blockers.includes(OPEN_TERMINAL_BLOCKER)) continue;
+      yield* Effect.gen(function* () {
+        const { thread } = yield* threads.getThreadProjection(row.threadId);
+        if (
+          thread.deletedAt !== null ||
+          thread.pinnedAt != null ||
+          thread.lineage.relationshipToParent === "subagent"
+        )
+          return;
+        if (
+          (thread.ownedWorktreePath != null || thread.conversationPath != null) &&
+          (yield* workspaces.hasUnfinishedGitWork(thread))
+        ) {
+          deletionDeferredAt.set(row.threadId, now);
+          return;
+        }
+        yield* threads.dispatch({
+          type: "thread.delete",
+          commandId: CommandId.make(yield* randomUuidV4),
+          threadId: row.threadId,
+        });
+        cached = null;
+      }).pipe(
+        Effect.catch((cause) => {
+          deletionDeferredAt.set(row.threadId, now);
+          return Effect.logWarning("Settled thread deletion deferred", {
+            threadId: row.threadId,
+            cause,
+          });
+        }),
+      );
+    }
+  });
   const service: Shape = {
     snapshot: io(() => refresh()),
     monitor: Effect.gen(function* () {
+      if (
+        state.policy.deleteSettledThreads === true &&
+        activeJob === null &&
+        persistenceError === null
+      )
+        yield* deleteSettledThreads;
       if (!state.policy.enabled || activeJob !== null || persistenceError !== null) {
         yield* io(async () => {
           const revision = storageInventoryRevision();
@@ -1179,6 +1244,7 @@ export const layer = Layer.effect(StorageService, makeStorageService).pipe(
           threadDataBytes: (threadId: ThreadId) => measureThreadStorageBytes(sql, threadId),
           config: yield* ServerConfig,
           threads: yield* ThreadManagementService,
+          workspaces: yield* ThreadWorkspaceService,
           terminals: yield* TerminalManager,
           workflow: yield* GitWorkflowService,
           projects: yield* ProjectionProjectRepository,
