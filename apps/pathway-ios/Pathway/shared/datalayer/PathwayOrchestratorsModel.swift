@@ -250,12 +250,12 @@ final class PathwayOrchestratorsModel {
   }
   func addAttachment(chatID: String, targetID: String, data: Data, name: String, mimeType: String) async {
     let type = mimeType.lowercased().hasPrefix("image/") ? "image" : "file"
-    guard (attachmentDrafts[chatID] ?? []).count < 8, data.count <= (type == "image" ? 10 : 50) * 1024 * 1024, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 255 else {
+    guard (attachmentDrafts[chatID] ?? []).count < 8, data.count <= 50 * 1024 * 1024, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 255 else {
       errorMessage = "Attach up to 8 files, with images up to 10 MB and files up to 50 MB."
       return
     }
     let id = UUID().uuidString.lowercased()
-    let draft = PathwayThreadAttachmentDraft(id: id, name: name, mimeType: mimeType.isEmpty ? "application/octet-stream" : mimeType, type: type, sizeBytes: data.count, state: .uploading, previewData: type == "image" ? data : nil)
+    let draft = PathwayThreadAttachmentDraft(id: id, name: name, mimeType: mimeType.isEmpty ? "application/octet-stream" : mimeType, type: type, sizeBytes: data.count, state: .uploading, previewData: nil)
     attachmentBytes[id] = data
     attachmentDrafts[chatID, default: []].append(draft)
     await retryAttachment(chatID: chatID, targetID: targetID, id: id)
@@ -271,12 +271,26 @@ final class PathwayOrchestratorsModel {
     } catch { errorMessage = error.localizedDescription }
   }
   func retryAttachment(chatID: String, targetID: String, id: String) async {
-    guard let draft = attachmentDrafts[chatID]?.first(where: { $0.id == id }), let data = attachmentBytes[id] else { return }
+    guard var draft = attachmentDrafts[chatID]?.first(where: { $0.id == id }), var data = attachmentBytes[id] else { return }
     let current = generation
     uploadingAttachmentIDs.insert(id)
     defer { uploadingAttachmentIDs.remove(id) }
     setAttachmentState(chatID: chatID, id: id, state: .uploading)
     do {
+      let image = try await PathwayImageUpload.prepare(data: data, name: draft.name, mimeType: draft.mimeType)
+      guard generation == current, !Task.isCancelled else { return }
+      guard let index = attachmentDrafts[chatID]?.firstIndex(where: { $0.id == id }) else {
+        await removeAttachment(chatID: chatID, id: id, completedUpload: true)
+        return
+      }
+      let type = image.mimeType.lowercased().hasPrefix("image/") ? "image" : "file"
+      guard image.data.count <= (type == "image" ? 10 : 50) * 1024 * 1024 else {
+        throw PathwayThreadConversationError.message("Images must be at most 10 MB and files at most 50 MB.")
+      }
+      data = image.data
+      draft = PathwayThreadAttachmentDraft(id: id, name: image.name, mimeType: image.mimeType, type: type, sizeBytes: data.count, state: .uploading, previewData: type == "image" ? data : nil)
+      attachmentBytes[id] = data
+      attachmentDrafts[chatID]?[index] = draft
       let metadata: JSONValue = .object(["id": .string(id), "name": .string(draft.name), "type": .string(draft.type), "mimeType": .string(draft.mimeType), "sizeBytes": .number(Double(draft.sizeBytes))])
       let prepared = try await request("mutation", "aiOrchestratorAttachments:prepare", .object(["chatId": .string(chatID), "targetId": .string(targetID), "attachment": metadata]))
       if prepared.objectValue?["ready"]?.boolValue != true {
