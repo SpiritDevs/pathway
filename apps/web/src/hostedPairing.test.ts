@@ -5,12 +5,8 @@ import {
   buildHostedPairingUrl,
   buildHostedMailSetupUrl,
   hasHostedPairingRequest,
-  isClientOnlyChosen,
   isHostedStaticApp,
-  pairWithServingEnvironment,
   readHostedPairingRequest,
-  runsWithoutServingEnvironment,
-  setClientOnlyChosen,
 } from "./hostedPairing";
 
 describe("hostedPairing", () => {
@@ -100,45 +96,5 @@ describe("hostedPairing", () => {
 
     vi.stubEnv("VITE_HTTP_URL", "https://backend.example.com");
     expect(isHostedStaticApp(new URL("https://app.pathwayos.dev/"))).toBe(false);
-  });
-
-  describe("client-only choice", () => {
-    function stubBrowser() {
-      const storage = new Map<string, string>();
-      const assign = vi.fn();
-      vi.stubGlobal("window", {
-        localStorage: {
-          getItem: (key: string) => storage.get(key) ?? null,
-          setItem: (key: string, value: string) => storage.set(key, value),
-          removeItem: (key: string) => storage.delete(key),
-        },
-        location: { assign },
-      });
-      return { assign };
-    }
-    afterEach(() => {
-      vi.unstubAllGlobals();
-    });
-
-    it("treats a self-hosted origin as client-only once this browser chooses it", () => {
-      stubBrowser();
-      vi.stubEnv("VITE_HOSTED_APP_URL", "https://app.pathwayos.dev");
-      const selfHosted = new URL("https://desktop.example.com/");
-
-      expect(runsWithoutServingEnvironment(selfHosted)).toBe(false);
-      setClientOnlyChosen(true);
-      expect(isClientOnlyChosen()).toBe(true);
-      expect(runsWithoutServingEnvironment(selfHosted)).toBe(true);
-    });
-
-    it("pairing with the serving environment clears the choice and opens the pairing form", () => {
-      const { assign } = stubBrowser();
-      setClientOnlyChosen(true);
-
-      pairWithServingEnvironment();
-
-      expect(isClientOnlyChosen()).toBe(false);
-      expect(assign).toHaveBeenCalledWith("/pair");
-    });
   });
 });

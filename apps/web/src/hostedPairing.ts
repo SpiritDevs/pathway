@@ -35,6 +35,37 @@ function originFromUrl(value: string): string | null {
   }
 }
 
+const SERVING_ENVIRONMENT_SKIPPED_KEY = "pathway:serving-environment-skipped";
+
+// Read once per page load, so the next load tries signing in to the serving environment again.
+const servingEnvironmentSkipped = (() => {
+  try {
+    const skipped = window.sessionStorage.getItem(SERVING_ENVIRONMENT_SKIPPED_KEY) === "1";
+    window.sessionStorage.removeItem(SERVING_ENVIRONMENT_SKIPPED_KEY);
+    return skipped;
+  } catch {
+    return false;
+  }
+})();
+
+/**
+ * True for a page load that runs as a client of the account's other environments because the
+ * signed-in account does not own the environment serving this page.
+ */
+export function runsWithoutServingEnvironment(): boolean {
+  return servingEnvironmentSkipped;
+}
+
+/** Reloads the app as a client of the account's other environments. */
+export function continueWithoutServingEnvironment(): void {
+  try {
+    window.sessionStorage.setItem(SERVING_ENVIRONMENT_SKIPPED_KEY, "1");
+  } catch {
+    // Without storage the reload retries sign-in, which is still not a dead end.
+  }
+  window.location.reload();
+}
+
 export function isHostedStaticApp(url: URL = new URL(window.location.href)): boolean {
   if (configuredBackendUrl()) {
     return false;
@@ -46,44 +77,6 @@ export function isHostedStaticApp(url: URL = new URL(window.location.href)): boo
 
   const hostedOrigin = originFromUrl(configuredHostedAppUrl());
   return hostedOrigin !== null && url.origin === hostedOrigin;
-}
-
-const CLIENT_ONLY_STORAGE_KEY = "pathway:client-only";
-
-/** Whether this browser chose to skip pairing with the server that serves it. */
-export function isClientOnlyChosen(): boolean {
-  try {
-    return window.localStorage.getItem(CLIENT_ONLY_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-/** Remembers the pairing screen choice; callers reload so the connection layer follows it. */
-export function setClientOnlyChosen(chosen: boolean): void {
-  try {
-    if (chosen) {
-      window.localStorage.setItem(CLIENT_ONLY_STORAGE_KEY, "1");
-    } else {
-      window.localStorage.removeItem(CLIENT_ONLY_STORAGE_KEY);
-    }
-  } catch {
-    // Storage can be unavailable in private modes; the choice then lasts only for this page.
-  }
-}
-
-/** Undoes "Use as a client" and opens the pairing form for the server that serves this page. */
-export function pairWithServingEnvironment(): void {
-  setClientOnlyChosen(false);
-  window.location.assign("/pair");
-}
-
-/**
- * True when the app only connects to saved environments: the hosted app, or a self-hosted
- * origin whose pairing screen was answered with "Use as a client".
- */
-export function runsWithoutServingEnvironment(url: URL = new URL(window.location.href)): boolean {
-  return isHostedStaticApp(url) || isClientOnlyChosen();
 }
 
 export function readHostedPairingRequest(url: URL = new URL(window.location.href)) {

@@ -40,11 +40,9 @@ function PairRouteView() {
 
   return (
     <PairingRouteSurface
-      auth={authGateState.auth}
       onAuthenticated={() => {
         void navigate({ to: "/", replace: true });
       }}
-      {...(authGateState.errorMessage ? { initialErrorMessage: authGateState.errorMessage } : {})}
     />
   );
 }

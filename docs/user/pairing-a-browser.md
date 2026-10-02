@@ -1,13 +1,14 @@
-# Pairing a browser with an environment
+# Opening Pathway in a browser
 
-When you open Pathway from a server you have not paired with yet, it asks how you want to
-use it there:
+Sign in with your Pathway account. There is no pairing code to enter.
 
-- **Pair with this environment** asks for a pairing code, then lets you work with that
-  server's projects and agents. Pairing links skip this choice and pair straight away.
-- **Use as a client** skips pairing. This browser connects only to your saved environments,
-  such as the ones you reach through Pathway Connect, and the server that served the page
-  stays unpaired.
+- **Your own environment.** When the server that serves the page belongs to your account,
+  Pathway signs this browser in to it automatically. A server belongs to you when it is linked
+  to your account through Pathway Connect, or when the Pathway desktop app on that machine is
+  signed in to your account.
+- **Someone else's server, or one Pathway can't confirm is yours.** Pathway opens anyway and
+  works as a client of your other environments, such as the ones you reach through Pathway
+  Connect. Reloading the page checks again, so signing in to the desktop app on that machine
+  and then reloading signs you in to it.
 
-The browser remembers the choice. To pair with the server later, choose **Pair with this
-server** in **Settings → Environments** or on the empty start screen.
+Pairing links still work. Opening one signs the browser in straight away.
