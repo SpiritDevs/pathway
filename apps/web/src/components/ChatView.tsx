@@ -244,7 +244,7 @@ import {
 import { useRemoteAgentBrowserReveal } from "./preview/useRemoteAgentBrowserReveal";
 import { closePreviewSession } from "./preview/closePreviewSession";
 import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
-import { subscribePreviewAction } from "./preview/previewActionBus";
+import { requestNewTabAddressFocus, subscribePreviewAction } from "./preview/previewActionBus";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import {
@@ -4697,6 +4697,7 @@ function ChatViewContent(props: ChatViewProps) {
         input: { action: "selectHost", threadId: activeThreadRef.threadId, host: "automatic" },
       });
       // A new tab starts blank and offers the panel's tools until a page is opened.
+      requestNewTabAddressFocus();
       useRightPanelStore.getState().openBrowser(activeThreadRef, null);
     },
     [activeThreadRef, defaultBrowserPlacement, remoteBrowserCommand],
@@ -4714,6 +4715,28 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const activeEnvironmentLabel = activeEnvironment?.label ?? "Environment";
   const remoteBrowserPage = useRemoteBrowserPage(activeThreadRef);
+  const rightPanelToolShortcuts = useMemo(
+    () => ({
+      diff: shortcutLabelForCommand(keybindings, "diff.toggle"),
+      computer: shortcutLabelForCommand(keybindings, "computer.toggle"),
+      "terminal-drawer": shortcutLabelForCommand(keybindings, "terminal.toggle"),
+    }),
+    [keybindings],
+  );
+  const openBottomTerminal = useCallback(() => {
+    // The drawer lives under the full-page chat, as with the terminal shortcut.
+    if (isPanelPresentation) revealPanelThreadAsPage();
+    // Opened from the right panel, it spans the panel too rather than only the chat.
+    if (activeThreadRef)
+      useTerminalUiStateStore.getState().setTerminalFullWidth(activeThreadRef, true);
+    if (!terminalUiState.terminalOpen) toggleTerminalVisibility();
+  }, [
+    activeThreadRef,
+    isPanelPresentation,
+    revealPanelThreadAsPage,
+    terminalUiState.terminalOpen,
+    toggleTerminalVisibility,
+  ]);
   const browserTabContext = useMemo(
     () =>
       activeThreadRef
@@ -10792,6 +10815,8 @@ function ChatViewContent(props: ChatViewProps) {
                 ? { onOpenInRemoteBrowser: openInRemoteBrowser }
                 : {})}
               onAddTerminal={addTerminalSurface}
+              onOpenBottomTerminal={openBottomTerminal}
+              toolShortcuts={rightPanelToolShortcuts}
               onAddDiff={addDiffSurface}
               onAddFiles={addFilesSurface}
               onAddPullRequest={addPullRequestSurface}
@@ -10859,6 +10884,8 @@ function ChatViewContent(props: ChatViewProps) {
               ? { onOpenInRemoteBrowser: openInRemoteBrowser }
               : {})}
             onAddTerminal={addTerminalSurface}
+            onOpenBottomTerminal={openBottomTerminal}
+            toolShortcuts={rightPanelToolShortcuts}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}

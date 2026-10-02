@@ -38,10 +38,10 @@ import { useEnvironment, useEnvironmentHttpBaseUrl } from "~/state/environments"
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { selectThreadPreviewMiniPlayer, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
-import { useRightPanelStore } from "~/rightPanelStore";
+import { beginBlankBrowserOpen, useRightPanelStore } from "~/rightPanelStore";
 
 import { previewBridge } from "./previewBridge";
-import { subscribePreviewAction } from "./previewActionBus";
+import { subscribeNewTabAddressFocus, subscribePreviewAction } from "./previewActionBus";
 import { isPaneFocused, usePaneId } from "../../panes/usePaneFocus";
 import { openPreviewSession } from "./openPreviewSession";
 import { PreviewChromeRow } from "./PreviewChromeRow";
@@ -197,11 +197,17 @@ function DesktopPreviewView({
         rememberPreviewUrl(threadRef, resolvedUrl);
         return true;
       }
-      const result = await openPreviewSession({ openPreview: open, threadRef, url: resolvedUrl });
-      if (result._tag !== "Success") return false;
-      // A blank new tab becomes the tab it just opened.
-      if (tabId === null) useRightPanelStore.getState().openBrowser(threadRef, result.value.tabId);
-      return true;
+      const releaseBlankOpen = tabId === null ? beginBlankBrowserOpen(threadRef) : null;
+      try {
+        const result = await openPreviewSession({ openPreview: open, threadRef, url: resolvedUrl });
+        if (result._tag !== "Success") return false;
+        // A blank new tab becomes the tab it just opened, in the same place.
+        if (tabId === null)
+          useRightPanelStore.getState().openBrowser(threadRef, result.value.tabId);
+        return true;
+      } finally {
+        releaseBlankOpen?.();
+      }
     },
     [open, runtimeTabId, tabId, threadRef],
   );
@@ -709,6 +715,10 @@ function DesktopPreviewView({
     };
   }, [runtimeTabId]);
 
+  useEffect(() => {
+    if (!visible || tabId !== null) return;
+    return subscribeNewTabAddressFocus(() => setFocusUrlNonce((value) => (value ?? 0) + 1));
+  }, [visible, tabId]);
   // Subscribe only while visible; `toggle-panel` is owned by ChatView's
   // URL-aware handler regardless of whether the panel is currently mounted.
   const paneId = usePaneId();

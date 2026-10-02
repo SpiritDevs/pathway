@@ -11,6 +11,18 @@ export interface PanelSurfaceAction {
   readonly disabledReason: string;
   readonly badgeCount: number;
   readonly onClick: () => void;
+  /** The keyboard shortcut that opens this same tool, if it has one. */
+  readonly shortcut?: string | null;
+  /** Other places the tool can open, offered from a dropdown on its new-tab tile. */
+  readonly alternatives?: ReadonlyArray<PanelSurfaceAlternative>;
+}
+
+export interface PanelSurfaceAlternative {
+  readonly label: string;
+  readonly shortcut: string | null;
+  readonly onClick: () => void;
+  /** Opens outside the right panel, so the blank tab stays where it is. */
+  readonly keepsTab?: boolean;
 }
 
 const NewTabToolsContext = createContext<ReadonlyArray<PanelSurfaceAction>>([]);

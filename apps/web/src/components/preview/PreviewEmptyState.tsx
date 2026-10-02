@@ -1,9 +1,11 @@
 import type { EnvironmentId } from "@spiritdevs/contracts";
-import { Globe } from "lucide-react";
+import { ChevronDown, Globe } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { historyEntryVisits, type BrowserHistoryEntry } from "~/browserHistoryStore";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "~/components/ui/empty";
+import { Kbd } from "~/components/ui/kbd";
+import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "~/components/ui/menu";
 
 import { useNewTabTools, type PanelSurfaceAction } from "./newTabTools";
 import { PreviewLocalServerCard } from "./PreviewLocalServerCard";
@@ -63,7 +65,7 @@ export function PreviewEmptyState({
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-7">
         {tools.length > 0 ? (
           <NewTabSection title="Tools">
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-2">
+            <div className="grid grid-cols-2 gap-2">
               {tools.map((tool) => (
                 <ToolTile key={tool.kind} tool={tool} />
               ))}
@@ -118,18 +120,39 @@ function NewTabSection({ title, children }: { title: string; children: ReactNode
 function ToolTile({ tool }: { tool: PanelSurfaceAction }) {
   const Icon = tool.icon;
   return (
-    <button
-      type="button"
-      onClick={tool.onClick}
-      className="flex h-11 w-full cursor-pointer items-center gap-2.5 rounded-lg border border-border/70 bg-card px-3 text-left text-sm hover:bg-accent/60"
-    >
-      <Icon className="size-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate">{tool.label}</span>
-      {tool.badgeCount > 0 ? (
-        <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-info px-1 text-[10px] font-semibold tabular-nums text-white">
-          {tool.badgeCount}
-        </span>
+    <div className="flex h-11 min-w-0 items-center rounded-lg border border-border/70 bg-card text-sm">
+      <button
+        type="button"
+        onClick={tool.onClick}
+        className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-lg px-3 text-left hover:bg-accent/60"
+      >
+        <Icon className="size-4 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate">{tool.label}</span>
+        {tool.badgeCount > 0 ? (
+          <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-info px-1 text-[10px] font-semibold tabular-nums text-white">
+            {tool.badgeCount}
+          </span>
+        ) : null}
+        {tool.shortcut ? <Kbd className="shrink-0">{tool.shortcut}</Kbd> : null}
+      </button>
+      {tool.alternatives && tool.alternatives.length > 0 ? (
+        <Menu>
+          <MenuTrigger
+            aria-label={`More ways to open ${tool.label}`}
+            className="mr-1 flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+          >
+            <ChevronDown className="size-3.5" />
+          </MenuTrigger>
+          <MenuPopup align="end">
+            {tool.alternatives.map((alternative) => (
+              <MenuItem key={alternative.label} onClick={alternative.onClick}>
+                {alternative.label}
+                {alternative.shortcut ? <MenuShortcut>{alternative.shortcut}</MenuShortcut> : null}
+              </MenuItem>
+            ))}
+          </MenuPopup>
+        </Menu>
       ) : null}
-    </button>
+    </div>
   );
 }

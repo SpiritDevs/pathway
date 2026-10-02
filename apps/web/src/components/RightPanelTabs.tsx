@@ -95,6 +95,10 @@ interface RightPanelTabsProps {
   /** Reopens a local tab's page in the thread environment's browser. */
   onOpenInRemoteBrowser?: (surface: RightPanelSurface) => void;
   onAddTerminal: () => void;
+  /** Opens the terminal drawer below the chat instead of a panel tab. */
+  onOpenBottomTerminal?: (() => void) | undefined;
+  /** Shortcut labels for the tools whose shortcut opens that same tool. */
+  toolShortcuts?: Partial<Record<"terminal-drawer" | RightPanelKind, string | null>> | undefined;
   onAddDiff: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
@@ -240,6 +244,19 @@ function buildSurfaceActions(props: RightPanelTabsProps): PanelSurfaceAction[] {
       disabledReason: SURFACE_DISABLED_REASONS.terminal,
       onClick: props.onAddTerminal,
       badgeCount: 0,
+      ...(props.onOpenBottomTerminal
+        ? {
+            alternatives: [
+              { label: "Open in panel", shortcut: null, onClick: props.onAddTerminal },
+              {
+                label: "Open at bottom",
+                shortcut: props.toolShortcuts?.["terminal-drawer"] ?? null,
+                onClick: props.onOpenBottomTerminal,
+                keepsTab: true,
+              },
+            ],
+          }
+        : {}),
     },
     {
       kind: "files",
@@ -650,14 +667,25 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const newTabAction = surfaceActions.find((action) => action.kind === "preview");
   const activeSurface = props.surfaces.find((surface) => surface.id === props.activeSurfaceId);
   // A blank browser tab offers the other surfaces; picking one takes the tab's place.
+  const replaceBlankTab = (open: () => void) => () => {
+    open();
+    if (activeSurface?.kind === "preview") props.onCloseSurface(activeSurface);
+  };
   const newTabTools = surfaceActions
     .filter((action) => action.kind !== "preview" && action.available)
     .map((action) => ({
       ...action,
-      onClick: () => {
-        action.onClick();
-        if (activeSurface?.kind === "preview") props.onCloseSurface(activeSurface);
-      },
+      shortcut: props.toolShortcuts?.[action.kind as RightPanelKind] ?? null,
+      onClick: replaceBlankTab(action.onClick),
+      ...(action.alternatives
+        ? {
+            alternatives: action.alternatives.map((alternative) =>
+              alternative.keepsTab
+                ? alternative
+                : { ...alternative, onClick: replaceBlankTab(alternative.onClick) },
+            ),
+          }
+        : {}),
     }));
 
   const handleTabContextMenu = useCallback(

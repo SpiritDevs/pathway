@@ -226,6 +226,27 @@ const browserSurface = (tabId: string | null): RightPanelSurface =>
     : { id: `browser:new:${randomUUID()}`, kind: "preview", resourceId: null };
 
 /** Shows a browser page, letting it take the place of the blank tab the user is looking at. */
+/**
+ * Blank tabs waiting on the page they asked to open, by thread. The server's new
+ * tab can arrive before the open call returns; it takes the blank's place rather
+ * than landing at the end of the strip.
+ */
+const blankBrowserOpens = new Map<string, string>();
+
+/** Marks the thread's active blank tab as opening a page; call the result if the open fails. */
+export function beginBlankBrowserOpen(ref: ScopedThreadRef): () => void {
+  const threadKey = scopedThreadKey(ref);
+  const current = useRightPanelStore.getState().byThreadKey[threadKey];
+  const blank = current?.surfaces.find(
+    (surface) => surface.id === current.activeSurfaceId && isBlankBrowserSurface(surface),
+  );
+  if (!blank) return () => undefined;
+  blankBrowserOpens.set(threadKey, blank.id);
+  return () => {
+    if (blankBrowserOpens.get(threadKey) === blank.id) blankBrowserOpens.delete(threadKey);
+  };
+}
+
 const showBrowserSurface = (
   current: ThreadRightPanelState,
   surface: RightPanelSurface,
@@ -234,12 +255,12 @@ const showBrowserSurface = (
     (entry) => entry.id === current.activeSurfaceId && isBlankBrowserSurface(entry),
   );
   if (!blank) return upsertSurface(current, surface);
-  const exists = current.surfaces.some((entry) => entry.id === surface.id);
+  // The blank's slot goes to the page, even when its tab already landed elsewhere.
   return {
     isOpen: true,
-    surfaces: exists
-      ? current.surfaces.filter((entry) => entry !== blank)
-      : current.surfaces.map((entry) => (entry === blank ? surface : entry)),
+    surfaces: current.surfaces.flatMap((entry) =>
+      entry === blank ? [surface] : entry.id === surface.id ? [] : [entry],
+    ),
     activeSurfaceId: surface.id,
   };
 };
@@ -824,6 +845,8 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       reconcileBrowserSurfaces: (ref, tabIds) =>
         set((state) =>
           updateThread(state, ref, (current) => {
+            const threadKey = scopedThreadKey(ref);
+            const openingBlankId = blankBrowserOpens.get(threadKey);
             const validIds = new Set(tabIds.map((tabId) => `browser:${tabId}`));
             const nonBrowser = current.surfaces.filter((surface) => surface.kind !== "preview");
             const existingBrowser = current.surfaces.filter(
@@ -837,16 +860,30 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             const added = tabIds
               .filter((tabId) => !knownIds.has(`browser:${tabId}`))
               .map((tabId) => browserSurface(tabId));
-            const surfaces = [...nonBrowser, ...existingBrowser, ...added];
-            const activeStillExists = surfaces.some(
-              (surface) => surface.id === current.activeSurfaceId,
-            );
+            const claimed =
+              openingBlankId !== undefined &&
+              existingBrowser.some((surface) => surface.id === openingBlankId)
+                ? added.shift()
+                : undefined;
+            if (claimed) blankBrowserOpens.delete(threadKey);
+            const surfaces = [
+              ...nonBrowser,
+              ...existingBrowser.map((surface) =>
+                claimed && surface.id === openingBlankId ? claimed : surface,
+              ),
+              ...added,
+            ];
+            const activeSurfaceId =
+              claimed && current.activeSurfaceId === openingBlankId
+                ? claimed.id
+                : current.activeSurfaceId;
+            const activeStillExists = surfaces.some((surface) => surface.id === activeSurfaceId);
             const fallbackBrowser = surfaces.find((surface) => surface.kind === "preview");
             return {
               ...current,
               surfaces,
               activeSurfaceId: activeStillExists
-                ? current.activeSurfaceId
+                ? activeSurfaceId
                 : (fallbackBrowser?.id ?? surfaces[0]?.id ?? null),
             };
           }),

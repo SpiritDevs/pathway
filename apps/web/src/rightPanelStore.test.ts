@@ -3,6 +3,7 @@ import { type EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  beginBlankBrowserOpen,
   migratePersistedRightPanelState,
   pullRequestSurfaceId,
   selectActiveRightPanel,
@@ -633,6 +634,29 @@ describe("rightPanelStore", () => {
         { id: "browser:tab-1", kind: "preview", resourceId: "tab-1" },
         { id: "browser:tab-2", kind: "preview", resourceId: "tab-2" },
         second,
+      ],
+    });
+  });
+
+  it("puts a blank tab's page in its place when the session arrives before the open returns", () => {
+    const store = useRightPanelStore.getState();
+    store.openBrowser(refA, "tab-1");
+    store.openBrowser(refA, "tab-2");
+    store.openBrowser(refA, null);
+    store.moveSurface(refA, panelState().activeSurfaceId!, 1);
+
+    const release = beginBlankBrowserOpen(refA);
+    store.reconcileBrowserSurfaces(refA, ["tab-1", "tab-2", "tab-3"]);
+    store.openBrowser(refA, "tab-3");
+    release();
+
+    expect(panelState()).toEqual({
+      isOpen: true,
+      activeSurfaceId: "browser:tab-3",
+      surfaces: [
+        { id: "browser:tab-1", kind: "preview", resourceId: "tab-1" },
+        { id: "browser:tab-3", kind: "preview", resourceId: "tab-3" },
+        { id: "browser:tab-2", kind: "preview", resourceId: "tab-2" },
       ],
     });
   });
