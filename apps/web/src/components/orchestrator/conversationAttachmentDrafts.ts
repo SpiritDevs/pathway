@@ -3,15 +3,23 @@ import type { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import * as Schema from "effect/Schema";
 import { OrchestratorAttachment } from "@spiritdevs/contracts/aiOrchestrator";
-import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@spiritdevs/contracts";
+import {
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+} from "@spiritdevs/contracts";
 import { randomUUID } from "../../lib/utils";
+import {
+  compressImageToByteLimit,
+  MAX_COMPRESSIBLE_SOURCE_BYTES,
+} from "../../lib/imageCompression";
+import { isHeicImage } from "../../lib/heicImage";
 import { normalizeComposerAttachmentName } from "../chat/composerAttachmentFiles";
 
 export interface ConversationAttachmentDraft {
   attachment: OrchestratorAttachment;
   file: File;
   previewUrl?: string;
-  status: "uploading" | "ready" | "failed";
+  status: "preparing" | "uploading" | "ready" | "failed";
   progress: number;
   error?: string | undefined;
   storageId?: string;
@@ -22,20 +30,41 @@ const ref = <T extends "query" | "mutation">(kind: T, name: string) => {
 };
 const isAttachment = Schema.is(OrchestratorAttachment);
 
-export function conversationFileMetadata(file: File, id = randomUUID()): OrchestratorAttachment {
-  const type = file.type.toLowerCase().startsWith("image/") ? "image" : "file";
-  const metadata = {
+function sourceMetadata(file: File, id: string) {
+  const type = file.type.toLowerCase().startsWith("image/")
+    ? ("image" as const)
+    : ("file" as const);
+  return {
     id,
     type,
     name: normalizeComposerAttachmentName(file.name, type),
     mimeType: file.type.toLowerCase() || "application/octet-stream",
     sizeBytes: file.size,
   };
+}
+
+export function conversationFileMetadata(file: File, id = randomUUID()): OrchestratorAttachment {
+  const metadata = sourceMetadata(file, id);
   if (!isAttachment(metadata))
     throw new Error(
       `${metadata.name}: images must be at most 10 MB and files at most 50 MB, with a name under 256 characters.`,
     );
   return metadata;
+}
+
+/** Normalize bytes before creating any upload metadata or preview URL. */
+export async function prepareConversationFile(file: File, id: string) {
+  if (file.type.toLowerCase().startsWith("image/") || (await isHeicImage(file))) {
+    const result = await compressImageToByteLimit(file, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES);
+    if (!result.ok)
+      throw new Error(
+        result.reason === "unreadable"
+          ? `${file.name}: this image could not be converted. Choose another image or export it as JPEG or PNG.`
+          : `${file.name}: this image is too large to attach, even after conversion.`,
+      );
+    file = result.file;
+  }
+  return { file, attachment: conversationFileMetadata(file, id) };
 }
 
 /** Uses the normal thread cloud queue's direct storage protocol with compose progress. */
@@ -165,15 +194,23 @@ export function useConversationAttachmentDrafts(client: ConvexClient | null, acc
           rows.map((row) => (row.attachment.id === id ? { ...row, ...value } : row)),
         );
     };
-    patch({ status: "uploading", progress: 0, error: undefined });
+    patch({ status: "preparing", progress: 0, error: undefined });
     queue.current.push(async () => {
       let storageId = draft.storageId;
       try {
         if (!client || !exists()) return;
+        const normalized = await prepareConversationFile(draft.file, id);
+        if (!exists()) return;
+        const previewUrl =
+          draft.previewUrl ??
+          (normalized.attachment.type === "image"
+            ? URL.createObjectURL(normalized.file)
+            : undefined);
+        patch({ ...normalized, ...(previewUrl ? { previewUrl } : {}), status: "uploading" });
         const prepared = (await client.mutation(ref("mutation", "prepare"), {
           chatId,
           targetId,
-          attachment: draft.attachment,
+          attachment: normalized.attachment,
         })) as { ready: boolean; uploadUrl: string | null };
         if (!exists()) return;
         if (!prepared.ready) {
@@ -182,8 +219,8 @@ export function useConversationAttachmentDrafts(client: ConvexClient | null, acc
             storageId ??
             (await uploadConversationFile(
               prepared.uploadUrl,
-              draft.file,
-              draft.attachment.mimeType,
+              normalized.file,
+              normalized.attachment.mimeType,
               controller.signal,
               (progress) => patch({ progress: Math.floor(progress * 20) / 20 }),
             ));
@@ -212,13 +249,15 @@ export function useConversationAttachmentDrafts(client: ConvexClient | null, acc
       const rows = current.current[chatId] ?? [];
       if (rows.length + files.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS)
         throw new Error(`Attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`);
-      const metadata = files.map((file) => conversationFileMetadata(file));
+      for (const file of files) {
+        if (file.size > MAX_COMPRESSIBLE_SOURCE_BYTES)
+          throw new Error(`${file.name}: files must be at most 50 MB before conversion.`);
+      }
       const added = files.map(
-        (file, i): ConversationAttachmentDraft => ({
-          attachment: metadata[i]!,
+        (file): ConversationAttachmentDraft => ({
+          attachment: sourceMetadata(file, randomUUID()),
           file,
-          ...(metadata[i]!.type === "image" ? { previewUrl: URL.createObjectURL(file) } : {}),
-          status: "uploading",
+          status: "preparing",
           progress: 0,
         }),
       );

@@ -5,6 +5,46 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderDriverKind } from "@spiritdevs/contracts";
 import { prepareOrchestratorAttachments } from "./orchestratorAttachments.ts";
 
+it.effect("delivers real PNG and JPEG bytes unchanged through the authorized reader", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const cwd = yield* fs.makeTempDirectoryScoped();
+    for (const [extension, mimeType] of [
+      ["png", "image/png"],
+      ["jpg", "image/jpeg"],
+    ]) {
+      const bytes = yield* fs.readFile(
+        new URL(`../../../web/src/lib/fixtures/heic/two-colors.${extension}`, import.meta.url)
+          .pathname,
+      );
+      const reads: string[] = [];
+      const result = yield* prepareOrchestratorAttachments(
+        [
+          {
+            id: "converted-image",
+            type: "image",
+            name: `photo.${extension}`,
+            mimeType: mimeType!,
+            sizeBytes: bytes.length,
+          },
+        ],
+        (id, limit) =>
+          Effect.sync(() => {
+            reads.push(id);
+            expect(limit).toBe(bytes.length);
+            return bytes;
+          }),
+        cwd,
+        ProviderDriverKind.make("codex"),
+      );
+      expect(reads).toEqual(["converted-image"]);
+      expect(result.imagePaths).toHaveLength(1);
+      expect(yield* fs.readFile(result.imagePaths[0]!)).toEqual(bytes);
+      expect(result.prompt).toContain("Image supplied with this request.");
+    }
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect("supplies authorized images to Codex and bounded text as data", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

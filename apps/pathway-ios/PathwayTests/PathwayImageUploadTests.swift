@@ -34,12 +34,49 @@ struct PathwayImageUploadTests {
         #expect(CGImageSourceGetType(decoded) as String? == UTType.png.identifier)
     }
 
-    @Test func compatibleImageBytesArePreserved() throws {
-        let data = try fixture(type: .png)
-        let upload = try PathwayImageUpload.convert(data: data, name: "screen.png", mimeType: "image/png")
+    @Test(arguments: [UTType.png, .jpeg]) func compatibleImageBytesArePreserved(type: UTType) throws {
+        let data = try fixture(type: type)
+        let name = "screen.\(type.preferredFilenameExtension!)"
+        let mime = type.preferredMIMEType!
+        let upload = try PathwayImageUpload.convert(data: data, name: name, mimeType: mime)
         #expect(upload.data == data)
-        #expect(upload.name == "screen.png")
-        #expect(upload.mimeType == "image/png")
+        #expect(upload.name == name)
+        #expect(upload.mimeType == mime)
+    }
+
+    @MainActor @Test func orchestratorPreparesConvertedMetadataAndPreview() async throws {
+        var metadata: JSONValue?
+        let model = PathwayOrchestratorsModel(request: { _, path, args in
+            #expect(path == "aiOrchestratorAttachments:prepare")
+            metadata = args.objectValue?["attachment"]
+            return .object(["ready": .bool(true)])
+        }, subscribe: { _, _ in AsyncThrowingStream { $0.finish() } })
+        let source = try fixture(type: .heic, orientation: 6)
+        await model.addAttachment(chatID: "chat", targetID: "target", data: source, name: "Paste.HEIC", mimeType: "image/heic")
+        let draft = try #require(model.attachmentDrafts["chat"]?.first)
+        let bytes = try #require(draft.previewData)
+        #expect(draft.state == .ready)
+        #expect(draft.name == "Paste.jpg")
+        #expect(draft.mimeType == "image/jpeg")
+        #expect(draft.sizeBytes == bytes.count)
+        #expect(metadata?.objectValue?["sizeBytes"]?.intValue == bytes.count)
+        #expect(metadata?.objectValue?["mimeType"]?.stringValue == "image/jpeg")
+        let decoded = try #require(CGImageSourceCreateWithData(bytes as CFData, nil))
+        #expect(CGImageSourceGetType(decoded) as String? == UTType.jpeg.identifier)
+        #expect(try #require(CGImageSourceCreateImageAtIndex(decoded, 0, nil)).width == 32)
+    }
+
+    @MainActor @Test func orchestratorReportsConversionFailureWithoutUpload() async {
+        let model = PathwayOrchestratorsModel(request: { _, _, _ in
+            Issue.record("Invalid HEIC must not reach the upload API")
+            return .null
+        }, subscribe: { _, _ in AsyncThrowingStream { $0.finish() } })
+        await model.addAttachment(chatID: "chat", targetID: "target", data: Data("invalid".utf8), name: "broken.heic", mimeType: "image/heic")
+        guard case .failed(let message) = model.attachmentDrafts["chat"]?.first?.state else {
+            Issue.record("Conversion failure must remain visible on the attachment")
+            return
+        }
+        #expect(message.contains("could not be converted"))
     }
 
     @Test func invalidHEICIsRejectedInsteadOfUploaded() {

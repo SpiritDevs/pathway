@@ -46,11 +46,13 @@ export function ConversationAttachmentDrafts({
             <div className="min-w-0">
               <p className="max-w-40 truncate text-xs">{draft.attachment.name}</p>
               <p role="status" className="max-w-48 text-[10px] text-muted-foreground">
-                {draft.status === "uploading"
-                  ? `Uploading ${formatAttachmentUploadProgress(draft.progress)}`
-                  : draft.status === "failed"
-                    ? draft.error
-                    : formatAttachmentSizeLabel(draft.attachment.sizeBytes)}
+                {draft.status === "preparing"
+                  ? "Preparing image or file…"
+                  : draft.status === "uploading"
+                    ? `Uploading ${formatAttachmentUploadProgress(draft.progress)}`
+                    : draft.status === "failed"
+                      ? draft.error
+                      : formatAttachmentSizeLabel(draft.attachment.sizeBytes)}
               </p>
               {draft.status === "failed" && (
                 <button

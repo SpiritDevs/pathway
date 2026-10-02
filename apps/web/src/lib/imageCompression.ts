@@ -8,8 +8,10 @@
  *   `PROVIDER_SEND_TURN_MAX_IMAGE_BYTES` wire cap and shrinks them to fit
  *   via `compressImageToByteLimit` instead of rejecting the paste.
  *
- * Images already within budget pass through untouched.
+ * Compatible images already within budget pass through untouched. HEIF always
+ * gets decoded and re-encoded so previews and providers receive usable bytes.
  */
+import { decodeHeicImage, isHeicImage } from "./heicImage";
 
 /**
  * Longest edge kept when an image has to be re-encoded. Sized so a typical
@@ -206,14 +208,18 @@ type ReencodeResult =
  * Shared re-encode loop: decodes `file`, then walks the quality ladder and
  * fallback downscale passes until an encoding fits `budgetChars`.
  */
-async function reencodeWithinBudget(file: File, budgetChars: number): Promise<ReencodeResult> {
+async function reencodeWithinBudget(
+  file: File,
+  budgetChars: number,
+  heic = false,
+): Promise<ReencodeResult> {
   if (!canRecompress()) {
-    return { ok: false, reason: "too-large" };
+    return { ok: false, reason: heic ? "unreadable" : "too-large" };
   }
 
   let bitmap: ImageBitmap;
   try {
-    bitmap = await createImageBitmap(file);
+    bitmap = heic ? await decodeHeicImage(file) : await createImageBitmap(file);
   } catch {
     return { ok: false, reason: "unreadable" };
   }
@@ -262,8 +268,8 @@ async function reencodeWithinBudget(file: File, budgetChars: number): Promise<Re
 /**
  * Produces the payload to persist for a stashed image.
  *
- * Small images are stored verbatim (preserving PNG transparency and exact
- * pixels). Anything over budget is downscaled and re-encoded; if it still
+ * Small compatible images are stored verbatim (preserving PNG transparency
+ * and exact pixels). HEIF and anything over budget are re-encoded; if it still
  * doesn't fit after the fallback passes, reports a failure so the caller
  * can record it as dropped.
  */
@@ -271,13 +277,17 @@ export async function compressImageForStash(
   file: File,
   budgetChars: number = MAX_STASH_IMAGE_DATA_URL_CHARS,
 ): Promise<CompressStashImageResult> {
+  let heic: boolean;
   let originalDataUrl: string;
   try {
-    originalDataUrl = await blobToDataUrl(file);
+    heic = await isHeicImage(file);
+    if (heic && file.size > MAX_COMPRESSIBLE_SOURCE_BYTES)
+      return { ok: false, reason: "too-large" };
+    originalDataUrl = heic ? "" : await blobToDataUrl(file);
   } catch {
     return { ok: false, reason: "unreadable" };
   }
-  if (originalDataUrl.length <= budgetChars) {
+  if (!heic && originalDataUrl.length <= budgetChars) {
     return {
       ok: true,
       image: {
@@ -288,7 +298,7 @@ export async function compressImageForStash(
       },
     };
   }
-  const reencoded = await reencodeWithinBudget(file, budgetChars);
+  const reencoded = await reencodeWithinBudget(file, budgetChars, heic);
   if (!reencoded.ok) {
     return reencoded;
   }
@@ -306,7 +316,7 @@ export async function compressImageForStash(
 
 /**
  * Shrinks `file` until its binary size fits `maxBytes`, returning a new
- * `File` (WebP or JPEG). Files already within the limit pass through
+ * `File` (WebP or JPEG). Compatible files already within the limit pass through
  * untouched, preserving their exact bytes and format. Sources above
  * `MAX_COMPRESSIBLE_SOURCE_BYTES` are refused outright — decoding them is
  * the risk, so no amount of output budget makes them safe.
@@ -315,7 +325,13 @@ export async function compressImageToByteLimit(
   file: File,
   maxBytes: number,
 ): Promise<CompressImageFileResult> {
-  if (file.size <= maxBytes) {
+  let heic: boolean;
+  try {
+    heic = await isHeicImage(file);
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  }
+  if (!heic && file.size <= maxBytes) {
     return { ok: true, file, recompressed: false };
   }
   if (file.size > MAX_COMPRESSIBLE_SOURCE_BYTES) {
@@ -325,7 +341,7 @@ export async function compressImageToByteLimit(
   // into 4 chars; flooring keeps the budget a hair conservative instead of
   // admitting an encoding right at the byte cap.
   const budgetChars = Math.floor(maxBytes / 3) * 4;
-  const reencoded = await reencodeWithinBudget(file, budgetChars);
+  const reencoded = await reencodeWithinBudget(file, budgetChars, heic);
   if (!reencoded.ok) {
     return reencoded;
   }
