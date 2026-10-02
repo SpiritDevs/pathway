@@ -10,7 +10,13 @@ import { readPreparedConnection } from "~/state/session";
 import { isLocalLoopbackHost, normalizeHostname } from "./browser/browserTargetResolver";
 import { resolveStorage } from "./lib/storage";
 
-export type BrowserHistoryEntry = { url: string; lastVisitedAt: number; title?: string };
+export type BrowserHistoryEntry = {
+  url: string;
+  lastVisitedAt: number;
+  title?: string;
+  /** How many times the page was visited; entries saved before counting began read as one. */
+  visits?: number;
+};
 
 export const BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT = 50;
 export const BROWSER_HISTORY_MAX_PROJECTS = 20;
@@ -74,13 +80,22 @@ export function upsertHistoryEntry(
   const storedUrl =
     existing && (isStableLocalUrl(existing.url) || !isStableLocalUrl(url)) ? existing.url : url;
   const entry: BrowserHistoryEntry = existing
-    ? { ...existing, url: storedUrl, lastVisitedAt: visitedAt }
+    ? {
+        ...existing,
+        url: storedUrl,
+        lastVisitedAt: visitedAt,
+        visits: historyEntryVisits(existing) + 1,
+      }
     : { url, lastVisitedAt: visitedAt };
   if (!options?.insertOrdered)
     return [entry, ...rest].slice(0, BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT);
   const index = rest.findIndex((candidate) => candidate.lastVisitedAt < entry.lastVisitedAt);
   const next = index === -1 ? [...rest, entry] : rest.toSpliced(index, 0, entry);
   return next.slice(0, BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT);
+}
+
+export function historyEntryVisits(entry: BrowserHistoryEntry): number {
+  return entry.visits ?? 1;
 }
 
 export function evictExcessProjects(
@@ -110,7 +125,7 @@ export function migratePersistedBrowserHistoryState(persistedState: unknown): {
     const entries = value
       .flatMap<BrowserHistoryEntry>((candidate) => {
         if (!candidate || typeof candidate !== "object") return [];
-        const { url, lastVisitedAt, title } = candidate as Record<string, unknown>;
+        const { url, lastVisitedAt, title, visits } = candidate as Record<string, unknown>;
         if (typeof url !== "string") return [];
         const normalizedUrl = normalizeHistoryUrl(url);
         if (!normalizedUrl) return [];
@@ -121,6 +136,9 @@ export function migratePersistedBrowserHistoryState(persistedState: unknown): {
             lastVisitedAt,
             ...(typeof title === "string" && title.length > 0
               ? { title: title.slice(0, BROWSER_HISTORY_MAX_TITLE_LENGTH) }
+              : {}),
+            ...(typeof visits === "number" && Number.isSafeInteger(visits) && visits > 1
+              ? { visits }
               : {}),
           },
         ];

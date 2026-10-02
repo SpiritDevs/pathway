@@ -7,6 +7,7 @@ import {
 } from "@spiritdevs/contracts";
 import { useEffect, useRef } from "react";
 
+import { remoteBrowserEnabled } from "~/browser/browserPlacement";
 import { openRemoteBrowser, useRemoteBrowserStore } from "~/browser/remoteBrowserStore";
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { isRemoteBrowserSurface, useRightPanelStore } from "~/rightPanelStore";
@@ -64,7 +65,7 @@ export function useRemoteAgentBrowserReveal(
 
   useEffect(() => {
     // Undefined means the thread projection has not loaded yet.
-    if (!threadRef || activityKey === undefined) return;
+    if (!remoteBrowserEnabled || !threadRef || activityKey === undefined) return;
     const previous = seen.current;
     seen.current = { threadKey, activityKey };
     if (previous?.threadKey !== threadKey || previous.activityKey === activityKey) return;

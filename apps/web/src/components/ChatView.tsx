@@ -228,11 +228,11 @@ import {
   setActivePreviewTab,
   useThreadPreviewState,
 } from "../previewStateStore";
-import { addBrowserSurface } from "./preview/addBrowserSurface";
 import {
   type BrowserPlacement,
   hasLocalBrowser,
   localMachineLabel,
+  remoteBrowserEnabled,
   useEnvironmentOnThisMachine,
 } from "../browser/browserPlacement";
 import { openRemoteBrowser, useRemoteBrowserStore } from "../browser/remoteBrowserStore";
@@ -1579,7 +1579,6 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const snoozeThreadMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
-  const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const { environments } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
@@ -2330,6 +2329,8 @@ function ChatViewContent(props: ChatViewProps) {
     poppedOut: rightPanelPoppedOut,
   });
   const inlineRightPanelOwnsTitleBar = rightPanelOpen && !rightPanelUsesSheet;
+  // Popped out, or a sheet because the window is too narrow to dock: either way it floats.
+  const rightPanelFloating = rightPanelOpen && rightPanelUsesSheet;
   const threadPanelPresentation = isPanelPresentation
     ? "popover"
     : resolveThreadPanelPresentation(
@@ -2352,11 +2353,12 @@ function ChatViewContent(props: ChatViewProps) {
   useEffect(() => {
     if (!activeThreadRef) return;
     // Without a local browser, local tabs cannot render here; only the remote surface stays.
+    // With the remote browser off, the web keeps local tabs for their chrome alone.
     useRightPanelStore
       .getState()
       .reconcileBrowserSurfaces(
         activeThreadRef,
-        hasLocalBrowser ? Object.keys(activePreviewState.sessions) : [],
+        hasLocalBrowser || !remoteBrowserEnabled ? Object.keys(activePreviewState.sessions) : [],
       );
   }, [activePreviewState.sessions, activeThreadRef]);
 
@@ -4664,14 +4666,15 @@ function ChatViewContent(props: ChatViewProps) {
   const environmentOnThisMachine = useEnvironmentOnThisMachine(
     activeThreadRef?.environmentId ?? null,
   );
-  const defaultBrowserPlacement: BrowserPlacement = environmentOnThisMachine ? "local" : "remote";
+  const defaultBrowserPlacement: BrowserPlacement =
+    !remoteBrowserEnabled || environmentOnThisMachine ? "local" : "remote";
   const remoteBrowserCommand = useAtomCommand(previewEnvironment.remoteCommand, {
     reportFailure: false,
   });
   const createBrowserSurface = useCallback(
     (placement: BrowserPlacement = defaultBrowserPlacement) => {
       if (!activeThreadRef) return;
-      if (placement === "remote" || !hasLocalBrowser) {
+      if (remoteBrowserEnabled && (placement === "remote" || !hasLocalBrowser)) {
         openRemoteBrowser(activeThreadRef);
         return;
       }
@@ -4681,9 +4684,10 @@ function ChatViewContent(props: ChatViewProps) {
         environmentId: activeThreadRef.environmentId,
         input: { action: "selectHost", threadId: activeThreadRef.threadId, host: "automatic" },
       });
-      void addBrowserSurface({ threadRef: activeThreadRef, openPreview });
+      // A new tab starts blank and offers the panel's tools until a page is opened.
+      useRightPanelStore.getState().openBrowser(activeThreadRef, null);
     },
-    [activeThreadRef, defaultBrowserPlacement, openPreview, remoteBrowserCommand],
+    [activeThreadRef, defaultBrowserPlacement, remoteBrowserCommand],
   );
   const openInRemoteBrowser = useCallback(
     (surface: RightPanelSurface) => {
@@ -4697,15 +4701,6 @@ function ChatViewContent(props: ChatViewProps) {
     [activePreviewState.sessions, activeThreadRef],
   );
   const activeEnvironmentLabel = activeEnvironment?.label ?? "Environment";
-  const browserOptions = useMemo(() => {
-    const remote = {
-      placement: "remote" as const,
-      label: `Remote browser · ${activeEnvironmentLabel}`,
-    };
-    if (!hasLocalBrowser) return [remote];
-    const local = { placement: "local" as const, label: `Local browser · ${localMachineLabel()}` };
-    return defaultBrowserPlacement === "local" ? [local, remote] : [remote, local];
-  }, [activeEnvironmentLabel, defaultBrowserPlacement]);
   const browserLabels = useMemo(
     () => ({
       remote: `Remote · ${activeEnvironmentLabel}`,
@@ -10019,18 +10014,19 @@ function ChatViewContent(props: ChatViewProps) {
   const workspaceTopBarPanelToggles = workspaceTopBarActionsHost
     ? createPortal(
         <>
-          {canPopOutRightPanel ? (
+          {canPopOutRightPanel || rightPanelFloating ? (
             <RightPanelPopOutControl
-              poppedOut={rightPanelPoppedOut}
-              onToggle={rightPanelPoppedOut ? closePreviewPanel : toggleRightPanelPoppedOut}
+              poppedOut={rightPanelFloating}
+              onToggle={rightPanelFloating ? closePreviewPanel : toggleRightPanelPoppedOut}
               hidesWhenPoppedOut
             />
           ) : null}
-          {/* Docked and popped out are exclusive here: only the current mode's toggle is
-              pressed, pressing it hides the panel, and pressing the other switches mode. */}
+          {/* Docked and floating are exclusive here: only the current mode's toggle is
+              pressed, pressing it hides the panel, and pressing the other switches mode
+              (or hides a sheet that has no room to dock). */}
           <PanelLayoutControls
             {...panelToggleControlProps}
-            rightPanelOpen={rightPanelOpen && !rightPanelPoppedOut}
+            rightPanelOpen={rightPanelOpen && !rightPanelFloating}
             onToggleRightPanel={rightPanelPoppedOut ? toggleRightPanelPoppedOut : toggleRightPanel}
             showThreadPanelControl={false}
             showTerminalControl={false}
@@ -10063,7 +10059,7 @@ function ChatViewContent(props: ChatViewProps) {
       {panelToggleControls}
     </div>
   );
-  // The sheet covers the page, so it keeps every toggle rather than leaning on the top bar.
+  // Without the top bar, the sheet covers the page and keeps every toggle.
   const sheetPanelToggleControls = renderPanelToggleControls(false);
   // With the top bar showing, the dock and right panel toggles stay put in its corner and
   // the popped-out panel keeps only the thread controls the hidden header would show.
@@ -10760,9 +10756,8 @@ function ChatViewContent(props: ChatViewProps) {
                   : undefined
               }
               onAddBrowser={createBrowserSurface}
-              browserOptions={browserOptions}
               browserLabels={browserLabels}
-              {...(hasLocalBrowser && !environmentOnThisMachine
+              {...(remoteBrowserEnabled && hasLocalBrowser && !environmentOnThisMachine
                 ? { onOpenInRemoteBrowser: openInRemoteBrowser }
                 : {})}
               onAddTerminal={addTerminalSurface}
@@ -10806,7 +10801,7 @@ function ChatViewContent(props: ChatViewProps) {
             // the sheet opens.
             layoutControls={
               <div className="mr-px flex items-center">
-                {rightPanelPoppedOut ? poppedOutRightPanelControls : sheetPanelToggleControls}
+                {rightPanelPoppedOut ? poppedOutRightPanelControls : panelToggleControls}
               </div>
             }
             surfaces={rightPanelState.surfaces}
@@ -10827,9 +10822,8 @@ function ChatViewContent(props: ChatViewProps) {
                 : undefined
             }
             onAddBrowser={createBrowserSurface}
-            browserOptions={browserOptions}
             browserLabels={browserLabels}
-            {...(hasLocalBrowser && !environmentOnThisMachine
+            {...(remoteBrowserEnabled && hasLocalBrowser && !environmentOnThisMachine
               ? { onOpenInRemoteBrowser: openInRemoteBrowser }
               : {})}
             onAddTerminal={addTerminalSurface}

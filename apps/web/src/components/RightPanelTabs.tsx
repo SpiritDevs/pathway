@@ -25,6 +25,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -40,14 +41,16 @@ import {
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { PanelTabCloseButton } from "~/components/ui/panel-tab-close-button";
-import { faviconUrlForOrigin } from "~/lib/favicon";
 import { useTheme } from "~/hooks/useTheme";
+import { useIsSplitWindow } from "~/panes/usePaneFocus";
+import { useWorkspaceTopBarPanelTabsHost } from "./navigation/WorkspaceTopBar";
 import type { PreviewPanelInlineSize } from "~/hooks/usePreviewPanelInlineSize";
 import { PreviewPanelShell, type PreviewPanelMode } from "./preview/PreviewPanelShell";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
+import { NewTabToolsProvider, type PanelSurfaceAction } from "./preview/newTabTools";
+import { PreviewFavicon } from "./preview/PreviewFavicon";
 
 interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -74,8 +77,6 @@ interface RightPanelTabsProps {
   onAddDevice?: (() => void) | undefined;
   /** Opens a browser tab; without a placement it opens the thread's default browser. */
   onAddBrowser: (placement?: BrowserPlacement) => void;
-  /** Browsers the new-tab menu offers, default first. A single option reads as "Browser". */
-  browserOptions?: ReadonlyArray<{ readonly placement: BrowserPlacement; readonly label: string }>;
   /** Tab labels saying where each browser runs. `local` is null when there is no ambiguity. */
   browserLabels?: { readonly remote: string; readonly local: string | null };
   /** Reopens a local tab's page in the thread environment's browser. */
@@ -119,8 +120,41 @@ export function RightPanelTabBarActions({ children }: { children: ReactNode }) {
   return host ? createPortal(children, host) : null;
 }
 
+/**
+ * How far into the top bar's tab host the panel's left edge sits, so the lifted tab
+ * strip starts right above the panel.
+ */
+function useTopBarTabStripOffset(
+  host: HTMLElement | null,
+  anchorRef: { current: HTMLElement | null },
+): number {
+  const [offset, setOffset] = useState(0);
+
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    if (!host || !anchor) return;
+    const panel = anchor.closest<HTMLElement>("[data-preview-panel-mode]") ?? anchor;
+    // While the panel opens its contents keep their full width, so this is where it settles.
+    const measure = () =>
+      setOffset(
+        Math.max(0, panel.getBoundingClientRect().left - host.getBoundingClientRect().left),
+      );
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(panel);
+    observer.observe(host);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [anchorRef, host]);
+
+  return offset;
+}
+
 const SURFACE_DISABLED_REASONS = {
-  browser: "The browser is only available from a thread.",
+  browser: "The browser is only available in the Pathway desktop app.",
   terminal: "Terminal surfaces are only available from a project thread.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
@@ -146,47 +180,9 @@ function DisabledReasonTooltip(props: { reason: string; trigger: ReactElement })
   );
 }
 
-function SurfaceMenuItem(props: {
-  available: boolean;
-  disabledReason?: string;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  const item = (
-    <MenuItem
-      className={!props.available ? "data-disabled:pointer-events-auto" : undefined}
-      onClick={props.onClick}
-      disabled={!props.available}
-    >
-      {props.children}
-    </MenuItem>
-  );
-  if (props.available || !props.disabledReason) return item;
-  return <DisabledReasonTooltip reason={props.disabledReason} trigger={item} />;
-}
-
-function RightPanelEmptyState(props: {
-  onAddDevice?: (() => void) | undefined;
-  onAddBrowser: (placement?: BrowserPlacement) => void;
-  onAddTerminal: () => void;
-  onAddDiff: () => void;
-  onAddFiles: () => void;
-  onAddPullRequest: () => void;
-  onAddAgents: () => void;
-  /** Present where the environment's screen can be shown; absent hides the entry. */
-  onAddComputer?: () => void;
-  onAddSideChat: () => void;
-  browserAvailable: boolean;
-  terminalAvailable: boolean;
-  diffAvailable: boolean;
-  filesAvailable: boolean;
-  pullRequestAvailable: boolean;
-  agentsAvailable: boolean;
-  sideChatAvailable: boolean;
-  liveAgentCount: number;
-  allowedSurfaceKinds?: ReadonlySet<RightPanelKind>;
-}) {
-  const actions = [
+/** Every surface the panel can open, filtered to the ones this view allows. */
+function buildSurfaceActions(props: RightPanelTabsProps): PanelSurfaceAction[] {
+  const actions: PanelSurfaceAction[] = [
     ...(props.onAddDevice
       ? [
           {
@@ -285,8 +281,14 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddSideChat,
       badgeCount: 0,
     },
-  ].filter((action) => props.allowedSurfaceKinds?.has(action.kind as RightPanelKind) ?? true);
+  ];
+  return actions.filter(
+    (action) => props.allowedSurfaceKinds?.has(action.kind as RightPanelKind) ?? true,
+  );
+}
 
+function RightPanelEmptyState(props: { actions: ReadonlyArray<PanelSurfaceAction> }) {
+  const { actions } = props;
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center p-6">
       <div className="w-full max-w-xl">
@@ -386,6 +388,7 @@ export function resolveRightPanelSurfaceTitle(
       return threadTitlesById?.get(surface.resourceId)?.trim() || "Side chat";
     case "preview": {
       if (isRemoteBrowserSurface(surface)) return browserLabels?.remote ?? "Remote browser";
+      if (surface.resourceId === null) return "New tab";
       const title = localBrowserTitle(surface.resourceId ? sessions[surface.resourceId] : null);
       return browserLabels?.local ? `${browserLabels.local} · ${title}` : title;
     }
@@ -400,22 +403,6 @@ function localBrowserTitle(snapshot: PreviewSessionSnapshot | null | undefined):
   } catch {
     return "Browser";
   }
-}
-
-function PreviewFavicon({ url }: { url: string | null }) {
-  const faviconUrl = faviconUrlForOrigin(url, 32);
-  const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  if (!faviconUrl || failedUrl === faviconUrl) return <Globe2 className="size-3 shrink-0" />;
-  return (
-    <img
-      src={faviconUrl}
-      alt=""
-      aria-hidden
-      draggable={false}
-      className="size-3 shrink-0 rounded-sm"
-      onError={() => setFailedUrl(faviconUrl)}
-    />
-  );
 }
 
 function SurfaceIcon({
@@ -483,6 +470,25 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
   const { resolvedTheme } = useTheme();
   const tabListRef = useRef<HTMLDivElement>(null);
+  const surfaceContentRef = useRef<HTMLDivElement>(null);
+  const splitWindow = useIsSplitWindow();
+  // Inline beside a single pane, the tabs sit in the top bar's empty stretch above the panel.
+  const topBarTabsHost = useWorkspaceTopBarPanelTabsHost(props.mode === "inline" && !splitWindow);
+  const topBarTabStripOffset = useTopBarTabStripOffset(topBarTabsHost, surfaceContentRef);
+  const inTopBar = topBarTabsHost !== null;
+  const surfaceActions = buildSurfaceActions(props);
+  const newTabAction = surfaceActions.find((action) => action.kind === "preview");
+  const activeSurface = props.surfaces.find((surface) => surface.id === props.activeSurfaceId);
+  // A blank browser tab offers the other surfaces; picking one takes the tab's place.
+  const newTabTools = surfaceActions
+    .filter((action) => action.kind !== "preview" && action.available)
+    .map((action) => ({
+      ...action,
+      onClick: () => {
+        action.onClick();
+        if (activeSurface?.kind === "preview") props.onCloseSurface(activeSurface);
+      },
+    }));
 
   const handleTabContextMenu = useCallback(
     async (event: ReactMouseEvent, surface: RightPanelSurface) => {
@@ -570,6 +576,130 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [props.activeSurfaceId]);
 
+  const tabBar = (
+    <div
+      className={cn(
+        inTopBar
+          ? "flex h-full min-w-0 flex-1 items-center gap-1 pr-2"
+          : cn(
+              "workspace-topbar min-w-0 gap-1 pl-2",
+              props.mode !== "inline" &&
+                props.mode !== "sheet" &&
+                "[--workspace-topbar-height:--spacing(11)]",
+              props.mode === "inline" && !props.layoutControls ? "pr-28" : "pr-3",
+              ownsDesktopTitleBar && "wco:pr-[calc(var(--workspace-native-controls-inset)+6rem)]",
+            ),
+      )}
+      style={inTopBar ? { marginLeft: topBarTabStripOffset } : undefined}
+      data-right-panel-tabbar
+    >
+      {inTopBar ? <div aria-hidden className="mr-1 h-5 w-px shrink-0 bg-sidebar-border" /> : null}
+      <ScrollArea
+        ref={tabListRef}
+        scrollFade
+        className="min-w-0 flex-1 rounded-none [-webkit-app-region:no-drag]"
+        data-right-panel-tab-list
+      >
+        <div className="flex h-full w-max min-w-full items-center gap-1">
+          {props.surfaces.map((surface) => {
+            const active = surface.id === props.activeSurfaceId;
+            const pending = props.pendingSurfaceIds.has(surface.id);
+            const title = resolveRightPanelSurfaceTitle(
+              surface,
+              props.previewSessions,
+              props.terminalLabelsById,
+              props.threadTitlesById,
+              props.browserLabels,
+            );
+            return (
+              <div
+                key={surface.id}
+                data-active-tab={active}
+                onMouseDown={handleTabMouseDown}
+                onAuxClick={(event) => handleTabAuxClick(event, surface)}
+                onContextMenu={(event) => void handleTabContextMenu(event, surface)}
+                className={cn(
+                  "cursor-pointer group/tab flex h-6 max-w-36 shrink-0 items-center gap-0.5 rounded-md pr-2 pl-1.5 text-xs",
+                  // The accent fill vanishes on the top bar's gray, so it uses the rail's.
+                  active
+                    ? inTopBar
+                      ? "bg-sidebar-foreground/10 text-foreground"
+                      : "bg-accent text-foreground"
+                    : cn(
+                        "text-muted-foreground hover:text-foreground",
+                        inTopBar ? "hover:bg-sidebar-foreground/6" : "hover:bg-accent/60",
+                      ),
+                )}
+              >
+                <PanelTabCloseButton
+                  label={`Close ${title}`}
+                  onClick={() => props.onCloseSurface(surface)}
+                >
+                  <SurfaceIcon
+                    surface={surface}
+                    sessions={props.previewSessions}
+                    theme={resolvedTheme}
+                    pullRequestStatuses={props.pullRequestStatuses}
+                  />
+                  {pending ? (
+                    <span
+                      className="absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full bg-current"
+                      aria-hidden
+                    />
+                  ) : null}
+                </PanelTabCloseButton>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        className="cursor-pointer flex min-w-0 items-center"
+                        onClick={() => props.onActivate(surface)}
+                      >
+                        <span className="truncate">{title}</span>
+                      </button>
+                    }
+                  />
+                  <TooltipPopup>{title}</TooltipPopup>
+                </Tooltip>
+              </div>
+            );
+          })}
+          {props.surfaces.length > 0 && newTabAction ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    className={cn(
+                      "cursor-pointer relative inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40",
+                      inTopBar ? "hover:bg-sidebar-foreground/6" : "hover:bg-accent",
+                    )}
+                    aria-label="New tab"
+                    disabled={!newTabAction.available}
+                    onClick={newTabAction.onClick}
+                  />
+                }
+              >
+                <Plus className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipPopup>
+                {newTabAction.available ? "New tab" : newTabAction.disabledReason}
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+        </div>
+      </ScrollArea>
+      <div
+        ref={setTabBarActionsHost}
+        className="flex shrink-0 items-center [-webkit-app-region:no-drag]"
+      />
+      {props.layoutControls ? (
+        <div className="flex h-full shrink-0 items-center">{props.layoutControls}</div>
+      ) : null}
+    </div>
+  );
+
   return (
     <PreviewPanelShell
       mode={props.mode}
@@ -578,216 +708,17 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       {...(props.defaultWidth !== undefined ? { defaultWidth: props.defaultWidth } : {})}
       {...(props.inlineSize ? { inlineSize: props.inlineSize } : {})}
     >
+      {topBarTabsHost ? createPortal(tabBar, topBarTabsHost) : tabBar}
       <div
-        className={cn(
-          "workspace-topbar min-w-0 gap-1 pl-2",
-          props.mode !== "inline" &&
-            props.mode !== "sheet" &&
-            "[--workspace-topbar-height:--spacing(11)]",
-          props.mode === "inline" && !props.layoutControls ? "pr-28" : "pr-3",
-          ownsDesktopTitleBar && "wco:pr-[calc(var(--workspace-native-controls-inset)+6rem)]",
-        )}
-        data-right-panel-tabbar
+        ref={surfaceContentRef}
+        className="flex min-h-0 flex-1 flex-col"
+        data-right-panel-surface-content
       >
-        <ScrollArea
-          ref={tabListRef}
-          scrollFade
-          className="min-w-0 flex-1 rounded-none [-webkit-app-region:no-drag]"
-          data-right-panel-tab-list
-        >
-          <div className="flex h-full w-max min-w-full items-center gap-1">
-            {props.surfaces.map((surface) => {
-              const active = surface.id === props.activeSurfaceId;
-              const pending = props.pendingSurfaceIds.has(surface.id);
-              const title = resolveRightPanelSurfaceTitle(
-                surface,
-                props.previewSessions,
-                props.terminalLabelsById,
-                props.threadTitlesById,
-                props.browserLabels,
-              );
-              return (
-                <div
-                  key={surface.id}
-                  data-active-tab={active}
-                  onMouseDown={handleTabMouseDown}
-                  onAuxClick={(event) => handleTabAuxClick(event, surface)}
-                  onContextMenu={(event) => void handleTabContextMenu(event, surface)}
-                  className={cn(
-                    "cursor-pointer group/tab flex h-6 max-w-36 shrink-0 items-center gap-0.5 rounded-md pr-2 pl-1.5 text-xs",
-                    active
-                      ? "bg-accent text-foreground"
-                      : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-                  )}
-                >
-                  <PanelTabCloseButton
-                    label={`Close ${title}`}
-                    onClick={() => props.onCloseSurface(surface)}
-                  >
-                    <SurfaceIcon
-                      surface={surface}
-                      sessions={props.previewSessions}
-                      theme={resolvedTheme}
-                      pullRequestStatuses={props.pullRequestStatuses}
-                    />
-                    {pending ? (
-                      <span
-                        className="absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full bg-current"
-                        aria-hidden
-                      />
-                    ) : null}
-                  </PanelTabCloseButton>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <button
-                          type="button"
-                          className="cursor-pointer flex min-w-0 items-center"
-                          onClick={() => props.onActivate(surface)}
-                        >
-                          <span className="truncate">{title}</span>
-                        </button>
-                      }
-                    />
-                    <TooltipPopup>{title}</TooltipPopup>
-                  </Tooltip>
-                </div>
-              );
-            })}
-            {props.surfaces.length > 0 ? (
-              <Menu>
-                <MenuTrigger
-                  className="cursor-pointer relative inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-                  aria-label="Add panel surface"
-                >
-                  <Plus className="size-3.5" />
-                </MenuTrigger>
-                <MenuPopup align="start" side="bottom" sideOffset={6} className="min-w-44">
-                  {props.onAddDevice && (props.allowedSurfaceKinds?.has("device") ?? true) ? (
-                    <MenuItem onClick={props.onAddDevice}>
-                      <Smartphone className="size-4" />
-                      Device
-                    </MenuItem>
-                  ) : null}
-                  {(props.allowedSurfaceKinds?.has("preview") ?? true)
-                    ? (props.browserOptions && props.browserOptions.length > 1
-                        ? props.browserOptions
-                        : [{ placement: undefined, label: "Browser" }]
-                      ).map((option) => (
-                        <SurfaceMenuItem
-                          key={option.label}
-                          available={props.browserAvailable}
-                          disabledReason={SURFACE_DISABLED_REASONS.browser}
-                          onClick={() => props.onAddBrowser(option.placement)}
-                        >
-                          <Globe2 />
-                          {option.label}
-                        </SurfaceMenuItem>
-                      ))
-                    : null}
-                  {(props.allowedSurfaceKinds?.has("terminal") ?? true) ? (
-                    <SurfaceMenuItem
-                      available={props.terminalAvailable}
-                      disabledReason={SURFACE_DISABLED_REASONS.terminal}
-                      onClick={props.onAddTerminal}
-                    >
-                      <TerminalSquare />
-                      Terminal
-                    </SurfaceMenuItem>
-                  ) : null}
-                  {(props.allowedSurfaceKinds?.has("files") ?? true) ? (
-                    <SurfaceMenuItem
-                      available={props.filesAvailable}
-                      disabledReason={SURFACE_DISABLED_REASONS.files}
-                      onClick={props.onAddFiles}
-                    >
-                      <Files />
-                      Files
-                    </SurfaceMenuItem>
-                  ) : null}
-                  {(props.allowedSurfaceKinds?.has("diff") ?? true) ? (
-                    <SurfaceMenuItem
-                      available={props.diffAvailable}
-                      disabledReason={SURFACE_DISABLED_REASONS.diff}
-                      onClick={props.onAddDiff}
-                    >
-                      <FileDiff />
-                      Diff
-                    </SurfaceMenuItem>
-                  ) : null}
-                  {(props.allowedSurfaceKinds?.has("pull-request") ?? true) ? (
-                    <SurfaceMenuItem
-                      available={props.pullRequestAvailable}
-                      disabledReason={SURFACE_DISABLED_REASONS.pullRequest}
-                      onClick={props.onAddPullRequest}
-                    >
-                      <GitPullRequest />
-                      Pull request
-                    </SurfaceMenuItem>
-                  ) : null}
-                  {(props.allowedSurfaceKinds?.has("agents") ?? true) ? (
-                    <SurfaceMenuItem
-                      available={props.agentsAvailable}
-                      disabledReason={SURFACE_DISABLED_REASONS.agents}
-                      onClick={props.onAddAgents}
-                    >
-                      <Bot />
-                      Agents
-                    </SurfaceMenuItem>
-                  ) : null}
-                  {props.onAddComputer && (props.allowedSurfaceKinds?.has("computer") ?? true) ? (
-                    <SurfaceMenuItem available onClick={props.onAddComputer}>
-                      <Monitor />
-                      Computer
-                    </SurfaceMenuItem>
-                  ) : null}
-                  {(props.allowedSurfaceKinds?.has("thread") ?? true) ? (
-                    <SurfaceMenuItem
-                      available={props.sideChatAvailable}
-                      disabledReason={SURFACE_DISABLED_REASONS.sideChat}
-                      onClick={props.onAddSideChat}
-                    >
-                      <MessagesSquare />
-                      Side chat
-                    </SurfaceMenuItem>
-                  ) : null}
-                </MenuPopup>
-              </Menu>
-            ) : null}
-          </div>
-        </ScrollArea>
-        <div ref={setTabBarActionsHost} className="flex shrink-0 items-center" />
-        {props.layoutControls ? (
-          <div className="flex h-full shrink-0 items-center">{props.layoutControls}</div>
-        ) : null}
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col" data-right-panel-surface-content>
         {props.activeSurfaceId === null ? (
-          <RightPanelEmptyState
-            onAddDevice={props.onAddDevice}
-            onAddBrowser={props.onAddBrowser}
-            onAddTerminal={props.onAddTerminal}
-            onAddDiff={props.onAddDiff}
-            onAddFiles={props.onAddFiles}
-            onAddPullRequest={props.onAddPullRequest}
-            onAddAgents={props.onAddAgents}
-            {...(props.onAddComputer ? { onAddComputer: props.onAddComputer } : {})}
-            onAddSideChat={props.onAddSideChat}
-            browserAvailable={props.browserAvailable}
-            terminalAvailable={props.terminalAvailable}
-            diffAvailable={props.diffAvailable}
-            filesAvailable={props.filesAvailable}
-            pullRequestAvailable={props.pullRequestAvailable}
-            agentsAvailable={props.agentsAvailable}
-            sideChatAvailable={props.sideChatAvailable}
-            liveAgentCount={props.liveAgentCount}
-            {...(props.allowedSurfaceKinds
-              ? { allowedSurfaceKinds: props.allowedSurfaceKinds }
-              : {})}
-          />
+          <RightPanelEmptyState actions={surfaceActions} />
         ) : (
           <RightPanelTabBarActionsContext.Provider value={tabBarActionsHost}>
-            {props.children}
+            <NewTabToolsProvider value={newTabTools}>{props.children}</NewTabToolsProvider>
           </RightPanelTabBarActionsContext.Provider>
         )}
       </div>

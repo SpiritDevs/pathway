@@ -277,6 +277,8 @@ function PullRequestsRouteView() {
     viewportRequiresSheet: shouldUseRightPanelSheet,
     poppedOut: desktopRightPanelPoppedOut,
   });
+  // Popped out, or a sheet because the window is too narrow to dock: either way it floats.
+  const rightPanelFloating = rightPanelState.isOpen && rightPanelUsesSheet;
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
     Record<string, PullRequestTabStatus>
   >({});
@@ -1053,7 +1055,7 @@ function PullRequestsRouteView() {
       onToggleRightPanel={onToggleRightPanel}
     />
   );
-  // The sheet covers the page, so it keeps its own right panel toggle.
+  // Without the top bar, the sheet covers the page and keeps its own right panel toggle.
   const panelToggleControls = renderPanelToggleControls(false);
   const openPanelControls = (
     <div className="workspace-titlebar-controls z-50 mr-px gap-1 [-webkit-app-region:no-drag]">
@@ -1364,19 +1366,17 @@ function PullRequestsRouteView() {
       {workspaceTopBarActionsHost
         ? createPortal(
             <>
-              {rightPanelState.isOpen && (!rightPanelUsesSheet || desktopRightPanelPoppedOut) ? (
+              {rightPanelState.isOpen ? (
                 <RightPanelPopOutControl
-                  poppedOut={desktopRightPanelPoppedOut}
-                  onToggle={
-                    desktopRightPanelPoppedOut ? toggleRightPanel : toggleRightPanelPoppedOut
-                  }
+                  poppedOut={rightPanelFloating}
+                  onToggle={rightPanelFloating ? toggleRightPanel : toggleRightPanelPoppedOut}
                   hidesWhenPoppedOut
                 />
               ) : null}
-              {/* Docked and popped out are exclusive: only the current mode's toggle is pressed. */}
+              {/* Docked and floating are exclusive: only the current mode's toggle is pressed. */}
               {renderPanelToggleControls(
                 false,
-                rightPanelState.isOpen && !desktopRightPanelPoppedOut,
+                rightPanelState.isOpen && !rightPanelFloating,
                 desktopRightPanelPoppedOut ? toggleRightPanelPoppedOut : toggleRightPanel,
               )}
             </>,
@@ -1405,11 +1405,11 @@ function PullRequestsRouteView() {
             {renderPullRequestPanel(
               "sheet",
               // With the top bar showing, the dock and right panel toggles stay in its corner.
-              desktopRightPanelPoppedOut
-                ? workspaceTopBarActionsHost === null
+              workspaceTopBarActionsHost !== null
+                ? null
+                : desktopRightPanelPoppedOut
                   ? poppedOutPanelControls
-                  : null
-                : panelToggleControls,
+                  : panelToggleControls,
             )}
           </RightPanelSheet>
         ) : null}

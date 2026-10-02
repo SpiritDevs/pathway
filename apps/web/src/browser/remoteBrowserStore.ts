@@ -3,6 +3,7 @@ import type { ScopedThreadRef } from "@spiritdevs/contracts";
 import { create } from "zustand";
 
 import { useRightPanelStore } from "~/rightPanelStore";
+import { remoteBrowserEnabled } from "~/browser/browserPlacement";
 
 export interface RemoteBrowserThreadState {
   /** The remote tab the panel shows; null follows the environment's selected tab. */
@@ -62,6 +63,7 @@ export function openRemoteBrowser(
   ref: ScopedThreadRef,
   target: { readonly tabId?: string; readonly url?: string } = {},
 ): void {
+  if (!remoteBrowserEnabled) return;
   const store = useRemoteBrowserStore.getState();
   if (target.tabId !== undefined) store.select(ref, target.tabId);
   if (target.url !== undefined) store.requestOpen(ref, target.url);

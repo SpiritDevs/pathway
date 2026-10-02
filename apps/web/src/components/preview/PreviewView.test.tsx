@@ -178,6 +178,8 @@ vi.mock("~/components/ui/toast", () => ({
 }));
 
 vi.mock("~/browser/browserPlacement", () => ({
+  // The remote browser is switched off in the app; these tests keep covering it.
+  remoteBrowserEnabled: true,
   useEnvironmentOnThisMachine: () => mocks.environmentOnThisMachine,
   localMachineLabel: () => "This Mac",
 }));

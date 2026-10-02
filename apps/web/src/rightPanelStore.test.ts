@@ -1,6 +1,6 @@
 import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import { type EnvironmentId, ThreadId } from "@spiritdevs/contracts";
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   migratePersistedRightPanelState,
@@ -13,6 +13,12 @@ import {
   selectThreadRightPanelState,
   useRightPanelStore,
 } from "./rightPanelStore";
+
+// The remote browser is switched off in the app; these tests keep covering it.
+vi.mock("~/browser/browserPlacement", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/browser/browserPlacement")>()),
+  remoteBrowserEnabled: true,
+}));
 
 const refA = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-A"));
 const refB = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-B"));
@@ -566,16 +572,47 @@ describe("rightPanelStore", () => {
     });
   });
 
-  it("toggles empty panel visibility without creating a surface", () => {
+  it("opens an empty panel on a new browser tab", () => {
     useRightPanelStore.getState().toggleVisibility(refA);
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
-      activeSurfaceId: null,
-      surfaces: [],
+      activeSurfaceId: "browser:new",
+      surfaces: [{ id: "browser:new", kind: "preview", resourceId: null }],
     });
 
     useRightPanelStore.getState().toggleVisibility(refA);
-    expect(useRightPanelStore.getState().byThreadKey).toEqual({});
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).isOpen,
+    ).toBe(false);
+  });
+
+  it("keeps a new browser tab until a session takes its place", () => {
+    const store = useRightPanelStore.getState();
+    store.openBrowser(refA, null);
+    store.reconcileBrowserSurfaces(refA, []);
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "browser:new",
+      surfaces: [{ id: "browser:new", kind: "preview", resourceId: null }],
+    });
+
+    store.openBrowser(refA, "tab-1");
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "browser:tab-1",
+      surfaces: [{ id: "browser:tab-1", kind: "preview", resourceId: "tab-1" }],
+    });
+  });
+
+  it("falls back to a new browser tab when an open panel loses its last tab", () => {
+    const store = useRightPanelStore.getState();
+    store.openBrowser(refA, "stale-tab");
+    store.reconcileBrowserSurfaces(refA, []);
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "browser:new",
+      surfaces: [{ id: "browser:new", kind: "preview", resourceId: null }],
+    });
   });
 
   it("toggle hides the panel without discarding the active surface", () => {

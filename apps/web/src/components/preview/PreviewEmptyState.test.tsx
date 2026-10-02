@@ -38,7 +38,9 @@ function server(port: number) {
   };
 }
 
-function render(recentEntries: Array<{ url: string; lastVisitedAt: number; title?: string }>) {
+function render(
+  recentEntries: Array<{ url: string; lastVisitedAt: number; title?: string; visits?: number }>,
+) {
   return renderToStaticMarkup(
     <PreviewEmptyState
       environmentId={environmentId}
@@ -56,19 +58,28 @@ describe("PreviewEmptyState", () => {
       { url: "https://myapp.test/admin#users", lastVisitedAt: Date.now(), title: "Admin" },
       { url: "http://localhost:5173/", lastVisitedAt: Date.now(), title: "Recent Local" },
     ]);
-    expect(html).toContain("Recently used");
-    expect(html).toContain("Local servers");
+    expect(html).toContain("Frequently visited");
+    expect(html).toContain(">Servers<");
     expect(html).toContain("myapp.test/admin#users");
     expect(html).toContain("Admin");
     expect(html).toContain("Recent Local");
     expect(html).toContain("node");
   });
 
-  it("renders only the recents group when no servers are found", () => {
+  it("renders only the frequently visited group when no servers are found", () => {
     mocks.servers = [];
     const html = render([{ url: "https://myapp.test/", lastVisitedAt: 0 }]);
-    expect(html).toContain("Recently used");
-    expect(html).not.toContain("Local servers");
+    expect(html).toContain("Frequently visited");
+    expect(html).not.toContain(">Servers<");
+  });
+
+  it("orders frequently visited pages by visit count", () => {
+    mocks.servers = [];
+    const html = render([
+      { url: "https://recent.test/", lastVisitedAt: 2, title: "Recent" },
+      { url: "https://often.test/", lastVisitedAt: 1, title: "Often", visits: 5 },
+    ]);
+    expect(html.indexOf("Often")).toBeLessThan(html.indexOf("Recent"));
   });
 
   it("keeps the original empty state when both groups are empty", () => {

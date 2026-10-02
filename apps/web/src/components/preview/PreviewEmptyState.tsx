@@ -1,12 +1,16 @@
 import type { EnvironmentId } from "@spiritdevs/contracts";
-import { Globe, History, RadioTower } from "lucide-react";
+import { Globe } from "lucide-react";
+import type { ReactNode } from "react";
 
-import type { BrowserHistoryEntry } from "~/browserHistoryStore";
+import { historyEntryVisits, type BrowserHistoryEntry } from "~/browserHistoryStore";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "~/components/ui/empty";
 
+import { useNewTabTools, type PanelSurfaceAction } from "./newTabTools";
 import { PreviewLocalServerCard } from "./PreviewLocalServerCard";
-import { PreviewRecentUrlCard } from "./PreviewRecentUrlCard";
+import { PreviewSiteTile } from "./PreviewSiteTile";
 import { useDiscoveredLocalServers } from "./useDiscoveredLocalServers";
+
+const FREQUENT_SITE_LIMIT = 8;
 
 interface Props {
   environmentId: EnvironmentId;
@@ -17,6 +21,7 @@ interface Props {
   onOpenUrl: (url: string) => void;
 }
 
+/** The new-tab page: the panel's other tools, frequently visited pages, then servers. */
 export function PreviewEmptyState({
   environmentId,
   configuredUrls,
@@ -25,14 +30,20 @@ export function PreviewEmptyState({
   onRemoveRecent,
   onOpenUrl,
 }: Props) {
+  const tools = useNewTabTools();
   const servers = useDiscoveredLocalServers({
     environmentId,
     configuredUrls,
     recentlySeenUrls,
   });
-  const recents = recentEntries.filter((entry) => URL.canParse(entry.url)).slice(0, 8);
+  const frequent = recentEntries
+    .filter((entry) => URL.canParse(entry.url))
+    .toSorted(
+      (a, b) => historyEntryVisits(b) - historyEntryVisits(a) || b.lastVisitedAt - a.lastVisitedAt,
+    )
+    .slice(0, FREQUENT_SITE_LIMIT);
 
-  if (servers.length === 0 && recents.length === 0) {
+  if (tools.length === 0 && servers.length === 0 && frequent.length === 0) {
     return (
       <Empty>
         <EmptyMedia variant="icon">
@@ -48,17 +59,22 @@ export function PreviewEmptyState({
   }
 
   return (
-    <div className="flex h-full min-h-0 overflow-y-auto px-5 py-8">
-      <div className="m-auto flex w-full max-w-xl flex-col gap-6">
-        {recents.length > 0 ? (
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <History className="size-4 shrink-0" />
-              <h2 className="font-medium">Recently used</h2>
+    <div className="flex h-full min-h-0 overflow-y-auto px-5 py-6">
+      <div className="mx-auto flex w-full max-w-2xl flex-col gap-7">
+        {tools.length > 0 ? (
+          <NewTabSection title="Tools">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-2">
+              {tools.map((tool) => (
+                <ToolTile key={tool.kind} tool={tool} />
+              ))}
             </div>
-            <div className="flex flex-col divide-y divide-border/60 overflow-hidden rounded-xl border border-border/70 bg-background">
-              {recents.map((entry) => (
-                <PreviewRecentUrlCard
+          </NewTabSection>
+        ) : null}
+        {frequent.length > 0 ? (
+          <NewTabSection title="Frequently visited">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-1">
+              {frequent.map((entry) => (
+                <PreviewSiteTile
                   key={entry.url}
                   entry={entry}
                   onOpen={() => onOpenUrl(entry.url)}
@@ -66,14 +82,10 @@ export function PreviewEmptyState({
                 />
               ))}
             </div>
-          </div>
+          </NewTabSection>
         ) : null}
         {servers.length > 0 ? (
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <RadioTower className="size-4 shrink-0" />
-              <h2 className="font-medium">Local servers</h2>
-            </div>
+          <NewTabSection title="Servers">
             <div className="flex flex-col divide-y divide-border/60 overflow-hidden rounded-xl border border-border/70 bg-background">
               {servers.map((server) => (
                 <PreviewLocalServerCard
@@ -83,12 +95,41 @@ export function PreviewEmptyState({
                 />
               ))}
             </div>
-            <p className="px-1 text-xs text-muted-foreground">
-              Select a listening port to open it in this browser tab.
-            </p>
-          </div>
-        ) : null}
+          </NewTabSection>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Type a URL above, or run a dev script. Listening ports will show up here automatically.
+          </p>
+        )}
       </div>
     </div>
+  );
+}
+
+function NewTabSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="text-sm font-medium text-foreground">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+function ToolTile({ tool }: { tool: PanelSurfaceAction }) {
+  const Icon = tool.icon;
+  return (
+    <button
+      type="button"
+      onClick={tool.onClick}
+      className="flex h-11 w-full cursor-pointer items-center gap-2.5 rounded-lg border border-border/70 bg-card px-3 text-left text-sm hover:bg-accent/60"
+    >
+      <Icon className="size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate">{tool.label}</span>
+      {tool.badgeCount > 0 ? (
+        <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-info px-1 text-[10px] font-semibold tabular-nums text-white">
+          {tool.badgeCount}
+        </span>
+      ) : null}
+    </button>
   );
 }

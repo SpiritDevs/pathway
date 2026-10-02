@@ -104,7 +104,7 @@ describe("upsertHistoryEntry", () => {
   it("with insertOrdered, replaying an older visit for an existing entry keeps its newer timestamp", () => {
     const existing = [entry({ url: "http://a.test/", lastVisitedAt: 2000 })];
     const next = upsertHistoryEntry(existing, "http://a.test/", 1000, { insertOrdered: true });
-    expect(next).toEqual([{ url: "http://a.test/", lastVisitedAt: 2000 }]);
+    expect(next).toEqual([{ url: "http://a.test/", lastVisitedAt: 2000, visits: 2 }]);
   });
 });
 
@@ -296,14 +296,14 @@ describe("useBrowserHistoryStore", () => {
     recordVisitForThread(threadRef, "http://127.0.0.1:5173/app", 2);
     recordVisitForThread(threadRef, "http://192.168.64.2:5173/app", 3);
     expect(useBrowserHistoryStore.getState().byProjectKey["proj-a"]).toEqual([
-      { url: "http://localhost:5173/app", lastVisitedAt: 3 },
+      { url: "http://localhost:5173/app", lastVisitedAt: 3, visits: 3 },
     ]);
 
     useBrowserHistoryStore.setState({ byProjectKey: {} });
     recordVisitForThread(threadRef, "http://192.168.64.2:5173/app", 4);
     recordVisitForThread(threadRef, "http://localhost:5173/app", 5);
     expect(useBrowserHistoryStore.getState().byProjectKey["proj-a"]).toEqual([
-      { url: "http://localhost:5173/app", lastVisitedAt: 5 },
+      { url: "http://localhost:5173/app", lastVisitedAt: 5, visits: 2 },
     ]);
   });
 

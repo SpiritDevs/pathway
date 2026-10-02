@@ -1,10 +1,16 @@
 import { scopeThreadRef, scopedThreadKey } from "@spiritdevs/client-runtime/environment";
 import { type EnvironmentId, ThreadId } from "@spiritdevs/contracts";
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
 
 import { openRemoteBrowser, useRemoteBrowserStore } from "./remoteBrowserStore";
+
+// The remote browser is switched off in the app; these tests keep covering it.
+vi.mock("~/browser/browserPlacement", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/browser/browserPlacement")>()),
+  remoteBrowserEnabled: true,
+}));
 
 const ref = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-A"));
 
