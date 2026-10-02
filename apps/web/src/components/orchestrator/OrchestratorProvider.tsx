@@ -1,9 +1,14 @@
+import {
+  defaultConversation,
+  rememberedConversation,
+  rememberConversation,
+} from "./defaultConversation";
 import { transitionConversationReply, type ConversationReply } from "./conversationReply";
 import { useAuth } from "@clerk/react";
 import { makeClerkConvexTokenFetcher } from "../../cloud/syncTransportAuth";
 import { fetchConversationAttachment } from "./conversationAttachmentDrafts";
 import { useConversationAttachmentDrafts } from "./conversationAttachmentDrafts";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AvatarContact } from "./OrchestratorAvatar";
 import { useLocation } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
@@ -37,7 +42,14 @@ function useOrchestratorState() {
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [keybindings]);
-  const [selectedId, selectChat] = useState<string | null>(null);
+  const [selection, setSelection] = useState<{ accountID: string; id: string | null } | null>(null);
+  const selectChat = useCallback(
+    (id: string | null) => {
+      setSelection({ accountID: cloud.accountID, id });
+      if (id) rememberConversation(cloud.accountID, id);
+    },
+    [cloud.accountID],
+  );
   const [settingsId, selectSettings] = useState<string | null>(null);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const pendingMessages = useRef(
@@ -108,7 +120,7 @@ function useOrchestratorState() {
   );
   useEffect(() => {
     setFloating(false);
-    selectChat(null);
+    setSelection(null);
     selectSettings(null);
     setDrafts({});
     setRecipients({});
@@ -118,13 +130,10 @@ function useOrchestratorState() {
     scrollPositions.current.clear();
     setError(undefined);
   }, [cloud.accountID]);
-  const needsChief =
-    ownedContacts.value !== undefined &&
-    !ownedContacts.value.some(
-      (contact) => contact.kind === "personal" && contact.ownerSubject === cloud.accountID,
-    );
+  // A resolved avatar query confirms account provisioning; avoid racing the first sign-in.
+  const needsPersonal = personalAvatar.value === null;
   useEffect(() => {
-    if (!cloud.client || !needsChief) return;
+    if (!cloud.client || !cloud.accountID || !needsPersonal) return;
     let current = true;
     void cloud.client
       .mutation(makeFunctionReference<"mutation">("aiOrchestrators:ensurePersonal"), {})
@@ -134,13 +143,41 @@ function useOrchestratorState() {
     return () => {
       current = false;
     };
-  }, [cloud.client, needsChief]);
+  }, [cloud.client, cloud.accountID, needsPersonal]);
   const chats = conversations.value ?? [];
+  const rememberedId = useMemo(
+    () => rememberedConversation(cloud.accountID),
+    [cloud.accountID, selection],
+  );
+  const selected = defaultConversation(
+    chats,
+    contacts,
+    cloud.accountID,
+    selection,
+    rememberedId,
+    avatarContacts,
+  );
+  const needsHome =
+    enabled &&
+    conversations.value !== undefined &&
+    ownedContacts.value !== undefined &&
+    conversationAvatars.value !== undefined &&
+    !selected;
   useEffect(() => {
-    if (chats.some((chat) => chat.id === selectedId)) return;
-    const initial = chats.find((chat) => !chat.archived);
-    if (initial) selectChat(initial.id);
-  }, [chats, selectedId]);
+    if (!cloud.client || !needsHome) return;
+    let current = true;
+    void cloud.client
+      .mutation(
+        makeFunctionReference<"mutation", {}, string>("aiOrchestrators:ensurePersonalChat"),
+        {},
+      )
+      .catch((cause: unknown) => {
+        if (current) setError(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => {
+      current = false;
+    };
+  }, [cloud.client, cloud.accountID, needsHome]);
   useEffect(() => {
     const open = (event: Event) => {
       if (
@@ -154,9 +191,7 @@ function useOrchestratorState() {
     };
     window.addEventListener("pathway:open-orchestrator-chat", open);
     return () => window.removeEventListener("pathway:open-orchestrator-chat", open);
-  }, [chats]);
-  const selected =
-    chats.find((chat) => chat.id === selectedId) ?? chats.find((chat) => !chat.archived) ?? null;
+  }, [chats, selectChat]);
   const downloadAttachment = useCallback(
     async (id: string, signal?: AbortSignal) => {
       if (!cloud.client) throw new Error("Sign in to open this attachment.");

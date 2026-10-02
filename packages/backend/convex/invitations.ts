@@ -1,3 +1,4 @@
+import { ensurePersonalAssistant } from "./lib/personalAssistant.ts";
 // @effect-diagnostics globalDate:off -- Convex actions are not Effect programs; the invitation clock is `Date.now()`.
 /**
  * Company invitations.
@@ -732,6 +733,7 @@ async function upsertUser(
     readonly now: number;
   },
 ): Promise<Id<"users">> {
+  await ensurePersonalAssistant(ctx, input.clerkSubject);
   const existing = await ctx.db
     .query("users")
     .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", input.clerkSubject))

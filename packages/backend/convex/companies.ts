@@ -1,3 +1,4 @@
+import { ensurePersonalAssistant } from "./lib/personalAssistant.ts";
 import { readCompanySyncVersion } from "./lib/companySyncHead.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations are not Effect programs; the transaction clock is `Date.now()`.
 /**
@@ -500,6 +501,8 @@ export const provisionCurrentUser = mutation({
     const user = await ctx.db.get(userDocId);
     if (user === null) throw backendError("entity-not-found", "The user insert did not persist.");
 
+    await ensurePersonalAssistant(ctx, identity.subject);
+
     // Prefer a workspace the caller owns: that is the one this function would have created. An
     // explicit onboarding choice must match the workspace kind; otherwise choosing Personal after
     // joining an organization would incorrectly adopt somebody else's organization as home.
@@ -628,6 +631,7 @@ export const repairCurrentUserWorkspace = mutation({
   handler: async (ctx) => {
     const user = await currentUser(ctx);
     if (user === null) return null;
+    await ensurePersonalAssistant(ctx, user.clerkSubject);
 
     let owned: { company: Doc<"companies">; membership: Doc<"memberships"> } | null = null;
     let fallback: { company: Doc<"companies">; membership: Doc<"memberships"> } | null = null;

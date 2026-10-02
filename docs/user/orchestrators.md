@@ -1,8 +1,8 @@
 # Orchestrators
 
-Orchestrators are AI contacts that inspect information, research questions, coordinate your work, and delegate implementation to agent threads. Chief is your personal coordinator. You can create additional contacts for projects or other responsibilities, give them names and personas, and talk in continuing direct or group conversations.
+Orchestrators are AI contacts that inspect information, research questions, coordinate your work, and delegate implementation to agent threads. Every account starts with a personal assistant with a randomly chosen name and appearance. Existing assistants keep their customization. You can create additional contacts for projects or other responsibilities, give them names and personas, and talk in continuing direct or group conversations.
 
-Open Orchestrators from the navigation rail. The full view has conversations on the left, messages in the center, and conversation details on the right. The floating companion opens above any app view. Switching between floating and full views preserves the selected conversation and unsent message. Both support light and dark appearance.
+Open Orchestrators from the navigation rail, command palette, or companion shortcut. You return to the last accessible conversation used on this device for your signed-in account, falling back to your main personal assistant. There is no required assistant setup. Explicit conversation links and notifications open their requested conversation. The full view has conversations on the left, messages in the center, and conversation details on the right. The floating companion opens above any app view. Switching between floating and full views preserves the selected conversation and unsent message. Both support light and dark appearance.
 
 ## Settings
 
@@ -36,7 +36,7 @@ Follow-ups such as “push the PR for that work” go back to the original threa
 
 Worker reports include the outcome, supporting findings, changed files and artifacts, branch/commit/PR references, checks performed, and remaining work. Reports return automatically. Long results are bounded and marked when shortened so the orchestrator knows when it needs more detail.
 
-Automatic activity updates have one responder for each owner's conversations. A project coordinator handles project updates when available; Chief handles environment-wide updates and provides a fallback for projects without a coordinator. When responsibilities overlap, a lightweight selector chooses one eligible contact. A specialist's completed group reply does not automatically make the lead repeat it; participants can explicitly request a lead decision or consolidation.
+Automatic activity updates have one responder for each owner's conversations. A project coordinator handles project updates when available; your personal assistant handles environment-wide updates and provides a fallback for projects without a coordinator. When responsibilities overlap, a lightweight selector chooses one eligible contact. A specialist's completed group reply does not automatically make the lead repeat it; participants can explicitly request a lead decision or consolidation.
 
 Background checks happen quietly. Internal activity triggers and review instructions do not appear as messages, change the conversation preview, or create unread badges. Your orchestrator replies when it has something useful to report. Participant changes remain visible.
 
@@ -54,11 +54,11 @@ New task changes, thread completions, priority mail, and environment availabilit
 
 Ask the coordinator to stop a specific assignment or redirect work that its environment has not accepted. Redirecting cancels the original command and queues its replacement under the same conversation limits. Accepted or uncertain work needs a confirmed stop before replacement.
 
-Pause prevents new autonomous activity while existing assignments continue. Stop work also cancels queued assignments and requests interruption of active workers. An offline worker's stop remains unconfirmed until its environment responds. Archive retains the contact and its history; resume and unarchive restore it.
+Pause prevents new autonomous activity while existing assignments continue. Stop work also cancels queued assignments and requests interruption of active workers. An offline worker's stop remains unconfirmed until its environment responds. Archive retains the contact and its history; resume and unarchive restore it. If you archive, delete, share, or change the kind of your last private personal assistant, a fresh assistant is created for your account. Pausing still keeps your assistant. Opening Orchestrators never resumes paused assistants or stopped work.
 
 Memory settings let you inspect, correct, and forget saved information. Memories retain their source and visibility. Explicit instructions take precedence over inferred preferences.
 
-Preferences stay with one orchestrator unless you choose a wider scope. Ask to apply a preference across all your private orchestrators, or choose that scope in Memory settings. The shared fact appears in their memory lists; the source conversation stays private. Forgetting removes the saved text and prevents old messages from teaching it again.
+With automatic memory enabled, useful sourced facts from a one-to-one conversation with your personal assistant are remembered across your account’s private assistants. Assistant-specific facts can stay with one contact. Other conversations keep their own memory unless you explicitly choose a wider scope. Personal memory is used only in private one-to-one conversations, never groups or shared assistants, and remains subject to access to its source. It does not grant access to other private thread transcripts. Memory settings let you review or forget these facts. Forgetting removes the saved text and prevents old messages from teaching it again, including after the originating assistant is deleted.
 
 ## Provider allowance
 

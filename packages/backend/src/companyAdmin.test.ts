@@ -320,6 +320,15 @@ describe("companies.provisionCurrentUser", () => {
         .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", "user_new"))
         .unique();
       expect(user?.email).toBe("ada@example.test");
+      expect(await ctx.db.query("aiOrchestrators").collect()).toEqual([
+        expect.objectContaining({
+          ownerSubject: "user_new",
+          kind: "personal",
+          status: "active",
+          shared: false,
+          companyId: null,
+        }),
+      ]);
       const roles = await ctx.db.query("roles").collect();
       expect(roles.map((role) => role.name).sort()).toEqual(["Admin", "Manager", "Member"]);
       // Seeded is provenance only; they stay ordinary editable roles.
@@ -350,6 +359,7 @@ describe("companies.provisionCurrentUser", () => {
     expect(await feedRows(t)).toEqual(before);
     await t.run(async (ctx) => {
       expect(await ctx.db.query("companies").collect()).toHaveLength(1);
+      expect(await ctx.db.query("aiOrchestrators").collect()).toHaveLength(1);
     });
   });
 

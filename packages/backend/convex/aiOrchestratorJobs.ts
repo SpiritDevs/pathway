@@ -1267,7 +1267,15 @@ async function remember(
     return fail("A memory must cite a user message from this conversation.");
   if (!(await withoutForgottenSources(ctx, claim.orchestrator, [source])).length)
     return fail("Forgotten information cannot be learned again from old messages.");
-  const memoryScope = action.scope ?? "orchestrator";
+  const privatePersonal =
+    claim.orchestrator.kind === "personal" &&
+    !claim.orchestrator.shared &&
+    claim.chat.kind === "dm" &&
+    claim.chat.orchestratorIds.length === 1 &&
+    claim.chat.participantSubjects.length === 1 &&
+    claim.chat.participantSubjects[0] === claim.orchestrator.ownerSubject &&
+    source.senderId === claim.orchestrator.ownerSubject;
+  const memoryScope = action.scope ?? (privatePersonal ? "personal" : "orchestrator");
   if (
     memoryScope !== "orchestrator" &&
     (source.senderId !== claim.orchestrator.ownerSubject ||

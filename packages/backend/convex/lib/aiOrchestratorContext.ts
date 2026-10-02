@@ -209,28 +209,36 @@ export function boundedConversationMessages(
     );
 }
 
+/** Saved facts retain the live authorization of their quoted conversation. */
+export async function memorySourceAvailable(ctx: QueryCtx, memory: Doc<"aiOrchestratorMemory">) {
+  // Sharing a fact does not survive losing access to its source conversation.
+  if (memory.sourceChatId) {
+    const source = await ctx.db
+      .query("aiOrchestratorChats")
+      .withIndex("by_domain_id", (q) => q.eq("id", memory.sourceChatId!))
+      .unique();
+    if (
+      !source ||
+      source.lifecycle === "deleted" ||
+      source.lifecycle === "deleting" ||
+      !source.orchestratorIds.includes(memory.orchestratorId) ||
+      !source.participantSubjects.includes(memory.ownerSubject)
+    )
+      return false;
+    const boundary = await sharedHistoryBoundary(ctx, source, source);
+    if (boundary === null || (memory.sourceSequence ?? 0) < boundary) return false;
+  }
+  return true;
+}
+
 export function memoryVisibilityForConversation(ctx: QueryCtx, chat: Doc<"aiOrchestratorChats">) {
   const histories = new Map<string, Promise<number | null>>();
   const permissions = new Map<string, ReturnType<typeof audienceProjectPermissions>>();
   let contactsPromise: Promise<Array<Doc<"aiOrchestrators"> | null>> | undefined;
   return async (memory: Doc<"aiOrchestratorMemory">) => {
-    // Sharing a fact does not survive losing access to its source conversation.
-    if (memory.sourceChatId) {
-      const source = await ctx.db
-        .query("aiOrchestratorChats")
-        .withIndex("by_domain_id", (q) => q.eq("id", memory.sourceChatId!))
-        .unique();
-      if (
-        !source ||
-        source.lifecycle === "deleted" ||
-        source.lifecycle === "deleting" ||
-        !source.orchestratorIds.includes(memory.orchestratorId) ||
-        !source.participantSubjects.includes(memory.ownerSubject)
-      )
-        return false;
-      const boundary = await sharedHistoryBoundary(ctx, source, source);
-      if (boundary === null || (memory.sourceSequence ?? 0) < boundary) return false;
-    }
+    if (!(await memorySourceAvailable(ctx, memory))) return false;
+    if (memory.scope === "personal" && (chat.kind !== "dm" || chat.orchestratorIds.length !== 1))
+      return false;
     // Explicitly shared facts carry their own audience; their source transcript remains private.
     if (memory.sourceChatId && memory.scope === "orchestrator") {
       if (!histories.has(memory.sourceChatId))

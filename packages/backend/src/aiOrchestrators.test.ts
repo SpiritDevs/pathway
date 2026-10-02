@@ -122,7 +122,7 @@ async function personalChat(t: Harness) {
   return { owner, id, chatId };
 }
 describe("persistent orchestrator identities and messages", () => {
-  it("provisions one personal Chief and reuses its continuing DM", async () => {
+  it("provisions one personal assistant and reuses its continuing DM", async () => {
     const t = harness();
     await seed(t);
     const { owner, id, chatId } = await personalChat(t);
@@ -210,7 +210,7 @@ describe("persistent orchestrator identities and messages", () => {
     expect(page.readers).toContainEqual({
       id,
       kind: "orchestrator",
-      name: "Chief",
+      name: expect.any(String),
       fromSequence: 0,
     });
     expect(page.messages.every((message) => message.seenBy?.length === 0)).toBe(true);
@@ -984,7 +984,10 @@ describe("coordinator reasoning claims and action boundaries", () => {
       targetId: test.id,
     });
     const lead = (await test.claim())!;
-    expect(lead.name).toBe("Chief");
+    expect(lead.name).toBe(
+      (await test.owner.query(api.aiOrchestrators.list, {})).find((row) => row.id === test.id)
+        ?.name,
+    );
     expect(lead.context).toContain("The API contract is ready.");
   });
 
@@ -3282,12 +3285,12 @@ describe("shared orchestrator avatars", () => {
     await seed(t);
     const { owner, id } = await personalChat(t);
     const avatar = await owner.query(api.aiOrchestrators.personalAvatar, {});
-    expect(avatar).toMatchObject({ id, name: "Chief", color: "violet" });
+    expect(avatar).toMatchObject({ id, name: expect.any(String), color: expect.any(String) });
     expect(avatar).not.toHaveProperty("instructions");
     expect(avatar).not.toHaveProperty("persona");
     expect(await human(t, "colleague").query(api.aiOrchestrators.personalAvatar, {})).toBeNull();
     await owner.mutation(api.aiOrchestrators.setStatus, { id, status: "archived" });
-    expect(await owner.query(api.aiOrchestrators.personalAvatar, {})).toBeNull();
+    expect((await owner.query(api.aiOrchestrators.personalAvatar, {}))?.id).not.toBe(id);
   });
   it("shares only visual identity with conversation participants outside the contact directory", async () => {
     const t = harness();
@@ -3312,7 +3315,7 @@ describe("shared orchestrator avatars", () => {
     expect(avatars).toHaveLength(1);
     expect(avatars[0]).toMatchObject({
       id,
-      avatar: config().avatar,
+      avatar: (await owner.query(api.aiOrchestrators.personalAvatar, {}))?.avatar,
       personality: config().personality,
     });
     expect(avatars[0]).not.toHaveProperty("instructions");
@@ -6546,5 +6549,287 @@ describe("event-driven delegated work refresh", () => {
       status: "failed",
     });
     expect((await test.claim())?.id).toBe("legacy");
+  });
+});
+
+describe("default personal assistant", () => {
+  it("retains one personal assistant when two clients delete the remaining identities concurrently", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, id } = await personalChat(t);
+    const second = await owner.mutation(api.aiOrchestrators.create, { config: config() });
+    await Promise.all(
+      [id, second].map((id) =>
+        owner.mutation(api.aiOrchestrators.setStatus, { id, status: "deleted", stopWork: true }),
+      ),
+    );
+    const rows = await owner.query(api.aiOrchestrators.list, {});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: "personal",
+      status: "active",
+      shared: false,
+      companyId: null,
+    });
+    expect([id, second]).not.toContain(rows[0]!.id);
+  });
+
+  it("resolves a remembered chat only while the account and its assistants retain access", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, id, chatId } = await personalChat(t);
+    expect(
+      await owner.mutation(api.aiOrchestrators.ensurePersonalChat, { preferredChatId: chatId }),
+    ).toBe(chatId);
+    const colleagueHome = await human(t, "colleague").mutation(
+      api.aiOrchestrators.ensurePersonalChat,
+      { preferredChatId: chatId },
+    );
+    expect(colleagueHome).not.toBe(chatId);
+    await owner.mutation(api.aiOrchestrators.setStatus, { id, status: "deleted" });
+    expect(
+      await owner.mutation(api.aiOrchestrators.ensurePersonalChat, { preferredChatId: chatId }),
+    ).not.toBe(chatId);
+    expect(
+      await owner.mutation(api.aiOrchestrators.ensurePersonalChat, { preferredChatId: "missing" }),
+    ).not.toBe(chatId);
+  });
+  it("keeps the existing personal home reachable beyond the recent chat window", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, chatId } = await personalChat(t);
+    await t.run(async (ctx) => {
+      const chat = (await ctx.db.query("aiOrchestratorChats").first())!;
+      const member = (await ctx.db.query("aiOrchestratorChatMembers").first())!;
+      const { _id: _chatId, _creationTime: _chatTime, ...chatFields } = chat;
+      const { _id: _memberId, _creationTime: _memberTime, ...memberFields } = member;
+      for (let index = 0; index < 101; index++) {
+        const id = `later-group-${index}`;
+        await ctx.db.insert("aiOrchestratorChats", { ...chatFields, id, kind: "group" });
+        await ctx.db.insert("aiOrchestratorChatMembers", { ...memberFields, chatId: id });
+      }
+    });
+    expect(await owner.mutation(api.aiOrchestrators.ensurePersonalChat, {})).toBe(chatId);
+    const chats = await owner.query(api.aiOrchestrators.listChats, {});
+    expect(chats).toHaveLength(101);
+    expect(chats.some((chat) => chat.id === chatId)).toBe(true);
+  });
+
+  it("converges concurrent provisioning and home opens without scheduling work", async () => {
+    const t = harness();
+    await seed(t);
+    const owner = human(t);
+    const ids = await Promise.all(
+      Array.from({ length: 8 }, () => owner.mutation(api.aiOrchestrators.ensurePersonal, {})),
+    );
+    expect(new Set(ids).size).toBe(1);
+    const chats = await Promise.all(
+      Array.from({ length: 8 }, () => owner.mutation(api.aiOrchestrators.ensurePersonalChat, {})),
+    );
+    expect(new Set(chats).size).toBe(1);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("aiOrchestrators").collect()).toHaveLength(1);
+      expect(await ctx.db.query("aiOrchestratorChats").collect()).toHaveLength(1);
+      expect(await ctx.db.query("aiOrchestratorJobs").collect()).toEqual([]);
+    });
+    expect(await human(t, "colleague").mutation(api.aiOrchestrators.ensurePersonal, {})).not.toBe(
+      ids[0],
+    );
+    await expect(
+      human(t, "colleague").query(api.aiOrchestrators.messages, { chatId: chats[0]! }),
+    ).rejects.toThrow("access");
+  });
+  it("preserves customized paused assistants and does not resume stopped work", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, id } = await personalChat(t);
+    await owner.mutation(api.aiOrchestrators.configure, {
+      id,
+      revision: 1,
+      config: {
+        ...config(),
+        name: "My Assistant",
+        color: "pink",
+        avatar: { shape: "flower", eyes: "soft" },
+        instructions: "Keep my instructions",
+        rememberAutomatically: false,
+      },
+    });
+    await owner.mutation(api.aiOrchestrators.setStatus, { id, status: "paused", stopWork: true });
+    const before = (await owner.query(api.aiOrchestrators.list, {}))[0]!;
+    expect(await owner.mutation(api.aiOrchestrators.ensurePersonal, {})).toBe(id);
+    await owner.mutation(api.aiOrchestrators.ensurePersonalChat, {});
+    expect((await owner.query(api.aiOrchestrators.list, {}))[0]).toEqual(before);
+    expect(before).toMatchObject({
+      name: "My Assistant",
+      status: "paused",
+      rememberAutomatically: false,
+    });
+  });
+  it.each(["archived", "deleted"] as const)(
+    "replaces the last %s identity without resurrecting it",
+    async (status) => {
+      const t = harness();
+      await seed(t);
+      const { owner, id } = await personalChat(t);
+      await owner.mutation(api.aiOrchestrators.setStatus, { id, status, stopWork: true });
+      const replacement = await owner.mutation(api.aiOrchestrators.ensurePersonal, {});
+      expect(replacement).not.toBe(id);
+      await t.run(async (ctx) => {
+        const rows = await ctx.db.query("aiOrchestrators").collect();
+        expect(rows).toHaveLength(2);
+        expect(rows.find((row) => row.id === id)).toMatchObject({
+          status,
+          workStoppedBefore: expect.any(Number),
+        });
+        expect(rows.find((row) => row.id === replacement)).toMatchObject({
+          status: "active",
+          kind: "personal",
+          shared: false,
+          companyId: null,
+        });
+      });
+    },
+  );
+  it("does not replace an additional assistant and repairs kind or sharing changes atomically", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, id } = await personalChat(t);
+    const second = await owner.mutation(api.aiOrchestrators.create, { config: config() });
+    await owner.mutation(api.aiOrchestrators.setStatus, { id: second, status: "deleted" });
+    expect(await owner.mutation(api.aiOrchestrators.ensurePersonal, {})).toBe(id);
+    await owner.mutation(api.aiOrchestrators.configure, {
+      id,
+      revision: 1,
+      config: { ...config(), kind: "custom" },
+    });
+    const replacement = await owner.mutation(api.aiOrchestrators.ensurePersonal, {});
+    expect(replacement).not.toBe(id);
+    await owner.mutation(api.aiOrchestrators.configure, {
+      id: replacement,
+      revision: 1,
+      config: { ...config(), shared: true, companyId: "workspace" },
+    });
+    expect(await owner.mutation(api.aiOrchestrators.ensurePersonal, {})).not.toBe(replacement);
+    await expect(
+      human(t, "colleague").mutation(api.aiOrchestrators.setStatus, { id, status: "deleted" }),
+    ).rejects.toThrow("access");
+  });
+  it("repairs legacy deleted identities and does not reopen stopped or group conversations", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, id, chatId } = await personalChat(t);
+    await t.run(async (ctx) => {
+      const row = (await ctx.db.query("aiOrchestrators").first())!;
+      await ctx.db.patch(row._id, { status: "deleted" });
+    });
+    const home = await owner.mutation(api.aiOrchestrators.ensurePersonalChat, {});
+    expect(home).not.toBe(chatId);
+    expect(await owner.mutation(api.aiOrchestrators.ensurePersonal, {})).not.toBe(id);
+    await t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", home))
+        .unique())!;
+      await ctx.db.patch(chat._id, { archived: true, lifecycle: "archived" });
+    });
+    const next = await owner.mutation(api.aiOrchestrators.ensurePersonalChat, {});
+    expect(next).not.toBe(home);
+    await t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", next))
+        .unique())!;
+      await ctx.db.patch(chat._id, { kind: "group", participantSubjects: ["owner", "colleague"] });
+    });
+    expect(await owner.mutation(api.aiOrchestrators.ensurePersonalChat, {})).not.toBe(next);
+  });
+  it("defaults sourced private personal memories to the account and preserves deletion exclusions", async () => {
+    const test = await coordinatorHarness();
+    const run = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+      result: {
+        ...decision(),
+        actions: [
+          {
+            kind: "remember",
+            text: "Call the owner Corey",
+            sourceMessageId: "greeting",
+            sourceQuote: "Call me Corey.",
+          },
+        ],
+      },
+    });
+    const memory = (
+      await test.owner.query(api.aiOrchestrators.memories, { orchestratorId: test.id })
+    )[0]!;
+    expect(memory).toMatchObject({
+      scope: "personal",
+      source: expect.stringContaining("greeting"),
+    });
+    const second = await test.owner.mutation(api.aiOrchestrators.create, { config: config() });
+    expect(
+      await test.owner.query(api.aiOrchestrators.memories, { orchestratorId: second }),
+    ).toContainEqual(memory);
+    const stranger = await human(test.t, "colleague").mutation(
+      api.aiOrchestrators.ensurePersonal,
+      {},
+    );
+    expect(
+      await human(test.t, "colleague").query(api.aiOrchestrators.memories, {
+        orchestratorId: stranger,
+      }),
+    ).toEqual([]);
+    await test.owner.mutation(api.aiOrchestrators.setStatus, { id: test.id, status: "deleted" });
+    expect(
+      await test.owner.query(api.aiOrchestrators.memories, { orchestratorId: second }),
+    ).toEqual([]);
+    await test.t.run(async (ctx) => {
+      const tombstone = await ctx.db
+        .query("aiOrchestratorMemory")
+        .withIndex("by_domain_id", (q) => q.eq("id", memory.id))
+        .unique();
+      expect(tombstone).toMatchObject({
+        scope: "personal",
+        forgotten: true,
+        text: "",
+        sourceChatId: test.chatId,
+        sourceSequence: 1,
+      });
+    });
+  });
+  it("removes sourced account memory from settings after source access is revoked", async () => {
+    const test = await coordinatorHarness();
+    const run = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+      result: {
+        ...decision(),
+        actions: [
+          {
+            kind: "remember",
+            text: "Call the owner Corey",
+            sourceMessageId: "greeting",
+            sourceQuote: "Call me Corey.",
+          },
+        ],
+      },
+    });
+    const second = await test.owner.mutation(api.aiOrchestrators.create, { config: config() });
+    await test.t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+        .unique())!;
+      await ctx.db.patch(chat._id, { participantSubjects: [] });
+    });
+    expect(
+      await test.owner.query(api.aiOrchestrators.memories, { orchestratorId: second }),
+    ).toEqual([]);
   });
 });
