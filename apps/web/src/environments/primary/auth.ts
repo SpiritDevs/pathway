@@ -377,6 +377,29 @@ export async function submitServerAuthCredential(credential: string): Promise<vo
   stripPairingTokenFromUrl();
 }
 
+/**
+ * Opens a session on the environment serving this page for the signed-in Pathway account. The
+ * server only accepts the account that owns the environment.
+ */
+export async function signInWithPathwayCloud(clerkToken: string): Promise<void> {
+  resolvedAuthenticatedGateState = null;
+  await runPrimaryHttp(
+    PrimaryEnvironmentHttpClient.pipe(
+      Effect.flatMap((client) => client.auth.cloudSession({ payload: { clerkToken } })),
+    ),
+  );
+  bootstrapPromise = null;
+}
+
+/** Records the desktop app's signed-in Pathway account as the owner of its environment. */
+export async function recordPathwayCloudOwner(clerkToken: string): Promise<void> {
+  await runPrimaryHttp(
+    PrimaryEnvironmentHttpClient.pipe(
+      Effect.flatMap((client) => client.auth.cloudOwner({ headers: {}, payload: { clerkToken } })),
+    ),
+  );
+}
+
 export async function createServerPairingCredential(input?: {
   readonly label?: string;
   readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;

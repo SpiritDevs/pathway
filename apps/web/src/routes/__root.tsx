@@ -1,6 +1,6 @@
 import { AgentCursorDesktopSync } from "../components/settings/agentCursorDesktopSync";
 import { DictationAccountCoordinator } from "../dictation/cloud";
-import { type AuthSessionState, type ServerLifecycleWelcomePayload } from "@spiritdevs/contracts";
+import { type ServerLifecycleWelcomePayload } from "@spiritdevs/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import {
   isOnboardingComplete,
@@ -37,6 +37,7 @@ import { WorkspaceCleanupNoticeHost } from "../components/WorkspaceCleanupNotice
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { PullRequestAgentReviewHost } from "../components/pullRequest/PullRequestAgentReviewHost";
 import { AssignPersonalProjectOwnership } from "../components/projects/AssignPersonalProjectOwnership";
+import { RecordEnvironmentOwner } from "../components/auth/RecordEnvironmentOwner";
 import { AttachProjectDirectoryHost } from "../components/projects/AttachProjectDirectoryDialog";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
@@ -66,7 +67,11 @@ import { useUiStateStore } from "../uiStateStore";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
-import { hasHostedPairingRequest, runsWithoutServingEnvironment } from "../hostedPairing";
+import {
+  hasHostedPairingRequest,
+  isHostedStaticApp,
+  runsWithoutServingEnvironment,
+} from "../hostedPairing";
 import { shellEnvironment } from "../state/shell";
 import { useAtomValue } from "@effect/atom-react";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -130,7 +135,7 @@ export const Route = createRootRoute({
       };
     }
 
-    if (runsWithoutServingEnvironment(new URL(window.location.href))) {
+    if (isHostedStaticApp(new URL(window.location.href)) || runsWithoutServingEnvironment()) {
       return {
         authGateState: {
           status: "hosted-static",
@@ -395,21 +400,15 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
     );
   }
 
-  // Every route below this point is server-backed, so an unpaired client has
-  // nothing to render: the routes above own the pairing and sign-in surfaces,
-  // and the rest would paint their own content with no app shell around it.
-  // Pair in place instead of redirecting to `/pair`, so the requested route is
-  // still the one that renders once the session exists.
+  // Every route below this point is server-backed, so a client without a
+  // session has nothing to render. Sign in in place instead of redirecting to
+  // `/pair`, so the requested route is still the one that renders once the
+  // session exists.
   if (authGateState.status === "requires-auth") {
     return (
       <>
         <DocumentTitleSync />
-        <ServerPairingGate
-          auth={authGateState.auth}
-          {...(authGateState.errorMessage
-            ? { initialErrorMessage: authGateState.errorMessage }
-            : {})}
-        />
+        <ServerPairingGate />
       </>
     );
   }
@@ -450,6 +449,9 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         {primaryEnvironmentAuthenticated && !isChildWindow ? (
           <AssignPersonalProjectOwnership />
         ) : null}
+        {primaryEnvironmentAuthenticated && isElectron && !isChildWindow ? (
+          <RecordEnvironmentOwner />
+        ) : null}
         <SlowRpcRequestToastCoordinator />
         <PullRequestAgentReviewHost />
         <HostedStaticEnvironmentBootstrap />
@@ -469,27 +471,19 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
 }
 
 /**
- * The pairing prompt for a client the local environment does not know yet,
- * rendered in place of the route it blocks. Pairing re-runs the root
- * `beforeLoad`, which is what resolves the gate again, so the route this
- * replaced renders with its shell as soon as the session exists.
+ * Signs a browser the local environment does not know yet in, rendered in
+ * place of the route it blocks. Signing in re-runs the root `beforeLoad`,
+ * which is what resolves the gate again, so the route this replaced renders
+ * with its shell as soon as the session exists.
  */
-function ServerPairingGate({
-  auth,
-  initialErrorMessage,
-}: {
-  readonly auth: AuthSessionState["auth"];
-  readonly initialErrorMessage?: string;
-}) {
+function ServerPairingGate() {
   const router = useRouter();
 
   return (
     <PairingRouteSurface
-      auth={auth}
       onAuthenticated={() => {
         void router.invalidate();
       }}
-      {...(initialErrorMessage ? { initialErrorMessage } : {})}
     />
   );
 }

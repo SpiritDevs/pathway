@@ -226,6 +226,25 @@ function makePublicValueConfig(name: string, fallback: string) {
   );
 }
 
+/** The Clerk Frontend API origin, which issues and signs Pathway Cloud session tokens. */
+export const clerkFrontendApiUrlConfig = makePublicValueConfig(
+  "PATHWAY_CLERK_PUBLISHABLE_KEY",
+  buildTimeClerkPublishableKey,
+).pipe(
+  Config.mapOrFail((publishableKey) =>
+    Effect.try({
+      try: () => clerkFrontendApiUrlFromPublishableKey(publishableKey),
+      catch: (cause) =>
+        new Config.ConfigError(
+          new ConfigProvider.SourceError({
+            message: "Failed to derive Clerk Frontend API URL from the publishable key.",
+            cause,
+          }),
+        ),
+    }),
+  ),
+);
+
 export interface CloudCliOAuthConfig {
   readonly authorizationEndpoint: string;
   readonly tokenEndpoint: string;

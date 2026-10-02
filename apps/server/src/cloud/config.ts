@@ -6,6 +6,8 @@ export const CLOUD_MINT_PUBLIC_KEY = "cloud-mint-ed25519-public-key";
 export const CLOUD_ENDPOINT_RUNTIME_CONFIG = "cloud-endpoint-runtime-config";
 export const CLOUD_MANAGED_TUNNEL_LOCAL_PORT = "cloud-managed-tunnel-local-port";
 export const CLOUD_LINKED_USER_ID = "cloud-linked-user-id";
+/** The desktop app's signed-in account; owns the environment while it is not linked. */
+export const CLOUD_OWNER_USER_ID = "cloud-owner-user-id";
 export const RELAY_URL_SECRET = "cloud-relay-url";
 export const RELAY_ISSUER_SECRET = "cloud-relay-issuer";
 export const RELAY_ENVIRONMENT_CREDENTIAL_SECRET = "cloud-relay-environment-credential";

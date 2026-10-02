@@ -99,6 +99,8 @@ export async function installEnvironmentHttpTest(scenario: EnvironmentHttpTestSc
                 );
               }),
             )
+            .handle("cloudSession", () => unexpectedEndpoint("auth.cloudSession"))
+            .handle("cloudOwner", () => unexpectedEndpoint("auth.cloudOwner"))
             .handle("token", () => unexpectedEndpoint("auth.token"))
             .handle("webSocketTicket", () => unexpectedEndpoint("auth.webSocketTicket"))
             .handle(

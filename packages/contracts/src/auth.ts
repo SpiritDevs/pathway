@@ -176,6 +176,12 @@ export const AuthBrowserSessionRequest = Schema.Struct({
 });
 export type AuthBrowserSessionRequest = typeof AuthBrowserSessionRequest.Type;
 
+/** A Pathway Cloud (Clerk) session token, presented to sign in as or record the environment owner. */
+export const AuthCloudIdentityRequest = Schema.Struct({
+  clerkToken: TrimmedNonEmptyString,
+});
+export type AuthCloudIdentityRequest = typeof AuthCloudIdentityRequest.Type;
+
 export const AuthBrowserSessionResult = Schema.Struct({
   authenticated: Schema.Literal(true),
   scopes: AuthEnvironmentScopes,

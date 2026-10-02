@@ -2,6 +2,7 @@ import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthEnvironmentScope,
+  type AuthBrowserSessionResult,
   AuthStandardClientScopes,
   EnvironmentAuthInvalidError,
   type EnvironmentAuthInvalidReason,
@@ -20,12 +21,14 @@ import {
 import { parseAllowedOAuthScope } from "@spiritdevs/shared/oauthScope";
 import { causeErrorTag } from "@spiritdevs/shared/observability";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { identity } from "effect/Function";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Cookies from "effect/unstable/http/Cookies";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
-import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpClient, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
@@ -33,6 +36,12 @@ import * as SessionStore from "./SessionStore.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
+import {
+  readClerkIssuer,
+  readEnvironmentOwner,
+  recordEnvironmentOwner,
+  verifyCloudUser,
+} from "./cloudOwner.ts";
 
 const CREDENTIAL_RESPONSE_HEADERS = {
   "cache-control": "no-store",
@@ -193,12 +202,40 @@ export const environmentAuthenticatedAuthLayer = Layer.effect(
   }),
 );
 
+const setBrowserSessionCookie = Effect.fn("environment.auth.setBrowserSessionCookie")(function* (
+  cookieName: string,
+  result: { readonly response: AuthBrowserSessionResult; readonly sessionToken: string },
+) {
+  const sessionCookies = yield* Effect.fromResult(
+    Cookies.set(Cookies.empty, cookieName, result.sessionToken, {
+      expires: DateTime.toDate(result.response.expiresAt),
+      httpOnly: true,
+      path: "/",
+      sameSite: "lax",
+    }),
+  ).pipe(Effect.catch(() => failEnvironmentInternal("browser_session_cookie_failed")));
+
+  yield* HttpEffect.appendPreResponseHandler((_request, response) =>
+    Effect.succeed(HttpServerResponse.mergeCookies(response, sessionCookies)),
+  );
+  yield* appendCredentialResponseHeaders;
+  return result.response;
+});
+
 export const authHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "auth",
   Effect.fnUntraced(function* (handlers) {
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const sessions = yield* SessionStore.SessionStore;
+    const httpClient = yield* HttpClient.HttpClient;
+    const clerkIssuer = yield* readClerkIssuer;
+    const verifyCloudSessionToken = (clerkToken: string) =>
+      Option.isNone(clerkIssuer)
+        ? Effect.succeed(Option.none<string>())
+        : verifyCloudUser(clerkIssuer.value, clerkToken).pipe(
+            Effect.provideService(HttpClient.HttpClient, httpClient),
+          );
 
     return handlers
       .handle(
@@ -224,20 +261,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
               args.payload.credential,
               deriveAuthClientMetadata({ request }),
             );
-            const sessionCookies = yield* Effect.fromResult(
-              Cookies.set(Cookies.empty, sessions.cookieName, result.sessionToken, {
-                expires: DateTime.toDate(result.response.expiresAt),
-                httpOnly: true,
-                path: "/",
-                sameSite: "lax",
-              }),
-            ).pipe(Effect.catch(() => failEnvironmentInternal("browser_session_cookie_failed")));
-
-            yield* HttpEffect.appendPreResponseHandler((_request, response) =>
-              Effect.succeed(HttpServerResponse.mergeCookies(response, sessionCookies)),
-            );
-            yield* appendCredentialResponseHeaders;
-            return result.response;
+            return yield* setBrowserSessionCookie(sessions.cookieName, result);
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
             failEnvironmentAuthInvalid(EnvironmentAuth.serverAuthCredentialReason(error)),
@@ -246,6 +270,58 @@ export const authHttpApiLayer = HttpApiBuilder.group(
             failEnvironmentInternal("browser_session_issuance_failed", error),
           ),
         ),
+      )
+      .handle(
+        "cloudSession",
+        Effect.fn("environment.auth.cloudSession")(
+          function* (args) {
+            yield* annotateEnvironmentRequest(args.endpoint.name);
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            const cloudUser = yield* verifyCloudSessionToken(args.payload.clerkToken);
+            if (Option.isNone(cloudUser)) {
+              return yield* failEnvironmentAuthInvalid("invalid_credential");
+            }
+            const owner = yield* readEnvironmentOwner;
+            if (Option.isNone(owner) || owner.value !== cloudUser.value) {
+              return yield* failEnvironmentAuthInvalid("not_environment_owner");
+            }
+            // A short-lived grant redeemed on the spot, so the owner's session is recorded and
+            // revocable exactly like one opened with a pairing code.
+            const grant = yield* serverAuth.createPairingLink({
+              scopes: AuthStandardClientScopes,
+              subject: "cloud-connect",
+              clerkSubject: cloudUser.value,
+              ttl: Duration.minutes(1),
+              label: "Pathway Cloud sign-in",
+            });
+            const result = yield* serverAuth.createBrowserSession(
+              grant.credential,
+              deriveAuthClientMetadata({ request }),
+            );
+            return yield* setBrowserSessionCookie(sessions.cookieName, result);
+          },
+          Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
+            failEnvironmentAuthInvalid(EnvironmentAuth.serverAuthCredentialReason(error)),
+          ),
+          Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
+            failEnvironmentInternal("browser_session_issuance_failed", error),
+          ),
+        ),
+      )
+      .handle(
+        "cloudOwner",
+        Effect.fn("environment.auth.cloudOwner")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthAccessWriteScope);
+          const cloudUser = yield* verifyCloudSessionToken(args.payload.clerkToken);
+          if (Option.isNone(cloudUser)) {
+            return yield* failEnvironmentAuthInvalid("invalid_credential");
+          }
+          yield* recordEnvironmentOwner(cloudUser.value).pipe(
+            Effect.catch((error) => failEnvironmentInternal("cloud_owner_record_failed", error)),
+          );
+          return { ownerUserId: cloudUser.value };
+        }),
       )
       .handle(
         "token",

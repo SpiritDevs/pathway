@@ -11,6 +11,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import {
   AuthAccessTokenResult,
   AuthBrowserSessionRequest,
+  AuthCloudIdentityRequest,
   AuthBrowserSessionResult,
   AuthClientSession,
   AuthCreatePairingCredentialInput,
@@ -74,6 +75,7 @@ export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidRe
 export const EnvironmentAuthInvalidReason = Schema.Literals([
   "missing_credential",
   "invalid_credential",
+  "not_environment_owner",
 ]);
 export type EnvironmentAuthInvalidReason = typeof EnvironmentAuthInvalidReason.Type;
 
@@ -86,6 +88,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "bootstrap_validation_failed",
   "browser_session_issuance_failed",
   "browser_session_cookie_failed",
+  "cloud_owner_record_failed",
   "access_token_issuance_failed",
   "websocket_ticket_issuance_failed",
   "pairing_credential_issuance_failed",
@@ -425,6 +428,21 @@ export class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
       success: AuthBrowserSessionResult,
       error: EnvironmentSessionCreationErrors,
     }),
+  )
+  .add(
+    HttpApiEndpoint.post("cloudSession", "/api/auth/cloud-session", {
+      payload: AuthCloudIdentityRequest,
+      success: AuthBrowserSessionResult,
+      error: EnvironmentSessionCreationErrors,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("cloudOwner", "/api/auth/cloud-owner", {
+      headers: OptionalBearerHeaders,
+      payload: AuthCloudIdentityRequest,
+      success: Schema.Struct({ ownerUserId: TrimmedNonEmptyString }),
+      error: [EnvironmentAuthInvalidError, ...EnvironmentScopedOperationErrors],
+    }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.post("token", "/oauth/token", {
