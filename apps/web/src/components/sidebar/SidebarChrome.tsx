@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
@@ -13,10 +13,18 @@ import {
 import { Badge } from "../ui/badge";
 import { SidebarHeader, SidebarTrigger } from "../ui/sidebar";
 
+/**
+ * The sidebar's top bar. `search` sits pinned to the right; while `searchExpanded`
+ * the brand and pill step aside so it can widen across the bar.
+ */
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
+  search,
+  searchExpanded = false,
 }: {
   isElectron: boolean;
+  search?: ReactNode;
+  searchExpanded?: boolean;
 }) {
   const stageLabel = useEnvironmentStageLabel();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
@@ -32,9 +40,10 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   return (
     <SidebarHeader
       className={cn(
-        "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0",
+        "group/sidebar-chrome @container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0",
         isElectron && "drag-region",
       )}
+      data-stage-backdrop={backdropVariant ? "" : undefined}
     >
       {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
       <SidebarTrigger
@@ -45,8 +54,8 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           backdropVariant && resolveSidebarStageFocusRingOffsetClass(backdropVariant),
         )}
       />
-      <SidebarBrand onBackdrop={backdropVariant !== null} />
-      {pillLabel ? (
+      {searchExpanded ? null : <SidebarBrand onBackdrop={backdropVariant !== null} />}
+      {pillLabel && !searchExpanded ? (
         <Badge
           className="relative z-10 ml-1 rounded-full px-1.5 text-muted-foreground"
           data-environment-identification="pill"
@@ -55,6 +64,11 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
         >
           {pillLabel}
         </Badge>
+      ) : null}
+      {search ? (
+        <div className="relative z-10 flex min-w-0 flex-1 justify-end ps-2 md:ps-[calc(var(--workspace-titlebar-control-size)+var(--workspace-titlebar-control-gap))]">
+          {search}
+        </div>
       ) : null}
     </SidebarHeader>
   );

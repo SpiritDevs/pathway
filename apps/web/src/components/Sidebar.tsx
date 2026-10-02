@@ -80,6 +80,7 @@ import {
   FolderPlusIcon,
   GitBranchIcon,
   MessageSquareIcon,
+  MessageSquarePlusIcon,
   MessagesSquareIcon,
   Layers3Icon,
   PinIcon,
@@ -2798,6 +2799,9 @@ export default function Sidebar() {
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
+  // The header search rests as an icon and stays open while focused or holding a query.
+  const [threadSearchFocused, setThreadSearchFocused] = useState(false);
+  const threadSearchExpanded = threadSearchFocused || isSearchingThreads;
   // Search is global within the active company. Neither the Focus nor the project picker narrows it.
   const searchableThreads = useMemo(
     () =>
@@ -3163,10 +3167,11 @@ export default function Sidebar() {
       // IME composition (Japanese/Chinese input) uses the same keys; committing
       // a candidate must not move the highlight or navigate away mid-compose.
       if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-      if (event.key === "Escape" && isSearchingThreads) {
+      if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        clearThreadSearch();
+        if (isSearchingThreads) clearThreadSearch();
+        else event.currentTarget.blur();
         return;
       }
       if (threadSearchResults.length === 0) return;
@@ -4334,95 +4339,163 @@ export default function Sidebar() {
     });
   }, [isMobile, newThreadContext, setOpenMobile, threadStartAvailability]);
 
+  // Conversations start beside the current thread when its environment can host them,
+  // else on the primary environment, matching the command palette's destinations.
+  const conversationEnvironmentId = useMemo(() => {
+    const preferred = [
+      newThreadContext.activeThread?.environmentId ??
+        newThreadContext.activeDraftThread?.environmentId,
+      primaryEnvironmentId,
+    ];
+    for (const environmentId of preferred) {
+      if (queueDestinations.some((destination) => destination.environmentId === environmentId)) {
+        return environmentId as EnvironmentId;
+      }
+    }
+    return (queueDestinations[0]?.environmentId as EnvironmentId | undefined) ?? null;
+  }, [
+    newThreadContext.activeDraftThread,
+    newThreadContext.activeThread,
+    primaryEnvironmentId,
+    queueDestinations,
+  ]);
+  const handleNewConversationClick = useCallback(() => {
+    if (conversationEnvironmentId === null) return;
+    if (isMobile) setOpenMobile(false);
+    setActiveFocusId(CONVERSATIONS_FOCUS_ID);
+    void newThreadContext.handleNewThread({
+      environmentId: conversationEnvironmentId,
+      projectId: null,
+    });
+  }, [conversationEnvironmentId, isMobile, newThreadContext, setActiveFocusId, setOpenMobile]);
+
   // chat.newLocal is retained as a fallback for custom keybinding setups.
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.new") ??
     shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
     <>
-      <SidebarChromeHeader isElectron={isElectron} />
+      <SidebarChromeHeader
+        isElectron={isElectron}
+        searchExpanded={threadSearchExpanded}
+        search={
+          <div
+            className={cn(
+              "flex h-7 items-center overflow-hidden rounded-md transition-[width,background-color] duration-200 ease-out motion-reduce:transition-none",
+              threadSearchExpanded
+                ? "w-full bg-sidebar-control-surface group-data-[stage-backdrop]/sidebar-chrome:bg-black/35"
+                : "w-7",
+            )}
+          >
+            <button
+              type="button"
+              tabIndex={threadSearchExpanded ? -1 : undefined}
+              aria-label="Search threads"
+              className={cn(
+                "flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-hidden ring-ring hover:text-sidebar-foreground focus-visible:ring-2 group-data-[stage-backdrop]/sidebar-chrome:text-white/90 group-data-[stage-backdrop]/sidebar-chrome:hover:text-white",
+                !threadSearchExpanded &&
+                  "hover:bg-sidebar-row-hover group-data-[stage-backdrop]/sidebar-chrome:hover:bg-white/15",
+              )}
+              onClick={() => threadSearchInputRef.current?.focus({ preventScroll: true })}
+            >
+              <SearchIcon className="size-4" />
+            </button>
+            <Input
+              ref={threadSearchInputRef}
+              nativeInput
+              unstyled
+              type="search"
+              value={threadSearchQuery}
+              onChange={(event) => {
+                setThreadSearchQuery(event.currentTarget.value);
+                setActiveSearchResultIndex(0);
+              }}
+              onKeyDown={handleThreadSearchKeyDown}
+              onFocus={() => setThreadSearchFocused(true)}
+              onBlur={() => setThreadSearchFocused(false)}
+              tabIndex={threadSearchExpanded ? undefined : -1}
+              placeholder="Search"
+              aria-label="Search threads"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={isSearchingThreads && threadSearchResults.length > 0}
+              aria-controls={
+                isSearchingThreads && threadSearchResults.length > 0
+                  ? "sidebar-thread-search-results"
+                  : undefined
+              }
+              aria-activedescendant={
+                isSearchingThreads && threadSearchResults[activeSearchResultIndex]
+                  ? `sidebar-thread-search-result-${activeSearchResultIndex}`
+                  : undefined
+              }
+              className="min-w-0 flex-1 pe-2 group-data-[stage-backdrop]/sidebar-chrome:[&_[data-slot=input]]:text-white group-data-[stage-backdrop]/sidebar-chrome:[&_[data-slot=input]]:placeholder:text-white/70 [&_[data-slot=input]]:h-auto [&_[data-slot=input]]:p-0 [&_[data-slot=input]]:leading-normal [&_[data-slot=input]]:text-sm [&_[data-slot=input]]:font-medium [&_[data-slot=input]]:text-sidebar-foreground [&_[data-slot=input]]:placeholder:text-sidebar-muted-foreground"
+            />
+            {isSearchingThreads ? (
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                className="me-1 size-5 shrink-0 rounded-sm text-sidebar-muted-foreground group-data-[stage-backdrop]/sidebar-chrome:text-white/80 hover:bg-sidebar-control-surface hover:text-sidebar-foreground"
+                aria-label="Clear thread search"
+                onClick={() => {
+                  clearThreadSearch();
+                  threadSearchInputRef.current?.focus({ preventScroll: true });
+                }}
+              >
+                <XIcon className="size-3" />
+              </Button>
+            ) : null}
+          </div>
+        }
+      />
       <DraftSendReconciliation activeDraftId={routeDraftIdForRows} />
       <SidebarContent
         scrollAreaRef={focusSwipe.viewportRef}
         className="min-h-full gap-0 overflow-x-clip"
         fixedHeader={
           // Lifted above the stage backdrop, whose fade bleeds below the
-          // header and would otherwise paint across the search row's outline.
+          // header and would otherwise paint across the new thread row.
           <SidebarGroup className="relative z-[1] gap-1 p-[var(--sidebar-content-inset)]">
-            <div className="flex items-center gap-1">
-              <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
-                <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
-                <Input
-                  ref={threadSearchInputRef}
-                  nativeInput
-                  unstyled
-                  type="search"
-                  value={threadSearchQuery}
-                  onChange={(event) => {
-                    setThreadSearchQuery(event.currentTarget.value);
-                    setActiveSearchResultIndex(0);
-                  }}
-                  onKeyDown={handleThreadSearchKeyDown}
-                  placeholder="Search"
-                  aria-label="Search threads"
-                  role="combobox"
-                  aria-autocomplete="list"
-                  aria-expanded={isSearchingThreads && threadSearchResults.length > 0}
-                  aria-controls={
-                    isSearchingThreads && threadSearchResults.length > 0
-                      ? "sidebar-thread-search-results"
-                      : undefined
+            <div className="group/new-thread relative">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <SidebarMenuButton
+                      type="button"
+                      className="ps-[calc(var(--sidebar-row-content-inset)-1px)] pe-9 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                      onClick={handleNewThreadClick}
+                      disabled={threadStartAvailability === "unavailable"}
+                    />
                   }
-                  aria-activedescendant={
-                    isSearchingThreads && threadSearchResults[activeSearchResultIndex]
-                      ? `sidebar-thread-search-result-${activeSearchResultIndex}`
-                      : undefined
-                  }
-                  className="min-w-0 flex-1 [&_[data-slot=input]]:h-auto [&_[data-slot=input]]:p-0 [&_[data-slot=input]]:leading-normal [&_[data-slot=input]]:text-sm [&_[data-slot=input]]:font-medium [&_[data-slot=input]]:text-sidebar-foreground [&_[data-slot=input]]:placeholder:text-sidebar-muted-foreground"
-                />
-                {isSearchingThreads ? (
-                  <Button
-                    type="button"
-                    size="icon-xs"
-                    variant="ghost"
-                    className="size-5 shrink-0 rounded-sm text-sidebar-muted-foreground hover:bg-sidebar-control-surface hover:text-sidebar-foreground"
-                    aria-label="Clear thread search"
-                    onClick={() => {
-                      clearThreadSearch();
-                      threadSearchInputRef.current?.focus();
-                    }}
-                  >
-                    <XIcon className="size-3" />
-                  </Button>
-                ) : null}
-              </div>
-              <div className="shrink-0">
+                >
+                  <SquarePenIcon className="size-4 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">New thread</span>
+                </TooltipTrigger>
+                <TooltipPopup side="right">
+                  {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
+                </TooltipPopup>
+              </Tooltip>
+              {conversationEnvironmentId === null ? null : (
                 <Tooltip>
                   <TooltipTrigger
                     render={
-                      <SidebarMenuButton
-                        size="icon"
+                      <Button
                         type="button"
-                        className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                        onClick={handleNewThreadClick}
-                        disabled={threadStartAvailability === "unavailable"}
-                        aria-label="New thread"
+                        size="icon-xs"
+                        variant="ghost"
+                        className="absolute top-1/2 right-1 -translate-y-1/2 text-sidebar-muted-foreground opacity-0 hover:bg-sidebar-control-surface hover:text-sidebar-foreground focus-visible:opacity-100 group-hover/new-thread:opacity-100 pointer-coarse:opacity-100"
+                        onClick={handleNewConversationClick}
+                        disabled={activeCompanyId === null}
+                        aria-label="New conversation"
                       />
                     }
                   >
-                    <SquarePenIcon />
-                    <span
-                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
-                      aria-hidden="true"
-                    />
+                    <MessageSquarePlusIcon />
                   </TooltipTrigger>
-                  <TooltipPopup side="right">
-                    {newThreadShortcutLabel
-                      ? `New thread (${newThreadShortcutLabel})`
-                      : "New thread"}
-                  </TooltipPopup>
+                  <TooltipPopup side="right">New conversation</TooltipPopup>
                 </Tooltip>
-              </div>
+              )}
             </div>
             {workspaceProjects.length > 0 ? (
               <div className="flex items-center gap-1">
