@@ -473,6 +473,15 @@ export interface IssueCloudAttachmentSource {
   readonly url: string;
 }
 
+/** A company member as people name them: what an agent needs to turn "Corey" into a membership. */
+export interface IssueCompanyMember {
+  readonly membershipId: Extract<IssueActor, { readonly kind: "member" }>["membershipId"];
+  readonly displayName: string;
+  readonly email: string;
+  /** Departed members stay listed so their past assignments and comments keep a name. */
+  readonly active: boolean;
+}
+
 export interface IssueTrackerServiceShape {
   readonly withCompanyRoute: <A, E, R>(
     input: IssueInvestigationRoute & {
@@ -496,6 +505,8 @@ export interface IssueTrackerServiceShape {
   readonly activeMemberActor: (
     membershipId: Extract<IssueActor, { readonly kind: "member" }>["membershipId"],
   ) => Effect.Effect<Extract<IssueActor, { readonly kind: "member" }> | null, IssueTrackerError>;
+  /** Every membership in the routed company, departed ones included; empty in legacy mode. */
+  readonly companyMembers: Effect.Effect<ReadonlyArray<IssueCompanyMember>, IssueTrackerError>;
   /** The environment owner's membership, used by local MCP aliases and local cloud sessions. */
   readonly linkedMemberActor: Effect.Effect<Extract<
     IssueActor,
@@ -5342,6 +5353,22 @@ export const makeIssueTrackerService = Effect.fn(function* (
             ),
       ),
     );
+  const companyMembers: IssueTrackerServiceShape["companyMembers"] = resolveReplicaRoute.pipe(
+    Effect.flatMap((route) =>
+      route === null
+        ? Effect.succeed([])
+        : route.read.pipe(
+            Effect.map((readModel) =>
+              readModel.memberships.map((membership) => ({
+                membershipId: membership.id,
+                displayName: membership.displayNameSnapshot,
+                email: membership.emailSnapshot,
+                active: membership.state === "active",
+              })),
+            ),
+          ),
+    ),
+  );
   const linkedMemberActor: IssueTrackerServiceShape["linkedMemberActor"] = secretStore
     .get(CLOUD_LINKED_USER_ID)
     .pipe(
@@ -6328,6 +6355,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     replicaRoutable,
     memberActorForCloudUserId,
     activeMemberActor,
+    companyMembers,
     linkedMemberActor,
     readLocalIssueSnapshot: localIssueSnapshot,
     getSnapshot,

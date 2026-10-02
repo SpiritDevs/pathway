@@ -67,7 +67,7 @@ const evidenceDependencies = [...dependencies, PreviewAutomationBroker.PreviewAu
 const fileDependencies = [...dependencies, FileSystem.FileSystem, Path.Path];
 
 const ASSIGNEE_GRAMMAR =
-  'Who owns the task: "user" for the environment\'s bound company member, "member:<membership-id>" for an explicit member, "agent" for you (the calling agent), or "agent:<driver>" for a specific provider such as "agent:codex".';
+  'Who owns the task: a company member by name or email such as "Ada" or "ada@example.com" (issues_members_list shows who can be named), "user" for the environment\'s bound company member, "member:<membership-id>" for an exact member, "agent" for you (the calling agent), or "agent:<driver>" for a specific provider such as "agent:codex".';
 
 const STATUS_GRAMMAR =
   'Status name such as "In Progress" (case-insensitive), or one of the six categories — backlog, unstarted, started, review, completed, canceled — which resolves to the first status in that category. Use "review" for pre-completion checks and "completed" rather than guessing the name of the done column.';
@@ -632,6 +632,16 @@ export const IssuesMcpCycleDeleteInput = Schema.Struct({
 
 export const IssuesMcpCycleResult = Schema.Struct({ cycle: IssuesMcpCycle });
 
+export const IssuesMcpMember = Schema.Struct({
+  name: Schema.String,
+  email: Schema.String,
+  assignee: Schema.String.annotate({
+    description: 'Exact assignee value for this person, "member:<membership-id>".',
+  }),
+});
+
+export const IssuesMcpMembersListResult = Schema.Struct({ members: Schema.Array(IssuesMcpMember) });
+
 export const IssuesMcpLabel = Schema.Struct({ name: Schema.String, color: Schema.String });
 
 export const IssuesMcpLabelsListResult = Schema.Struct({ labels: Schema.Array(IssuesMcpLabel) });
@@ -1157,6 +1167,16 @@ export const IssuesMilestoneHistoryTool = readonlyTrackerTool(
   }).annotate(Tool.Title, "Get milestone burn-up"),
 );
 
+export const IssuesMembersListTool = readonlyTrackerTool(
+  Tool.make("issues_members_list", {
+    description:
+      "List the active company members tasks can be assigned to, with their names, emails, and exact assignee values. Any assignee field also accepts a member's name or email directly. Read-only.",
+    success: IssuesMcpMembersListResult,
+    failure: IssueTrackerError,
+    dependencies,
+  }).annotate(Tool.Title, "List members"),
+);
+
 export const IssuesLabelsListTool = readonlyTrackerTool(
   Tool.make("issues_labels_list", {
     description: "List task labels with their colours. Read-only.",
@@ -1291,6 +1311,7 @@ export const IssuesToolkit = Toolkit.make(
   IssuesCycleDeleteTool,
   IssuesMilestonesReorderTool,
   IssuesMilestoneHistoryTool,
+  IssuesMembersListTool,
   IssuesLabelsListTool,
   IssuesLabelCreateTool,
   IssuesLabelUpdateTool,

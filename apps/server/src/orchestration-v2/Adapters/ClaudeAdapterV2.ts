@@ -893,6 +893,7 @@ export const CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS: ReadonlyArray<string> =
   "issues_milestone_history",
   "issues_history",
   "issues_cycles_list",
+  "issues_members_list",
   "issues_labels_list",
   "issues_statuses_list",
   "projects_list",

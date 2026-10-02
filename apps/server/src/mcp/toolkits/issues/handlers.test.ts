@@ -242,6 +242,7 @@ describe("issues MCP toolkit", () => {
               replicaRoutable: Effect.succeed(true),
               linkedMemberActor: Effect.succeed(member),
               activeMemberActor: () => Effect.succeed(null),
+              companyMembers: Effect.succeed([]),
             },
             "me",
             AGENT_DRIVER,
@@ -254,6 +255,7 @@ describe("issues MCP toolkit", () => {
               replicaRoutable: Effect.succeed(true),
               linkedMemberActor: Effect.succeed(null),
               activeMemberActor: (membershipId) => Effect.succeed({ kind: "member", membershipId }),
+              companyMembers: Effect.succeed([]),
             },
             "member:membership-explicit",
             AGENT_DRIVER,
@@ -265,22 +267,78 @@ describe("issues MCP toolkit", () => {
             replicaRoutable: Effect.succeed(true),
             linkedMemberActor: Effect.succeed(null),
             activeMemberActor: () => Effect.succeed(null),
+            companyMembers: Effect.succeed([]),
           },
           "user",
           AGENT_DRIVER,
         ).pipe(Effect.flip);
-        assert.include(error.message, "explicit");
+        assert.include(error.message, "name or email");
         const staleMember = yield* resolveIssueAssignee(
           {
             replicaRoutable: Effect.succeed(true),
             linkedMemberActor: Effect.succeed(null),
             activeMemberActor: () => Effect.succeed(null),
+            companyMembers: Effect.succeed([]),
           },
           "member:membership-departed",
           AGENT_DRIVER,
         ).pipe(Effect.flip);
         assert.include(staleMember.message, "No active company member");
       }),
+  );
+
+  it.effect("resolves an assignee by a member's name or email and explains misses", () =>
+    Effect.gen(function* () {
+      const member = (membershipId: string, displayName: string, email: string, active = true) => ({
+        membershipId: MembershipId.make(membershipId),
+        displayName,
+        email,
+        active,
+      });
+      const tracker = {
+        replicaRoutable: Effect.succeed(true),
+        linkedMemberActor: Effect.succeed(null),
+        activeMemberActor: () => Effect.succeed(null),
+        companyMembers: Effect.succeed([
+          member("membership-corey", "Corey Baines", "corey@example.com"),
+          member("membership-cora", "Cora Baines", "cora@example.com"),
+          member("membership-ada", "Ada Lovelace", "ada@example.com"),
+          member("membership-gone", "Grace Hopper", "grace@example.com", false),
+        ]),
+      };
+      const resolve = (value: string) => resolveIssueAssignee(tracker, value, AGENT_DRIVER);
+      const corey = {
+        kind: "member" as const,
+        membershipId: MembershipId.make("membership-corey"),
+      };
+
+      assert.deepEqual(yield* resolve("corey baines"), corey);
+      assert.deepEqual(yield* resolve("COREY@example.com"), corey);
+      assert.deepEqual(yield* resolve("Corey"), corey);
+
+      const ambiguous = yield* resolve("Baines").pipe(Effect.flip);
+      assert.include(ambiguous.message, "more than one member");
+      assert.include(ambiguous.message, "member:membership-cora");
+
+      const departed = yield* resolve("Grace Hopper").pipe(Effect.flip);
+      assert.include(departed.message, "Ada Lovelace <ada@example.com>");
+      assert.notInclude(departed.message, "grace@example.com");
+      // A bare slug that names nobody still reads as a provider, as it always has.
+      assert.deepEqual(yield* resolve("codex"), {
+        kind: "agent",
+        provider: ProviderDriverKind.make("codex"),
+      });
+
+      const unbound = yield* resolve("user").pipe(Effect.flip);
+      assert.include(unbound.message, "name or email");
+      assert.include(unbound.message, "member:membership-corey");
+
+      // A row's printed assignee reads back as the same member.
+      assert.deepEqual(
+        parseIssueAssignee("member:membership-corey (Corey Baines)", AGENT_DRIVER),
+        corey,
+      );
+    }),
   );
 
   it.effect("filters the list by status name, category, project, label, and text", () =>
