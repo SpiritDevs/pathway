@@ -333,8 +333,9 @@ private actor RefreshEnvironmentRPC: PathwayIssueRPCClient {
     }
     func request(_ tag: String, payload: JSONValue, requiresSubscription: Bool, waitForSubscription: Bool, timeout: Duration) async throws -> JSONValue {
         #expect(tag == "server.getConfig")
-        #expect(requiresSubscription && waitForSubscription)
-        #expect(timeout == .seconds(5))
+        // Reachability must not wait on the issue subscription's first chunk.
+        #expect(!requiresSubscription)
+        #expect(timeout == .seconds(10))
         if offline { throw PathwayRPCError.timedOut }
         return .object([:])
     }

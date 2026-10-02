@@ -16,9 +16,10 @@ Once all work finishes, the Dynamic Island clears and the final card remains on 
 for 15 minutes, with green checks for completed threads and a red icon for failed threads.
 
 Pull down on Agent Threads to refresh cloud updates and reconnect active environments.
-Refresh finishes within 15 seconds and shows a result above the list. If an environment
-cannot be reached, the result names it and keeps your available threads visible. You can
-pull down again to retry. Git and pull request statuses update separately in the background.
+Refresh finishes within 15 seconds. A successful refresh updates the list without a message.
+If an environment cannot be reached or the refresh fails, a short notice floats over the top of
+the list for a few seconds, naming the environment, and your available threads stay visible.
+Tap the notice to dismiss it early, or pull down again to retry. Git and pull request statuses update separately in the background.
 
 When starting a thread, tap the environment dropdown below the project name to choose where
 it will run. The menu lists the environments linked to that project and marks the selected

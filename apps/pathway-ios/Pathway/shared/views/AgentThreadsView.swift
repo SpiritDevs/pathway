@@ -39,6 +39,7 @@ struct AgentThreadsView: View {
     @State private var creatingProject = false
     @State private var showingNotifications = false
     @State private var refresh = PathwayThreadRefresh()
+    @State private var dismissedRefreshRevision = 0
     init(newThreadAction: @escaping () -> Void, initialFilter: PathwayThreadListFilter = .all) {
         self.newThreadAction = newThreadAction
         _listFilter = State(initialValue: initialFilter)
@@ -47,13 +48,18 @@ struct AgentThreadsView: View {
     private var threadNavigation: some View {
         VStack(spacing: 0) {
             if lifecycleThreadCount == 0 {
-                VStack {
-                    refreshResult.padding(.horizontal)
-                    emptyState
-                }
+                emptyState
             } else {
                 threadList
             }
+        }
+        .overlay(alignment: .top) { refreshNotice }
+        .animation(.easeOut(duration: 0.2), value: showsRefreshNotice)
+        .task(id: refresh.revision) {
+            guard showsRefreshNotice, let message = refresh.result?.message else { return }
+            AccessibilityNotification.Announcement(message).post()
+            do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            dismissedRefreshRevision = refresh.revision
         }
         .navigationTitle("Agent Threads")
         .navigationBarTitleDisplayMode(showsSearch ? .inline : .large)
@@ -167,13 +173,26 @@ struct AgentThreadsView: View {
         }
     }
 
+    /// A refreshed list is its own confirmation, so only problems surface, briefly and over the list.
+    private var showsRefreshNotice: Bool {
+        guard let result = refresh.result, result != .updated else { return false }
+        return refresh.revision != dismissedRefreshRevision
+    }
+
     @ViewBuilder
-    private var refreshResult: some View {
-        if let result = refresh.result {
+    private var refreshNotice: some View {
+        if showsRefreshNotice, let result = refresh.result {
             Text(result.message)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(3)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(.horizontal)
+                .padding(.top, 8)
+                .onTapGesture { dismissedRefreshRevision = refresh.revision }
+                .transition(.move(edge: .top).combined(with: .opacity))
                 .accessibilityIdentifier("thread-refresh-result")
         }
     }
@@ -188,7 +207,6 @@ struct AgentThreadsView: View {
         let visibleSettledThreads = Array(settledThreads.prefix(settledVisibleCount))
         let hiddenSettledCount = settledThreads.count - visibleSettledThreads.count
         List {
-            refreshResult
             ForEach(pendingQueueThreads) { queued in
                 Button { queuedThread = queued } label: {
                     if let thread = try? queued.conversationThread(detail: .object(["thread": .object(queued.fields)])) {
