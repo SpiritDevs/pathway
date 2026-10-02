@@ -40,6 +40,23 @@ export function useThreadQueueChat(environmentId: string, threadId: string) {
   });
   const detail = detailState.key === key ? detailState.value : null;
   const [error, setError] = useState<string | null>(null);
+  // Sends the timeline has shown as committed. They leave the chat for good, so a
+  // copy cannot resurface at the end once the committed row pages out of view.
+  const [committedState, setCommittedState] = useState<{
+    key: string;
+    ids: ReadonlySet<string>;
+  }>({ key, ids: new Set() });
+  const committedIds = committedState.key === key ? committedState.ids : null;
+  const markCommitted = useCallback(
+    (messageIds: readonly string[]) =>
+      setCommittedState((previous) => {
+        const ids = previous.key === key ? previous.ids : new Set<string>();
+        if (messageIds.every((id) => ids.has(id)))
+          return previous.key === key ? previous : { key, ids };
+        return { key, ids: new Set([...ids, ...messageIds]) };
+      }),
+    [key],
+  );
   const localMessages = useMemo(
     () =>
       local.filter(
@@ -172,8 +189,14 @@ export function useThreadQueueChat(environmentId: string, threadId: string) {
     [detail?.attachmentUrls, localUrlState, key],
   );
   const chatMessages = useMemo(
-    () => queuedChatMessages(messages, attachmentUrls),
-    [messages, attachmentUrls],
+    () =>
+      queuedChatMessages(
+        committedIds
+          ? messages.filter((message) => !committedIds.has(message.messageId))
+          : messages,
+        attachmentUrls,
+      ),
+    [messages, attachmentUrls, committedIds],
   );
   const messageById = useMemo(
     () => new Map(messages.map((message) => [message.messageId, message])),
@@ -232,5 +255,15 @@ export function useThreadQueueChat(environmentId: string, threadId: string) {
   );
   const loading =
     row?.cloudSaved === true && detail === null && chatMessages.length === 0 && !error;
-  return { row, messages, chatMessages, attachmentUrls, controls, mutateMessage, error, loading };
+  return {
+    row,
+    messages,
+    chatMessages,
+    attachmentUrls,
+    controls,
+    mutateMessage,
+    markCommitted,
+    error,
+    loading,
+  };
 }

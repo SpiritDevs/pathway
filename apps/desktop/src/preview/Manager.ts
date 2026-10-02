@@ -117,6 +117,11 @@ const MAX_SCREENSHOT_WIDTH = 1280;
 const RECORDING_FRAME_INTERVAL_MS = Math.ceil(1_000 / 30);
 const PICTURE_IN_PICTURE_FRAME_INTERVAL_MS = Math.ceil(1_000 / 12);
 const PREVIEW_CAPTURE_TIMEOUT_MS = 5_000;
+/** Hover-card thumbnails: wide enough for a ~320px card on a 2x display. */
+const PREVIEW_THUMBNAIL_WIDTH_PX = 640;
+const PREVIEW_THUMBNAIL_JPEG_QUALITY = 70;
+const PREVIEW_THUMBNAIL_ATTEMPTS = 4;
+const PREVIEW_THUMBNAIL_RETRY_MS = 120;
 const PREVIEW_COMMAND_TIMEOUT_MS = 15_000;
 const RECORDING_JPEG_QUALITY = 80;
 const PICTURE_IN_PICTURE_INITIAL_WIDTH = 480;
@@ -2105,6 +2110,30 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     };
   });
 
+  const captureThumbnail = Effect.fn("PreviewManager.captureThumbnail")(function* (tabId: string) {
+    const wc = yield* requireWebContents(tabId);
+    // A background tab sits offscreen and may not have painted lately, so its first
+    // captures can fail or come back empty while the compositor warms up.
+    for (let attempt = 0; attempt < PREVIEW_THUMBNAIL_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) yield* Effect.sleep(PREVIEW_THUMBNAIL_RETRY_MS);
+      if (wc.isDestroyed()) return null;
+      wc.invalidate();
+      const image = yield* boundedPromise(
+        { operation: "captureThumbnail.capturePage", tabId, webContentsId: wc.id },
+        () => wc.capturePage(undefined, { stayHidden: true }),
+        PREVIEW_CAPTURE_TIMEOUT_MS,
+      ).pipe(Effect.option);
+      if (Option.isNone(image) || image.value.isEmpty()) continue;
+      const { width } = image.value.getSize();
+      const scaled =
+        width > PREVIEW_THUMBNAIL_WIDTH_PX
+          ? image.value.resize({ width: PREVIEW_THUMBNAIL_WIDTH_PX, quality: "good" })
+          : image.value;
+      return `data:image/jpeg;base64,${scaled.toJPEG(PREVIEW_THUMBNAIL_JPEG_QUALITY).toString("base64")}`;
+    }
+    return null;
+  });
+
   const capturePreviewFrame = Effect.fn("PreviewManager.capturePreviewFrame")(function* (
     tabId: string,
   ) {
@@ -3437,6 +3466,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     automationWaitFor,
     cancelPickElement,
     captureScreenshot,
+    captureThumbnail,
     closeTab,
     copyArtifactToClipboard,
     createTab,
@@ -3767,6 +3797,7 @@ export class PreviewManager extends Context.Service<
     readonly captureScreenshot: (
       tabId: string,
     ) => Effect.Effect<DesktopPreviewScreenshotArtifact, PreviewManagerError>;
+    readonly captureThumbnail: (tabId: string) => Effect.Effect<string | null, PreviewManagerError>;
     readonly revealArtifact: (path: string) => Effect.Effect<void, PreviewManagerError>;
     readonly copyArtifactToClipboard: (path: string) => Effect.Effect<void, PreviewManagerError>;
     readonly openPictureInPicture: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
@@ -3901,6 +3932,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     pickElement: operations.pickElement,
     cancelPickElement: operations.cancelPickElement,
     captureScreenshot: operations.captureScreenshot,
+    captureThumbnail: operations.captureThumbnail,
     revealArtifact: operations.revealArtifact,
     copyArtifactToClipboard: operations.copyArtifactToClipboard,
     openPictureInPicture: operations.openPictureInPicture,

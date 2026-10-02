@@ -1,6 +1,6 @@
 # Browser password vault
 
-The password vault belongs to the signed-in Pathway account. It is separate from company data, environment credentials, and agent tools. Settings → General → Passwords manages logins. The browser's Saved logins picker shows matching website accounts and fills the selected login without submitting the form.
+The password vault belongs to the signed-in Pathway account. It is separate from company data, environment credentials, and agent tools. Settings → General → Passwords manages logins. The desktop and web browser panels do not currently show a fill picker; `BrowserSavedLoginPicker` holds the fill flow until its new UI lands.
 
 ## Deployment setup
 

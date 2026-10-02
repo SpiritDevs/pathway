@@ -56,7 +56,6 @@ import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { PreviewUnreachable } from "./PreviewUnreachable";
 import { revealInFileExplorerLabel } from "./fileExplorerLabel";
 import { shouldShowPreviewEmptyState } from "./previewEmptyStateLogic";
-import { BrowserSavedLoginPicker } from "~/browser/BrowserSavedLoginPicker";
 import { RemoteBrowserView } from "~/browser/RemoteBrowserView";
 import { BrowserSurfaceSlot } from "~/browser/BrowserSurfaceSlot";
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
@@ -116,7 +115,6 @@ function DesktopPreviewView({
   allowInlinePictureInPicture = true,
   onSendAnnotation,
 }: Props) {
-  const [showSavedLogins, setShowSavedLogins] = useState(false);
   const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);
   const [pickActive, setPickActive] = useState(false);
   const activeRecordingTabIds = useActiveBrowserRecordingTabIds();
@@ -788,32 +786,6 @@ function DesktopPreviewView({
         }
       />
 
-      {previewBridge && runtimeTabId && tabId && /^https?:/.test(url) && (
-        <div className="border-b p-2">
-          <button
-            type="button"
-            className="rounded border px-2 py-1 text-xs"
-            onClick={() => setShowSavedLogins((value) => !value)}
-            disabled={!previewBridge.autofillLogin}
-          >
-            {previewBridge.autofillLogin ? "Saved logins" : "Update desktop to fill saved logins"}
-          </button>
-          {showSavedLogins && (
-            <BrowserSavedLoginPicker
-              key={`${runtimeTabId}:${new URL(url).origin}`}
-              threadRef={threadRef}
-              tabId={tabId}
-              origin={new URL(url).origin}
-              fillLogin={async (login) => {
-                if (!previewBridge || !previewBridge.autofillLogin)
-                  throw new Error("Update Pathway desktop to fill saved logins.");
-                await previewBridge.autofillLogin(runtimeTabId, login);
-                return true;
-              }}
-            />
-          )}
-        </div>
-      )}
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {runtimeTabId && snapshot && !showEmptyState ? (
           <BrowserSurfaceSlot

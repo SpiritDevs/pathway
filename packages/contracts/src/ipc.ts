@@ -1580,6 +1580,8 @@ export interface DesktopPreviewBridge {
   /** Cancel an in-flight preview annotation session. */
   cancelPickElement: (tabId: string) => Promise<void>;
   captureScreenshot: (tabId: string) => Promise<DesktopPreviewScreenshotArtifact>;
+  /** A small JPEG data URL of the page for tab hover cards; null when nothing is painted. */
+  captureThumbnail?: (tabId: string) => Promise<string | null>;
   revealArtifact: (path: string) => Promise<void>;
   copyArtifactToClipboard: (path: string) => Promise<void>;
   pictureInPicture: {

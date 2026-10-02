@@ -6,6 +6,7 @@ import type {
   ContextMenuItem,
   PreviewSessionSnapshot,
   PullRequestState,
+  ScopedThreadRef,
 } from "@spiritdevs/contracts";
 import { getTerminalLabel } from "@spiritdevs/shared/terminalLabels";
 import {
@@ -16,6 +17,7 @@ import {
   Files,
   GitPullRequest,
   Globe2,
+  Laptop,
   MessagesSquare,
   Monitor,
   Plus,
@@ -38,6 +40,9 @@ import {
 import { createPortal } from "react-dom";
 
 import type { BrowserPlacement } from "~/browser/browserPlacement";
+import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
+import { RemoteBrowserStream } from "~/browser/RemoteBrowserStream";
+import type { RemoteBrowserPage } from "~/browser/remoteBrowserStore";
 import { isElectron } from "~/env";
 import {
   isRemoteBrowserSurface,
@@ -56,6 +61,7 @@ import { PreviewPanelShell, type PreviewPanelMode } from "./preview/PreviewPanel
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { NewTabToolsProvider, type PanelSurfaceAction } from "./preview/newTabTools";
 import { PreviewFavicon } from "./preview/PreviewFavicon";
+import { previewBridge } from "./preview/previewBridge";
 
 interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -84,8 +90,8 @@ interface RightPanelTabsProps {
   onAddDevice?: (() => void) | undefined;
   /** Opens a browser tab; without a placement it opens the thread's default browser. */
   onAddBrowser: (placement?: BrowserPlacement) => void;
-  /** Tab labels saying where each browser runs. `local` is null when there is no ambiguity. */
-  browserLabels?: { readonly remote: string; readonly local: string | null };
+  /** Where the thread's browser tabs run, for their icons and hover cards. */
+  browser?: BrowserTabContext | undefined;
   /** Reopens a local tab's page in the thread environment's browser. */
   onOpenInRemoteBrowser?: (surface: RightPanelSurface) => void;
   onAddTerminal: () => void;
@@ -109,6 +115,17 @@ interface RightPanelTabsProps {
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
   children: ReactNode;
+}
+
+export interface BrowserTabContext {
+  readonly threadRef: ScopedThreadRef;
+  /** Part of a local tab's desktop runtime id. */
+  readonly serverEpoch: string | null;
+  readonly environmentLabel: string;
+  /** What to call the machine local tabs browse from, such as "This Mac". */
+  readonly localLabel: string;
+  /** The page the remote browser last showed. */
+  readonly remotePage: RemoteBrowserPage | null;
 }
 
 export interface PullRequestTabStatus {
@@ -367,7 +384,7 @@ export function resolveRightPanelSurfaceTitle(
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>,
   terminalLabelsById: ReadonlyMap<string, string>,
   threadTitlesById?: ReadonlyMap<string, string>,
-  browserLabels?: RightPanelTabsProps["browserLabels"],
+  remotePage?: RemoteBrowserPage | null,
 ): string {
   switch (surface.kind) {
     case "device":
@@ -394,38 +411,184 @@ export function resolveRightPanelSurfaceTitle(
     case "thread":
       return threadTitlesById?.get(surface.resourceId)?.trim() || "Side chat";
     case "preview": {
-      if (isRemoteBrowserSurface(surface)) return browserLabels?.remote ?? "Remote browser";
+      if (isRemoteBrowserSurface(surface)) {
+        return remotePage ? pageTitle(remotePage, "Remote browser") : "Remote browser";
+      }
       if (surface.resourceId === null) return "New tab";
-      const title = localBrowserTitle(surface.resourceId ? sessions[surface.resourceId] : null);
-      return browserLabels?.local ? `${browserLabels.local} · ${title}` : title;
+      const snapshot = sessions[surface.resourceId];
+      return !snapshot || snapshot.navStatus._tag === "Idle"
+        ? "Browser"
+        : pageTitle(snapshot.navStatus, "Browser");
     }
   }
 }
 
-function localBrowserTitle(snapshot: PreviewSessionSnapshot | null | undefined): string {
-  if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
-  if (snapshot.navStatus.title.trim().length > 0) return snapshot.navStatus.title;
+function pageTitle(page: { readonly url: string; readonly title: string }, fallback: string) {
+  if (page.title.trim().length > 0) return page.title;
   try {
-    return new URL(snapshot.navStatus.url).host || "Browser";
+    return new URL(page.url).host || fallback;
   } catch {
-    return "Browser";
+    return fallback;
+  }
+}
+
+/** A blue globe marks the remote browser; the page's favicon sits on its corner. */
+function RemoteBrowserIcon({ url }: { url: string | null }) {
+  return (
+    <span className="relative flex size-3.5 shrink-0 items-center justify-center">
+      <Globe2 className="size-3.5 text-blue-500 dark:text-blue-400" />
+      <PreviewFavicon
+        url={url}
+        fallback={null}
+        className="absolute -right-1 -bottom-1 size-2.5 rounded-[3px] bg-background ring-1 ring-background"
+      />
+    </span>
+  );
+}
+
+/**
+ * Hover card for a browser tab: the page's title and host, where it runs, and a
+ * glimpse of the page. Remote tabs stream watch-only; local tabs show a still.
+ */
+function BrowserTabPreview({
+  surface,
+  context,
+  sessions,
+  title,
+}: {
+  surface: RightPanelSurface & { kind: "preview" };
+  context: BrowserTabContext;
+  sessions: Readonly<Record<string, PreviewSessionSnapshot>>;
+  title: string;
+}) {
+  const remote = isRemoteBrowserSurface(surface);
+  const navStatus = surface.resourceId ? sessions[surface.resourceId]?.navStatus : undefined;
+  const url = remote
+    ? (context.remotePage?.url ?? null)
+    : navStatus && navStatus._tag !== "Idle"
+      ? navStatus.url
+      : null;
+  return (
+    <div className="flex w-80 flex-col gap-2 py-1">
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="truncate text-sm font-medium text-foreground">{title}</span>
+        <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate">{url ? displayHost(url) : null}</span>
+          <span className="flex shrink-0 items-center gap-1 text-[11px]">
+            {remote ? (
+              <Globe2 className="size-3 text-blue-500 dark:text-blue-400" />
+            ) : (
+              <Laptop className="size-3" />
+            )}
+            {remote ? `Remote · ${context.environmentLabel}` : `Local · ${context.localLabel}`}
+          </span>
+        </div>
+      </div>
+      {remote ? (
+        context.remotePage ? (
+          <PreviewFrame>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <RemoteBrowserStream
+                threadRef={context.threadRef}
+                tabId={context.remotePage.tabId}
+                compact
+              />
+            </div>
+          </PreviewFrame>
+        ) : null
+      ) : surface.resourceId ? (
+        <LocalTabThumbnail
+          runtimeTabId={previewRuntimeTabId(
+            context.threadRef,
+            context.serverEpoch,
+            surface.resourceId,
+          )}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// Last good still per local tab, so a repeat hover paints at once while a fresh one loads.
+const localTabThumbnails = new Map<string, string>();
+const LOCAL_TAB_THUMBNAIL_LIMIT = 12;
+
+function PreviewFrame({ children }: { children?: ReactNode }) {
+  return (
+    <div className="relative aspect-[16/10] w-full overflow-hidden rounded-md bg-muted">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * A still of a local tab, captured when its hover card opens. The frame only
+ * shows while a still exists or is on its way; a failed capture leaves no box.
+ */
+function LocalTabThumbnail({ runtimeTabId }: { runtimeTabId: string }) {
+  const capture = previewBridge?.captureThumbnail;
+  const [src, setSrc] = useState(() => localTabThumbnails.get(runtimeTabId) ?? null);
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (!capture) return;
+    let cancelled = false;
+    capture(runtimeTabId)
+      .then(
+        (next) => {
+          if (next === null) return;
+          localTabThumbnails.delete(runtimeTabId);
+          localTabThumbnails.set(runtimeTabId, next);
+          // Oldest first: keep only the most recently hovered tabs.
+          for (const key of localTabThumbnails.keys()) {
+            if (localTabThumbnails.size <= LOCAL_TAB_THUMBNAIL_LIMIT) break;
+            localTabThumbnails.delete(key);
+          }
+          if (!cancelled) setSrc(next);
+        },
+        () => undefined,
+      )
+      .finally(() => {
+        if (!cancelled) setSettled(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [capture, runtimeTabId]);
+  if (!src && (!capture || settled)) return null;
+  return (
+    <PreviewFrame>
+      {src ? (
+        <img src={src} alt="" className="absolute inset-0 size-full object-cover object-top" />
+      ) : null}
+    </PreviewFrame>
+  );
+}
+
+function displayHost(url: string): string {
+  try {
+    return new URL(url).host.replace(/^www\./, "") || url;
+  } catch {
+    return url;
   }
 }
 
 function SurfaceIcon({
   surface,
   sessions,
+  remotePage,
   theme,
   pullRequestStatuses,
 }: {
   surface: RightPanelSurface;
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>;
+  remotePage: RemoteBrowserPage | null;
   theme: "light" | "dark";
   pullRequestStatuses: Readonly<Record<string, PullRequestTabStatus>> | undefined;
 }) {
   switch (surface.kind) {
     case "preview": {
-      if (isRemoteBrowserSurface(surface)) return <Globe2 className="size-3 shrink-0" />;
+      if (isRemoteBrowserSurface(surface))
+        return <RemoteBrowserIcon url={remotePage?.url ?? null} />;
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       const url = !snapshot || snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
       return <PreviewFavicon url={url} />;
@@ -641,12 +804,13 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
               {props.surfaces.map((surface) => {
                 const active = surface.id === props.activeSurfaceId;
                 const pending = props.pendingSurfaceIds.has(surface.id);
+                const remotePage = props.browser?.remotePage ?? null;
                 const title = resolveRightPanelSurfaceTitle(
                   surface,
                   props.previewSessions,
                   props.terminalLabelsById,
                   props.threadTitlesById,
-                  props.browserLabels,
+                  remotePage,
                 );
                 return (
                   <SortableTab
@@ -679,6 +843,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                               <SurfaceIcon
                                 surface={surface}
                                 sessions={props.previewSessions}
+                                remotePage={remotePage}
                                 theme={resolvedTheme}
                                 pullRequestStatuses={props.pullRequestStatuses}
                               />
@@ -693,7 +858,20 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                           </button>
                         }
                       />
-                      <TooltipPopup>{title}</TooltipPopup>
+                      {props.browser &&
+                      surface.kind === "preview" &&
+                      (surface.resourceId !== null || isRemoteBrowserSurface(surface)) ? (
+                        <TooltipPopup className="rounded-xl" side="bottom" align="start">
+                          <BrowserTabPreview
+                            surface={surface}
+                            context={props.browser}
+                            sessions={props.previewSessions}
+                            title={title}
+                          />
+                        </TooltipPopup>
+                      ) : (
+                        <TooltipPopup>{title}</TooltipPopup>
+                      )}
                     </Tooltip>
                     <button
                       type="button"

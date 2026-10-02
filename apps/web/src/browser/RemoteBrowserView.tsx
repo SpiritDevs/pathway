@@ -20,7 +20,6 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { useEnvironment, useEnvironmentHttpBaseUrl } from "~/state/environments";
 import { useThreadProjection } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
-import { BrowserSavedLoginPicker } from "./BrowserSavedLoginPicker";
 import { RemoteBrowserStream } from "./RemoteBrowserStream";
 import { useRemoteBrowserSelectedTabId, useRemoteBrowserStore } from "./remoteBrowserStore";
 
@@ -65,7 +64,6 @@ export function RemoteBrowserView({
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const [showLogins, setShowLogins] = useState(false);
   const baseUrl = useEnvironmentHttpBaseUrl(threadRef.environmentId);
   const selected =
     state.tabs.find((tab) => tab.tabId === selectedId) ??
@@ -145,6 +143,15 @@ export function RemoteBrowserView({
   useEffect(() => {
     setAddress(selected?.url ?? "");
   }, [selected?.tabId, selected?.url]);
+  useEffect(() => {
+    useRemoteBrowserStore
+      .getState()
+      .setPage(
+        threadRef,
+        selected ? { tabId: selected.tabId, url: selected.url, title: selected.title } : null,
+      );
+    // threadKey stands in for threadRef, whose identity churns on every thread update.
+  }, [threadKey, selected?.tabId, selected?.url, selected?.title]);
   const lastTabs = useRef("");
   const lastMetadataRevision = useRef<number | undefined>(undefined);
   const receiveTabs = useCallback(
@@ -163,13 +170,6 @@ export function RemoteBrowserView({
     [run, threadRef.threadId],
   );
   const target = selected ? { threadId: threadRef.threadId, tabId: selected.tabId } : null;
-  let selectedOrigin: string | null = null;
-  try {
-    if (selected?.url && /^https?:/.test(selected.url))
-      selectedOrigin = new URL(selected.url).origin;
-  } catch {
-    /* A pending navigation has no usable origin yet. */
-  }
   const takeControl = async () => {
     const result = await requestTakeover({
       environmentId: threadRef.environmentId,
@@ -291,14 +291,6 @@ export function RemoteBrowserView({
       )}
       {target && (
         <div className="flex flex-wrap items-center gap-2 border-b p-2 text-xs">
-          {selectedOrigin && (
-            <button
-              className="rounded border px-2 py-1"
-              onClick={() => setShowLogins((value) => !value)}
-            >
-              Saved logins
-            </button>
-          )}
           <button
             className="rounded border px-2 py-1"
             disabled={busy}
@@ -318,14 +310,6 @@ export function RemoteBrowserView({
           >
             {selected?.recording ? "Stop recording" : "Record video"}
           </button>
-          {showLogins && selectedOrigin && (
-            <BrowserSavedLoginPicker
-              key={`${target.tabId}:${selectedOrigin}`}
-              threadRef={threadRef}
-              tabId={target.tabId}
-              origin={selectedOrigin}
-            />
-          )}
           {state.artifacts?.map((artifact) =>
             baseUrl ? (
               <a

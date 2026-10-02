@@ -236,7 +236,11 @@ import {
   remoteBrowserEnabled,
   useEnvironmentOnThisMachine,
 } from "../browser/browserPlacement";
-import { openRemoteBrowser, useRemoteBrowserStore } from "../browser/remoteBrowserStore";
+import {
+  openRemoteBrowser,
+  useRemoteBrowserPage,
+  useRemoteBrowserStore,
+} from "../browser/remoteBrowserStore";
 import { useRemoteAgentBrowserReveal } from "./preview/useRemoteAgentBrowserReveal";
 import { closePreviewSession } from "./preview/closePreviewSession";
 import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
@@ -1670,6 +1674,13 @@ function ChatViewContent(props: ChatViewProps) {
       ),
     [queuedChat.controls, committedServerMessageIds],
   );
+  const markQueuedChatCommitted = queuedChat.markCommitted;
+  useEffect(() => {
+    const committed = queuedChat.chatMessages.flatMap((message) =>
+      committedServerMessageIds.has(message.id) ? [message.id] : [],
+    );
+    if (committed.length > 0) markQueuedChatCommitted(committed);
+  }, [committedServerMessageIds, markQueuedChatCommitted, queuedChat.chatMessages]);
   const projectedServerMessageIds = useMemo(
     () => new Set(serverProjection?.messages.map((message) => message.id) ?? []),
     [serverProjection?.messages],
@@ -4702,13 +4713,19 @@ function ChatViewContent(props: ChatViewProps) {
     [activePreviewState.sessions, activeThreadRef],
   );
   const activeEnvironmentLabel = activeEnvironment?.label ?? "Environment";
-  const browserLabels = useMemo(
-    () => ({
-      remote: `Remote · ${activeEnvironmentLabel}`,
-      // Local tabs only need a label when their localhost differs from the agent's.
-      local: environmentOnThisMachine ? null : `Local · ${localMachineLabel()}`,
-    }),
-    [activeEnvironmentLabel, environmentOnThisMachine],
+  const remoteBrowserPage = useRemoteBrowserPage(activeThreadRef);
+  const browserTabContext = useMemo(
+    () =>
+      activeThreadRef
+        ? {
+            threadRef: activeThreadRef,
+            serverEpoch: activePreviewState.serverEpoch,
+            environmentLabel: activeEnvironmentLabel,
+            localLabel: localMachineLabel(),
+            remotePage: remoteBrowserPage,
+          }
+        : undefined,
+    [activeThreadRef, activePreviewState.serverEpoch, activeEnvironmentLabel, remoteBrowserPage],
   );
   const addDiffSurface = useCallback(() => {
     if (!activeThreadRef || !isServerThread || !isGitRepo) return;
@@ -10770,7 +10787,7 @@ function ChatViewContent(props: ChatViewProps) {
                   : undefined
               }
               onAddBrowser={createBrowserSurface}
-              browserLabels={browserLabels}
+              browser={browserTabContext}
               {...(remoteBrowserEnabled && hasLocalBrowser && !environmentOnThisMachine
                 ? { onOpenInRemoteBrowser: openInRemoteBrowser }
                 : {})}
@@ -10837,7 +10854,7 @@ function ChatViewContent(props: ChatViewProps) {
                 : undefined
             }
             onAddBrowser={createBrowserSurface}
-            browserLabels={browserLabels}
+            browser={browserTabContext}
             {...(remoteBrowserEnabled && hasLocalBrowser && !environmentOnThisMachine
               ? { onOpenInRemoteBrowser: openInRemoteBrowser }
               : {})}

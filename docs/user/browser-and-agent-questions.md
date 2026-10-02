@@ -16,10 +16,12 @@ Blocking questions still pause the agent and use their existing response flow. O
 
 ## Choose a browser
 
-Every browser tab is either **remote** or **local**, and its tab says which:
+Every browser tab is either **remote** or **local**:
 
-- **Remote · <environment>** runs beside your agent on the thread's environment. There, `localhost` is the environment, so `localhost:3000` shows the dev server your agent started. You can watch and use it from desktop, the web app and iOS, including over Pathway Connect. Its tabs and website sessions stay on that environment when your client disconnects.
-- **Local · This Mac** is the desktop app's own browser. There, `localhost` is the computer you are using. Only the desktop app has one.
+- The **remote** browser runs beside your agent on the thread's environment. There, `localhost` is the environment, so `localhost:3000` shows the dev server your agent started. You can watch and use it from desktop, the web app and iOS, including over Pathway Connect. Its tabs and website sessions stay on that environment when your client disconnects. Its tab shows a blue globe with the page's icon on the corner.
+- The **local** browser is the desktop app's own browser. There, `localhost` is the computer you are using. Only the desktop app has one. Its tab shows just the page's icon and title.
+
+Hover a browser tab to see the page's title, its site, whether it is remote or local, and where it runs, above a preview of the page. Remote previews are live; local previews are a snapshot taken when you hover.
 
 When the thread's environment is another machine, the browser opens remote by default. When it is the machine the desktop app runs on, it opens local. The web app and iOS always use the remote browser. On desktop, choose either one from the **+** menu in the panel's tab bar. Both kinds of tab can sit side by side.
 
@@ -46,8 +48,6 @@ While you are using a page in a local tab, your keys go to that page, the way th
 ## Saved logins
 
 Settings → General → Passwords stores website logins in your Pathway account. On iOS, open Passwords from the browser to manage saved logins. The vault uses encryption on Pathway's servers and synchronizes through your account.
-
-The browser's Saved logins picker lists accounts for the current website. Select an account and fill it, then submit the website's sign-in form when ready. Filling does not put the password in the conversation. Browser tools can inspect the page, so only fill accounts you intend the task to use.
 
 You can replace or delete a saved login. Passkey private keys remain with their authenticator; the password vault does not store them. Apple Passwords and iCloud-synced passkeys are not yet connected to this vault. Supported signed macOS builds can offer device-bound Touch ID credentials separately.
 

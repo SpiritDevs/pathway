@@ -97,6 +97,7 @@ export const PREVIEW_SET_ANNOTATION_THEME_CHANNEL = "desktop:preview-set-annotat
 export const PREVIEW_PICK_ELEMENT_CHANNEL = "desktop:preview-pick-element";
 export const PREVIEW_CANCEL_PICK_ELEMENT_CHANNEL = "desktop:preview-cancel-pick-element";
 export const PREVIEW_CAPTURE_SCREENSHOT_CHANNEL = "desktop:preview-capture-screenshot";
+export const PREVIEW_CAPTURE_THUMBNAIL_CHANNEL = "desktop:preview-capture-thumbnail";
 export const PREVIEW_REVEAL_ARTIFACT_CHANNEL = "desktop:preview-reveal-artifact";
 export const PREVIEW_COPY_ARTIFACT_CHANNEL = "desktop:preview-copy-artifact";
 export const PREVIEW_PICTURE_IN_PICTURE_OPEN_CHANNEL = "desktop:preview-pip-open";
