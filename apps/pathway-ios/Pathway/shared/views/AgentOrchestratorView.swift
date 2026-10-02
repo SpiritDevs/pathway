@@ -11,6 +11,8 @@ struct AgentOrchestratorView: View {
     @State private var search = ""
     @State private var creating = false
     @State private var archived = false
+    @State private var initialChatID: String?
+    @State private var openedInitialChat = false
     private var model: PathwayOrchestratorsModel { appModel.cloud.orchestrators }
 
     var body: some View {
@@ -58,8 +60,47 @@ struct AgentOrchestratorView: View {
             }
             .sheet(isPresented: $creating) { PathwayNewOrchestratorConversation() }
         }
-        .task(id: appModel.accountID) { if let id = appModel.accountID { model.start(accountID: id, companyIDs: appModel.cloud.companies.map(\.id)) } }
+        .task(id: appModel.accountID) {
+            openedInitialChat = false
+            initialChatID = nil
+            guard let accountID = appModel.accountID else { return }
+            model.start(accountID: accountID, companyIDs: appModel.cloud.companies.map(\.id))
+            do {
+                let remembered = UserDefaults.standard.string(forKey: "pathway.orchestrator.lastChat.\(accountID)")
+                let home = try await model.mutate("ensurePersonalChat", remembered.map { ["preferredChatId": .string($0)] } ?? [:])
+                guard !Task.isCancelled, appModel.accountID == accountID else { return }
+                initialChatID = home.stringValue
+                openInitialConversation()
+            } catch { if !Task.isCancelled { model.errorMessage = error.localizedDescription } }
+        }
+        .onChange(of: model.contacts) { _, _ in openInitialConversation() }
+        .onChange(of: model.chats) { _, _ in openInitialConversation() }
+        .onChange(of: model.selectedID) { _, id in
+            guard let accountID = appModel.accountID, let id else { return }
+            openedInitialChat = true
+            UserDefaults.standard.set(id, forKey: "pathway.orchestrator.lastChat.\(accountID)")
+        }
         .accessibilityIdentifier("agent-orchestrator-view")
+    }
+    private func openInitialConversation() {
+        guard !openedInitialChat, !model.loading, appModel.accountID != nil else { return }
+        // An explicit notification/deep-link selection always wins, including archived history.
+        if let id = model.selectedID, model.chats.contains(where: { $0.id == id }) {
+            openedInitialChat = true
+            return
+        }
+        guard let initialChatID else { return }
+        let personal = model.contacts.filter {
+            $0.string("ownerSubject") == appModel.accountID && $0.string("kind") == "personal" &&
+            !$0.flag("shared") && $0.string("companyId").isEmpty &&
+            ["active", "paused"].contains($0.string("status"))
+        }.min { $0.number("createdAt") < $1.number("createdAt") }
+        let target = model.chats.first { $0.id == initialChatID } ?? model.chats.first {
+            $0.string("kind") == "dm" && $0.string("leadId") == personal?.id &&
+            !$0.flag("archived") && $0.string("lifecycle").isEmpty &&
+            $0.strings("companyIds").isEmpty && $0.strings("participantSubjects").count == 1
+        }
+        if let target { openedInitialChat = true; model.selectedID = target.id }
     }
     private func close() {
         #if os(visionOS)

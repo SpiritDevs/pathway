@@ -368,6 +368,19 @@ describe("invitation lifecycle", () => {
         .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", "user_invitee"))
         .unique();
       if (user === null) throw new Error("the invitee was never provisioned");
+      expect(
+        await ctx.db
+          .query("aiOrchestrators")
+          .withIndex("by_owner", (q) => q.eq("ownerSubject", user.clerkSubject))
+          .collect(),
+      ).toEqual([
+        expect.objectContaining({
+          kind: "personal",
+          status: "active",
+          shared: false,
+          companyId: null,
+        }),
+      ]);
       const membership = await ctx.db
         .query("memberships")
         .withIndex("by_company_and_user", (q) =>

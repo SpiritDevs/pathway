@@ -1,3 +1,9 @@
+import {
+  ensurePersonalAssistant,
+  ensurePersonalConversation,
+  findPersonalAssistant,
+  findPersonalConversation,
+} from "./lib/personalAssistant.ts";
 import { internal } from "./_generated/api.js";
 import { conversationWork, reconcileConversationLifecycle } from "./lib/conversationLifecycle.ts";
 import { conversationAttention, type HumanMention } from "@spiritdevs/contracts/aiOrchestrator";
@@ -16,10 +22,7 @@ import { nextResponsibilityReview } from "./aiOrchestratorReviews.ts";
 /** Authenticated orchestration contacts and continuing conversations. */
 import { v } from "convex/values";
 import * as Schema from "effect/Schema";
-import {
-  OrchestratorConfig,
-  defaultOrchestratorConfig,
-} from "@spiritdevs/contracts/aiOrchestrator";
+import { OrchestratorConfig } from "@spiritdevs/contracts/aiOrchestrator";
 import {
   internalMutation,
   mutation,
@@ -42,6 +45,7 @@ import { requestOrchestratorStop } from "./lib/aiOrchestratorWork.ts";
 import { scheduleOrchestratorWorkRefresh } from "./lib/aiOrchestratorWorkRefresh.ts";
 import { orchestratorJobCompanyId } from "./lib/aiOrchestratorAuthority.ts";
 import {
+  memorySourceAvailable,
   resolveWorkAssignments,
   workVisibilityForConversation,
 } from "./lib/aiOrchestratorContext.ts";
@@ -240,6 +244,8 @@ export const list = query({
       .query("aiOrchestrators")
       .withIndex("by_owner", (q) => q.eq("ownerSubject", user.clerkSubject))
       .take(200);
+    const personal = await findPersonalAssistant(ctx, user.clerkSubject);
+    if (personal && !owned.some((row) => row.id === personal.id)) owned.push(personal);
     let shared: Doc<"aiOrchestrators">[] = [];
     if (args.companyId) {
       await requireCompanyActor(ctx, args.companyId);
@@ -264,33 +270,43 @@ export const ensurePersonal = mutation({
   args: {},
   handler: async (ctx) => {
     const user = await requireUser(ctx);
-    const owned = await ctx.db
-      .query("aiOrchestrators")
-      .withIndex("by_owner", (q) => q.eq("ownerSubject", user.clerkSubject))
-      .take(200);
-    // A deliberately deleted Chief should not be recreated by a subscribed client.
-    const existing = owned.find((r) => r.kind === "personal");
-    if (existing) return existing.id;
-    const id = mintDomainId(Date.now());
-    const now = Date.now();
-    await ctx.db.insert("aiOrchestrators", {
-      ...defaultOrchestratorConfig(),
-      models: [],
-      workerModels: [],
-      capabilities: [...defaultOrchestratorConfig().capabilities],
-      directorSubjects: [],
-      managerSubjects: [],
-      environmentIds: [],
-      id,
-      ownerSubject: user.clerkSubject,
-      status: "active",
-      revision: 1,
-      createdAt: now,
-      updatedAt: now,
-    });
-    return id;
+    return (await ensurePersonalAssistant(ctx, user.clerkSubject)).id;
   },
 });
+export const ensurePersonalChat = mutation({
+  args: { preferredChatId: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const user = await requireUser(ctx);
+    if (args.preferredChatId) {
+      const chat = await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", args.preferredChatId!))
+        .unique();
+      const member = await ctx.db
+        .query("aiOrchestratorChatMembers")
+        .withIndex("by_chat_subject", (q) =>
+          q.eq("chatId", args.preferredChatId!).eq("subject", user.clerkSubject),
+        )
+        .unique();
+      if (
+        chat &&
+        member &&
+        !chat.archived &&
+        !chat.lifecycle &&
+        chat.participantSubjects.includes(user.clerkSubject) &&
+        (await hasChatAccess(ctx, chat, user))
+      ) {
+        const contacts = await Promise.all(
+          chat.orchestratorIds.map((id) => findOrchestrator(ctx, id)),
+        );
+        if (contacts.every((row) => row && (row.status === "active" || row.status === "paused")))
+          return chat.id;
+      }
+    }
+    return ensurePersonalConversation(ctx, user.clerkSubject);
+  },
+});
+
 export const create = mutation({
   args: { config: v.object(orchestratorConfig) },
   handler: async (ctx, args) => {
@@ -328,6 +344,7 @@ export const configure = mutation({
       revision: row.revision + 1,
       updatedAt: Date.now(),
     });
+    await ensurePersonalAssistant(ctx, row.ownerSubject);
     // Assignment limits and delegation grants decide what queued work may dispatch.
     await scheduleOrchestratorWorkRefresh(ctx, [row.id]);
     return row.revision + 1;
@@ -354,6 +371,7 @@ export const setStatus = mutation({
       revision: row.revision + 1,
       updatedAt: now,
     });
+    await ensurePersonalAssistant(ctx, row.ownerSubject);
     // Resuming dispatches queued assignments and delivers completions held while paused.
     if (args.status === "active") await scheduleOrchestratorWorkRefresh(ctx, [row.id]);
     if (args.stopWork || args.status === "deleted") {
@@ -384,7 +402,15 @@ export const setStatus = mutation({
         .query("aiOrchestratorMemory")
         .withIndex("by_orchestrator", (q) => q.eq("orchestratorId", row.id))
         .take(500);
-      for (const memory of memories) await ctx.db.delete(memory._id);
+      // Keep source exclusions: deleting an assistant must not let another private assistant
+      // relearn its forgotten account memory from retained conversation history.
+      for (const memory of memories)
+        await ctx.db.patch(memory._id, {
+          forgotten: true,
+          text: "",
+          source: "",
+          updatedAt: now,
+        });
     }
     return null;
   },
@@ -602,6 +628,15 @@ export const listChats = query({
       .withIndex("by_subject", (q) => q.eq("subject", user.clerkSubject))
       .order("desc")
       .take(100);
+    // The main DM remains reachable even when it predates the bounded recent-chat window.
+    if (memberships.length === 100) {
+      const personal = await findPersonalAssistant(ctx, user.clerkSubject);
+      const home = personal
+        ? await findPersonalConversation(ctx, user.clerkSubject, personal.id)
+        : null;
+      if (home && !memberships.some((member) => member.chatId === home.chat.id))
+        memberships.push(home.member);
+    }
     const rows = await Promise.all(
       memberships.map(async (member) => {
         const chat = await ctx.db
@@ -1353,7 +1388,13 @@ export const memories = query({
             .order("desc")
             .take(100)
         : [];
-    return [...new Map([...own, ...personal].map((memory) => [memory.id, memory])).values()]
+    const candidates = [
+      ...new Map([...own, ...personal].map((memory) => [memory.id, memory])).values(),
+    ];
+    const visible = [];
+    for (const memory of candidates)
+      if (await memorySourceAvailable(ctx, memory)) visible.push(memory);
+    return visible
       .filter(
         (memory) =>
           user.clerkSubject === row.ownerSubject || memory.sharedCompanyId === row.companyId,
@@ -1572,14 +1613,8 @@ export const personalAvatar = query({
   args: {},
   handler: async (ctx) => {
     const user = await requireUser(ctx);
-    const rows = await ctx.db
-      .query("aiOrchestrators")
-      .withIndex("by_owner_kind", (q) =>
-        q.eq("ownerSubject", user.clerkSubject).eq("kind", "personal"),
-      )
-      .take(200);
-    const row = rows.find((item) => item.status === "active" || item.status === "paused");
-    if (!row || (row.companyId && !(await hasCompanyAccess(ctx, row.companyId, user)))) return null;
+    const row = await findPersonalAssistant(ctx, user.clerkSubject);
+    if (!row) return null;
     const [running, working, queued] = await Promise.all([
       ctx.db
         .query("aiOrchestratorJobs")
