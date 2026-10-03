@@ -21,6 +21,8 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/in
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 
+import { PreviewSiteInfo } from "./PreviewSiteInfo";
+
 interface Props {
   url: string;
   loading: boolean;
@@ -34,6 +36,8 @@ interface Props {
   onForward: () => void;
   onRefresh: () => void;
   onSubmit: (url: string) => void;
+  /** Clears the current site's cookies and storage; offered from the site button. */
+  onClearSiteData?: (() => void) | undefined;
   /** When provided, renders an "Open in browser" affordance to the right. */
   onOpenInBrowser?: (() => void) | undefined;
   onCapture?: ((record: boolean) => void) | undefined;
@@ -61,6 +65,15 @@ interface Props {
 
 const NOOP = () => {};
 
+/**
+ * What the address bar shows while you are not editing it: the site you are on,
+ * as `google.com` or `localhost:3000`. Other addresses show in full.
+ */
+export function settledAddress(url: string): string {
+  if (!/^https?:\/\//i.test(url) || !URL.canParse(url)) return url;
+  return new URL(url).host.replace(/^www\./, "");
+}
+
 /** A bordered pill that groups toolbar buttons, as in a browser's chrome. */
 const PILL_CLASS_NAME =
   "flex h-8 shrink-0 items-center rounded-full border border-border/70 bg-background p-px";
@@ -79,6 +92,7 @@ export function PreviewChromeRow({
   onRefresh,
   onSubmit,
   onOpenInBrowser,
+  onClearSiteData,
   onCapture,
   captureDisabled,
   recording,
@@ -182,12 +196,18 @@ export function PreviewChromeRow({
             !inputFocused && "[&_input]:text-center",
           )}
         >
+          {!inputFocused ? (
+            <InputGroupAddon align="inline-start" className="ps-1">
+              <PreviewSiteInfo url={url} onClearSiteData={onClearSiteData} />
+            </InputGroupAddon>
+          ) : null}
           <Tooltip>
             <TooltipTrigger
               render={
                 <InputGroupInput
                   ref={inputRef}
-                  value={inputFocused ? draft : url}
+                  value={inputFocused ? draft : settledAddress(url)}
+                  title={inputFocused ? undefined : url}
                   className={cn(
                     onOpenInBrowser &&
                       !inputFocused &&

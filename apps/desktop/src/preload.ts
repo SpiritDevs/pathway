@@ -296,6 +296,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.PREVIEW_CAPTURE_SCREENSHOT_CHANNEL, { tabId }),
     captureThumbnail: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_CAPTURE_THUMBNAIL_CHANNEL, { tabId }),
+    clearSiteData: (tabId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_SITE_DATA_CHANNEL, { tabId }),
     revealArtifact: (path) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_REVEAL_ARTIFACT_CHANNEL, { path }),
     copyArtifactToClipboard: (path) =>

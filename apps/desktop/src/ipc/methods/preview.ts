@@ -261,6 +261,16 @@ export const captureThumbnail = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const clearSiteData = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CLEAR_SITE_DATA_CHANNEL,
+  payload: DesktopPreviewTabInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.clearSiteData")(function* ({ tabId }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.clearSiteData(tabId);
+  }),
+});
+
 export const revealArtifact = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_REVEAL_ARTIFACT_CHANNEL,
   payload: DesktopPreviewArtifactInputSchema,
@@ -417,6 +427,7 @@ export const methods = [
   cancelPickElement,
   captureScreenshot,
   captureThumbnail,
+  clearSiteData,
   revealArtifact,
   copyArtifactToClipboard,
   openPictureInPicture,

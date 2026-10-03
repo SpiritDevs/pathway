@@ -765,6 +765,11 @@ function DesktopPreviewView({
         onRefresh={handleRefresh}
         onSubmit={(next) => void handleSubmitUrl(next)}
         onOpenInBrowser={tabId ? handleOpenInBrowser : undefined}
+        onClearSiteData={
+          runtimeTabId && previewBridge?.clearSiteData
+            ? () => void previewBridge?.clearSiteData?.(runtimeTabId).catch(() => undefined)
+            : undefined
+        }
         onCapture={previewBridge && tabId ? handleCapture : undefined}
         captureDisabled={!desktopOverlay || isUnreachable}
         recording={recordingRuntimeTabId !== null}

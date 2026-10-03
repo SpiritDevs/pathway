@@ -23,6 +23,8 @@ Every browser tab is either **remote** or **local**:
 
 Hover a browser tab to see the page's title, its site, whether it is remote or local, and where it runs, above a preview of the page. Remote previews are live; local previews are a snapshot taken when you hover.
 
+In a local tab, the address bar shows just the site once you leave it. Click it to see and edit the full address. The sliders button at its left shows whether the connection is secure, and **Clear site data** signs you out of that site and reloads it.
+
 When the thread's environment is another machine, the browser opens remote by default. When it is the machine the desktop app runs on, it opens local. The web app and iOS always use the remote browser. On desktop, choose either one from the **+** menu in the panel's tab bar. Both kinds of tab can sit side by side.
 
 Servers listed under **Local servers** run on the environment, so they open in the remote browser unless the environment is this computer. If you type a `localhost` address into a local tab while the environment is another machine, Pathway offers to open it in the remote browser instead. You can still open it on this computer. On desktop, right-click a local tab and choose **Open in remote browser** to move its page across.

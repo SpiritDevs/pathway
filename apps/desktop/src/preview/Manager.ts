@@ -2134,6 +2134,29 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     return null;
   });
 
+  const clearSiteData = Effect.fn("PreviewManager.clearSiteData")(function* (tabId: string) {
+    const wc = yield* requireWebContents(tabId);
+    const url = wc.getURL();
+    if (!/^https?:/i.test(url) || !URL.canParse(url)) return;
+    const origin = new URL(url).origin;
+    yield* attemptPromise(
+      { operation: "clearSiteData.clearStorageData", tabId, webContentsId: wc.id },
+      () =>
+        wc.session.clearStorageData({
+          origin,
+          storages: [
+            "cookies",
+            "localstorage",
+            "indexdb",
+            "websql",
+            "serviceworkers",
+            "cachestorage",
+          ],
+        }),
+    );
+    if (!wc.isDestroyed()) wc.reload();
+  });
+
   const capturePreviewFrame = Effect.fn("PreviewManager.capturePreviewFrame")(function* (
     tabId: string,
   ) {
@@ -3467,6 +3490,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     cancelPickElement,
     captureScreenshot,
     captureThumbnail,
+    clearSiteData,
     closeTab,
     copyArtifactToClipboard,
     createTab,
@@ -3798,6 +3822,7 @@ export class PreviewManager extends Context.Service<
       tabId: string,
     ) => Effect.Effect<DesktopPreviewScreenshotArtifact, PreviewManagerError>;
     readonly captureThumbnail: (tabId: string) => Effect.Effect<string | null, PreviewManagerError>;
+    readonly clearSiteData: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly revealArtifact: (path: string) => Effect.Effect<void, PreviewManagerError>;
     readonly copyArtifactToClipboard: (path: string) => Effect.Effect<void, PreviewManagerError>;
     readonly openPictureInPicture: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
@@ -3933,6 +3958,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     cancelPickElement: operations.cancelPickElement,
     captureScreenshot: operations.captureScreenshot,
     captureThumbnail: operations.captureThumbnail,
+    clearSiteData: operations.clearSiteData,
     revealArtifact: operations.revealArtifact,
     copyArtifactToClipboard: operations.copyArtifactToClipboard,
     openPictureInPicture: operations.openPictureInPicture,

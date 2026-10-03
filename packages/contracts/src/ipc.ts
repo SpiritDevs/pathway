@@ -1582,6 +1582,8 @@ export interface DesktopPreviewBridge {
   captureScreenshot: (tabId: string) => Promise<DesktopPreviewScreenshotArtifact>;
   /** A small JPEG data URL of the page for tab hover cards; null when nothing is painted. */
   captureThumbnail?: (tabId: string) => Promise<string | null>;
+  /** Clears the current site's cookies and storage in this tab's browser, then reloads it. */
+  clearSiteData?: (tabId: string) => Promise<void>;
   revealArtifact: (path: string) => Promise<void>;
   copyArtifactToClipboard: (path: string) => Promise<void>;
   pictureInPicture: {
