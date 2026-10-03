@@ -4,8 +4,6 @@ You can attach documents, code, data, archives, and other files to a chat from t
 button, by dragging them into the composer, or by pasting them from the clipboard. Pathway shows
 upload progress and keeps Send unavailable until every file is ready.
 
-On desktop, file and folder pickers start in Downloads when Pathway has no starting folder to suggest, or in your home folder if Downloads does not exist.
-
 Files can be up to 50 MB, although a connected environment may advertise a smaller limit. Images
 continue to use the image attachment flow. A newer client connected to an older environment only
 offers attachment types that environment supports.

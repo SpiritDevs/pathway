@@ -126,7 +126,10 @@ class SnapShotExportError extends Schema.TaggedErrorClass<SnapShotExportError>()
 }
 
 /** Checks the PNG header before native decoding to bound both compressed and decoded sizes. */
-export function decodeSnapShotExportImage(dataUrl: string): Electron.NativeImage {
+export function decodeSnapShotExportImage(dataUrl: string): {
+  readonly png: Buffer;
+  readonly image: Electron.NativeImage;
+} {
   const png = Buffer.from(dataUrl.slice("data:image/png;base64,".length), "base64");
   if (
     png.length < 33 ||
@@ -149,7 +152,7 @@ export function decodeSnapShotExportImage(dataUrl: string): Electron.NativeImage
   }
   const image = Electron.nativeImage.createFromBuffer(png);
   if (image.isEmpty()) throw new Error("The snapshot must be a valid PNG image.");
-  return image;
+  return { png, image };
 }
 
 export const exportSnapShot = DesktopIpc.makeIpcMethod({
@@ -158,7 +161,7 @@ export const exportSnapShot = DesktopIpc.makeIpcMethod({
   result: Schema.Boolean,
   handler: Effect.fn("desktop.ipc.snapShot.export")(function* (request, event) {
     const owner = yield* ensureTrustedSnapShotSender(event);
-    const image = yield* Effect.try({
+    const { png, image } = yield* Effect.try({
       try: () => decodeSnapShotExportImage(request.dataUrl),
       catch: (cause) => new SnapShotExportError({ cause }),
     });
@@ -167,7 +170,7 @@ export const exportSnapShot = DesktopIpc.makeIpcMethod({
         try: () =>
           Electron.clipboard.write([
             new Electron.ClipboardItem({
-              "image/png": new Blob([new Uint8Array(image.toPNG())], { type: "image/png" }),
+              "image/png": new Blob([new Uint8Array(png)], { type: "image/png" }),
             }),
           ]),
         catch: (cause) => new SnapShotExportError({ cause }),

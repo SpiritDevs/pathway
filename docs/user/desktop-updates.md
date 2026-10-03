@@ -1,6 +1,6 @@
 # Desktop updates
 
-The desktop app requires macOS 13 (Ventura) or later on Mac. Windows and Linux desktop releases support 64-bit x64 and arm64 systems.
+The desktop app requires macOS 13 (Ventura) or later. On older versions of macOS, Pathway stops offering updates and keeps the last version that runs there.
 
 Use **Check for Updates…** in the top application menu or Settings → About to check for desktop and provider updates. Connected environments check their installed providers too.
 

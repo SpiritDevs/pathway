@@ -1,11 +1,15 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type { BrowserWindow } from "electron";
 import { beforeEach, vi } from "vite-plus/test";
 
 import * as ElectronDialog from "./ElectronDialog.ts";
+
+const dialogLayer = ElectronDialog.layer.pipe(Layer.provide(NodeServices.layer));
 
 const { showMessageBoxMock, showOpenDialogMock, showErrorBoxMock } = vi.hoisted(() => ({
   showMessageBoxMock: vi.fn(),
@@ -50,7 +54,29 @@ describe("ElectronDialog", () => {
       assert.include(error.message, "window 7");
       assert.include(error.message, "/workspace");
       assert.notInclude(error.message, cause.message);
-    }).pipe(Effect.provide(ElectronDialog.layer)),
+    }).pipe(Effect.provide(dialogLayer)),
+  );
+
+  it.effect("reopens pickers where the user last picked unless given a path", () =>
+    Effect.gen(function* () {
+      const dialog = yield* ElectronDialog.ElectronDialog;
+      showOpenDialogMock.mockResolvedValue({ canceled: false, filePaths: ["/code/projects/app"] });
+      yield* dialog.pickFolder({ owner: Option.none(), defaultPath: Option.none() });
+
+      showOpenDialogMock.mockResolvedValue({ canceled: false, filePaths: ["/code/notes/a.png"] });
+      yield* dialog.pickFiles({
+        owner: Option.none(),
+        defaultPath: Option.none(),
+        filters: [],
+      });
+      assert.strictEqual(showOpenDialogMock.mock.calls[1]?.[0].defaultPath, "/code/projects");
+
+      yield* dialog.pickFolder({ owner: Option.none(), defaultPath: Option.none() });
+      assert.strictEqual(showOpenDialogMock.mock.calls[2]?.[0].defaultPath, "/code/notes");
+
+      yield* dialog.pickFolder({ owner: Option.none(), defaultPath: Option.some("/workspace") });
+      assert.strictEqual(showOpenDialogMock.mock.calls[3]?.[0].defaultPath, "/workspace");
+    }).pipe(Effect.provide(dialogLayer)),
   );
 
   it.effect("preserves message box request context and cause", () =>
@@ -87,7 +113,7 @@ describe("ElectronDialog", () => {
       assert.notInclude(error.message, "Cancel");
       assert.notInclude(error.message, "Discard");
       assert.notInclude(error.message, cause.message);
-    }).pipe(Effect.provide(ElectronDialog.layer)),
+    }).pipe(Effect.provide(dialogLayer)),
   );
 
   it.effect("preserves error box request context and cause in the defect", () =>
@@ -112,6 +138,6 @@ describe("ElectronDialog", () => {
       assert.notInclude(error.message, "Startup failed");
       assert.notInclude(error.message, "Could not start.");
       assert.notInclude(error.message, cause.message);
-    }).pipe(Effect.provide(ElectronDialog.layer)),
+    }).pipe(Effect.provide(dialogLayer)),
   );
 });
