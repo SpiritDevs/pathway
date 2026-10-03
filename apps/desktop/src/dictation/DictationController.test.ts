@@ -28,6 +28,7 @@ async function setup(
     native?: Partial<DictationNativePort>;
     models?: Partial<DictationControllerOptions["models"]>;
     onState?: DictationControllerOptions["onState"];
+    copy?: DictationControllerOptions["copy"];
     prepare?: (directory: string, storage: DictationStorage) => Promise<void>;
     enable?: boolean;
   } = {},
@@ -80,7 +81,7 @@ async function setup(
     },
     onState: options.onState ?? (() => {}),
     onMeter,
-    copy: () => {},
+    copy: options.copy ?? (() => {}),
     open: () => {},
   });
   disposals.push(async () => {
@@ -97,6 +98,31 @@ async function setup(
 }
 
 describe("desktop dictation lifecycle", () => {
+  it("waits for clipboard writes and reports rejected copies", async () => {
+    const written = deferred<void>();
+    const started = deferred<void>();
+    const copy = vi.fn(() => {
+      started.resolve();
+      return written.promise;
+    });
+    const { controller } = await setup({}, { copy });
+    let completed = false;
+    const result = controller.execute({ type: "copy", text: "Dictated text" }).then(() => {
+      completed = true;
+    });
+    await started.promise;
+    expect(completed).toBe(false);
+    written.resolve();
+    await result;
+    expect(completed).toBe(true);
+    expect(copy).toHaveBeenCalledWith("Dictated text");
+
+    copy.mockRejectedValueOnce(new Error("Clipboard unavailable"));
+    await expect(controller.execute({ type: "copy", text: "Failed copy" })).rejects.toThrow(
+      "Clipboard unavailable",
+    );
+  });
+
   it("starts capture without waiting for model loading and cancels its preparation", async () => {
     const prepared = deferred<void>();
     const prepare = vi.fn<DictationInferencePort["prepare"]>(() => prepared.promise);

@@ -163,8 +163,13 @@ export const exportSnapShot = DesktopIpc.makeIpcMethod({
       catch: (cause) => new SnapShotExportError({ cause }),
     });
     if (request.action === "copy") {
-      yield* Effect.try({
-        try: () => Electron.clipboard.writeImage(image),
+      yield* Effect.tryPromise({
+        try: () =>
+          Electron.clipboard.write([
+            new Electron.ClipboardItem({
+              "image/png": new Blob([new Uint8Array(image.toPNG())], { type: "image/png" }),
+            }),
+          ]),
         catch: (cause) => new SnapShotExportError({ cause }),
       });
       return true;

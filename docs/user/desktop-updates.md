@@ -1,5 +1,7 @@
 # Desktop updates
 
+The desktop app requires macOS 13 (Ventura) or later on Mac. Windows and Linux desktop releases support 64-bit x64 and arm64 systems.
+
 Use **Check for Updates…** in the top application menu or Settings → About to check for desktop and provider updates. Connected environments check their installed providers too.
 
 Pathway also checks for updates in the background every few minutes. It checks less often once an update is waiting, and backs off while the update server cannot be reached. Background checks run quietly. The sidebar shows progress only for a check you started or for a download. When an update is available, you can download it from the sidebar, then choose **Restart to update** once it is ready to install.

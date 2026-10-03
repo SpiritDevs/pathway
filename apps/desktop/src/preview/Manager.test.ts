@@ -143,20 +143,29 @@ const {
   writeImage,
 } = vi.hoisted(() => ({
   browserWindowConstructor: vi.fn(),
-  createFromPath: vi.fn((): { readonly isEmpty: () => boolean } => ({ isEmpty: () => false })),
+  createFromPath: vi.fn((): { isEmpty: () => boolean; toPNG: () => Buffer<ArrayBuffer> } => ({
+    isEmpty: () => false,
+    toPNG: () => Buffer.from("screenshot PNG"),
+  })),
   fromId: vi.fn((_id?: number) => null),
   getFocusedWebContents: vi.fn(() => null),
   mkdir: vi.fn((_path: string) => undefined),
   showItemInFolder: vi.fn(),
   webviewSend: vi.fn(),
   writeFile: vi.fn((_path: string, _data: Uint8Array) => undefined),
-  writeImage: vi.fn(),
+  writeImage: vi.fn(async (_items: { data: Record<string, Blob> }[]) => {}),
 }));
 
 vi.mock("electron", () => ({
   BrowserWindow: browserWindowConstructor,
   clipboard: {
-    writeImage,
+    write: writeImage,
+  },
+  ClipboardItem: class {
+    readonly data: Record<string, Blob>;
+    constructor(data: Record<string, Blob>) {
+      this.data = data;
+    }
   },
   nativeImage: {
     createFromPath,
@@ -299,7 +308,7 @@ describe("PreviewManager", () => {
     mkdir.mockClear();
     writeFile.mockClear();
     showItemInFolder.mockClear();
-    writeImage.mockClear();
+    writeImage.mockReset();
     createFromPath.mockClear();
     webviewSend.mockClear();
   });
@@ -1954,6 +1963,20 @@ describe("PreviewManager", () => {
 
         expect(createFromPath).toHaveBeenCalledWith(artifactPath);
         expect(writeImage).toHaveBeenCalledOnce();
+        const png = writeImage.mock.calls[0]?.[0][0]?.data["image/png"];
+        expect(png).toBeInstanceOf(Blob);
+        expect(png?.type).toBe("image/png");
+        expect(Buffer.from(yield* Effect.promise(() => png!.arrayBuffer()))).toEqual(
+          Buffer.from("screenshot PNG"),
+        );
+        writeImage.mockRejectedValueOnce(new Error("Clipboard unavailable"));
+        const failedCopy = yield* Effect.exit(manager.copyArtifactToClipboard(artifactPath));
+        expect(Exit.isFailure(failedCopy)).toBe(true);
+        if (Exit.isSuccess(failedCopy)) return;
+        expect(Option.getOrThrow(Cause.findErrorOption(failedCopy.cause))).toMatchObject({
+          _tag: "PreviewOperationError",
+          operation: "copyArtifactToClipboard.write",
+        });
         const exit = yield* Effect.exit(
           manager.copyArtifactToClipboard("/tmp/pathway/dev/settings.json"),
         );
@@ -1967,7 +1990,7 @@ describe("PreviewManager", () => {
         });
         expect("cause" in error).toBe(false);
 
-        createFromPath.mockReturnValueOnce({ isEmpty: () => true });
+        createFromPath.mockReturnValueOnce({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) });
         const invalidImageExit = yield* Effect.exit(manager.copyArtifactToClipboard(artifactPath));
         expect(Exit.isFailure(invalidImageExit)).toBe(true);
         if (Exit.isSuccess(invalidImageExit)) return;

@@ -32,7 +32,15 @@ import type {
 import { fillBrowserLoginFields } from "@spiritdevs/shared/browserPasswordAutofill";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import { normalizePreviewUrl } from "@spiritdevs/shared/preview";
-import { BrowserWindow, type Session, clipboard, nativeImage, shell, webContents } from "electron";
+import {
+  BrowserWindow,
+  ClipboardItem,
+  type Session,
+  clipboard,
+  nativeImage,
+  shell,
+  webContents,
+} from "electron";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -2144,14 +2152,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       () =>
         wc.session.clearStorageData({
           origin,
-          storages: [
-            "cookies",
-            "localstorage",
-            "indexdb",
-            "websql",
-            "serviceworkers",
-            "cachestorage",
-          ],
+          storages: ["cookies", "localstorage", "indexdb", "serviceworkers", "cachestorage"],
         }),
     );
     if (!wc.isDestroyed()) wc.reload();
@@ -3442,8 +3443,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     if (image.isEmpty()) {
       return yield* new PreviewArtifactImageLoadError({ artifactPath: resolvedPath });
     }
-    yield* attempt({ operation: "copyArtifactToClipboard.write", artifactPath: resolvedPath }, () =>
-      clipboard.writeImage(image),
+    yield* attemptPromise(
+      { operation: "copyArtifactToClipboard.write", artifactPath: resolvedPath },
+      () =>
+        clipboard.write([
+          new ClipboardItem({
+            "image/png": new Blob([new Uint8Array(image.toPNG())], { type: "image/png" }),
+          }),
+        ]),
     );
   });
 

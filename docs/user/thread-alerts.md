@@ -3,6 +3,8 @@
 Thread alerts play a sound, show an OS notification, or both when an agent finishes, needs permission,
 asks for input, or fails. They are available on desktop and web. Sign in to Pathway Cloud to use them.
 
+On macOS, desktop OS notifications require a signed Pathway installation.
+
 ## Turn alerts on
 
 Click the bell beside a thread to enable all four alert types. Click again to disable them.

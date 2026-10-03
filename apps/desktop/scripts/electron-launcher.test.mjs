@@ -153,10 +153,10 @@ describe("electron development launcher", () => {
       hasRuntime: true,
       existingPlist: {
         CFBundleIdentifier: "com.pathway.dev.test",
-        CFBundleVersion: "41.5.0",
+        CFBundleVersion: "44.5.1",
         CFBundleExecutable: "Old Shell Launcher",
       },
-      sourcePlist: { CFBundleVersion: "41.5.0" },
+      sourcePlist: { CFBundleVersion: "44.5.1" },
       appBundleId: "com.pathway.dev.test",
     };
     assert.isTrue(canReuseMacRuntime(input));

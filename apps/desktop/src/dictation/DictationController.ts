@@ -117,7 +117,7 @@ export interface DictationControllerOptions {
   inference: DictationInferencePort;
   onState: (state: DictationState) => void;
   onMeter: (meter: { durationMs: number; level: number; mode: DictationState["mode"] }) => void;
-  copy: (text: string) => void;
+  copy: (text: string) => void | Promise<void>;
   open: (page: "models" | "history" | "dictionary" | "settings") => void;
 }
 
@@ -291,7 +291,7 @@ export class DictationController {
         break;
       case "copy":
         if (command.text.length > 100_000) throw new Error("The text is too long to copy.");
-        this.options.copy(command.text);
+        await this.options.copy(command.text);
         break;
       case "delete-history":
         await this.options.storage.deleteHistory(this.accountId, command.id);

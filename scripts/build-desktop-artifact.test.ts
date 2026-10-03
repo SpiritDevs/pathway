@@ -271,7 +271,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           "@spiritdevs/shared": "workspace:*",
           "@spiritdevs/ssh": "workspace:*",
           effect: "catalog:",
-          electron: "41.5.0",
+          electron: "44.5.1",
         },
         {
           "@effect/platform-node": "4.0.0-beta.59",
