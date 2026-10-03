@@ -36,7 +36,7 @@ A Chromium checkout is managed by `gclient` and is far too large for the pnpm mo
 
 **This repository** consumes the runtime:
 
-- `apps/desktop/pathway-runtime.json` pins `runtimeName: "pathway"`, the runtime version, and per-platform and per-architecture archive URLs with their SHA-256 hashes.
+- `apps/desktop/pathway-runtime.json` pins `runtimeName: "pathway"`, the runtime version, and per-platform and per-architecture archive URLs with their SHA-256 hashes. See [Desktop runtime pin](../internals/desktop-runtime.md).
 - `scripts/build-desktop-artifact.ts` packages the app against the pinned archive instead of the npm `electron` binary. `vp run dev` launches the pinned runtime too.
 - `.github/workflows/release.yml` gains Windows and Linux jobs. Today it packages only macOS arm64, on the self-hosted `fleet-macos-arm64` runners.
 

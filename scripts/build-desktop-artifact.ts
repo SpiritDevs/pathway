@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
 
 import { fromYaml } from "@spiritdevs/shared/schemaYaml";
@@ -13,6 +14,7 @@ import { clerkFrontendApiHostnameFromPublishableKey } from "@spiritdevs/shared/r
 import { resolveSpawnCommand } from "@spiritdevs/shared/shell";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
+import pathwayRuntime from "../apps/desktop/pathway-runtime.json" with { type: "json" };
 import gnomeCaptureBundle from "../apps/desktop/gnome-extension/bundle.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
@@ -40,6 +42,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { Command, Flag } from "effect/unstable/cli";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
@@ -149,6 +152,7 @@ interface BuildCliInput {
   readonly outputDir: Option.Option<string>;
   readonly skipBuild: Option.Option<boolean>;
   readonly skipBackendDeploy: Option.Option<boolean>;
+  readonly pinnedRuntime: Option.Option<boolean>;
   readonly keepStage: Option.Option<boolean>;
   readonly signed: Option.Option<boolean>;
   readonly verbose: Option.Option<boolean>;
@@ -243,6 +247,113 @@ export class UnsupportedDesktopBuildArchitectureError extends Schema.TaggedError
     return `Unsupported architecture '${this.arch}' for ${this.platform}.`;
   }
 }
+
+export class RuntimeElectronVersionMismatchError extends Schema.TaggedErrorClass<RuntimeElectronVersionMismatchError>()(
+  "RuntimeElectronVersionMismatchError",
+  { runtimeElectronVersion: Schema.String, npmElectronVersion: Schema.String },
+) {
+  override get message(): string {
+    return `pathway-runtime.json Electron ${this.runtimeElectronVersion} does not match apps/desktop/package.json electron ${this.npmElectronVersion}. Update the runtime pin and npm electron together.`;
+  }
+}
+
+export class UnsupportedPinnedRuntimeArchitectureError extends Schema.TaggedErrorClass<UnsupportedPinnedRuntimeArchitectureError>()(
+  "UnsupportedPinnedRuntimeArchitectureError",
+  { platform: BuildPlatform, arch: BuildArch },
+) {
+  override get message(): string {
+    return `No pinned runtime archive for ${this.platform}/${this.arch}. Package arm64 and x64 separately with --pinned-runtime.`;
+  }
+}
+
+export class RuntimeArchiveHashMismatchError extends Schema.TaggedErrorClass<RuntimeArchiveHashMismatchError>()(
+  "RuntimeArchiveHashMismatchError",
+  { url: Schema.String, expected: Schema.String, actual: Schema.String },
+) {
+  override get message(): string {
+    return `Runtime archive SHA-256 mismatch for ${this.url}: expected ${this.expected}, got ${this.actual}. The archive was removed.`;
+  }
+}
+
+export const resolvePinnedRuntimeArchive = Effect.fn("resolvePinnedRuntimeArchive")(function* (
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+  pin = pathwayRuntime,
+  npmElectronVersion = desktopPackageJson.dependencies.electron,
+) {
+  if (pin.electronVersion !== npmElectronVersion) {
+    return yield* new RuntimeElectronVersionMismatchError({
+      runtimeElectronVersion: pin.electronVersion,
+      npmElectronVersion,
+    });
+  }
+  if (arch === "universal") {
+    return yield* new UnsupportedPinnedRuntimeArchitectureError({ platform, arch });
+  }
+  const runtimePlatform = { mac: "darwin", win: "win32", linux: "linux" } as const;
+  return pin.archives[`${runtimePlatform[platform]}-${arch}`];
+});
+
+const verifyRuntimeArchive = Effect.fn("verifyRuntimeArchive")(function* (
+  archive: { readonly url: string; readonly sha256: string },
+  archivePath: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const hash = NodeCrypto.createHash("sha256");
+  yield* fs.stream(archivePath).pipe(
+    Stream.runForEach((bytes) =>
+      Effect.sync(() => {
+        hash.update(bytes);
+      }),
+    ),
+  );
+  const actual = hash.digest("hex");
+  if (actual !== archive.sha256) {
+    yield* fs.remove(archivePath);
+    return yield* new RuntimeArchiveHashMismatchError({
+      url: archive.url,
+      expected: archive.sha256,
+      actual,
+    });
+  }
+});
+
+/** Downloads into a temporary file; only verified archives enter the persistent cache. */
+export const cachePinnedRuntimeArchive = Effect.fn("cachePinnedRuntimeArchive")(function* (
+  archive: { readonly url: string; readonly sha256: string },
+  cacheDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const archivePath = path.join(cacheDir, `${archive.sha256}.zip`);
+  if (yield* fs.exists(archivePath)) {
+    yield* verifyRuntimeArchive(archive, archivePath);
+    yield* Effect.log(`[desktop-artifact] Reusing verified runtime archive: ${archivePath}`);
+    return archivePath;
+  }
+  yield* fs.makeDirectory(cacheDir, { recursive: true });
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const downloadDir = yield* fs.makeTempDirectoryScoped({
+        directory: cacheDir,
+        prefix: "download-",
+      });
+      const downloadPath = path.join(downloadDir, "runtime.zip");
+      yield* Effect.log(`[desktop-artifact] Downloading pinned runtime: ${archive.url}`);
+      yield* HttpClient.get(archive.url).pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        HttpClientResponse.stream,
+        Stream.run(fs.sink(downloadPath)),
+      );
+      yield* verifyRuntimeArchive(archive, downloadPath);
+      yield* fs.rename(downloadPath, archivePath);
+    }),
+  );
+  yield* Effect.log(
+    `[desktop-artifact] Verified runtime SHA-256 ${archive.sha256}: ${archivePath}`,
+  );
+  return archivePath;
+});
 
 const InvalidMockUpdateServerPortReason = Schema.Literals([
   "not-numeric",
@@ -711,6 +822,7 @@ interface ResolvedBuildOptions {
   readonly outputDir: string;
   readonly skipBuild: boolean;
   readonly skipBackendDeploy: boolean;
+  readonly pinnedRuntime: boolean;
   readonly keepStage: boolean;
   readonly signed: boolean;
   readonly verbose: boolean;
@@ -1216,6 +1328,7 @@ const BuildEnvConfig = Config.all({
   skipBackendDeploy: Config.boolean("PATHWAY_DESKTOP_SKIP_BACKEND_DEPLOY").pipe(
     Config.withDefault(false),
   ),
+  pinnedRuntime: Config.boolean("PATHWAY_DESKTOP_PINNED_RUNTIME").pipe(Config.withDefault(false)),
   keepStage: Config.boolean("PATHWAY_DESKTOP_KEEP_STAGE").pipe(Config.withDefault(false)),
   signed: Config.boolean("PATHWAY_DESKTOP_SIGNED").pipe(Config.withDefault(false)),
   verbose: Config.boolean("PATHWAY_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
@@ -1314,6 +1427,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   const skipBuild = resolveBooleanFlag(input.skipBuild, env.skipBuild);
   const skipBackendDeploy = resolveBooleanFlag(input.skipBackendDeploy, env.skipBackendDeploy);
+  const pinnedRuntime = resolveBooleanFlag(input.pinnedRuntime, env.pinnedRuntime);
   const keepStage = resolveBooleanFlag(input.keepStage, env.keepStage);
   const signed = resolveBooleanFlag(input.signed, env.signed);
   const verbose = resolveBooleanFlag(input.verbose, env.verbose);
@@ -1341,6 +1455,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     outputDir,
     skipBuild,
     skipBackendDeploy,
+    pinnedRuntime,
     keepStage,
     signed,
     verbose,
@@ -2170,6 +2285,20 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   const electronVersion = desktopPackageJson.dependencies.electron;
+  const runtimeArchive = options.pinnedRuntime
+    ? yield* resolvePinnedRuntimeArchive(options.platform, options.arch)
+    : undefined;
+  if (runtimeArchive) {
+    yield* Effect.log(
+      `[desktop-artifact] Packaging against runtime ${pathwayRuntime.runtimeName} ${pathwayRuntime.runtimeVersion} (Electron ${pathwayRuntime.electronVersion})`,
+    );
+  }
+  const electronDist = runtimeArchive
+    ? yield* cachePinnedRuntimeArchive(
+        runtimeArchive,
+        path.join(repoRoot, "apps/desktop/.electron-runtime/archives"),
+      )
+    : undefined;
 
   const serverDependencies = serverPackageJson.dependencies;
   if (!serverDependencies || Object.keys(serverDependencies).length === 0) {
@@ -2408,21 +2537,24 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     description: "Pathway desktop build",
     author: "Spirit Devs",
     main: "apps/desktop/dist-electron/main.cjs",
-    build: yield* createBuildConfig(
-      options.platform,
-      options.target,
-      appVersion,
-      options.signed,
-      options.mockUpdates,
-      options.mockUpdateServerPort,
-      macPasskeySigning && macEntitlementsPath
-        ? {
-            entitlementsPath: macEntitlementsPath,
-            provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
-          }
-        : undefined,
-      options.flavor,
-    ),
+    build: {
+      ...(yield* createBuildConfig(
+        options.platform,
+        options.target,
+        appVersion,
+        options.signed,
+        options.mockUpdates,
+        options.mockUpdateServerPort,
+        macPasskeySigning && macEntitlementsPath
+          ? {
+              entitlementsPath: macEntitlementsPath,
+              provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
+            }
+          : undefined,
+        options.flavor,
+      )),
+      ...(electronDist ? { electronDist, electronVersion: pathwayRuntime.electronVersion } : {}),
+    },
     dependencies: stageDependencies,
     devDependencies: {
       electron: electronVersion,
@@ -2608,6 +2740,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
     ),
     Flag.optional,
   ),
+  pinnedRuntime: Flag.boolean("pinned-runtime").pipe(
+    Flag.withDescription(
+      "Package against pathway-runtime.json (env: PATHWAY_DESKTOP_PINNED_RUNTIME).",
+    ),
+    Flag.optional,
+  ),
   keepStage: Flag.boolean("keep-stage").pipe(
     Flag.withDescription("Keep temporary staging files (env: PATHWAY_DESKTOP_KEEP_STAGE)."),
     Flag.optional,
@@ -2648,7 +2786,11 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   Command.withHandler((input) => Effect.flatMap(resolveBuildOptions(input), buildDesktopArtifact)),
 );
 
-const cliRuntimeLayer = Layer.mergeAll(Logger.layer([Logger.consolePretty()]), NodeServices.layer);
+const cliRuntimeLayer = Layer.mergeAll(
+  Logger.layer([Logger.consolePretty()]),
+  NodeServices.layer,
+  FetchHttpClient.layer,
+);
 
 if (import.meta.main) {
   Command.run(buildDesktopArtifactCli, { version: "0.0.0" }).pipe(
