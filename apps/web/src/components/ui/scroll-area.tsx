@@ -71,4 +71,10 @@ function ScrollBar({
   );
 }
 
-export { ScrollArea, ScrollBar };
+// Use as the viewport's direct child when content can shrink without the viewport resizing;
+// it re-measures overflow so the scroll fade does not linger after the content gets shorter.
+function ScrollAreaContent(props: ScrollAreaPrimitive.Content.Props) {
+  return <ScrollAreaPrimitive.Content data-slot="scroll-area-content" {...props} />;
+}
+
+export { ScrollArea, ScrollAreaContent, ScrollBar };

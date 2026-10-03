@@ -6,7 +6,7 @@ import * as React from "react";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
-import { ScrollArea } from "~/components/ui/scroll-area";
+import { ScrollArea, ScrollAreaContent } from "~/components/ui/scroll-area";
 import { Separator } from "~/components/ui/separator";
 import {
   Sheet,
@@ -899,7 +899,7 @@ function SidebarContent({
     <>
       {fixedHeader ? <div className="w-full shrink-0">{fixedHeader}</div> : null}
       <ScrollArea ref={scrollAreaRef} hideScrollbars scrollFade className="h-auto min-h-0 flex-1">
-        <div
+        <ScrollAreaContent
           className={cn(
             "flex w-full min-w-0 flex-col gap-2 group-data-[collapsible=icon]:overflow-hidden",
             className,
@@ -907,6 +907,7 @@ function SidebarContent({
           data-sidebar="content"
           data-slot="sidebar-content"
           {...props}
+          style={{ minWidth: 0, ...props.style }}
         />
       </ScrollArea>
     </>
