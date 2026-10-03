@@ -109,16 +109,27 @@ function iconResizeSpawnerLayer(
 }
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it.effect("pins the same base Electron version as npm electron", () =>
+    Effect.sync(() => {
+      // Bump apps/desktop/pathway-runtime.json together with npm electron.
+      assert.equal(pathwayRuntime.electronVersion, desktopPackageJson.dependencies.electron);
+    }),
+  );
+
   it.effect("selects the pinned archive for all six platform and architecture targets", () =>
     Effect.gen(function* () {
-      assert.equal(pathwayRuntime.electronVersion, desktopPackageJson.dependencies.electron);
       for (const [platform, runtimePlatform] of [
         ["mac", "darwin"],
         ["win", "win32"],
         ["linux", "linux"],
       ] as const) {
         for (const arch of ["arm64", "x64"] as const) {
-          const archive = yield* resolvePinnedRuntimeArchive(platform, arch);
+          const archive = yield* resolvePinnedRuntimeArchive(
+            platform,
+            arch,
+            pathwayRuntime,
+            pathwayRuntime.electronVersion,
+          );
           assert.deepStrictEqual(archive, pathwayRuntime.archives[`${runtimePlatform}-${arch}`]);
           assert.match(archive.sha256, /^[a-f0-9]{64}$/u);
         }
@@ -128,7 +139,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it.effect("rejects universal packaging with a single pinned archive", () =>
     Effect.gen(function* () {
-      const error = yield* resolvePinnedRuntimeArchive("mac", "universal").pipe(
+      const error = yield* resolvePinnedRuntimeArchive(
+        "mac",
+        "universal",
+        pathwayRuntime,
+        pathwayRuntime.electronVersion,
+      ).pipe(
         Effect.match({
           onSuccess: () => assert.fail("Expected universal packaging to be rejected"),
           onFailure: (error) => error,

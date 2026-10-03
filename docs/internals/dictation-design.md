@@ -228,20 +228,6 @@ Native [host](../../scripts/build-dictation-host.mjs) and
 self-test, protocol, and engine smoke checks. Adding this workflow does not establish a successful
 Windows build or desktop interaction test.
 
-Desktop packaging can opt into the pinned runtime with
-`node scripts/build-desktop-artifact.ts --pinned-runtime` (or
-`PATHWAY_DESKTOP_PINNED_RUNTIME=true`). `apps/desktop/pathway-runtime.json` records the
-runtime name, runtime version, base Electron version, and archive URL and SHA-256 for
-each macOS, Windows and Linux architecture. For Phase 1 it pins official Electron
-release zips; their hashes come from the release's `SHASUMS256.txt`. The base Electron
-version must match the npm dependency, which still supplies types and the dev binary.
-Downloads stream into the gitignored `apps/desktop/.electron-runtime/archives` cache;
-every download and cache hit is verified before its zip path is passed to
-electron-builder's `electronDist`, alongside the pin's `electronVersion`. A mismatch
-removes the archive and stops packaging. Use separate `--arch arm64` and `--arch x64`
-builds; there is no universal archive. Default packaging, dev launch and release CI
-continue to use npm Electron until Phase 3.
-
 ## Validation status
 
 The startup, quick-hide, focused-field, and latency corrections have a new focused validation pass:

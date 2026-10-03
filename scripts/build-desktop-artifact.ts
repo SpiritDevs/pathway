@@ -332,19 +332,23 @@ export const cachePinnedRuntimeArchive = Effect.fn("cachePinnedRuntimeArchive")(
     return archivePath;
   }
   yield* fs.makeDirectory(cacheDir, { recursive: true });
-  const downloadDir = yield* fs.makeTempDirectoryScoped({
-    directory: cacheDir,
-    prefix: "download-",
-  });
-  const downloadPath = path.join(downloadDir, "runtime.zip");
-  yield* Effect.log(`[desktop-artifact] Downloading pinned runtime: ${archive.url}`);
-  yield* HttpClient.get(archive.url).pipe(
-    Effect.flatMap(HttpClientResponse.filterStatusOk),
-    HttpClientResponse.stream,
-    Stream.run(fs.sink(downloadPath)),
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const downloadDir = yield* fs.makeTempDirectoryScoped({
+        directory: cacheDir,
+        prefix: "download-",
+      });
+      const downloadPath = path.join(downloadDir, "runtime.zip");
+      yield* Effect.log(`[desktop-artifact] Downloading pinned runtime: ${archive.url}`);
+      yield* HttpClient.get(archive.url).pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        HttpClientResponse.stream,
+        Stream.run(fs.sink(downloadPath)),
+      );
+      yield* verifyRuntimeArchive(archive, downloadPath);
+      yield* fs.rename(downloadPath, archivePath);
+    }),
   );
-  yield* verifyRuntimeArchive(archive, downloadPath);
-  yield* fs.rename(downloadPath, archivePath);
   yield* Effect.log(
     `[desktop-artifact] Verified runtime SHA-256 ${archive.sha256}: ${archivePath}`,
   );
@@ -2284,6 +2288,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const runtimeArchive = options.pinnedRuntime
     ? yield* resolvePinnedRuntimeArchive(options.platform, options.arch)
     : undefined;
+  if (runtimeArchive) {
+    yield* Effect.log(
+      `[desktop-artifact] Packaging against runtime ${pathwayRuntime.runtimeName} ${pathwayRuntime.runtimeVersion} (Electron ${pathwayRuntime.electronVersion})`,
+    );
+  }
   const electronDist = runtimeArchive
     ? yield* cachePinnedRuntimeArchive(
         runtimeArchive,
