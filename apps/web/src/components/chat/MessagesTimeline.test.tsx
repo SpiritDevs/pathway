@@ -574,6 +574,34 @@ describe("MessagesTimeline", () => {
     expect(onAnchorSizeChanged).toHaveBeenCalledWith(secondEntry.message.id, 240);
   });
 
+  it("shows sent images above the message bubble and drops the bubble for image-only messages", () => {
+    const image = {
+      type: "image" as const,
+      id: "attachment-1",
+      name: "screenshot.png",
+      mimeType: "image/png",
+      sizeBytes: 1,
+      previewUrl: "data:image/png;base64,iVBORw0KGgo=",
+    };
+    const withAttachments = (text: string) => {
+      const entry = buildUserTimelineEntry(text);
+      return { ...entry, message: { ...entry.message, attachments: [image] } };
+    };
+    const captioned = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[withAttachments("Test image")]} />,
+    );
+    const imagesAt = captioned.indexOf('data-user-message-images="true"');
+    expect(imagesAt).toBeGreaterThan(-1);
+    expect(captioned.indexOf("rounded-2xl bg-accent p-3")).toBeGreaterThan(imagesAt);
+    expect(captioned).toContain("Test image");
+
+    const imageOnly = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[withAttachments("")]} />,
+    );
+    expect(imageOnly).toContain('data-user-message-images="true"');
+    expect(imageOnly).not.toContain("rounded-2xl bg-accent p-3");
+  });
+
   it("hands end-following back to the list once the send anchor is released", () => {
     const firstEntry = buildUserTimelineEntry("First prompt.");
     const secondEntry = {

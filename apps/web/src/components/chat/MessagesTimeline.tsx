@@ -1638,6 +1638,18 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       ctx.queuedMessageControls.get(row.message.id)?.retryable) &&
     hasMessageText;
 
+  // Images sit above the bubble, so an image-only message has no bubble at all.
+  const hasBubbleContent =
+    isEditingMessage ||
+    questionReply !== null ||
+    fileAttachments.length > 0 ||
+    unknownAttachments.length > 0 ||
+    previewAnnotations.length > 0 ||
+    issueContextState.contexts.length > 0 ||
+    elementContexts.length > 0 ||
+    terminalContexts.length > 0 ||
+    elementContextState.promptText.trim().length > 0;
+
   return (
     <div className="group flex flex-col items-end gap-1">
       {row.message.createdBy === "agent" ? (
@@ -1651,28 +1663,28 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       {row.message.inputIntent && row.message.inputIntent !== "turn_start" ? (
         <UserMessageIntentMarker intent={row.message.inputIntent} />
       ) : null}
-      <div
-        className={cn(
-          "relative rounded-2xl bg-accent p-3",
-          isEditingMessage ? "w-[min(32rem,80%)]" : "max-w-[80%]",
-        )}
-      >
-        {regularImages.length > 0 && (
-          <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
-            {regularImages.map((image: NonNullable<TimelineMessage["attachments"]>[number]) => (
+      {regularImages.length > 0 && (
+        <div
+          className="flex max-w-[min(420px,80%)] flex-wrap justify-end gap-1.5"
+          data-user-message-images="true"
+        >
+          {regularImages.map((image: NonNullable<TimelineMessage["attachments"]>[number]) => {
+            const single = regularImages.length === 1;
+            const snapShot = "source" in image && image.source ? image.source : null;
+            return (
               <div
                 key={image.id}
                 className={cn(
-                  "bg-background/70",
-                  "source" in image && image.source
+                  "bg-accent",
+                  snapShot
                     ? SNAP_SHOT_ATTACHMENT_FRAME_CLASS
-                    : "overflow-hidden rounded-lg border border-border/80",
+                    : cn("overflow-hidden rounded-2xl", single ? "max-w-full" : "size-32"),
                 )}
               >
                 {image.previewUrl ? (
                   <button
                     type="button"
-                    className="h-full w-full cursor-zoom-in"
+                    className="block h-full w-full cursor-zoom-in"
                     aria-label={`Preview ${image.name}`}
                     onClick={() => {
                       const preview = buildExpandedImagePreview(regularImages, image.id);
@@ -1683,7 +1695,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                     <img
                       src={image.previewUrl}
                       alt={image.name}
-                      className="block h-auto max-h-[220px] w-full object-cover"
+                      className={cn(
+                        "block object-cover",
+                        single && !snapShot ? "max-h-80 w-auto max-w-full" : "size-full",
+                      )}
                     />
                   </button>
                 ) : (
@@ -1691,97 +1706,104 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                     {image.name}
                   </div>
                 )}
-                {"source" in image && image.source ? (
-                  <SnapShotAttachmentDetails source={image.source} />
-                ) : null}
+                {snapShot ? <SnapShotAttachmentDetails source={snapShot} /> : null}
               </div>
-            ))}
-          </div>
-        )}
-        {fileAttachments.length > 0 && (
-          <div className="mb-2 flex max-w-[420px] flex-wrap gap-1.5">
-            {fileAttachments.map((attachment) => {
-              const content = (
-                <>
+            );
+          })}
+        </div>
+      )}
+      {hasBubbleContent || regularImages.length === 0 ? (
+        <div
+          className={cn(
+            "relative rounded-2xl bg-accent p-3",
+            isEditingMessage ? "w-[min(32rem,80%)]" : "max-w-[80%]",
+          )}
+        >
+          {fileAttachments.length > 0 && (
+            <div className="mb-2 flex max-w-[420px] flex-wrap gap-1.5">
+              {fileAttachments.map((attachment) => {
+                const content = (
+                  <>
+                    <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span className="max-w-48 truncate">{attachment.name}</span>
+                    <span className="shrink-0 text-muted-foreground/70">
+                      {formatAttachmentSizeLabel(attachment.sizeBytes)}
+                    </span>
+                  </>
+                );
+                const className =
+                  "inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/80 bg-background/70 px-2 py-1 text-[11px]";
+                return attachment.previewUrl ? (
+                  <a
+                    key={attachment.id}
+                    href={attachment.previewUrl}
+                    download={attachment.name}
+                    className={cn(className, "hover:bg-background")}
+                    aria-label={`Download ${attachment.name}`}
+                  >
+                    {content}
+                  </a>
+                ) : (
+                  <span key={attachment.id} className={className}>
+                    {content}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          {unknownAttachments.length > 0 && (
+            <div className="mb-2 flex max-w-[420px] flex-wrap gap-1.5">
+              {unknownAttachments.map((attachment) => (
+                <span
+                  key={attachment.id}
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/80 bg-background/70 px-2 py-1 text-[11px]"
+                  aria-label={`Unsupported ${attachment.type} attachment ${attachment.name}`}
+                >
                   <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
                   <span className="max-w-48 truncate">{attachment.name}</span>
-                  <span className="shrink-0 text-muted-foreground/70">
-                    {formatAttachmentSizeLabel(attachment.sizeBytes)}
-                  </span>
-                </>
-              );
-              const className =
-                "inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/80 bg-background/70 px-2 py-1 text-[11px]";
-              return attachment.previewUrl ? (
-                <a
-                  key={attachment.id}
-                  href={attachment.previewUrl}
-                  download={attachment.name}
-                  className={cn(className, "hover:bg-background")}
-                  aria-label={`Download ${attachment.name}`}
-                >
-                  {content}
-                </a>
-              ) : (
-                <span key={attachment.id} className={className}>
-                  {content}
+                  <span className="shrink-0 text-muted-foreground/70">Unsupported attachment</span>
                 </span>
-              );
-            })}
-          </div>
-        )}
-        {unknownAttachments.length > 0 && (
-          <div className="mb-2 flex max-w-[420px] flex-wrap gap-1.5">
-            {unknownAttachments.map((attachment) => (
-              <span
-                key={attachment.id}
-                className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/80 bg-background/70 px-2 py-1 text-[11px]"
-                aria-label={`Unsupported ${attachment.type} attachment ${attachment.name}`}
-              >
-                <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="max-w-48 truncate">{attachment.name}</span>
-                <span className="shrink-0 text-muted-foreground/70">Unsupported attachment</span>
-              </span>
-            ))}
-          </div>
-        )}
-        {previewAnnotations.map((annotation, index) => (
-          <UserMessagePreviewAnnotationCard
-            key={annotation.id}
-            annotation={annotation}
-            image={previewImages[index] ?? null}
-          />
-        ))}
-        {issueContextState.contexts.length > 0 ? (
-          <div className="mb-2 flex flex-wrap gap-1.5" aria-label="Tasks in this message">
-            {issueContextState.contexts.map((context) => (
-              <UserMessageIssueContextChip key={context.id} context={context} />
-            ))}
-          </div>
-        ) : null}
-        {elementContexts.length > 0 ? (
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {elementContexts.map((context) => (
-              <UserMessageElementContextChip
-                key={`${context.header}:${context.body}`}
-                context={context}
-              />
-            ))}
-          </div>
-        ) : null}
-        {isEditingMessage ? (
-          <InlineUserMessageEditor messageId={row.message.id} originalText={row.message.text} />
-        ) : (
-          <CollapsibleUserMessageBody
-            questionReply={questionReply}
-            attachments={userAttachments}
-            text={elementContextState.promptText}
-            terminalContexts={terminalContexts}
-            skills={ctx.skills}
-            markdownCwd={ctx.markdownCwd}
-          />
-        )}
-      </div>
+              ))}
+            </div>
+          )}
+          {previewAnnotations.map((annotation, index) => (
+            <UserMessagePreviewAnnotationCard
+              key={annotation.id}
+              annotation={annotation}
+              image={previewImages[index] ?? null}
+            />
+          ))}
+          {issueContextState.contexts.length > 0 ? (
+            <div className="mb-2 flex flex-wrap gap-1.5" aria-label="Tasks in this message">
+              {issueContextState.contexts.map((context) => (
+                <UserMessageIssueContextChip key={context.id} context={context} />
+              ))}
+            </div>
+          ) : null}
+          {elementContexts.length > 0 ? (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {elementContexts.map((context) => (
+                <UserMessageElementContextChip
+                  key={`${context.header}:${context.body}`}
+                  context={context}
+                />
+              ))}
+            </div>
+          ) : null}
+          {isEditingMessage ? (
+            <InlineUserMessageEditor messageId={row.message.id} originalText={row.message.text} />
+          ) : (
+            <CollapsibleUserMessageBody
+              questionReply={questionReply}
+              attachments={userAttachments}
+              text={elementContextState.promptText}
+              terminalContexts={terminalContexts}
+              skills={ctx.skills}
+              markdownCwd={ctx.markdownCwd}
+            />
+          )}
+        </div>
+      ) : null}
       {row.projectedItem &&
       row.projectedItem.item.status !== "completed" &&
       row.projectedItem.item.status !== "pending" &&

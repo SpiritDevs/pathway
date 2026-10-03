@@ -26,6 +26,7 @@ vi.mock("react/compiler-runtime", async () => {
 vi.mock("./imageTransfer", () => ({
   downloadImageFile: vi.fn().mockResolvedValue(undefined),
   copyImageToClipboard: vi.fn().mockResolvedValue(undefined),
+  readImageDataUrl: vi.fn().mockResolvedValue("data:image/png;base64,original"),
 }));
 
 const images = [
@@ -243,5 +244,47 @@ describe("video galleries", () => {
         (e) => Array.isArray(e.props.children) && e.props.children.includes("Copy"),
       ),
     ).toBeNull();
+  });
+});
+
+describe("image editor", () => {
+  function openEditor(label: string) {
+    const button = find((e) => Array.isArray(e.props.children) && e.props.children.includes(label));
+    (button.props.onClick as () => void)();
+  }
+  async function editor() {
+    await vi.waitFor(() => {
+      expect(visitElements(render(), (e) => "initialTool" in e.props)).not.toBeNull();
+    });
+    return find((e) => "initialTool" in e.props).props as {
+      initialTool: string;
+      actions: ReadonlyArray<string>;
+      onAction: (action: string, result: { dataUrl: string; name: string }) => Promise<void>;
+    };
+  }
+
+  it("opens on the chosen tool with outputs that stay inside the app", async () => {
+    openEditor("Crop");
+    const opened = await editor();
+    expect(opened.initialTool).toBe("crop");
+    expect(opened.actions).toEqual(["copy", "download"]);
+    await opened.onAction("download", { dataUrl: "data:image/png;base64,YQ==", name: "dark.png" });
+    expect(downloadImageFile).toHaveBeenCalledWith("data:image/png;base64,YQ==", "dark.png");
+    expect(visitElements(render(), (e) => "initialTool" in e.props)).toBeNull();
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it("attaches the edited image to chat and closes the viewer", async () => {
+    const onAttachEditedImage = vi.fn();
+    props = { ...props, onAttachEditedImage };
+    openEditor("Remove");
+    const opened = await editor();
+    expect(opened.initialTool).toBe("redact");
+    expect(opened.actions).toContain("chat");
+    await opened.onAction("chat", { dataUrl: "data:image/png;base64,YQ==", name: "dark.png" });
+    const file = onAttachEditedImage.mock.calls[0]![0] as File;
+    expect(file.name).toBe("dark.png");
+    expect(file.type).toBe("image/png");
+    expect(props.onClose).toHaveBeenCalledOnce();
   });
 });

@@ -9,6 +9,7 @@ import {
   CopyIcon,
   CropIcon,
   DownloadIcon,
+  EraserIcon,
   HandIcon,
   HighlighterIcon,
   MessageSquarePlusIcon,
@@ -46,7 +47,10 @@ import {
   containsPoint,
   exportSnapShot,
   moveAnnotation,
+  pixelatedImage,
   rectangleBetween,
+  rectangleRadius,
+  redactionStrokeWidth,
   resizeAnnotation,
   sourceAfterCrop,
   type Annotation,
@@ -61,19 +65,30 @@ export type SnapShotEditorAction = "copy" | "chat" | "download";
 export type SnapShotEditorResult = { dataUrl: string; name: string; source?: SnapShotSource };
 export type SnapShotEditorProps = {
   image: SnapShotEditorResult & { id: string };
+  /** The outputs offered in the toolbar. Defaults to all of them. */
+  actions?: ReadonlyArray<SnapShotEditorAction>;
+  /** Opens on this tool. `resize` focuses the output size. */
+  initialTool?: EditorTool | "resize";
+  /** Names the editor in its status bar and accessible title. */
+  title?: string;
   onAction: (action: SnapShotEditorAction, result: SnapShotEditorResult) => Promise<void>;
   onClose: () => void;
 };
+const ALL_ACTIONS: ReadonlyArray<SnapShotEditorAction> = ["copy", "chat", "download"];
+const OUTPUT_SCALES = [1, 0.75, 0.5, 0.25];
+// Only one editor is ever open, so the redaction mask can use a fixed id.
+const REDACTION_MASK_ID = "shot-editor-redactions";
 
 const TOOLS: { tool: EditorTool; label: string; key: string; icon: LucideIcon }[] = [
   { tool: "select", label: "Select and move", key: "V", icon: MousePointer2Icon },
   { tool: "pan", label: "Pan", key: "H", icon: HandIcon },
   { tool: "text", label: "Text", key: "T", icon: TypeIcon },
-  { tool: "rectangle", label: "Rectangle", key: "R", icon: SquareIcon },
+  { tool: "rectangle", label: "Rounded box", key: "R", icon: SquareIcon },
   { tool: "ellipse", label: "Ellipse", key: "O", icon: CircleIcon },
   { tool: "arrow", label: "Arrow", key: "A", icon: ArrowUpRightIcon },
   { tool: "pen", label: "Freehand", key: "P", icon: PencilIcon },
   { tool: "highlight", label: "Highlighter", key: "M", icon: HighlighterIcon },
+  { tool: "redact", label: "Remove (pixelate)", key: "E", icon: EraserIcon },
   { tool: "number", label: "Numbered callout", key: "N", icon: CirclePlusIcon },
   { tool: "crop", label: "Crop", key: "C", icon: CropIcon },
 ];
@@ -148,7 +163,10 @@ function AnnotationShape({ annotation }: { annotation: Annotation }) {
   };
   switch (annotation.tool) {
     case "rectangle":
-      return <rect {...bounds} {...style} />;
+      return <rect {...bounds} rx={rectangleRadius(annotation, bounds)} {...style} />;
+    case "redact":
+      // Rendered together as the masked pixelated layer beneath every other annotation.
+      return null;
     case "ellipse":
       return (
         <ellipse
@@ -246,7 +264,14 @@ function isTextInput(target: EventTarget | null) {
 }
 
 /** Captured pixels and vector annotations stay separate until an output action flattens them. */
-export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps) {
+export function SnapShotEditor({
+  image,
+  actions = ALL_ACTIONS,
+  initialTool = "select",
+  title = "App Shot",
+  onAction,
+  onClose,
+}: SnapShotEditorProps) {
   const [document, setDocument] = useState<EditorDocument>(EMPTY_DOCUMENT);
   const documentRef = useRef(document);
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -258,7 +283,12 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
   const redoRef = useRef<EditorDocument[]>([]);
   const [historyRevision, setHistoryRevision] = useState(0);
   const [loaded, setLoaded] = useState(false);
-  const [tool, setTool] = useState<EditorTool>("select");
+  const [tool, setTool] = useState<EditorTool>(initialTool === "resize" ? "select" : initialTool);
+  const [outputScale, setOutputScale] = useState(initialTool === "resize" ? 0.5 : 1);
+  const [pixelated, setPixelated] = useState<{ canvas: HTMLCanvasElement; url: string } | null>(
+    null,
+  );
+  const sizeRef = useRef<HTMLSelectElement | null>(null);
   const [color, setColor] = useState("#ed3b32");
   const [strokeWidth, setStrokeWidth] = useState(4);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -386,7 +416,12 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
     setError(null);
     try {
       const current = documentRef.current;
-      const { dataUrl, imageSize } = exportSnapShot(imageRef.current, current);
+      const { dataUrl, imageSize } = exportSnapShot(
+        imageRef.current,
+        current,
+        outputScale,
+        pixelated?.canvas ?? null,
+      );
       const source = sourceAfterCrop(image.source, current.crop, {
         width: imageRef.current.naturalWidth,
         height: imageRef.current.naturalHeight,
@@ -417,11 +452,12 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
       };
       documentRef.current = initial;
       setDocument(initial);
+      const canvas = pixelatedImage(bitmap);
+      setPixelated({ canvas, url: canvas.toDataURL("image/png") });
       setLoaded(true);
     });
     bitmap.addEventListener("error", () => {
-      if (!cancelled)
-        setError("This capture could not be opened. Close the editor and try capturing again.");
+      if (!cancelled) setError("This image could not be opened. Close the editor and try again.");
     });
     bitmap.src = image.dataUrl;
     return () => {
@@ -446,8 +482,10 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
   }, [editing]);
 
   useEffect(() => {
-    if (loaded) stageRef.current?.focus({ preventScroll: true });
-  }, [loaded]);
+    if (!loaded) return;
+    if (initialTool === "resize") sizeRef.current?.focus({ preventScroll: true });
+    else stageRef.current?.focus({ preventScroll: true });
+  }, [initialTool, loaded]);
 
   function pointFromEvent(event: PointerEvent): Point {
     const bounds = stageRef.current!.getBoundingClientRect();
@@ -582,7 +620,10 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
     } else if (gesture.kind === "resize") {
       annotation = resizeAnnotation(gesture.annotation, rectangleBetween(gesture.anchor, point));
     } else {
-      const freehand = gesture.annotation.tool === "pen" || gesture.annotation.tool === "highlight";
+      const freehand =
+        gesture.annotation.tool === "pen" ||
+        gesture.annotation.tool === "highlight" ||
+        gesture.annotation.tool === "redact";
       if (freehand) {
         const previous = gesture.annotation.points.at(-1)!;
         if (Math.hypot(previous.x - point.x, previous.y - point.y) < 1.5 / scale) return;
@@ -689,12 +730,12 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
       redo();
       return;
     }
-    if (command && key === "c") {
+    if (command && key === "c" && actions.includes("copy")) {
       event.preventDefault();
       void act("copy");
       return;
     }
-    if (command && key === "s") {
+    if (command && key === "s" && actions.includes("download")) {
       event.preventDefault();
       void act("download");
       return;
@@ -703,7 +744,7 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
       if (event.target instanceof HTMLElement && event.target.closest("button")) return;
       event.preventDefault();
       if (cropSelection) applyCrop();
-      else void act("chat");
+      else if (actions.includes("chat")) void act("chat");
       return;
     }
     if (key === "delete" || key === "backspace") {
@@ -761,7 +802,9 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
           ? "Click to add text · ⌘ / Ctrl + Enter to finish"
           : tool === "crop"
             ? "Drag to select the area to keep"
-            : "Drag to draw · Hold Shift for straight arrows and equal sides";
+            : tool === "redact"
+              ? "Paint over anything you don't want to show"
+              : "Drag to draw · Hold Shift for straight arrows and equal sides";
 
   return (
     <DialogPrimitive.Root
@@ -774,10 +817,11 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
         <DialogPrimitive.Backdrop className="shot-editor-backdrop" />
         <DialogPrimitive.Popup className="shot-editor" onKeyDown={keyDown} initialFocus={stageRef}>
           <DialogPrimitive.Title className="shot-editor-sr-only">
-            App Shot editor
+            {title} editor
           </DialogPrimitive.Title>
           <DialogPrimitive.Description className="shot-editor-sr-only">
-            Annotate your capture, then copy it, save it to your chat draft, or download it. Each
+            Annotate the image, then copy it
+            {actions.includes("chat") ? ", save it to your chat draft," : ""} or download it. Each
             action closes the editor.
           </DialogPrimitive.Description>
           <header className="shot-editor-toolbar" aria-label="Image editor tools">
@@ -794,24 +838,30 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
               </button>
             </div>
             <div className="shot-editor-group" role="group" aria-label="Save image">
-              <ToolButton
-                label="Copy image and close (⌘/Ctrl+C)"
-                icon={CopyIcon}
-                onClick={() => void act("copy")}
-                disabled={!loaded || Boolean(busy)}
-              />
-              <ToolButton
-                label="Save to chat and close (Enter)"
-                icon={MessageSquarePlusIcon}
-                onClick={() => void act("chat")}
-                disabled={!loaded || Boolean(busy)}
-              />
-              <ToolButton
-                label="Download image and close (⌘/Ctrl+S)"
-                icon={DownloadIcon}
-                onClick={() => void act("download")}
-                disabled={!loaded || Boolean(busy)}
-              />
+              {actions.includes("copy") && (
+                <ToolButton
+                  label="Copy image and close (⌘/Ctrl+C)"
+                  icon={CopyIcon}
+                  onClick={() => void act("copy")}
+                  disabled={!loaded || Boolean(busy)}
+                />
+              )}
+              {actions.includes("chat") && (
+                <ToolButton
+                  label="Save to chat and close (Enter)"
+                  icon={MessageSquarePlusIcon}
+                  onClick={() => void act("chat")}
+                  disabled={!loaded || Boolean(busy)}
+                />
+              )}
+              {actions.includes("download") && (
+                <ToolButton
+                  label="Download image and close (⌘/Ctrl+S)"
+                  icon={DownloadIcon}
+                  onClick={() => void act("download")}
+                  disabled={!loaded || Boolean(busy)}
+                />
+              )}
             </div>
             <div
               className="shot-editor-group shot-editor-tools"
@@ -884,13 +934,25 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
                 </label>
               </div>
             </div>
-            <div className="shot-editor-size">
-              <strong>
-                {loaded ? `${document.crop.width}×${document.crop.height}` : "—"}
-                <span> px</span>
-              </strong>
+            <label className="shot-editor-size">
+              <select
+                aria-label="Output size"
+                ref={sizeRef}
+                value={outputScale}
+                disabled={!loaded || Boolean(busy)}
+                onChange={(event) => setOutputScale(Number(event.target.value))}
+              >
+                {OUTPUT_SCALES.map((value) => (
+                  <option key={value} value={value}>
+                    {Math.round(value * 100)}%
+                    {loaded
+                      ? ` · ${Math.max(1, Math.floor(document.crop.width * value))}×${Math.max(1, Math.floor(document.crop.height * value))} px`
+                      : ""}
+                  </option>
+                ))}
+              </select>
               <span>Image size</span>
-            </div>
+            </label>
             <label className="shot-editor-zoom">
               <select
                 aria-label="Zoom"
@@ -986,6 +1048,36 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
                       width={imageRef.current?.naturalWidth}
                       height={imageRef.current?.naturalHeight}
                     />
+                    {pixelated &&
+                      document.annotations.some((annotation) => annotation.tool === "redact") && (
+                        <g pointerEvents="none">
+                          <mask id={REDACTION_MASK_ID}>
+                            {document.annotations
+                              .filter((annotation) => annotation.tool === "redact")
+                              .map((annotation) => (
+                                <polyline
+                                  key={annotation.id}
+                                  points={annotation.points
+                                    .map((point) => `${point.x},${point.y}`)
+                                    .join(" ")}
+                                  fill="none"
+                                  stroke="white"
+                                  strokeWidth={redactionStrokeWidth(annotation)}
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              ))}
+                          </mask>
+                          <image
+                            href={pixelated.url}
+                            width={imageRef.current?.naturalWidth}
+                            height={imageRef.current?.naturalHeight}
+                            preserveAspectRatio="none"
+                            style={{ imageRendering: "pixelated" }}
+                            mask={`url(#${REDACTION_MASK_ID})`}
+                          />
+                        </g>
+                      )}
                     <g pointerEvents="none">
                       {document.annotations
                         .filter((annotation) => annotation.id !== editing?.id)
@@ -1148,7 +1240,7 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
                   : busy === "chat"
                     ? "Saving to chat…"
                     : "Downloading…"
-                : "App Shot"}
+                : title}
             </span>
           </footer>
           {error && (

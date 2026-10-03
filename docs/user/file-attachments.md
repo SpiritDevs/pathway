@@ -33,6 +33,22 @@ Use the zoom buttons or the `+` and `-` keys to zoom. Drag a zoomed image to pan
 percentage or press `0` to fit it to the window. Download saves the original image. Press Escape,
 click the background, or use the close button to return to the conversation.
 
+Images you send appear as rounded previews above your message bubble. A message that has only
+images shows no bubble. Click a preview to open it in the gallery.
+
+To change a copy of the image, use **Edit**, **Crop**, **Resize**, or **Remove** in the gallery.
+Each one opens the image editor with that tool selected. The editor can draw arrows, rounded boxes,
+text, freehand lines, highlights and numbered callouts. **Remove** pixelates anything you paint
+over, so it doesn't appear in the saved image. **Resize** sets the size of the saved image. The
+original attachment never changes. Copy or download the edited image, or, while viewing an image
+in a chat, save it to the composer so you can send it with your next message.
+
+On iPhone and iPad, sent images also appear above the bubble. Tap one to open a full-screen gallery.
+Swipe between images, and pinch or double-tap to zoom. Copy, share or save the image to Photos from
+the top bar. **Edit**, **Crop**, **Resize** and **Remove** at the bottom open the same kinds of
+tools. After you apply an edit, the gallery shows the edited copy, and **Revert edits** brings back
+the original.
+
 ## Answering questions with attachments
 
 You can paste a photo, drag a file, or use the paperclip while answering an agent's question.

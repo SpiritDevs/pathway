@@ -174,7 +174,7 @@ it("blocks duplicate output and close while saving, then permits cancellation", 
 it("keeps editor shortcuts from reaching chat and lets Escape cancel a tool before closing", () => {
   const event = keyDown(mount(), "r");
   expect(event.stopPropagation).toHaveBeenCalledOnce();
-  expect(button(render(), "Rectangle (R)")).toBeDefined();
+  expect(button(render(), "Rounded box (R)")).toBeDefined();
   keyDown(render(), "Escape");
   expect(onClose).not.toHaveBeenCalled();
   keyDown(render(), "Escape");
@@ -190,4 +190,17 @@ it("preserves Enter on a focused toolbar button rather than saving to chat", () 
   expect(onAction).not.toHaveBeenCalled();
   expect(event.preventDefault).not.toHaveBeenCalled();
   expect(event.stopPropagation).toHaveBeenCalledOnce();
+});
+
+it("offers only the outputs its host supports", () => {
+  const renderHost = () => {
+    hooks.beginRender();
+    return SnapShotEditor({ ...props, actions: ["copy", "download"] });
+  };
+  renderHost();
+  for (const effect of effects.splice(0)) effect();
+  const tree = renderHost();
+  expect(() => button(tree, "Save to chat and close (Enter)")).toThrow("Missing button");
+  keyDown(tree, "Enter");
+  expect(onAction).not.toHaveBeenCalled();
 });

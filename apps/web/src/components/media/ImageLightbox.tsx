@@ -9,17 +9,23 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
+  CropIcon,
   DownloadIcon,
+  EraserIcon,
   ExternalLinkIcon,
   MessageSquarePlusIcon,
   FilmIcon,
+  PencilIcon,
+  ScalingIcon,
   XIcon,
   ZoomInIcon,
   ZoomOutIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
+  lazy,
   memo,
+  Suspense,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   useCallback,
@@ -28,6 +34,7 @@ import {
   useState,
 } from "react";
 
+import { dataUrlToFile } from "~/lib/imageCompression";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { Button } from "../ui/button";
@@ -41,7 +48,21 @@ import {
   steppedZoom,
   wrapImageIndex,
 } from "./imageLightbox.logic";
-import { copyImageToClipboard, downloadImageFile } from "./imageTransfer";
+import { copyImageToClipboard, downloadImageFile, readImageDataUrl } from "./imageTransfer";
+import type { SnapShotEditorAction, SnapShotEditorProps } from "../snapShot/SnapShotEditor";
+
+const SnapShotEditor = lazy(() => import("../snapShot/SnapShotEditor"));
+
+const EDIT_TOOLS = [
+  { tool: "select", label: "Edit", icon: PencilIcon },
+  { tool: "crop", label: "Crop", icon: CropIcon },
+  { tool: "resize", label: "Resize", icon: ScalingIcon },
+  { tool: "redact", label: "Remove", icon: EraserIcon },
+] as const satisfies ReadonlyArray<{
+  tool: NonNullable<SnapShotEditorProps["initialTool"]>;
+  label: string;
+  icon: LucideIcon;
+}>;
 
 export interface LightboxImage {
   readonly kind?: "image" | "video";
@@ -72,6 +93,8 @@ export interface ImageLightboxProps {
   readonly actions?: ReadonlyArray<ImageLightboxAction>;
   /** When supplied, the footer grows a comment box that posts against the shown image. */
   readonly comment?: ImageLightboxCommentSupport;
+  /** When supplied, the image editor can send its result to the chat composer. */
+  readonly onAttachEditedImage?: (file: File) => void;
   readonly onClose: () => void;
   readonly onImageError?: (image: LightboxImage, index: number) => void;
 }
@@ -130,9 +153,14 @@ export const ImageLightbox = memo(function ImageLightbox({
   initialIndex = 0,
   actions = NO_ACTIONS,
   comment,
+  onAttachEditedImage,
   onClose,
   onImageError,
 }: ImageLightboxProps) {
+  const [editor, setEditor] = useState<{
+    image: SnapShotEditorProps["image"];
+    initialTool: (typeof EDIT_TOOLS)[number]["tool"];
+  } | null>(null);
   const [index, setIndex] = useState(() => wrapImageIndex(initialIndex, images.length));
   const [zoom, setZoom] = useState<number>(MIN_IMAGE_ZOOM);
   const [pan, setPan] = useState<{ x: number; y: number }>(ORIGIN);
@@ -314,6 +342,46 @@ export const ImageLightbox = memo(function ImageLightbox({
   };
 
   if (image === undefined) return null;
+
+  const openEditor = (initialTool: (typeof EDIT_TOOLS)[number]["tool"]) =>
+    runTransfer("Could not open the image editor", async () => {
+      const dataUrl = await readImageDataUrl(image.src);
+      setEditor({ image: { id: image.src, name: image.name, dataUrl }, initialTool });
+    });
+
+  if (editor !== null) {
+    const editorActions: ReadonlyArray<SnapShotEditorAction> = onAttachEditedImage
+      ? ["copy", "chat", "download"]
+      : ["copy", "download"];
+    return (
+      <Suspense
+        fallback={
+          <div
+            className="fixed inset-0 z-[140] grid place-items-center bg-black/85 text-sm text-white/70"
+            role="status"
+          >
+            Opening editor…
+          </div>
+        }
+      >
+        <SnapShotEditor
+          key={editor.image.id}
+          image={editor.image}
+          initialTool={editor.initialTool}
+          actions={editorActions}
+          title="Image"
+          onClose={() => setEditor(null)}
+          onAction={async (action, result) => {
+            if (action === "copy") await copyImageToClipboard(result.dataUrl);
+            else if (action === "download") await downloadImageFile(result.dataUrl, result.name);
+            else onAttachEditedImage?.(dataUrlToFile(result.dataUrl, result.name, "image/png"));
+            setEditor(null);
+            if (action === "chat") onClose();
+          }}
+        />
+      </Suspense>
+    );
+  }
   const contents =
     showContents && image.source ? snapShotAccessibilityDetails(image.source) : undefined;
   const hasContents = Boolean(
@@ -585,6 +653,20 @@ export const ImageLightbox = memo(function ImageLightbox({
                   Copy
                 </Button>
               ) : null}
+              {!isVideo
+                ? EDIT_TOOLS.map((edit) => (
+                    <Button
+                      disabled={busy || imageUnavailable}
+                      key={edit.tool}
+                      onClick={() => openEditor(edit.tool)}
+                      size="sm"
+                      variant="outline"
+                    >
+                      <edit.icon />
+                      {edit.label}
+                    </Button>
+                  ))
+                : null}
               {hasContents ? (
                 <Button
                   aria-pressed={showContents}

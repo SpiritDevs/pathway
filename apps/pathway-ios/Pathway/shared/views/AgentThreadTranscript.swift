@@ -136,40 +136,16 @@ private struct AgentTranscriptMessage<Actions: View>: View {
     var body: some View {
         let questionReply = item.questionReply
         let copyText = questionReply?.copyText ?? item.text ?? ""
+        // Sent images sit above the bubble; question replies keep each image with its answer.
+        let images = item.isUserMessage && questionReply == nil ? item.attachments.filter { $0.type == "image" } : []
+        let inlineAttachments = item.attachments.filter { attachment in
+            !images.contains(attachment) && !(questionReply?.answers.contains { $0.attachmentIDs.contains(attachment.id) } ?? false)
+        }
+        let showsBubble = !item.isUserMessage || !(item.text ?? "").isEmpty || !inlineAttachments.isEmpty
         VStack(alignment: item.isUserMessage ? .trailing : .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 12) {
-                if let text = item.text, !text.isEmpty {
-                    if let questionReply {
-                        ForEach(Array(questionReply.answers.enumerated()), id: \.offset) { _, reply in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(reply.question).fontWeight(.medium).foregroundStyle(.secondary)
-                                Text(reply.answer)
-                                ForEach(item.attachments.filter { reply.attachmentIDs.contains($0.id) }) { attachment in
-                                    AgentTranscriptAttachment(attachment: attachment, model: model)
-                                }
-                            }
-                            .textSelection(.enabled)
-                            .accessibilityElement(children: .combine)
-                        }
-                    } else if item.isUserMessage {
-                        Text(AgentTranscriptMessageEditor.editableText(text)).textSelection(.enabled)
-                    } else {
-                        AgentTranscriptMarkdown(markdown: text, imageContext: AgentMarkdownImageContext(model: model, threadID: item.fields["threadId"]?.stringValue ?? model.threadID)).equatable()
-                    }
-                }
-                ForEach(item.attachments.filter { attachment in !(questionReply?.answers.contains { $0.attachmentIDs.contains(attachment.id) } ?? false) }) { attachment in
-                    AgentTranscriptAttachment(attachment: attachment, model: model)
-                }
-                if questionReply == nil, item.isUserMessage, let text = item.text, AgentTranscriptMessageEditor.editableText(text) != text {
-                    DisclosureGroup("Attached context", isExpanded: $showingContext) {
-                        Text(String(text.dropFirst(AgentTranscriptMessageEditor.editableText(text).count)))
-                            .font(.caption.monospaced()).textSelection(.enabled)
-                    }.font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .padding(item.isUserMessage ? 14 : 0)
-            .background {
-                if item.isUserMessage { RoundedRectangle(cornerRadius: 22).fill(Color(uiColor: .secondarySystemBackground)) }
+            VStack(alignment: item.isUserMessage ? .trailing : .leading, spacing: 6) {
+                if !images.isEmpty { AgentTranscriptImageStack(images: images, model: model) }
+                if showsBubble { bubble(questionReply: questionReply, attachments: inlineAttachments) }
             }
             .frame(maxWidth: .infinity, alignment: item.isUserMessage ? .trailing : .leading)
             .contextMenu {
@@ -193,19 +169,85 @@ private struct AgentTranscriptMessage<Actions: View>: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("thread-message-\(item.id)")
     }
+
+    private func bubble(questionReply: PathwayQuestionReply?, attachments: [PathwayMessageAttachment]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let text = item.text, !text.isEmpty {
+                if let questionReply {
+                    ForEach(Array(questionReply.answers.enumerated()), id: \.offset) { _, reply in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(reply.question).fontWeight(.medium).foregroundStyle(.secondary)
+                            Text(reply.answer)
+                            ForEach(item.attachments.filter { reply.attachmentIDs.contains($0.id) }) { attachment in
+                                AgentTranscriptAttachment(attachment: attachment, model: model)
+                            }
+                        }
+                        .textSelection(.enabled)
+                        .accessibilityElement(children: .combine)
+                    }
+                } else if item.isUserMessage {
+                    let editable = AgentTranscriptMessageEditor.editableText(text)
+                    if !editable.isEmpty { Text(editable).textSelection(.enabled) }
+                } else {
+                    AgentTranscriptMarkdown(markdown: text, imageContext: AgentMarkdownImageContext(model: model, threadID: item.fields["threadId"]?.stringValue ?? model.threadID)).equatable()
+                }
+            }
+            ForEach(attachments) { attachment in
+                AgentTranscriptAttachment(attachment: attachment, model: model)
+            }
+            if questionReply == nil, item.isUserMessage, let text = item.text, AgentTranscriptMessageEditor.editableText(text) != text {
+                DisclosureGroup("Attached context", isExpanded: $showingContext) {
+                    Text(String(text.dropFirst(AgentTranscriptMessageEditor.editableText(text).count)))
+                        .font(.caption.monospaced()).textSelection(.enabled)
+                }.font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(item.isUserMessage ? 14 : 0)
+        .background {
+            if item.isUserMessage { RoundedRectangle(cornerRadius: 22).fill(Color(uiColor: .secondarySystemBackground)) }
+        }
+    }
+}
+
+/// A sent message's images: one large rounded image, or right-aligned rows of square tiles.
+private struct AgentTranscriptImageStack: View {
+    let images: [PathwayMessageAttachment]
+    let model: PathwayAgentThreadModel
+
+    var body: some View {
+        if images.count == 1 {
+            AgentTranscriptAttachment(attachment: images[0], model: model, gallery: images, layout: .single)
+        } else {
+            VStack(alignment: .trailing, spacing: 6) {
+                ForEach(Array(stride(from: 0, to: images.count, by: 3)), id: \.self) { start in
+                    HStack(spacing: 6) {
+                        ForEach(images[start..<min(start + 3, images.count)]) { image in
+                            AgentTranscriptAttachment(attachment: image, model: model, gallery: images, layout: .tile)
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 private struct AgentTranscriptAttachment: View {
+    enum Layout { case inline, single, tile }
     let attachment: PathwayMessageAttachment
     let model: PathwayAgentThreadModel
+    let gallery: [PathwayMessageAttachment]
+    let layout: Layout
     @State private var url: URL?
     @State private var errorMessage: String?
     @State private var attempt = 0
     @State private var showPreview = false
+    @State private var showGallery = false
 
-    init(attachment: PathwayMessageAttachment, model: PathwayAgentThreadModel) {
+    init(attachment: PathwayMessageAttachment, model: PathwayAgentThreadModel, gallery: [PathwayMessageAttachment] = [], layout: Layout = .inline) {
         self.attachment = attachment
         self.model = model
+        self.gallery = gallery.isEmpty ? [attachment] : gallery
+        self.layout = layout
         _url = State(initialValue: model.cachedAttachmentImageURL(attachment.id))
     }
 
@@ -213,27 +255,16 @@ private struct AgentTranscriptAttachment: View {
         Group {
             if let url {
                 if attachment.type == "image" {
-                    AgentTranscriptAttachmentImage(url: url, maximumPixelSize: 840) { phase in
+                    AgentTranscriptAttachmentImage(url: url, maximumPixelSize: layout == .tile ? 320 : 840) { phase in
                         switch phase {
                         case .success(let image):
-                            Button { showPreview = true } label: {
-                                VStack(alignment: .leading, spacing: 5) {
-                                    image.resizable().scaledToFit().frame(maxWidth: 280, maxHeight: 210)
-                                        .clipShape(.rect(cornerRadius: 12))
-                                    if let source = attachment.snapShotSource {
-                                        Label(source["appName"]?.stringValue ?? "SnapShot", systemImage: "macwindow")
-                                            .font(.caption).foregroundStyle(.secondary)
-                                        if let title = source["windowTitle"]?.stringValue, !title.isEmpty {
-                                            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                                        }
-                                    }
-                                }
-                            }.buttonStyle(.plain)
+                            Button { showGallery = true } label: { thumbnail(image) }
+                                .buttonStyle(.plain)
                                 .accessibilityIdentifier("transcript-image-\(attachment.id)")
                         case .failure:
                             unavailable("This image couldn’t be loaded.")
                         default:
-                            ProgressView().frame(width: 100, height: 70)
+                            placeholder
                         }
                     }
                 } else {
@@ -244,14 +275,19 @@ private struct AgentTranscriptAttachment: View {
                 }
             } else if let errorMessage {
                 unavailable(errorMessage)
-            } else {
+            } else if layout == .inline {
                 HStack(spacing: 8) { Image(systemName: "photo"); Text(model.isSubscriptionReady ? attachment.name : "Image available when reconnected").lineLimit(1) }
                     .foregroundStyle(.secondary)
+            } else {
+                placeholder
             }
         }
         .font(.subheadline).accessibilityLabel("Attachment \(attachment.name)")
         .sheet(isPresented: $showPreview) {
             AgentTranscriptAttachmentPreview(attachment: attachment, model: model, initialURL: url)
+        }
+        .fullScreenCover(isPresented: $showGallery) {
+            AgentTranscriptImageGallery(attachments: gallery, model: model, initialID: attachment.id, initialURL: url)
         }
         .task(id: "\(attempt):\(model.isSubscriptionReady):\(model.cloudQueueAttachmentURLs[attachment.id]?.absoluteString ?? "")") {
             guard url == nil else { return }
@@ -263,6 +299,42 @@ private struct AgentTranscriptAttachment: View {
                 guard !Task.isCancelled else { return }
                 errorMessage = model.isSubscriptionReady ? "This image isn’t available yet. Try again." : nil
             }
+        }
+    }
+    @ViewBuilder
+    private func thumbnail(_ image: Image) -> some View {
+        switch layout {
+        case .tile:
+            Color.clear.frame(width: 96, height: 96)
+                .overlay { image.resizable().scaledToFill() }
+                .clipShape(.rect(cornerRadius: 18, style: .continuous))
+        case .single, .inline:
+            VStack(alignment: layout == .single ? .trailing : .leading, spacing: 5) {
+                if layout == .single {
+                    image.resizable().scaledToFit().frame(maxWidth: 240, maxHeight: 300)
+                        .clipShape(.rect(cornerRadius: 18, style: .continuous))
+                } else {
+                    image.resizable().scaledToFit().frame(maxWidth: 280, maxHeight: 210)
+                        .clipShape(.rect(cornerRadius: 12))
+                }
+                if let source = attachment.snapShotSource {
+                    Label(source["appName"]?.stringValue ?? "SnapShot", systemImage: "macwindow")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let title = source["windowTitle"]?.stringValue, !title.isEmpty {
+                        Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+            }
+        }
+    }
+    @ViewBuilder
+    private var placeholder: some View {
+        switch layout {
+        case .inline: ProgressView().frame(width: 100, height: 70)
+        case .single, .tile:
+            RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.quaternary)
+                .frame(width: layout == .tile ? 96 : 180, height: layout == .tile ? 96 : 135)
+                .overlay { ProgressView() }
         }
     }
     private func unavailable(_ message: String) -> some View {

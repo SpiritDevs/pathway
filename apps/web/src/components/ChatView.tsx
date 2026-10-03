@@ -10905,6 +10905,7 @@ function ChatViewContent(props: ChatViewProps) {
           key={`${expandedImage.images[expandedImage.index]?.src ?? "image"}:${expandedImage.index}`}
           images={expandedImage.images}
           initialIndex={expandedImage.index}
+          onAttachEditedImage={(file) => composerRef.current?.addDroppedFiles([file])}
           onClose={closeExpandedImage}
         />
       )}
