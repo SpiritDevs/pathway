@@ -1367,10 +1367,15 @@ function PullRequestsRouteView() {
         ? createPortal(
             <>
               {rightPanelState.isOpen ? (
+                // Popped out, it docks; a sheet with no room to dock can only hide.
                 <RightPanelPopOutControl
                   poppedOut={rightPanelFloating}
-                  onToggle={rightPanelFloating ? toggleRightPanel : toggleRightPanelPoppedOut}
-                  hidesWhenPoppedOut
+                  onToggle={
+                    rightPanelFloating && !desktopRightPanelPoppedOut
+                      ? toggleRightPanel
+                      : toggleRightPanelPoppedOut
+                  }
+                  hidesWhenPoppedOut={!desktopRightPanelPoppedOut}
                 />
               ) : null}
               {/* Docked and floating are exclusive: only the current mode's toggle is pressed. */}

@@ -10058,10 +10058,15 @@ function ChatViewContent(props: ChatViewProps) {
     ? createPortal(
         <>
           {canPopOutRightPanel || rightPanelFloating ? (
+            // Popped out, it docks; a sheet with no room to dock can only hide.
             <RightPanelPopOutControl
               poppedOut={rightPanelFloating}
-              onToggle={rightPanelFloating ? closePreviewPanel : toggleRightPanelPoppedOut}
-              hidesWhenPoppedOut
+              onToggle={
+                rightPanelFloating && !rightPanelPoppedOut
+                  ? closePreviewPanel
+                  : toggleRightPanelPoppedOut
+              }
+              hidesWhenPoppedOut={!rightPanelPoppedOut}
             />
           ) : null}
           {/* Docked and floating are exclusive here: only the current mode's toggle is
