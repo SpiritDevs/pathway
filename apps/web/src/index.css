@@ -134,6 +134,12 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
     min-height: 0;
   }
 
+  /* A maximized right panel covers this toggle, so its tab strip carries one instead. */
+  [data-sidebar-state="collapsed"]:has([data-right-panel-maximized="panel"])
+    [data-sidebar-control] {
+    display: none;
+  }
+
   [data-app-workspace-row]:has([data-inline-right-panel-fill="true"])
     > [data-app-workspace-main-row]
     > [data-app-primary-column] {

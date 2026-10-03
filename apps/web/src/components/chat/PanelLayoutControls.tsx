@@ -200,42 +200,6 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   );
 });
 
-export const RightPanelPopOutControl = memo(function RightPanelPopOutControl({
-  poppedOut,
-  onToggle,
-  hidesWhenPoppedOut = false,
-}: {
-  poppedOut: boolean;
-  onToggle: () => void;
-  /** Pressing it while popped out hides the panel instead of docking it. */
-  hidesWhenPoppedOut?: boolean;
-}) {
-  const label = poppedOut ? (hidesWhenPoppedOut ? "Hide panel" : "Dock panel") : "Pop out panel";
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Toggle
-            className="shrink-0 [-webkit-app-region:no-drag]"
-            pressed={poppedOut}
-            onPressedChange={onToggle}
-            aria-label={label}
-            variant="ghost"
-            size="sm"
-          >
-            {poppedOut ? (
-              <Minimize2Icon className="size-4" />
-            ) : (
-              <Maximize2Icon className="size-4" />
-            )}
-          </Toggle>
-        }
-      />
-      <TooltipPopup side="bottom">{label}</TooltipPopup>
-    </Tooltip>
-  );
-});
-
 export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl({
   maximized,
   onToggle,

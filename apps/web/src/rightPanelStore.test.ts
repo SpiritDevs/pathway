@@ -691,6 +691,25 @@ describe("rightPanelStore", () => {
     ]);
   });
 
+  it("leaves the page tab when a surface is opened or picked, even the one already active", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "diff");
+    store.setPageTabActive(refA, true);
+    store.closeSurface(refA, "missing");
+    expect(panelState().pageTabActive).toBe(true);
+
+    store.open(refA, "diff");
+    expect(panelState().pageTabActive).toBeUndefined();
+
+    store.setPageTabActive(refA, true);
+    store.activateSurface(refA, "diff");
+    expect(panelState()).toEqual({
+      isOpen: true,
+      activeSurfaceId: "diff",
+      surfaces: [{ id: "diff", kind: "diff" }],
+    });
+  });
+
   it("falls back to a new browser tab when an open panel loses its last tab", () => {
     const store = useRightPanelStore.getState();
     store.openBrowser(refA, "stale-tab");

@@ -121,6 +121,11 @@ export interface ThreadRightPanelState {
   isOpen: boolean;
   activeSurfaceId: string | null;
   surfaces: RightPanelSurface[];
+  /**
+   * While maximized, the covered page shows through its own first tab instead of a surface.
+   * Opening or picking any surface clears it.
+   */
+  pageTabActive?: boolean;
 }
 
 export interface ThreadPanelVisibility {
@@ -161,6 +166,7 @@ interface RightPanelStoreState {
   activateTerminal: (ref: ScopedThreadRef, surfaceId: string, terminalId: string) => void;
   closeTerminal: (ref: ScopedThreadRef, surfaceId: string, terminalId: string) => void;
   activateSurface: (ref: ScopedThreadRef, surfaceId: string) => void;
+  setPageTabActive: (ref: ScopedThreadRef, active: boolean) => void;
   /** Moves a tab to `toIndex` in the tab strip. */
   moveSurface: (ref: ScopedThreadRef, surfaceId: string, toIndex: number) => void;
   closeSurface: (ref: ScopedThreadRef, surfaceId: string) => void;
@@ -335,6 +341,12 @@ const appendSurface = (
 });
 
 /** Opens a surface. A tool opened from a blank tab replaces it; another browser tab sits beside it. */
+/** The state with its surface showing, for actions that pick one. */
+const withoutPageTab = ({
+  pageTabActive: _pageTabActive,
+  ...state
+}: ThreadRightPanelState): ThreadRightPanelState => state;
+
 const upsertSurface = (
   current: ThreadRightPanelState,
   surface: RightPanelSurface,
@@ -705,7 +717,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       splitTerminal: (ref, surfaceId, terminalId, direction = "horizontal") =>
         set((state) =>
           updateThread(state, ref, (current) => ({
-            ...current,
+            ...withoutPageTab(current),
             isOpen: true,
             activeSurfaceId: surfaceId,
             surfaces: current.surfaces.map((surface) => {
@@ -725,7 +737,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       activateTerminal: (ref, surfaceId, terminalId) =>
         set((state) =>
           updateThread(state, ref, (current) => ({
-            ...current,
+            ...withoutPageTab(current),
             activeSurfaceId: surfaceId,
             surfaces: current.surfaces.map((surface) =>
               surface.id === surfaceId &&
@@ -779,8 +791,18 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         set((state) =>
           updateThread(state, ref, (current) =>
             current.surfaces.some((surface) => surface.id === surfaceId)
-              ? { ...current, isOpen: true, activeSurfaceId: surfaceId }
+              ? { ...withoutPageTab(current), isOpen: true, activeSurfaceId: surfaceId }
               : current,
+          ),
+        ),
+      setPageTabActive: (ref, active) =>
+        set((state) =>
+          updateThread(state, ref, (current) =>
+            (current.pageTabActive ?? false) === active
+              ? current
+              : active
+                ? { ...current, pageTabActive: true }
+                : withoutPageTab(current),
           ),
         ),
       moveSurface: (ref, surfaceId, toIndex) =>

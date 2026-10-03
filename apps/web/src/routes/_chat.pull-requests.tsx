@@ -64,10 +64,14 @@ import {
 import { InlineRightPanelPortal } from "../components/preview/InlineRightPanelPresence";
 import { useWorkspaceTopBarActionsHost } from "../components/navigation/WorkspaceTopBar";
 import { RightPanelSheet } from "../components/RightPanelSheet";
-import { RightPanelTabs, type PullRequestTabStatus } from "../components/RightPanelTabs";
+import {
+  RightPanelTabs,
+  type PullRequestTabStatus,
+  type RightPanelLeadingTab,
+} from "../components/RightPanelTabs";
 import {
   PanelLayoutControls,
-  RightPanelPopOutControl,
+  RightPanelMaximizeControl,
 } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
 import { SidebarInset } from "../components/ui/sidebar";
@@ -102,11 +106,10 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
-import { isPaneFocused, useIsNarrowPane, usePaneId } from "~/panes/usePaneFocus";
+import { isPaneFocused, useIsNarrowPane, useIsSplitWindow, usePaneId } from "~/panes/usePaneFocus";
 import {
   RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
   shouldMountRightPanelSheet,
-  shouldPresentRightPanelAsSheet,
 } from "~/rightPanelLayout";
 
 export interface PullRequestsSearch {
@@ -267,17 +270,20 @@ function PullRequestsRouteView() {
   const selectedPullRequestSurface =
     selectedRightPanelSurface?.kind === "pull-request" ? selectedRightPanelSurface : null;
   const activePullRequestSurface = rightPanelState.isOpen ? selectedPullRequestSurface : null;
-  const [rightPanelPoppedOut, setRightPanelPoppedOut] = useState(false);
+  const [rightPanelMaximized, setRightPanelMaximized] = useState(false);
   const viewportRequiresRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const narrowPane = useIsNarrowPane();
+  const splitWindow = useIsSplitWindow();
   const workspaceTopBarActionsHost = useWorkspaceTopBarActionsHost(pullRequestsSupported);
-  const shouldUseRightPanelSheet = viewportRequiresRightPanelSheet || narrowPane;
-  const desktopRightPanelPoppedOut = rightPanelPoppedOut && !shouldUseRightPanelSheet;
-  const rightPanelUsesSheet = shouldPresentRightPanelAsSheet({
-    viewportRequiresSheet: shouldUseRightPanelSheet,
-    poppedOut: desktopRightPanelPoppedOut,
-  });
-  // Popped out, or a sheet because the window is too narrow to dock: either way it floats.
+  const rightPanelUsesSheet = viewportRequiresRightPanelSheet || narrowPane;
+  // Maximizing needs the panel's tabs in the top bar, where they stay while the list shows.
+  const canMaximizeRightPanel =
+    rightPanelState.isOpen &&
+    !rightPanelUsesSheet &&
+    !splitWindow &&
+    workspaceTopBarActionsHost !== null;
+  const desktopRightPanelMaximized = rightPanelMaximized && canMaximizeRightPanel;
+  // A sheet because the window is too narrow to dock.
   const rightPanelFloating = rightPanelState.isOpen && rightPanelUsesSheet;
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
     Record<string, PullRequestTabStatus>
@@ -332,7 +338,7 @@ function PullRequestsRouteView() {
   }) => {
     if (rightPanelRef !== null) {
       // Hide the old selection while retaining peer PR tabs for parallel reviews.
-      setRightPanelPoppedOut(false);
+      setRightPanelMaximized(false);
       useRightPanelStore.getState().close(rightPanelRef);
     }
     updateSearch({ ...patch, ...clearedSelection });
@@ -965,7 +971,7 @@ function PullRequestsRouteView() {
   const toggleRightPanel = () => {
     if (rightPanelRef === null) return;
     if (rightPanelState.isOpen) {
-      setRightPanelPoppedOut(false);
+      setRightPanelMaximized(false);
       useRightPanelStore.getState().close(rightPanelRef);
       updateSearch(clearedSelection);
       return;
@@ -975,9 +981,11 @@ function PullRequestsRouteView() {
     selectSurfaceInUrl(selectedPullRequestSurface);
   };
 
-  const toggleRightPanelPoppedOut = () => {
-    if (!rightPanelState.isOpen || shouldUseRightPanelSheet) return;
-    setRightPanelPoppedOut((poppedOut) => !poppedOut);
+  const toggleRightPanelMaximized = () => {
+    if (!canMaximizeRightPanel || rightPanelRef === null) return;
+    // Maximizing shows the open pull request; the list tab is one click away.
+    useRightPanelStore.getState().setPageTabActive(rightPanelRef, false);
+    setRightPanelMaximized((maximized) => !maximized);
   };
 
   // The provider list is the workspace's hosts, not the filtered ones, so switching to a host
@@ -1059,16 +1067,7 @@ function PullRequestsRouteView() {
   const panelToggleControls = renderPanelToggleControls(false);
   const openPanelControls = (
     <div className="workspace-titlebar-controls z-50 mr-px gap-1 [-webkit-app-region:no-drag]">
-      {rightPanelState.isOpen && !rightPanelUsesSheet && workspaceTopBarActionsHost === null ? (
-        <RightPanelPopOutControl poppedOut={false} onToggle={toggleRightPanelPoppedOut} />
-      ) : null}
       {renderPanelToggleControls(workspaceTopBarActionsHost !== null)}
-    </div>
-  );
-  const poppedOutPanelControls = (
-    <div className="mr-px flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-      <RightPanelPopOutControl poppedOut onToggle={toggleRightPanelPoppedOut} />
-      {panelToggleControls}
     </div>
   );
   // The rows carried over from the last filters can also narrow to nothing one step further on,
@@ -1241,7 +1240,7 @@ function PullRequestsRouteView() {
       useRightPanelStore.getState().byThreadKey,
       rightPanelRef,
     );
-    if (next === null) setRightPanelPoppedOut(false);
+    if (next === null) setRightPanelMaximized(false);
     selectSurfaceInUrl(next?.kind === "pull-request" ? next : null);
   };
   const closeOtherSurfaces = (surface: PullRequestSurface) => {
@@ -1260,7 +1259,7 @@ function PullRequestsRouteView() {
   };
   const closeAllSurfaces = () => {
     if (rightPanelRef === null) return;
-    setRightPanelPoppedOut(false);
+    setRightPanelMaximized(false);
     useRightPanelStore.getState().closeAllSurfaces(rightPanelRef);
     selectSurfaceInUrl(null);
   };
@@ -1275,11 +1274,17 @@ function PullRequestsRouteView() {
     : activePullRequestSurface;
   const pullRequestPanelDefaultWidth =
     typeof window === "undefined" ? 640 : Math.floor(window.innerWidth / 2);
-  const renderPullRequestPanel = (mode: "inline" | "sheet", layoutControls: ReactNode) =>
+  const listTabActive = desktopRightPanelMaximized && rightPanelState.pageTabActive === true;
+  const renderPullRequestPanel = (
+    mode: "inline" | "sheet",
+    layoutControls: ReactNode,
+    leadingTab?: RightPanelLeadingTab,
+  ) =>
     panelPullRequestSurface && panelEnvironmentId !== null ? (
       <RightPanelTabs
         mode={mode}
         layoutControls={layoutControls}
+        {...(leadingTab ? { maximized: true, leadingTab } : {})}
         {...(mode === "inline"
           ? {
               widthStorageKey: PULL_REQUEST_PANEL_WIDTH_STORAGE_KEY,
@@ -1324,27 +1329,29 @@ function PullRequestsRouteView() {
         liveAgentCount={0}
         pullRequestStatuses={pullRequestTabStatuses}
       >
-        <PullRequestDetailPanel
-          key={panelPullRequestSurface.id}
-          environmentId={panelPullRequestSurface.environmentId ?? panelEnvironmentId}
-          reference={{
-            projectId: panelPullRequestSurface.projectId as ProjectId,
-            repository: panelPullRequestSurface.repository,
-            number: panelPullRequestSurface.number,
-          }}
-          refreshToken={detailRefreshToken}
-          // Merging, closing or reopening changes the row this panel was opened from, so
-          // the list behind it is out of date the moment the host takes the action.
-          onActed={() => {
-            refreshList();
-            baselineQuery.refresh();
-            authoredQuery.refresh();
-            reviewingQuery.refresh();
-            statsQuery.refresh();
-          }}
-          onStateChange={handlePullRequestTabStatusChange}
-          chromeVariant="collapse"
-        />
+        {listTabActive ? null : (
+          <PullRequestDetailPanel
+            key={panelPullRequestSurface.id}
+            environmentId={panelPullRequestSurface.environmentId ?? panelEnvironmentId}
+            reference={{
+              projectId: panelPullRequestSurface.projectId as ProjectId,
+              repository: panelPullRequestSurface.repository,
+              number: panelPullRequestSurface.number,
+            }}
+            refreshToken={detailRefreshToken}
+            // Merging, closing or reopening changes the row this panel was opened from, so
+            // the list behind it is out of date the moment the host takes the action.
+            onActed={() => {
+              refreshList();
+              baselineQuery.refresh();
+              authoredQuery.refresh();
+              reviewingQuery.refresh();
+              statsQuery.refresh();
+            }}
+            onStateChange={handlePullRequestTabStatusChange}
+            chromeVariant="collapse"
+          />
+        )}
       </RightPanelTabs>
     ) : null;
 
@@ -1366,33 +1373,47 @@ function PullRequestsRouteView() {
       {workspaceTopBarActionsHost
         ? createPortal(
             <>
-              {rightPanelState.isOpen ? (
-                // Popped out, it docks; a sheet with no room to dock can only hide.
-                <RightPanelPopOutControl
-                  poppedOut={rightPanelFloating}
-                  onToggle={
-                    rightPanelFloating && !desktopRightPanelPoppedOut
-                      ? toggleRightPanel
-                      : toggleRightPanelPoppedOut
-                  }
-                  hidesWhenPoppedOut={!desktopRightPanelPoppedOut}
+              {canMaximizeRightPanel ? (
+                <RightPanelMaximizeControl
+                  maximized={desktopRightPanelMaximized}
+                  onToggle={toggleRightPanelMaximized}
                 />
               ) : null}
-              {/* Docked and floating are exclusive: only the current mode's toggle is pressed. */}
-              {renderPanelToggleControls(
-                false,
-                rightPanelState.isOpen && !rightPanelFloating,
-                desktopRightPanelPoppedOut ? toggleRightPanelPoppedOut : toggleRightPanel,
-              )}
+              {/* A sheet floats over the page, so the toggle only shows pressed while docked. */}
+              {renderPanelToggleControls(false, rightPanelState.isOpen && !rightPanelFloating)}
             </>,
             workspaceTopBarActionsHost,
           )
         : null}
-      <div className="relative flex min-h-0 flex-1">
+      <div
+        className={cn(
+          "relative flex min-h-0 flex-1",
+          // Keeps a maximized panel under the sidebar when it slides out.
+          desktopRightPanelMaximized && "isolate",
+        )}
+      >
         {pullRequestsSupported && rightPanelState.isOpen ? openPanelControls : null}
         <PullRequestsColumn {...columnProps} />
 
-        {!rightPanelUsesSheet ? (
+        {desktopRightPanelMaximized ? (
+          // Maximized, the panel covers the list. Its list tab hides the panel to show the
+          // list underneath, while the tabs stay in the top bar.
+          <div
+            className={cn("absolute inset-0 z-50 flex", listTabActive && "invisible")}
+            data-right-panel-maximized={listTabActive ? "page" : "panel"}
+          >
+            {renderPullRequestPanel("inline", null, {
+              title: "Pull requests",
+              icon: GitPullRequestIcon,
+              active: listTabActive,
+              onActivate: () => {
+                if (rightPanelRef !== null) {
+                  useRightPanelStore.getState().setPageTabActive(rightPanelRef, true);
+                }
+              },
+            })}
+          </div>
+        ) : !rightPanelUsesSheet ? (
           <InlineRightPanelPortal open={rightPanelVisible}>
             {renderPullRequestPanel("inline", null)}
           </InlineRightPanelPortal>
@@ -1410,11 +1431,7 @@ function PullRequestsRouteView() {
             {renderPullRequestPanel(
               "sheet",
               // With the top bar showing, the dock and right panel toggles stay in its corner.
-              workspaceTopBarActionsHost !== null
-                ? null
-                : desktopRightPanelPoppedOut
-                  ? poppedOutPanelControls
-                  : panelToggleControls,
+              workspaceTopBarActionsHost !== null ? null : panelToggleControls,
             )}
           </RightPanelSheet>
         ) : null}
