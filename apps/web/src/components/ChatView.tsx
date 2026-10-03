@@ -10011,7 +10011,8 @@ function ChatViewContent(props: ChatViewProps) {
     terminalShortcutLabel: shortcutLabelForCommand(keybindings, "terminal.toggle"),
     threadPanelOpen,
     threadPanelPresentation,
-    threadPanelPopoverAnchor: threadPanelPopoverAnchorRef,
+    // Side chats have no header to anchor to, so their popover sizes from its own toggle.
+    ...(isPanelPresentation ? {} : { threadPanelPopoverAnchor: threadPanelPopoverAnchorRef }),
     ...(threadPanelPresentation === "popover"
       ? {
           threadPanelPopoverContent: (
