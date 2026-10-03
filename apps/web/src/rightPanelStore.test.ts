@@ -661,6 +661,36 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("turns the blank tab being viewed into the tool opened from it", () => {
+    const store = useRightPanelStore.getState();
+    const child = ThreadId.make("child-A");
+    store.openBrowser(refA, "tab-1");
+    store.openBrowser(refA, "tab-2");
+    store.openBrowser(refA, null);
+    store.moveSurface(refA, panelState().activeSurfaceId!, 1);
+
+    store.openThread(refA, child);
+    expect(panelState()).toEqual({
+      isOpen: true,
+      activeSurfaceId: "thread:child-A",
+      surfaces: [
+        { id: "browser:tab-1", kind: "preview", resourceId: "tab-1" },
+        { id: "thread:child-A", kind: "thread", resourceId: child },
+        { id: "browser:tab-2", kind: "preview", resourceId: "tab-2" },
+      ],
+    });
+
+    // Opened from a page rather than a blank tab, a tool gets a tab of its own.
+    store.activateSurface(refA, "browser:tab-2");
+    store.open(refA, "diff");
+    expect(panelState().surfaces.map((surface) => surface.id)).toEqual([
+      "browser:tab-1",
+      "thread:child-A",
+      "browser:tab-2",
+      "diff",
+    ]);
+  });
+
   it("falls back to a new browser tab when an open panel loses its last tab", () => {
     const store = useRightPanelStore.getState();
     store.openBrowser(refA, "stale-tab");

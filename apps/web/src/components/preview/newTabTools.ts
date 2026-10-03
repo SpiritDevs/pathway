@@ -21,8 +21,6 @@ export interface PanelSurfaceAlternative {
   readonly label: string;
   readonly shortcut: string | null;
   readonly onClick: () => void;
-  /** Opens outside the right panel, so the blank tab stays where it is. */
-  readonly keepsTab?: boolean;
 }
 
 const NewTabToolsContext = createContext<ReadonlyArray<PanelSurfaceAction>>([]);

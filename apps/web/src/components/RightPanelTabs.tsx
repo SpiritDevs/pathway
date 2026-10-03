@@ -252,7 +252,6 @@ function buildSurfaceActions(props: RightPanelTabsProps): PanelSurfaceAction[] {
                 label: "Open at bottom",
                 shortcut: props.toolShortcuts?.["terminal-drawer"] ?? null,
                 onClick: props.onOpenBottomTerminal,
-                keepsTab: true,
               },
             ],
           }
@@ -665,27 +664,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const inTopBar = topBarTabsHost !== null;
   const surfaceActions = buildSurfaceActions(props);
   const newTabAction = surfaceActions.find((action) => action.kind === "preview");
-  const activeSurface = props.surfaces.find((surface) => surface.id === props.activeSurfaceId);
-  // A blank browser tab offers the other surfaces; picking one takes the tab's place.
-  const replaceBlankTab = (open: () => void) => () => {
-    open();
-    if (activeSurface?.kind === "preview") props.onCloseSurface(activeSurface);
-  };
+  // A blank browser tab offers the other surfaces; the store puts the one picked in its place.
   const newTabTools = surfaceActions
     .filter((action) => action.kind !== "preview" && action.available)
     .map((action) => ({
       ...action,
       shortcut: props.toolShortcuts?.[action.kind as RightPanelKind] ?? null,
-      onClick: replaceBlankTab(action.onClick),
-      ...(action.alternatives
-        ? {
-            alternatives: action.alternatives.map((alternative) =>
-              alternative.keepsTab
-                ? alternative
-                : { ...alternative, onClick: replaceBlankTab(alternative.onClick) },
-            ),
-          }
-        : {}),
     }));
 
   const handleTabContextMenu = useCallback(
