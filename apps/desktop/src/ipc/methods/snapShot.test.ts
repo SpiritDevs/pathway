@@ -11,13 +11,19 @@ import { vi } from "vite-plus/test";
 
 const showMacPermissionSetupMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const { copyImageMock, saveDialogMock, exportImageMock } = vi.hoisted(() => ({
-  copyImageMock: vi.fn(),
+  copyImageMock: vi.fn(async (_items: { data: Record<string, Blob> }[]) => {}),
   saveDialogMock: vi.fn(),
   exportImageMock: vi.fn(),
 }));
 vi.mock("electron", () => ({
   nativeImage: { createFromBuffer: exportImageMock },
-  clipboard: { writeImage: copyImageMock },
+  clipboard: { write: copyImageMock },
+  ClipboardItem: class {
+    readonly data: Record<string, Blob>;
+    constructor(data: Record<string, Blob>) {
+      this.data = data;
+    }
+  },
   dialog: { showSaveDialog: saveDialogMock },
 }));
 vi.mock("../../snapShot/MacPermissionSetup.ts", () => ({
@@ -548,7 +554,7 @@ const exportDataUrl = `data:image/png;base64,${exportPng.toString("base64")}`;
 
 it.effect("copies the rendered PNG only for the trusted renderer", () => {
   const nativeImage = { isEmpty: () => false, toPNG: () => exportPng };
-  copyImageMock.mockClear();
+  copyImageMock.mockReset();
   exportImageMock.mockReset().mockReturnValue(nativeImage);
   return Effect.gen(function* () {
     const request = { action: "copy", dataUrl: exportDataUrl, name: "snapshot.png" };
@@ -556,7 +562,14 @@ it.effect("copies the rendered PNG only for the trusted renderer", () => {
     assert(Exit.isFailure(rejected));
     assert.lengthOf(copyImageMock.mock.calls, 0);
     assert.isTrue(yield* exportSnapShot.handler(request, { sender: { id: 7 } }));
-    assert.deepEqual(copyImageMock.mock.calls, [[nativeImage]]);
+    const png = copyImageMock.mock.calls[0]?.[0][0]?.data["image/png"];
+    assert.instanceOf(png, Blob);
+    assert.equal(png?.type, "image/png");
+    assert.deepEqual(Buffer.from(yield* Effect.promise(() => png!.arrayBuffer())), exportPng);
+
+    copyImageMock.mockRejectedValueOnce(new Error("Clipboard unavailable"));
+    const failedCopy = yield* Effect.exit(exportSnapShot.handler(request, { sender: { id: 7 } }));
+    assert.isTrue(Exit.isFailure(failedCopy));
   }).pipe(
     Effect.provide(
       Layer.mergeAll(

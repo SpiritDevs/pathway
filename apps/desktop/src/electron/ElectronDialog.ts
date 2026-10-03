@@ -2,6 +2,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
@@ -103,90 +105,103 @@ export class ElectronDialog extends Context.Service<
   }
 >()("@spiritdevs/desktop/electron/ElectronDialog") {}
 
-export const make = ElectronDialog.of({
-  pickFolder: Effect.fn("desktop.electron.dialog.pickFolder")(function* (input) {
-    const ownerWindowId = Option.match(input.owner, {
-      onNone: () => null,
-      onSome: (owner) => owner.id,
+export const make = Effect.gen(function* () {
+  const path = yield* Path.Path;
+  // Since Electron 43, pickers without a defaultPath open in Downloads instead of where the user
+  // last was. Remember the last picked location for this session, as Electron's migration note
+  // suggests.
+  const lastPickedDirectory = yield* Ref.make<string | null>(null);
+  const resolveDefaultPath = (requested: Option.Option<string>) =>
+    Option.match(requested, {
+      onNone: () => Ref.get(lastPickedDirectory),
+      onSome: (defaultPath) => Effect.succeed<string | null>(defaultPath),
     });
-    const defaultPath = Option.getOrNull(input.defaultPath);
-    const openDialogOptions: Electron.OpenDialogOptions = Option.match(input.defaultPath, {
-      onNone: () => ({
-        properties: ["openDirectory", "createDirectory"],
-      }),
-      onSome: (defaultPath) => ({
-        properties: ["openDirectory", "createDirectory"],
-        defaultPath,
-      }),
-    });
-    const result = yield* Effect.tryPromise({
-      try: () =>
-        Option.match(input.owner, {
-          onNone: () => Electron.dialog.showOpenDialog(openDialogOptions),
-          onSome: (owner) => Electron.dialog.showOpenDialog(owner, openDialogOptions),
-        }),
-      catch: (cause) =>
-        new ElectronDialogPickFolderError({
-          ownerWindowId,
-          defaultPath,
-          cause,
-        }),
-    });
+  const rememberPickedDirectory = (paths: ReadonlyArray<string>) =>
+    paths[0] === undefined ? Effect.void : Ref.set(lastPickedDirectory, path.dirname(paths[0]));
 
-    if (result.canceled) {
-      return Option.none();
-    }
-    return Option.fromNullishOr(result.filePaths[0]);
-  }),
-  pickFiles: Effect.fn("desktop.electron.dialog.pickFiles")(function* (input) {
-    const ownerWindowId = Option.match(input.owner, {
-      onNone: () => null,
-      onSome: (owner) => owner.id,
-    });
-    const defaultPath = Option.getOrNull(input.defaultPath);
-    const openDialogOptions: Electron.OpenDialogOptions = {
-      properties: input.multiple === false ? ["openFile"] : ["openFile", "multiSelections"],
-      filters: [...input.filters],
-      ...(defaultPath === null ? {} : { defaultPath }),
-    };
-    const result = yield* Effect.tryPromise({
-      try: () =>
-        Option.match(input.owner, {
-          onNone: () => Electron.dialog.showOpenDialog(openDialogOptions),
-          onSome: (owner) => Electron.dialog.showOpenDialog(owner, openDialogOptions),
-        }),
-      catch: (cause) =>
-        new ElectronDialogPickFilesError({
-          ownerWindowId,
-          defaultPath,
-          cause,
-        }),
-    });
-    return result.canceled ? [] : result.filePaths;
-  }),
-  showMessageBox: (options) =>
-    Effect.tryPromise({
-      try: () => Electron.dialog.showMessageBox(options),
-      catch: (cause) =>
-        new ElectronDialogShowMessageBoxError({
-          type: options.type ?? null,
-          titleLength: options.title?.length ?? null,
-          messageLength: options.message.length,
-          detailLength: options.detail?.length ?? null,
-          buttonCount: options.buttons?.length ?? 0,
-          cause,
-        }),
+  return ElectronDialog.of({
+    pickFolder: Effect.fn("desktop.electron.dialog.pickFolder")(function* (input) {
+      const ownerWindowId = Option.match(input.owner, {
+        onNone: () => null,
+        onSome: (owner) => owner.id,
+      });
+      const defaultPath = yield* resolveDefaultPath(input.defaultPath);
+      const openDialogOptions: Electron.OpenDialogOptions = {
+        properties: ["openDirectory", "createDirectory"],
+        ...(defaultPath === null ? {} : { defaultPath }),
+      };
+      const result = yield* Effect.tryPromise({
+        try: () =>
+          Option.match(input.owner, {
+            onNone: () => Electron.dialog.showOpenDialog(openDialogOptions),
+            onSome: (owner) => Electron.dialog.showOpenDialog(owner, openDialogOptions),
+          }),
+        catch: (cause) =>
+          new ElectronDialogPickFolderError({
+            ownerWindowId,
+            defaultPath,
+            cause,
+          }),
+      });
+
+      if (result.canceled) {
+        return Option.none();
+      }
+      yield* rememberPickedDirectory(result.filePaths);
+      return Option.fromNullishOr(result.filePaths[0]);
     }),
-  showErrorBox: (title, content) =>
-    Effect.try({
-      try: () => Electron.dialog.showErrorBox(title, content),
-      catch: (cause) =>
-        new ElectronDialogShowErrorBoxError({
-          titleLength: title.length,
-          contentLength: content.length,
-          cause,
-        }),
-    }).pipe(Effect.orDie),
+    pickFiles: Effect.fn("desktop.electron.dialog.pickFiles")(function* (input) {
+      const ownerWindowId = Option.match(input.owner, {
+        onNone: () => null,
+        onSome: (owner) => owner.id,
+      });
+      const defaultPath = yield* resolveDefaultPath(input.defaultPath);
+      const openDialogOptions: Electron.OpenDialogOptions = {
+        properties: input.multiple === false ? ["openFile"] : ["openFile", "multiSelections"],
+        filters: [...input.filters],
+        ...(defaultPath === null ? {} : { defaultPath }),
+      };
+      const result = yield* Effect.tryPromise({
+        try: () =>
+          Option.match(input.owner, {
+            onNone: () => Electron.dialog.showOpenDialog(openDialogOptions),
+            onSome: (owner) => Electron.dialog.showOpenDialog(owner, openDialogOptions),
+          }),
+        catch: (cause) =>
+          new ElectronDialogPickFilesError({
+            ownerWindowId,
+            defaultPath,
+            cause,
+          }),
+      });
+      if (result.canceled) return [];
+      yield* rememberPickedDirectory(result.filePaths);
+      return result.filePaths;
+    }),
+    showMessageBox: (options) =>
+      Effect.tryPromise({
+        try: () => Electron.dialog.showMessageBox(options),
+        catch: (cause) =>
+          new ElectronDialogShowMessageBoxError({
+            type: options.type ?? null,
+            titleLength: options.title?.length ?? null,
+            messageLength: options.message.length,
+            detailLength: options.detail?.length ?? null,
+            buttonCount: options.buttons?.length ?? 0,
+            cause,
+          }),
+      }),
+    showErrorBox: (title, content) =>
+      Effect.try({
+        try: () => Electron.dialog.showErrorBox(title, content),
+        catch: (cause) =>
+          new ElectronDialogShowErrorBoxError({
+            titleLength: title.length,
+            contentLength: content.length,
+            cause,
+          }),
+      }).pipe(Effect.orDie),
+  });
 });
 
-export const layer = Layer.succeed(ElectronDialog, make);
+export const layer = Layer.effect(ElectronDialog, make);

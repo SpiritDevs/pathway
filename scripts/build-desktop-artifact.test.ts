@@ -58,7 +58,9 @@ import {
   stageLinuxCaptureHelper,
   STAGE_INSTALL_ARGS,
   WINDOWS_ASAR_UNPACK,
+  withMacMinimumSystemVersion,
 } from "./build-desktop-artifact.ts";
+import { parseUpdateManifest } from "./lib/update-manifest.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 
@@ -100,6 +102,29 @@ function iconResizeSpawnerLayer(
 }
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it.effect("limits macOS update manifests to systems Electron supports", () =>
+    Effect.sync(() => {
+      const manifest = [
+        "version: 0.0.42",
+        "files:",
+        "  - url: Pathway-0.0.42-arm64.zip",
+        "    sha512: abc",
+        "    size: 123",
+        "path: Pathway-0.0.42-arm64.zip",
+        "sha512: abc",
+        "releaseDate: '2026-10-03T00:00:00.000Z'",
+        "",
+      ].join("\n");
+
+      const limited = withMacMinimumSystemVersion(manifest);
+      assert.isTrue(limited.startsWith(manifest.trimEnd()));
+      // The release merge step keeps the field, and electron-updater compares it to the Darwin version.
+      const parsed = parseUpdateManifest(limited, "latest-mac.yml", "macOS");
+      assert.strictEqual(parsed.extras.minimumSystemVersion, "22.0.0");
+      assert.strictEqual(withMacMinimumSystemVersion(limited), limited);
+    }),
+  );
+
   it.effect("packages dictation executables and notices without downloaded weights", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -271,7 +296,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           "@spiritdevs/shared": "workspace:*",
           "@spiritdevs/ssh": "workspace:*",
           effect: "catalog:",
-          electron: "41.5.0",
+          electron: "44.5.1",
         },
         {
           "@effect/platform-node": "4.0.0-beta.59",
