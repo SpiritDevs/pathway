@@ -9,6 +9,17 @@ async function fetchImageBlob(src: string): Promise<Blob> {
   return response.blob();
 }
 
+/** The editor draws onto a canvas, so it needs bytes a cross-origin asset URL cannot taint. */
+export async function readImageDataUrl(src: string): Promise<string> {
+  const blob = await fetchImageBlob(src);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(String(reader.result)));
+    reader.addEventListener("error", () => reject(new Error("The image could not be read.")));
+    reader.readAsDataURL(blob);
+  });
+}
+
 /** Clipboards only take PNG reliably, so anything else is re-encoded first. */
 async function fetchPngBlob(src: string): Promise<Blob> {
   const blob = await fetchImageBlob(src);

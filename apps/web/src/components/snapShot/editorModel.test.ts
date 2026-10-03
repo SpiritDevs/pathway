@@ -130,7 +130,8 @@ describe("PNG export", () => {
       save: vi.fn(),
       restore: vi.fn(),
       beginPath: vi.fn(),
-      strokeRect: vi.fn(),
+      roundRect: vi.fn(),
+      stroke: vi.fn(),
       fillText: vi.fn(),
       measureText: vi.fn((line: string) => ({ width: line.length * 26 * 0.65 })),
       fillRect: vi.fn(),
@@ -171,7 +172,7 @@ describe("PNG export", () => {
       600,
     );
     expect(context.translate).toHaveBeenCalledExactlyOnceWith(-200, -100);
-    expect(context.strokeRect).toHaveBeenCalledExactlyOnceWith(220, 130, 140, 60);
+    expect(context.roundRect).toHaveBeenCalledExactlyOnceWith(220, 130, 140, 60, 16);
     expect(context.fillText.mock.calls).toEqual([
       ["First", 307.8, 207.8],
       ["Second", 307.8, 240.3],
@@ -191,7 +192,8 @@ describe("PNG export", () => {
       save: vi.fn(),
       restore: vi.fn(),
       beginPath: vi.fn(),
-      strokeRect: vi.fn(),
+      roundRect: vi.fn(),
+      stroke: vi.fn(),
     };
     const oversized =
       "data:image/png;base64," + "A".repeat(Math.ceil((SNAP_SHOT_EXPORT_MAX_BYTES + 3) / 3) * 4);
@@ -230,7 +232,7 @@ describe("PNG export", () => {
       [-20, -10],
       [-20, -10],
     ]);
-    expect(context.strokeRect).toHaveBeenCalledTimes(3);
+    expect(context.roundRect).toHaveBeenCalledTimes(3);
   });
 
   it("bounds export dimensions even when a PNG compresses well", () => {
@@ -248,6 +250,83 @@ describe("PNG export", () => {
     });
     expect(result.imageSize.width).toBeLessThanOrEqual(16384);
     expect(result.imageSize.width * result.imageSize.height).toBeLessThanOrEqual(40000000);
+  });
+
+  it("exports at the chosen output scale", () => {
+    const context = { drawImage: vi.fn(), scale: vi.fn(), translate: vi.fn() };
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => context,
+      toDataURL: () => "data:image/png;base64,YQ==",
+    };
+    vi.stubGlobal("window", { document: { createElement: () => canvas } });
+    const result = exportSnapShot(
+      {} as HTMLImageElement,
+      { crop: { x: 0, y: 0, width: 1000, height: 600 }, annotations: [] },
+      0.5,
+    );
+    expect(result.imageSize).toEqual({ width: 500, height: 300 });
+    expect(context.scale).toHaveBeenCalledExactlyOnceWith(0.5, 0.5);
+  });
+
+  it("covers Remove strokes with the pixelated copy beneath other annotations", () => {
+    const calls: string[] = [];
+    const transform = { a: 1 };
+    const main = {
+      canvas: { width: 0, height: 0 },
+      drawImage: vi.fn((source: unknown) => calls.push(source === layer ? "layer" : "image")),
+      scale: vi.fn(),
+      translate: vi.fn(),
+      getTransform: () => transform,
+      save: vi.fn(),
+      restore: vi.fn(),
+      resetTransform: vi.fn(),
+      beginPath: vi.fn(),
+      roundRect: vi.fn(),
+      stroke: vi.fn(() => calls.push("box")),
+    };
+    const layerContext = {
+      setTransform: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      drawImage: vi.fn(),
+      globalCompositeOperation: "source-over",
+      imageSmoothingEnabled: true,
+      lineWidth: 0,
+    };
+    const output = {
+      width: 0,
+      height: 0,
+      getContext: () => main,
+      toDataURL: () => "data:image/png;base64,YQ==",
+    };
+    const layer = { width: 0, height: 0, getContext: () => layerContext };
+    const created = [output, layer];
+    vi.stubGlobal("window", { document: { createElement: () => created.shift() } });
+    const image = { naturalWidth: 400, naturalHeight: 200 } as HTMLImageElement;
+    const pixelated = {} as HTMLCanvasElement;
+    exportSnapShot(
+      image,
+      {
+        crop: { x: 0, y: 0, width: 400, height: 200 },
+        annotations: [
+          { ...arrow, id: "box", tool: "rectangle" },
+          { ...arrow, id: "remove", tool: "redact" },
+        ],
+      },
+      1,
+      pixelated,
+    );
+    expect(layerContext.setTransform).toHaveBeenCalledExactlyOnceWith(transform);
+    expect(layerContext.lineWidth).toBe(40);
+    expect(layerContext.lineTo).toHaveBeenCalledExactlyOnceWith(20, 40);
+    expect(layerContext.globalCompositeOperation).toBe("source-in");
+    expect(layerContext.imageSmoothingEnabled).toBe(false);
+    expect(layerContext.drawImage).toHaveBeenCalledExactlyOnceWith(pixelated, 0, 0, 400, 200);
+    expect(calls).toEqual(["image", "layer", "box"]);
   });
 
   it("reports a failed canvas export rather than returning an empty image", () => {

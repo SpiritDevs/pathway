@@ -14,6 +14,7 @@ export type AnnotationTool =
   | "text"
   | "pen"
   | "highlight"
+  | "redact"
   | "number";
 export type EditorTool = AnnotationTool | "select" | "pan" | "crop";
 export type Annotation = {
@@ -252,6 +253,69 @@ export function arrowHead(annotation: Annotation): Point[] {
   ];
 }
 
+/** Boxes keep softened corners that never exceed half of a side. */
+export function rectangleRadius(annotation: Annotation, bounds: Rect): number {
+  return Math.min(8 + annotation.width * 2, bounds.width / 2, bounds.height / 2);
+}
+
+/** Remove strokes are wide enough to cover a line of text at the editor's default width. */
+export function redactionStrokeWidth(annotation: Annotation): number {
+  return annotation.width * 10;
+}
+
+/**
+ * A tiny copy of the image that becomes coarse blocks when stretched back over it. Remove
+ * strokes reveal this copy, so the hidden pixels never reach the exported file.
+ */
+export function pixelatedImage(image: HTMLImageElement): HTMLCanvasElement {
+  const block = Math.max(8, Math.round(Math.max(image.naturalWidth, image.naturalHeight) / 60));
+  const canvas = window.document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(image.naturalWidth / block));
+  canvas.height = Math.max(1, Math.ceil(image.naturalHeight / block));
+  canvas.getContext("2d")?.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+function drawRedactions(
+  context: CanvasRenderingContext2D,
+  annotations: ReadonlyArray<Annotation>,
+  image: HTMLImageElement,
+  pixelated: HTMLCanvasElement | null,
+): void {
+  const strokes = annotations.filter((annotation) => annotation.tool === "redact");
+  if (strokes.length === 0) return;
+  const layer = window.document.createElement("canvas");
+  layer.width = context.canvas.width;
+  layer.height = context.canvas.height;
+  const layerContext = layer.getContext("2d");
+  if (!layerContext)
+    throw new Error("The image editor could not create an image. Please try again.");
+  layerContext.setTransform(context.getTransform());
+  layerContext.strokeStyle = "#ffffff";
+  layerContext.lineCap = "round";
+  layerContext.lineJoin = "round";
+  for (const stroke of strokes) {
+    layerContext.lineWidth = redactionStrokeWidth(stroke);
+    layerContext.beginPath();
+    layerContext.moveTo(stroke.points[0]!.x, stroke.points[0]!.y);
+    for (const point of stroke.points.slice(1)) layerContext.lineTo(point.x, point.y);
+    layerContext.stroke();
+  }
+  layerContext.globalCompositeOperation = "source-in";
+  layerContext.imageSmoothingEnabled = false;
+  layerContext.drawImage(
+    pixelated ?? pixelatedImage(image),
+    0,
+    0,
+    image.naturalWidth,
+    image.naturalHeight,
+  );
+  context.save();
+  context.resetTransform();
+  context.drawImage(layer, 0, 0);
+  context.restore();
+}
+
 export function drawAnnotation(context: CanvasRenderingContext2D, annotation: Annotation): void {
   const start = annotation.points[0]!;
   context.save();
@@ -262,8 +326,17 @@ export function drawAnnotation(context: CanvasRenderingContext2D, annotation: An
   context.lineCap = "round";
   context.lineJoin = "round";
   context.beginPath();
-  if (annotation.tool === "rectangle") {
-    context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  if (annotation.tool === "redact") {
+    // Drawn as one layer by exportSnapShot, beneath every other annotation.
+  } else if (annotation.tool === "rectangle") {
+    context.roundRect(
+      bounds.x,
+      bounds.y,
+      bounds.width,
+      bounds.height,
+      rectangleRadius(annotation, bounds),
+    );
+    context.stroke();
   } else if (annotation.tool === "ellipse") {
     context.ellipse(
       bounds.x + bounds.width / 2,
@@ -334,12 +407,20 @@ export function drawAnnotation(context: CanvasRenderingContext2D, annotation: An
   context.restore();
 }
 
-/** Keep original resolution unless the PNG exceeds the native export limits. */
-export function exportSnapShot(image: HTMLImageElement, document: EditorDocument) {
+/**
+ * Exports at the chosen output scale of the cropped size, shrinking further only when the
+ * PNG exceeds the native export limits.
+ */
+export function exportSnapShot(
+  image: HTMLImageElement,
+  document: EditorDocument,
+  outputScale = 1,
+  pixelated: HTMLCanvasElement | null = null,
+) {
   const canvas = window.document.createElement("canvas");
   const crop = document.crop;
   const initialScale = Math.min(
-    1,
+    outputScale,
     SNAP_SHOT_EXPORT_MAX_DIMENSION / Math.max(crop.width, crop.height),
     Math.sqrt(SNAP_SHOT_EXPORT_MAX_PIXELS / (crop.width * crop.height)),
   );
@@ -353,6 +434,7 @@ export function exportSnapShot(image: HTMLImageElement, document: EditorDocument
     context.drawImage(image, crop.x, crop.y, crop.width, crop.height, 0, 0, width, height);
     context.scale(width / crop.width, height / crop.height);
     context.translate(-crop.x, -crop.y);
+    drawRedactions(context, document.annotations, image, pixelated);
     for (const annotation of document.annotations) drawAnnotation(context, annotation);
     const dataUrl = canvas.toDataURL("image/png");
     if (!dataUrl.startsWith("data:image/png;base64,"))
