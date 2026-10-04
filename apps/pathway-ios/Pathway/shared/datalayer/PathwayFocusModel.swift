@@ -130,6 +130,8 @@ struct PathwayFocusNotification: Decodable, Identifiable {
             return
         }
         #endif
+        // Focus queries need the provisioned cloud user; callers re-observe once companies arrive.
+        guard !cloud.companies.isEmpty else { return }
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.observeFocuses(cloud: cloud, generation: generation) }
             group.addTask { await self.observeNotifications(cloud: cloud, generation: generation) }

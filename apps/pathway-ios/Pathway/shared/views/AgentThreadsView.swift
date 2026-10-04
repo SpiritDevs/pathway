@@ -106,7 +106,9 @@ struct AgentThreadsView: View {
         }
         .task(id: appModel.cloud.threads.map(\.id)) { await openPendingThread() }
         .task(id: appModel.cloud.threadQueue.threads.map(\.id)) { await openPendingThread() }
-        .task(id: appModel.localStorageDirectory) { await focuses.observe(cloud: appModel.cloud, storageDirectory: appModel.localStorageDirectory) }
+        .task(id: FocusObservationKey(storageDirectory: appModel.localStorageDirectory, isCloudReady: !appModel.cloud.companies.isEmpty)) {
+            await focuses.observe(cloud: appModel.cloud, storageDirectory: appModel.localStorageDirectory)
+        }
         .sheet(isPresented: $creatingFocus) { PathwayFocusEditorView(model: focuses) }
         .sheet(isPresented: $creatingProject) { PathwayCreateProjectView(focuses: focuses) }
         .sheet(isPresented: $showingNotifications) { PathwayFocusNotificationsView(model: focuses) }
@@ -1814,4 +1816,9 @@ private struct AgentThreadDestination: Hashable {
     let workspaceRoot: String?
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
     nonisolated func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
+private struct FocusObservationKey: Equatable {
+    let storageDirectory: URL?
+    let isCloudReady: Bool
 }
