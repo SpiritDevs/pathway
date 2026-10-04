@@ -16,14 +16,14 @@ Corey, 2026-10-03:
 
 Tracked under COR-243, with one milestone per phase.
 
-| Phase                         | macOS                                                                                                                                                                                        | Windows          | Linux            | Notes                                                                                              |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ---------------- | -------------------------------------------------------------------------------------------------- |
-| 0. Build hosts and CI         | Interim host: the fleet Mac Studio synced and built. Dedicated build Mac still needed.                                                                                                       | Blocked: no host | Blocked: no host | `SpiritDevs/pathway-runtime` created (private). Remote cache deferred until dedicated hosts exist. |
-| 1. Stock Electron from source | arm64 built from source; Pathway packaged against it and starts isolated. The sign-in stall was a stale Clerk key in the test build, not the runtime. x64 waits for the dedicated build Mac. | Not started      | Not started      | Electron 44.5.1 upgrade in #270; pinned-archive packaging in #269                                  |
-| 2. Chrome's browser layer     | Source survey done (COR-256). Spike waits for the dedicated build Mac.                                                                                                                       | Not started      | Not started      | Starting point: Chrome owns startup and real Profiles, one Profile per `persist:*` partition       |
-| 3. Runtime packaging          | Not started                                                                                                                                                                                  | Not started      | Not started      |                                                                                                    |
-| 4. Pathway UI on Chromium     | Not started                                                                                                                                                                                  | Not started      | Not started      |                                                                                                    |
-| 5. Release cadence            | Not started                                                                                                                                                                                  | Not started      | Not started      |                                                                                                    |
+| Phase                         | macOS                                                                                                                                                                                                                                                                                                      | Windows          | Linux            | Notes                                                                                              |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ---------------- | -------------------------------------------------------------------------------------------------- |
+| 0. Build hosts and CI         | Interim host: the fleet Mac Studio synced and built. Dedicated build Mac still needed.                                                                                                                                                                                                                     | Blocked: no host | Blocked: no host | `SpiritDevs/pathway-runtime` created (private). Remote cache deferred until dedicated hosts exist. |
+| 1. Stock Electron from source | arm64 built from source; Pathway packaged against it and starts isolated, unsigned. The account-check stall came from a stale Clerk key in the test build (COR-253); sign-in on the runtime is not yet verified, and the build scripts have not yet run end to end. x64 waits for the dedicated build Mac. | Not started      | Not started      | Electron 44.5.1 upgrade in #270; pinned-archive packaging in #269                                  |
+| 2. Chrome's browser layer     | Source survey done (COR-256). Spike waits for the dedicated build Mac.                                                                                                                                                                                                                                     | Not started      | Not started      | Starting point: Chrome owns startup and real Profiles, one Profile per `persist:*` partition       |
+| 3. Runtime packaging          | Not started                                                                                                                                                                                                                                                                                                | Not started      | Not started      |                                                                                                    |
+| 4. Pathway UI on Chromium     | Not started                                                                                                                                                                                                                                                                                                | Not started      | Not started      |                                                                                                    |
+| 5. Release cadence            | Not started                                                                                                                                                                                                                                                                                                | Not started      | Not started      |                                                                                                    |
 
 ## Reference
 
@@ -76,12 +76,12 @@ How preview partitions map onto Chrome profiles is the main design question in P
 - One host per OS covers both architectures by cross-compiling, as Electron's own CI does: macOS arm64 builds x64, Windows x64 builds arm64, and Linux x64 builds arm64. Launching the second architecture still needs a device or VM.
 - Toolchains for Chromium 152:
   - macOS: Xcode with the macOS 26.5 SDK.
-  - Windows: Visual Studio 2022 or 2026, and Windows SDK 10.0.26100.0.
+  - Windows: Visual Studio 2026 and Windows 11 SDK 10.0.26100.7705.
 - Set up Electron's `build-tools` with a shared remote compile cache from day one. Rebuilds without a cache are not workable. Electron's own remote build cluster only admits Electron org members, and a patched tree couldn't share its cache anyway. Point `rbeServiceAddress` at a REAPI backend we run or rent.
 
 **Host audit, 2026-10-03:** none qualify.
 
-- The fleet Mac Studio running Pathway (M2 Max, 32 GB) has 58 GB free, and it is also the main CI runner.
+- The fleet Mac Studio running Pathway (M2 Max, 32 GB) has 58 GiB free, and it is also the main CI runner.
 - The second fleet Mac Studio's disk is unverified, and it serves iOS CI.
 - No Windows or Linux build host exists. Actions Fleet doesn't support Windows, and its Linux agent has never run on a physical host.
 
@@ -104,11 +104,17 @@ How preview partitions map onto Chrome profiles is the main design question in P
   - Warm rebuild: 60 s.
   - Dist zip: 50 s.
 - **Sizes:**
-  - Checkout plus out dir: 42 GB.
-  - Runtime archive: 126.4 MB, against 130.3 MB for the official zip. The difference is `default_app.asar` and `version`, which are left out.
-  - Packaged app: 206 MB zipped.
+  - Build root (checkout plus out dir): about 42 GiB, peaking at 44 GiB.
+  - Runtime archive: 126.4 MB. That is the source-built dist zip (126.6 MB) minus `default_app.asar` and `version`. The official zip is 130.3 MB.
+  - Packaged app: 216 MB zipped.
 - **Versions:** the build reports Electron 44.5.1, Chrome 152.0.7977.130 and Node 24.21.0. The packaged framework is byte-identical to the source build.
-- **Deviations from `release.gn`:** `enable_dsyms=false`, `symbol_level=0`, `concurrent_links=1` and `use_thin_lto=false`, all for the RAM limit; plus `mac_sdk_path` pointing at the official SDK 26.5. Release archives must come from the dedicated host with ThinLTO and symbols.
+- **Deviations from `release.gn`:**
+  - `enable_dsyms=false`, `symbol_level=0` and `concurrent_links=1`, for the 32 GB RAM and disk limits.
+  - `use_thin_lto=false`: GN rejects an explicit `concurrent_links` with ThinLTO.
+  - `use_remoteexec=false` and `use_siso=false`, pending the remote cache (COR-245).
+  - `mac_sdk_path`, pointing at the official SDK 26.5.
+
+  Release archives must come from the dedicated host with ThinLTO and symbols.
 
 ## Phase 2: link Chrome's browser layer
 
