@@ -2,6 +2,8 @@ import { passkeys } from "@clerk/electron/passkeys";
 import { ClerkProvider } from "@clerk/electron/react";
 import type { ReactNode } from "react";
 
+import { ClerkStartupBoundary } from "./ClerkStartupBoundary";
+
 /** The desktop SDK bundles Clerk JS and must stay outside the ordinary web entry. */
 export default function ElectronClerkProvider({
   publishableKey,
@@ -12,7 +14,7 @@ export default function ElectronClerkProvider({
 }) {
   return (
     <ClerkProvider publishableKey={publishableKey} passkeys={passkeys}>
-      {children}
+      <ClerkStartupBoundary>{children}</ClerkStartupBoundary>
     </ClerkProvider>
   );
 }
