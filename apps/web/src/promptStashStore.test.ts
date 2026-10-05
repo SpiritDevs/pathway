@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { removeLocalStorageItem } from "./hooks/useLocalStorage";
+import { hydrateImagesFromPersisted } from "./composerDraftStore";
 
 import {
   MAX_STASH_ENTRIES,
@@ -177,6 +178,46 @@ describe("promptStashStore", () => {
     usePromptStashStore.setState({ entries: [] });
     rehydratePromptStashForTest();
     expect(usePromptStashStore.getState().entries.map((entry) => entry.id)).toEqual(["first"]);
+  });
+
+  it("keeps a sketch editable after stash persistence, reload, and restore", () => {
+    const entry: PromptStashEntry = {
+      ...makeEntry({ id: "sketch" }),
+      attachments: [
+        {
+          type: "image",
+          id: "sketch-image",
+          name: "sketch.png",
+          mimeType: "image/png",
+          sizeBytes: 1,
+          dataUrl: "data:image/png;base64,YQ==",
+          sketch: {
+            elements: [
+              {
+                id: "stroke",
+                kind: "pen",
+                points: [
+                  { x: 10, y: 20 },
+                  { x: 30, y: 40 },
+                ],
+                color: "#123456",
+                size: 4,
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const store = usePromptStashStore.getState();
+    store.stashEntry(entry);
+    usePromptStashStore.setState({ entries: [] });
+    rehydratePromptStashForTest();
+    const restored = store.takeEntry(entry.id).entry!;
+    expect(restored.attachments).toEqual(entry.attachments);
+    expect(hydrateImagesFromPersisted(restored.attachments)[0]).toHaveProperty(
+      "sketch",
+      entry.attachments[0]?.sketch,
+    );
   });
 
   it("finalizeEntryImages attaches images and clears the pending count", () => {

@@ -85,6 +85,7 @@ import {
 } from "./lib/terminalContext";
 import { createDebouncedJSONStorage, createDebouncedStorage } from "./lib/storage";
 import { selectSidebarDraftRows } from "./components/sidebarDrafts";
+import type { SketchScene } from "./lib/sketch";
 
 function makeImage(input: {
   id: string;
@@ -371,6 +372,186 @@ describe("composerDraftStore addImages", () => {
     const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
     expect(draft?.images.map((image) => image.id)).toEqual(["img-shared"]);
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:shared");
+  });
+});
+
+const sketchScene: SketchScene = {
+  elements: [
+    {
+      id: "stroke-1",
+      kind: "pen",
+      color: "#123456",
+      size: 4,
+      points: [
+        { x: 10, y: 20 },
+        { x: 30, y: 40 },
+      ],
+    },
+  ],
+};
+
+describe("composerDraftStore replaceImage", () => {
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("thread-replace"));
+  let originalRevokeObjectUrl: typeof URL.revokeObjectURL;
+  let revokeSpy: ReturnType<typeof vi.fn<(url: string) => void>>;
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+    originalRevokeObjectUrl = URL.revokeObjectURL;
+    revokeSpy = vi.fn();
+    URL.revokeObjectURL = revokeSpy;
+  });
+
+  afterEach(() => {
+    URL.revokeObjectURL = originalRevokeObjectUrl;
+  });
+
+  it("replaces in place with the existing id, bypasses dedupe, and restages persisted bytes", () => {
+    const store = useComposerDraftStore.getState();
+    const first = makeImage({ id: "first", name: "first.png", previewUrl: "blob:first" });
+    const previous = makeImage({ id: "sketch", name: "sketch.png", previewUrl: "blob:old" });
+    const last = makeImage({ id: "last", name: "last.png", previewUrl: "blob:last" });
+    store.addImages(threadRef, [first, previous, last]);
+    const key = scopedThreadKey(threadRef);
+    const draft = store.getComposerDraft(threadRef)!;
+    const persisted = [first, previous, last].map((image) => ({
+      id: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      dataUrl: "data:image/png;base64,YQ==",
+    }));
+    useComposerDraftStore.setState({
+      draftsByThreadKey: {
+        [key]: {
+          ...draft,
+          persistedAttachments: persisted,
+          nonPersistedImageIds: ["sketch", "last"],
+        },
+      },
+    });
+    const replacement = {
+      ...first,
+      id: "different-incoming-id",
+      previewUrl: "blob:new",
+      sketch: sketchScene,
+    };
+    expect(store.replaceImage(threadRef, "sketch", replacement)).toBe(true);
+    const updated = store.getComposerDraft(threadRef)!;
+    expect(updated.images).toEqual([first, { ...replacement, id: "sketch" }, last]);
+    expect(updated.persistedAttachments).toEqual([persisted[0], persisted[2]]);
+    expect(updated.nonPersistedImageIds).toEqual(["last"]);
+    expect(revokeSpy).toHaveBeenCalledExactlyOnceWith("blob:old");
+  });
+
+  it.each(["blob:same", "data:image/png;base64,YQ=="])(
+    "does not revoke an unchanged or non-blob preview %s",
+    (previewUrl) => {
+      const store = useComposerDraftStore.getState();
+      store.addImage(threadRef, makeImage({ id: "sketch", previewUrl }));
+      const replacement = makeImage({
+        id: "sketch",
+        previewUrl: previewUrl.startsWith("blob:") ? previewUrl : "blob:new",
+      });
+      expect(store.replaceImage(threadRef, "sketch", replacement)).toBe(true);
+      expect(revokeSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("returns false without updating state or revoking URLs when the draft or id is missing", () => {
+    const store = useComposerDraftStore.getState();
+    const replacement = makeImage({ id: "sketch", previewUrl: "blob:new" });
+    const before = useComposerDraftStore.getState();
+    expect(store.replaceImage(threadRef, "sketch", replacement)).toBe(false);
+    expect(useComposerDraftStore.getState()).toBe(before);
+    store.addImage(threadRef, makeImage({ id: "other", previewUrl: "blob:other" }));
+    const withDraft = useComposerDraftStore.getState();
+    expect(store.replaceImage(threadRef, "sketch", replacement)).toBe(false);
+    expect(useComposerDraftStore.getState()).toBe(withDraft);
+    expect(revokeSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("composer sketch persistence", () => {
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("thread-sketch-persist"));
+
+  beforeEach(() => resetComposerDraftStore());
+
+  it.each([true, false])(
+    "round-trips image bytes with sketch=%s through saved draft storage",
+    async (withSketch) => {
+      const store = useComposerDraftStore.getState();
+      const image = {
+        ...makeImage({ id: "sketch", previewUrl: "data:image/png;base64,YQ==" }),
+        ...(withSketch ? { sketch: sketchScene } : {}),
+      };
+      store.addImage(threadRef, image);
+      const saved = captureComposerDraft(threadRef);
+      expect(saved.attachments[0]?.sketch).toEqual(withSketch ? sketchScene : undefined);
+      const staged = store.syncPersistedAttachments(threadRef, [...saved.attachments]);
+      const persistedState = flushComposerDraftStorage();
+      await staged;
+      const merge = useComposerDraftStore.persist.getOptions().merge!;
+      useComposerDraftStore.setState(
+        merge(persistedState, useComposerDraftStore.getInitialState()),
+      );
+      const restored = store.getComposerDraft(threadRef)!;
+      expect(restored.persistedAttachments[0]?.sketch).toEqual(
+        withSketch ? sketchScene : undefined,
+      );
+      expect(restored.images[0]).toMatchObject({ id: "sketch", previewUrl: image.previewUrl });
+      const attachment = restored.images[0]!;
+      expect(attachment.type === "image" ? attachment.sketch : undefined).toEqual(
+        withSketch ? sketchScene : undefined,
+      );
+      expect(await attachment.file?.text()).toBe("a");
+    },
+  );
+
+  it("drops invalid sketch data on hydrate while keeping the image and other draft content", () => {
+    const key = scopedThreadKey(threadRef);
+    const merge = useComposerDraftStore.persist.getOptions().merge!;
+    const merged = merge(
+      {
+        draftsByThreadKey: {
+          [key]: {
+            prompt: "Keep this draft",
+            attachments: [
+              {
+                type: "image",
+                id: "sketch",
+                name: "sketch.png",
+                mimeType: "image/png",
+                sizeBytes: 1,
+                dataUrl: "data:image/png;base64,YQ==",
+                sketch: { elements: [{ ...sketchScene.elements[0], points: [] }] },
+              },
+            ],
+          },
+        },
+        draftThreadsByThreadKey: {},
+        logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+      },
+      useComposerDraftStore.getInitialState(),
+    );
+    expect(merged.draftsByThreadKey[key]?.prompt).toBe("Keep this draft");
+    expect(merged.draftsByThreadKey[key]?.persistedAttachments[0]).not.toHaveProperty("sketch");
+    const image = merged.draftsByThreadKey[key]?.images[0];
+    expect(image).toMatchObject({ id: "sketch", previewUrl: "data:image/png;base64,YQ==" });
+    expect(image).not.toHaveProperty("sketch");
+  });
+
+  it("carries a validated sketch through when hydrating attachments", () => {
+    const persisted = {
+      type: "image" as const,
+      id: "sketch",
+      name: "sketch.png",
+      mimeType: "image/png",
+      sizeBytes: 1,
+      dataUrl: "data:image/png;base64,YQ==",
+      sketch: sketchScene,
+    };
+    expect(hydrateImagesFromPersisted([persisted])[0]).toHaveProperty("sketch", sketchScene);
   });
 });
 

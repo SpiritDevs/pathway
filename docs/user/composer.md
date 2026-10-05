@@ -12,8 +12,8 @@ messages, such as large pastes, stay unformatted so typing remains fast.
 
 Use the plus button on the left of the input to open the Add menu. It grows out of the top of
 the message field and covers the environment controls while open. The Add section holds
-attachments, Goal, Plan mode, Computer use (when the environment supports it), and Stash
-prompts. Your skills follow. Search to find an item. Stash prompts opens your stashed prompts:
+attachments, Goal, Plan mode, Computer use (when the environment supports it), Sketch, and
+Stash prompts. Your skills follow. Search to find an item. Stash prompts opens your stashed prompts:
 stash the current draft, restore a prompt into this thread, or delete one. Until you have a
 stashed prompt, the Add section shows Stash current prompt instead, and only when the input
 has something to stash.
@@ -27,6 +27,14 @@ Choose Files and folders to upload files from your device or reference a file or
 in the selected environment's project. Attachment previews appear above the input in a
 separate scrollable area, so a long draft or several attachments cannot fill the conversation.
 You can still preview and remove attachments, inspect upload status, and retry failed uploads.
+
+Choose Sketch, or type `/sketch`, to draw a quick design on a blank page. Draw with the pen,
+add text, rectangles, ellipses, arrows, and lines, and pick a color and stroke size. The eraser
+removes whatever it touches. Use Select to move, recolor, or delete a single item, and double-click
+text to edit it. Undo and redo cover every change. Choose the check button, or press
+Command-Enter (Ctrl+Enter on Windows and Linux), to attach the sketch as an image. Until you send the message, select
+the sketch's preview to reopen it and keep editing; saving replaces the attached image. Closing
+with unsaved changes asks before discarding them. Sketches are available on web and desktop.
 
 Before sending a new thread, changing the project from either the header or the project name
 above the composer moves your current message and attachments to that project. You can switch
@@ -61,7 +69,7 @@ they happen. Once the workspace is ready for the agent, the card disappears and 
 timer starts. Setup failures stay visible so you can inspect them.
 
 Typing `/`, `$`, or `@` opens the same panel as the plus button, growing out of the top of
-the input. `/` lists tools first (Goal, Plan mode, Build mode, Computer use, and Model), then
+the input. `/` lists tools first (Goal, Plan mode, Build mode, Computer use, Sketch, and Model), then
 provider commands, then skills. `$` lists skills only. `@` lists tools, then project files and
 folders. Keep typing to filter, use the arrow keys to move, and press Enter to choose.
 
