@@ -136,7 +136,7 @@ The desktop app's own webview. Its `localhost` is the user's machine. The deskto
 _Avoid_: This desktop (as a host choice)
 
 **Pathway runtime**:
-The desktop app's own Electron, built inside a full Chromium tree with Chrome's browser layer linked in, and pinned by `apps/desktop/pathway-runtime.json` ([ADR 0049](../adr/0049-desktop-runs-on-a-pathway-chromium-runtime.md)). It gives the local browser Chrome's real site information, certificates, settings pages and per-site permissions, with Pathway's UI on top.
+The desktop app's own Electron, built inside a full Chromium tree with Chrome's browser layer linked in, and pinned by `apps/desktop/pathway-runtime.json` ([ADR 0049](../adr/0049-desktop-runs-on-a-pathway-chromium-runtime.md), [pin](desktop-runtime.md)). It gives the local browser Chrome's real site information, certificates, settings pages and per-site permissions, with Pathway's UI on top.
 _Avoid_: Stock Electron (for the shipped runtime), owl (that is OpenAI's)
 
 **Model manifest**:

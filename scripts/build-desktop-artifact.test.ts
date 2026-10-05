@@ -9,7 +9,10 @@ import * as Option from "effect/Option";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
+import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
+import pathwayRuntime from "../apps/desktop/pathway-runtime.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import {
@@ -20,6 +23,11 @@ import {
   createStageWorkspaceConfig,
   createStagePatchedDependencies,
   createBuildConfig,
+  cachePinnedRuntimeArchive,
+  resolvePinnedRuntimeArchive,
+  RuntimeArchiveHashMismatchError,
+  RuntimeElectronVersionMismatchError,
+  UnsupportedPinnedRuntimeArchitectureError,
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
@@ -60,6 +68,7 @@ import {
   WINDOWS_ASAR_UNPACK,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
+import { sha256Hex } from "./lib/native-command.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 
 function mockProcess(exitCode: number) {
@@ -100,6 +109,162 @@ function iconResizeSpawnerLayer(
 }
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it.effect("pins the same base Electron version as npm electron", () =>
+    Effect.sync(() => {
+      // Bump apps/desktop/pathway-runtime.json together with npm electron.
+      assert.equal(pathwayRuntime.electronVersion, desktopPackageJson.dependencies.electron);
+    }),
+  );
+
+  it.effect("selects the pinned archive for all six platform and architecture targets", () =>
+    Effect.gen(function* () {
+      for (const [platform, runtimePlatform] of [
+        ["mac", "darwin"],
+        ["win", "win32"],
+        ["linux", "linux"],
+      ] as const) {
+        for (const arch of ["arm64", "x64"] as const) {
+          const archive = yield* resolvePinnedRuntimeArchive(
+            platform,
+            arch,
+            pathwayRuntime,
+            pathwayRuntime.electronVersion,
+          );
+          assert.deepStrictEqual(archive, pathwayRuntime.archives[`${runtimePlatform}-${arch}`]);
+          assert.match(archive.sha256, /^[a-f0-9]{64}$/u);
+        }
+      }
+    }),
+  );
+
+  it.effect("rejects universal packaging with a single pinned archive", () =>
+    Effect.gen(function* () {
+      const error = yield* resolvePinnedRuntimeArchive(
+        "mac",
+        "universal",
+        pathwayRuntime,
+        pathwayRuntime.electronVersion,
+      ).pipe(
+        Effect.match({
+          onSuccess: () => assert.fail("Expected universal packaging to be rejected"),
+          onFailure: (error) => error,
+        }),
+      );
+      assert.instanceOf(error, UnsupportedPinnedRuntimeArchitectureError);
+      assert.include(error.message, "Package arm64 and x64 separately");
+    }),
+  );
+
+  it.effect("requires the runtime base Electron version to match npm electron", () =>
+    Effect.gen(function* () {
+      const error = yield* resolvePinnedRuntimeArchive("mac", "arm64", {
+        ...pathwayRuntime,
+        electronVersion: "0.0.0",
+      }).pipe(
+        Effect.match({
+          onSuccess: () => assert.fail("Expected mismatched Electron versions to be rejected"),
+          onFailure: (error) => error,
+        }),
+      );
+      assert.instanceOf(error, RuntimeElectronVersionMismatchError);
+      assert.equal(error.runtimeElectronVersion, "0.0.0");
+      assert.equal(error.npmElectronVersion, desktopPackageJson.dependencies.electron);
+      assert.include(error.message, "Update the runtime pin and npm electron together");
+    }),
+  );
+
+  it.effect("downloads and reuses a verified archive without another request", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cacheDir = yield* fs.makeTempDirectoryScoped();
+      const contents = "runtime archive fixture";
+      const archive = {
+        url: "https://example.invalid/runtime.zip",
+        sha256: sha256Hex(new TextEncoder().encode(contents)),
+      };
+      let requests = 0;
+      const client = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) => {
+          requests++;
+          assert.equal(request.url, archive.url);
+          return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(contents)));
+        }),
+      );
+      const downloaded = yield* cachePinnedRuntimeArchive(archive, cacheDir).pipe(
+        Effect.provide(client),
+        Effect.scoped,
+      );
+      assert.equal(yield* fs.readFileString(downloaded), contents);
+      assert.equal(path.basename(downloaded), `${archive.sha256}.zip`);
+      const reused = yield* cachePinnedRuntimeArchive(archive, cacheDir).pipe(
+        Effect.provide(client),
+        Effect.scoped,
+      );
+      assert.equal(reused, downloaded);
+      assert.equal(requests, 1);
+      assert.deepStrictEqual(yield* fs.readDirectory(cacheDir), [`${archive.sha256}.zip`]);
+
+      // Cache hits must be verified again, rather than trusted by filename.
+      yield* fs.writeFileString(downloaded, "corrupt cached archive");
+      const error = yield* cachePinnedRuntimeArchive(archive, cacheDir).pipe(
+        Effect.provide(client),
+        Effect.scoped,
+        Effect.flip,
+      );
+      assert.instanceOf(error, RuntimeArchiveHashMismatchError);
+      assert.equal(requests, 1);
+      assert.isFalse(yield* fs.exists(downloaded));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("rejects and removes a downloaded archive with a mismatched SHA-256", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fs.makeTempDirectoryScoped();
+      const archive = { url: "https://example.invalid/runtime.zip", sha256: "0".repeat(64) };
+      const client = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response("wrong archive"))),
+        ),
+      );
+      const error = yield* cachePinnedRuntimeArchive(archive, cacheDir).pipe(
+        Effect.provide(client),
+        Effect.scoped,
+        Effect.flip,
+      );
+      assert.instanceOf(error, RuntimeArchiveHashMismatchError);
+      assert.equal(error.expected, archive.sha256);
+      assert.equal(error.actual, sha256Hex(new TextEncoder().encode("wrong archive")));
+      assert.include(error.message, "SHA-256 mismatch");
+      assert.deepStrictEqual(yield* fs.readDirectory(cacheDir), []);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("cleans temporary files when the HTTP request fails", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fs.makeTempDirectoryScoped();
+      const archive = { url: "https://example.invalid/runtime.zip", sha256: "0".repeat(64) };
+      const client = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(request, new Response("unavailable", { status: 503 })),
+          ),
+        ),
+      );
+      yield* cachePinnedRuntimeArchive(archive, cacheDir).pipe(
+        Effect.provide(client),
+        Effect.scoped,
+        Effect.flip,
+      );
+      assert.deepStrictEqual(yield* fs.readDirectory(cacheDir), []);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("packages dictation executables and notices without downloaded weights", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -877,6 +1042,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         outputDir: Option.none(),
         skipBuild: Option.none(),
         skipBackendDeploy: Option.none(),
+        pinnedRuntime: Option.none(),
         keepStage: Option.none(),
         signed: Option.none(),
         verbose: Option.none(),
@@ -904,6 +1070,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(resolved.platform, "win");
       assert.equal(resolved.target, "nsis");
       assert.equal(resolved.arch, "arm64");
+      assert.isFalse(resolved.pinnedRuntime);
     }),
   );
 
@@ -965,6 +1132,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         outputDir: Option.none(),
         skipBuild: Option.none(),
         skipBackendDeploy: Option.none(),
+        pinnedRuntime: Option.none(),
         keepStage: Option.none(),
         signed: Option.none(),
         verbose: Option.none(),
@@ -998,6 +1166,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             outputDir: Option.none(),
             skipBuild: Option.none(),
             skipBackendDeploy: Option.none(),
+            pinnedRuntime: Option.none(),
             keepStage: Option.none(),
             signed: Option.none(),
             verbose: Option.none(),
@@ -1090,6 +1259,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         outputDir: Option.some("release-test"),
         skipBuild: Option.some(false),
         skipBackendDeploy: Option.some(false),
+        pinnedRuntime: Option.some(false),
         keepStage: Option.some(false),
         signed: Option.some(false),
         verbose: Option.some(false),
@@ -1104,6 +1274,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
               env: {
                 PATHWAY_DESKTOP_SKIP_BUILD: "true",
                 PATHWAY_DESKTOP_SKIP_BACKEND_DEPLOY: "true",
+                PATHWAY_DESKTOP_PINNED_RUNTIME: "true",
                 PATHWAY_DESKTOP_KEEP_STAGE: "true",
                 PATHWAY_DESKTOP_SIGNED: "true",
                 PATHWAY_DESKTOP_VERBOSE: "true",
@@ -1116,6 +1287,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       assert.equal(resolved.skipBuild, false);
       assert.equal(resolved.skipBackendDeploy, false);
+      assert.isFalse(resolved.pinnedRuntime);
       assert.equal(resolved.keepStage, false);
       assert.equal(resolved.signed, false);
       assert.equal(resolved.verbose, false);

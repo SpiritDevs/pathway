@@ -1,0 +1,31 @@
+{
+  "runtimeName": "pathway",
+  "electronVersion": "41.5.0",
+  "runtimeVersion": "41.5.0",
+  "archives": {
+    "darwin-arm64": {
+      "url": "https://github.com/electron/electron/releases/download/v41.5.0/electron-v41.5.0-darwin-arm64.zip",
+      "sha256": "091a58410a353b7f7fc5898ccb6cc31c6e5ea7acd8caedf448833713563efae2"
+    },
+    "darwin-x64": {
+      "url": "https://github.com/electron/electron/releases/download/v41.5.0/electron-v41.5.0-darwin-x64.zip",
+      "sha256": "3085b52fc90e81c0c3ed7f59b759f710b176c5a8989ced64a51618e8fd3e8a2e"
+    },
+    "win32-x64": {
+      "url": "https://github.com/electron/electron/releases/download/v41.5.0/electron-v41.5.0-win32-x64.zip",
+      "sha256": "80ca17147647872ddf2c5322e7aad198b67ab179954998eebc295316861ecd51"
+    },
+    "win32-arm64": {
+      "url": "https://github.com/electron/electron/releases/download/v41.5.0/electron-v41.5.0-win32-arm64.zip",
+      "sha256": "c59cd1af301253aaf1e482f516c1535d5d23575334b0689bb88c4f67284c3334"
+    },
+    "linux-x64": {
+      "url": "https://github.com/electron/electron/releases/download/v41.5.0/electron-v41.5.0-linux-x64.zip",
+      "sha256": "1d5364794dffe2493d74a9755d49ba37ecdfd3d19a8e2a38349cd9374adb19d4"
+    },
+    "linux-arm64": {
+      "url": "https://github.com/electron/electron/releases/download/v41.5.0/electron-v41.5.0-linux-arm64.zip",
+      "sha256": "1d0c89698bcc3029d0c197a215679c14c65ab67086c4529d5ea90280f3d5bcc2"
+    }
+  }
+}
