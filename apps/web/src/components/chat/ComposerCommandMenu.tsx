@@ -6,6 +6,7 @@ import {
 } from "@spiritdevs/contracts";
 import {
   BotIcon,
+  CircleDotIcon,
   CpuIcon,
   MonitorIcon,
   PencilRulerIcon,
@@ -79,6 +80,7 @@ const TOOL_ICONS: Record<ComposerSlashCommand, typeof BotIcon> = {
   default: BotIcon,
   "computer-use": MonitorIcon,
   sketch: SignatureIcon,
+  "record-skill": CircleDotIcon,
   model: CpuIcon,
 };
 

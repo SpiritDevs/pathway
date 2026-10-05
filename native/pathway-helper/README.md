@@ -11,16 +11,22 @@ Run the native tests with `node scripts/build-pathway-helper.ts --native-tests`.
 
 Pass exactly one mode flag.
 
-| Mode                         | Extra flags                                                                            | Emits                                                                                                                                             |
-| ---------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--check-permissions`        | `--permission accessibility\|inputMonitoring\|screenRecording` (repeatable)            | `permissions`                                                                                                                                     |
-| `--request-permissions`      | `--permission …`, `--app-path <bundle>.app`                                            | `permissions`                                                                                                                                     |
-| `--prepare-permission-setup` | `--permission …`, `--app-path <bundle>.app`                                            | `permissions`                                                                                                                                     |
-| `--release-held-input`       |                                                                                        | `release-held-input`                                                                                                                              |
-| `--permission-guide`         | `--pane accessibility\|input-monitoring\|screen-recording`, `--app-path`, `--app-name` | `permission-guide` (`granted` or `closed`); stdin `close` dismisses it                                                                            |
-| `--computer-frames`          | `--window-id <n>`, `--out <unix socket>`, optional `--pid <n>`                         | `ready`, `error`; JPEG frames go to the socket, never stdout                                                                                      |
-| `--escape-monitor`           |                                                                                        | `ready`, `escape`, `physical-input`, `escape-monitor-state`, `error`; stdin `arm` / `disarm`                                                      |
-| `--shield`                   |                                                                                        | `ready`, `shield` (`engaged`, `refused`, `released`), `error`; stdin `engage <id> <x> <y> <w> <h> [label]`, `release <id>`, `release-all`, `quit` |
+| Mode                         | Extra flags                                                                            | Emits                                                                                                                                                        |
+| ---------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--check-permissions`        | `--permission accessibility\|inputMonitoring\|screenRecording` (repeatable)            | `permissions`                                                                                                                                                |
+| `--request-permissions`      | `--permission …`, `--app-path <bundle>.app`                                            | `permissions`                                                                                                                                                |
+| `--prepare-permission-setup` | `--permission …`, `--app-path <bundle>.app`                                            | `permissions`                                                                                                                                                |
+| `--release-held-input`       |                                                                                        | `release-held-input`                                                                                                                                         |
+| `--permission-guide`         | `--pane accessibility\|input-monitoring\|screen-recording`, `--app-path`, `--app-name` | `permission-guide` (`granted` or `closed`); stdin `close` dismisses it                                                                                       |
+| `--computer-frames`          | `--window-id <n>`, `--out <unix socket>`, optional `--pid <n>`                         | `ready`, `error`; JPEG frames go to the socket, never stdout                                                                                                 |
+| `--escape-monitor`           |                                                                                        | `ready`, `escape`, `physical-input`, `escape-monitor-state`, `error`; stdin `arm` / `disarm`                                                                 |
+| `--shield`                   |                                                                                        | `ready`, `shield` (`engaged`, `refused`, `released`), `error`; stdin `engage <id> <x> <y> <w> <h> [label]`, `release <id>`, `release-all`, `quit`            |
+| `--record-workflow`          | optional `--target-name <name>` (defaults to the Mac's name)                           | `workflow-started` (after consent), `workflow-event`, `workflow-ended` (`stopped`, `cancelled`, `time-limit`), `error`; stdin `stop` / `cancel`, EOF cancels |
+
+`--record-workflow` captures nothing until the user presses Start in its native confirmation. A
+floating indicator then shows the elapsed time against the 30-minute cap with Stop and Cancel. A
+stop before consent, a screen lock, sleep, or a user switch ends it as `cancelled`. For a manual
+capture check, see `tests/workflow-fixture/main.swift`.
 
 When no permission is selected, checks and requests default to Input Monitoring and Screen
 Recording.

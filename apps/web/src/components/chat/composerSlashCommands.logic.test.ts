@@ -33,6 +33,27 @@ describe("buildBuiltInSlashCommandItems", () => {
     const items = buildBuiltInSlashCommandItems({ computerUseAvailable: false });
     expect(items.some((item) => item.command === "computer-use")).toBe(false);
   });
+
+  it("offers /record-skill after the tools only when the thread can record", () => {
+    const items = buildBuiltInSlashCommandItems({
+      computerUseAvailable: true,
+      recordSkillAvailable: true,
+    });
+    expect(items.map((item) => item.command)).toEqual([
+      "goal",
+      "plan",
+      "default",
+      "computer-use",
+      "record-skill",
+      "sketch",
+      "model",
+    ]);
+    expect(
+      buildBuiltInSlashCommandItems({ computerUseAvailable: true }).some(
+        (item) => item.command === "record-skill",
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("shouldHideProviderNativeSlashCommand", () => {

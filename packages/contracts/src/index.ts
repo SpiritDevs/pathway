@@ -69,5 +69,6 @@ export * from "./environmentSurface.ts";
 export * from "./previewRemoteInteractions.ts";
 
 export * from "./computerSurface.ts";
+export * from "./workflowRecording.ts";
 
 export * from "./simBuild.ts";

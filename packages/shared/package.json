@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./workflowRecordingSkill": {
+      "types": "./src/workflowRecordingSkill.ts",
+      "import": "./src/workflowRecordingSkill.ts"
+    },
     "./cuaDriverRelease.json": "./src/cuaDriverRelease.json",
     "./desktopFlavor": {
       "types": "./src/desktopFlavor.ts",

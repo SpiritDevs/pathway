@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import type { SnapShotSource } from "@spiritdevs/contracts";
+import type { SnapShotSource, WorkflowRecordingStatus } from "@spiritdevs/contracts";
 import {
   SNAP_SHOT_ATTACHMENT_FRAME_CLASS,
   SnapShotAttachmentDetails,
@@ -150,6 +150,18 @@ import { useComputerSupport } from "../../hooks/useComputerSupport";
 import { useComputerControlEffortHint } from "../../hooks/useComputerControlEffortHint";
 import { ComposerComputerControlEffortHint } from "./ComposerComputerControlEffortHint";
 import {
+  isWorkflowRecordingBlocked,
+  onWorkflowRecordingStartRequested,
+  useWorkflowRecording,
+  useWorkflowRecordingPlatform,
+} from "../../hooks/useWorkflowRecording";
+import { ComposerWorkflowRecordingStrip } from "./ComposerWorkflowRecordingStrip";
+import {
+  appendWorkflowSkillPrompt,
+  removeWorkflowSkillPrompt,
+} from "./composerWorkflowRecording.logic";
+import { useEnvironment } from "../../state/environments";
+import {
   getComposerPromptInjectionState,
   getComposerProviderState,
   renderProviderTraitsMenuContent,
@@ -271,6 +283,7 @@ import { toastManager } from "../ui/toast";
 import {
   BotIcon,
   CircleAlertIcon,
+  CircleDotIcon,
   LoaderCircleIcon,
   FileTextIcon,
   MonitorIcon,
@@ -1297,6 +1310,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     pendingUserInputs.length > 0 ||
     (showPlanFollowUpPrompt && activeProposedPlan !== null);
   const computerUseAvailable = useComputerSupport(environmentId);
+  // Record a skill: owned by a durable thread, recorded on the environment's Mac.
+  const recordSkillPlatform = useWorkflowRecordingPlatform(environmentId);
+  const workflowRecording = useWorkflowRecording({
+    environmentId: recordSkillPlatform ? environmentId : null,
+    threadId: recordSkillPlatform && routeKind === "server" ? routeThreadRef.threadId : null,
+  });
+  const recordSkillEnvironment = useEnvironment(environmentId);
+  const recordSkillTargetName =
+    workflowRecording.status?.targetName ?? recordSkillEnvironment?.label ?? "this Mac";
+  const recordSkillOffered =
+    recordSkillPlatform && (routeKind === "draft" || workflowRecording.status?.supported === true);
+  const recordSkillBusy =
+    workflowRecording.pending !== null || isWorkflowRecordingBlocked(workflowRecording.status);
+  const recordSkillSlashAvailable =
+    recordSkillOffered && routeKind === "server" && !recordSkillBusy;
   const addMenuSkills = useMemo(
     () =>
       composerAddSkillItems({ provider: selectedProvider, skills: composerCatalog?.skills ?? [] }),
@@ -1322,6 +1350,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (!composerTrigger) return [];
     const toolItems = buildBuiltInSlashCommandItems({
       computerUseAvailable,
+      recordSkillAvailable: recordSkillSlashAvailable,
     }) satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
     const skillItems = (query: string) =>
       searchProviderSkills(composerCatalog?.skills ?? [], query).map((skill) => ({
@@ -1385,6 +1414,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerCatalog,
     workspaceEntries.entries,
     computerUseAvailable,
+    recordSkillSlashAvailable,
   ]);
 
   const composerMenuOpen = Boolean(composerTrigger);
@@ -1519,6 +1549,50 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setComposerDraftPrompt(composerDraftTarget, nextPrompt);
     },
     [composerDraftTarget, setComposerDraftPrompt],
+  );
+
+  // Hands a finished recording to this (its owner) thread as an editable prompt.
+  // Appends after whatever is drafted; the user decides when to send.
+  // The server builds the prompt for completed recordings only.
+  const workflowSkillPrompt =
+    workflowRecording.status?.phase === "completed"
+      ? (workflowRecording.status.skillPrompt ?? null)
+      : null;
+  const workflowSkillPromptAdded =
+    workflowSkillPrompt !== null && prompt.includes(workflowSkillPrompt);
+  const appendWorkflowRecordingSkillPrompt = useCallback(
+    (status: WorkflowRecordingStatus) => {
+      if (!status.skillPrompt) return;
+      const next = appendWorkflowSkillPrompt(promptRef.current, status.skillPrompt);
+      if (next !== promptRef.current) setPromptFromTraits(next);
+    },
+    [promptRef, setPromptFromTraits],
+  );
+  // Discard and a new recording both delete the saved files, so the exact
+  // prompt pointing at them leaves the draft too. Edited text stays.
+  const withdrawWorkflowSkillPrompt = useCallback(() => {
+    if (workflowSkillPrompt === null) return;
+    const next = removeWorkflowSkillPrompt(promptRef.current, workflowSkillPrompt);
+    if (next !== promptRef.current) setPromptFromTraits(next);
+  }, [promptRef, setPromptFromTraits, workflowSkillPrompt]);
+  const { cancel: cancelWorkflowRecording, start: beginWorkflowRecording } = workflowRecording;
+  const discardWorkflowRecording = useCallback(() => {
+    withdrawWorkflowSkillPrompt();
+    cancelWorkflowRecording();
+  }, [cancelWorkflowRecording, withdrawWorkflowSkillPrompt]);
+  // The one start path for the Add menu, /record-skill, and the command palette.
+  const startWorkflowRecording = useCallback(() => {
+    withdrawWorkflowSkillPrompt();
+    beginWorkflowRecording();
+  }, [beginWorkflowRecording, withdrawWorkflowSkillPrompt]);
+  const workflowRecordingThreadId = routeKind === "server" ? routeThreadRef.threadId : null;
+  useEffect(
+    () =>
+      onWorkflowRecordingStartRequested((target) => {
+        if (target.environmentId === environmentId && target.threadId === workflowRecordingThreadId)
+          startWorkflowRecording();
+      }),
+    [environmentId, startWorkflowRecording, workflowRecordingThreadId],
   );
 
   const removeComposerImageFromDraft = useCallback(
@@ -1998,6 +2072,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           setSketchEditor({ imageId: null, scene: null, draftTarget: composerDraftTarget });
           return;
         }
+        if (item.command === "record-skill") {
+          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            focusEditorAfterReplace: false,
+          });
+          if (applied) {
+            setComposerHighlightedItemId(null);
+            startWorkflowRecording();
+          }
+          return;
+        }
         if (item.command === "computer-use") {
           // The server only reads /computer-use from the start of the message.
           const expectedText = snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd);
@@ -2066,6 +2151,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerDraftTarget,
       composerImagesRef,
       setGoalMode,
+      startWorkflowRecording,
     ],
   );
 
@@ -3260,6 +3346,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         pendingUserInputs.length > 0 || composerImages.length >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
       run: () => setSketchEditor({ imageId: null, scene: null, draftTarget: composerDraftTarget }),
     },
+    ...(recordSkillOffered
+      ? [
+          {
+            id: "record-skill",
+            label: "Record a skill",
+            description:
+              routeKind === "draft"
+                ? "Send a message first. Recordings belong to a thread."
+                : workflowRecording.status?.phase === "busy"
+                  ? `Another thread is recording on ${recordSkillTargetName}`
+                  : workflowRecording.status?.phase === "completed"
+                    ? "Replaces this thread's saved recording"
+                    : `Show the agent a task on ${recordSkillTargetName}`,
+            icon: <CircleDotIcon className="size-4" />,
+            disabled: routeKind === "draft" || recordSkillBusy || pendingUserInputs.length > 0,
+            run: startWorkflowRecording,
+          },
+        ]
+      : []),
   ];
   const setAddMenuOpen = (open: boolean) => {
     setIsAddMenuOpen(open);
@@ -3454,6 +3559,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               <ComposerComputerControlEffortHint
                 onApply={computerControlEffortHint.apply}
                 onDismiss={computerControlEffortHint.dismiss}
+              />
+            </div>
+          ) : null}
+          {routeKind === "server" ? (
+            <div
+              className={cn(
+                "border-b border-border/65 bg-muted/20 empty:hidden",
+                hasComposerHeaderPanel || computerControlEffortHint.show
+                  ? null
+                  : "rounded-t-[19px]",
+              )}
+            >
+              <ComposerWorkflowRecordingStrip
+                recording={workflowRecording}
+                targetName={recordSkillTargetName}
+                promptAdded={workflowSkillPromptAdded}
+                onCreateSkill={appendWorkflowRecordingSkillPrompt}
+                onDiscard={discardWorkflowRecording}
               />
             </div>
           ) : null}

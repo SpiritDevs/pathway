@@ -8,7 +8,8 @@ export type ComposerSlashCommand =
   | "plan"
   | "default"
   | "computer-use"
-  | "sketch";
+  | "sketch"
+  | "record-skill";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;

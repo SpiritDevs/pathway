@@ -1,4 +1,8 @@
-import { COMPUTER_SURFACE_METHODS, COMPUTER_WS_METHODS } from "@spiritdevs/contracts";
+import {
+  COMPUTER_SURFACE_METHODS,
+  COMPUTER_WS_METHODS,
+  WORKFLOW_RECORDING_METHODS,
+} from "@spiritdevs/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -19,6 +23,7 @@ export function createComputerEnvironmentAtoms<R, E>(
   const controlScheduler = createAtomCommandScheduler();
   const inputScheduler = createAtomCommandScheduler();
   const provisionScheduler = createAtomCommandScheduler();
+  const recordingScheduler = createAtomCommandScheduler();
   const surfaceScheduler = createAtomCommandScheduler();
   const threadKey = ({
     environmentId,
@@ -28,6 +33,28 @@ export function createComputerEnvironmentAtoms<R, E>(
     input: { threadId: string };
   }) => JSON.stringify([environmentId, input.threadId]);
   return {
+    recordingStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer:recording-status",
+      tag: WORKFLOW_RECORDING_METHODS.status,
+    }),
+    startRecording: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer:recording-start",
+      tag: WORKFLOW_RECORDING_METHODS.start,
+      scheduler: recordingScheduler,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
+    stopRecording: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer:recording-stop",
+      tag: WORKFLOW_RECORDING_METHODS.stop,
+      scheduler: recordingScheduler,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
+    cancelRecording: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer:recording-cancel",
+      tag: WORKFLOW_RECORDING_METHODS.cancel,
+      scheduler: recordingScheduler,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
     status: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:computer:status",
       tag: COMPUTER_WS_METHODS.getStatus,

@@ -78,6 +78,30 @@ do {
         withExtendedLifetime((monitor, commandListener, parentProcessMonitor)) {
             RunLoop.main.run()
         }
+    case let .recordWorkflow(targetName):
+        _ = NSApplication.shared.setActivationPolicy(.accessory)
+
+        let (controller, commandListener, parentProcessMonitor): (
+            WorkflowRecordingController, WorkflowRecordingCommandListener, ParentProcessMonitor
+        ) = MainActor.assumeIsolated {
+            let controller = WorkflowRecordingController(emitter: emitter, targetName: targetName)
+            // Host death ends the recording as cancelled, then exits the helper.
+            let parentProcessMonitor = ParentProcessMonitor {
+                MainActor.assumeIsolated { controller.cancelForHostExit() }
+            }
+            parentProcessMonitor.start()
+            let commandListener = WorkflowRecordingCommandListener { command in
+                MainActor.assumeIsolated { controller.handle(command: command) }
+            }
+            commandListener.start()
+            controller.present()
+            return (controller, commandListener, parentProcessMonitor)
+        }
+
+        // NSApplication.run() dispatches the confirmation and indicator buttons.
+        withExtendedLifetime((controller, commandListener, parentProcessMonitor)) {
+            NSApplication.shared.run()
+        }
     case let .permissionGuide(pane, appPath, appName):
         try MainActor.assumeIsolated { try ensurePermissionSetupAppRegistration(appPath: appPath) }
         _ = NSApplication.shared.setActivationPolicy(.accessory)

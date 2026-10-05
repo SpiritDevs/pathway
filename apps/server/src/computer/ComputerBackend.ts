@@ -1,4 +1,6 @@
 import {
+  type WorkflowRecordingAction,
+  type WorkflowRecordingStatus,
   COMPUTER_DELIVERY_PATH_MAX_LENGTH,
   COMPUTER_MESSAGE_MAX_LENGTH,
   type ComputerAccessibilityTreeApp,
@@ -465,6 +467,10 @@ export interface ComputerBackend {
   readonly endTask?: (threadId: string, turnId?: string) => BackendEffect<void>;
   /** The CDP browser surface this backend exposes, if any. */
   readonly browser?: ComputerBrowserBackend;
+  readonly recording?: (
+    action: WorkflowRecordingAction,
+    threadId: string,
+  ) => BackendEffect<WorkflowRecordingStatus>;
   readonly dispose: () => Effect.Effect<void>;
 }
 

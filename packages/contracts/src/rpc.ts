@@ -1,3 +1,8 @@
+import {
+  WORKFLOW_RECORDING_METHODS,
+  WorkflowRecordingInput,
+  WorkflowRecordingStatus,
+} from "./workflowRecording.ts";
 import { SimBuildRpcs } from "./simBuild.ts";
 import { ReleaseRpcs } from "./releases.ts";
 import { XcodeRpcs } from "./xcode.ts";
@@ -2417,7 +2422,33 @@ export const WsComputerSurfaceHandBackRpc = Rpc.make(COMPUTER_SURFACE_METHODS.ha
 });
 
 /** Platform-neutral computer control and perception surface. */
+const WsWorkflowRecordingStatusRpc = Rpc.make(WORKFLOW_RECORDING_METHODS.status, {
+  payload: WorkflowRecordingInput,
+  success: WorkflowRecordingStatus,
+  error: ComputerRpcError,
+});
+const WsWorkflowRecordingStartRpc = Rpc.make(WORKFLOW_RECORDING_METHODS.start, {
+  payload: WorkflowRecordingInput,
+  success: WorkflowRecordingStatus,
+  error: ComputerRpcError,
+});
+const WsWorkflowRecordingStopRpc = Rpc.make(WORKFLOW_RECORDING_METHODS.stop, {
+  payload: WorkflowRecordingInput,
+  success: WorkflowRecordingStatus,
+  error: ComputerRpcError,
+});
+const WsWorkflowRecordingCancelRpc = Rpc.make(WORKFLOW_RECORDING_METHODS.cancel, {
+  payload: WorkflowRecordingInput,
+  success: WorkflowRecordingStatus,
+  error: ComputerRpcError,
+});
+
 export const WsComputerRpcGroup = RpcGroup.make(
+  WsWorkflowRecordingStatusRpc,
+  WsWorkflowRecordingStartRpc,
+  WsWorkflowRecordingStopRpc,
+  WsWorkflowRecordingCancelRpc,
+
   WsComputerSurfaceGetStateRpc,
   WsComputerSurfaceSubscribeRpc,
   WsComputerSurfaceTakeControlRpc,

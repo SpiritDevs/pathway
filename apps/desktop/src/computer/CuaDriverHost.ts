@@ -1,3 +1,5 @@
+import { idleWorkflowRecording, WorkflowRecordingAction } from "@spiritdevs/contracts";
+import type { WorkflowRecorder } from "./WorkflowRecorder.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- the host socket, driver sockets and capability compare are Node primitives the driver protocol is defined over.
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
@@ -55,6 +57,8 @@ export class CuaHostError extends Schema.TaggedErrorClass<CuaHostError>()("CuaHo
 }) {}
 
 const isCuaHostError = Schema.is(CuaHostError);
+const decodeWorkflowRecordingAction = Schema.decodeUnknownOption(WorkflowRecordingAction);
+
 const hostError = (message: string) => new CuaHostError({ message });
 const toHostError = (cause: unknown) =>
   isCuaHostError(cause) ? cause : hostError(cause instanceof Error ? cause.message : String(cause));
@@ -133,6 +137,7 @@ export interface CuaCursorStyle {
 }
 
 export interface CuaDriverHostOptions {
+  readonly workflowRecorder?: WorkflowRecorder;
   readonly binaryPath: string;
   readonly bundleId: string;
   readonly capability: string;
@@ -2113,6 +2118,23 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
     admitted: TaskRequest | undefined,
   ): Effect.Effect<CuaReply, CuaHostError> =>
     Effect.gen(function* () {
+      if (request.method === "workflow_recording") {
+        if (!task) return yield* hostError("Recording thread attribution is required.");
+        const decoded = decodeWorkflowRecordingAction(request.action);
+        if (Option.isNone(decoded)) return yield* hostError("Invalid recording action.");
+        const action = decoded.value;
+        if (!options.workflowRecorder) {
+          if (action === "status")
+            return { ok: true, result: idleWorkflowRecording(false) } satisfies CuaReply;
+          return yield* hostError("Workflow recording is unavailable on this host.");
+        }
+        if (action === "start" && (closed || suspended || desktopPauses.size > 0))
+          return yield* hostError("Recording cannot start while the desktop host is paused.");
+        const result = yield* options.workflowRecorder
+          .call(action, task.threadId)
+          .pipe(Effect.mapError(toHostError));
+        return { ok: true, result } satisfies CuaReply;
+      }
       const taskStopped = () =>
         admitted?.stopped === true ||
         (task !== undefined && userStoppedTasks.has(cuaComputerTaskKey(task)));
@@ -2624,6 +2646,9 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
 
   const dispose = Effect.gen(function* () {
     closed = true;
+    yield* (options.workflowRecorder?.cancelActive ?? Effect.void).pipe(
+      Effect.mapError(toHostError),
+    );
     updateInputMonitorArmed();
     const stopExit = yield* Effect.exit(stopNow().await);
     if (options.frameTap) yield* Effect.ignore(options.frameTap.dispose);
@@ -2649,7 +2674,10 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
     stop: Effect.suspend(() => stopNow().await),
     suspend: Effect.suspend(() => {
       suspended = true;
-      return stopNow().await;
+      return (options.workflowRecorder?.cancelActive ?? Effect.void).pipe(
+        Effect.mapError(toHostError),
+        Effect.andThen(stopNow().await),
+      );
     }),
     resume: Effect.sync(() => {
       if (!closed) suspended = false;
@@ -2657,6 +2685,9 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
     pauseDesktop: (reason) =>
       Effect.gen(function* () {
         desktopPauses.add(reason);
+        yield* (options.workflowRecorder?.cancelActive ?? Effect.void).pipe(
+          Effect.mapError(toHostError),
+        );
         desktopInterruptionCount += 1;
         desktopObservationRequired = true;
         browserObservationRequired = true;
