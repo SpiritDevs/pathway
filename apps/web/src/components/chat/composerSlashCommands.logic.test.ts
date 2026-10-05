@@ -15,6 +15,7 @@ describe("buildBuiltInSlashCommandItems", () => {
       "plan",
       "default",
       "computer-use",
+      "sketch",
       "model",
     ]);
     expect(items.filter((item) => item.command === "computer-use")).toEqual([

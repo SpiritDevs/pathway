@@ -56,6 +56,13 @@ export function buildBuiltInSlashCommandItems(input: {
         ]
       : []),
     {
+      id: "slash:sketch",
+      type: "slash-command",
+      command: "sketch",
+      label: "Sketch",
+      description: "Draw a sketch to attach",
+    },
+    {
       id: "slash:model",
       type: "slash-command",
       command: "model",

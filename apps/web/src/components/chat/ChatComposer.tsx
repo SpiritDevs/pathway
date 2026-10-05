@@ -45,8 +45,10 @@ import {
 import { serializeComposerFileLink } from "@spiritdevs/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@spiritdevs/shared/model";
 import {
+  lazy,
   memo,
   type ReactNode,
+  Suspense,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -156,6 +158,8 @@ import {
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { resolveContextWindowModelDisplayName } from "./ContextWindowMeter.logic";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
+import type { SketchDialogResult } from "../sketch/SketchDialog";
+import type { SketchScene } from "~/lib/sketch";
 import { basenameOfPath } from "../../pierre-icons";
 import { formatAttachmentSizeLabel } from "../../lib/attachmentSize";
 import {
@@ -276,6 +280,7 @@ import {
   LockIcon,
   LockOpenIcon,
   PenLineIcon,
+  SignatureIcon,
   SparklesIcon,
   XIcon,
 } from "lucide-react";
@@ -310,6 +315,8 @@ import { formatProviderSkillDisplayName } from "../../providerSkillPresentation"
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
+
+const SketchDialog = lazy(() => import("../sketch/SketchDialog"));
 
 const runtimeModeConfig: Record<
   RuntimeMode,
@@ -827,6 +834,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
+  const replaceComposerDraftImage = useComposerDraftStore((store) => store.replaceImage);
   const insertComposerDraftTerminalContext = useComposerDraftStore(
     (store) => store.insertTerminalContext,
   );
@@ -1123,6 +1131,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [composerMenuAnchor, setComposerMenuAnchor] = useState<HTMLDivElement | null>(null);
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
+  // The draft target is captured on open: the sketch lands in the thread it was started from.
+  const [sketchEditor, setSketchEditor] = useState<{
+    imageId: string | null;
+    scene: SketchScene | null;
+    draftTarget: ScopedThreadRef | DraftId;
+  } | null>(null);
   const [addMenuPathQuery, setAddMenuPathQuery] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1755,6 +1769,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 sizeBytes: image.sizeBytes,
                 dataUrl,
                 ...(image.source ? { source: image.source } : {}),
+                ...(image.sketch ? { sketch: image.sketch } : {}),
               });
             } catch {
               const existingPersisted = existingPersistedById.get(image.id);
@@ -1966,6 +1981,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }
           return;
         }
+        if (item.command === "sketch") {
+          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            focusEditorAfterReplace: false,
+          });
+          if (!applied) return;
+          setComposerHighlightedItemId(null);
+          if (composerImagesRef.current.length >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+            toastManager.add({
+              type: "error",
+              title: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`,
+            });
+            return;
+          }
+          setSketchEditor({ imageId: null, scene: null, draftTarget: composerDraftTarget });
+          return;
+        }
         if (item.command === "computer-use") {
           // The server only reads /computer-use from the start of the message.
           const expectedText = snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd);
@@ -2032,6 +2064,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       handleInteractionModeChange,
       resolveActiveComposerTrigger,
       composerDraftTarget,
+      composerImagesRef,
       setGoalMode,
     ],
   );
@@ -2578,6 +2611,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           ...(image.source
             ? { source: resizeSnapShotSource(image.source, result.image.imageSize) }
             : {}),
+          ...(image.sketch ? { sketch: image.sketch } : {}),
         } satisfies PersistedComposerImageAttachment;
         encodedImageAttachments.push(attachment);
         usedAttachmentChars += attachment.dataUrl.length;
@@ -2821,6 +2855,48 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
     if (file) releaseDraftAttachment(file);
     removeComposerImageFromDraft(imageId);
+  };
+
+  /**
+   * A sketch attaches as an ordinary PNG that also carries its vector scene, so the
+   * thumbnail reopens the editor until the message is sent. Edits replace it in place.
+   */
+  const saveSketch = async ({ scene, image }: SketchDialogResult) => {
+    if (!sketchEditor) return;
+    const { imageId, draftTarget } = sketchEditor;
+    const draftImages = getComposerDraft(draftTarget)?.images ?? [];
+    const existing = draftImages.find((attachment) => attachment.id === imageId);
+    if (!existing && draftImages.length >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+      throw new Error(
+        `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`,
+      );
+    }
+    const name =
+      existing?.name ?? `sketch-${new Date().toTimeString().slice(0, 8).replaceAll(":", "")}.png`;
+    const compressed = await compressImageToByteLimit(
+      new File([image], name, { type: "image/png" }),
+      PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+    );
+    if (!compressed.ok) throw new Error("This sketch is too large to attach.");
+    const attachment: ComposerImageAttachment = {
+      type: "image",
+      id: existing?.id ?? randomUUID(),
+      name: normalizeComposerAttachmentName(compressed.file.name, "image"),
+      mimeType: compressed.file.type,
+      sizeBytes: compressed.file.size,
+      previewUrl: URL.createObjectURL(compressed.file),
+      file: compressed.file,
+      sketch: scene,
+    };
+    const attached = existing
+      ? replaceComposerDraftImage(draftTarget, existing.id, attachment)
+      : addComposerDraftImage(draftTarget, attachment);
+    if (!attached) {
+      URL.revokeObjectURL(attachment.previewUrl);
+      throw new Error("The sketch could not be attached. Try again.");
+    }
+    setSketchEditor(null);
+    scheduleComposerFocus();
   };
 
   const onAttachmentInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -3175,6 +3251,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           },
         ]
       : []),
+    {
+      id: "sketch",
+      label: "Sketch",
+      description: "Draw a sketch",
+      icon: <SignatureIcon className="size-4" />,
+      disabled:
+        pendingUserInputs.length > 0 || composerImages.length >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+      run: () => setSketchEditor({ imageId: null, scene: null, draftTarget: composerDraftTarget }),
+    },
   ];
   const setAddMenuOpen = (open: boolean) => {
     setIsAddMenuOpen(open);
@@ -3292,6 +3377,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         accept={maxFileAttachmentBytes === null ? "image/*" : undefined}
         onChange={onAttachmentInputChange}
       />
+      {sketchEditor ? (
+        <Suspense fallback={null}>
+          <SketchDialog
+            initialScene={sketchEditor.scene}
+            onCancel={() => {
+              setSketchEditor(null);
+              scheduleComposerFocus();
+            }}
+            onDone={saveSketch}
+          />
+        </Suspense>
+      ) : null}
       <div
         className={cn(
           "group rounded-[22px] p-px transition-colors duration-200",
@@ -3555,6 +3652,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 </button>
                               ) : null}
                             </>
+                          ) : image.previewUrl && image.sketch ? (
+                            <button
+                              type="button"
+                              className="relative h-full w-full cursor-pointer"
+                              aria-label={`Edit ${image.name}`}
+                              title="Edit sketch"
+                              onClick={() =>
+                                setSketchEditor({
+                                  imageId: image.id,
+                                  scene: image.sketch ?? null,
+                                  draftTarget: composerDraftTarget,
+                                })
+                              }
+                            >
+                              <img
+                                src={image.previewUrl}
+                                alt={image.name}
+                                className="h-full w-full object-cover"
+                              />
+                              <span className="absolute bottom-1 left-1 inline-flex rounded bg-background/85 p-0.5 text-muted-foreground">
+                                <SignatureIcon className="size-3" aria-hidden="true" />
+                              </span>
+                            </button>
                           ) : image.previewUrl ? (
                             <button
                               type="button"
