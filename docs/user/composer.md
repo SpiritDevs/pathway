@@ -88,6 +88,8 @@ over a project skill with the same name.
 Provider commands appear only when `/` starts the whole message, where the
 provider can expand them. Tools remain available after `/` at the beginning of any line.
 Choosing Computer use always places `/computer-use` at the start of the message.
+Record a skill, in the Add menu or as `/record-skill`, appears when the environment is a Mac. See
+[Record a skill](record-a-skill.md).
 
 ## Action palette
 

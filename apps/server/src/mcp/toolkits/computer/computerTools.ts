@@ -110,6 +110,7 @@ import {
   type ComputerHelpTopic,
 } from "./computerGuidance.ts";
 import { ComputerProgressGuard, type ComputerProgressAction } from "./computerProgressGuard.ts";
+import { makeWorkflowRecordingTools } from "./workflowRecordingTools.ts";
 import { makeComputerSpaceTools } from "./computerSpaceTools.ts";
 import {
   COMPUTER_CONTROL_CAPABILITY,
@@ -3190,6 +3191,7 @@ export function makeComputerTools(options: ComputerToolsOptions): ReadonlyArray<
   // renamed tool can never leave the chapter naming something that no longer
   // exists.
   const entries: ToolEntry[] = [
+    ...makeWorkflowRecordingTools(manager),
     ...makeComputerSpaceTools({
       manager,
       handle,

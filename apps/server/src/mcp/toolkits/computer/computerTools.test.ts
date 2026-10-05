@@ -450,16 +450,17 @@ it.layer(NodeServices.layer)("Pathway computer tools", (it) => {
   );
 
   it.effect(
-    "exposes the native batch fast path behind the computer capability, with 15 specialist tools hidden",
+    "exposes the native batch fast path behind the computer capability, with 16 specialist tools hidden",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const { byName, tools } = yield* setup();
-          // 33 registered desktop tools: 18 advertised, including the batch fast
-          // path, plus 15 specialists. The 7 recording/replay tools, the three click
+          // 34 registered desktop tools: 18 advertised, including the batch fast
+          // path, plus 16 specialists. The 7 recording/replay tools, the three click
           // variants and computer_hotkey are gone entirely — their behavior folded
           // into computer_click's count/button and computer_press_key's chord.
           expect(tools.map((tool) => tool.definition.name)).toEqual([
+            "computer_recording",
             "computer_spaces",
             "computer_list_windows",
             "computer_get_state",
@@ -521,6 +522,7 @@ it.layer(NodeServices.layer)("Pathway computer tools", (it) => {
           expect(
             tools.filter((tool) => tool.discoveryOnly === true).map((tool) => tool.definition.name),
           ).toEqual([
+            "computer_recording",
             "computer_spaces",
             "computer_read_clipboard",
             "computer_zoom",

@@ -51,7 +51,7 @@ struct AgentThreadComposerTrigger: Equatable, Hashable, Sendable {
 }
 
 struct AgentThreadComposerSuggestion: Identifiable {
-    enum Action { case insert(String), model(PathwayModelSelection), mode(String) }
+    enum Action { case insert(String), model(PathwayModelSelection), mode(String), recordSkill }
     let id: String
     let title: String
     let detail: String
@@ -145,6 +145,11 @@ struct AgentThreadComposerSuggestions: View {
             if trigger.range.location == 0, model.supportsComputer, !model.computerAccessDenied {
                 commands.append(.init(id: "builtin:computer-use", title: "/\(PathwayComputerInvocation.slashCommand)", detail: "Use Pathway Computer for this request only",
                                       symbol: "desktopcomputer", action: .insert("/\(PathwayComputerInvocation.slashCommand) ")))
+            }
+            if model.offersWorkflowRecording, !model.workflowRecordingBlocked {
+                commands.append(.init(id: "builtin:record-skill", title: "/record-skill",
+                                      detail: "Show the agent a task on \(model.workflowRecordingTargetName)",
+                                      symbol: "record.circle", action: .recordSkill))
             }
             commands += (trigger.range.location == 0 ? composerCatalog["slashCommands"]?.arrayValue ?? [] : []).compactMap { value in
                 // The server reads `/computer-use` from the message, so a provider command of that name never runs.

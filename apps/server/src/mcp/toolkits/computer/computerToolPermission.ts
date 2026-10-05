@@ -29,6 +29,7 @@ export const PATHWAY_COMPUTER_TOOL_NAMES = [
   "computer_perform_action",
   "computer_press_key",
   "computer_read_clipboard",
+  "computer_recording",
   "computer_run",
   "computer_screenshot",
   "computer_scroll",

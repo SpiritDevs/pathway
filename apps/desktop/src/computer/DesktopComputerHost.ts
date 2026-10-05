@@ -1,6 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off -- the host capability is minted from Node's CSPRNG.
 import * as NodeCrypto from "node:crypto";
 
+import * as Path from "effect/Path";
+import { makeWorkflowRecorder } from "./WorkflowRecorder.ts";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as FiberSet from "effect/FiberSet";
@@ -14,7 +16,7 @@ import * as Electron from "electron";
 import type { DesktopComputerHelperState } from "@spiritdevs/contracts";
 import { COMPUTER_PERMISSIONS } from "@spiritdevs/shared/computerGrants";
 import type { CuaToolResult } from "@spiritdevs/shared/cuaDriverProtocol";
-import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
+import { HostProcessPlatform, HostProcessHostname } from "@spiritdevs/shared/hostProcess";
 import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@spiritdevs/shared/modelImageBudget";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -260,7 +262,14 @@ const make = Effect.gen(function* () {
 
   yield* sweepOrphanedCuaDrivers();
   const capability = NodeCrypto.randomBytes(32).toString("base64url");
+  const path = yield* Path.Path;
+  const workflowRecorder = yield* makeWorkflowRecorder({
+    helperPath: helperPath.value,
+    directory: path.join(Electron.app.getPath("userData"), "workflow-recordings"),
+    targetName: (yield* HostProcessHostname).slice(0, 256),
+  });
   host = yield* makeCuaDriverHost({
+    workflowRecorder,
     binaryPath: driverPath.value,
     bundleId: environment.appUserModelId,
     capability,

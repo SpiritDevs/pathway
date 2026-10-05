@@ -55,6 +55,7 @@ import {
   type DesktopWslState,
   type DesktopSnapShotState,
   type EnvironmentId,
+  type WorkflowRecordingStatus,
   type FilesystemBrowseResult,
   type ProjectId,
   type SourceControlDiscoveryResult,
@@ -133,6 +134,12 @@ import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
+import {
+  isWorkflowRecordingActive,
+  requestWorkflowRecordingStart,
+  useWorkflowRecordingAvailable,
+} from "../hooks/useWorkflowRecording";
+import { computerEnvironment } from "../state/computer";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import {
@@ -1314,6 +1321,34 @@ function OpenCommandPaletteDialog(props: {
 
   const activeThreadId = activeThread?.id;
   const computerServed = useComputerEventsServed(activeThread?.environmentId ?? null);
+  const recordSkillAllowed = useWorkflowRecordingAvailable(activeThread?.environmentId ?? null);
+  // One read per palette open or thread change; the composer owns polling.
+  const readRecordingStatus = useAtomCommand(computerEnvironment.recordingStatus, {
+    reportFailure: false,
+  });
+  const recordSkillEnvironmentId = recordSkillAllowed ? activeThread?.environmentId : undefined;
+  const recordSkillKey = recordSkillEnvironmentId
+    ? `${recordSkillEnvironmentId}:${activeThreadId}`
+    : null;
+  const [recordSkillRead, setRecordSkillRead] = useState<{
+    readonly key: string;
+    readonly status: WorkflowRecordingStatus;
+  } | null>(null);
+  useEffect(() => {
+    if (!recordSkillEnvironmentId || !activeThreadId || !recordSkillKey) return;
+    let current = true;
+    void readRecordingStatus({
+      environmentId: recordSkillEnvironmentId,
+      input: { threadId: activeThreadId },
+    }).then((outcome) => {
+      if (current && outcome._tag === "Success")
+        setRecordSkillRead({ key: recordSkillKey, status: outcome.value });
+    });
+    return () => {
+      current = false;
+    };
+  }, [activeThreadId, readRecordingStatus, recordSkillEnvironmentId, recordSkillKey]);
+  const recordSkillStatus = recordSkillRead?.key === recordSkillKey ? recordSkillRead.status : null;
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
   const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
@@ -2187,6 +2222,50 @@ function OpenCommandPaletteDialog(props: {
           .open(scopeThreadRef(activeThread.environmentId, activeThread.id), "computer");
       },
     });
+  // Offered only once the server says this thread can record and nothing is live
+  // here; the composer strip already holds the controls for a live recording.
+  if (
+    activeThread &&
+    recordSkillStatus?.supported === true &&
+    !isWorkflowRecordingActive(recordSkillStatus)
+  ) {
+    const recordSkillTarget =
+      recordSkillStatus.targetName ??
+      environments.find((environment) => environment.environmentId === activeThread.environmentId)
+        ?.label ??
+      "this environment's Mac";
+    const recordSkillBusy = recordSkillStatus.phase === "busy";
+    actionItems.push({
+      kind: "action",
+      value: "action:record-skill",
+      searchTerms: ["record", "skill", "demonstrate", "teach", "workflow", "record a skill"],
+      title: "Record a skill",
+      description: recordSkillBusy
+        ? `Unavailable: another thread is recording on ${recordSkillTarget}`
+        : recordSkillStatus.phase === "completed"
+          ? "Replaces this thread's saved recording"
+          : `Show the agent a task on ${recordSkillTarget}`,
+      icon: <CircleDotIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        if (recordSkillBusy) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "info",
+              title: "Another thread is recording",
+              description: `You can record here once the recording on ${recordSkillTarget} ends.`,
+            }),
+          );
+          return;
+        }
+        // The composer owns the start: it clears a stale hand-off prompt, then
+        // its strip shows the confirmation, controls, and any error.
+        requestWorkflowRecordingStart({
+          environmentId: activeThread.environmentId,
+          threadId: activeThread.id,
+        });
+      },
+    });
+  }
   if (activeThread && activeThread.projectId !== null)
     actionItems.push({
       kind: "action",

@@ -8,6 +8,7 @@ struct AgentThreadComposer: View {
     private static let surfaceID = "agent-thread-composer-surface"
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @Bindable var model: PathwayAgentThreadModel
     @Binding var isExpanded: Bool
     @Binding var isFocused: Bool
@@ -78,6 +79,7 @@ struct AgentThreadComposer: View {
                 }
                 .padding(.horizontal, 20)
             }
+            AgentThreadWorkflowRecordingStrip(model: model)
             if usesCompactPresentation && !isExpanded {
                 collapsedComposer
                     .transition(.opacity)
@@ -91,6 +93,16 @@ struct AgentThreadComposer: View {
                     }
                     .transition(.opacity)
             }
+        }
+        // Status reads only while the app is in front and the host is a Mac; re-armed on
+        // return and whenever the poll interval changes, so reads never overlap.
+        .task(id: WorkflowRecordingWatch(thread: model.threadID, ready: model.isSubscriptionReady && isMacHost,
+                                         active: scenePhase == .active, interval: model.workflowRecording.pollInterval)) {
+            guard model.isSubscriptionReady, isMacHost, scenePhase == .active else { return }
+            await model.workflowRecording.watch(model)
+        }
+        .onChange(of: model.workflowRecording.status?.skillPrompt) { previous, _ in
+            if let previous { model.withdrawWorkflowSkillPrompt(previous) }
         }
         .fileImporter(isPresented: $showsFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
@@ -299,6 +311,21 @@ struct AgentThreadComposer: View {
                 .disabled(stash == nil || !hasContent || model.draftAttachments.contains(where: { $0.state != .ready }))
             Button("Saved prompts (\(stashCount))", systemImage: "tray.full") { showsStash = true }
                 .disabled(stash == nil)
+            if model.offersWorkflowRecording {
+                Divider()
+                Button { Task { await model.startWorkflowRecording() } } label: {
+                    Label {
+                        Text("Record a skill")
+                        Text(model.workflowRecording.status?.phase == "busy"
+                             ? "Another thread is recording on \(model.workflowRecordingTargetName)"
+                             : model.workflowRecording.status?.phase == "completed"
+                                ? "Replaces this thread's saved recording"
+                                : "Show the agent a task on \(model.workflowRecordingTargetName)")
+                    } icon: { Image(systemName: "record.circle") }
+                }
+                .disabled(model.workflowRecordingBlocked)
+                .accessibilityIdentifier("agent-thread-record-skill")
+            }
         } label: {
             Image(systemName: "plus").font(.title3)
                 .frame(width: controlDiameter, height: controlDiameter)
@@ -424,6 +451,17 @@ struct AgentThreadComposer: View {
         return AgentThreadComposerTrigger.detect(in: model.draft, cursor: cursor)
     }
 
+    private var isMacHost: Bool {
+        model.serverConfig["environment"]?.objectValue?["platform"]?.objectValue?["os"]?.stringValue == "darwin"
+    }
+
+    private struct WorkflowRecordingWatch: Equatable {
+        let thread: String
+        let ready: Bool
+        let active: Bool
+        let interval: Duration?
+    }
+
     private func selectSuggestion(_ suggestion: AgentThreadComposerSuggestion, trigger: AgentThreadComposerTrigger) {
         guard composerTrigger == trigger, !isApplyingSuggestion else { return }
         switch suggestion.action {
@@ -446,6 +484,9 @@ struct AgentThreadComposer: View {
                 do { try await model.setInteractionMode(mode); applySuggestion(trigger, replacement: "") }
                 catch { errorMessage = error.localizedDescription }
             }
+        case .recordSkill:
+            applySuggestion(trigger, replacement: "")
+            Task { await model.startWorkflowRecording() }
         }
     }
 

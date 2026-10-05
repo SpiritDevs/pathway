@@ -55,6 +55,7 @@ export const COMPUTER_TOOL_TITLES = {
   computer_run: "Run a sequence",
   computer_inspect: "Inspect the computer",
   computer_spaces: "Inspect desktop Spaces",
+  computer_recording: "Record a skill",
   computer_browser_state: "Read the browser page",
   computer_browser_prepare: "Prepare a browser",
   computer_browser_navigate: "Open a browser page",
