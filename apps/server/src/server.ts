@@ -139,6 +139,7 @@ import { cloudAgentThreadPublisherLayer } from "./cloud/cloudAgentThreadPublishe
 import { mailBrainLayer } from "./cloud/mailBrain.ts";
 import { orchestratorLayer } from "./cloud/orchestrator.ts";
 import { cloudTimeTrackingPublisherLayer } from "./cloud/cloudTimeTrackingPublisher.ts";
+import { workflowRecordingCleanupLayer } from "./computer/workflowRecordingCleanup.ts";
 import { capturedEmailPublisherLayer } from "./cloud/capturedEmailPublisher.ts";
 import { cloudSyncEngineRegistryLayer } from "./cloud/CloudSyncEngineRegistry.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
@@ -868,6 +869,7 @@ export const makeServerLayer = Layer.unwrap(
       cloudProjectPublisherLayer(),
       cloudAgentThreadPublisherLayer(),
       cloudTimeTrackingPublisherLayer(),
+      workflowRecordingCleanupLayer,
       capturedEmailPublisherLayer(),
       mailBrainLayer(),
       orchestratorLayer(),

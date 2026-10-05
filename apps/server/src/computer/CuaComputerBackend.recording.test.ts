@@ -1,11 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import { idleWorkflowRecording, ProviderDriverKind } from "@spiritdevs/contracts";
 import { makeCuaComputerBackend } from "./CuaComputerBackend.ts";
 import { ComputerManager } from "./ComputerManager.ts";
 import { fakeCuaRequest } from "./testing/FakeCuaRequest.ts";
 import { makeWorkflowRecordingTools } from "../mcp/toolkits/computer/workflowRecordingTools.ts";
+import { discardDeletedThreadRecordings } from "./workflowRecordingCleanup.ts";
 import type { ToolContext } from "../mcp/toolkits/computer/toolRuntime.ts";
 
 describe("recording transport and agent ownership", () => {
@@ -54,7 +56,11 @@ describe("recording transport and agent ownership", () => {
         assertCallerTurnActive: () => Effect.void,
         jsonRpcRequestId: 1,
       };
-      for (const tool of tools) expect((yield* tool.handler({}, context)).isError).toBeUndefined();
+      const [tool] = tools;
+      expect(tools).toHaveLength(1);
+      expect(tool!.discoveryOnly).toBe(true);
+      for (const action of ["status", "start", "stop", "cancel"])
+        expect((yield* tool!.handler({ action }, context)).isError).toBeUndefined();
       expect(requests).toEqual(
         ["status", "start", "stop", "cancel"].map((action) => ({
           method: "workflow_recording",
@@ -63,8 +69,36 @@ describe("recording transport and agent ownership", () => {
           capability: "fixture-authority",
         })),
       );
-      expect((yield* tools[0]!.handler({ threadId: "other" }, context)).isError).toBe(true);
+      expect((yield* tool!.handler({ action: "status", threadId: "other" }, context)).isError).toBe(
+        true,
+      );
+      expect((yield* tool!.handler({ action: "replay" }, context)).isError).toBe(true);
       expect(requests).toHaveLength(4);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("discards a deleted thread's recording and ignores other events", () =>
+    Effect.gen(function* () {
+      const actions: unknown[] = [];
+      const backend = yield* makeCuaComputerBackend({
+        endpoint: "/fixture/socket",
+        request: fakeCuaRequest(async (_, body) => {
+          actions.push([(body as { action: string }).action, (body as { task: unknown }).task]);
+          return { ok: true, result: idleWorkflowRecording(true) };
+        }),
+      });
+      const manager = yield* ComputerManager.make({ backend });
+      yield* discardDeletedThreadRecordings(
+        Stream.make(
+          { type: "thread.archived", threadId: "kept" },
+          { type: "thread.deleted", threadId: "gone" },
+        ),
+        manager,
+      );
+      expect(actions).toEqual([
+        ["status", { threadId: "gone" }],
+        ["cancel", { threadId: "gone" }],
+      ]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

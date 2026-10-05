@@ -9,16 +9,16 @@ typing on. Start it from a browser or another computer and the confirmation appe
 Mac. Someone has to be at that Mac to accept it and do the task.
 
 Record a skill works in the web, desktop, and iOS apps when the environment is a Mac running the
-Pathway desktop app. On iOS it controls that Mac; your phone is never recorded.
+Pathway desktop app and you are allowed to use Computer there. On iOS it controls that Mac; your
+phone is never recorded.
 
 ## Before you start
 
 Recording uses the same macOS permissions as Computer: **Accessibility** and **Input Monitoring**.
-If they are missing, the recording fails with a message telling you to allow them in
-**Settings** > **Computer** on the host Mac.
+If either is missing, the recording fails and asks you to allow both for Pathway on the host Mac.
 
-A recording belongs to a thread. In a new conversation, send a message first; until then the menu
-item is unavailable and says why.
+A recording belongs to a thread. In a new conversation, send a message first; Record a skill is
+not available until the thread exists.
 
 ## Recording
 
@@ -32,14 +32,17 @@ item is unavailable and says why.
 4. Choose **Stop** to keep the recording, or **Cancel** to discard it.
 
 While recording, Pathway notes the apps and windows you use, what you click, and the text you
-type. Password fields and password managers are skipped. Don't do anything sensitive while
-recording.
+type. Password fields, password managers, and System Settings are skipped. Don't do anything
+sensitive while recording.
+
+From the moment the confirmation appears until the recording ends, agents and other devices
+can't click or type on that Mac through Computer, so only your own actions are recorded. They
+can still look at the screen.
 
 Recording stops by itself after 30 minutes, or once it reaches 32 MiB of recorded steps, and keeps
-what it has. Locking the screen, putting the
-Mac to sleep, switching users, or quitting Pathway cancels it. Only one recording runs on a Mac at
-a time. While another thread is recording, the composer says so and Record a skill is unavailable
-until it ends.
+what it has. Locking the screen, putting the Mac to sleep, switching users, quitting Pathway, or
+restarting its environment cancels it. Only one recording runs on a Mac at a time. While another
+thread is recording, the composer says so and Record a skill is unavailable until it ends.
 
 ## Turning it into a skill
 
@@ -61,4 +64,7 @@ yourself, because it points at files that no longer exist.
 A thread keeps one saved recording. Starting a new one replaces it: the saved recording is
 deleted, and its unedited prompt leaves your draft the same way as with Discard. Creating the
 skill does not delete the recording. It stays on the Mac, including across restarts, until you
-discard it or record again in that thread.
+discard it, record again in that thread, or delete the thread.
+
+If you discard or replace the recording from another device, a device with the thread open
+removes the unedited prompt from its draft within a few seconds.

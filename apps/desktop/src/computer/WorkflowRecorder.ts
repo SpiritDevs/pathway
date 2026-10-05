@@ -58,10 +58,13 @@ interface Recording {
   helper?: HelperProcess;
   bytes: number;
   terminalReason?: string;
+  finalized?: boolean;
 }
 
 export interface WorkflowRecorder {
   readonly cancelActive?: Effect.Effect<void, WorkflowRecordingError>;
+  /** Whether a recording is awaiting consent, capturing, or saving; Computer input waits. */
+  readonly isActive?: () => boolean;
   readonly call: (
     action: WorkflowRecordingAction,
     threadId: string,
@@ -92,7 +95,7 @@ export const makeWorkflowRecorder = Effect.fn("desktop.makeWorkflowRecorder")(fu
           .pipe(Effect.orElseSucceed(() => undefined));
         const decoded = contents ? decodeStored(contents) : Option.none();
         if (Option.isNone(decoded) || decoded.value.phase !== "completed")
-          yield* fs.remove(directory, { recursive: true, force: true });
+          yield* fs.remove(directory, { recursive: true, force: true }).pipe(Effect.ignore);
       }),
     { concurrency: 4, discard: true },
   );
@@ -138,6 +141,8 @@ export const makeWorkflowRecorder = Effect.fn("desktop.makeWorkflowRecorder")(fu
   });
 
   const finalize = Effect.fn("workflowRecording.finalize")(function* (recording: Recording) {
+    if (recording.finalized) return;
+    recording.finalized = true;
     const reported = recording.terminalReason ?? "helper-exited";
     const reason = reported === "stopped" && !recording.status.startedAt ? "cancelled" : reported;
     const completed = reason === "stopped" || reason === "time-limit" || reason === "size-limit";
@@ -167,6 +172,28 @@ export const makeWorkflowRecorder = Effect.fn("desktop.makeWorkflowRecorder")(fu
     if (active === recording) active = undefined;
   });
 
+  /** Finalizes once, never leaves the recorder held, and always releases `ended`. */
+  const settle = (recording: Recording) =>
+    finalize(recording).pipe(
+      Effect.catch(() =>
+        fs.remove(recording.directory, { recursive: true, force: true }).pipe(
+          Effect.ignore,
+          Effect.andThen(
+            Effect.sync(() => {
+              recording.status = {
+                ...idleWorkflowRecording(true),
+                phase: "failed",
+                message: "Could not save the recording.",
+              };
+              remember(recording);
+              if (active === recording) active = undefined;
+            }),
+          ),
+        ),
+      ),
+      Effect.ensuring(Deferred.succeed(recording.ended, undefined)),
+    );
+
   const finish = Effect.fn("workflowRecording.finish")(function* (
     recording: Recording,
     action: "stop" | "cancel",
@@ -175,10 +202,17 @@ export const makeWorkflowRecorder = Effect.fn("desktop.makeWorkflowRecorder")(fu
     recording.status = { ...recording.status, phase: "stopping" };
     const helper = recording.helper;
     if (helper) {
-      yield* helper.writeLine(action);
-      if (Option.isNone(yield* Effect.timeoutOption(Deferred.await(recording.ended), 3_000))) {
-        yield* stopHelper(helper);
-        yield* Deferred.await(recording.ended);
+      const sent = yield* helper.writeLine(action);
+      if (
+        !sent ||
+        Option.isNone(yield* Effect.timeoutOption(Deferred.await(recording.ended), 3_000))
+      ) {
+        // A helper too busy to answer still ends here; a requested stop keeps what it captured.
+        if (action === "stop" && recording.status.startedAt) recording.terminalReason ??= "stopped";
+        yield* stopHelper(helper).pipe(Effect.ignore);
+        // onExit settles `ended`, unless shutdown interrupted the helper's supervisor first.
+        if (Option.isNone(yield* Effect.timeoutOption(Deferred.await(recording.ended), 1_000)))
+          yield* settle(recording);
       }
     }
     return recording.status;
@@ -253,26 +287,7 @@ export const makeWorkflowRecorder = Effect.fn("desktop.makeWorkflowRecorder")(fu
                 }),
               ),
             ),
-          onExit: () =>
-            finalize(recording).pipe(
-              Effect.catch(() =>
-                fs.remove(recording.directory, { recursive: true, force: true }).pipe(
-                  Effect.ignore,
-                  Effect.andThen(
-                    Effect.sync(() => {
-                      recording.status = {
-                        ...idleWorkflowRecording(true),
-                        phase: "failed",
-                        message: "Could not save the recording.",
-                      };
-                      remember(recording);
-                      if (active === recording) active = undefined;
-                    }),
-                  ),
-                ),
-              ),
-              Effect.ensuring(Deferred.succeed(recording.ended, undefined)),
-            ),
+          onExit: () => settle(recording),
         }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner)),
       ),
       Effect.onError(() =>
@@ -286,32 +301,26 @@ export const makeWorkflowRecorder = Effect.fn("desktop.makeWorkflowRecorder")(fu
   });
 
   const cancelActive = lock.withPermit(
-    Effect.suspend(() =>
-      active
-        ? finish(active, "cancel").pipe(
-            Effect.asVoid,
-            Effect.mapError((cause) => error(cause.message)),
-          )
-        : Effect.void,
-    ),
+    Effect.suspend(() => (active ? finish(active, "cancel").pipe(Effect.asVoid) : Effect.void)),
   );
   yield* Effect.addFinalizer(() => cancelActive.pipe(Effect.ignore));
 
   const call: WorkflowRecorder["call"] = (action, threadId) =>
     lock.withPermit(
       Effect.gen(function* () {
-        if (active && active.threadId !== threadId) {
-          if (action === "status")
-            return {
-              ...idleWorkflowRecording(true),
-              ...(options.targetName ? { targetName: options.targetName } : {}),
-              phase: "busy" as const,
-            };
+        const idle = {
+          ...idleWorkflowRecording(true),
+          ...(options.targetName ? { targetName: options.targetName } : {}),
+        };
+        const busy = active && active.threadId !== threadId;
+        // Another thread's live recording blocks this one, but its own saved
+        // evidence can still be discarded (Discard, or the thread's deletion).
+        if (busy && action === "status") return { ...idle, phase: "busy" as const };
+        if (busy && action !== "cancel")
           return yield* error(
             "Another thread is recording on this Mac. Stop or cancel it from that thread first.",
           );
-        }
-        if (active) {
+        if (active?.threadId === threadId) {
           if (action === "start" || action === "status") return active.status;
           return yield* finish(active, action);
         }
@@ -321,18 +330,10 @@ export const makeWorkflowRecorder = Effect.fn("desktop.makeWorkflowRecorder")(fu
             yield* fs.remove(path.dirname(previous.metadataPath), { recursive: true, force: true });
           latest.delete(threadId);
           if (action === "start") return yield* start(threadId);
-          return {
-            ...idleWorkflowRecording(true),
-            ...(options.targetName ? { targetName: options.targetName } : {}),
-          };
+          return busy ? { ...idle, phase: "busy" as const } : idle;
         }
-        return (
-          previous ?? {
-            ...idleWorkflowRecording(true),
-            ...(options.targetName ? { targetName: options.targetName } : {}),
-          }
-        );
+        return previous ?? idle;
       }).pipe(Effect.mapError((cause) => error(cause.message))),
     );
-  return { call, cancelActive } satisfies WorkflowRecorder;
+  return { call, cancelActive, isActive: () => active !== undefined } satisfies WorkflowRecorder;
 });

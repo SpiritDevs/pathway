@@ -25,8 +25,8 @@ Pass exactly one mode flag.
 
 `--record-workflow` captures nothing until the user presses Start in its native confirmation. A
 floating indicator then shows the elapsed time against the 30-minute cap with Stop and Cancel. A
-stop before consent, a screen lock, sleep, or a user switch ends it as `cancelled`. For a manual
-capture check, see `tests/workflow-fixture/main.swift`.
+stop before consent, a screen lock, sleep, or a user switch ends it as `cancelled`. Password
+managers and OS security UI are never captured (the list mirrors the server's Computer denylist).
 
 When no permission is selected, checks and requests default to Input Monitoring and Screen
 Recording.

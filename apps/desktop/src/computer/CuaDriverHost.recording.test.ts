@@ -79,6 +79,28 @@ describe("authenticated recording host", () => {
       expect(cancelled).toBe(3);
     }),
   );
+  it.live("pauses Computer input while a recording is live and keeps reads open", () =>
+    Effect.gen(function* () {
+      let active = true;
+      const workflowRecorder: WorkflowRecorder = {
+        call: () => Effect.succeed(idleWorkflowRecording(true)),
+        isActive: () => active,
+      };
+      const f = yield* makeFixture({ workflowRecorder });
+      expect(yield* f.send({ method: "call", name: "click", args: { x: 1, y: 1 } })).toMatchObject({
+        ok: true,
+        result: {
+          isError: true,
+          structuredContent: { effect: "refused", code: "computer_input_paused" },
+        },
+      });
+      expect(yield* f.send({ method: "call", name: "list_windows" })).toMatchObject({ ok: true });
+      active = false;
+      expect(
+        (yield* f.send({ method: "call", name: "click", args: { x: 1, y: 1 } })).result,
+      ).not.toMatchObject({ structuredContent: { code: "computer_input_paused" } });
+    }),
+  );
   it.live("reports unsupported on a host without a recorder", () =>
     Effect.gen(function* () {
       const f = yield* makeFixture();

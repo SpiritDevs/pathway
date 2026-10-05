@@ -26,9 +26,24 @@ final class WorkflowCapture {
     private var running = false
     private var sequence = 0
     private var lastSnapshot: Data?
-    private let blockedApps: Set<String> = [
-        "com.apple.Passwords", "com.apple.keychainaccess", "com.agilebits.onepassword7",
-        "com.1password.1password", "com.bitwarden.desktop", "com.lastpass.LastPass",
+    /// A timeout on the system-wide element is the process-wide AX default, so a hung app
+    /// cannot stall the main run loop that also handles Stop.
+    private let systemWide: AXUIElement = {
+        let element = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(element, 0.1)
+        return element
+    }()
+    // Mirrors apps/server/src/computer/computerDenylist.ts: password managers
+    // and OS security UI are never captured. Keep the two lists in step.
+    private static let blockedBundleIDs: Set<String> = [
+        "com.1password.1password", "com.agilebits.onepassword", "com.apple.keychainaccess",
+        "com.apple.passwords", "com.apple.systempreferences", "com.apple.securityagent",
+        "com.apple.security.authorization", "com.lastpass.lastpass", "com.bitwarden.desktop",
+    ]
+    private static let blockedBundlePrefixes = ["com.agilebits.onepassword", "com.dashlane."]
+    private static let blockedNames: Set<String> = [
+        "1password", "keychain access", "passwords", "system settings", "system preferences",
+        "securityagent", "securityagenthelper", "bitwarden", "dashlane", "lastpass",
     ]
 
     init(emit: @escaping ([String: Any]) -> Void, onFailure: @escaping (String) -> Void) {
@@ -96,7 +111,7 @@ final class WorkflowCapture {
         }
         guard event.getIntegerValueField(.eventSourceUnixProcessID) == 0,
               let app = NSWorkspace.shared.frontmostApplication,
-              !blockedApps.contains(app.bundleIdentifier ?? ""),
+              !Self.isBlocked(app),
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
         let application = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.1)
@@ -128,14 +143,14 @@ final class WorkflowCapture {
                 payload["deltaY"] = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1)
             }
             var target: AXUIElement?
-            if AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(),
+            if AXUIElementCopyElementAtPosition(systemWide,
                 Float(event.location.x), Float(event.location.y), &target) == .success,
                let target {
                 var pid: pid_t = 0
                 if AXUIElementGetPid(target, &pid) == .success {
                     if pid == ProcessInfo.processInfo.processIdentifier { return }
                     if let targetApp = NSRunningApplication(processIdentifier: pid),
-                       blockedApps.contains(targetApp.bundleIdentifier ?? "") { return }
+                       Self.isBlocked(targetApp) { return }
                 }
                 payload["target"] = describe(target)
             }
@@ -155,7 +170,7 @@ final class WorkflowCapture {
 
     private func snapshot() {
         guard running, let app = NSWorkspace.shared.frontmostApplication,
-              !blockedApps.contains(app.bundleIdentifier ?? ""),
+              !Self.isBlocked(app),
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
         let application = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.1)
@@ -212,6 +227,17 @@ final class WorkflowCapture {
             if let value = attribute(node, ax) as? String { result[key] = String(value.prefix(1000)) }
         }
         return result
+    }
+
+    /// Case-insensitive bundle id, bundle prefix, or app name (an edition suffix such as
+    /// "1Password 8" still matches).
+    static func isBlocked(_ app: NSRunningApplication) -> Bool {
+        let bundleID = (app.bundleIdentifier ?? "").lowercased()
+        if blockedBundleIDs.contains(bundleID) || blockedBundlePrefixes.contains(where: bundleID.hasPrefix) {
+            return true
+        }
+        let name = (app.localizedName ?? "").lowercased().trimmingCharacters(in: .whitespaces)
+        return blockedNames.contains { name == $0 || name.hasPrefix("\($0) ") }
     }
 
     private func isSecure(_ node: AXUIElement) -> Bool {

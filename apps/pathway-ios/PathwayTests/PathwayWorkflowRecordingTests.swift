@@ -51,6 +51,15 @@ struct PathwayWorkflowRecordingTests {
         #expect(methods == ["computer.recording.status", "computer.recording.start"])
     }
 
+    @Test func keepsReadingASavedRecordingSoAnotherDevicesDiscardLands() async {
+        let model = makeModel { _, _ in
+            .object(["supported": .bool(true), "phase": .string("completed"), "eventCount": .number(1),
+                     "skillPrompt": .string("Create a reusable skill from the workflow I just recorded.")])
+        }
+        await model.workflowRecording.refresh(model)
+        #expect(model.workflowRecording.pollInterval == .seconds(5))
+    }
+
     private func makeModel(request: @escaping PathwayAgentThreadModel.Request) -> PathwayAgentThreadModel {
         let thread = makeAgentThread()
         let environment = PathwayCompanyEnvironment(companyId: thread.companyId, environment: PathwayEnvironment(id: "environment", environmentId: thread.environmentId,

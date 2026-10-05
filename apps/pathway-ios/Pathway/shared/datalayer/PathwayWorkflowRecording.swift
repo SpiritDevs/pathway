@@ -64,10 +64,11 @@ final class PathwayWorkflowRecordingModel {
     /// The read in flight, if any. Only that read may release it.
     @ObservationIgnored private var reading: UUID?
 
-    /// How often to re-read: every second while live, slowly while another thread records.
+    /// How often to re-read: every second while live, slowly while another thread records or a
+    /// saved recording waits, so its hand-off never points at files another device deleted.
     var pollInterval: Duration? {
         if status?.isActive == true { return .seconds(1) }
-        return status?.phase == "busy" ? .seconds(5) : nil
+        return status?.phase == "busy" || status?.phase == "completed" ? .seconds(5) : nil
     }
 
     func clearError() { error = nil }
@@ -166,8 +167,10 @@ extension PathwayAgentThreadModel {
         if next != draft { draft = next }
     }
 
-    private func withdrawWorkflowSkillPrompt() {
-        guard let prompt = workflowRecording.status?.skillPrompt else { return }
+    /// Takes an unedited hand-off back out of the draft: before Discard or a new recording here,
+    /// or after another device discarded or replaced the saved recording.
+    func withdrawWorkflowSkillPrompt(_ prompt: String? = nil) {
+        guard let prompt = prompt ?? workflowRecording.status?.skillPrompt else { return }
         let next = PathwayWorkflowSkillPrompt.remove(prompt, from: draft)
         if next != draft { draft = next }
     }

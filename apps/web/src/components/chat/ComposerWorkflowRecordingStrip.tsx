@@ -1,6 +1,6 @@
 import type { WorkflowRecordingStatus } from "@spiritdevs/contracts";
 import { CheckIcon, CircleIcon, SparklesIcon, XIcon } from "lucide-react";
-import { memo, type ReactNode, useState } from "react";
+import { memo, type ReactNode, useEffect, useState } from "react";
 
 import type { WorkflowRecordingController } from "~/hooks/useWorkflowRecording";
 import { Button } from "../ui/button";
@@ -48,6 +48,13 @@ export const ComposerWorkflowRecordingStrip = memo(function ComposerWorkflowReco
   const { status, error, pending } = recording;
   const [, rerender] = useState(0);
   const busy = pending !== null;
+  // Only the elapsed label changes each second, so only this strip re-renders for it.
+  const ticking = status?.phase === "recording" && status.startedAt !== undefined;
+  useEffect(() => {
+    if (!ticking) return;
+    const interval = setInterval(() => rerender((value) => value + 1), 1_000);
+    return () => clearInterval(interval);
+  }, [ticking]);
 
   const cancelButton = (
     <Button type="button" size="xs" variant="ghost" disabled={busy} onClick={recording.cancel}>

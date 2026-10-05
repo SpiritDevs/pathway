@@ -101,6 +101,9 @@ struct AgentThreadComposer: View {
             guard model.isSubscriptionReady, isMacHost, scenePhase == .active else { return }
             await model.workflowRecording.watch(model)
         }
+        .onChange(of: model.workflowRecording.status?.skillPrompt) { previous, _ in
+            if let previous { model.withdrawWorkflowSkillPrompt(previous) }
+        }
         .fileImporter(isPresented: $showsFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls):

@@ -153,7 +153,7 @@ import {
   isWorkflowRecordingBlocked,
   onWorkflowRecordingStartRequested,
   useWorkflowRecording,
-  useWorkflowRecordingPlatform,
+  useWorkflowRecordingAvailable,
 } from "../../hooks/useWorkflowRecording";
 import { ComposerWorkflowRecordingStrip } from "./ComposerWorkflowRecordingStrip";
 import {
@@ -1311,16 +1311,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     (showPlanFollowUpPrompt && activeProposedPlan !== null);
   const computerUseAvailable = useComputerSupport(environmentId);
   // Record a skill: owned by a durable thread, recorded on the environment's Mac.
-  const recordSkillPlatform = useWorkflowRecordingPlatform(environmentId);
+  const recordSkillAllowed = useWorkflowRecordingAvailable(environmentId);
   const workflowRecording = useWorkflowRecording({
-    environmentId: recordSkillPlatform ? environmentId : null,
-    threadId: recordSkillPlatform && routeKind === "server" ? routeThreadRef.threadId : null,
+    environmentId: recordSkillAllowed ? environmentId : null,
+    threadId: recordSkillAllowed && routeKind === "server" ? routeThreadRef.threadId : null,
   });
   const recordSkillEnvironment = useEnvironment(environmentId);
   const recordSkillTargetName =
     workflowRecording.status?.targetName ?? recordSkillEnvironment?.label ?? "this Mac";
   const recordSkillOffered =
-    recordSkillPlatform && (routeKind === "draft" || workflowRecording.status?.supported === true);
+    recordSkillAllowed && (routeKind === "draft" || workflowRecording.status?.supported === true);
   const recordSkillBusy =
     workflowRecording.pending !== null || isWorkflowRecordingBlocked(workflowRecording.status);
   const recordSkillSlashAvailable =
@@ -1575,6 +1575,28 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const next = removeWorkflowSkillPrompt(promptRef.current, workflowSkillPrompt);
     if (next !== promptRef.current) setPromptFromTraits(next);
   }, [promptRef, setPromptFromTraits, workflowSkillPrompt]);
+  const workflowRecordingThreadId = routeKind === "server" ? routeThreadRef.threadId : null;
+  // Another device can discard or replace this thread's saved recording; its
+  // unedited prompt then leaves this draft the same way as with Discard here.
+  const shownWorkflowSkillPrompt = useRef<{ threadId: string | null; prompt: string | null }>({
+    threadId: null,
+    prompt: null,
+  });
+  useEffect(() => {
+    const shown = shownWorkflowSkillPrompt.current;
+    shownWorkflowSkillPrompt.current = {
+      threadId: workflowRecordingThreadId,
+      prompt: workflowSkillPrompt,
+    };
+    if (
+      shown.prompt === null ||
+      shown.prompt === workflowSkillPrompt ||
+      shown.threadId !== workflowRecordingThreadId
+    )
+      return;
+    const next = removeWorkflowSkillPrompt(promptRef.current, shown.prompt);
+    if (next !== promptRef.current) setPromptFromTraits(next);
+  }, [promptRef, setPromptFromTraits, workflowRecordingThreadId, workflowSkillPrompt]);
   const { cancel: cancelWorkflowRecording, start: beginWorkflowRecording } = workflowRecording;
   const discardWorkflowRecording = useCallback(() => {
     withdrawWorkflowSkillPrompt();
@@ -1585,7 +1607,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     withdrawWorkflowSkillPrompt();
     beginWorkflowRecording();
   }, [beginWorkflowRecording, withdrawWorkflowSkillPrompt]);
-  const workflowRecordingThreadId = routeKind === "server" ? routeThreadRef.threadId : null;
   useEffect(
     () =>
       onWorkflowRecordingStartRequested((target) => {

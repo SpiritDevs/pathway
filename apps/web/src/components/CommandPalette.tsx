@@ -137,7 +137,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import {
   isWorkflowRecordingActive,
   requestWorkflowRecordingStart,
-  useWorkflowRecordingPlatform,
+  useWorkflowRecordingAvailable,
 } from "../hooks/useWorkflowRecording";
 import { computerEnvironment } from "../state/computer";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
@@ -1321,12 +1321,12 @@ function OpenCommandPaletteDialog(props: {
 
   const activeThreadId = activeThread?.id;
   const computerServed = useComputerEventsServed(activeThread?.environmentId ?? null);
-  const recordSkillPlatform = useWorkflowRecordingPlatform(activeThread?.environmentId ?? null);
+  const recordSkillAllowed = useWorkflowRecordingAvailable(activeThread?.environmentId ?? null);
   // One read per palette open or thread change; the composer owns polling.
   const readRecordingStatus = useAtomCommand(computerEnvironment.recordingStatus, {
     reportFailure: false,
   });
-  const recordSkillEnvironmentId = recordSkillPlatform ? activeThread?.environmentId : undefined;
+  const recordSkillEnvironmentId = recordSkillAllowed ? activeThread?.environmentId : undefined;
   const recordSkillKey = recordSkillEnvironmentId
     ? `${recordSkillEnvironmentId}:${activeThreadId}`
     : null;

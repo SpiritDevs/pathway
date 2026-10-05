@@ -6,6 +6,7 @@ import {
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useCanUseComputer } from "~/hooks/useComputerAccess";
 import { computerEnvironment } from "~/state/computer";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -17,8 +18,9 @@ const ACTIVE_PHASES: ReadonlySet<WorkflowRecordingStatus["phase"]> = new Set([
   "stopping",
 ]);
 const ACTIVE_POLL_MS = 1_000;
-// Another thread holds the recorder; re-check slowly so this one frees up.
-const BUSY_POLL_MS = 5_000;
+// Another thread holds the recorder, or this thread's saved recording could be
+// discarded or replaced from another device; re-check slowly.
+const SETTLED_POLL_MS = 5_000;
 
 export const isWorkflowRecordingActive = (status: WorkflowRecordingStatus | null) =>
   status !== null && ACTIVE_PHASES.has(status.phase);
@@ -28,12 +30,15 @@ export const isWorkflowRecordingBlocked = (status: WorkflowRecordingStatus | nul
   isWorkflowRecordingActive(status) || status?.phase === "busy";
 
 /**
- * Whether the environment's server runs on macOS, the only recorder platform.
- * Follows the server, not this device: a phone or browser records the host Mac.
+ * Whether this client may record on the environment: its server runs on macOS,
+ * the only recorder platform, and its Computer access policy admits this
+ * session. Follows the server, not this device: a phone or browser records the
+ * host Mac.
  */
-export function useWorkflowRecordingPlatform(environmentId: EnvironmentId | null): boolean {
+export function useWorkflowRecordingAvailable(environmentId: EnvironmentId | null): boolean {
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
-  return serverConfig?.environment.platform.os === "darwin";
+  const allowed = useCanUseComputer(environmentId);
+  return serverConfig?.environment.platform.os === "darwin" && allowed;
 }
 
 const WORKFLOW_RECORDING_START_EVENT = "pathway:workflow-recording-start";
@@ -84,8 +89,9 @@ const describeFailure = (outcome: Parameters<typeof squashAtomCommandFailure>[0]
 
 /**
  * Record a skill for one durable thread. Reads the status once per thread,
- * then every second only while a recording is live and the window is visible,
- * one request at a time. Returning to the window re-reads it.
+ * then every second while a recording is live (every five while another
+ * thread records or a saved recording waits) and only while the window is
+ * visible, one request at a time. Returning to the window re-reads it.
  */
 export function useWorkflowRecording(input: {
   readonly environmentId: EnvironmentId | null;
@@ -105,13 +111,41 @@ export function useWorkflowRecording(input: {
   const [status, setStatus] = useState<WorkflowRecordingStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<RecordingCommand | null>(null);
-  // Counts finished reads, so a failed or dropped read still re-arms the poll.
-  const [reads, setReads] = useState(0);
   // Bumped on thread change and around every command, so a read that raced
   // either is dropped instead of overwriting the newer status.
   const version = useRef(0);
   // The read in flight, if any. Only that read may release it.
   const reading = useRef<object | null>(null);
+  const statusRef = useRef<WorkflowRecordingStatus | null>(null);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const refreshRef = useRef<() => void>(() => {});
+
+  // Polls mostly repeat the last status. Skipping those keeps the composer
+  // that owns this hook from re-rendering on every read.
+  const applyStatus = useCallback((next: WorkflowRecordingStatus | null) => {
+    const previous = statusRef.current;
+    if (previous === next || JSON.stringify(previous) === JSON.stringify(next)) return;
+    statusRef.current = next;
+    setStatus(next);
+  }, []);
+
+  // One timer, armed after each reply, so reads never overlap. Live phases
+  // include native Stop/Cancel on the Mac, so reads continue until the status
+  // settles (cancelled, failed, idle). A saved recording keeps a slow read so
+  // its hand-off never points at files another device deleted.
+  const schedulePoll = useCallback(() => {
+    clearTimeout(pollTimer.current);
+    const current = statusRef.current;
+    const pollMs = isWorkflowRecordingActive(current)
+      ? ACTIVE_POLL_MS
+      : current?.phase === "busy" || current?.phase === "completed"
+        ? SETTLED_POLL_MS
+        : null;
+    if (pollMs === null) return;
+    pollTimer.current = setTimeout(() => {
+      if (document.visibilityState !== "hidden") refreshRef.current();
+    }, pollMs);
+  }, []);
 
   const refresh = useCallback(() => {
     if (!environmentId || !threadId || reading.current) return;
@@ -120,43 +154,31 @@ export function useWorkflowRecording(input: {
     reading.current = read;
     void readStatus({ environmentId, input: { threadId } }).then((outcome) => {
       if (reading.current === read) reading.current = null;
-      // Counted even when dropped, so the poll re-arms after a raced read.
-      setReads((count) => count + 1);
-      if (current !== version.current) return;
-      if (outcome._tag === "Success") {
-        setStatus(outcome.value);
-        setError(null);
-        return;
+      if (current === version.current) {
+        if (outcome._tag === "Success") {
+          applyStatus(outcome.value);
+          setError(null);
+        } else if (!isAtomCommandInterrupted(outcome)) {
+          // Keep the last known status so live Stop/Cancel stay reachable.
+          setError(describeFailure(outcome));
+        }
       }
-      // Keep the last known status so live Stop/Cancel stay reachable.
-      if (!isAtomCommandInterrupted(outcome)) setError(describeFailure(outcome));
+      // Re-armed even after a dropped read, so polling never stalls.
+      schedulePoll();
     });
-  }, [environmentId, readStatus, threadId]);
+  }, [applyStatus, environmentId, readStatus, schedulePoll, threadId]);
 
   useEffect(() => {
+    refreshRef.current = refresh;
     version.current += 1;
     reading.current = null;
-    setStatus(null);
+    clearTimeout(pollTimer.current);
+    applyStatus(null);
     setError(null);
     setPending(null);
     refresh();
-  }, [refresh]);
-
-  // Live phases include native Stop/Cancel on the Mac, so the read continues
-  // until the status settles (completed, cancelled, failed, idle).
-  const pollMs = isWorkflowRecordingActive(status)
-    ? ACTIVE_POLL_MS
-    : status?.phase === "busy"
-      ? BUSY_POLL_MS
-      : null;
-  useEffect(() => {
-    if (pollMs === null) return;
-    // Re-armed by each status reply, so reads never overlap.
-    const timeout = setTimeout(() => {
-      if (document.visibilityState !== "hidden") refresh();
-    }, pollMs);
-    return () => clearTimeout(timeout);
-  }, [pollMs, reads, refresh, status]);
+    return () => clearTimeout(pollTimer.current);
+  }, [applyStatus, refresh]);
 
   useEffect(() => {
     const refreshOnReturn = () => {
@@ -179,14 +201,24 @@ export function useWorkflowRecording(input: {
         version.current += 1;
         setPending(null);
         if (outcome._tag === "Success") {
-          setStatus(outcome.value);
+          applyStatus(outcome.value);
+          schedulePoll();
           return;
         }
         if (!isAtomCommandInterrupted(outcome)) setError(describeFailure(outcome));
         refresh();
       });
     },
-    [cancelRecording, environmentId, refresh, startRecording, stopRecording, threadId],
+    [
+      applyStatus,
+      cancelRecording,
+      environmentId,
+      refresh,
+      schedulePoll,
+      startRecording,
+      stopRecording,
+      threadId,
+    ],
   );
 
   return {
