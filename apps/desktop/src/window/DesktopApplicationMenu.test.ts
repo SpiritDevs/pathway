@@ -30,6 +30,8 @@ const environmentInput = {
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
 
 const electronAppLayer = Layer.succeed(ElectronApp.ElectronApp, {
+  isPathwayRuntime: false,
+  userDataPath: Effect.die("unexpected userData read"),
   metadata: Effect.die("unexpected metadata read"),
   name: Effect.succeed("Pathway"),
   whenReady: Effect.void,

@@ -455,6 +455,17 @@ jobs:
             Select-Object -Unique
           "PSModulePath=$($modulePathEntries -join ';')" >> $env:GITHUB_ENV
 
+      - id: runtime_token
+        name: Mint runtime download token
+        if: matrix.platform == 'mac' && matrix.arch == 'arm64' && needs.preflight.outputs.release_channel == 'nightly'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: SpiritDevs
+          repositories: pathway-runtime
+          permission-contents: read
+
       - name: Build desktop artifact
         shell: bash
         env:
@@ -466,6 +477,7 @@ jobs:
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           MACOS_PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
           PATHWAY_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
+          PATHWAY_RUNTIME_DOWNLOAD_TOKEN: ${{ steps.runtime_token.outputs.token }}
         run: |
           set -euo pipefail
           umask 077
@@ -476,6 +488,9 @@ jobs:
             --build-version "${{ needs.preflight.outputs.version }}"
             --verbose
           )
+          if [[ "${{ matrix.platform }}" == "mac" && "${{ matrix.arch }}" == "arm64" && "${{ needs.preflight.outputs.release_channel }}" == "nightly" ]]; then
+            args+=(--pinned-runtime --require-pathway-runtime)
+          fi
 
           has_all() {
             for value in "$@"; do
@@ -538,6 +553,21 @@ jobs:
             exit 1
           fi
           app="${apps[0]}"
+          for key in NSAudioCaptureUsageDescription NSCameraUsageDescription NSMicrophoneUsageDescription NSLocationUsageDescription NSBluetoothAlwaysUsageDescription; do
+            description="$(/usr/libexec/PlistBuddy -c "Print :$key" "$app/Contents/Info.plist" || true)"
+            test -n "$description" || { echo "Release app is missing $key." >&2; exit 1; }
+          done
+          if [[ "${{ needs.preflight.outputs.release_channel }}" == "nightly" ]]; then
+            test -f "$app/Contents/Resources/pathway-runtime-app.json" || { echo "Runtime identity stamp is missing." >&2; exit 1; }
+            node --input-type=module - "$app/Contents/Resources/pathway-runtime-app.json" <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          assert.deepEqual(JSON.parse(readFileSync(process.argv[2], 'utf8')), {
+            userDataDirName: 'pathway',
+            legacyUserDataDirName: 'Pathway (Alpha)',
+          }, 'Release runtime identity stamp must contain both production directory names.');
+          NODE
+          fi
           /usr/bin/codesign --verify --deep --strict --verbose=2 "$app"
           signature="$(/usr/bin/codesign --display --verbose=4 "$app" 2>&1)"
           if ! /usr/bin/grep -q '^Authority=Developer ID Application: ' <<< "$signature"; then
@@ -548,6 +578,50 @@ jobs:
             echo "Release app was signed by an unexpected Apple team." >&2
             exit 1
           fi
+          # The framework is covered by deep verification. Helpers are separate
+          # executables, so check their hardened runtime and inherited grants too.
+          helpers=("$app/Contents/Frameworks/"*.app)
+          test "${#helpers[@]}" -gt 0 || { echo "Runtime helpers are missing." >&2; exit 1; }
+          for executable_bundle in "$app" "${helpers[@]}"; do
+            nested_signature="$(/usr/bin/codesign -d --verbose=4 "$executable_bundle" 2>&1)"
+            if ! /usr/bin/grep -q 'flags=.*runtime' <<< "$nested_signature"; then
+              echo "Hardened runtime is missing from $executable_bundle." >&2
+              exit 1
+            fi
+            entitlements="$verification_dir/runtime-entitlements.plist"
+            /usr/bin/codesign -d --entitlements - --xml "$executable_bundle" > "$entitlements" 2>/dev/null
+            for key in \
+              com.apple.security.cs.allow-jit \
+              com.apple.security.cs.allow-unsigned-executable-memory \
+              com.apple.security.cs.disable-library-validation \
+              com.apple.security.device.audio-input \
+              com.apple.security.device.camera \
+              com.apple.security.personal-information.location \
+              com.apple.security.device.bluetooth; do
+              value="$(/usr/libexec/PlistBuddy -c "Print :$key" "$entitlements" || true)"
+              test "$value" == true || { echo "Missing $key in $executable_bundle." >&2; exit 1; }
+            done
+          done
+          # entitlementsInherit also applies to native resource executables.
+          # Keep their effective grants visible for the first signed runtime audit.
+          audit_dirs=(
+            "$app/Contents/MacOS"
+            "$app/Contents/Frameworks"
+            "$app/Contents/Resources/cua-driver"
+            "$app/Contents/Resources/pathway-helper"
+            "$app/Contents/Resources/dictation"
+            "$app/Contents/Resources/resource-monitor"
+          )
+          for directory in "${audit_dirs[@]}"; do
+            test -d "$directory" || { echo "Entitlement audit folder is missing: $directory" >&2; exit 1; }
+          done
+          while IFS= read -r -d '' helper; do
+            if /usr/bin/file -b "$helper" | /usr/bin/grep -q '^Mach-O.*executable'; then
+              echo "Effective entitlements: $helper"
+              /usr/bin/codesign -d --entitlements - --xml "$helper"
+              echo
+            fi
+          done < <(/usr/bin/find "${audit_dirs[@]}" -type f -print0)
           # The Computer Use binaries embed an Info.plist so electron-builder's
           # re-sign keeps their identifiers; macOS ties TCC grants to them.
           for nested in \

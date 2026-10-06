@@ -7,6 +7,7 @@ import { fromYaml } from "@spiritdevs/shared/schemaYaml";
 import {
   PATHWAY_CUA_DESKTOP_IDENTITY,
   PATHWAY_DESKTOP_FLAVORS,
+  PATHWAY_PRODUCTION_DESKTOP_IDENTITY,
   type PathwayDesktopFlavor,
 } from "@spiritdevs/shared/desktopFlavor";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
@@ -39,6 +40,7 @@ import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { Command, Flag } from "effect/unstable/cli";
@@ -153,6 +155,7 @@ interface BuildCliInput {
   readonly skipBuild: Option.Option<boolean>;
   readonly skipBackendDeploy: Option.Option<boolean>;
   readonly pinnedRuntime: Option.Option<boolean>;
+  readonly requirePathwayRuntime: Option.Option<boolean>;
   readonly keepStage: Option.Option<boolean>;
   readonly signed: Option.Option<boolean>;
   readonly verbose: Option.Option<boolean>;
@@ -275,6 +278,58 @@ export class RuntimeArchiveHashMismatchError extends Schema.TaggedErrorClass<Run
   }
 }
 
+export class PathwayRuntimeReleaseGuardError extends Schema.TaggedErrorClass<PathwayRuntimeReleaseGuardError>()(
+  "PathwayRuntimeReleaseGuardError",
+  { reason: Schema.String },
+) {
+  override get message(): string {
+    return `Pathway runtime release guard: ${this.reason}`;
+  }
+}
+
+/** Releases opt in to this guard while only macOS arm64 ships the Pathway runtime. */
+export const assertPathwayRuntimeRelease = Effect.fn("assertPathwayRuntimeRelease")(function* (
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+  pinnedRuntime: boolean,
+  pin = pathwayRuntime,
+) {
+  if (!pinnedRuntime || platform !== "mac" || arch !== "arm64") {
+    return yield* new PathwayRuntimeReleaseGuardError({
+      reason: "--require-pathway-runtime needs --pinned-runtime --platform mac --arch arm64.",
+    });
+  }
+  yield* resolvePinnedRuntimeArchive(platform, arch, pin);
+  if (!/^\d+\.\d+\.\d+-pathway\.\d+$/u.test(pin.runtimeVersion)) {
+    return yield* new PathwayRuntimeReleaseGuardError({
+      reason:
+        "darwin-arm64 requires a Pathway runtimeVersion matching <major>.<minor>.<patch>-pathway.<revision>. Publish the Pathway Chromium runtime with the native identity reader and update its runtimeVersion, URL and SHA-256 in apps/desktop/pathway-runtime.json before releasing.",
+    });
+  }
+});
+
+/** Chrome and desktop JS read these names from Contents/Resources before selecting a Profile root. */
+export function runtimeAppIdentity(flavor: PathwayDesktopFlavor) {
+  return flavor === "cua"
+    ? {
+        userDataDirName: PATHWAY_CUA_DESKTOP_IDENTITY.userDataDirName,
+        legacyUserDataDirName: PATHWAY_CUA_DESKTOP_IDENTITY.userDataDirName,
+      }
+    : PATHWAY_PRODUCTION_DESKTOP_IDENTITY;
+}
+
+export const stageRuntimeAppIdentity = Effect.fn("stageRuntimeAppIdentity")(function* (
+  stageAppDir: string,
+  flavor: PathwayDesktopFlavor,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const identityPath = path.join(stageAppDir, "pathway-runtime-app.json");
+  const encodedIdentity = yield* encodeJsonString(runtimeAppIdentity(flavor));
+  yield* fs.writeFileString(identityPath, `${encodedIdentity}\n`);
+  return { from: identityPath, to: "pathway-runtime-app.json" };
+});
+
 export const resolvePinnedRuntimeArchive = Effect.fn("resolvePinnedRuntimeArchive")(function* (
   platform: typeof BuildPlatform.Type,
   arch: typeof BuildArch.Type,
@@ -339,8 +394,20 @@ export const cachePinnedRuntimeArchive = Effect.fn("cachePinnedRuntimeArchive")(
         prefix: "download-",
       });
       const downloadPath = path.join(downloadDir, "runtime.zip");
+      const token = yield* Config.redacted("PATHWAY_RUNTIME_DOWNLOAD_TOKEN").pipe(Config.option);
+      const headers =
+        new URL(archive.url).hostname === "api.github.com"
+          ? Option.match(token, {
+              onNone: () => undefined,
+              onSome: (value) => ({
+                Authorization: `Bearer ${Redacted.value(value)}`,
+                Accept: "application/octet-stream",
+              }),
+            })
+          : undefined;
       yield* Effect.log(`[desktop-artifact] Downloading pinned runtime: ${archive.url}`);
-      yield* HttpClient.get(archive.url).pipe(
+      // Fetch follows GitHub's asset redirect and drops credentials when the origin changes.
+      yield* HttpClient.get(archive.url, { headers }).pipe(
         Effect.flatMap(HttpClientResponse.filterStatusOk),
         HttpClientResponse.stream,
         Stream.run(fs.sink(downloadPath)),
@@ -823,6 +890,7 @@ interface ResolvedBuildOptions {
   readonly skipBuild: boolean;
   readonly skipBackendDeploy: boolean;
   readonly pinnedRuntime: boolean;
+  readonly requirePathwayRuntime: boolean;
   readonly keepStage: boolean;
   readonly signed: boolean;
   readonly verbose: boolean;
@@ -1146,14 +1214,34 @@ export function renderMacPasskeyEntitlements(
     <array>
 ${associatedDomains}
     </array>
-    <key>com.apple.security.device.audio-input</key>
+${MAC_RUNTIME_ENTITLEMENTS_XML}
+  </dict>
+</plist>
+`;
+}
+
+const MAC_RUNTIME_ENTITLEMENTS_XML = `    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.personal-information.location</key>
+    <true/>
+    <key>com.apple.security.device.bluetooth</key>
     <true/>
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
+    <true/>`;
+
+/** Helpers need runtime capabilities, without the main app's passkey identity and groups. */
+export function renderMacInheritedEntitlements(): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+${MAC_RUNTIME_ENTITLEMENTS_XML}
   </dict>
 </plist>
 `;
@@ -1428,6 +1516,8 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const skipBuild = resolveBooleanFlag(input.skipBuild, env.skipBuild);
   const skipBackendDeploy = resolveBooleanFlag(input.skipBackendDeploy, env.skipBackendDeploy);
   const pinnedRuntime = resolveBooleanFlag(input.pinnedRuntime, env.pinnedRuntime);
+  const requirePathwayRuntime = Option.getOrElse(input.requirePathwayRuntime, () => false);
+  if (requirePathwayRuntime) yield* assertPathwayRuntimeRelease(platform, arch, pinnedRuntime);
   const keepStage = resolveBooleanFlag(input.keepStage, env.keepStage);
   const signed = resolveBooleanFlag(input.signed, env.signed);
   const verbose = resolveBooleanFlag(input.verbose, env.verbose);
@@ -1456,6 +1546,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     skipBuild,
     skipBackendDeploy,
     pinnedRuntime,
+    requirePathwayRuntime,
     keepStage,
     signed,
     verbose,
@@ -1977,6 +2068,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   macPasskeySigning:
     | {
         readonly entitlementsPath: string;
+        readonly inheritedEntitlementsPath: string;
         readonly provisioningProfilePath: string;
       }
     | undefined,
@@ -2030,6 +2122,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "mac") {
     buildConfig.mac = {
       forceCodeSigning: signed,
+      hardenedRuntime: true,
       ...(signed ? { type: "distribution" } : {}),
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
@@ -2042,8 +2135,15 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // fails dev servers on private IPs with ERR_ADDRESS_UNREACHABLE instead
       // of prompting. The webview and the agent browser both need the grant.
       extendInfo: {
+        NSAudioCaptureUsageDescription:
+          "Pathway lets websites capture system audio when you share your screen with them.",
         NSMicrophoneUsageDescription:
-          "Pathway records your voice when you start dictation. Audio is processed on this computer.",
+          "Pathway uses your microphone for dictation and websites you allow to record audio. Dictation is processed on this computer.",
+        NSCameraUsageDescription: "Pathway lets websites use your camera when you allow them.",
+        NSLocationUsageDescription:
+          "Pathway shares your location with websites when you allow them.",
+        NSBluetoothAlwaysUsageDescription:
+          "Pathway lets websites connect to Bluetooth devices when you allow them.",
         NSScreenCaptureUsageDescription:
           "Pathway captures the active window when you use the SnapShots shortcut, and the windows you authorize for Computer use.",
         NSAccessibilityUsageDescription:
@@ -2060,6 +2160,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
+            entitlementsInherit: macPasskeySigning.inheritedEntitlementsPath,
             provisioningProfile: macPasskeySigning.provisioningProfilePath,
           }
         : {}),
@@ -2498,13 +2599,17 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const macEntitlementsPath = macPasskeySigning
     ? path.join(stageAppDir, "entitlements.mac.plist")
     : undefined;
-  if (macPasskeySigning && macEntitlementsPath) {
+  const macInheritedEntitlementsPath = macPasskeySigning
+    ? path.join(stageAppDir, "entitlements.mac.inherit.plist")
+    : undefined;
+  if (macPasskeySigning && macEntitlementsPath && macInheritedEntitlementsPath) {
     if (!(yield* fs.exists(macPasskeySigning.provisioningProfilePath))) {
       return yield* new MacProvisioningProfileNotFoundError({
         provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
       });
     }
     yield* fs.writeFileString(macEntitlementsPath, renderMacPasskeyEntitlements(macPasskeySigning));
+    yield* fs.writeFileString(macInheritedEntitlementsPath, renderMacInheritedEntitlements());
   }
 
   const stageDependencies = {
@@ -2555,9 +2660,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         options.signed,
         options.mockUpdates,
         options.mockUpdateServerPort,
-        macPasskeySigning && macEntitlementsPath
+        macPasskeySigning && macEntitlementsPath && macInheritedEntitlementsPath
           ? {
               entitlementsPath: macEntitlementsPath,
+              inheritedEntitlementsPath: macInheritedEntitlementsPath,
               provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
             }
           : undefined,
@@ -2570,6 +2676,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       electron: electronVersion,
     },
   };
+
+  if (options.pinnedRuntime) {
+    const identityResource = yield* stageRuntimeAppIdentity(stageAppDir, options.flavor);
+    stagePackageJson.build.extraResources = [
+      ...(stagePackageJson.build.extraResources as ReadonlyArray<unknown>),
+      identityResource,
+    ];
+  }
 
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);
   yield* fs.writeFileString(path.join(stageAppDir, "package.json"), `${stagePackageJsonString}\n`);
@@ -2758,6 +2872,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   pinnedRuntime: Flag.boolean("pinned-runtime").pipe(
     Flag.withDescription(
       "Package against pathway-runtime.json (env: PATHWAY_DESKTOP_PINNED_RUNTIME).",
+    ),
+    Flag.optional,
+  ),
+  requirePathwayRuntime: Flag.boolean("require-pathway-runtime").pipe(
+    Flag.withDescription(
+      "Fail macOS arm64 releases that use stock Electron or the official Electron pin.",
     ),
     Flag.optional,
   ),

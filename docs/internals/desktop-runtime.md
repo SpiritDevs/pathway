@@ -10,7 +10,7 @@ The desktop app is moving onto the [Pathway runtime](glossary.md): Electron buil
 - `electronVersion`, the Electron release the runtime is built from;
 - an archive URL and SHA-256 for each of `darwin-arm64`, `darwin-x64`, `win32-x64`, `win32-arm64`, `linux-x64` and `linux-arm64`.
 
-Until `pathway-runtime` publishes Pathway's own archives, the pin points at the official Electron release zips. Their hashes come from that release's `SHASUMS256.txt`.
+`darwin-arm64` points at Pathway's own archive, runtime `44.5.1-pathway.1`, published on the private `pathway-runtime` repository. The other platforms point at the official Electron release zips; their hashes come from that release's `SHASUMS256.txt`.
 
 `electronVersion` must equal the npm `electron` version in `apps/desktop/package.json`. The npm package still supplies types and the dev binary, and a test fails when the two drift. Bump them together.
 
@@ -24,11 +24,43 @@ Until `pathway-runtime` publishes Pathway's own archives, the pin points at the 
 
 Build arm64 and x64 separately; there is no universal archive.
 
-Default packaging, dev launch and release CI still use npm Electron. They switch to the pin in [Phase 3](../plans/desktop-chromium-runtime.md#phase-3-runtime-packaging).
+Default packaging and `vp run dev` still use npm Electron. The macOS arm64 release job uses `--pinned-runtime --require-pathway-runtime` for nightly builds. Stable macOS stays on stock Electron until the dedicated build Mac replaces the interim archive with ThinLTO and symbols. Windows and Linux stay on stock Electron. Before any build or backend deployment, the guard requires pinned macOS arm64 packaging and a `runtimeVersion` matching `^\d+\.\d+\.\d+-pathway\.\d+$`, regardless of the archive host. The version identifies a Pathway runtime with the native identity reader. If the pin's `runtimeVersion` isn't a Pathway version, for example a stock Electron pin, macOS nightly releases stop with instructions to publish and pin a Pathway archive.
+
+### Download authentication and hosting
+
+`PATHWAY_RUNTIME_DOWNLOAD_TOKEN` authenticates the download. The darwin-arm64 asset is private, so a local `--pinned-runtime` package on macOS arm64 needs `PATHWAY_RUNTIME_DOWNLOAD_TOKEN=$(gh auth token)`; without it GitHub answers 404. When supplied, the downloader sends `Authorization: Bearer <token>` and `Accept: application/octet-stream` only to the exact host `api.github.com`. Other archive hosts receive no token. It uses Fetch's default redirect handling, which follows GitHub's redirect to the asset host without forwarding authorization across origins. The token is read as a redacted config value, and authorization headers are redacted from HTTP errors. Without the variable, the request headers are unchanged. Verified cache hits need no token.
+
+Nightly release CI mints a short-lived token with the existing `RELEASE_APP_ID` / `RELEASE_APP_PRIVATE_KEY` through `actions/create-github-app-token@v2`, limited to `SpiritDevs/pathway-runtime` with Contents read permission. No additional long-lived token secret is needed.
+
+**One-time setup:** add `SpiritDevs/pathway-runtime` to the Pathway Release GitHub App's selected repositories. Ensure the installation permits Contents read and that the existing app secrets are available to the release job's production environment.
+
+**Hosting:** each runtime version is one release on the private `SpiritDevs/pathway-runtime` repository, tagged `v<runtimeVersion>` (for example `v44.5.1-pathway.1`), with one ZIP asset per platform. Releases are immutable: a rebuilt archive gets a new `-pathway.N` version, never a replaced asset. To pin one, set `archives.darwin-arm64.url` and `archives.darwin-arm64.sha256` in `apps/desktop/pathway-runtime.json` to that asset's URL and the SHA-256 of the exact downloaded ZIP. Set `runtimeVersion` to the archive's Pathway version (`44.5.1-pathway.1` or later, with the native identity reader). Use the asset's API `url` (`https://api.github.com/repos/SpiritDevs/pathway-runtime/releases/assets/<asset-id>`), rather than its `browser_download_url`; GitHub accepts the token and returns binary content or a redirect when asked for octet-stream ([GitHub release asset API](https://docs.github.com/en/rest/releases/assets#get-a-release-asset)). Keep the other platform pins unchanged; the base Electron version must still match npm Electron. The real pin must land in the same PR as the release guard before merging, because nightly releases run from main.
+
+### Bundle identity
+
+Pinned packaging writes `Contents/Resources/pathway-runtime-app.json` outside the asar, before signing. The file has exactly two fields:
+
+```json
+{ "userDataDirName": "pathway", "legacyUserDataDirName": "Pathway (Alpha)" }
+```
+
+Nightly retains the production directory names used by stable. The cua flavor stamps `pathway-cua` for both fields. The native runtime reads the stamp before Chrome starts and chooses the existing legacy directory under Application Support if present, otherwise the new directory. An explicit `--user-data-dir` wins over the stamp.
+
+The native reader is authoritative on the Pathway runtime: desktop `resolveUserDataPath` returns `app.getPath('userData')` without inspecting the stamp or resolving directories. CI validates the build-time stamp. Without a valid stamp or an explicit `--user-data-dir`, the runtime refuses to start (exit code 78) rather than create a fallback folder, so a development launch on the runtime must pass `--user-data-dir`. Stock Electron retains its existing desktop identity and legacy-directory resolution, including packaged development mode. The native reader ships in runtime `44.5.1-pathway.1`.
+
+### macOS signing and permission prompts
+
+The existing Developer ID signing, provisioning profile, notarization and stapler verification remain in the release job. `mac.hardenedRuntime` is explicit. The main app's passkey entitlements and a separate `mac.entitlementsInherit` file both grant JIT, unsigned executable memory, library-validation bypass and audio input. The inherited file excludes the main app's application identifier, associated domains and passkey keychain groups. Camera, location and Bluetooth runtime capabilities are present in both files too.
+
+Nested framework and helper signing uses the inherited file with hardened runtime enabled, including native resource executables such as `cua-driver` and `pathway-helper`. These binaries retain their own signing and TCC identities. Frameworks inherit their host executable's capabilities ([Apple Hardened Runtime](https://developer.apple.com/documentation/security/hardened-runtime), [electron-builder macOS options](https://www.electron.build/v26/docs/mac/)). CI checks the app and Chromium helper entitlements and runtime flags, prints each native helper's effective entitlements, verifies the entire signature with `codesign --verify --deep --strict`, and validates the stapled ticket.
+
+The first signed runtime build must check the inherited device grants on all nested binaries and test whether camera and microphone work with device keys on the main app only. If they do, remove those keys from the inherited file and the CI helper requirements; otherwise record why the helpers require them. The current signing behavior is retained until that check. A signed runtime release has not yet been exercised.
+
+The packaged `Info.plist` supplies `NSAudioCaptureUsageDescription` for system audio during screen sharing, `NSCameraUsageDescription`, `NSMicrophoneUsageDescription`, `NSLocationUsageDescription` (the macOS location key) and `NSBluetoothAlwaysUsageDescription`, plus the existing screen capture, accessibility and local network descriptions. Microphone copy covers dictation and websites. CI checks these website usage strings. They support macOS permission prompts ([Apple camera key](https://developer.apple.com/documentation/bundleresources/information-property-list/nscamerausagedescription), [location key](https://developer.apple.com/documentation/bundleresources/information-property-list/nslocationusagedescription), [Bluetooth key](https://developer.apple.com/documentation/bundleresources/information-property-list/nsbluetoothalwaysusagedescription)); they do not grant a website permission or prove hardware access. System audio, camera, microphone, location and Bluetooth prompts still need validation on a signed build.
 
 ## The `pathway` module
 
-The runtime adds a `pathway` module to `require("electron")` in the main process. `apps/desktop/src/preview/PathwayRuntime.ts` is the only place the app reads it. It feature-detects the module on each call, so the same build runs on stock Electron:
+The runtime adds a `pathway` module to `require("electron")` in the main process. `apps/desktop/src/preview/PathwayRuntime.ts` reads the browser API; `ElectronApp` also detects the module for startup identity. Both keep the same build compatible with stock Electron:
 
 | Local browser                      | On the runtime                                                                  | On stock Electron                                             |
 | ---------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------- |
@@ -50,7 +82,7 @@ Only the main process ever produces a `chrome://` address. `normalizePreviewUrl`
   - `blob:` and `data:` documents aren't web pages either, so agents can't drive them. That is the deliberate default.
   - Users still use the settings page themselves.
 
-User docs for site information, certificates and Site settings wait for [Phase 3](../plans/desktop-chromium-runtime.md#phase-3-runtime-packaging). Until then every shipped build runs stock Electron, which has no certificates or Site settings.
+The Pathway Nightly macOS local-browser features are documented in [Browser work and agent questions](../user/browser-and-agent-questions.md#site-information-in-pathway-nightly-on-macos). Stable macOS, Windows and Linux retain stock Electron's scheme-based connection information and Clear site data, without certificates or Site settings.
 
 ## Archive contents
 

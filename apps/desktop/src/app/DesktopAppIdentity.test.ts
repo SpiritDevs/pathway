@@ -33,8 +33,14 @@ interface ElectronAppCalls {
   readonly setName: string[];
 }
 
-const makeElectronAppLayer = (calls: ElectronAppCalls) =>
+const makeElectronAppLayer = (
+  calls: ElectronAppCalls,
+  isPathwayRuntime = false,
+  runtimeUserDataPath = "/Users/alice/Library/Application Support/pathway",
+) =>
   Layer.succeed(ElectronApp.ElectronApp, {
+    isPathwayRuntime,
+    userDataPath: Effect.succeed(runtimeUserDataPath),
     metadata: Effect.die("unexpected metadata read"),
     name: Effect.succeed("Pathway"),
     whenReady: Effect.void,
@@ -93,6 +99,9 @@ const withIdentity = <A, E, R>(
     readonly legacyPathExists?: boolean;
     readonly legacyPathProbeError?: PlatformError.PlatformError;
     readonly packageJson?: string;
+    readonly isPathwayRuntime?: boolean;
+    readonly runtimeUserDataPath?: string;
+    readonly probedPaths?: string[];
   } = {},
 ) => {
   const calls: ElectronAppCalls = input.calls ?? {
@@ -105,17 +114,21 @@ const withIdentity = <A, E, R>(
       DesktopAppIdentity.layer.pipe(
         Layer.provideMerge(
           FileSystem.layerNoop({
-            exists: (path) =>
-              input.legacyPathProbeError
+            exists: (path) => {
+              input.probedPaths?.push(path);
+              return input.legacyPathProbeError
                 ? Effect.fail(input.legacyPathProbeError)
                 : Effect.succeed(
                     input.legacyPathExists === true && path.includes("Pathway (Alpha)"),
-                  ),
+                  );
+            },
             readFileString: () =>
               Effect.succeed(input.packageJson ?? '{"pathwayCommitHash":"abcdef1234567890"}'),
           }),
         ),
-        Layer.provideMerge(makeElectronAppLayer(calls)),
+        Layer.provideMerge(
+          makeElectronAppLayer(calls, input.isPathwayRuntime, input.runtimeUserDataPath),
+        ),
         Layer.provideMerge(makeEnvironmentLayer(input.environment)),
       ),
     ),
@@ -123,6 +136,39 @@ const withIdentity = <A, E, R>(
 };
 
 describe("DesktopAppIdentity", () => {
+  it.effect("uses the native runtime userData path without inspecting desktop identity", () => {
+    const probedPaths: string[] = [];
+    return withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        assert.equal(yield* identity.resolveUserDataPath, "/native/selected-profile");
+        assert.deepEqual(probedPaths, []);
+      }),
+      {
+        isPathwayRuntime: true,
+        runtimeUserDataPath: "/native/selected-profile",
+        environment: { env: { VITE_DEV_SERVER_URL: "http://localhost:5173" } },
+        probedPaths,
+      },
+    );
+  });
+
+  it.effect.each([
+    { env: {}, directory: "pathway" },
+    { env: { VITE_DEV_SERVER_URL: "http://localhost:5173" }, directory: "pathway-dev" },
+  ])("preserves stock Electron identity (%j)", ({ env, directory }) =>
+    withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        assert.equal(
+          yield* identity.resolveUserDataPath,
+          `/Users/alice/Library/Application Support/${directory}`,
+        );
+      }),
+      { environment: { env }, runtimeUserDataPath: "/native/ignored-profile" },
+    ),
+  );
+
   it.effect("keeps using the legacy userData path when it already exists", () =>
     withIdentity(
       Effect.gen(function* () {

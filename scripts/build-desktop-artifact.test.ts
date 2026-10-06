@@ -1,4 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- The fixture observes native Fetch redirect headers on a real loopback socket.
+import * as NodeHttp from "node:http";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
@@ -6,10 +8,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import pathwayRuntime from "../apps/desktop/pathway-runtime.json" with { type: "json" };
@@ -24,6 +27,9 @@ import {
   createStagePatchedDependencies,
   createBuildConfig,
   cachePinnedRuntimeArchive,
+  assertPathwayRuntimeRelease,
+  PathwayRuntimeReleaseGuardError,
+  stageRuntimeAppIdentity,
   resolvePinnedRuntimeArchive,
   RuntimeArchiveHashMismatchError,
   RuntimeElectronVersionMismatchError,
@@ -46,6 +52,7 @@ import {
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
   renderMacPasskeyEntitlements,
+  renderMacInheritedEntitlements,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
   resolveDesktopRuntimeDependencies,
@@ -72,6 +79,9 @@ import { parseUpdateManifest } from "./lib/update-manifest.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { sha256Hex } from "./lib/native-command.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
+
+const decodeJsonString = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
+const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 function mockProcess(exitCode: number) {
   return ChildProcessSpawner.makeHandle({
@@ -162,6 +172,102 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect("accepts the committed Pathway runtime pin for a runtime release", () =>
+    assertPathwayRuntimeRelease("mac", "arm64", true),
+  );
+
+  it.effect("rejects the official Electron pin for a runtime release", () =>
+    Effect.gen(function* () {
+      const pin = {
+        ...pathwayRuntime,
+        runtimeVersion: "44.5.1",
+        archives: {
+          ...pathwayRuntime.archives,
+          "darwin-arm64": {
+            url: "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-darwin-arm64.zip",
+            sha256: "1d75703019bb16461ae65f3081d7e6f5c0b11e901d0ccb5c343bcf7bcdd6435c",
+          },
+        },
+      };
+      const error = yield* assertPathwayRuntimeRelease("mac", "arm64", true, pin).pipe(Effect.flip);
+      assert.instanceOf(error, PathwayRuntimeReleaseGuardError);
+      assert.include(error.message, "darwin-arm64 requires a Pathway runtimeVersion");
+      assert.include(error.message, "URL and SHA-256");
+    }),
+  );
+
+  it.effect.each([
+    "44.5.1",
+    "44.5.1-pathway",
+    "44.5.1-pathway.1-extra",
+    "v44.5.1-pathway.1",
+    "44.5-pathway.1",
+    "44.5.1-pathway.x",
+  ])("rejects a non-Pathway runtime version from a mirror: %s", (runtimeVersion) =>
+    Effect.gen(function* () {
+      const pin = {
+        ...pathwayRuntime,
+        runtimeVersion,
+        archives: {
+          ...pathwayRuntime.archives,
+          "darwin-arm64": {
+            ...pathwayRuntime.archives["darwin-arm64"],
+            url: "https://npmmirror.com/mirrors/electron/electron-v44.5.1-darwin-arm64.zip",
+          },
+        },
+      };
+      assert.instanceOf(
+        yield* assertPathwayRuntimeRelease("mac", "arm64", true, pin).pipe(Effect.flip),
+        PathwayRuntimeReleaseGuardError,
+      );
+    }),
+  );
+
+  it.effect.each([
+    "https://api.github.com/repos/SpiritDevs/pathway-runtime/releases/assets/123",
+    "https://cdn.example.invalid/pathway-runtime.zip",
+  ])("accepts a Pathway runtime version independently of hosting: %s", (url) =>
+    Effect.gen(function* () {
+      const runtimePin = {
+        ...pathwayRuntime,
+        runtimeVersion: "44.5.1-pathway.1",
+        archives: {
+          ...pathwayRuntime.archives,
+          "darwin-arm64": {
+            ...pathwayRuntime.archives["darwin-arm64"],
+            url,
+          },
+        },
+      };
+      yield* assertPathwayRuntimeRelease("mac", "arm64", true, runtimePin);
+      assert.instanceOf(
+        yield* assertPathwayRuntimeRelease("mac", "arm64", false, runtimePin).pipe(Effect.flip),
+        PathwayRuntimeReleaseGuardError,
+      );
+      assert.instanceOf(
+        yield* assertPathwayRuntimeRelease("win", "x64", true, runtimePin).pipe(Effect.flip),
+        PathwayRuntimeReleaseGuardError,
+      );
+    }),
+  );
+
+  it.effect.each(["production", "cua"] as const)(
+    "stages the non-development identity outside the asar for %s",
+    (flavor) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stageDir = yield* fs.makeTempDirectoryScoped();
+        const resource = yield* stageRuntimeAppIdentity(stageDir, flavor);
+        assert.equal(resource.to, "pathway-runtime-app.json");
+        assert.deepEqual(
+          yield* decodeJsonString(yield* fs.readFileString(resource.from)),
+          flavor === "cua"
+            ? { userDataDirName: "pathway-cua", legacyUserDataDirName: "pathway-cua" }
+            : { userDataDirName: "pathway", legacyUserDataDirName: "Pathway (Alpha)" },
+        );
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("rejects universal packaging with a single pinned archive", () =>
     Effect.gen(function* () {
       const error = yield* resolvePinnedRuntimeArchive(
@@ -214,6 +320,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         HttpClient.make((request) => {
           requests++;
           assert.equal(request.url, archive.url);
+          assert.isUndefined(request.headers.authorization);
+          assert.isUndefined(request.headers.accept);
           return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(contents)));
         }),
       );
@@ -241,6 +349,172 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.instanceOf(error, RuntimeArchiveHashMismatchError);
       assert.equal(requests, 1);
       assert.isFalse(yield* fs.exists(downloaded));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("authenticates GitHub API assets without network", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fs.makeTempDirectoryScoped();
+      const contents = "private runtime fixture";
+      const archive = {
+        url: "https://api.github.com/repos/SpiritDevs/pathway-runtime/releases/assets/123",
+        sha256: sha256Hex(new TextEncoder().encode(contents)),
+      };
+      let calls = 0;
+      const fetch: typeof globalThis.fetch = async (url, init) => {
+        calls++;
+        assert.equal(String(url), archive.url);
+        const headers = new Headers(init?.headers);
+        assert.equal(headers.get("Authorization"), "Bearer test-download-token");
+        assert.equal(headers.get("Accept"), "application/octet-stream");
+        return new Response(contents);
+      };
+      const downloaded = yield* cachePinnedRuntimeArchive(archive, cacheDir).pipe(
+        Effect.provide(FetchHttpClient.layer),
+        Effect.provideService(FetchHttpClient.Fetch, fetch),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: { PATHWAY_RUNTIME_DOWNLOAD_TOKEN: "test-download-token" },
+            }),
+          ),
+        ),
+      );
+      assert.equal(yield* fs.readFileString(downloaded), contents);
+      assert.equal(calls, 1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    "https://cdn.example.invalid/runtime.zip",
+    "https://github.com/SpiritDevs/pathway-runtime/releases/download/v1/runtime.zip",
+    "https://api.github.com.example.invalid/runtime.zip",
+  ])("does not send a GitHub token to %s", (url) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fs.makeTempDirectoryScoped();
+      const contents = "public runtime fixture";
+      const archive = { url, sha256: sha256Hex(new TextEncoder().encode(contents)) };
+      const client = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) => {
+          assert.isUndefined(request.headers.authorization);
+          return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(contents)));
+        }),
+      );
+      const downloaded = yield* cachePinnedRuntimeArchive(archive, cacheDir).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            client,
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: { PATHWAY_RUNTIME_DOWNLOAD_TOKEN: "test-download-token" },
+              }),
+            ),
+          ),
+        ),
+      );
+      assert.equal(yield* fs.readFileString(downloaded), contents);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("drops authorization when Fetch redirects to another host", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fs.makeTempDirectoryScoped();
+      const contents = "redirected runtime fixture";
+      const archive = {
+        url: "https://api.github.com/repos/SpiritDevs/pathway-runtime/releases/assets/123",
+        sha256: sha256Hex(new TextEncoder().encode(contents)),
+      };
+      const requests: Array<{ host: string | undefined; authorization: string | undefined }> = [];
+      const server = NodeHttp.createServer((request, response) => {
+        requests.push({ host: request.headers.host, authorization: request.headers.authorization });
+        if (request.url === "/asset") {
+          response.writeHead(302, { Location: `http://localhost:${port}/runtime.zip` });
+          response.end();
+        } else {
+          response.end(contents);
+        }
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(
+          () =>
+            new Promise<void>((resolve) => {
+              server.close(() => resolve());
+              server.closeAllConnections();
+            }),
+        ),
+      );
+      yield* Effect.promise(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.once("error", reject);
+            server.listen(0, "127.0.0.1", resolve);
+          }),
+      );
+      const address = server.address();
+      assert.isNotNull(address);
+      assert.notEqual(typeof address, "string");
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      // Route only the initial API request to a loopback fixture. Native Fetch
+      // handles the actual cross-host redirect, including credential stripping.
+      const fetch: typeof globalThis.fetch = (url, init) => {
+        assert.equal(String(url), archive.url);
+        // @effect-diagnostics-next-line globalFetch:off -- Exercise Fetch's own credential stripping rather than simulating the redirect.
+        return globalThis.fetch(`http://127.0.0.1:${port}/asset`, init);
+      };
+      const downloaded = yield* cachePinnedRuntimeArchive(archive, cacheDir).pipe(
+        Effect.provide(FetchHttpClient.layer),
+        Effect.provideService(FetchHttpClient.Fetch, fetch),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: { PATHWAY_RUNTIME_DOWNLOAD_TOKEN: "test-download-token" },
+            }),
+          ),
+        ),
+      );
+      assert.equal(yield* fs.readFileString(downloaded), contents);
+      assert.deepEqual(requests, [
+        { host: `127.0.0.1:${port}`, authorization: "Bearer test-download-token" },
+        { host: `localhost:${port}`, authorization: undefined },
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("redacts the download token from HTTP failures", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fs.makeTempDirectoryScoped();
+      const archive = {
+        url: "https://api.github.com/repos/SpiritDevs/pathway-runtime/releases/assets/123",
+        sha256: "0".repeat(64),
+      };
+      const client = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(request, new Response("forbidden", { status: 403 })),
+          ),
+        ),
+      );
+      const error = yield* cachePinnedRuntimeArchive(archive, cacheDir).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            client,
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: { PATHWAY_RUNTIME_DOWNLOAD_TOKEN: "test-secret-do-not-log" },
+              }),
+            ),
+          ),
+        ),
+        Effect.flip,
+      );
+      assert.notInclude(yield* encodeJsonString(error), "test-secret-do-not-log");
+      assert.deepEqual(yield* fs.readDirectory(cacheDir), []);
     }).pipe(Effect.scoped),
   );
 
@@ -788,6 +1062,20 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
+    for (const entitlement of [
+      "com.apple.security.cs.allow-jit",
+      "com.apple.security.cs.allow-unsigned-executable-memory",
+      "com.apple.security.cs.disable-library-validation",
+      "com.apple.security.device.audio-input",
+      "com.apple.security.device.camera",
+      "com.apple.security.personal-information.location",
+      "com.apple.security.device.bluetooth",
+    ]) {
+      assert.include(entitlements, `<key>${entitlement}</key>\n    <true/>`);
+      assert.include(renderMacInheritedEntitlements(), `<key>${entitlement}</key>\n    <true/>`);
+    }
+    assert.notInclude(renderMacInheritedEntitlements(), "keychain-access-groups");
+    assert.notInclude(renderMacInheritedEntitlements(), "com.apple.application-identifier");
     assert.include(entitlements, "<key>keychain-access-groups</key>");
     assert.include(entitlements, "<string>ABC1234567.com.spiritdevs.pathway.webauthn</string>");
   });
@@ -901,6 +1189,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     Effect.gen(function* () {
       const config = yield* createBuildConfig("mac", "dmg", "1.2.3", true, false, undefined, {
         entitlementsPath: "/tmp/entitlements.mac.plist",
+        inheritedEntitlementsPath: "/tmp/entitlements.mac.inherit.plist",
         provisioningProfilePath: "/tmp/pathway.provisionprofile",
       });
 
@@ -909,13 +1198,22 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(mac.forceCodeSigning, true);
       assert.equal(mac.type, "distribution");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
+      assert.equal(mac.entitlementsInherit, "/tmp/entitlements.mac.inherit.plist");
+      assert.equal(mac.hardenedRuntime, true);
       assert.equal(mac.provisioningProfile, "/tmp/pathway.provisionprofile");
       assert.deepStrictEqual(mac.protocols, [
         { name: "Pathway", schemes: ["pathway", "pathway-dev"] },
       ]);
       assert.deepStrictEqual(mac.extendInfo, {
+        NSAudioCaptureUsageDescription:
+          "Pathway lets websites capture system audio when you share your screen with them.",
         NSMicrophoneUsageDescription:
-          "Pathway records your voice when you start dictation. Audio is processed on this computer.",
+          "Pathway uses your microphone for dictation and websites you allow to record audio. Dictation is processed on this computer.",
+        NSCameraUsageDescription: "Pathway lets websites use your camera when you allow them.",
+        NSLocationUsageDescription:
+          "Pathway shares your location with websites when you allow them.",
+        NSBluetoothAlwaysUsageDescription:
+          "Pathway lets websites connect to Bluetooth devices when you allow them.",
         NSScreenCaptureUsageDescription:
           "Pathway captures the active window when you use the SnapShots shortcut, and the windows you authorize for Computer use.",
         NSAccessibilityUsageDescription:
@@ -1068,6 +1366,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         skipBuild: Option.none(),
         skipBackendDeploy: Option.none(),
         pinnedRuntime: Option.none(),
+        requirePathwayRuntime: Option.none(),
         keepStage: Option.none(),
         signed: Option.none(),
         verbose: Option.none(),
@@ -1158,6 +1457,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         skipBuild: Option.none(),
         skipBackendDeploy: Option.none(),
         pinnedRuntime: Option.none(),
+        requirePathwayRuntime: Option.none(),
         keepStage: Option.none(),
         signed: Option.none(),
         verbose: Option.none(),
@@ -1192,6 +1492,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             skipBuild: Option.none(),
             skipBackendDeploy: Option.none(),
             pinnedRuntime: Option.none(),
+            requirePathwayRuntime: Option.none(),
             keepStage: Option.none(),
             signed: Option.none(),
             verbose: Option.none(),
@@ -1285,6 +1586,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         skipBuild: Option.some(false),
         skipBackendDeploy: Option.some(false),
         pinnedRuntime: Option.some(false),
+        requirePathwayRuntime: Option.none(),
         keepStage: Option.some(false),
         signed: Option.some(false),
         verbose: Option.some(false),

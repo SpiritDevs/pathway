@@ -45,6 +45,10 @@ const normalizeCommitHash = (value: string): Option.Option<string> => {
 };
 
 export const resolveUserDataPath = Effect.gen(function* () {
+  const electronApp = yield* ElectronApp.ElectronApp;
+  if (electronApp.isPathwayRuntime) {
+    return yield* electronApp.userDataPath;
+  }
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const legacyPath = environment.path.join(
@@ -113,7 +117,9 @@ export const make = Effect.gen(function* () {
 
   const userDataPath = resolveUserDataPath.pipe(
     Effect.provide(
-      yield* Effect.context<DesktopEnvironment.DesktopEnvironment | FileSystem.FileSystem>(),
+      yield* Effect.context<
+        DesktopEnvironment.DesktopEnvironment | FileSystem.FileSystem | ElectronApp.ElectronApp
+      >(),
     ),
   );
 

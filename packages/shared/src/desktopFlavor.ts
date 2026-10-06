@@ -8,6 +8,12 @@ export type PathwayDesktopFlavor = (typeof PATHWAY_DESKTOP_FLAVORS)[number];
 /** package.json key holding the packaged flavor. */
 export const PATHWAY_DESKTOP_FLAVOR_KEY = "pathwayDesktopFlavor";
 
+/** Stable and nightly share the same current and legacy user-data directories. */
+export const PATHWAY_PRODUCTION_DESKTOP_IDENTITY = {
+  userDataDirName: "pathway",
+  legacyUserDataDirName: "Pathway (Alpha)",
+} as const;
+
 /** The side-by-side Computer Use build: its own bundle, scheme, TCC grants and Pathway home. */
 export const PATHWAY_CUA_DESKTOP_IDENTITY = {
   displayName: "Pathway Cua",
