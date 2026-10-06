@@ -179,6 +179,7 @@ struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
         attachedPullRequests ?? attachedPullRequest.map { [$0] } ?? []
     }
     let hasActionableProposedPlan: Bool
+    var pendingBackgroundTasks: [JSONValue]? = nil
     let itemCount: Int
     let visibleItemCount: Int
     let createdAt: String

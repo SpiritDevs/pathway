@@ -4,7 +4,7 @@ Settle a thread when you are finished with it and want to move it out of your ac
 
 On iOS, thread actions update the list immediately while the environment saves the change. This includes settling, reopening, snoozing, waking, pinning, archiving, restoring, deleting, and renaming. If an action fails, the list restores the server state and shows an error or any required confirmation.
 
-An idle thread with linked pull requests settles automatically when all of them are merged. An open or closed-without-merging PR, or a status that cannot be determined, prevents automatic settlement. Unlink a PR from the thread if it should no longer count toward settlement. The settled banner and sidebar use the same linked PR statuses. Once a PR is reported as merged, an older cached status does not keep it active or offer Merge again.
+An idle thread with linked pull requests settles automatically when all of them are merged. An open or closed-without-merging PR, or a status that cannot be determined, prevents automatic settlement. Unlink a PR from the thread if it should no longer count toward settlement. A thread still waiting on subagents or background tasks never settles automatically, even after its PR merges. The settled banner and sidebar use the same linked PR statuses. Once a PR is reported as merged, an older cached status does not keep it active or offer Merge again.
 
 A thread with an unread notification (the blue dot beside it) stays where it is in the sidebar instead of moving to Settled, even if a merged PR, inactivity or Settle after completion would otherwise settle it. Once you open the thread, it settles as usual. Settling it yourself also marks its notifications read.
 

@@ -229,6 +229,24 @@ describe("effectiveSettled", () => {
     ).toBe(false);
   });
 
+  it("never auto-settles a thread still waiting on background work", () => {
+    const shell = {
+      ...makeShell({ activityAt: STALE }),
+      pendingBackgroundTasks: [{ taskId: "subagent-1", taskType: "subagent" }],
+    };
+    expect(
+      effectiveSettled(shell, { now: NOW, autoSettleAfterDays: 3, changeRequestState: "merged" }),
+    ).toBe(false);
+    expect(effectiveSettled(shell, { now: NOW, autoSettleAfterDays: 3 })).toBe(false);
+    // An explicit settle still parks it.
+    expect(
+      effectiveSettled(
+        { ...shell, settledOverride: "settled", settledAt: NOW },
+        { now: NOW, autoSettleAfterDays: 3, changeRequestState: "merged" },
+      ),
+    ).toBe(true);
+  });
+
   it("never settles a starting session, even with a settled override", () => {
     const shell = makeShell({
       settledOverride: "settled",

@@ -32,6 +32,7 @@ interface SettlementThreadShell extends QueuedThreadShell {
   readonly attachedPullRequest?: unknown;
   readonly attachedPullRequests?: ReadonlyArray<unknown> | undefined;
   readonly temporary?: boolean | undefined;
+  readonly pendingBackgroundTasks?: ReadonlyArray<unknown> | undefined;
   readonly settledOverride: "settled" | "active" | null;
   readonly settledAt: string | null;
   readonly hasPendingApprovals: boolean;
@@ -279,8 +280,9 @@ export function threadWokeAt(
  * override. Past the blockers, the explicit user override (thread.settle /
  * thread.unsettle commands, projected into settledOverride + settledAt)
  * wins in both directions; without one, a thread auto-settles on a merged
- * PR immediately or on inactivity past the window, except that an open or
- * closed PR blocks the inactivity path entirely. The server
+ * PR immediately or on inactivity past the window, except that pending
+ * background work (subagents, background commands) blocks auto-settle, and an
+ * open or closed PR blocks the inactivity path entirely. The server
  * un-settles on real activity (user message, session start, approval/
  * user-input request), so an override never goes stale silently.
  */
@@ -322,6 +324,9 @@ export function effectiveSettled(
   // "active" is the explicit keep-active pin: it suppresses auto-settle
   // until real activity clears it server-side.
   if (shell.settledOverride === "active") return false;
+  // Subagents and background commands still running after the root turn are
+  // unfinished work: only an explicit settle may park the thread.
+  if ((shell.pendingBackgroundTasks?.length ?? 0) > 0) return false;
   // Only the environment can verify unfinished Git work before deleting a temporary thread.
   if (shell.temporary === true) return false;
   if (options.changeRequestState === "merged") {
