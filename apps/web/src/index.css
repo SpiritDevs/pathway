@@ -2786,25 +2786,14 @@ label:has(> select#reasoning-effort) select {
   color: var(--code-foreground) !important;
 }
 
-/* Ultrathink's spectrum drifts while the mode is armed. background-position
-   and filter repaint rather than composite, so the drift is stepped: six
-   small moves a second instead of a full repaint of the composer frame on
-   every vsync. */
-@keyframes ultrathink-rainbow {
-  0% {
-    background-position: 0% 50%;
+/* Keep the armed spectrum static. Only activation fades in, so an idle
+   composer does not keep repainting its frame or model icon. */
+@keyframes ultrathink-activate {
+  from {
+    opacity: 0;
   }
-  100% {
-    background-position: 200% 50%;
-  }
-}
-
-@keyframes ultrathink-chroma-shift {
-  0% {
-    filter: hue-rotate(0deg) saturate(1.2);
-  }
-  100% {
-    filter: hue-rotate(360deg) saturate(1.2);
+  to {
+    opacity: 1;
   }
 }
 
@@ -2830,7 +2819,7 @@ label:has(> select#reasoning-effort) select {
   border-radius: inherit;
   padding: 2px;
   background-image: var(--ultrathink-spectrum);
-  background-size: 220% 220%;
+  background-size: 100% 100%;
   pointer-events: none;
   filter: saturate(0.82) brightness(0.92);
   -webkit-mask:
@@ -2841,7 +2830,7 @@ label:has(> select#reasoning-effort) select {
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   mask-composite: exclude;
-  animation: ultrathink-rainbow 10s steps(60) infinite;
+  animation: ultrathink-activate 180ms ease-out;
 }
 
 .ultrathink-frame > * {
@@ -2849,7 +2838,7 @@ label:has(> select#reasoning-effort) select {
 }
 
 .ultrathink-chroma {
-  animation: ultrathink-chroma-shift 10s steps(60) infinite;
+  filter: saturate(1.2);
 }
 
 @media (prefers-reduced-motion: reduce) {
