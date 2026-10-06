@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { resolveThreadLineageWindow, ThreadLineageRowList } from "./ThreadRelationshipsControl";
+import type { ThreadId } from "@spiritdevs/contracts";
+
+import {
+  formatAgentElapsed,
+  isPreviousAgentRow,
+  resolveThreadLineageWindow,
+  ThreadLineageRowList,
+} from "./ThreadRelationshipsControl";
 
 const rows = Array.from({ length: 20 }, (_, index) => `row-${index}`);
 
@@ -45,5 +52,38 @@ describe("thread lineage row list", () => {
     expect(list).toContain("overflow-y-auto");
     expect(list).not.toContain("overscroll-contain");
     expect(markup.indexOf("</ul>")).toBeLessThan(markup.indexOf("<button"));
+  });
+});
+
+describe("previous agents", () => {
+  const current = "thread-current" as ThreadId;
+  const subagent = (status: string | null, sourceThreadId = current) =>
+    ({ kind: "subagent", sourceThreadId, status }) as const;
+
+  it("files this thread's finished subagents under previous agents", () => {
+    for (const status of ["completed", "failed", "cancelled", "interrupted"]) {
+      expect(isPreviousAgentRow(subagent(status), current)).toBe(true);
+    }
+  });
+
+  it("keeps live subagents, parent agents, and other relationships in the main list", () => {
+    expect(isPreviousAgentRow(subagent("running"), current)).toBe(false);
+    expect(isPreviousAgentRow(subagent("waiting"), current)).toBe(false);
+    expect(isPreviousAgentRow(subagent(null), current)).toBe(false);
+    expect(isPreviousAgentRow(subagent("completed", "thread-parent" as ThreadId), current)).toBe(
+      false,
+    );
+    expect(
+      isPreviousAgentRow({ kind: "fork", sourceThreadId: current, status: "completed" }, current),
+    ).toBe(false);
+  });
+});
+
+describe("agent elapsed label", () => {
+  it("shows seconds, then minutes and seconds, then hours and minutes", () => {
+    expect(formatAgentElapsed(9_400)).toBe("9s");
+    expect(formatAgentElapsed(87_000)).toBe("1m 27s");
+    expect(formatAgentElapsed(3_723_000)).toBe("1h 2m");
+    expect(formatAgentElapsed(-5)).toBe("0s");
   });
 });

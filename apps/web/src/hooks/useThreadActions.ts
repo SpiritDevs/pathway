@@ -27,6 +27,7 @@ import { useNewThreadHandler } from "./useHandleNewThread";
 import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
 import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
 import { readLocalApi } from "../localApi";
+import { markThreadNotificationsRead } from "../cloud/focusReadModel";
 import {
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsPinReorder,
@@ -603,6 +604,8 @@ export function useThreadActions() {
       if (result._tag === "Success" && wokeAt !== null) {
         markThreadVisited(scopedThreadKey(target), wokeAt);
       }
+      // Unread threads never settle out of view, so settling one by hand counts as seeing it.
+      if (result._tag === "Success") markThreadNotificationsRead(scopedThreadKey(target));
       return result;
     },
     [markThreadVisited, resolveThreadTarget, router, settleThreadMutation],
