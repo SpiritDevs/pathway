@@ -1,3 +1,5 @@
+import * as Context from "effect/Context";
+import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -39,6 +41,35 @@ let activeScope: Scope.Closeable | null = null;
 let activeConfigKey: string | null = null;
 let configurationGeneration = 0;
 let pendingConfiguration = Promise.resolve();
+
+const shellMilestones = new Map<string, number>();
+const exportedShellMilestones = new Set<string>();
+
+function exportShellMilestone(name: string, completedAt: number): void {
+  if (activeDelegate === null || exportedShellMilestones.has(name)) return;
+  const span = activeDelegate.span({
+    name,
+    parent: Option.none(),
+    annotations: Context.empty(),
+    links: [],
+    startTime: BigInt(Math.round(performance.timeOrigin * 1_000_000)),
+    kind: "internal",
+    root: true,
+    sampled: true,
+  });
+  span.end(BigInt(Math.round((performance.timeOrigin + completedAt) * 1_000_000)), Exit.void);
+  exportedShellMilestones.add(name);
+}
+
+// Buffer the original paint timestamp until backend auth enables the exporter.
+export function recordShellStartupMilestone(kind: "cachedShellPainted" | "liveShellSynced"): void {
+  const name = `web.startup.${kind}`;
+  if (shellMilestones.has(name)) return;
+  const completedAt = performance.now();
+  shellMilestones.set(name, completedAt);
+  performance.mark(name, { startTime: completedAt });
+  exportShellMilestone(name, completedAt);
+}
 
 export interface ClientTracingConfig {
   readonly exportIntervalMs?: number;
@@ -119,6 +150,7 @@ async function applyClientTracingConfig(config: ClientTracingConfig): Promise<vo
   }
 
   activeDelegate = delegateResult.value;
+  for (const [name, completedAt] of shellMilestones) exportShellMilestone(name, completedAt);
   activeRuntime = runtime;
   activeScope = scope;
 }
@@ -137,6 +169,8 @@ async function disposeTracerRuntime(
 
 export async function __resetClientTracingForTests() {
   configurationGeneration++;
+  shellMilestones.clear();
+  exportedShellMilestones.clear();
   activeConfigKey = null;
   activeDelegate = null;
   pendingConfiguration = Promise.resolve();
