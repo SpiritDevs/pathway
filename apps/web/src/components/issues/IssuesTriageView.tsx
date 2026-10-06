@@ -14,7 +14,16 @@
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import type { Issue, IssueId, ProjectId, ProviderDriverKind } from "@spiritdevs/contracts";
 import { CheckIcon, InboxIcon, XIcon } from "lucide-react";
-import { memo, useEffect, useEffectEvent, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  memo,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 
 import { cn } from "~/lib/utils";
 import {
@@ -201,7 +210,7 @@ export function IssuesTriageView({
 
   const detailIssueKey = search.issue ?? null;
   const detailIssue = useIssue(detailIssueKey);
-  const openIssue = (issue: Issue) => onSearch({ issue: issue.key });
+  const openIssue = useCallback((issue: Issue) => onSearch({ issue: issue.key }), [onSearch]);
   const closeDetail = () => {
     setStartWorkRequest(null);
     onSearch({ issue: undefined });
@@ -281,60 +290,69 @@ export function IssuesTriageView({
     listRef.current?.scrollToIndex({ index, viewOffset: 48 });
   }, [ids, selection.activeId]);
 
-  const handleRowClick = (issue: Issue, event: MouseEvent) => {
-    const mode = issueSelectModeForModifiers(event);
-    setSelection((current) => selectIssueRow(current, { ids, issueId: issue.id, mode }));
-    if (mode === "replace") openIssue(issue);
-  };
+  const handleRowClick = useCallback(
+    (issue: Issue, event: MouseEvent) => {
+      const mode = issueSelectModeForModifiers(event);
+      setSelection((current) => selectIssueRow(current, { ids, issueId: issue.id, mode }));
+      if (mode === "replace") openIssue(issue);
+    },
+    [ids, openIssue],
+  );
 
-  const openAccept = (issues: ReadonlyArray<Issue>) => {
+  const openAccept = useCallback((issues: ReadonlyArray<Issue>) => {
     if (issues.length === 0) return;
     setAcceptIssues(issues);
     setAcceptOpen(true);
-  };
+  }, []);
 
   /**
    * Rejecting is a soft delete that leaves `triage` set, so restoring puts the item back in this
    * queue rather than into the workflow — which is what makes the Undo whole.
    */
-  const reject = (issues: ReadonlyArray<Issue>) => {
-    if (issues.length === 0) return;
-    void (async () => {
-      const rejected: Array<IssueId> = [];
-      for (const issue of issues) {
-        const result = await rejectTriage({ issueId: issue.id });
-        if (reportIssueWriteFailure("Failed to reject the task", result)) continue;
-        rejected.push(issue.id);
-      }
-      if (rejected.length === 0) return;
-      setSelection(EMPTY_ISSUES_SELECTION);
-      const first = issues[0];
-      const toastId = toastManager.add(
-        stackedThreadToast({
-          type: "success",
-          title:
-            rejected.length === 1
-              ? `${first?.key ?? "Task"} rejected`
-              : `${rejected.length} items rejected`,
-          description: "Restoring one puts it back in triage.",
-          actionProps: {
-            children: "Undo",
-            onClick: () => {
-              void (async () => {
-                toastManager.close(toastId);
-                for (const issueId of rejected) {
-                  reportIssueWriteFailure(
-                    "Failed to restore the task",
-                    await restoreIssue({ issueId }),
-                  );
-                }
-              })();
+  const reject = useCallback(
+    (issues: ReadonlyArray<Issue>) => {
+      if (issues.length === 0) return;
+      void (async () => {
+        const rejected: Array<IssueId> = [];
+        for (const issue of issues) {
+          const result = await rejectTriage({ issueId: issue.id });
+          if (reportIssueWriteFailure("Failed to reject the task", result)) continue;
+          rejected.push(issue.id);
+        }
+        if (rejected.length === 0) return;
+        setSelection(EMPTY_ISSUES_SELECTION);
+        const first = issues[0];
+        const toastId = toastManager.add(
+          stackedThreadToast({
+            type: "success",
+            title:
+              rejected.length === 1
+                ? `${first?.key ?? "Task"} rejected`
+                : `${rejected.length} items rejected`,
+            description: "Restoring one puts it back in triage.",
+            actionProps: {
+              children: "Undo",
+              onClick: () => {
+                void (async () => {
+                  toastManager.close(toastId);
+                  for (const issueId of rejected) {
+                    reportIssueWriteFailure(
+                      "Failed to restore the task",
+                      await restoreIssue({ issueId }),
+                    );
+                  }
+                })();
+              },
             },
-          },
-        }),
-      );
-    })();
-  };
+          }),
+        );
+      })();
+    },
+    [rejectTriage, restoreIssue],
+  );
+
+  const acceptIssue = useCallback((issue: Issue) => openAccept([issue]), [openAccept]);
+  const rejectIssue = useCallback((issue: Issue) => reject([issue]), [reject]);
 
   const renderItem = ({ item }: { item: TriageRowPresentation }) => {
     const issue = issuesById.get(item.issueId as IssueId);
@@ -343,9 +361,9 @@ export function IssuesTriageView({
       <TriageRow
         active={selection.activeId === issue.id}
         issue={issue}
-        onAccept={(target) => openAccept([target])}
+        onAccept={acceptIssue}
         onOpen={openIssue}
-        onReject={(target) => reject([target])}
+        onReject={rejectIssue}
         onRowClick={handleRowClick}
         row={item}
         selected={selection.ids.has(issue.id)}

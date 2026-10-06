@@ -345,7 +345,7 @@ export function DraggableIssueListRow({
   });
 
   return (
-    <IssueListRowImpl
+    <IssueListRow
       {...props}
       dragListeners={row.listeners}
       dropTarget={row.isOver && !row.isDragging}
