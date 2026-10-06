@@ -25,6 +25,7 @@
 
 import * as Brand from "effect/Brand";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -493,9 +494,15 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
       ),
     };
   }
+  const spawnedAt = yield* DateTime.nowAsDate;
   const command = ChildProcess.make(options.executablePath, options.args, {
     cwd: options.cwd,
-    env: options.env,
+    env: {
+      ...options.env,
+      ...(options.bootstrapDelivery === "fd3"
+        ? { PATHWAY_DESKTOP_BACKEND_SPAWN_TIME_MS: String(spawnedAt.getTime()) }
+        : {}),
+    },
     extendEnv: options.extendEnv,
     // In Electron main, process.execPath points to the Electron binary.
     // Run the child in Node mode so this backend process does not become a GUI app instance.

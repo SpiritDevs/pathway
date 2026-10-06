@@ -4,6 +4,7 @@ import { Command, GlobalFlag } from "effect/unstable/cli";
 import { ServerConfig, type StartupPresentation } from "../config.ts";
 import { runServer } from "../server.ts";
 import { type CliServerFlags, resolveServerConfig, sharedServerCommandFlags } from "./config.ts";
+import { beginServerStartupPhase, endServerStartupPhase } from "../serverStartupTrace.ts";
 
 export const runServerCommand = (
   flags: CliServerFlags,
@@ -13,8 +14,13 @@ export const runServerCommand = (
   },
 ) =>
   Effect.gen(function* () {
+    endServerStartupPhase("server.startup.commandDispatch");
+    beginServerStartupPhase("server.startup.config");
     const logLevel = yield* GlobalFlag.LogLevel;
-    const config = yield* resolveServerConfig(flags, logLevel, options);
+    const config = yield* resolveServerConfig(flags, logLevel, options).pipe(
+      Effect.ensuring(Effect.sync(() => endServerStartupPhase("server.startup.config"))),
+    );
+    beginServerStartupPhase("server.startup.layerConstruction");
     return yield* runServer.pipe(Effect.provideService(ServerConfig, config));
   });
 

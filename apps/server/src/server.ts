@@ -33,6 +33,7 @@ import {
   httpCompressionLayer,
 } from "./http.ts";
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
+import { endServerStartupPhase } from "./serverStartupTrace.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import { desktopComputerEmergencyStopRouteLayer } from "./computer/computerEmergencyStopRoute.ts";
@@ -850,7 +851,14 @@ export const makeServerLayer = Layer.unwrap(
 
     const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
       disableLogger: !config.logWebSocketEvents,
-    }).pipe(Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)));
+    }).pipe(
+      Layer.tap(() =>
+        Effect.sync(() => endServerStartupPhase("server.startup.layerConstruction")).pipe(
+          Effect.andThen(Deferred.succeed(routesReady, undefined)),
+          Effect.orDie,
+        ),
+      ),
+    );
     const serverApplicationLayer = Layer.mergeAll(
       routesLayer,
       httpListeningLayer,

@@ -2,6 +2,7 @@ import { httpHeaderRedactionLayer } from "@spiritdevs/shared/httpObservability";
 import { makeLocalFileTracer, makeTraceSink } from "@spiritdevs/shared/observability";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as LogLevel from "effect/LogLevel";
 import * as References from "effect/References";
 import * as Tracer from "effect/Tracer";
 import * as OtlpExporter from "effect/unstable/observability/OtlpExporter";
@@ -14,6 +15,7 @@ import * as ResourceAttribution from "../../resourceTelemetry/ResourceAttributio
 import { ServerLoggerLive } from "../../serverLogger.ts";
 import * as BrowserTraceCollector from "../BrowserTraceCollector.ts";
 import { threadSubscriptionTraceRecord } from "../ThreadSubscriptionTrace.ts";
+import { installServerStartupTracer } from "../../serverStartupTrace.ts";
 
 const otlpSerializationLayer = OtlpSerialization.layerJson;
 
@@ -69,6 +71,9 @@ export const ObservabilityLive = Layer.unwrap(
           ...(delegate ? { delegate } : {}),
         });
 
+        if (config.traceTimingEnabled && LogLevel.Order(config.traceMinLevel, "Info") <= 0) {
+          installServerStartupTracer(tracer);
+        }
         return Layer.mergeAll(
           Layer.succeed(Tracer.Tracer, tracer),
           BrowserTraceCollector.layer(sink),
