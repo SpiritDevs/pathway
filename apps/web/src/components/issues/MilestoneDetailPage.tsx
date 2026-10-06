@@ -33,7 +33,7 @@ import {
   PlusIcon,
   TriangleAlertIcon,
 } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
 import { cn } from "~/lib/utils";
@@ -245,11 +245,14 @@ function MilestoneDetail({ milestone }: { milestone: IssueMilestone }) {
 
   // Nothing here is optimistic: a refused write leaves the field exactly as it was, which reads as
   // an edit that never registered unless it says so.
-  const write = (title: string, run: () => Promise<AtomCommandResult<unknown, unknown>>) => {
-    void (async () => {
-      reportIssueWriteFailure(title, await run());
-    })();
-  };
+  const write = useCallback(
+    (title: string, run: () => Promise<AtomCommandResult<unknown, unknown>>) => {
+      void (async () => {
+        reportIssueWriteFailure(title, await run());
+      })();
+    },
+    [],
+  );
 
   const nameProps = useCommitOnBlur(milestone.name, (next) => {
     const name = next.trim();
@@ -294,32 +297,41 @@ function MilestoneDetail({ milestone }: { milestone: IssueMilestone }) {
     );
   };
 
-  const openIssue = (issue: Issue) => setDetailIssueKey(issue.key);
-  const toggleGroup = (groupId: string) => {
+  const openIssue = useCallback((issue: Issue) => setDetailIssueKey(issue.key), []);
+  const toggleGroup = useCallback((groupId: string) => {
     setCollapsedGroupIds((current) => {
       const next = new Set(current);
       if (!next.delete(groupId)) next.add(groupId);
       return next;
     });
-  };
-  const setIssueStatus = (issue: Issue, statusId: IssueStatusId) => {
-    write("Failed to change the status", () =>
-      updateIssue({ issueId: issue.id, patch: { statusId } }),
-    );
-  };
-  const setIssuePriority = (issue: Issue, priority: IssuePriority) => {
-    write("Failed to change the priority", () =>
-      updateIssue({ issueId: issue.id, patch: { priority } }),
-    );
-  };
-  const toggleIssueLabel = (issue: Issue, labelId: IssueLabelId) => {
-    write("Failed to change the labels", () =>
-      updateIssue({
-        issueId: issue.id,
-        patch: { labelIds: toggleIssueLabelIds(issue.labelIds, labelId) },
-      }),
-    );
-  };
+  }, []);
+  const setIssueStatus = useCallback(
+    (issue: Issue, statusId: IssueStatusId) => {
+      write("Failed to change the status", () =>
+        updateIssue({ issueId: issue.id, patch: { statusId } }),
+      );
+    },
+    [updateIssue, write],
+  );
+  const setIssuePriority = useCallback(
+    (issue: Issue, priority: IssuePriority) => {
+      write("Failed to change the priority", () =>
+        updateIssue({ issueId: issue.id, patch: { priority } }),
+      );
+    },
+    [updateIssue, write],
+  );
+  const toggleIssueLabel = useCallback(
+    (issue: Issue, labelId: IssueLabelId) => {
+      write("Failed to change the labels", () =>
+        updateIssue({
+          issueId: issue.id,
+          patch: { labelIds: toggleIssueLabelIds(issue.labelIds, labelId) },
+        }),
+      );
+    },
+    [updateIssue, write],
+  );
 
   const renderItem = ({ item }: { item: IssuesListRowModel }) =>
     item.kind === "header" ? (

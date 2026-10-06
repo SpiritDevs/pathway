@@ -37,7 +37,15 @@ import type {
 import { MembershipId } from "@spiritdevs/contracts/company";
 import { Link } from "@tanstack/react-router";
 import { ColumnsIcon, ListTodoIcon, PanelRightIcon, PlusIcon, Rows3Icon } from "lucide-react";
-import { useEffect, useEffectEvent, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
@@ -400,7 +408,7 @@ function IssuesListView({
 
   const detailIssueKey = search.issue ?? null;
   const detailIssue = useIssue(detailIssueKey);
-  const openIssue = (issue: Issue) => onSearch({ issue: issue.key });
+  const openIssue = useCallback((issue: Issue) => onSearch({ issue: issue.key }), [onSearch]);
   const closeDetail = () => onSearch({ issue: undefined });
 
   // A deep link arrives with no selection; the cursor moves to the row the URL names so the very
@@ -489,45 +497,63 @@ function IssuesListView({
     listRef.current?.scrollToIndex({ index, viewOffset: 48 });
   }, [rows, selection.activeId]);
 
-  const handleRowClick = (issue: Issue, _event: MouseEvent) => {
-    setSelection((current) => activateIssueRow(current, issue.id));
-    openIssue(issue);
-  };
+  const handleRowClick = useCallback(
+    (issue: Issue, _event: MouseEvent) => {
+      setSelection((current) => activateIssueRow(current, issue.id));
+      openIssue(issue);
+    },
+    [openIssue],
+  );
 
-  const handleRowSelected = (issue: Issue, selected: boolean) => {
-    setBulkSelectionActive(true);
-    setSelection((current) => {
-      if (current.ids.has(issue.id) === selected) return current;
-      return selectIssueRow(current, { ids, issueId: issue.id, mode: "toggle" });
-    });
-  };
+  const handleRowSelected = useCallback(
+    (issue: Issue, selected: boolean) => {
+      setBulkSelectionActive(true);
+      setSelection((current) => {
+        if (current.ids.has(issue.id) === selected) return current;
+        return selectIssueRow(current, { ids, issueId: issue.id, mode: "toggle" });
+      });
+    },
+    [ids],
+  );
 
   // Nothing here is optimistic: a refused write leaves the row exactly as it was, which reads as a
   // press that never registered unless it says so.
-  const write = (title: string, run: () => Promise<AtomCommandResult<unknown, unknown>>) => {
-    void (async () => {
-      reportIssueWriteFailure(title, await run());
-    })();
-  };
+  const write = useCallback(
+    (title: string, run: () => Promise<AtomCommandResult<unknown, unknown>>) => {
+      void (async () => {
+        reportIssueWriteFailure(title, await run());
+      })();
+    },
+    [],
+  );
 
-  const setIssueStatus = (issue: Issue, statusId: IssueStatusId) => {
-    write("Failed to change the status", () =>
-      updateIssue({ issueId: issue.id, patch: { statusId } }),
-    );
-  };
-  const setIssuePriority = (issue: Issue, priority: IssuePriority) => {
-    write("Failed to change the priority", () =>
-      updateIssue({ issueId: issue.id, patch: { priority } }),
-    );
-  };
-  const toggleIssueLabel = (issue: Issue, labelId: IssueLabelId) => {
-    write("Failed to change the labels", () =>
-      updateIssue({
-        issueId: issue.id,
-        patch: { labelIds: toggleIssueLabelIds(issue.labelIds, labelId) },
-      }),
-    );
-  };
+  const setIssueStatus = useCallback(
+    (issue: Issue, statusId: IssueStatusId) => {
+      write("Failed to change the status", () =>
+        updateIssue({ issueId: issue.id, patch: { statusId } }),
+      );
+    },
+    [updateIssue, write],
+  );
+  const setIssuePriority = useCallback(
+    (issue: Issue, priority: IssuePriority) => {
+      write("Failed to change the priority", () =>
+        updateIssue({ issueId: issue.id, patch: { priority } }),
+      );
+    },
+    [updateIssue, write],
+  );
+  const toggleIssueLabel = useCallback(
+    (issue: Issue, labelId: IssueLabelId) => {
+      write("Failed to change the labels", () =>
+        updateIssue({
+          issueId: issue.id,
+          patch: { labelIds: toggleIssueLabelIds(issue.labelIds, labelId) },
+        }),
+      );
+    },
+    [updateIssue, write],
+  );
 
   const bulkIssueIds = selectedIssues.map((issue) => issue.id);
   const bulkStatus = (statusId: IssueStatusId) => {
@@ -881,19 +907,22 @@ function IssuesListView({
     },
   });
 
-  const handleRowContextMenu = (issue: Issue, event: MouseEvent) => {
-    event.preventDefault();
-    const targets = issueContextMenuIssues(issue, selectedIssues);
-    // A right-click outside the selection moves the cursor onto the row under the pointer, so what
-    // is highlighted and what the menu is about are the same rows. Inside it, the selection stands.
-    if (targets.length === 1) {
-      setBulkSelectionActive(false);
-      setSelection((current) =>
-        selectIssueRow(current, { ids, issueId: issue.id, mode: "replace" }),
-      );
-    }
-    setContextMenu({ issues: targets, x: event.clientX, y: event.clientY });
-  };
+  const handleRowContextMenu = useCallback(
+    (issue: Issue, event: MouseEvent) => {
+      event.preventDefault();
+      const targets = issueContextMenuIssues(issue, selectedIssues);
+      // A right-click outside the selection moves the cursor onto the row under the pointer, so what
+      // is highlighted and what the menu is about are the same rows. Inside it, the selection stands.
+      if (targets.length === 1) {
+        setBulkSelectionActive(false);
+        setSelection((current) =>
+          selectIssueRow(current, { ids, issueId: issue.id, mode: "replace" }),
+        );
+      }
+      setContextMenu({ issues: targets, x: event.clientX, y: event.clientY });
+    },
+    [ids, selectedIssues],
+  );
 
   // The board has no selection model, so a card is always its own target.
   const handleCardContextMenu = (issue: Issue, event: MouseEvent) => {
