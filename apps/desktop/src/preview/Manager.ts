@@ -750,6 +750,21 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     }
   });
 
+  /** Browser pages are the user's alone. Agents only drive websites and blank tabs. */
+  const requireWebPage = Effect.fn("PreviewManager.requireWebPage")(function* (
+    tabId: string,
+    wc: Electron.WebContents,
+    action: string,
+  ) {
+    if (isWebPageUrl(wc.getURL())) return;
+    return yield* new PreviewOperationError({
+      operation: `${action}.requireWebPage`,
+      tabId,
+      webContentsId: wc.id,
+      cause: new Error("Browser automation only works on websites. This tab shows a browser page."),
+    });
+  });
+
   const resolveArtifactPath = (artifactPath: string) =>
     attempt({ operation: "resolveArtifactPath", artifactPath }, () => {
       const resolvedPath = path.resolve(artifactPath);
@@ -1135,19 +1150,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const control = yield* ensureControlSession(wc);
     const execute = Effect.fn("PreviewManager.executeControlAction")(function* () {
       yield* validateCurrentGuest(tabId, wc);
-      // Browser pages, such as Chrome's settings on the Pathway runtime, are the user's alone.
-      if (!isWebPageUrl(wc.getURL())) {
-        return yield* new PreviewOperationError({
-          operation: `${action}.requireWebPage`,
-          tabId,
-          webContentsId: wc.id,
-          cause: new Error(
-            "Browser automation only works on websites. This tab shows a browser page.",
-          ),
-        });
-      }
+      // Checked before every command: the page's own history.back() can return the tab to a
+      // browser page, such as Chrome's settings on the Pathway runtime, partway through an action.
       const send: SendCommand = Effect.fn("PreviewManager.sendCommand")(
         function* (method, commandParams) {
+          yield* requireWebPage(tabId, wc, action);
           return yield* boundedPromise(
             { operation: `${action}.${method}`, tabId, webContentsId: wc.id },
             () => control.debugger.sendCommand(method, commandParams),
@@ -2890,6 +2897,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         Ref.get(actionTimelineRef),
       ]);
       yield* validateCurrentGuest(tabId, wc);
+      yield* requireWebPage(tabId, wc, "snapshot");
       const sourceSize = sourceImage.getSize();
       const image =
         sourceSize.width > MAX_SCREENSHOT_WIDTH

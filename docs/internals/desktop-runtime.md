@@ -46,10 +46,11 @@ Only the main process ever produces a `chrome://` address. `normalizePreviewUrl`
 - **Tab state.** The desktop reports the settings page's URL like any other, and the server stores it. History skips it. A webview restored or recovered from that state opens blank instead.
 - **Agents.** They drive websites and blank tabs only (`isWebPageUrl`):
   - The automation host refuses to navigate, read or drive a tab that shows a browser page. `PreviewAutomationBrowserPageError` tells the agent to open a website in a new tab instead.
-  - Main also refuses page automation in its CDP control session, as a backstop.
+  - Main also refuses page automation in its CDP control session, as a backstop. It checks before every command, because a page's own `history.back()` can return the tab to a browser page partway through an action.
+  - `blob:` and `data:` documents aren't web pages either, so agents can't drive them. That is the deliberate default.
   - Users still use the settings page themselves.
 
-User docs for site information, certificates and Site settings wait for [Phase 3](../plans/desktop-chromium-runtime.md#phase-3-runtime-packaging). Until then every shipped build runs stock Electron, which has none of them.
+User docs for site information, certificates and Site settings wait for [Phase 3](../plans/desktop-chromium-runtime.md#phase-3-runtime-packaging). Until then every shipped build runs stock Electron, which has no certificates or Site settings.
 
 ## Archive contents
 

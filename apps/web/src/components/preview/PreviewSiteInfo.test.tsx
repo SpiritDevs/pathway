@@ -214,7 +214,7 @@ describe("previewSiteActions", () => {
     const calls: string[] = [];
     const openTab = vi.fn(async () => {
       calls.push("openTab");
-      return "tab-8";
+      return { runtimeTabId: "tab-8", close: () => calls.push("close") };
     });
     const bridge = {
       openSiteSettings: vi.fn(async (tabId: string, targetTabId: string) => {
@@ -234,7 +234,7 @@ describe("previewSiteActions", () => {
     expect(toastManager.add).not.toHaveBeenCalled();
   });
 
-  it("says so when Site settings cannot open, and opens nothing without a tab", async () => {
+  it("says so and closes the blank tab when Site settings cannot open", async () => {
     const openSiteSettings = vi.fn(async () => {
       throw new Error("Site settings need the Pathway browser runtime.");
     });
@@ -245,9 +245,14 @@ describe("previewSiteActions", () => {
     });
     expect(openSiteSettings).not.toHaveBeenCalled();
 
+    const close = vi.fn();
     await act(async () => {
-      previewSiteActions(bridge, "tab-7", async () => "tab-8").openSiteSettings?.();
+      previewSiteActions(bridge, "tab-7", async () => ({
+        runtimeTabId: "tab-8",
+        close,
+      })).openSiteSettings?.();
     });
+    expect(close).toHaveBeenCalledOnce();
     expect(toastManager.add).toHaveBeenCalledWith(
       expect.objectContaining({ type: "error", title: "Site settings could not open" }),
     );

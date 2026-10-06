@@ -94,14 +94,20 @@ export interface PreviewSiteActions {
   readonly clearSiteData?: (() => void) | undefined;
 }
 
+/** A blank tab opened beside the site, for a page the main process loads into it. */
+export interface PreviewBlankTab {
+  readonly runtimeTabId: string;
+  readonly close: () => void;
+}
+
 /**
  * Site actions for a local browser tab, through the desktop bridge. `openTab`
- * opens a blank tab beside it and resolves to that tab's runtime id, or null.
+ * opens a blank tab beside it, or resolves to null.
  */
 export function previewSiteActions(
   bridge: DesktopPreviewBridge,
   tabId: string,
-  openTab: () => Promise<string | null>,
+  openTab: () => Promise<PreviewBlankTab | null>,
 ): PreviewSiteActions {
   const { siteInfo, openSiteSettings, clearSiteData } = bridge;
   return {
@@ -112,8 +118,12 @@ export function previewSiteActions(
       openSiteSettings &&
       (() =>
         void (async () => {
-          const targetTabId = await openTab();
-          if (targetTabId !== null) await openSiteSettings(tabId, targetTabId);
+          const target = await openTab();
+          if (target === null) return;
+          await openSiteSettings(tabId, target.runtimeTabId).catch((error: unknown) => {
+            target.close();
+            throw error;
+          });
         })().catch(() =>
           toastManager.add({ type: "error", title: "Site settings could not open" }),
         )),

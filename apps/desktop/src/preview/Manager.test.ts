@@ -666,6 +666,87 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("refuses the rest of an action once the tab returns to a browser page", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        let url = "https://example.com";
+        const sendCommand = vi.fn(async (method: string) => {
+          if (method !== "Runtime.evaluate") return undefined;
+          // The page calls history.back() into Site settings while the click waits to land.
+          url = "chrome://settings/content/siteDetails?site=https%3A%2F%2Fexample.com";
+          return { result: { value: { width: 800, height: 600 } } };
+        });
+        fromId.mockReturnValue({
+          ...(makeTestPreviewWebContents(async () => {
+            throw new Error("unexpected capture");
+          }) as object),
+          getURL: () => url,
+          isDevToolsOpened: () => false,
+          debugger: {
+            isAttached: () => false,
+            attach: vi.fn(),
+            sendCommand,
+            on: vi.fn(),
+            off: vi.fn(),
+          },
+        } as never);
+        yield* manager.createTab("tab_back");
+        yield* manager.registerWebview("tab_back", 42);
+
+        const click = yield* failureOf(manager.automationClick("tab_back", { x: 10, y: 10 })).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* TestClock.adjust(200);
+        const error = yield* Fiber.join(click);
+
+        expect(error).toMatchObject({
+          _tag: "PreviewOperationError",
+          operation: "click.requireWebPage",
+        });
+        const methods = sendCommand.mock.calls.map(([method]) => method);
+        expect(methods).toContain("Runtime.evaluate");
+        expect(methods.slice(methods.indexOf("Runtime.evaluate") + 1)).toEqual([]);
+      }),
+    ),
+  );
+
+  effectIt.effect("discards a snapshot captured after the tab returned to a browser page", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        let url = "https://example.com";
+        const capturePage = vi.fn(async () => {
+          url = "chrome://settings/content/siteDetails?site=https%3A%2F%2Fexample.com";
+          return {
+            toJPEG: () => Buffer.from("settings"),
+            getSize: () => ({ width: 1, height: 1 }),
+          };
+        });
+        fromId.mockReturnValue({
+          ...(makeTestPreviewWebContents(capturePage) as object),
+          getURL: () => url,
+          isDevToolsOpened: () => false,
+          debugger: {
+            isAttached: () => false,
+            attach: vi.fn(),
+            sendCommand: vi.fn(async () => ({ result: { value: { url } } })),
+            on: vi.fn(),
+            off: vi.fn(),
+          },
+        } as never);
+        yield* manager.createTab("tab_snapshot");
+        yield* manager.registerWebview("tab_snapshot", 42);
+
+        const error = yield* failureOf(manager.automationSnapshot("tab_snapshot"));
+
+        expect(capturePage).toHaveBeenCalledOnce();
+        expect(error).toMatchObject({
+          _tag: "PreviewOperationError",
+          operation: "snapshot.requireWebPage",
+        });
+      }),
+    ),
+  );
+
   effectIt.effect("mirrors Electron's effective zoom across registration and navigation", () =>
     withManager((manager) =>
       Effect.gen(function* () {

@@ -52,7 +52,7 @@ declare global {
  * What a restored or recovered webview loads. A browser page, such as Chrome's
  * settings, opens blank: only the main process loads those, never server state.
  */
-function webviewSrc(url: string | null): string {
+export function webviewSrc(url: string | null): string {
   return url !== null && url !== "" && isWebPageUrl(url) ? url : "about:blank";
 }
 

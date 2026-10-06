@@ -139,6 +139,9 @@ _Avoid_: This desktop (as a host choice)
 The desktop app's own Electron, built inside a full Chromium tree with Chrome's browser layer linked in, and pinned by `apps/desktop/pathway-runtime.json` ([ADR 0049](../adr/0049-desktop-runs-on-a-pathway-chromium-runtime.md), [pin](desktop-runtime.md)). It gives the local browser Chrome's real site information, certificates, settings pages and per-site permissions, with Pathway's UI on top.
 _Avoid_: Stock Electron (for the shipped runtime), owl (that is OpenAI's)
 
+**Browser page**:
+A local browser tab's page that isn't a website or a blank tab, such as `chrome://settings` on the Pathway runtime ([browser pages](desktop-runtime.md#browser-pages)). Only the desktop main process opens one, and agents can't automate it.
+
 **Model manifest**:
 A versioned data file used for model metadata and classification. It does not prove that an account or installed provider can use a model.
 

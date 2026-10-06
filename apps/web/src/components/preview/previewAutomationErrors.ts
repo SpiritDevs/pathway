@@ -8,6 +8,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "@spiritdevs/contracts";
+import { isWebPageUrl } from "@spiritdevs/shared/preview";
 import * as Schema from "effect/Schema";
 
 export interface PreviewAutomationOperationContext {
@@ -151,6 +152,19 @@ export class PreviewAutomationBrowserPageHostError extends Schema.TaggedErrorCla
 
   override get message(): string {
     return `Preview automation ${this.operation} request ${this.requestId} was refused: tab ${this.tabId ?? "unassigned"} shows a browser page, which only the user can use.`;
+  }
+}
+
+/**
+ * Agents use websites and blank tabs. Browser pages, such as Chrome's settings,
+ * are the user's; the main process also refuses to drive them.
+ */
+export function assertPreviewAutomationWebPage(
+  url: string | null,
+  context: PreviewAutomationOperationContext,
+): void {
+  if (url !== null && !isWebPageUrl(url)) {
+    throw new PreviewAutomationBrowserPageHostError(context);
   }
 }
 
