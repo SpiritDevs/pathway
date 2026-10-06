@@ -57,7 +57,7 @@ The certificate viewer has **General** and **Details** tabs. General shows who t
 
 After you update to Pathway Nightly, a website in the local browser may ask you to sign in again. Your conversations and the passwords saved in your Pathway account remain available.
 
-Pathway Nightly copies the local browser data and app state stored on this Mac the first time it opens. After that, Nightly and stable builds keep separate copies, so website sign-ins, drafts and other local data changed in one don't appear in the other. Conversations aren't affected.
+Pathway Nightly copies the local browser and window data stored on this Mac, such as website sign-ins and unsent drafts, the first time it opens. After that, Nightly and stable builds keep separate copies of that data, so changes to it in one don't appear in the other. Conversations aren't affected.
 
 These certificate and Site settings controls belong to Pathway Nightly on macOS. Stable macOS, Windows and Linux show connection information and Clear site data. The remote browser, web app and iOS use their existing browser controls.
 
