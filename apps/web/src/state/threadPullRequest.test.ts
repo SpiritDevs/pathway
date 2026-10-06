@@ -13,6 +13,7 @@ import {
   useAttachedPullRequest,
   liveAttachedPullRequestDetail,
   sameAttachedPullRequest,
+  threadPullRequestBadgeDetail,
 } from "./threadPullRequest";
 
 const mocks = vi.hoisted(() => ({
@@ -374,4 +375,39 @@ it("observes every linked PR through the shared cache and waits for the last mer
   } finally {
     registry.dispose();
   }
+});
+
+it("does not mount project or PR detail subscriptions for a row outside the viewport", () => {
+  const registry = AtomRegistry.make();
+  const atom = attachedPullRequestsAtom(JSON.stringify({ thread, poll: true, supported: false }));
+  try {
+    const stop = registry.mount(atom);
+    const result = registry.get(atom);
+    expect(result.map((query) => query.attachment)).toEqual([thread.attachedPullRequest]);
+    expect(result[0]?.isLoading).toBe(false);
+    expect(mocks.projects).not.toHaveBeenCalled();
+    expect(mocks.detail).not.toHaveBeenCalled();
+    stop();
+  } finally {
+    registry.dispose();
+  }
+});
+
+it("retains badge inputs without keeping full PR bodies or reviewers in the sidebar cache", () => {
+  const detail = {
+    ...thread.attachedPullRequest,
+    title: "Cached PR",
+    state: "open" as const,
+    headBranch: "work",
+    baseBranch: "main",
+    provider: "github" as const,
+    checks: [],
+    isDraft: false,
+    body: "A long pull request description",
+    reviewers: [{ name: "Reviewer" }],
+  };
+  const badge = threadPullRequestBadgeDetail(detail);
+  expect(badge.title).toBe("Cached PR");
+  expect(badge).not.toHaveProperty("body");
+  expect(badge).not.toHaveProperty("reviewers");
 });

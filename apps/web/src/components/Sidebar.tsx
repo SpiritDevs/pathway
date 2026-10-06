@@ -147,6 +147,7 @@ import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
+import { useNearViewport } from "../hooks/useNearViewport";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { pendingDraftSendHold } from "../lib/pendingDraftSend";
@@ -162,6 +163,8 @@ import {
   threadChangeRequestSource,
   useAttachedPullRequests,
   aggregateThreadPullRequestState,
+  sameAttachedPullRequest,
+  threadPullRequestBadgeDetail,
   type ThreadChangeRequestState,
 } from "../state/threadPullRequest";
 import { threadEnvironment } from "../state/threads";
@@ -945,11 +948,15 @@ function useSidebarChangeRequest({
   thread,
   projectCwd,
   poll = false,
+  enabled = true,
+  cached,
   onChangeRequestState,
 }: {
   thread: EnvironmentThreadShell;
   projectCwd: string | null;
   poll?: boolean;
+  enabled?: boolean;
+  cached?: ThreadChangeRequestState | undefined;
   onChangeRequestState: (
     threadKey: string,
     value: ThreadChangeRequestState,
@@ -957,29 +964,42 @@ function useSidebarChangeRequest({
   ) => void;
 }) {
   const gitCwd = thread.worktreePath ?? projectCwd;
+  const source = threadChangeRequestSource(thread);
+  const previous = cached?.source === source ? cached : undefined;
   const gitStatus = useEnvironmentQuery(
-    (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
+    enabled && (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
       ? vcsEnvironment.status({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd },
         })
       : null,
   );
-  const pr = resolveThreadPr({
+  const observedPr = resolveThreadPr({
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
   });
-  const attachedQueries = useAttachedPullRequests(thread, { poll });
+  const attachedQueries = useAttachedPullRequests(thread, { poll, enabled });
+  const pr =
+    !enabled || gitStatus.data === null || gitStatus.error !== null
+      ? (previous?.presentation?.branchPullRequest ?? observedPr)
+      : observedPr;
   const visibleBranchPr = pr && !thread.detachedPullRequestUrls?.includes(pr.url) ? pr : null;
   const badges = resolveThreadPrBadges({
     branchPullRequest: pr,
     detachedPullRequestUrls: thread.detachedPullRequestUrls,
-    attachedQueries,
-    provider: gitStatus.data?.sourceControlProvider,
+    attachedQueries: attachedQueries.map((query) => ({
+      ...query,
+      data:
+        !enabled || query.isLoading || query.error !== null
+          ? (previous?.presentation?.attachedDetails.find((detail) =>
+              sameAttachedPullRequest(query.attachment, detail),
+            ) ?? query.data)
+          : query.data,
+    })),
+    provider: gitStatus.data?.sourceControlProvider ?? previous?.presentation?.provider,
   });
 
   const prState = aggregateThreadPullRequestState(badges.map((badge) => badge.changeRequestState));
-  const source = threadChangeRequestSource(thread);
   const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
   const gitReady =
     thread.branch === null ||
@@ -989,26 +1009,26 @@ function useSidebarChangeRequest({
   const ready = gitReady && attachedQueries.every((query) => !query.isLoading);
   // A refresh with no result must not erase the last known merged/open state.
   const failed = gitStatus.error !== null || attachedQueries.some((query) => query.error !== null);
+  const presentation = useMemo(
+    () => ({
+      branchPullRequest: observedPr,
+      attachedDetails: attachedQueries.flatMap((query) =>
+        query.data ? [threadPullRequestBadgeDetail(query.data)] : [],
+      ),
+      provider: gitStatus.data?.sourceControlProvider,
+    }),
+    [observedPr, attachedQueries, gitStatus.data?.sourceControlProvider],
+  );
   useEffect(() => {
-    if (!ready) return;
-    onChangeRequestState(threadKey, { source, state: prState }, failed);
-  }, [ready, failed, source, prState, threadKey, onChangeRequestState]);
+    if (!enabled || !ready) return;
+    onChangeRequestState(
+      threadKey,
+      { source, state: prState, ...(!failed ? { presentation } : {}) },
+      failed,
+    );
+  }, [enabled, ready, failed, source, prState, presentation, threadKey, onChangeRequestState]);
   return { gitStatus, pr, visibleBranchPr, badges, prState };
 }
-
-// Pending rows need only enough data to classify; do not mount hidden cards or terminal observers.
-const SidebarThreadClassification = memo(function SidebarThreadClassification(props: {
-  thread: EnvironmentThreadShell;
-  projectCwd: string | null;
-  onChangeRequestState: (
-    threadKey: string,
-    value: ThreadChangeRequestState,
-    failed?: boolean,
-  ) => void;
-}) {
-  useSidebarChangeRequest(props);
-  return null;
-});
 
 function SettleActionTooltipText(props: {
   settleAfterCompletionSupported: boolean;
@@ -1085,6 +1105,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     value: ThreadChangeRequestState,
     failed?: boolean,
   ) => void;
+  cachedChangeRequest?: ThreadChangeRequestState | undefined;
   onOpenIssue: (issueKey: string) => void;
   onOpenSideChat: (parentRef: ScopedThreadRef, sideChatThreadId: ThreadId) => void;
 }) {
@@ -1128,10 +1149,25 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
 
+  const viewport = useNearViewport();
+  const rowRef = useCallback(
+    (element: HTMLLIElement | null) => {
+      props.sortable?.setNodeRef(element);
+      const stopObserving = viewport.ref(element);
+      if (element === null) return;
+      return () => {
+        stopObserving?.();
+        props.sortable?.setNodeRef(null);
+      };
+    },
+    [props.sortable?.setNodeRef, viewport.ref],
+  );
   const { gitStatus, visibleBranchPr, badges, prState } = useSidebarChangeRequest({
     thread,
     projectCwd: props.projectCwd,
     poll: props.isActive,
+    enabled: viewport.near,
+    cached: props.cachedChangeRequest,
     onChangeRequestState,
   });
   const displayedPrBadge =
@@ -1565,6 +1601,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   if (variant === "slim") {
     return (
       <li
+        ref={rowRef}
         data-thread-item
         data-active-thread={props.isActive || undefined}
         className={cn(
@@ -1723,7 +1760,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     <li
       data-thread-item
       data-active-thread={props.isActive || undefined}
-      ref={sortable?.setNodeRef}
+      ref={rowRef}
       style={
         sortable
           ? {
@@ -4712,18 +4749,6 @@ export default function Sidebar() {
           ref={focusSwipe.contentRef}
           className="flex-1 ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0"
         >
-          {loadingThreads.map((thread) =>
-            lifecycleCapabilities.get(thread.environmentId)?.threadSettlement === true ? (
-              <SidebarThreadClassification
-                key={scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))}
-                thread={thread}
-                projectCwd={
-                  projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
-                }
-                onChangeRequestState={handleChangeRequestState}
-              />
-            ) : null,
-          )}
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider
@@ -4973,6 +4998,7 @@ export default function Sidebar() {
                         onUnpin={attemptUnpin}
                         onAcknowledgeWoke={acknowledgeWoke}
                         onChangeRequestState={handleChangeRequestState}
+                        cachedChangeRequest={changeRequestStateByKey.get(threadKey)}
                         onOpenSideChat={openSideChat}
                         onOpenIssue={openIssue}
                       />

@@ -34,8 +34,8 @@ const classify = (
 afterEach(() => vi.useRealTimers());
 
 describe("sidebar lifecycle loading", () => {
-  it("never places unresolved PR history in the active list", () => {
-    expect(classify()).toBe("loading");
+  it("keeps unresolved PR history visible so near-viewport rows can classify it", () => {
+    expect(classify()).toBe("active");
     expect(classify(thread, { changeRequests: new Map([[key, merged]]) })).toBe("settled");
     expect(classify(thread, { changeRequests: new Map([[key, { ...merged, state: null }]]) })).toBe(
       "active",
@@ -88,11 +88,11 @@ describe("sidebar lifecycle loading", () => {
 
   it("reclassifies changed PR sources and keeps environments separate", () => {
     const changeRequests = new Map([[key, merged]]);
-    expect(classify({ ...thread, branch: "new-work" }, { changeRequests })).toBe("loading");
+    expect(classify({ ...thread, branch: "new-work" }, { changeRequests })).toBe("active");
     expect(
       classify({ ...thread, environmentId: EnvironmentId.make("other") }, { changeRequests }),
-    ).toBe("loading");
-    expect(classify({ ...thread, worktreePath: "/another" }, { changeRequests })).toBe("loading");
+    ).toBe("active");
+    expect(classify({ ...thread, worktreePath: "/another" }, { changeRequests })).toBe("active");
   });
 
   it("does not auto-settle an old branch before discovering its open PR", () => {
@@ -101,7 +101,7 @@ describe("sidebar lifecycle loading", () => {
       createdAt: "2026-08-01T00:00:00.000Z",
       latestUserMessageAt: "2026-08-01T00:00:00.000Z",
     };
-    expect(classify(old, { autoSettleAfterDays: 1 })).toBe("loading");
+    expect(classify(old, { autoSettleAfterDays: 1 })).toBe("active");
     expect(
       classify(old, {
         autoSettleAfterDays: 1,
@@ -160,7 +160,7 @@ it("keeps uncached remote threads navigable while offline and reclassifies after
   expect(classify(thread, { unavailable: true, changeRequests: new Map([[key, merged]]) })).toBe(
     "settled",
   );
-  expect(classify(thread, { unavailable: false })).toBe("loading");
+  expect(classify(thread, { unavailable: false })).toBe("active");
   expect(
     classify(thread, {
       unavailable: false,
@@ -184,5 +184,57 @@ it("retains freshness across cache reads and errors, and advances it on successf
     expect(classify(thread, { changeRequests: refreshed })).toBe("settled");
   } finally {
     vi.restoreAllMocks();
+  }
+});
+
+it("retains badge inputs across navigation and refresh errors, and updates checks without changing classification", () => {
+  const presentation: NonNullable<ThreadChangeRequestState["presentation"]> = {
+    branchPullRequest: {
+      number: 123,
+      title: "Cached PR",
+      url: "https://github.com/example/repo/pull/123",
+      baseRef: "main",
+      headRef: "work",
+      state: "open",
+    },
+    attachedDetails: [],
+    provider: undefined,
+  };
+  const cached = { ...merged, state: "open" as const, presentation };
+  const states = updateSidebarChangeRequest(new Map(), key, cached);
+  expect(updateSidebarChangeRequest(states, key, cached)).toBe(states);
+  expect(
+    updateSidebarChangeRequest(states, key, { ...cached, presentation: { ...presentation } }),
+  ).toBe(states);
+  expect(
+    updateSidebarChangeRequest(
+      states,
+      key,
+      { ...cached, presentation: { ...presentation, branchPullRequest: null } },
+      true,
+    ),
+  ).toBe(states);
+  const changed = updateSidebarChangeRequest(states, key, {
+    ...cached,
+    presentation: {
+      ...presentation,
+      branchPullRequest: { ...presentation.branchPullRequest!, title: "Updated PR" },
+    },
+  });
+  expect(changed.get(key)?.presentation?.branchPullRequest?.title).toBe("Updated PR");
+  const registry = AtomRegistry.make();
+  const atom = sidebarThreadChangeRequestsAtom("badges/account-a/company-a");
+  try {
+    const unmount = registry.subscribe(atom, () => {});
+    registry.set(atom, changed);
+    unmount();
+    const remount = registry.subscribe(atom, () => {});
+    expect(registry.get(atom).get(key)?.presentation).toBe(changed.get(key)?.presentation);
+    expect(registry.get(sidebarThreadChangeRequestsAtom("badges/account-b/company-a")).size).toBe(
+      0,
+    );
+    remount();
+  } finally {
+    registry.dispose();
   }
 });
