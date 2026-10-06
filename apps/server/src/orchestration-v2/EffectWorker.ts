@@ -332,16 +332,18 @@ export const executorLayer: Layer.Layer<
               ),
             );
           case "attachment.cleanup":
-            return resourceCleanup.cleanupAttachments(effect.request.attachmentIds).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationEffectExecutionError({
-                    effectId: effect.id,
-                    effectType: effect.request.type,
-                    cause,
-                  }),
-              ),
-            );
+            return resourceCleanup
+              .cleanupAttachments(effect.request.attachmentIds, effect.request.htmlRenderThreadId)
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              );
           case "thread-title.generate":
             return threadTitleRegeneration
               .execute({

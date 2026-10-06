@@ -2765,17 +2765,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           projection.messages.flatMap((message) => message.attachments.map((item) => item.id)),
         ),
       );
-      if (attachmentIds.length > 0) {
-        yield* Ref.update(effects, (existing) => [
-          ...existing,
-          {
-            id: `effect:${command.commandId}:attachment.cleanup`,
-            commandId: command.commandId,
-            threadId: command.threadId,
-            request: { type: "attachment.cleanup", attachmentIds },
-          } satisfies PendingOrchestrationEffectV2,
-        ]);
-      }
+      // Always enqueued: the owner sweep removes every HTML render this thread minted, projected or not.
+      yield* Ref.update(effects, (existing) => [
+        ...existing,
+        {
+          id: `effect:${command.commandId}:attachment.cleanup`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: { type: "attachment.cleanup", attachmentIds, htmlRenderThreadId: thread.id },
+        } satisfies PendingOrchestrationEffectV2,
+      ]);
     }
     for (const childId of subagentsToDelete) {
       yield* dispatchThreadMutation(

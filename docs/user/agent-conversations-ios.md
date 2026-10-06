@@ -10,6 +10,8 @@ Completed turns keep the final answer visible and fold intermediate work into a 
 
 When working details fold away, the conversation keeps the latest answer in view if you were following it. Reading earlier messages does not resume automatic scrolling. If the collapsed work leaves your view beyond the end of the conversation, it returns to the final answer.
 
+Pages an agent publishes as [visual replies](./html-renders.md) appear inline above its answer and stay visible when the turn folds. They use the system colors and follow your appearance setting. Tap the expand button in a page's corner to view it full screen. Links in a page open in your browser. If a page cannot load, tap **Page unavailable** to reload it.
+
 The file count above the composer opens the changed files and available diffs. Copy an answer with its copy button, or hold a message to open its actions. Fork from an answer to continue from that turn in a separate conversation. The thread menu can also fork the latest state and copy the conversation.
 
 Hold the latest message you sent and choose **Edit and restart** when the provider supports restoring that conversation point. Editing preserves attached context. Messages that have already changed workspace files may no longer be editable.

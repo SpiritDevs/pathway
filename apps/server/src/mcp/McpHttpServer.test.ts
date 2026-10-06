@@ -1,3 +1,10 @@
+import { HtmlRender } from "../htmlRender/HtmlRender.ts";
+import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
+import type {
+  OrchestrationV2ThreadShell,
+  OrchestrationV2ThreadProjection,
+} from "@spiritdevs/contracts";
+import * as Deferred from "effect/Deferred";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -39,7 +46,7 @@ const invocation: McpInvocationScope = {
   providerSessionId: "provider-session-mcp-test",
   providerInstanceId: ProviderInstanceId.make("codex"),
   providerDriverKind: ProviderDriverKind.make("codex"),
-  capabilities: new Set(["preview"]),
+  capabilities: new Set(["preview", "html"]),
   issuedAt: 1,
 };
 
@@ -83,6 +90,7 @@ const toWebRequest = (input: string | URL, init?: RequestInit) =>
 const connectClient = async (
   handler: McpHttpServer.PathwayMcpHandler,
   protocolVersion = McpHttpServer.MCP_PROTOCOL_VERSION,
+  scope: McpInvocationScope = invocation,
 ) => {
   const client = new Client(
     { name: "pathway-mcp-test", version: "1.0.0" },
@@ -95,7 +103,7 @@ const connectClient = async (
         },
   );
   const transport = new StreamableHTTPClientTransport(new URL("http://pathway.test/mcp"), {
-    fetch: (input, init) => handler.fetch(toWebRequest(input, init), invocation),
+    fetch: (input, init) => handler.fetch(toWebRequest(input, init), scope),
   });
   await client.connect(transport);
   return { client, close: () => client.close() };
@@ -477,7 +485,8 @@ it.effect("serves every production Pathway toolkit through one endpoint", () =>
       const actual = listed.tools.map(({ name }) => name).sort();
       const expected = [...PATHWAY_MCP_TOOL_NAMES].sort();
 
-      expect(expected).toHaveLength(100);
+      expect(expected).toHaveLength(103);
+      expect(expected).toEqual(expect.arrayContaining(["html_preview", "html_render"]));
       expect(actual).toEqual(
         expect.arrayContaining([
           "device_build_discover",
@@ -664,4 +673,284 @@ it.effect("delivers listen notifications through the v2 client subscription", ()
       yield* Effect.promise(() => notificationReceived);
     }),
   ).pipe(Effect.provide(PreviewAutomationBroker.layer.pipe(Layer.provide(NodeServices.layer)))),
+);
+
+const decodeHtmlFailureResponse = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    result: Schema.Struct({
+      isError: Schema.Boolean,
+      structuredContent: Schema.Struct({ code: Schema.String }),
+      content: Schema.Array(Schema.Unknown),
+    }),
+  }),
+);
+
+const htmlMetadata = {
+  width: 728,
+  contentHeight: 400,
+  capturedHeight: 400,
+  consoleMessages: [],
+  screenshot: { mimeType: "image/png" as const, width: 728, height: 400 },
+};
+const htmlResult = {
+  htmlRender: { attachmentId: "thread-html-attachment", title: "Chart", height: 400 },
+  message: "Shown to the reader above your reply. Add only what the page does not already say.",
+};
+const htmlThreadDependencies = Layer.mock(ThreadManagementService)({
+  getThreadShell: () =>
+    Effect.succeed({
+      id: threadId,
+      deletedAt: null,
+      archivedAt: null,
+      lineage: { relationshipToParent: null },
+    } as unknown as OrchestrationV2ThreadShell),
+  getThreadProjection: () =>
+    Effect.succeed({
+      thread: { id: threadId, deletedAt: null, archivedAt: null },
+      runs: [
+        {
+          id: "html-run",
+          ordinal: 1,
+          status: "running",
+          rootNodeId: "html-root",
+          providerInstanceId: invocation.providerInstanceId,
+        },
+      ],
+    } as unknown as OrchestrationV2ThreadProjection),
+});
+const htmlTestService = Layer.mock(HtmlRender)({
+  preview: () => Effect.succeed({ png: new Uint8Array([1, 2, 3]), metadata: htmlMetadata }),
+  publish: () => Effect.succeed(htmlResult.htmlRender),
+  discardHtmlRender: () => Effect.void,
+});
+
+for (const version of [McpHttpServer.MCP_PROTOCOL_VERSION, "2025-06-18"]) {
+  it.effect(`serves HTML metadata with one native PNG and publish results through ${version}`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const handler = yield* McpHttpServer.makeHtmlTestHandler;
+        const connected = yield* Effect.acquireRelease(
+          Effect.promise(() => connectClient(handler, version)),
+          ({ close }) => Effect.promise(close).pipe(Effect.orDie),
+        );
+        const listed = yield* Effect.promise(() => connected.client.listTools());
+        for (const tool of listed.tools) {
+          expect(tool.annotations).toMatchObject({
+            readOnlyHint: true,
+            destructiveHint: false,
+            openWorldHint: true,
+            idempotentHint: tool.name === "html_preview",
+          });
+          expect(tool.description).toContain("100vh");
+          expect(tool.description).toContain("--background");
+        }
+        const result = yield* Effect.promise(() =>
+          connected.client.callTool({
+            name: "html_preview",
+            arguments: { html: "<html>Chart</html>" },
+          }),
+        );
+        expect(result.isError).toBe(false);
+        expect(result.structuredContent).toEqual(htmlMetadata);
+        expect(result.content).toEqual([
+          { type: "text", text: encodeJson(htmlMetadata) },
+          { type: "image", mimeType: "image/png", data: "AQID" },
+        ]);
+        expect(encodeJson(result.structuredContent)).not.toContain("AQID");
+        const published = yield* Effect.promise(() =>
+          connected.client.callTool({
+            name: "html_render",
+            arguments: { html: "<html>Chart</html>", title: "Chart", height: 400 },
+          }),
+        );
+        expect(published.isError).toBe(false);
+        expect(published.structuredContent).toEqual(htmlResult);
+        expect(published.content).toEqual([{ type: "text", text: encodeJson(htmlResult) }]);
+      }),
+    ).pipe(Effect.provide(Layer.mergeAll(htmlThreadDependencies, htmlTestService))),
+  );
+}
+
+it.effect("lists HTML tools only for credentials holding the html capability", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const handler = yield* McpHttpServer.makeHtmlTestHandler;
+      const connected = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          connectClient(handler, McpHttpServer.MCP_PROTOCOL_VERSION, {
+            ...invocation,
+            capabilities: new Set(["preview"]),
+          }),
+        ),
+        ({ close }) => Effect.promise(close).pipe(Effect.orDie),
+      );
+      const listed = yield* Effect.promise(() => connected.client.listTools());
+      const names = listed.tools.map(({ name }) => name);
+      expect(names).not.toContain("html_preview");
+      expect(names).not.toContain("html_render");
+    }),
+  ).pipe(Effect.provide(Layer.mergeAll(htmlThreadDependencies, htmlTestService))),
+);
+
+it.effect("returns typed HTML failures as native MCP isError", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const handler = yield* McpHttpServer.makeHtmlTestHandler;
+      const response = yield* Effect.promise(() =>
+        handler.fetch(
+          rawRequest(
+            "tools/call",
+            {
+              name: "html_preview",
+              arguments: { html: "<html>Chart</html>" },
+            },
+            { name: "html_preview" },
+          ),
+          { ...invocation, capabilities: new Set(["html"]) },
+        ),
+      );
+      const body = yield* decodeHtmlFailureResponse(yield* Effect.promise(() => response.json()));
+      expect(body.result.isError).toBe(true);
+      expect(body.result.structuredContent.code).toBe("capability_denied");
+      expect(body.result.content).toHaveLength(1);
+    }),
+  ).pipe(Effect.provide(Layer.mergeAll(htmlThreadDependencies, htmlTestService))),
+);
+
+for (const cancellation of ["notification", "disconnect", "shutdown"] as const) {
+  it.effect(`interrupts an HTML preview on ${cancellation} and waits for its finalizer`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const finalized = yield* Deferred.make<void>();
+        const handler = yield* McpHttpServer.makeHtmlTestHandler.pipe(
+          Effect.provide(
+            Layer.mock(HtmlRender)({
+              preview: () =>
+                Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(Effect.never),
+                  Effect.ensuring(Deferred.succeed(finalized, undefined)),
+                ),
+            }),
+          ),
+        );
+        const request = rawRequest(
+          "tools/call",
+          {
+            name: "html_preview",
+            arguments: { html: "<html>Chart</html>" },
+          },
+          { name: "html_preview" },
+        );
+        const controller = new AbortController();
+        const pending = handler
+          .fetch(new Request(request, { signal: controller.signal }), invocation)
+          .catch(() => undefined);
+        yield* Deferred.await(started);
+        if (cancellation === "notification") {
+          yield* Effect.promise(() =>
+            handler.fetch(
+              new Request("http://pathway.test/mcp", {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  "mcp-protocol-version": McpHttpServer.MCP_PROTOCOL_VERSION,
+                  "mcp-method": "notifications/cancelled",
+                },
+                body: encodeJson({
+                  jsonrpc: "2.0",
+                  method: "notifications/cancelled",
+                  params: {
+                    requestId: "raw:1",
+                    _meta: {
+                      [PROTOCOL_VERSION_META_KEY]: McpHttpServer.MCP_PROTOCOL_VERSION,
+                      [CLIENT_INFO_META_KEY]: { name: "test", version: "1" },
+                      [CLIENT_CAPABILITIES_META_KEY]: {},
+                    },
+                  },
+                }),
+              }),
+              invocation,
+            ),
+          );
+        } else if (cancellation === "disconnect") {
+          controller.abort();
+        } else {
+          yield* Effect.promise(() => handler.close());
+        }
+        yield* Deferred.await(finalized);
+        yield* Effect.promise(() => pending);
+      }),
+    ).pipe(Effect.provide(htmlThreadDependencies)),
+  );
+}
+
+it.effect(
+  "discards a saved HTML publication when its MCP request is aborted during authorization",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rechecking = yield* Deferred.make<void>();
+        const discarded = yield* Deferred.make<void>();
+        let saved = false;
+        const handler = yield* McpHttpServer.makeHtmlTestHandler.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(ThreadManagementService)({
+                getThreadShell: () =>
+                  saved
+                    ? Deferred.succeed(rechecking, undefined).pipe(Effect.andThen(Effect.never))
+                    : Effect.succeed({
+                        id: threadId,
+                        deletedAt: null,
+                        archivedAt: null,
+                        lineage: { relationshipToParent: null },
+                      } as unknown as OrchestrationV2ThreadShell),
+                getThreadProjection: () =>
+                  Effect.succeed({
+                    thread: { id: threadId, deletedAt: null, archivedAt: null },
+                    runs: [
+                      {
+                        id: "html-run",
+                        ordinal: 1,
+                        status: "running",
+                        rootNodeId: "html-root",
+                        providerInstanceId: invocation.providerInstanceId,
+                      },
+                    ],
+                  } as unknown as OrchestrationV2ThreadProjection),
+              }),
+              Layer.mock(HtmlRender)({
+                publish: () =>
+                  Effect.sync(() => {
+                    saved = true;
+                    return htmlResult.htmlRender;
+                  }),
+                discardHtmlRender: (reference) =>
+                  Effect.gen(function* () {
+                    expect(reference).toEqual(htmlResult.htmlRender);
+                    yield* Deferred.succeed(discarded, undefined);
+                  }),
+              }),
+            ),
+          ),
+        );
+        const controller = new AbortController();
+        const request = rawRequest(
+          "tools/call",
+          {
+            name: "html_render",
+            arguments: { html: "<html>Chart</html>", title: "Chart", height: 400 },
+          },
+          { name: "html_render" },
+        );
+        const pending = handler
+          .fetch(new Request(request, { signal: controller.signal }), invocation)
+          .catch(() => undefined);
+        yield* Deferred.await(rechecking);
+        controller.abort();
+        yield* Deferred.await(discarded);
+        yield* Effect.promise(() => pending);
+      }),
+    ),
 );

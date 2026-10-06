@@ -31,6 +31,8 @@ export interface McpCredentialRequest {
    * switch changes the next credential, never a live one.
    */
   readonly enableComputerControl?: boolean;
+  /** Grants the inline HTML page tools; only for threads the user reads directly. */
+  readonly enableHtmlRenders?: boolean;
 }
 
 export interface McpIssuedCredential {
@@ -153,6 +155,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         capabilities: new Set<McpInvocationContext.McpCapability>([
           ...McpInvocationContext.ALL_MCP_CAPABILITIES,
           ...(request.enableComputerControl === true ? (["computer"] as const) : []),
+          ...(request.enableHtmlRenders === true ? (["html"] as const) : []),
         ]),
         issuedAt,
       };

@@ -19,9 +19,17 @@ export const ALL_MCP_CAPABILITIES = [
 ] as const;
 /**
  * `computer` is granted per credential, only while the thread's Computer
- * control is on, so it is never part of the default set.
+ * control is on, so it is never part of the default set. `html` (inline HTML
+ * pages) is granted only to threads the user reads directly, never to
+ * subagents or orchestrator workers.
  */
-export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number] | "computer";
+export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number] | "computer" | "html";
+
+/** Inline HTML pages are for the user, so subagents and orchestrator workers never get them. */
+export const threadShowsHtmlRenders = (thread: {
+  readonly lineage: { readonly relationshipToParent: "fork" | "subagent" | null };
+  readonly orchestratorOrigin?: unknown;
+}) => thread.lineage.relationshipToParent !== "subagent" && thread.orchestratorOrigin === undefined;
 
 export interface McpInvocationScope {
   readonly environmentId: EnvironmentId;

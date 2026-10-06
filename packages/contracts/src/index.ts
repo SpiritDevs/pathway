@@ -43,6 +43,7 @@ export * from "./editor.ts";
 export * from "./project.ts";
 export * from "./filesystem.ts";
 export * from "./assets.ts";
+export * from "./htmlRender.ts";
 export * from "./review.ts";
 export * from "./computer.ts";
 export * from "./computerAudit.ts";

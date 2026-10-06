@@ -1,3 +1,10 @@
+import * as HtmlRender from "../htmlRender/HtmlRender.ts";
+import * as HtmlPreviewBrowser from "../htmlRender/HtmlPreviewBrowser.ts";
+import { HtmlPreviewToolkit, HtmlRenderToolkit, HtmlPreviewResult } from "./toolkits/html/tools.ts";
+import {
+  HtmlPreviewToolkitHandlersLive,
+  HtmlRenderToolkitHandlersLive,
+} from "./toolkits/html/handlers.ts";
 import { SimBuildToolkit } from "./toolkits/simBuild/tools.ts";
 import { SimBuildToolkitHandlersLive } from "./toolkits/simBuild/handlers.ts";
 import * as DeviceService from "../device/DeviceService.ts";
@@ -188,6 +195,7 @@ const McpAuthMiddlewareLive = HttpRouter.middleware<{
 }>()(makeMcpAuthMiddleware).layer;
 
 interface EncodedToolResult {
+  readonly isFailure?: boolean;
   readonly encodedResult: object | string | number | boolean | null;
 }
 
@@ -264,6 +272,8 @@ const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
   }).pipe(Effect.as(result));
 };
 
+const isHtmlPreviewResult = Schema.is(HtmlPreviewResult);
+
 const isDeviceToolScreenshotResult = Schema.is(DeviceToolScreenshotResult);
 
 const invokeBuiltTool = (
@@ -272,6 +282,7 @@ const invokeBuiltTool = (
   payload: object,
   invocation: McpInvocationContext.McpInvocationScope,
   runtimeContext: Context.Context<never>,
+  signal?: AbortSignal,
 ): Promise<CallToolResult> =>
   Effect.runPromiseWith(runtimeContext)(
     built.handle(name, payload).pipe(
@@ -282,7 +293,35 @@ const invokeBuiltTool = (
       Effect.tapCause(Effect.logError),
       Effect.matchCause({
         onFailure: toolFailure,
-        onSuccess: ({ encodedResult }) => {
+        onSuccess: ({ encodedResult, isFailure }) => {
+          if ((name === "html_preview" || name === "html_render") && isFailure) {
+            return {
+              isError: true,
+              ...(typeof encodedResult === "object" && encodedResult !== null
+                ? { structuredContent: encodedResult }
+                : {}),
+              content: [{ type: "text" as const, text: JSON.stringify(encodedResult) }],
+            };
+          }
+          if (name === "html_preview" && isHtmlPreviewResult(encodedResult)) {
+            const { screenshot, ...preview } = encodedResult as typeof HtmlPreviewResult.Type;
+            const metadata = {
+              ...preview,
+              screenshot: {
+                mimeType: screenshot.mimeType,
+                width: screenshot.width,
+                height: screenshot.height,
+              },
+            };
+            return {
+              isError: false,
+              structuredContent: metadata,
+              content: [
+                { type: "text" as const, text: JSON.stringify(metadata) },
+                { type: "image" as const, mimeType: screenshot.mimeType, data: screenshot.data },
+              ],
+            };
+          }
           if (name === "device_screenshot" && isDeviceToolScreenshotResult(encodedResult)) {
             const { screenshot, device } = encodedResult;
             const metadata = {
@@ -310,6 +349,7 @@ const invokeBuiltTool = (
         },
       }),
     ),
+    signal === undefined ? undefined : { signal },
   );
 
 const inspectIssueAttachment = Effect.fn("McpHttpServer.inspectIssueAttachment")(function* (
@@ -813,8 +853,11 @@ const cancelledRequestIdOf = (body: unknown) => {
 
 const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler => {
   const customSubscriptions = new Map<string, () => void>();
-  /** Running Computer calls by session and JSON-RPC id, so a cancel can interrupt one. */
-  const computerCalls = new Map<string, AbortController>();
+  /**
+   * Running Computer and HTML calls by session and JSON-RPC id, so a cancel can interrupt one. The
+   * stateless SDK serves a cancel notification on a fresh server, so only this map reaches the call.
+   */
+  const cancellableCalls = new Map<string, AbortController>();
   const registeredTools = options.toolkits.flatMap((built) =>
     Object.values(built.tools).map((tool) => ({
       built,
@@ -856,6 +899,11 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
       });
       for (const registration of registeredTools) {
         const { annotations, built, description, inputSchema, tool } = registration;
+        if (
+          (tool.name === "html_preview" || tool.name === "html_render") &&
+          !invocation.capabilities.has("html")
+        )
+          continue;
         server.registerTool<typeof inputSchema, typeof inputSchema>(
           tool.name,
           {
@@ -863,9 +911,24 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
             inputSchema,
             annotations,
           },
-          (payload) =>
-            (tool.name === "issues_get" || tool.name === "issues_get_attachment") &&
-            options.issueAttachmentContext !== undefined
+          (payload, extra) => {
+            if (tool.name === "html_preview" || tool.name === "html_render") {
+              const key = invocationSubscriptionKey(invocation, extra.mcpReq.id);
+              const cancel = new AbortController();
+              cancellableCalls.set(key, cancel);
+              return invokeBuiltTool(
+                built,
+                tool.name,
+                payload,
+                invocation,
+                options.runtimeContext,
+                AbortSignal.any([extra.mcpReq.signal, cancel.signal]),
+              ).finally(() => {
+                if (cancellableCalls.get(key) === cancel) cancellableCalls.delete(key);
+              });
+            }
+            return (tool.name === "issues_get" || tool.name === "issues_get_attachment") &&
+              options.issueAttachmentContext !== undefined
               ? invokeIssueTool(
                   built,
                   tool.name,
@@ -874,7 +937,8 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
                   options.issueAttachmentContext,
                   options.runtimeContext,
                 )
-              : invokeBuiltTool(built, tool.name, payload, invocation, options.runtimeContext),
+              : invokeBuiltTool(built, tool.name, payload, invocation, options.runtimeContext);
+          },
         );
       }
       if (options.computer !== undefined && invocation.capabilities.has("computer")) {
@@ -1223,10 +1287,10 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
           }
         }
       }
-      // Either protocol generation may cancel a Computer call it started.
+      // Either protocol generation may cancel a Computer or HTML call it started.
       const cancelledId = cancelledRequestIdOf(parsedBody);
       if (cancelledId !== undefined) {
-        computerCalls.get(invocationSubscriptionKey(invocation, cancelledId))?.abort();
+        cancellableCalls.get(invocationSubscriptionKey(invocation, cancelledId))?.abort();
       }
       const computerCall = classified.kind === "reject" ? undefined : toolCallOf(parsedBody);
       if (options.computer !== undefined && computerCall !== undefined) {
@@ -1237,7 +1301,7 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
           const key = invocationSubscriptionKey(invocation, computerCall.id);
           const cancel = new AbortController();
           const abort = () => cancel.abort();
-          computerCalls.set(key, cancel);
+          cancellableCalls.set(key, cancel);
           request.signal.addEventListener("abort", abort, { once: true });
           if (request.signal.aborted) abort();
           let result: Effect.Success<ReturnType<ComputerMcpTools["call"]>>;
@@ -1256,7 +1320,7 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
             return jsonRpcError(computerCall.id, -32800, "Request cancelled.");
           } finally {
             request.signal.removeEventListener("abort", abort);
-            if (computerCalls.get(key) === cancel) computerCalls.delete(key);
+            if (cancellableCalls.get(key) === cancel) cancellableCalls.delete(key);
           }
           if (result !== undefined) {
             return classified.kind === "modern"
@@ -1283,7 +1347,7 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
     },
     close: async () => {
       for (const close of customSubscriptions.values()) close();
-      for (const call of computerCalls.values()) call.abort();
+      for (const call of cancellableCalls.values()) call.abort();
       await sdk.close();
     },
     notify: sdk.notify,
@@ -1323,6 +1387,8 @@ const OrchestratorMcpServiceLive = OrchestratorMcpService.layer.pipe(
 );
 
 const ToolkitHandlersLive = Layer.mergeAll(
+  HtmlPreviewToolkitHandlersLive,
+  HtmlRenderToolkitHandlersLive,
   SimBuildToolkitHandlersLive,
   DeviceStandardToolkitHandlersLive,
   DeviceScreenshotToolkitHandlersLive,
@@ -1336,6 +1402,7 @@ const ToolkitHandlersLive = Layer.mergeAll(
 );
 
 const McpToolkitServicesLive = Layer.mergeAll(
+  HtmlRender.layer.pipe(Layer.provide(HtmlPreviewBrowser.layer)),
   DelegatedBusiness.layer,
   CloudProjectIcons.layer,
   OrchestratorMcpServiceLive,
@@ -1348,6 +1415,8 @@ const McpToolkitServicesLive = Layer.mergeAll(
  * Test handlers use this same effect so a toolkit cannot disappear from production unnoticed.
  */
 const buildPathwayMcpToolkits = Effect.gen(function* () {
+  const htmlPreview = (yield* HtmlPreviewToolkit) as unknown as BuiltToolkit;
+  const htmlRender = (yield* HtmlRenderToolkit) as unknown as BuiltToolkit;
   const simBuild = (yield* SimBuildToolkit) as unknown as BuiltToolkit;
   const standardPreview = (yield* PreviewStandardToolkit) as unknown as BuiltToolkit;
   const snapshot = (yield* PreviewSnapshotToolkit) as unknown as BuiltToolkit;
@@ -1360,6 +1429,8 @@ const buildPathwayMcpToolkits = Effect.gen(function* () {
   const deviceScreenshots = (yield* DeviceScreenshotToolkit) as unknown as BuiltToolkit;
   return {
     toolkits: [
+      htmlPreview,
+      htmlRender,
       standardPreview,
       issues,
       projects,
@@ -1373,6 +1444,15 @@ const buildPathwayMcpToolkits = Effect.gen(function* () {
     snapshot,
   };
 });
+
+export const makeHtmlTestHandler = Effect.gen(function* () {
+  const preview = (yield* HtmlPreviewToolkit) as unknown as BuiltToolkit;
+  const render = (yield* HtmlRenderToolkit) as unknown as BuiltToolkit;
+  const runtimeContext = yield* Effect.context<never>();
+  return yield* makeScopedPathwayMcpHandler({ toolkits: [preview, render], runtimeContext });
+}).pipe(
+  Effect.provide(Layer.mergeAll(HtmlPreviewToolkitHandlersLive, HtmlRenderToolkitHandlersLive)),
+);
 
 export const makePreviewTestHandler = Effect.gen(function* () {
   yield* PreviewAutomationBroker.PreviewAutomationBroker;
@@ -1404,17 +1484,21 @@ export const makeCoreToolkitsTestHandler = Effect.gen(function* () {
   yield* OrchestratorMcpService.OrchestratorMcpService;
   yield* WorktreeMcpService.WorktreeMcpService;
   const preview = (yield* PreviewStandardToolkit) as unknown as BuiltToolkit;
+  const htmlPreview = (yield* HtmlPreviewToolkit) as unknown as BuiltToolkit;
+  const htmlRender = (yield* HtmlRenderToolkit) as unknown as BuiltToolkit;
   const orchestrator = (yield* OrchestratorToolkit) as unknown as BuiltToolkit;
   const worktree = (yield* WorktreeToolkit) as unknown as BuiltToolkit;
   const runtimeContext = yield* Effect.context<never>();
   return yield* makeScopedPathwayMcpHandler({
-    toolkits: [preview, orchestrator, worktree],
+    toolkits: [preview, htmlPreview, htmlRender, orchestrator, worktree],
     runtimeContext,
   });
 }).pipe(
   Effect.provide(
     Layer.mergeAll(
       PreviewStandardToolkitHandlersLive,
+      HtmlPreviewToolkitHandlersLive,
+      HtmlRenderToolkitHandlersLive,
       OrchestratorToolkitHandlersLive,
       WorktreeToolkitHandlersLive,
       OrchestratorMcpService.layer,

@@ -1,3 +1,4 @@
+import { compactHtmlToolProjection } from "@spiritdevs/shared/toolOutput";
 import { USAGE_RECOVERY_MESSAGE_PREFIX } from "../../providerUsage/usageRecoveryPolicy.ts";
 import {
   BUNDLED_MODEL_MANIFEST,
@@ -886,6 +887,8 @@ export const CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS: ReadonlyArray<string> =
   "preview_status",
   "preview_snapshot",
   "preview_wait_for",
+  "html_preview",
+  "html_render",
   "issues_list",
   "issues_get",
   "issues_get_attachment",
@@ -1721,10 +1724,12 @@ type ClaudeNativeToolOutput =
   | {
       readonly type: "content_block";
       readonly value: ClaudeToolResultOutput;
+      readonly envelope?: unknown;
     }
   | {
       readonly type: "structured_tool_use_result";
       readonly value: unknown;
+      readonly envelope?: unknown;
       readonly fallbackValue?: ClaudeToolResultOutput;
     };
 
@@ -1734,16 +1739,20 @@ function claudeNativeToolOutputFromToolResult(
   toolResult: ClaudeToolResultContentBlock,
 ): ClaudeNativeToolOutput {
   const value = outputFromClaudeToolResult(toolResult);
-  return value === undefined ? NO_CLAUDE_NATIVE_TOOL_OUTPUT : { type: "content_block", value };
+  return value === undefined
+    ? NO_CLAUDE_NATIVE_TOOL_OUTPUT
+    : { type: "content_block", value, envelope: toolResult };
 }
 
 function claudeNativeToolOutputFromStructuredResult(input: {
   readonly structuredOutput: unknown;
+  readonly envelope?: unknown;
   readonly fallbackValue?: ClaudeToolResultOutput;
 }): ClaudeNativeToolOutput {
   return {
     type: "structured_tool_use_result",
     value: input.structuredOutput,
+    envelope: input.envelope,
     ...(input.fallbackValue === undefined ? {} : { fallbackValue: input.fallbackValue }),
   };
 }
@@ -1758,6 +1767,23 @@ function claudeNativeToolOutputValue(output: ClaudeNativeToolOutput): unknown | 
     default:
       return assertNever(output);
   }
+}
+
+export function projectClaudeDynamicToolCall(input: {
+  readonly toolName: string;
+  readonly input: unknown;
+  readonly output?: unknown;
+  readonly fallbackOutput?: unknown;
+}) {
+  const compacted = compactHtmlToolProjection(input);
+  return compacted.toolName === "pathway.html_render" ||
+    compacted.toolName === "pathway.html_preview"
+    ? compacted
+    : {
+        toolName: input.toolName,
+        input: input.input,
+        ...(input.fallbackOutput === undefined ? {} : { output: input.fallbackOutput }),
+      };
 }
 
 function claudeNativeToolOutputText(output: ClaudeNativeToolOutput): string {
@@ -2069,6 +2095,7 @@ function claudeToolResultEntriesFromMessage(message: SDKMessage): ReadonlyArray<
           ? claudeNativeToolOutputFromToolResult(toolResult)
           : claudeNativeToolOutputFromStructuredResult({
               structuredOutput,
+              envelope: { ...toolResult, structuredContent: structuredOutput },
               fallbackValue: outputFromClaudeToolResult(toolResult),
             }),
     })),
@@ -3113,9 +3140,15 @@ export function makeClaudeAdapterV2(
                   : {
                       ...itemBase,
                       type: "dynamic_tool",
-                      toolName: input.toolName,
-                      input: claudeNativeToolInputValue(input.toolInput),
-                      ...(outputValue === undefined ? {} : { output: outputValue }),
+                      ...projectClaudeDynamicToolCall({
+                        toolName: input.toolName,
+                        input: claudeNativeToolInputValue(input.toolInput),
+                        output:
+                          input.output.type === "none"
+                            ? undefined
+                            : (input.output.envelope ?? outputValue),
+                        fallbackOutput: outputValue,
+                      }),
                     };
           return { node, turnItem };
         };

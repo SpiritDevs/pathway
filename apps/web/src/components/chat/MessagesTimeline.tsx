@@ -33,6 +33,7 @@ import type { EnvironmentThreadHistory } from "@spiritdevs/client-runtime/state/
 import { isUsageLimitFailure } from "@spiritdevs/client-runtime/state/usage-limit-recovery";
 import { resolveChatListAnchoredEndSpace } from "@spiritdevs/shared/chatList";
 import { buildOrchestrationErrorFixPrompt } from "@spiritdevs/shared/orchestrationV2Timeline";
+import type { HtmlRenderReference } from "@spiritdevs/shared/htmlRender";
 import {
   createContext,
   Fragment,
@@ -102,6 +103,7 @@ import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { formatAttachmentSizeLabel } from "../../lib/attachmentSize";
 import { ProposedPlanCard } from "./ProposedPlanCard";
+import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
 import { keepTimelineEndVisibleAfterOverlayGrowth } from "./timelineScrollAnchoring";
@@ -245,6 +247,7 @@ interface TimelineRowSharedState {
   onRetryUserMessage: (messageId: MessageId, text: string) => void;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
+  onHtmlRenderExpand: (htmlRender: HtmlRenderReference) => void;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenFilePreview: (relativePath: string, line?: number) => void;
   onOpenIssueContext: (context: IssueContextSelection) => void;
@@ -378,6 +381,7 @@ interface MessagesTimelineProps {
   onRevertUserMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
+  onHtmlRenderExpand: (htmlRender: HtmlRenderReference) => void;
   activeThreadEnvironmentId: EnvironmentId;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
@@ -460,6 +464,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onRevertUserMessage,
   isRevertingCheckpoint,
   onImageExpand,
+  onHtmlRenderExpand,
   activeThreadEnvironmentId,
   markdownCwd,
   resolvedTheme,
@@ -987,6 +992,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRetryUserMessage: retryUserMessage,
       onRevertUserMessage,
       onImageExpand,
+      onHtmlRenderExpand,
       onOpenTurnDiff,
       onOpenFilePreview,
       onOpenIssueContext,
@@ -1042,6 +1048,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       retryUserMessage,
       onRevertUserMessage,
       onImageExpand,
+      onHtmlRenderExpand,
       onOpenTurnDiff,
       onOpenFilePreview,
       onOpenIssueContext,
@@ -1532,7 +1539,8 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
                 !row.showAssistantMeta) ||
               row.kind === "work" ||
               row.kind === "event" ||
-              row.kind === "attempt-fold"
+              row.kind === "attempt-fold" ||
+              row.kind === "html-render"
             ? "pb-2"
             : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
@@ -1550,6 +1558,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
         <AssistantTimelineRow row={row} />
       ) : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
+      {row.kind === "html-render" ? <HtmlRenderTimelineRow row={row} /> : null}
       {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "waiting-background" ? <WaitingBackgroundTimelineRow row={row} /> : null}
@@ -2240,6 +2249,22 @@ function AssistantCopyButton({ row }: { row: Extract<TimelineRow, { kind: "messa
   }
 
   return <MessageCopyButton text={assistantCopyState.text ?? ""} variant="ghost" />;
+}
+
+function HtmlRenderTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "html-render" }> }) {
+  const ctx = use(TimelineRowCtx);
+
+  return (
+    <div className="min-w-0 px-1">
+      <HtmlRenderFrame
+        // A reused row must not keep another page's frozen frame.
+        key={`${ctx.activeThreadEnvironmentId}:${row.htmlRender.attachmentId}`}
+        environmentId={ctx.activeThreadEnvironmentId}
+        htmlRender={row.htmlRender}
+        onExpand={ctx.onHtmlRenderExpand}
+      />
+    </div>
+  );
 }
 
 function ProposedPlanTimelineRow({

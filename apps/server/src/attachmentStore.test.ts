@@ -9,7 +9,9 @@ import {
   attachmentMetadataMatchesStoredPath,
   createAttachmentId,
   createIssueAttachmentId,
+  createPendingAttachmentId,
   attachmentRelativePath,
+  isThreadHtmlRenderAttachmentId,
   parseIssueSegmentFromAttachmentId,
   createDeterministicAttachmentId,
   planAttachmentClaim,
@@ -213,5 +215,29 @@ describe("attachmentStore", () => {
     } finally {
       NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("HTML render ownership", () => {
+  it("recognizes only the html ids minted for exactly this thread", () => {
+    const own = createAttachmentId("thread-a", "html")!;
+    expect(isThreadHtmlRenderAttachmentId("thread-a", own)).toBe(true);
+    for (const attachmentId of [
+      createAttachmentId("thread-a-b", "html")!,
+      createAttachmentId("thread-b", "html")!,
+      createAttachmentId("thread-a", "png")!,
+      createAttachmentId("thread-a")!,
+      createIssueAttachmentId("thread-a")!,
+      own.toUpperCase(),
+      `${own}.html`,
+      `../${own}`,
+      `${own}-html`,
+    ]) {
+      expect(isThreadHtmlRenderAttachmentId("thread-a", attachmentId), attachmentId).toBe(false);
+    }
+    // A thread literally named "pending" can never claim pending uploads.
+    expect(isThreadHtmlRenderAttachmentId("pending", createPendingAttachmentId("html"))).toBe(
+      false,
+    );
   });
 });

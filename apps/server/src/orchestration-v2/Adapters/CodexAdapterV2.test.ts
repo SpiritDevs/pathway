@@ -5555,3 +5555,81 @@ describe("CodexAdapterV2 Computer elicitation stop guard", () => {
     ),
   );
 });
+
+describe("Codex HTML MCP projection", () => {
+  const htmlResult = {
+    htmlRender: { attachmentId: "thread-html-attachment", title: "Chart", height: 400 },
+    message: "Shown",
+  };
+  const rawHtml = "<html><body>Chart</body></html>";
+
+  // Codex's wire result has no isError: an MCP isError result arrives as status "failed".
+  for (const status of ["completed", "failed"] as const) {
+    it(`compacts the complete native envelope with status ${status}`, () => {
+      const item = projectCodexDynamicToolItem({
+        type: "mcpToolCall",
+        id: "html-call",
+        server: "pathway",
+        tool: "html_render",
+        status,
+        arguments: { html: rawHtml, title: "Chart", height: 400 },
+        result: {
+          structuredContent: htmlResult,
+          content: [{ type: "text", text: JSON.stringify(htmlResult) }],
+        },
+      });
+      assert.equal(item.toolName, "pathway.html_render");
+      assert.deepEqual(item.input, {
+        title: "Chart",
+        height: 400,
+        htmlBytes: new TextEncoder().encode(rawHtml).byteLength,
+      });
+      assert.deepEqual(
+        item.output,
+        status === "failed" ? { isError: true, message: "Shown" } : htmlResult,
+      );
+      assert.notInclude(JSON.stringify(item), rawHtml);
+    });
+  }
+  it("keeps a failed preview's message", () => {
+    const failure = {
+      _tag: "OrchestratorMcpFailure",
+      code: "orchestration_error",
+      message: "Chromium is not installed.",
+    };
+    const item = projectCodexDynamicToolItem({
+      type: "mcpToolCall",
+      id: "preview-call",
+      server: "pathway",
+      tool: "html_preview",
+      status: "failed",
+      arguments: { html: rawHtml },
+      result: {
+        structuredContent: failure,
+        content: [{ type: "text", text: JSON.stringify(failure) }],
+      },
+    });
+    assert.deepEqual(item.output, { isError: true, message: "Chromium is not installed." });
+  });
+  it("retains native failure and strips preview PNG data", () => {
+    const item = projectCodexDynamicToolItem({
+      type: "mcpToolCall",
+      id: "preview-call",
+      server: "pathway",
+      tool: "html_preview",
+      status: "failed",
+      arguments: { html: rawHtml },
+      result: {
+        content: [{ type: "image", mimeType: "image/png", data: "secret-base64" }],
+        structuredContent: {
+          width: 728,
+          contentHeight: 400,
+          capturedHeight: 400,
+          screenshot: { mimeType: "image/png", width: 728, height: 400, data: "secret-base64" },
+        },
+      },
+    });
+    assert.equal(item.status, "failed");
+    assert.notInclude(JSON.stringify(item), "secret-base64");
+  });
+});

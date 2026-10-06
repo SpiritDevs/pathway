@@ -137,6 +137,10 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
   // origins are not known when this response policy is created, so restrict
   // connections by the network schemes the client supports instead of by host.
   const connectSources = ["'self'", "http:", "https:", "ws:", "wss:"];
+  // Agent HTML renders load in iframes from the owning environment's asset
+  // origin, which is just as unknown here. The iframe sandbox, not this
+  // policy, is what isolates those pages. Cloudflare's challenge frame is https.
+  const frameSources = ["'self'", "http:", "https:"];
 
   return [
     "default-src 'self'",
@@ -146,7 +150,7 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
     "style-src 'self' 'unsafe-inline'",
     `font-src 'self' ${input.scheme}: data:`,
     "worker-src 'self' blob:",
-    "frame-src 'self' https://challenges.cloudflare.com",
+    `frame-src ${frameSources.join(" ")}`,
     "form-action 'self'",
   ].join("; ");
 }
