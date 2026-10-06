@@ -29,19 +29,6 @@ import {
 import { useQuickCreateProject } from "./useProjectWorkspaceCommands";
 import type { WorkspaceProject } from "./workspaceProjects.logic";
 
-// #region DEBUG
-function debugPendingProjectSetup(
-  event: string,
-  fields: Readonly<Record<string, string | number | boolean | null>>,
-): void {
-  void fetch("/api/__debug/cloud-sync", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ hypothesis: "H4", event, fields }),
-  }).catch(() => undefined);
-}
-// #endregion DEBUG
-
 export interface PendingProjectSetupProps {
   readonly project: WorkspaceProject;
 }
@@ -94,31 +81,17 @@ export function PendingProjectSetup({ project }: PendingProjectSetupProps) {
     if (!canSubmit || companyId === undefined || project.cloudProjectId === null) return;
     setSubmitting(true);
     setWriteError(null);
-    // #region DEBUG
-    debugPendingProjectSetup("pending-setup-submitted", {
-      environmentSelected: selectedEnvironmentId !== null,
-      checkoutAlreadyCreated: createdCheckout !== null,
-    });
-    // #endregion DEBUG
     try {
       let checkout = createdCheckout;
       if (checkout === null) {
         if (plan.kind !== "create" || selectedEnvironmentId === null) return;
         const created = await createProject({ environmentId: selectedEnvironmentId, plan });
         if (!created.ok) {
-          // #region DEBUG
-          debugPendingProjectSetup("pending-setup-create-failed", {
-            messageAvailable: created.message !== null,
-          });
-          // #endregion DEBUG
           setWriteError(created.message);
           return;
         }
         checkout = created.value;
         setCreatedCheckout(checkout);
-        // #region DEBUG
-        debugPendingProjectSetup("pending-setup-checkout-created", {});
-        // #endregion DEBUG
       }
 
       await control.ensureEnvironmentProject({
@@ -132,15 +105,7 @@ export function PendingProjectSetup({ project }: PendingProjectSetupProps) {
         },
       });
       setComplete(true);
-      // #region DEBUG
-      debugPendingProjectSetup("pending-setup-completed", {});
-      // #endregion DEBUG
     } catch (error) {
-      // #region DEBUG
-      debugPendingProjectSetup("pending-setup-link-failed", {
-        errorType: error instanceof Error ? error.name : "unknown",
-      });
-      // #endregion DEBUG
       setWriteError(error instanceof Error ? error.message : "The checkout could not be attached.");
     } finally {
       setSubmitting(false);

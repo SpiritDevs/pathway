@@ -31,9 +31,6 @@ import {
   staticAndDevRouteLayer,
   browserApiCorsLayer,
   httpCompressionLayer,
-  // #region DEBUG
-  cloudSyncDebugRouteLayer,
-  // #endregion DEBUG
 } from "./http.ts";
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
@@ -702,9 +699,6 @@ export const makeRoutesLayer = Layer.mergeAll(
         Layer.provide(environmentAuthenticatedAuthLayer),
       ),
       otlpTracesProxyRouteLayer,
-      // #region DEBUG
-      cloudSyncDebugRouteLayer,
-      // #endregion DEBUG
       assetRouteLayer,
       attachmentUploadRouteLayer,
       deviceHubProxyRouteLayer,

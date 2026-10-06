@@ -20,20 +20,6 @@ import { ConvexError } from "convex/values";
 import { newCompanyDomainId } from "./companyAdmin";
 import type { ConvexArgs, ConvexAuthTokenFetcher } from "./syncTransport";
 
-// #region DEBUG
-function debugEnvironmentProjectAssignment(
-  hypothesis: "H10" | "H11",
-  event: string,
-  fields: Readonly<Record<string, string | number | boolean | null>>,
-): void {
-  void fetch("/api/__debug/cloud-sync", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ hypothesis, event, fields }),
-  }).catch(() => undefined);
-}
-// #endregion DEBUG
-
 export const DEFAULT_ENVIRONMENT_COMMAND_TTL_MS = 24 * 60 * 60 * 1_000;
 export const ENVIRONMENT_COMMAND_LIST_LIMIT = 500;
 
@@ -544,16 +530,6 @@ export function makeEnvironmentControlClient(options: {
     createCompanyProject: (args) =>
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.createCompanyProject, args),
     ensureEnvironmentProject: ({ companyId, cloudProjectId, matchRepository, project }) => {
-      // #region DEBUG
-      const startedAt = performance.now();
-      debugEnvironmentProjectAssignment("H10", "ensure-client-started", {
-        transport: useHttpMutation ? "http" : "websocket",
-        hasCloudProjectId: cloudProjectId !== undefined,
-        hasRepositoryIdentity: project.repositoryIdentity !== undefined,
-        hasWorkspaceRoot: project.workspaceRoot !== null,
-        matchRepository: matchRepository ?? null,
-      });
-      // #endregion DEBUG
       return cloudProjectMutationResult<string | null>(
         ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.ensureEnvironmentProject,
         {
@@ -568,28 +544,6 @@ export function makeEnvironmentControlClient(options: {
             : { internalWorkspaceRoot: project.internalWorkspaceRoot }),
           repositoryIdentity: project.repositoryIdentity ?? null,
           name: project.title,
-        },
-      ).then(
-        (cloudProjectId) => {
-          // #region DEBUG
-          debugEnvironmentProjectAssignment("H10", "ensure-client-finished", {
-            durationMs: Math.round(performance.now() - startedAt),
-          });
-          // #endregion DEBUG
-          return cloudProjectId;
-        },
-        (cause: unknown) => {
-          // #region DEBUG
-          debugEnvironmentProjectAssignment("H11", "ensure-client-failed", {
-            durationMs: Math.round(performance.now() - startedAt),
-            errorName: cause instanceof Error ? cause.name : typeof cause,
-            errorCode:
-              typeof cause === "object" && cause !== null && "code" in cause
-                ? String(cause.code).slice(0, 80)
-                : null,
-          });
-          // #endregion DEBUG
-          throw cause;
         },
       );
     },

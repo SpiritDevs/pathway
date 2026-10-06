@@ -99,20 +99,6 @@ const SnapShotCoordinator = lazy(() =>
   })),
 );
 
-// #region DEBUG
-function debugAuthGate(
-  hypothesis: "H1" | "H2",
-  event: string,
-  fields: Readonly<Record<string, string | number | boolean | null>>,
-): void {
-  void fetch("/api/__debug/cloud-sync", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ hypothesis, event, fields }),
-  }).catch(() => undefined);
-}
-// #endregion DEBUG
-
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
     if (
@@ -240,68 +226,12 @@ function ConfiguredClerkAuthGate({ pathname }: { readonly pathname: string }) {
     pathname,
   });
 
-  // #region DEBUG
-  const gateEffectCount = useRef(0);
-
   useEffect(() => {
-    debugAuthGate("H2", "auth-state-committed", {
-      gateState,
-      isLoaded,
-      isSignedIn: isSignedIn ?? null,
-      onboardingComplete: onboardingComplete ?? null,
-      pathname,
-    });
-  }, [gateState, isLoaded, isSignedIn, onboardingComplete, pathname]);
-  // #endregion DEBUG
-
-  useEffect(() => {
-    // #region DEBUG
-    gateEffectCount.current += 1;
-    const effectCount = gateEffectCount.current;
-    const destination =
-      gateState === "redirect" ? "/login" : gateState === "onboarding" ? "/onboarding" : null;
-    debugAuthGate("H1", "redirect-effect-entered", {
-      destination,
-      effectCount,
-      gateState,
-      pathname,
-    });
-    // #endregion DEBUG
     if (gateState === "redirect") {
-      // #region DEBUG
-      void navigate({ replace: true, to: "/login" }).then(
-        () =>
-          debugAuthGate("H1", "navigation-settled", {
-            destination: "/login",
-            effectCount,
-            pathname,
-          }),
-        () =>
-          debugAuthGate("H1", "navigation-rejected", {
-            destination: "/login",
-            effectCount,
-            pathname,
-          }),
-      );
-      // #endregion DEBUG
+      void navigate({ replace: true, to: "/login" }).catch(() => undefined);
     }
     if (gateState === "onboarding") {
-      // #region DEBUG
-      void navigate({ replace: true, to: "/onboarding" }).then(
-        () =>
-          debugAuthGate("H1", "navigation-settled", {
-            destination: "/onboarding",
-            effectCount,
-            pathname,
-          }),
-        () =>
-          debugAuthGate("H1", "navigation-rejected", {
-            destination: "/onboarding",
-            effectCount,
-            pathname,
-          }),
-      );
-      // #endregion DEBUG
+      void navigate({ replace: true, to: "/onboarding" }).catch(() => undefined);
     }
   }, [gateState, navigate]);
 
