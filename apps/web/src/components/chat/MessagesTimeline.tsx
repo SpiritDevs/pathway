@@ -123,6 +123,7 @@ import {
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
   resolveActiveAttachedPullRequestItemIds,
+  EMPTY_ATTACHED_PULL_REQUEST_ITEM_IDS,
   replaceEditableUserMessageText,
   splitEditableUserMessageText,
   parseAsyncQuestionReply,
@@ -738,13 +739,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const supportsPullRequestAttachments =
     threadServerConfig?.environment.capabilities.threadPullRequestAttachments === true;
-  const resolvedActiveAttachedPullRequestItemIds = useMemo(
-    () => resolveActiveAttachedPullRequestItemIds(rows),
-    [rows],
-  );
+  const previousAttachedPullRequestItemIds = useRef(EMPTY_ATTACHED_PULL_REQUEST_ITEM_IDS);
+  const resolvedActiveAttachedPullRequestItemIds = useMemo(() => {
+    const next = resolveActiveAttachedPullRequestItemIds(
+      rows,
+      previousAttachedPullRequestItemIds.current,
+    );
+    previousAttachedPullRequestItemIds.current = next;
+    return next;
+  }, [rows]);
   const activeAttachedPullRequestItemIds = supportsPullRequestAttachments
     ? resolvedActiveAttachedPullRequestItemIds
-    : new Set<string>();
+    : EMPTY_ATTACHED_PULL_REQUEST_ITEM_IDS;
   const detachPullRequest = useAtomCommand(threadEnvironment.detachPullRequest, {
     reportFailure: false,
   });

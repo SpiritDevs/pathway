@@ -9,6 +9,7 @@ import {
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   resolveActiveAttachedPullRequestItemIds,
+  EMPTY_ATTACHED_PULL_REQUEST_ITEM_IDS,
   replaceEditableUserMessageText,
   splitEditableUserMessageText,
   resolveTimelineToolPresentation,
@@ -41,6 +42,27 @@ function sourceControlRow(input: {
 }
 
 describe("active pull request attachment", () => {
+  it("shares empty state and preserves membership across streamed row updates", () => {
+    expect(resolveActiveAttachedPullRequestItemIds([])).toBe(EMPTY_ATTACHED_PULL_REQUEST_ITEM_IDS);
+    const attached = sourceControlRow({
+      id: "attach-stable",
+      action: "attached",
+      number: 1,
+      url: "https://github.com/acme/repo/pull/1",
+    });
+    const first = resolveActiveAttachedPullRequestItemIds([attached]);
+    expect(resolveActiveAttachedPullRequestItemIds([{ ...attached }], first)).toBe(first);
+    const detached = sourceControlRow({
+      id: "detach-stable",
+      action: "detached",
+      number: 1,
+      url: "https://github.com/acme/repo/pull/1",
+    });
+    expect(resolveActiveAttachedPullRequestItemIds([attached, detached], first)).toBe(
+      EMPTY_ATTACHED_PULL_REQUEST_ITEM_IDS,
+    );
+  });
+
   it("does not clear a newer attachment when a stale detach arrives", () => {
     const first = sourceControlRow({
       id: "attach-1",
