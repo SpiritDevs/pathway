@@ -133,8 +133,8 @@ describe("deleted issue compatibility", () => {
       updatedAt: Date.UTC(2026, 0, 4),
       deletedAt: Date.UTC(2026, 0, 4),
     };
-    const readModel = syncedIssueDomainFromEntities([
-      {
+    const audit = Option.getOrThrow(
+      issueEntityCodec("issueAuditEvent")!.decode({
         entityKind: "issueAuditEvent",
         id: "audit-bin-1",
         issueId: deletedIssue.id,
@@ -143,8 +143,9 @@ describe("deleted issue compatibility", () => {
         payload: { deletedIssue },
         operationId: null,
         createdAt: Date.UTC(2026, 0, 4),
-      },
-    ]);
+      }),
+    );
+    const readModel = syncedIssueDomainFromEntities([audit]);
 
     expect(readModel.issues).toHaveLength(1);
     expect(issueFromReplica(readModel.issues[0]!).deletedAt).toBe("2026-01-04T00:00:00.000Z");

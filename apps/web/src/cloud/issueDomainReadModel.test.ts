@@ -4,6 +4,7 @@ import { IssueId } from "@spiritdevs/contracts";
 import type { SyncEntityKind } from "@spiritdevs/contracts/cloudSync";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import * as Option from "effect/Option";
+import { AtomRegistry } from "effect/unstable/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -11,9 +12,14 @@ import {
   issueDomainEntityCompanyIdsFromReplicas,
   issueDomainEntityCompanyKey,
   syncedIssueDetailById,
+  syncedIssueDomainFromEntities,
   syncedIssueDomainFromReplica,
   syncedIssueDomainFromReplicas,
+  syncedIssueDomainForCompanyAtomFamily,
+  issueProjectProjectionsByCompanyAtom,
 } from "./issueDomainReadModel";
+
+import { companyRegistryReplicasAtom } from "./companyRegistryReplica";
 
 function decoded(entityKind: SyncEntityKind, payload: Record<string, unknown>): CloudSyncEntity {
   const codec = cloudEntityCodec(entityKind);
@@ -84,6 +90,58 @@ function todo(id: string, issueId: string, sortOrder: string) {
 }
 
 describe("syncedIssueDomainFromReplica", () => {
+  it("shares a decoded view projection and retains unaffected collections after an edit", () => {
+    const first = issue("issue-1", 1);
+    const second = issue("issue-2", 2);
+    const tail = comment("comment-1", "issue-1", 1);
+    const view = replica(first, second, tail);
+    const before = syncedIssueDomainFromReplica(view);
+    expect(syncedIssueDomainFromReplica({ view: view.view })).toBe(before);
+    const unchanged = syncedIssueDomainFromEntities([tail, second, first], before);
+    expect(unchanged).toBe(before);
+    const after = syncedIssueDomainFromReplica(
+      replica(first, second, comment("comment-1", "issue-1", 2)),
+      before,
+    );
+    expect(after.issues).toBe(before.issues);
+    expect(after.issueComments).not.toBe(before.issueComments);
+    expect(after.cloudProjects).toBe(before.cloudProjects);
+  });
+
+  it("shares project collections and preserves them when only a task changes", () => {
+    const companyId = CompanyId.make("projection-company");
+    const registry = AtomRegistry.make();
+    const domainAtom = syncedIssueDomainForCompanyAtomFamily(companyId);
+    const stopDomain = registry.mount(domainAtom);
+    const stopProjects = registry.mount(issueProjectProjectionsByCompanyAtom);
+    try {
+      const initial = issue("issue-1", 1);
+      registry.set(companyRegistryReplicasAtom, new Map([[companyId, replica(initial)]]));
+      const domain = registry.get(domainAtom)!;
+      const projects = registry.get(issueProjectProjectionsByCompanyAtom);
+      expect(projects.get(companyId)?.cloudProjects).toBe(domain.cloudProjects);
+      expect(projects.get(companyId)?.environmentBindings).toBe(domain.environmentBindings);
+      registry.set(
+        companyRegistryReplicasAtom,
+        new Map([[companyId, replica(issue("issue-1", 2))]]),
+      );
+      expect(registry.get(domainAtom)?.issues).not.toBe(domain.issues);
+      expect(registry.get(issueProjectProjectionsByCompanyAtom)).toBe(projects);
+    } finally {
+      stopDomain();
+      stopProjects();
+      registry.dispose();
+    }
+  });
+
+  it("keeps invalid payloads out at the codec boundary", () => {
+    const codec = cloudEntityCodec("issue");
+    expect(codec).not.toBeNull();
+    expect(Option.isNone(codec!.decode({ id: "invalid", title: "Missing required fields" }))).toBe(
+      true,
+    );
+  });
+
   it("returns the shared empty model without an active company replica", () => {
     expect(syncedIssueDomainFromReplica(null)).toBe(EMPTY_SYNCED_ISSUE_DOMAIN);
   });

@@ -1,20 +1,19 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
-import {
+import type {
   CloudProjectSyncEntity,
   EnvironmentBindingEntity,
-  EnvironmentRegistrationEntity,
 } from "@spiritdevs/client-runtime/sync";
 import { ProjectId, type EnvironmentId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import * as Schema from "effect/Schema";
 import { useMemo } from "react";
 
-import { companyRegistryReplicasAtom } from "~/cloud/companyRegistryReplica";
-import type { CompanyRegistryReplicaState } from "@spiritdevs/client-runtime/connection";
-import { scopedCompanyRegistryReplicasAtom } from "~/cloud/activeCompany";
 import { environmentBindingMatchesProject } from "~/cloud/agentThreadReadModel";
-import { syncedIssueDomainFromReplica } from "~/cloud/issueDomainReadModel";
+import {
+  issueProjectProjectionsByCompanyAtom,
+  scopedIssueProjectProjectionsByCompanyAtom,
+  type IssueProjectReplicaProjection,
+} from "~/cloud/issueDomainReadModel";
 import type { SidebarProjectGroupMember, SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
 import { useProjectGroups, useUnscopedProjectGroups } from "../projects/useProjectGroups";
 
@@ -278,13 +277,13 @@ export function useIssueProjectOptions(): ReadonlyArray<IssueProjectOption> {
 /** For the places that manage projects rather than file work under them, such as restoring one. */
 export function useIssueProjectOptionsIncludingArchived(): ReadonlyArray<IssueProjectOption> {
   const groups = useProjectGroups();
-  const replicas = useAtomValue(scopedCompanyRegistryReplicasAtom);
+  const replicas = useAtomValue(scopedIssueProjectProjectionsByCompanyAtom);
   return useMergedIssueProjectOptions(groups, replicas);
 }
 
 export function useUnscopedIssueProjectOptions(): ReadonlyArray<IssueProjectOption> {
   const groups = useUnscopedProjectGroups();
-  const replicas = useAtomValue(companyRegistryReplicasAtom);
+  const replicas = useAtomValue(issueProjectProjectionsByCompanyAtom);
   return useLiveIssueProjectOptions(useMergedIssueProjectOptions(groups, replicas));
 }
 
@@ -302,7 +301,7 @@ function useLiveIssueProjectOptions(
 
 function useMergedIssueProjectOptions(
   groups: ReadonlyArray<SidebarProjectSnapshot>,
-  replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
+  replicas: ReadonlyMap<CompanyId, IssueProjectReplicaProjection>,
 ): ReadonlyArray<IssueProjectOption> {
   return useMemo(() => {
     // No replica in scope: either cloud sync is off, or the persisted company selection has no
@@ -312,26 +311,13 @@ function useMergedIssueProjectOptions(
     if (replicas.size === 0) {
       return buildIssueProjectOptions({ groups, cloudProjects: [], environmentBindings: [] });
     }
-    const isEnvironmentBinding = Schema.is(EnvironmentBindingEntity);
-    const isEnvironmentRegistration = Schema.is(EnvironmentRegistrationEntity);
     const allCompanies = replicas.size > 1;
-    const scopedOptions = [...replicas].flatMap(([companyId, replica]) => {
-      const domain = syncedIssueDomainFromReplica(replica);
-      const caseInsensitiveEnvironmentIds = new Set(
-        [...replica.view.values()]
-          .filter(isEnvironmentRegistration)
-          .filter(
-            (registration) =>
-              registration.descriptor.platform.os === "darwin" ||
-              registration.descriptor.platform.os === "windows",
-          )
-          .map((registration) => registration.environmentId),
-      );
+    const scopedOptions = [...replicas].flatMap(([companyId, domain]) => {
       const options = buildIssueProjectOptions({
         groups,
         cloudProjects: domain.cloudProjects,
-        environmentBindings: [...replica.view.values()].filter(isEnvironmentBinding),
-        caseInsensitiveEnvironmentIds,
+        environmentBindings: domain.environmentBindings,
+        caseInsensitiveEnvironmentIds: domain.caseInsensitiveEnvironmentIds,
         companyId,
       });
       // An unregistered local checkout has no company provenance. It is safe to offer only when

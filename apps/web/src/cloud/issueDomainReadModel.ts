@@ -9,16 +9,18 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { CompanyRegistryReplicaState } from "@spiritdevs/client-runtime/connection";
 import {
-  EnvironmentBindingEntity,
+  type CloudSyncEntity,
+  type CloudProjectSyncEntity,
+  type EnvironmentBindingEntity,
   syncedIssueDetailById,
   syncedIssueDomainFromEntities,
   syncedIssueDomainFromReplica,
   type SyncedIssueDomainReadModel,
 } from "@spiritdevs/client-runtime/sync";
-import type { IssueId } from "@spiritdevs/contracts";
+import type { EnvironmentId, IssueId } from "@spiritdevs/contracts";
 import type { SyncEntityKind } from "@spiritdevs/contracts/cloudSync";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 import { Atom } from "effect/unstable/reactivity";
 
 import { scopedCompanyRegistryReplicasAtom } from "./activeCompany";
@@ -85,25 +87,109 @@ export function issueDomainEntityCompanyId(
 export function syncedIssueDomainFromReplicas(
   replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
 ): SyncedIssueDomainReadModel {
+  if (replicas.size === 1) return syncedIssueDomainFromReplica(replicas.values().next().value!);
   return syncedIssueDomainFromEntities(
-    [...replicas.values()].flatMap((replica) => [...replica.view.values()]),
+    [...replicas.values()].flatMap((replica) => [...replica.view.values()] as CloudSyncEntity[]),
   );
 }
 
-const scopedIssueDomainsByCompanyAtom = Atom.make((get) => {
+const issueDomainsByCompanyAtom = Atom.make((get) => {
+  const previous = Option.getOrUndefined(
+    get.self<ReadonlyMap<CompanyId, SyncedIssueDomainReadModel>>(),
+  );
   const domains = new Map<CompanyId, SyncedIssueDomainReadModel>();
-  for (const [companyId, replica] of get(scopedCompanyRegistryReplicasAtom)) {
-    domains.set(companyId, syncedIssueDomainFromReplica(replica));
+  for (const [companyId, replica] of get(companyRegistryReplicasAtom)) {
+    domains.set(companyId, syncedIssueDomainFromReplica(replica, previous?.get(companyId)));
   }
-  return domains;
+  return retainCompanyMap(previous, domains);
+});
+
+const scopedIssueDomainsByCompanyAtom = Atom.make((get) => {
+  const domains = get(issueDomainsByCompanyAtom);
+  const previous = Option.getOrUndefined(
+    get.self<ReadonlyMap<CompanyId, SyncedIssueDomainReadModel>>(),
+  );
+  return retainCompanyMap(
+    previous,
+    new Map([...get(scopedCompanyRegistryReplicasAtom).keys()].map((id) => [id, domains.get(id)!])),
+  );
 }).pipe(Atom.withLabel("cloud-sync:issue-domains-by-company"));
 
 export const syncedIssueDomainForCompanyAtomFamily = Atom.family((companyId: CompanyId) =>
-  Atom.make((get): SyncedIssueDomainReadModel | null => {
-    const replica = get(companyRegistryReplicasAtom).get(companyId);
-    return replica === undefined ? null : syncedIssueDomainFromReplica(replica);
-  }).pipe(Atom.withLabel(`cloud-sync:issue-domain:${companyId}`)),
+  Atom.make(
+    (get): SyncedIssueDomainReadModel | null =>
+      get(issueDomainsByCompanyAtom).get(companyId) ?? null,
+  ).pipe(Atom.withLabel(`cloud-sync:issue-domain:${companyId}`)),
 );
+
+export interface IssueProjectReplicaProjection {
+  readonly cloudProjects: ReadonlyArray<CloudProjectSyncEntity>;
+  readonly environmentBindings: ReadonlyArray<EnvironmentBindingEntity>;
+  readonly caseInsensitiveEnvironmentIds: ReadonlySet<EnvironmentId>;
+}
+
+function retainCompanyMap<A>(
+  previous: ReadonlyMap<CompanyId, A> | undefined,
+  next: ReadonlyMap<CompanyId, A>,
+) {
+  return previous?.size === next.size &&
+    [...next].every(([id, value]) => previous.get(id) === value)
+    ? previous
+    : next;
+}
+
+export const issueProjectProjectionsByCompanyAtom = Atom.make((get) => {
+  const domains = get(issueDomainsByCompanyAtom);
+  const previous = Option.getOrUndefined(
+    get.self<ReadonlyMap<CompanyId, IssueProjectReplicaProjection>>(),
+  );
+  const projects = new Map<CompanyId, IssueProjectReplicaProjection>();
+  for (const [companyId, replica] of get(companyRegistryReplicasAtom)) {
+    const domain = domains.get(companyId)!;
+    const caseInsensitiveEnvironmentIds = new Set<EnvironmentId>();
+    for (const entity of replica.view.values() as Iterable<CloudSyncEntity>) {
+      if (
+        entity.entityKind === "environmentRegistration" &&
+        (entity.descriptor.platform.os === "darwin" || entity.descriptor.platform.os === "windows")
+      ) {
+        caseInsensitiveEnvironmentIds.add(entity.environmentId);
+      }
+    }
+    const before = previous?.get(companyId);
+    const unchanged =
+      before !== undefined &&
+      before.cloudProjects === domain.cloudProjects &&
+      before.environmentBindings === domain.environmentBindings &&
+      before.caseInsensitiveEnvironmentIds.size === caseInsensitiveEnvironmentIds.size &&
+      [...caseInsensitiveEnvironmentIds].every((id) =>
+        before.caseInsensitiveEnvironmentIds.has(id),
+      );
+    projects.set(
+      companyId,
+      unchanged
+        ? before
+        : {
+            cloudProjects: domain.cloudProjects,
+            environmentBindings: domain.environmentBindings,
+            caseInsensitiveEnvironmentIds,
+          },
+    );
+  }
+  return retainCompanyMap(previous, projects);
+});
+
+export const scopedIssueProjectProjectionsByCompanyAtom = Atom.make((get) => {
+  const projects = get(issueProjectProjectionsByCompanyAtom);
+  const previous = Option.getOrUndefined(
+    get.self<ReadonlyMap<CompanyId, IssueProjectReplicaProjection>>(),
+  );
+  return retainCompanyMap(
+    previous,
+    new Map(
+      [...get(scopedCompanyRegistryReplicasAtom).keys()].map((id) => [id, projects.get(id)!]),
+    ),
+  );
+});
 
 const EMPTY_COMPANY_ISSUE_DOMAIN_ATOM = Atom.make<SyncedIssueDomainReadModel | null>(null).pipe(
   Atom.withLabel("cloud-sync:issue-domain-empty"),
@@ -114,22 +200,24 @@ export const issueDomainEntityCompanyIdsAtom = Atom.make((get) =>
   issueDomainEntityCompanyIdsFromReplicas(get(companyRegistryReplicasAtom)),
 ).pipe(Atom.withLabel("cloud-sync:issue-domain-entity-company-ids"));
 
-export const syncedIssueDomainAtom = Atom.make(
-  (get): SyncedIssueDomainReadModel =>
-    syncedIssueDomainFromReplicas(get(scopedCompanyRegistryReplicasAtom)),
-).pipe(Atom.withLabel("cloud-sync:issue-domain"));
+export const syncedIssueDomainAtom = Atom.make((get): SyncedIssueDomainReadModel => {
+  const domains = [...get(scopedIssueDomainsByCompanyAtom).values()];
+  const previous = Option.getOrUndefined(get.self<SyncedIssueDomainReadModel>());
+  return domains.length === 1
+    ? domains[0]!
+    : syncedIssueDomainFromEntities(
+        // Each company's collections are already decoded and ordered; one merge keeps All deterministic.
+        domains.flatMap((domain) => Object.values(domain).flat()) as CloudSyncEntity[],
+        previous,
+      );
+}).pipe(Atom.withLabel("cloud-sync:issue-domain"));
 
 export const cloudProjectsAtom = Atom.make((get) => get(syncedIssueDomainAtom).cloudProjects).pipe(
   Atom.withLabel("cloud-sync:cloud-projects"),
 );
-const isEnvironmentBinding = Schema.is(EnvironmentBindingEntity);
-export const environmentBindingsAtom = Atom.make((get) => {
-  const bindings = [];
-  for (const replica of get(scopedCompanyRegistryReplicasAtom).values()) {
-    bindings.push(...[...replica.view.values()].filter(isEnvironmentBinding));
-  }
-  return bindings;
-}).pipe(Atom.withLabel("cloud-sync:environment-bindings"));
+export const environmentBindingsAtom = Atom.make(
+  (get) => get(syncedIssueDomainAtom).environmentBindings,
+).pipe(Atom.withLabel("cloud-sync:environment-bindings"));
 export const syncedIssuesAtom = Atom.make((get) => get(syncedIssueDomainAtom).issues).pipe(
   Atom.withLabel("cloud-sync:issues"),
 );
