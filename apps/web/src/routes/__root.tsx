@@ -66,6 +66,7 @@ import {
 import { useUiStateStore } from "../uiStateStore";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
+import { ShellStartupTrace } from "../observability/ShellStartupTrace";
 import { readConnectionAccountScope } from "../connection/accountScope";
 import { environmentCatalog } from "../connection/catalog";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -424,6 +425,7 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         <SlowRpcRequestToastCoordinator />
         <PullRequestAgentReviewHost />
         <HostedStaticEnvironmentBootstrap />
+        <ShellStartupTrace />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {/* Alerts belong to the main window alone, so a torn-out window never repeats them. */}
         {/* Captured mail toasts from any route, so a verification code finds you mid-thread. */}
