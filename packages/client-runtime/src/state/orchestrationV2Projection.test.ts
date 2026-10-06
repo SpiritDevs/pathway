@@ -6,8 +6,11 @@ import {
   type OrchestrationV2TurnItem,
   EventId,
   MessageId,
+  NodeId,
   ProjectId,
   ProviderInstanceId,
+  ProviderThreadId,
+  RunAttemptId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -37,7 +40,11 @@ const run = {
   contextHandoffId: null,
 } satisfies OrchestrationV2Run;
 
-function commandItem(id: string, output = "done", ordinal = 1): OrchestrationV2TurnItem {
+function commandItem(
+  id: string,
+  output = "done",
+  ordinal = 1,
+): Extract<OrchestrationV2TurnItem, { type: "command_execution" }> {
   return {
     id: TurnItemId.make(id),
     threadId,
@@ -103,6 +110,140 @@ const emptyProjection = {
 } as OrchestrationV2ThreadProjection;
 
 describe("applyOrchestrationV2ProjectionEvent", () => {
+  it("does not revisit historical visible rows during a streamed item update", () => {
+    const oldItem = commandItem("old-item");
+    let historicalReads = 0;
+    const oldRow = {
+      position: 0,
+      visibility: "local" as const,
+      sourceThreadId: threadId,
+      sourceItemId: oldItem.id,
+      get item() {
+        historicalReads += 1;
+        return oldItem;
+      },
+    };
+    const current = commandItem("current-item", "first", 2);
+    const currentRow = {
+      position: 1,
+      visibility: "local" as const,
+      sourceThreadId: threadId,
+      sourceItemId: current.id,
+      item: current,
+    };
+    const projection = {
+      ...emptyProjection,
+      runs: [run, { ...run, id: RunId.make("old-cancelled-run"), status: "cancelled" as const }],
+      turnItems: [oldItem, current],
+      visibleTurnItems: [oldRow, currentRow],
+    };
+    const next = applyOrchestrationV2ProjectionEvent(projection, {
+      id: EventId.make("stream-update"),
+      type: "turn-item.updated",
+      threadId,
+      occurredAt: now,
+      payload: { ...current, output: "second" },
+    });
+    expect(historicalReads).toBe(0);
+    expect(next?.visibleTurnItems[0]).toBe(oldRow);
+    expect(next?.visibleTurnItems[1]?.item).toMatchObject({ output: "second" });
+  });
+
+  it("does not sweep history when a run updates without a hiding transition", () => {
+    const item = commandItem("historical-item");
+    let historicalReads = 0;
+    const row = {
+      position: 0,
+      visibility: "local" as const,
+      sourceThreadId: threadId,
+      sourceItemId: item.id,
+      get item() {
+        historicalReads += 1;
+        return item;
+      },
+    };
+    const cancelled = { ...run, id: RunId.make("cancelled-run"), status: "cancelled" as const };
+    const projection = { ...emptyProjection, runs: [run, cancelled], visibleTurnItems: [row] };
+    for (const payload of [run, cancelled]) {
+      const next = applyOrchestrationV2ProjectionEvent(projection, {
+        id: EventId.make("run-update"),
+        type: "run.updated",
+        threadId,
+        occurredAt: now,
+        payload,
+      });
+      expect(next?.visibleTurnItems).toBe(projection.visibleTurnItems);
+    }
+    expect(historicalReads).toBe(0);
+  });
+
+  it("sweeps superseded interrupt results once while retaining paired stop requests", () => {
+    const nodeId = NodeId.make("superseded-node");
+    const attempt = {
+      id: RunAttemptId.make("attempt"),
+      runId,
+      attemptOrdinal: 1,
+      rootNodeId: nodeId,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerThreadId: ProviderThreadId.make("provider-thread"),
+      providerTurnId: null,
+      reason: "initial" as const,
+      status: "interrupted" as const,
+      startedAt: now,
+      completedAt: now,
+    };
+    const result: OrchestrationV2TurnItem = {
+      ...commandItem("interrupt-result"),
+      nodeId,
+      type: "run_interrupt_result",
+      message: "Stopped",
+    };
+    const request: OrchestrationV2TurnItem = {
+      ...commandItem("interrupt-request", "", 2),
+      nodeId,
+      type: "run_interrupt_request",
+      message: "Stop",
+    };
+    const row = {
+      position: 0,
+      visibility: "local" as const,
+      sourceThreadId: threadId,
+      sourceItemId: result.id,
+      item: result,
+    };
+    const projection = {
+      ...emptyProjection,
+      runs: [run],
+      attempts: [attempt],
+      turnItems: [result],
+      visibleTurnItems: [row],
+    };
+    const event = {
+      id: EventId.make("supersede"),
+      type: "run-attempt.updated" as const,
+      threadId,
+      occurredAt: now,
+      payload: { ...attempt, status: "superseded" as const },
+    };
+    const next = applyOrchestrationV2ProjectionEvent(projection, event)!;
+    expect(next.visibleTurnItems).toEqual([]);
+    expect(applyOrchestrationV2ProjectionEvent(next, event)?.visibleTurnItems).toBe(
+      next.visibleTurnItems,
+    );
+    expect(
+      applyOrchestrationV2ProjectionEvent({ ...projection, turnItems: [result, request] }, event)
+        ?.visibleTurnItems,
+    ).toBe(projection.visibleTurnItems);
+    const lateUpdate = applyOrchestrationV2ProjectionEvent(next, {
+      id: EventId.make("late-interrupt-update"),
+      type: "turn-item.updated",
+      threadId,
+      occurredAt: now,
+      payload: { ...result, message: "Still stopped" },
+    });
+    expect(lateUpdate?.visibleTurnItems).toEqual([]);
+  });
+
   it("patches reported configuration without resetting titles or other metadata", () => {
     const updatedAt = DateTime.makeUnsafe("2026-06-20T01:00:00.000Z");
     const modelSelection = {
@@ -332,7 +473,9 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
       inputIntent: "queued_turn",
       text: "later",
       attachments: [],
-    } as OrchestrationV2TurnItem;
+      createdBy: "user",
+      creationSource: "web",
+    };
     const sibling = { ...commandItem("item-sibling", "done", 3), runId: cancelledRunId };
     const rows = [kept, queued, sibling].map((item, position) => ({
       position,
