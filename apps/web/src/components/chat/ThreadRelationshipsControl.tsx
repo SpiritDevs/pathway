@@ -250,15 +250,17 @@ function resolveSubagentDetails(input: {
 }): SubagentDetails {
   const { subagent, thread, status } = input;
   const live = isLiveAgentStatus(status);
-  const progress = subagent?.progress?.trim() || null;
-  const result = subagent?.result?.trim() || null;
+  // A follow-up run on a finished subagent's thread: its record describes the earlier task.
+  const task = live && !isLiveAgentStatus(subagent?.status ?? null) ? undefined : subagent;
+  const progress = task?.progress?.trim() || null;
+  const result = task?.result?.trim() || null;
   return {
     providerInstanceId: subagent?.providerInstanceId ?? thread?.providerInstanceId ?? null,
     model: subagent?.model ?? thread?.modelSelection.model,
     status,
     live,
-    startedAtMs: toEpochMillis(subagent?.startedAt ?? thread?.latestRunStartedAt),
-    completedAtMs: toEpochMillis(subagent?.completedAt ?? thread?.latestRunCompletedAt),
+    startedAtMs: toEpochMillis(task?.startedAt ?? thread?.latestRunStartedAt),
+    completedAtMs: toEpochMillis(task?.completedAt ?? thread?.latestRunCompletedAt),
     activity: live ? progress : (result ?? progress),
   };
 }

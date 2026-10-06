@@ -113,7 +113,9 @@ export function deriveThreadRelationshipGraph(input: {
         sourceThreadId: ownerThreadId,
         targetThreadId: subagent.childThreadId,
         kind: "subagent",
-        status: subagent.status,
+        // The record stays finished after its delegated task, but the owner can
+        // message the child thread again; that follow-up run is the live truth.
+        status: threadsById.get(subagent.childThreadId)?.activityRunStatus ?? subagent.status,
       });
     }
     for (const transfer of input.projection.contextTransfers) {

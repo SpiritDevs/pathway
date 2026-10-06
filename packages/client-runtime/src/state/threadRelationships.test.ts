@@ -171,6 +171,37 @@ describe("thread relationships", () => {
     );
   });
 
+  it("reports a finished subagent as live while its thread runs follow-up work", () => {
+    const parent = ThreadId.make("thread-parent");
+    const child = ThreadId.make("thread-child");
+    const subagentEdgeStatus = (activityRunStatus: string | null) =>
+      deriveThreadRelationshipGraph({
+        threads: [
+          {
+            id: child,
+            title: "Subagent",
+            status: "completed",
+            activityRunStatus,
+            archivedAt: null,
+            forkedFrom: null,
+            lineage: {
+              rootThreadId: parent,
+              parentThreadId: parent,
+              relationshipToParent: "subagent",
+            },
+          },
+        ] as never,
+        projection: {
+          thread: { id: parent },
+          subagents: [{ childThreadId: child, status: "completed" }],
+          contextTransfers: [],
+        } as never,
+      }).edges.find((edge) => edge.kind === "subagent")?.status;
+
+    expect(subagentEdgeStatus("running")).toBe("running");
+    expect(subagentEdgeStatus(null)).toBe("completed");
+  });
+
   it("keeps the live shell when an archived snapshot contains the same thread id", () => {
     const parent = ThreadId.make("thread-parent");
     const staleParent = ThreadId.make("thread-stale-parent");
