@@ -842,6 +842,22 @@ export class PreviewAutomationTargetNotEditableError extends Schema.TaggedErrorC
   }
 }
 
+/**
+ * The tab shows a browser page, such as Chrome's settings on the Pathway
+ * runtime. Only the user uses those; agents drive websites and blank tabs.
+ */
+export class PreviewAutomationBrowserPageError extends Schema.TaggedErrorClass<PreviewAutomationBrowserPageError>()(
+  "PreviewAutomationBrowserPageError",
+  {
+    ...PreviewAutomationRequestErrorFields,
+    ...PreviewAutomationRemoteDiagnosticFields,
+  },
+) {
+  override get message(): string {
+    return `Preview automation ${this.operation} was refused: the tab shows a browser page, such as Chrome's settings, which only the user can use. Agents can only use websites; open one in a new tab with preview_open and reuseExistingTab: false.`;
+  }
+}
+
 export class PreviewAutomationResultTooLargeError extends Schema.TaggedErrorClass<PreviewAutomationResultTooLargeError>()(
   "PreviewAutomationResultTooLargeError",
   {
@@ -908,6 +924,7 @@ export const PreviewAutomationError = Schema.Union([
   PreviewAutomationExecutionError,
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationTargetNotEditableError,
+  PreviewAutomationBrowserPageError,
   PreviewAutomationResultTooLargeError,
   PreviewAutomationClientDisconnectedError,
   PreviewAutomationRequestQueueClosedError,

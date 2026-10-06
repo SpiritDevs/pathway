@@ -33,10 +33,23 @@ The runtime adds a `pathway` module to `require("electron")` in the main process
 | Local browser                      | On the runtime                                                                  | On stock Electron                                             |
 | ---------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | Site information (`siteInfo` IPC)  | Chromium's security state, connection and certificate chain (PEMs stay in main) | The origin, and secure or not from its scheme; no certificate |
-| Site settings (`openSiteSettings`) | Opens `chrome://settings/content/siteDetails` in a new tab beside the page      | Not offered                                                   |
+| Site settings (`openSiteSettings`) | Loads `chrome://settings/content/siteDetails` into a new tab beside the page    | Not offered                                                   |
 | Clear site data (`clearSiteData`)  | Chrome's browsing-data remover for the tab's partition                          | The Electron session's `clearStorageData`                     |
 
-`normalizePreviewUrl` lets `chrome://settings` pages through, and no other `chrome://` page, so that a settings tab can open like any other tab.
+Certificate validity times arrive in milliseconds since the epoch, and fingerprints as uppercase hex bytes separated by colons.
+
+### Browser pages
+
+Only the main process ever produces a `chrome://` address. `normalizePreviewUrl` stays http(s)-only, so the server, the remote browser, the address bar, agents and `window.open` can't reach a browser page.
+
+- **Site settings.** The renderer opens a blank tab beside the page through `preview.open`, then calls `openSiteSettings(tabId, targetTabId)`. Main computes `pathway.settingsUrl(origin)` from the source tab's site and loads it into the new tab directly. No caller supplies the address, and it never goes through `normalizePreviewUrl`.
+- **Tab state.** The desktop reports the settings page's URL like any other, and the server stores it. History skips it. A webview restored or recovered from that state opens blank instead.
+- **Agents.** They drive websites and blank tabs only (`isWebPageUrl`):
+  - The automation host refuses to navigate, read or drive a tab that shows a browser page. `PreviewAutomationBrowserPageError` tells the agent to open a website in a new tab instead.
+  - Main also refuses page automation in its CDP control session, as a backstop.
+  - Users still use the settings page themselves.
+
+User docs for site information, certificates and Site settings wait for [Phase 3](../plans/desktop-chromium-runtime.md#phase-3-runtime-packaging). Until then every shipped build runs stock Electron, which has none of them.
 
 ## Archive contents
 

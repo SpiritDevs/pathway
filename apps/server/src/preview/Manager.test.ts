@@ -138,6 +138,50 @@ it.layer(PreviewManager.layer)("PreviewManager", (it) => {
     }),
   );
 
+  it.effect("never opens or navigates to a browser page", () =>
+    Effect.gen(function* () {
+      const threadId = freshThreadId();
+      const manager = yield* PreviewManager.PreviewManager;
+      const settings = "chrome://settings/content/siteDetails?site=https%3A%2F%2Fexample.com";
+
+      const openError = yield* Effect.flip(manager.open({ threadId, url: settings }));
+      const opened = yield* manager.open({ threadId, url: "https://example.com" });
+      const navigateError = yield* Effect.flip(
+        manager.navigate({ threadId, tabId: opened.tabId, url: "chrome://settings" }),
+      );
+
+      for (const error of [openError, navigateError]) {
+        expect(error).toMatchObject({
+          _tag: "PreviewInvalidUrlError",
+          reason: "unsupported-protocol",
+          protocol: "chrome:",
+        });
+      }
+    }),
+  );
+
+  it.effect("records a browser page the desktop reports loading in a tab", () =>
+    Effect.gen(function* () {
+      const threadId = freshThreadId();
+      const manager = yield* PreviewManager.PreviewManager;
+      const settings = "chrome://settings/content/siteDetails?site=https%3A%2F%2Fexample.com";
+
+      const opened = yield* manager.open({ threadId });
+      yield* manager.reportStatus({
+        threadId,
+        tabId: opened.tabId,
+        navStatus: { _tag: "Success", url: settings, title: "Settings" },
+        canGoBack: false,
+        canGoForward: false,
+      });
+
+      const { sessions } = yield* manager.list({ threadId });
+      expect(sessions.map((session) => session.navStatus)).toEqual([
+        { _tag: "Success", url: settings, title: "Settings" },
+      ]);
+    }),
+  );
+
   it.effect("navigate updates snapshot and emits navigated", () =>
     Effect.gen(function* () {
       const threadId = freshThreadId();

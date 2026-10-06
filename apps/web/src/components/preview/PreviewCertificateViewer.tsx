@@ -40,16 +40,16 @@ export function formatDistinguishedName(name: DesktopPreviewCertificateName): st
     .join(", ");
 }
 
-/** A hex digest in byte pairs, as Chrome shows fingerprints. Anything else shows as given. */
+/** The runtime's `AB:CD:01` digest as `ab cd 01`, as Chrome shows fingerprints. Anything else shows as given. */
 export function formatFingerprint(value: string): string {
-  return /^(?:[\da-f]{2})+$/i.test(value)
-    ? (value.toLowerCase().match(/../g) ?? []).join(" ")
+  return /^[\da-f]{2}(?::[\da-f]{2})*$/i.test(value)
+    ? value.toLowerCase().replaceAll(":", " ")
     : value;
 }
 
-/** Certificate validity times are Unix seconds. */
-export function formatCertificateDate(seconds: number): string {
-  return new Date(seconds * 1000).toLocaleString(undefined, {
+/** Certificate validity times are milliseconds since the epoch. */
+export function formatCertificateDate(milliseconds: number): string {
+  return new Date(milliseconds).toLocaleString(undefined, {
     dateStyle: "full",
     timeStyle: "long",
   });

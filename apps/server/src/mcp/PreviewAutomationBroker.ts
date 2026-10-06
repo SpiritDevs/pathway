@@ -1,5 +1,6 @@
 import {
   PREVIEW_AUTOMATION_V1_OPERATIONS,
+  PreviewAutomationBrowserPageError,
   PreviewAutomationClientDisconnectedError,
   PreviewAutomationExecutionError,
   PreviewAutomationInvalidSelectorError,
@@ -367,6 +368,11 @@ const classifyResponseError = (
           : { selectorLength: remoteSelectorLength ?? context.selectorLength }),
       });
     }
+    case "PreviewAutomationBrowserPageError":
+      return new PreviewAutomationBrowserPageError({
+        ...context,
+        ...remoteDiagnostics,
+      });
     case "PreviewAutomationResultTooLargeError": {
       const detail =
         typeof error.detail === "object" && error.detail !== null ? error.detail : undefined;

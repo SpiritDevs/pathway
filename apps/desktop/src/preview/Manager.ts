@@ -32,7 +32,7 @@ import type {
 } from "@spiritdevs/contracts";
 import { fillBrowserLoginFields } from "@spiritdevs/shared/browserPasswordAutofill";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
-import { normalizePreviewUrl } from "@spiritdevs/shared/preview";
+import { isWebPageUrl, normalizePreviewUrl } from "@spiritdevs/shared/preview";
 import {
   BrowserWindow,
   ClipboardItem,
@@ -1135,6 +1135,17 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const control = yield* ensureControlSession(wc);
     const execute = Effect.fn("PreviewManager.executeControlAction")(function* () {
       yield* validateCurrentGuest(tabId, wc);
+      // Browser pages, such as Chrome's settings on the Pathway runtime, are the user's alone.
+      if (!isWebPageUrl(wc.getURL())) {
+        return yield* new PreviewOperationError({
+          operation: `${action}.requireWebPage`,
+          tabId,
+          webContentsId: wc.id,
+          cause: new Error(
+            "Browser automation only works on websites. This tab shows a browser page.",
+          ),
+        });
+      }
       const send: SendCommand = Effect.fn("PreviewManager.sendCommand")(
         function* (method, commandParams) {
           return yield* boundedPromise(
@@ -1719,10 +1730,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
   });
 
-  const navigate = Effect.fn("PreviewManager.navigate")(function* (tabId: string, rawUrl: string) {
-    const url = yield* attempt({ operation: "navigate.normalizeUrl", tabId }, () =>
-      normalizePreviewUrl(rawUrl),
-    );
+  /**
+   * Loads an address into a tab, or holds it until the tab's webview registers.
+   * Callers vet the address first: `navigate` keeps it to websites, and only
+   * the main process itself loads a browser page.
+   */
+  const loadUrl = Effect.fn("PreviewManager.loadUrl")(function* (tabId: string, url: string) {
     const updatedAt = yield* currentIso;
     const pending = yield* SynchronizedRef.modify(tabsRef, (tabs) => {
       const current = tabs.get(tabId);
@@ -1772,6 +1785,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     yield* attemptPromise({ operation: "navigate.loadURL", tabId, webContentsId: wc.id }, () =>
       wc.loadURL(url),
     );
+  });
+
+  const navigate = Effect.fn("PreviewManager.navigate")(function* (tabId: string, rawUrl: string) {
+    const url = yield* attempt({ operation: "navigate.normalizeUrl", tabId }, () =>
+      normalizePreviewUrl(rawUrl),
+    );
+    yield* loadUrl(tabId, url);
   });
 
   const withWebContents = Effect.fn("PreviewManager.withWebContents")(function* (
@@ -2152,13 +2172,17 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
   });
 
-  const openSiteSettings = Effect.fn("PreviewManager.openSiteSettings")(function* (tabId: string) {
+  const openSiteSettings = Effect.fn("PreviewManager.openSiteSettings")(function* (
+    tabId: string,
+    targetTabId: string,
+  ) {
     const wc = yield* requireWebContents(tabId);
     const url = yield* attempt({ operation: "openSiteSettings", tabId, webContentsId: wc.id }, () =>
       PathwayRuntime.siteSettingsUrl(wc),
     );
-    // Opens beside this tab, as a link with target="_blank" would.
-    yield* emitOpenInNewTab({ tabId, url });
+    // Straight into the blank tab the renderer opened beside this one. No caller
+    // supplies a browser page's address, and it skips normalizePreviewUrl.
+    yield* loadUrl(targetTabId, url);
   });
 
   const clearSiteData = Effect.fn("PreviewManager.clearSiteData")(function* (tabId: string) {
@@ -3845,7 +3869,10 @@ export class PreviewManager extends Context.Service<
     readonly siteInfo: (
       tabId: string,
     ) => Effect.Effect<DesktopPreviewSiteInfo | null, PreviewManagerError>;
-    readonly openSiteSettings: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
+    readonly openSiteSettings: (
+      tabId: string,
+      targetTabId: string,
+    ) => Effect.Effect<void, PreviewManagerError>;
     readonly clearSiteData: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly revealArtifact: (path: string) => Effect.Effect<void, PreviewManagerError>;
     readonly copyArtifactToClipboard: (path: string) => Effect.Effect<void, PreviewManagerError>;

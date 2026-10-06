@@ -12,15 +12,18 @@ import {
   formatFingerprint,
 } from "./PreviewCertificateViewer";
 
+/** A SHA-256 digest as the runtime sends it: uppercase bytes joined by colons. */
+const hexDigest = (byte: string) => Array(32).fill(byte).join(":");
+
 const certificate = (
   overrides: Partial<DesktopPreviewCertificate> & Pick<DesktopPreviewCertificate, "subject">,
 ): DesktopPreviewCertificate => ({
   issuer: { organizations: [], organizationUnits: [] },
   serialNumber: "01",
-  validStart: 1_788_000_000,
-  validExpiry: 1_795_000_000,
-  fingerprintSha256: "00".repeat(32),
-  publicKeySha256: "11".repeat(32),
+  validStart: Date.UTC(2026, 8, 22),
+  validExpiry: Date.UTC(2026, 11, 15),
+  fingerprintSha256: hexDigest("00"),
+  publicKeySha256: hexDigest("11"),
   subjectAlternativeNames: [],
   signatureAlgorithm: "SHA256-RSA",
   publicKeyAlgorithm: "RSA",
@@ -38,8 +41,8 @@ const chain: ReadonlyArray<DesktopPreviewCertificate> = [
       country: "US",
     },
     serialNumber: "5A:3B:9C",
-    fingerprintSha256: "ab".repeat(32),
-    publicKeySha256: "cd".repeat(32),
+    fingerprintSha256: hexDigest("AB"),
+    publicKeySha256: hexDigest("CD"),
     subjectAlternativeNames: ["*.google.com", "google.com"],
     publicKeyAlgorithm: "ECDSA P-256",
   }),
@@ -102,9 +105,17 @@ describe("certificate formatting", () => {
     );
   });
 
-  it("splits hex fingerprints into bytes and leaves other forms alone", () => {
-    expect(formatFingerprint("ABCD01")).toBe("ab cd 01");
+  it("shows the runtime's colon-separated fingerprints as bytes, and other forms as given", () => {
+    expect(formatFingerprint("AB:CD:01")).toBe("ab cd 01");
+    expect(formatFingerprint(hexDigest("AB"))).toBe(Array(32).fill("ab").join(" "));
     expect(formatFingerprint("sha256/AbC=")).toBe("sha256/AbC=");
+    expect(formatFingerprint("AB:CD:")).toBe("AB:CD:");
+  });
+
+  it("reads validity times as milliseconds since the epoch", () => {
+    expect(formatCertificateDate(Date.UTC(2026, 8, 22, 12))).toContain("2026");
+    expect(formatCertificateDate(1_790_000_000_000)).toContain("2026");
+    expect(formatCertificateDate(1_790_000_000_000)).not.toContain("58692");
   });
 });
 

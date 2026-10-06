@@ -20,7 +20,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import {
@@ -31,6 +31,7 @@ import {
   PopoverTrigger,
 } from "~/components/ui/popover";
 import { Separator } from "~/components/ui/separator";
+import { toastManager } from "~/components/ui/toast";
 import { cn } from "~/lib/utils";
 
 import { PreviewCertificateViewer, certificateName } from "./PreviewCertificateViewer";
@@ -93,16 +94,29 @@ export interface PreviewSiteActions {
   readonly clearSiteData?: (() => void) | undefined;
 }
 
-/** Site actions for a local browser tab, through the desktop bridge. */
+/**
+ * Site actions for a local browser tab, through the desktop bridge. `openTab`
+ * opens a blank tab beside it and resolves to that tab's runtime id, or null.
+ */
 export function previewSiteActions(
   bridge: DesktopPreviewBridge,
   tabId: string,
+  openTab: () => Promise<string | null>,
 ): PreviewSiteActions {
   const { siteInfo, openSiteSettings, clearSiteData } = bridge;
   return {
     load: siteInfo && (() => siteInfo(tabId)),
+    // The main process loads Chrome's settings page into the new tab, so
+    // neither the renderer nor the server ever supplies a browser page's address.
     openSiteSettings:
-      openSiteSettings && (() => void openSiteSettings(tabId).catch(() => undefined)),
+      openSiteSettings &&
+      (() =>
+        void (async () => {
+          const targetTabId = await openTab();
+          if (targetTabId !== null) await openSiteSettings(tabId, targetTabId);
+        })().catch(() =>
+          toastManager.add({ type: "error", title: "Site settings could not open" }),
+        )),
     clearSiteData: clearSiteData && (() => void clearSiteData(tabId).catch(() => undefined)),
   };
 }
@@ -268,36 +282,47 @@ export function PreviewSiteInfo({
 }) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<"site" | "security">("site");
-  // The last answer, kept per address so reopening shows it while it refreshes.
+  // The last answer, kept per origin so reopening shows it while it refreshes.
+  // Null info means the desktop could not say.
   const [loaded, setLoaded] = useState<{
-    readonly url: string;
+    readonly origin: string;
     readonly info: DesktopPreviewSiteInfo | null;
   } | null>(null);
   const [viewer, setViewer] = useState<{
     readonly chain: ReadonlyArray<DesktopPreviewCertificate>;
     readonly open: boolean;
   } | null>(null);
-  const loadSiteInfo = useEffectEvent(() => {
-    const requestedUrl = url;
-    actions?.load?.().then(
-      (info) => setLoaded({ url: requestedUrl, info }),
-      () => setLoaded({ url: requestedUrl, info: null }),
-    );
+  const latestRequest = useRef(0);
+  const parsed = /^https?:\/\//i.test(url) && URL.canParse(url) ? new URL(url) : null;
+  const origin = parsed?.origin ?? null;
+  const loadSiteInfo = useEffectEvent((requestedOrigin: string) => {
+    const load = actions?.load;
+    if (!load) return;
+    // Only the latest request lands, so a slow answer for an earlier page cannot replace it.
+    const request = ++latestRequest.current;
+    const settle = (info: DesktopPreviewSiteInfo | null) => {
+      if (request === latestRequest.current) setLoaded({ origin: requestedOrigin, info });
+    };
+    load().then(settle, () => settle(null));
   });
-  // Loads when the dropdown opens, and again if the page moves on while it is open.
+  // Loads when the dropdown opens, and again if the page moves to another site while it is open.
   useEffect(() => {
-    if (open) loadSiteInfo();
-  }, [open, url]);
-  if (!/^https?:\/\//i.test(url) || !URL.canParse(url)) return null;
+    if (open && origin !== null) loadSiteInfo(origin);
+  }, [open, origin]);
+  if (!parsed) return null;
 
-  const parsed = new URL(url);
   const site = parsed.host.replace(/^www\./, "");
-  const current = loaded?.url === url ? loaded : null;
+  const current = loaded?.origin === origin ? loaded : null;
   const info = current?.info ?? null;
-  // Without the runtime's answer, a loaded https page already passed Chromium's checks.
+  // A desktop build without site information falls back to the scheme: a loaded
+  // https page already passed Chromium's checks. Otherwise only its answer counts.
   const connection = siteConnection(
     parsed,
-    info?.securityState ?? (parsed.protocol === "https:" ? "secure" : "insecure"),
+    !actions?.load
+      ? parsed.protocol === "https:"
+        ? "secure"
+        : "insecure"
+      : (info?.securityState ?? "unknown"),
   );
   const close = () => {
     setOpen(false);

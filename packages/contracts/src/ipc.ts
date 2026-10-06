@@ -1029,10 +1029,13 @@ export const DesktopPreviewCertificateSchema = Schema.Struct({
   subject: DesktopPreviewCertificateNameSchema,
   issuer: DesktopPreviewCertificateNameSchema,
   serialNumber: Schema.String,
-  /** Unix seconds, as in Electron's `Certificate`. */
+  /** Milliseconds since the epoch, as the Pathway runtime reports them. */
   validStart: Schema.Number,
+  /** Milliseconds since the epoch. */
   validExpiry: Schema.Number,
+  /** Uppercase hex bytes separated by colons, such as `AB:CD:01`. */
   fingerprintSha256: Schema.String,
+  /** Uppercase hex bytes separated by colons. */
   publicKeySha256: Schema.String,
   subjectAlternativeNames: Schema.Array(Schema.String),
   signatureAlgorithm: Schema.String,
@@ -1286,6 +1289,11 @@ export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
 export const DesktopPreviewNavigateInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   url: Schema.String,
+});
+
+export const DesktopPreviewOpenSiteSettingsInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  targetTabId: DesktopPreviewTabIdSchema,
 });
 
 export const DesktopPreviewConfigInputSchema = Schema.Struct({
@@ -1639,8 +1647,12 @@ export interface DesktopPreviewBridge {
   captureThumbnail?: (tabId: string) => Promise<string | null>;
   /** The site in this tab, for the address bar's site information. Null when the page is not a website. */
   siteInfo?: (tabId: string) => Promise<DesktopPreviewSiteInfo | null>;
-  /** Opens Chrome's settings for this tab's site in a new tab. Rejects without the Pathway runtime. */
-  openSiteSettings?: (tabId: string) => Promise<void>;
+  /**
+   * Loads Chrome's settings for this tab's site into `targetTabId`, a blank tab
+   * the caller just opened. The main process computes the address, so nothing
+   * else produces a `chrome://` URL. Rejects without the Pathway runtime.
+   */
+  openSiteSettings?: (tabId: string, targetTabId: string) => Promise<void>;
   /** Clears the current site's cookies and storage in this tab's browser, then reloads it. */
   clearSiteData?: (tabId: string) => Promise<void>;
   revealArtifact: (path: string) => Promise<void>;

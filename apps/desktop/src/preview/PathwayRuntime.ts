@@ -21,8 +21,11 @@ export interface PathwayCertificate {
   subject: PathwayCertificateName;
   issuer: PathwayCertificateName;
   serialNumber: string;
+  /** Milliseconds since the epoch. */
   validStart: number;
+  /** Milliseconds since the epoch. */
   validExpiry: number;
+  /** Uppercase hex bytes separated by colons, such as `AB:CD:01`. */
   fingerprintSha256: string;
   publicKeySha256: string;
   subjectAlternativeNames: string[];
@@ -66,10 +69,10 @@ export const webOrigin = (url: string): string | null =>
  */
 export const siteInfo = async (
   webContents: Electron.WebContents,
-  pathway = pathwayModule(),
 ): Promise<DesktopPreviewSiteInfo | null> => {
   const origin = webOrigin(webContents.getURL());
   if (origin === null) return null;
+  const pathway = pathwayModule();
   if (!pathway) {
     return {
       runtime: false,
@@ -94,10 +97,8 @@ export const siteInfo = async (
 };
 
 /** Chrome's settings page for the tab's site, which only exists on the runtime. */
-export const siteSettingsUrl = (
-  webContents: Electron.WebContents,
-  pathway = pathwayModule(),
-): string => {
+export const siteSettingsUrl = (webContents: Electron.WebContents): string => {
+  const pathway = pathwayModule();
   if (!pathway) throw new Error("Site settings need the Pathway browser runtime.");
   const origin = webOrigin(webContents.getURL());
   if (origin === null) throw new Error("Site settings are only available for websites.");
@@ -112,10 +113,10 @@ export const siteSettingsUrl = (
 export const clearSiteData = async (
   webContents: Electron.WebContents,
   partition: string | undefined,
-  pathway = pathwayModule(),
 ): Promise<void> => {
   const origin = webOrigin(webContents.getURL());
   if (origin === null) return;
+  const pathway = pathwayModule();
   if (pathway && partition !== undefined) {
     await pathway.clearSiteData(partition, origin);
   } else {

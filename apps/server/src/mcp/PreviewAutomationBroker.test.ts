@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  PreviewAutomationBrowserPageError,
   PreviewAutomationClientDisconnectedError,
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationMalformedResponseError,
@@ -441,6 +442,47 @@ it.effect("classifies a remote non-editable target without collapsing it to exec
         remoteTag: "PreviewAutomationTargetNotEditableError",
       });
       expect(error.message).toBe("Preview automation type requires an editable focused element.");
+    }),
+  );
+});
+
+it.effect("tells the agent a browser page is the user's, rather than a bare failure", () => {
+  const remoteError = {
+    _tag: "PreviewAutomationBrowserPageError",
+    message: "remote browser page details",
+  } as const;
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: false,
+          error: remoteError,
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const error = yield* broker
+        .invoke<void>({
+          scope,
+          operation: "evaluate",
+          input: { expression: "document.title" },
+          tabId: PreviewTabId.make("tab-1"),
+        })
+        .pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(PreviewAutomationBrowserPageError);
+      expect(error).toMatchObject({
+        operation: "evaluate",
+        tabId: "tab-1",
+        remoteTag: "PreviewAutomationBrowserPageError",
+      });
+      expect(error.message).toContain("only the user can use");
     }),
   );
 });

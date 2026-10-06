@@ -22,6 +22,7 @@ import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerD
 import { previewAnnotationScreenshotFile } from "~/lib/previewAnnotation";
 import { ensureLocalApi } from "~/localApi";
 import {
+  readThreadPreviewState,
   rememberPreviewUrl,
   updatePreviewServerSnapshot,
   useThreadPreviewState,
@@ -363,6 +364,18 @@ function DesktopPreviewView({
     if (!localApi || !url) return;
     void localApi.shell.openExternal(url).catch(() => undefined);
   }, [url]);
+
+  // A blank tab beside this one, for a page the main process loads into it.
+  const openBlankTab = useCallback(async () => {
+    const result = await openPreviewSession({ openPreview: open, threadRef });
+    if (result._tag !== "Success") return null;
+    useRightPanelStore.getState().openBrowser(threadRef, result.value.tabId);
+    return previewRuntimeTabId(
+      threadRef,
+      readThreadPreviewState(threadRef).serverEpoch,
+      result.value.tabId,
+    );
+  }, [open, threadRef]);
 
   const handlePictureInPicture = useCallback(() => {
     if (!tabId) return;
@@ -768,7 +781,7 @@ function DesktopPreviewView({
         onOpenInBrowser={tabId ? handleOpenInBrowser : undefined}
         siteActions={
           runtimeTabId && previewBridge
-            ? previewSiteActions(previewBridge, runtimeTabId)
+            ? previewSiteActions(previewBridge, runtimeTabId, openBlankTab)
             : undefined
         }
         onCapture={previewBridge && tabId ? handleCapture : undefined}

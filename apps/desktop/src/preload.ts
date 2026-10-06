@@ -297,8 +297,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     captureThumbnail: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_CAPTURE_THUMBNAIL_CHANNEL, { tabId }),
     siteInfo: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_SITE_INFO_CHANNEL, { tabId }),
-    openSiteSettings: (tabId) =>
-      ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_SITE_SETTINGS_CHANNEL, { tabId }),
+    openSiteSettings: (tabId, targetTabId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_SITE_SETTINGS_CHANNEL, { tabId, targetTabId }),
     clearSiteData: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_SITE_DATA_CHANNEL, { tabId }),
     revealArtifact: (path) =>

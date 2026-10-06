@@ -6,6 +6,7 @@ import { squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runti
 import {
   FILL_PREVIEW_VIEWPORT,
   PREVIEW_AUTOMATION_OPERATIONS,
+  type DesktopPreviewBridge,
   type EnvironmentId,
   type PreviewAutomationNavigateInput,
   type PreviewAutomationOpenInput,
@@ -21,6 +22,7 @@ import {
   type PreviewViewportSetting,
   type ScopedThreadRef,
 } from "@spiritdevs/contracts";
+import { isWebPageUrl } from "@spiritdevs/shared/preview";
 import { resolvePreviewViewport } from "@spiritdevs/shared/previewViewport";
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Atom } from "effect/unstable/reactivity";
@@ -54,6 +56,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { previewBridge } from "./previewBridge";
 import { usePreviewAutomationHostStore } from "./previewAutomationHostStore";
 import {
+  PreviewAutomationBrowserPageHostError,
   PreviewAutomationOperationError,
   PreviewAutomationOverlayTimeoutError,
   PreviewAutomationRecordingNotActiveError,
@@ -377,6 +380,20 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
           tabId,
           bridgeAvailable: Boolean(previewBridge),
         };
+        // Agents use websites and blank tabs. Browser pages, such as Chrome's
+        // settings, are the user's; the main process also refuses to drive them.
+        const requireWebPage = async (bridge: DesktopPreviewBridge, runtimeTabId: string) => {
+          const { url } = await bridge.automation.status(runtimeTabId);
+          if (url !== null && !isWebPageUrl(url)) {
+            throw new PreviewAutomationBrowserPageHostError({
+              requestId: request.requestId,
+              operation: request.operation,
+              environmentId,
+              threadId: request.threadId,
+              tabId,
+            });
+          }
+        };
         const requireReadyTab = async (options?: { readonly follow?: boolean }) => {
           const bridge = previewBridge;
           const readyTabId = tabId;
@@ -396,6 +413,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             request.operation,
             request.timeoutMs,
           );
+          await requireWebPage(bridge, runtimeTabId);
           return {
             bridge,
             tabId: readyTabId,
@@ -500,6 +518,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             }
             if (reusedExistingTab && resolvedInputUrl && previewBridge) {
               assertPreviewRuntimeCurrent(threadRef, activeTabId, activeRuntimeTabId, request);
+              await requireWebPage(previewBridge, activeRuntimeTabId);
               await previewBridge.navigate(activeRuntimeTabId, resolvedInputUrl);
               await waitForNavigationReadiness(
                 threadRef,

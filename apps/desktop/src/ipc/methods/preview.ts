@@ -10,6 +10,7 @@ import {
   DesktopPreviewAutomationWaitForInputSchema,
   DesktopPreviewConfigInputSchema,
   DesktopPreviewNavigateInputSchema,
+  DesktopPreviewOpenSiteSettingsInputSchema,
   DesktopPreviewRecordingArtifactSchema,
   DesktopPreviewRecordingReadInputSchema,
   DesktopPreviewRecordingReadResultSchema,
@@ -272,11 +273,15 @@ export const siteInfo = DesktopIpc.makeIpcMethod({
   }),
 });
 
-export const openSiteSettings = tabMethod(
-  IpcChannels.PREVIEW_OPEN_SITE_SETTINGS_CHANNEL,
-  "desktop.ipc.preview.openSiteSettings",
-  (manager, tabId) => manager.openSiteSettings(tabId),
-);
+export const openSiteSettings = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_OPEN_SITE_SETTINGS_CHANNEL,
+  payload: DesktopPreviewOpenSiteSettingsInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.openSiteSettings")(function* ({ tabId, targetTabId }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.openSiteSettings(tabId, targetTabId);
+  }),
+});
 
 export const clearSiteData = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_CLEAR_SITE_DATA_CHANNEL,

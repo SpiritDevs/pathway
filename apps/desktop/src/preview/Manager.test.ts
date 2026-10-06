@@ -241,6 +241,10 @@ const withManager = <A>(
     return yield* use(manager);
   }).pipe(Effect.provide(layer), Effect.scoped);
 
+/** The error an operation fails with, or null when it succeeds. */
+const failureOf = <A>(effect: Effect.Effect<A, PreviewManager.PreviewManagerError>) =>
+  effect.pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => null }));
+
 interface TestCapturedPreviewImage {
   readonly toJPEG: () => Buffer;
   readonly getSize: () => { readonly width: number; readonly height: number };
@@ -536,47 +540,128 @@ describe("PreviewManager", () => {
     ),
   );
 
-  effectIt.effect("opens Site settings beside the tab only on the Pathway runtime", () =>
+  effectIt.effect("loads Site settings into the new tab from main, only on the runtime", () =>
     withManager((manager) =>
       Effect.gen(function* () {
-        fromId.mockReturnValue(
-          makeTestPreviewWebContents(async () => {
+        const site = makeTestPreviewWebContents(async () => {
+          throw new Error("unexpected capture");
+        });
+        const loadURL = vi.fn(async (_url: string) => undefined);
+        const blank = {
+          ...(makeTestPreviewWebContents(async () => {
             throw new Error("unexpected capture");
-          }),
-        );
-        const events: Array<{ tabId: string; url: string }> = [];
+          }, 43) as object),
+          getURL: () => "about:blank",
+          loadURL,
+        };
+        fromId.mockImplementation(((id: number) => (id === 43 ? blank : site)) as never);
+        const opened: Array<{ tabId: string; url: string }> = [];
         yield* manager.subscribeOpenInNewTab((event) =>
           Effect.sync(() => {
-            events.push(event);
+            opened.push(event);
           }),
         );
         yield* manager.createTab("tab_site");
         yield* manager.registerWebview("tab_site", 42);
 
         pathwayRuntime.current = undefined;
-        const stock = yield* manager
-          .openSiteSettings("tab_site")
-          .pipe(Effect.match({ onFailure: (error) => error._tag, onSuccess: () => "opened" }));
-        expect(stock).toBe("PreviewOperationError");
+        const stock = yield* failureOf(manager.openSiteSettings("tab_site", "tab_settings"));
+        expect(stock?._tag).toBe("PreviewOperationError");
         expect(yield* manager.siteInfo("tab_site")).toMatchObject({
           runtime: false,
           origin: "https://example.com",
           certificate: null,
         });
 
+        // The renderer asks right after opening the blank tab, usually before its webview registers.
         pathwayRuntime.current = {
           settingsUrl: (origin) =>
             `chrome://settings/content/siteDetails?site=${encodeURIComponent(origin)}`,
         };
         yield* manager
-          .openSiteSettings("tab_site")
+          .openSiteSettings("tab_site", "tab_settings")
           .pipe(Effect.ensuring(Effect.sync(() => (pathwayRuntime.current = undefined))));
-        expect(events).toEqual([
-          {
-            tabId: "tab_site",
-            url: "chrome://settings/content/siteDetails?site=https%3A%2F%2Fexample.com",
+        const settings = "chrome://settings/content/siteDetails?site=https%3A%2F%2Fexample.com";
+        expect(yield* manager.automationStatus("tab_settings")).toMatchObject({
+          url: settings,
+          loading: true,
+        });
+
+        yield* manager.createTab("tab_settings");
+        yield* manager.registerWebview("tab_settings", 43);
+        yield* Effect.yieldNow;
+
+        expect(loadURL.mock.calls).toEqual([[settings]]);
+        expect(opened).toEqual([]);
+        fromId.mockReset();
+      }),
+    ),
+  );
+
+  effectIt.effect("refuses to navigate to a browser page", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const error = yield* failureOf(
+          manager.navigate("tab_nav", "chrome://settings/clearBrowserData"),
+        );
+        expect(error).toMatchObject({
+          _tag: "PreviewOperationError",
+          operation: "navigate.normalizeUrl",
+        });
+        expect(yield* manager.automationStatus("tab_nav")).toMatchObject({ url: null });
+      }),
+    ),
+  );
+
+  effectIt.effect("refuses automation on a browser page", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const sendCommand = vi.fn(async (_method: string) => undefined);
+        fromId.mockReturnValue({
+          ...(makeTestPreviewWebContents(async () => {
+            throw new Error("unexpected capture");
+          }) as object),
+          getURL: () => "chrome://settings/content/siteDetails?site=https%3A%2F%2Fexample.com",
+          isDevToolsOpened: () => false,
+          debugger: {
+            isAttached: () => false,
+            attach: vi.fn(),
+            sendCommand,
+            on: vi.fn(),
+            off: vi.fn(),
           },
+        } as never);
+        yield* manager.createTab("tab_settings");
+        yield* manager.registerWebview("tab_settings", 42);
+
+        const refusals = yield* Effect.all([
+          failureOf(manager.automationEvaluate("tab_settings", { expression: "1" })),
+          failureOf(manager.automationClick("tab_settings", { x: 10, y: 10 })),
+          failureOf(manager.automationType("tab_settings", { text: "hello" })),
+          failureOf(manager.automationPress("tab_settings", { key: "Enter" })),
+          failureOf(manager.automationScroll("tab_settings", { deltaY: 100 })),
+          failureOf(manager.automationWaitFor("tab_settings", { text: "Settings" })),
+          failureOf(manager.automationSnapshot("tab_settings")),
         ]);
+
+        expect(refusals.map((error) => error?._tag)).toEqual(
+          Array(refusals.length).fill("PreviewOperationError"),
+        );
+        expect(
+          refusals.map((error) => (error as { operation?: string } | null)?.operation),
+        ).toEqual([
+          "evaluate.requireWebPage",
+          "click.requireWebPage",
+          "type.requireWebPage",
+          "press.requireWebPage",
+          "scroll.requireWebPage",
+          "waitFor.requireWebPage",
+          "snapshot.requireWebPage",
+        ]);
+        const pageCommands = sendCommand.mock.calls
+          .map(([method]) => method)
+          .filter((method) => method.startsWith("Runtime.evaluate") || method.startsWith("Input."));
+        expect(pageCommands).toEqual([]);
       }),
     ),
   );

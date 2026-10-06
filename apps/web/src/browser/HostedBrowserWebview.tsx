@@ -1,6 +1,7 @@
 "use client";
 
 import type { PreviewViewportSetting, ScopedThreadRef } from "@spiritdevs/contracts";
+import { isWebPageUrl } from "@spiritdevs/shared/preview";
 import { useShallow } from "zustand/react/shallow";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -47,6 +48,14 @@ declare global {
   }
 }
 
+/**
+ * What a restored or recovered webview loads. A browser page, such as Chrome's
+ * settings, opens blank: only the main process loads those, never server state.
+ */
+function webviewSrc(url: string | null): string {
+  return url !== null && url !== "" && isWebPageUrl(url) ? url : "about:blank";
+}
+
 export function HostedBrowserWebview(props: {
   readonly threadRef: ScopedThreadRef;
   readonly tabId: string;
@@ -66,7 +75,7 @@ export function HostedBrowserWebview(props: {
   );
   const activeProvider =
     providerEntries.find((entry) => entry.instanceId === thread?.providerInstanceId) ?? null;
-  const [initialSrc] = useState(() => initialUrl ?? "about:blank");
+  const [initialSrc] = useState(() => webviewSrc(initialUrl));
   const tabLeaseRef = useRef<AcquiredDesktopTab | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const webviewRef = useRef<ElectronWebview | null>(null);
@@ -142,7 +151,7 @@ export function HostedBrowserWebview(props: {
       recoveryTimeout = setTimeout(() => {
         recoveryTimeout = null;
         if (!disposed) {
-          setRecoverySrc(latestUrlRef.current ?? initialSrc);
+          setRecoverySrc(webviewSrc(latestUrlRef.current));
           setWebviewGeneration((generation) => generation + 1);
         }
       }, recovery.delayMs);
