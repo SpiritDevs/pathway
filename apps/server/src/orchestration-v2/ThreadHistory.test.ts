@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import {
   EventId,
+  OrchestrationV2ThreadDetailSnapshot,
+  OrchestrationV2ThreadDetailSnapshotWire,
   MessageId,
   ProviderInstanceId,
   RunId,
@@ -14,9 +16,11 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ProjectionStoreV2, layer as projectionStoreLayer } from "./ProjectionStore.ts";
+import { readToolOutput, threadProjectionPayload } from "./ThreadPayload.ts";
 import {
   narrowHistoryPageSupport,
   threadHistoryNeedsSnapshot,
@@ -25,6 +29,14 @@ import {
 
 const TestLayer = projectionStoreLayer.pipe(Layer.provideMerge(SqlitePersistenceMemory));
 const now = DateTime.makeUnsafe("2026-09-19T01:00:00Z");
+const legacySnapshotCodec = Schema.fromJsonString(
+  Schema.toCodecJson(OrchestrationV2ThreadDetailSnapshot),
+);
+const encodeLegacySnapshot = Schema.encodeEffect(legacySnapshotCodec);
+const decodeLegacySnapshot = Schema.decodeUnknownEffect(legacySnapshotCodec);
+const encodeWireSnapshot = Schema.encodeEffect(
+  Schema.fromJsonString(Schema.toCodecJson(OrchestrationV2ThreadDetailSnapshotWire)),
+);
 const instanceId = ProviderInstanceId.make("codex");
 
 const seedThread = Effect.fn("seedThread")(function* (
@@ -168,6 +180,66 @@ const seedThread = Effect.fn("seedThread")(function* (
 
 it.layer(TestLayer)("bounded thread history", (it) => {
   it.effect(
+    "sends references and previews while preserving legacy snapshots and complete output retrieval",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* ProjectionStoreV2;
+        const { threadId } = yield* seedThread("compact", 1);
+        const output = `first\n${"x".repeat(100_000)}\nlast`;
+        const item: OrchestrationV2TurnItem = {
+          id: TurnItemId.make("compact:tool"),
+          threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 2,
+          type: "command_execution",
+          status: "completed",
+          title: null,
+          input: "example",
+          output,
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+        };
+        yield* store.apply({
+          id: EventId.make("compact:tool-event"),
+          threadId,
+          occurredAt: now,
+          type: "turn-item.updated",
+          payload: item,
+        });
+        const snapshot = yield* store.getThreadSnapshot(threadId, { limit: 50 });
+        assert.strictEqual(threadProjectionPayload(snapshot.projection), snapshot.projection);
+        const legacy = yield* encodeLegacySnapshot(snapshot);
+        assert.deepEqual(yield* decodeLegacySnapshot(legacy), {
+          snapshotSequence: snapshot.snapshotSequence,
+          projection: snapshot.projection,
+          ...(snapshot.history === undefined ? {} : { history: snapshot.history }),
+        });
+        const compact = threadProjectionPayload(snapshot.projection, "compact-v1");
+        const encoded = yield* encodeWireSnapshot({ ...snapshot, projection: compact });
+        assert.isBelow(Buffer.byteLength(encoded), Buffer.byteLength(legacy) / 2);
+        assert.isFalse("item" in compact.visibleTurnItems[0]!);
+        assert.deepEqual(yield* readToolOutput(threadId, item.id), {
+          text: output,
+          totalBytes: Buffer.byteLength(output),
+          format: "text",
+        });
+        assert.isNull(yield* readToolOutput(ThreadId.make("another-thread"), item.id));
+        assert.isNull(yield* readToolOutput(threadId, TurnItemId.make("missing")));
+        assert.equal(
+          (yield* store.getThreadProjection(threadId)).turnItems.find((row) => row.id === item.id)
+            ?.type,
+          "command_execution",
+        );
+      }),
+  );
+
+  it.effect(
     "pages actual items inside one long run, preserves order, and jumps through the full index",
     () =>
       Effect.gen(function* () {
@@ -246,11 +318,39 @@ it.layer(TestLayer)("bounded thread history", (it) => {
           threadId: child.threadId,
           runId: child.runId,
         });
+        const inheritedTool = (yield* store.getThreadProjection(source.threadId)).turnItems[1]!;
+        if (inheritedTool.type !== "command_execution")
+          return assert.fail("Expected inherited command");
+        const output = `first\n${"x".repeat(100_000)}\nlast`;
+        yield* store.apply({
+          id: EventId.make("fork-source:large-output"),
+          threadId: source.threadId,
+          occurredAt: now,
+          type: "turn-item.updated",
+          payload: { ...inheritedTool, output },
+        });
         const full = yield* store.getThreadSnapshot(nested.threadId);
         const latest = yield* store.getThreadSnapshot(nested.threadId, { limit: 40 });
         assert.deepEqual(
           latest.projection.visibleTurnItems,
           full.projection.visibleTurnItems.slice(-40),
+        );
+        const referenced = threadProjectionPayload(latest.projection, "references-v1");
+        if (!("referencedTurnItems" in referenced))
+          return assert.fail("Expected reference payload");
+        const pool = new Map(
+          [...referenced.turnItems, ...referenced.referencedTurnItems].map((item) => [
+            item.id,
+            item,
+          ]),
+        );
+        assert.deepEqual(
+          referenced.visibleTurnItems.map((row) => pool.get(row.sourceItemId)),
+          latest.projection.visibleTurnItems.map((row) => row.item),
+        );
+        assert.equal(
+          new Set(referenced.referencedTurnItems.map((item) => item.id)).size,
+          referenced.referencedTurnItems.length,
         );
         const around = yield* store.getThreadSnapshot(nested.threadId, {
           limit: 40,
@@ -260,6 +360,19 @@ it.layer(TestLayer)("bounded thread history", (it) => {
           around.projection.visibleTurnItems,
           full.projection.visibleTurnItems.slice(0, 40),
         );
+        const compact = threadProjectionPayload(around.projection, "compact-v1");
+        if (!("referencedTurnItems" in compact)) return assert.fail("Expected compact payload");
+        const preview = compact.referencedTurnItems.find((item) => item.id === inheritedTool.id);
+        assert.equal(preview?.type, "command_execution");
+        if (preview?.type !== "command_execution")
+          return assert.fail("Expected inherited output preview");
+        assert.equal(preview.outputPreview?.totalBytes, Buffer.byteLength(output));
+        assert.deepEqual(yield* readToolOutput(source.threadId, inheritedTool.id), {
+          text: output,
+          totalBytes: Buffer.byteLength(output),
+          format: "text",
+        });
+        assert.isNull(yield* readToolOutput(nested.threadId, inheritedTool.id));
         yield* store.apply({
           id: EventId.make("source-rollback"),
           threadId: source.threadId,

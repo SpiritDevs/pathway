@@ -2,6 +2,7 @@ import type {
   OrchestrationV2ThreadDetailSnapshot,
   OrchestrationV2ThreadHistoryRequest,
   ThreadId,
+  TurnItemId,
 } from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -19,11 +20,13 @@ import {
   type RemoteEnvironmentRequestError,
 } from "../rpc/http.ts";
 import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
+import { resolveThreadProjectionPayload } from "./threadPayload.ts";
 
 // Bounded so a pathologically slow endpoint cannot block the (cheaper) socket
 // fallback for long. The cached thread renders while this runs, so the wait only
 // delays the transition to live data on the first open, not the initial paint.
 const DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS = 6_000;
+const DEFAULT_TOOL_OUTPUT_TIMEOUT_MS = 30_000;
 
 /**
  * Load a thread's detail snapshot over HTTP instead of embedding it in the
@@ -48,6 +51,7 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
     for (const [key, value] of Object.entries(input.history))
       requestUrl.searchParams.set(key, String(value));
   }
+  requestUrl.searchParams.set("payloadFormat", "compact-v1");
   const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
   const headers = yield* buildEnvironmentAuthHeaders(
     input.prepared.httpAuthorization,
@@ -55,18 +59,19 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
     requestUrl.href,
     input.signer,
   );
-  return yield* executeEnvironmentHttpRequest(
+  const snapshot = yield* executeEnvironmentHttpRequest(
     requestUrl.href,
     input.timeoutMs ?? DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS,
     withEnvironmentCredentials(
       input.prepared.httpAuthorization,
       client.orchestration.threadSnapshot({
         params: { threadId: input.threadId },
-        query: input.history ?? {},
+        query: { ...input.history, payloadFormat: "compact-v1" },
         headers,
       }),
     ),
   );
+  return { ...snapshot, projection: resolveThreadProjectionPayload(snapshot.projection) };
 });
 
 export type FetchEnvironmentThreadSnapshotError = RemoteEnvironmentRequestError;
@@ -153,3 +158,36 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
     });
   }),
 );
+
+/** Uses the same environment credentials and relay proof as snapshot loading. */
+export const fetchEnvironmentToolOutput = Effect.fn(
+  "clientRuntime.state.fetchEnvironmentToolOutput",
+)(function* (input: {
+  readonly prepared: PreparedConnection;
+  readonly threadId: ThreadId;
+  readonly itemId: TurnItemId;
+}) {
+  const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+  const endpoint = environmentEndpointUrl(
+    input.prepared.httpBaseUrl,
+    `/api/orchestration/threads/${encodeURIComponent(input.threadId)}/items/${encodeURIComponent(input.itemId)}/output`,
+  );
+  const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
+  const headers = yield* buildEnvironmentAuthHeaders(
+    input.prepared.httpAuthorization,
+    "GET",
+    endpoint,
+    signer,
+  );
+  return yield* executeEnvironmentHttpRequest(
+    endpoint,
+    DEFAULT_TOOL_OUTPUT_TIMEOUT_MS,
+    withEnvironmentCredentials(
+      input.prepared.httpAuthorization,
+      client.orchestration.toolOutput({
+        params: { threadId: input.threadId, itemId: input.itemId },
+        headers,
+      }),
+    ),
+  );
+});

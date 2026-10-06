@@ -17,6 +17,7 @@ import {
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationEventStore from "../persistence/Services/OrchestrationEventStore.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
+import { readToolOutput, threadProjectionPayload } from "./ThreadPayload.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 
 function isThreadNotFound(error: unknown): boolean {
@@ -122,9 +123,24 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             );
           return {
             snapshotSequence: snapshot.snapshotSequence,
-            projection: snapshot.projection,
+            projection: threadProjectionPayload(snapshot.projection, args.query.payloadFormat),
             ...(snapshot.history === undefined ? {} : { history: snapshot.history }),
           };
+        }),
+      )
+      .handle(
+        "toolOutput",
+        Effect.fn("environment.orchestration.toolOutput")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          const output = yield* readToolOutput(args.params.threadId, args.params.itemId).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+            Effect.catch((cause) =>
+              failEnvironmentInternal("orchestration_tool_output_failed", cause),
+            ),
+          );
+          if (output === null) return yield* failEnvironmentNotFound("tool_output_not_found");
+          return output;
         }),
       );
   }),

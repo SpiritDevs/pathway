@@ -363,6 +363,91 @@ const deleted = (sequence = 3): OrchestrationV2ThreadStreamItem => {
 };
 
 describe("EnvironmentThreads", () => {
+  it.effect(
+    "resolves compact socket snapshots and keeps previews through replay and reconnect",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ completionMarker: true, historySupport: true });
+        const now = DateTime.makeUnsafe("2026-10-07T00:00:00Z");
+        const item: OrchestrationV2TurnItem = {
+          id: TurnItemId.make("tool:compact"),
+          threadId: THREAD_ID,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          type: "command_execution",
+          status: "completed",
+          title: null,
+          input: "example",
+          output: "first\n… output omitted …\nlast",
+          outputPreview: { totalBytes: 100_000, format: "text" },
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+        };
+        yield* Queue.offer(harness.inputs, {
+          kind: "snapshot",
+          snapshotSequence: 10,
+          history: { hasOlder: true, hasNewer: false, index: [] },
+          projection: {
+            ...BASE_PROJECTION,
+            payloadFormat: "compact-v1",
+            turnItems: [item],
+            referencedTurnItems: [],
+            visibleTurnItems: [
+              {
+                position: 50,
+                visibility: "local",
+                sourceThreadId: THREAD_ID,
+                sourceItemId: item.id,
+              },
+            ],
+          },
+        });
+        yield* Queue.offer(harness.inputs, {
+          kind: "event",
+          sequence: 11,
+          event: {
+            id: EventId.make("event:compact"),
+            threadId: THREAD_ID,
+            occurredAt: now,
+            type: "turn-item.updated",
+            payload: { ...item, output: "new preview" },
+          },
+        });
+        yield* Queue.offer(harness.inputs, synchronized());
+        const state = yield* awaitThreadState(
+          harness.observed,
+          (value) =>
+            value.status === "live" &&
+            Option.isSome(value.data) &&
+            value.data.value.turnItems[0]?.type === "command_execution" &&
+            value.data.value.turnItems[0].output === "new preview",
+        );
+        const projection = Option.getOrThrow(state.data);
+        expect(projection.visibleTurnItems[0]!.item).toEqual(projection.turnItems[0]);
+        expect(projection.visibleTurnItems[0]!.position).toBe(50);
+        yield* harness.clearSession;
+        yield* Effect.yieldNow;
+        yield* harness.replaceSession;
+        expect(yield* Queue.take(harness.subscriptionStarts)).toBe(1);
+        expect(yield* Queue.take(harness.subscriptionStarts)).toBe(2);
+        yield* Effect.yieldNow;
+        expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(11);
+        yield* TestClock.adjust("500 millis");
+        yield* Effect.yieldNow;
+        const cached = yield* Ref.get(harness.savedThreads);
+        expect(cached.at(-1)?.projection.turnItems[0]).toMatchObject({
+          output: "new preview",
+          outputPreview: { totalBytes: 100_000, format: "text" },
+        });
+      }),
+  );
+
   it.effect("publishes cached data immediately from a warm cache", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_PROJECTION });

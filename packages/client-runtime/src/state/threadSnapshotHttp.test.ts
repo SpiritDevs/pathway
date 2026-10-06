@@ -2,6 +2,8 @@ import {
   EnvironmentId,
   MessageId,
   OrchestrationV2ThreadDetailSnapshot,
+  OrchestrationV2ThreadDetailSnapshotWire,
+  type OrchestrationV2TurnItem,
   TurnItemId,
 } from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -13,9 +15,10 @@ import * as Schema from "effect/Schema";
 import { PrimaryConnectionTarget, type PreparedConnection } from "../connection/model.ts";
 import { remoteHttpClientLayer } from "../rpc/http.ts";
 import { ManagedRelayDpopSigner, type ManagedRelayDpopProofInput } from "../relay/managedRelay.ts";
-import { v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
+import { v2Now, v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
 import {
   fetchEnvironmentThreadSnapshot,
+  fetchEnvironmentToolOutput,
   ThreadSnapshotLoader,
   threadSnapshotLoaderLayer,
 } from "./threadSnapshotHttp.ts";
@@ -45,13 +48,15 @@ const SNAPSHOT: OrchestrationV2ThreadDetailSnapshot = {
     index: [{ messageId: MessageId.make("message:1"), role: "user", preview: "Earlier prompt" }],
   },
 };
-const encodeSnapshot = Schema.encodeSync(Schema.toCodecJson(OrchestrationV2ThreadDetailSnapshot));
+const encodeWireSnapshot = Schema.encodeSync(
+  Schema.toCodecJson(OrchestrationV2ThreadDetailSnapshotWire),
+);
 
-function httpHarness(snapshot = SNAPSHOT) {
+function httpHarness(snapshot: OrchestrationV2ThreadDetailSnapshotWire = SNAPSHOT) {
   const calls: Array<{ url: URL; init: RequestInit }> = [];
   const fetchFn: typeof fetch = (request, init) => {
     calls.push({ url: new URL(String(request)), init: init ?? {} });
-    return Promise.resolve(Response.json(encodeSnapshot(snapshot)));
+    return Promise.resolve(Response.json(encodeWireSnapshot(snapshot)));
   };
   return { calls, layer: remoteHttpClientLayer(fetchFn) };
 }
@@ -83,6 +88,99 @@ describe("thread history HTTP requests", () => {
         ),
     );
   }
+  it.effect("resolves compact wire items before returning a client snapshot", () =>
+    Effect.gen(function* () {
+      const item: OrchestrationV2TurnItem = {
+        id: TurnItemId.make("item:compact"),
+        threadId: v2ThreadId,
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        type: "command_execution",
+        status: "completed",
+        title: null,
+        input: "example",
+        output: "first\n… output omitted …\nlast",
+        outputPreview: { totalBytes: 100_000, format: "text" },
+        startedAt: v2Now,
+        completedAt: v2Now,
+        updatedAt: v2Now,
+      };
+      const reference = {
+        position: 50,
+        visibility: "local" as const,
+        sourceThreadId: v2ThreadId,
+        sourceItemId: item.id,
+      };
+      const harness = httpHarness({
+        ...SNAPSHOT,
+        projection: {
+          ...v2Projection,
+          payloadFormat: "compact-v1",
+          turnItems: [item],
+          referencedTurnItems: [],
+          visibleTurnItems: [reference],
+        },
+      });
+      const snapshot = yield* fetchEnvironmentThreadSnapshot({
+        prepared: PREPARED,
+        threadId: v2ThreadId,
+        signer: Option.none(),
+      }).pipe(Effect.provide(harness.layer));
+      expect(snapshot.projection.visibleTurnItems[0]!.item).toBe(snapshot.projection.turnItems[0]);
+      expect(snapshot.projection.visibleTurnItems[0]!.item).toEqual(item);
+      expect(snapshot.projection).not.toHaveProperty("payloadFormat");
+    }),
+  );
+
+  it.effect(
+    "fetches complete output on demand with an environment-scoped relay proof and opaque item id",
+    () =>
+      Effect.gen(function* () {
+        const calls: URL[] = [];
+        const proofs: ManagedRelayDpopProofInput[] = [];
+        const signer = ManagedRelayDpopSigner.of({
+          thumbprint: Effect.succeed("test-thumbprint"),
+          createProof: (input) =>
+            Effect.sync(() => {
+              proofs.push(input);
+              return "test-proof";
+            }),
+        });
+        const fetchFn: typeof fetch = (request, init) => {
+          calls.push(new URL(String(request)));
+          expect(new Headers(init?.headers).get("authorization")).toBe("DPoP test-access");
+          expect(new Headers(init?.headers).get("dpop")).toBe("test-proof");
+          return Promise.resolve(
+            Response.json({ text: "complete output", totalBytes: 15, format: "text" }),
+          );
+        };
+        const itemId = TurnItemId.make("item:opaque/+?&=id");
+        const output = yield* fetchEnvironmentToolOutput({
+          prepared: {
+            ...PREPARED,
+            httpAuthorization: { _tag: "Dpop", accessToken: "test-access" },
+          },
+          threadId: v2ThreadId,
+          itemId,
+        }).pipe(
+          Effect.provideService(ManagedRelayDpopSigner, signer),
+          Effect.provide(remoteHttpClientLayer(fetchFn)),
+        );
+        expect(output.text).toBe("complete output");
+        expect(calls).toHaveLength(1);
+        expect(calls[0]!.pathname).toBe(
+          `/api/orchestration/threads/${encodeURIComponent(v2ThreadId)}/items/${encodeURIComponent(itemId)}/output`,
+        );
+        expect(proofs).toEqual([
+          { method: "GET", url: calls[0]!.href, accessToken: "test-access" },
+        ]);
+      }),
+  );
 
   it.effect(
     "requests a bounded latest page with local session credentials and decodes its index",
@@ -101,7 +199,10 @@ describe("thread history HTTP requests", () => {
         const { url, init } = harness.calls[0]!;
         expect(url.origin).toBe("https://environment.example.test");
         expect(url.pathname).toBe(`/api/orchestration/threads/${v2ThreadId}`);
-        expect([...url.searchParams]).toEqual([["limit", "50"]]);
+        expect([...url.searchParams]).toEqual([
+          ["limit", "50"],
+          ["payloadFormat", "compact-v1"],
+        ]);
         expect(init.method).toBe("GET");
         expect(init.credentials).toBe("include");
       }),
@@ -165,7 +266,7 @@ describe("thread history HTTP requests", () => {
       }).pipe(Effect.provide(harness.layer));
 
       expect(snapshot).toEqual(legacySnapshot);
-      expect(harness.calls[0]!.url.search).toBe("");
+      expect(harness.calls[0]!.url.searchParams.get("payloadFormat")).toBe("compact-v1");
     }),
   );
 });

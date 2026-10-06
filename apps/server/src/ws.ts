@@ -107,6 +107,7 @@ import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import { threadEventPayload, threadProjectionPayload } from "./orchestration-v2/ThreadPayload.ts";
 import { ProjectionStoreThreadNotFoundError } from "./orchestration-v2/ProjectionStore.ts";
 import {
   threadHistoryNeedsSnapshot,
@@ -1055,7 +1056,7 @@ const makeWsRpcLayer = (
                 Stream.map((stored) => ({
                   kind: "event" as const,
                   sequence: stored.sequence,
-                  event: stored.event,
+                  event: threadEventPayload(stored.event, input.payloadFormat),
                 })),
                 Stream.mapError(
                   (cause) =>
@@ -1078,7 +1079,7 @@ const makeWsRpcLayer = (
                 Stream.map((stored) => ({
                   kind: "event" as const,
                   sequence: stored.sequence,
-                  event: stored.event,
+                  event: threadEventPayload(stored.event, input.payloadFormat),
                 })),
                 Stream.mapError(
                   (cause) =>
@@ -1156,7 +1157,7 @@ const makeWsRpcLayer = (
               Stream.make({
                 kind: "snapshot" as const,
                 snapshotSequence,
-                projection,
+                projection: threadProjectionPayload(projection, input.payloadFormat),
                 ...(snapshot.history === undefined ? {} : { history: snapshot.history }),
               }),
               completionMarker,
