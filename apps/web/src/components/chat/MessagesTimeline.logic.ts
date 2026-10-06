@@ -283,17 +283,22 @@ export interface StableMessagesTimelineRowsState {
   result: MessagesTimelineRow[];
 }
 
+export const EMPTY_ATTACHED_PULL_REQUEST_ITEM_IDS: ReadonlySet<string> = new Set();
+
 export function resolveActiveAttachedPullRequestItemIds(
   rows: ReadonlyArray<MessagesTimelineRow>,
+  previous: ReadonlySet<string> = EMPTY_ATTACHED_PULL_REQUEST_ITEM_IDS,
 ): ReadonlySet<string> {
   const localItems = rows.flatMap((row) =>
     row.kind === "event" && row.projectedItem.visibility === "local"
       ? [row.projectedItem.item]
       : [],
   );
-  return new Set(
+  const next = new Set(
     resolveActivePullRequestAttachments(localItems).map((attachment) => attachment.itemId),
   );
+  if (next.size === 0) return EMPTY_ATTACHED_PULL_REQUEST_ITEM_IDS;
+  return next.size === previous.size && [...next].every((id) => previous.has(id)) ? previous : next;
 }
 
 export function computeMessageDurationStart(

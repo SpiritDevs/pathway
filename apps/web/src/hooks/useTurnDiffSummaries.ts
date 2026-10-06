@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useMemo } from "react";
-import { deriveThreadCheckpointSummaries } from "@spiritdevs/client-runtime/state/thread-checkpoints";
-import type { OrchestrationV2ThreadProjection, ScopedThreadRef } from "@spiritdevs/contracts";
+import { createThreadCheckpointSummaryDeriver } from "@spiritdevs/client-runtime/state/thread-checkpoints";
+import type { ScopedThreadRef } from "@spiritdevs/contracts";
 import { Atom } from "effect/unstable/reactivity";
 import { inferCheckpointTurnCountByRunId } from "../session-logic";
 import { environmentThreadDetails } from "../state/threads";
@@ -59,11 +59,10 @@ const threadTurnDiffSummariesAtom = Atom.family((key: string) => {
     ScopedThreadRef["environmentId"],
     ScopedThreadRef["threadId"],
   ];
+  const derive = createThreadCheckpointSummaryDeriver();
   return Atom.make((get) => {
     const thread = get(environmentThreadDetails.threadAtom({ environmentId, threadId }));
-    return thread === null
-      ? EMPTY_TURN_DIFF_SUMMARIES
-      : deriveThreadCheckpointSummaries(thread.projection);
+    return thread === null ? EMPTY_TURN_DIFF_SUMMARIES : derive(thread.projection);
   }).pipe(
     Atom.withEquality(sameTurnDiffSummaries),
     Atom.withLabel(`web-thread-turn-diff-summaries:${key}`),
@@ -86,21 +85,5 @@ export function useThreadTurnDiffSummaries(ref: ScopedThreadRef | null) {
     () => inferCheckpointTurnCountByRunId(turnDiffSummaries),
     [turnDiffSummaries],
   );
-  return { turnDiffSummaries, inferredCheckpointTurnCountByRunId };
-}
-
-export function useTurnDiffSummaries(projection: OrchestrationV2ThreadProjection | null) {
-  const turnDiffSummaries = useMemo<ReadonlyArray<TurnDiffSummary>>(() => {
-    if (projection === null) {
-      return [];
-    }
-    return deriveThreadCheckpointSummaries(projection);
-  }, [projection]);
-
-  const inferredCheckpointTurnCountByRunId = useMemo(
-    () => inferCheckpointTurnCountByRunId(turnDiffSummaries),
-    [turnDiffSummaries],
-  );
-
   return { turnDiffSummaries, inferredCheckpointTurnCountByRunId };
 }

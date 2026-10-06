@@ -202,7 +202,7 @@ import {
   useEnsureProjectWorkspace,
 } from "../hooks/useEnsureProjectWorkspace";
 import { useTheme } from "../hooks/useTheme";
-import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
+import { useThreadTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useWorkspaceTopBarActionsHost } from "./navigation/WorkspaceTopBar";
@@ -3787,7 +3787,7 @@ function ChatViewContent(props: ChatViewProps) {
     isLocalDraftThread && timelineEntries.length === 0 && !isWorking && !draftHeroDockRequested;
   const draftHeroTransition = useDraftHeroLayoutTransition(isDraftHeroState);
   const captureDraftHeroComposerRect = draftHeroTransition.captureComposerRect;
-  const { turnDiffSummaries } = useTurnDiffSummaries(serverProjection);
+  const { turnDiffSummaries } = useThreadTurnDiffSummaries(isServerThread ? activeThreadRef : null);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
     const byMessageId = new Map<MessageId, TurnDiffSummary>();
     for (const summary of turnDiffSummaries) {
