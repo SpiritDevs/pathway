@@ -47,6 +47,7 @@ import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -205,7 +206,7 @@ const companiesRepairCurrentUserWorkspaceReference = makeFunctionReference<
   unknown
 >(convexFunctionName(COMPANIES_REPAIR_CURRENT_USER_WORKSPACE_FUNCTION));
 
-/** Runs before company discovery so every engine starts from a complete company bootstrap. */
+/** Repairs workspace data before a cold engine may fetch its bootstrap. */
 export const repairCloudSyncCurrentUserWorkspace = Effect.fn("web.cloudSync.repairCurrentUser")(
   function* (client: Pick<ConvexClientLike, "mutation">) {
     return yield* Effect.tryPromise({
@@ -398,6 +399,7 @@ interface RunningEngine {
 export interface CloudSyncConnection {
   readonly transport: SyncTransport["Service"];
   readonly companies: Stream.Stream<CloudSyncCompanyListing, SyncTransportError>;
+  readonly repairWorkspace?: Effect.Effect<void, SyncTransportError>;
 }
 
 export interface CloudSyncEnginesOptions {
@@ -479,7 +481,7 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
    * than caught. No error at all (an interrupted subscription, a clean end) counts as retryable:
    * that is the ordinary "socket went away" ending this loop exists for.
    */
-  const engineProgram = (company: CloudSyncCompany) =>
+  const engineProgram = (company: CloudSyncCompany, initialized: Deferred.Deferred<void>) =>
     Effect.gen(function* () {
       const engine = yield* makeSyncEngine({
         companyId: company.companyId,
@@ -502,10 +504,12 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
                 publishStatus?.(company.companyId, status),
               ].filter((effect): effect is Effect.Effect<void> => effect !== undefined),
               { discard: true },
-            );
+            ).pipe(Effect.andThen(Deferred.succeed(initialized, undefined)));
           }),
           Effect.forkChild,
         );
+      } else {
+        yield* Deferred.succeed(initialized, undefined);
       }
       const drive = Effect.gen(function* () {
         yield* engine.run;
@@ -544,8 +548,9 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
    * loop. A store failure is treated as retryable — it is the local replica, not a verdict from the
    * server.
    */
-  const superviseCompany = (company: CloudSyncCompany) =>
-    engineProgram(company).pipe(
+  const superviseCompany = (company: CloudSyncCompany, initialized: Deferred.Deferred<void>) =>
+    engineProgram(company, initialized).pipe(
+      Effect.ensuring(Deferred.succeed(initialized, undefined)),
       Effect.catch((error) =>
         Effect.logWarning("Cloud sync engine stopped; retrying.", {
           companyId: company.companyId,
@@ -578,6 +583,13 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
         }) ?? Effect.void,
     );
     const connection = yield* options.connect;
+    const repaired = yield* Deferred.make<void, SyncTransportError>();
+    let repairStarted = false;
+    const transport = SyncTransport.of({
+      ...connection.transport,
+      bootstrap: (input) =>
+        Deferred.await(repaired).pipe(Effect.andThen(() => connection.transport.bootstrap(input))),
+    });
     const running = yield* Ref.make(new Map<CompanyId, RunningEngine>());
 
     const stopCompany = Effect.fn("web.cloudSync.stopCompany")(function* (companyId: CompanyId) {
@@ -596,6 +608,7 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
       company: CloudSyncCompany,
     ) {
       const scope = yield* Scope.make();
+      const initialized = yield* Deferred.make<void>();
       yield* Scope.addFinalizer(
         scope,
         Effect.all(
@@ -615,13 +628,16 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
           ) ?? Effect.void
         );
       }
-      yield* superviseCompany(company).pipe(
-        Effect.provideService(SyncTransport, connection.transport),
+      yield* superviseCompany(company, initialized).pipe(
+        Effect.provideService(SyncTransport, transport),
         Effect.forkIn(scope),
       );
       yield* Ref.update(running, (current) =>
         new Map(current).set(company.companyId, { company, scope }),
       );
+      // Publish the restored replica before workspace repair starts. Record its scope first
+      // so interruption while storage is loading still releases the engine.
+      yield* Deferred.await(initialized).pipe(Effect.interruptible);
     }, Effect.uninterruptible);
 
     const purgeCompany = Effect.fn("web.cloudSync.purgeCompany")(function* (companyId: CompanyId) {
@@ -678,6 +694,18 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
       yield* Effect.forEach(new Set([...stop, ...revoked]), stopCompany, { discard: true });
       yield* Effect.forEach(revoked, purgeCompany, { discard: true });
       yield* Effect.forEach(start, startCompany, { discard: true });
+      if (!repairStarted && listing.decodedCleanly) {
+        repairStarted = true;
+        yield* (connection.repairWorkspace ?? Effect.void).pipe(
+          Effect.retry({
+            while: isRetryableTransportError,
+            schedule: Schedule.spaced(restartDelay),
+          }),
+          Effect.tapError((error) => Effect.logError("Cloud workspace repair failed.", { error })),
+          Deferred.into(repaired),
+          Effect.forkScoped,
+        );
+      }
     });
 
     yield* Effect.addFinalizer(() =>
@@ -849,12 +877,15 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
       fetchToken,
       client,
     });
-    yield* repairCloudSyncCurrentUserWorkspace(client).pipe(
-      Effect.mapError((error) => classifyCloudSyncConnectionError(error, tokenAvailable)),
-    );
     return {
       transport,
-      companies: cloudSyncCompaniesStream(client),
+      companies: cloudSyncCompaniesStream(client).pipe(
+        Stream.mapError((error) => classifyCloudSyncConnectionError(error, tokenAvailable)),
+      ),
+      repairWorkspace: repairCloudSyncCurrentUserWorkspace(client).pipe(
+        Effect.mapError((error) => classifyCloudSyncConnectionError(error, tokenAvailable)),
+        Effect.asVoid,
+      ),
     } satisfies CloudSyncConnection;
   });
 

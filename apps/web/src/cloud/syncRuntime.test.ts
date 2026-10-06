@@ -26,6 +26,7 @@ import {
 } from "@spiritdevs/contracts/cloudSync";
 import { EnvironmentRegistrationId } from "@spiritdevs/contracts/cloudProject";
 import { CompanyId, MembershipId, RoleId } from "@spiritdevs/contracts/company";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -485,7 +486,7 @@ describe("decodeCloudSyncCompanies", () => {
 });
 
 describe("repairCloudSyncCurrentUserWorkspace", () => {
-  it.effect("repairs company bootstrap data before company discovery starts", () => {
+  it.effect("requests the workspace repair mutation", () => {
     let calls = 0;
     return Effect.gen(function* () {
       const result = yield* repairCloudSyncCurrentUserWorkspace({
@@ -583,6 +584,183 @@ const connectionTo = (
 ): CloudSyncConnection => ({ transport, companies: Stream.fromQueue(listings) });
 
 describe("runCloudSyncEngines", () => {
+  it.effect(
+    "propagates terminal repair failure to cold bootstrap without requesting a snapshot",
+    () =>
+      Effect.gen(function* () {
+        const { transport } = yield* makeFeedTransport();
+        const store = yield* makeMemorySyncStore();
+        const election = yield* makeWebLeaderElection({
+          scope: "repair-failure",
+          locks: makeInProcessWebLockManager(),
+        });
+        const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
+        const handles =
+          yield* Queue.unbounded<import("./companySyncEngines").CompanySyncEngineMutationHandle>();
+        const error = new SyncTransportError({ reason: "unauthorized", message: "repair refused" });
+        let bootstrapCalls = 0;
+        const supervisor = yield* Effect.forkChild(
+          runCloudSyncEngines({
+            clientId: SyncClientId.make("client-1"),
+            election,
+            connect: Effect.succeed({
+              ...connectionTo(
+                SyncTransport.of({
+                  ...transport,
+                  bootstrap: () => {
+                    bootstrapCalls++;
+                    return Effect.never;
+                  },
+                }),
+                listings,
+              ),
+              repairWorkspace: Effect.fail(error),
+            }),
+            publishCompanySyncEngineHandle: (_id, handle) =>
+              handle ? Queue.offer(handles, handle) : Effect.void,
+          }).pipe(
+            Effect.provideService(SyncStore, store.service),
+            Effect.provide(captureLogs().layer),
+          ),
+          { startImmediately: true },
+        );
+        yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
+        const handle = yield* Queue.take(handles);
+        expect(yield* handle.sync).toMatchObject({ outcome: "failed", error });
+        expect(bootstrapCalls).toBe(0);
+        yield* Fiber.interrupt(supervisor);
+      }),
+  );
+  it.effect("interrupts pending repair when leadership is released", () =>
+    Effect.gen(function* () {
+      const { transport } = yield* makeFeedTransport();
+      const store = yield* makeMemorySyncStore();
+      const election = yield* makeWebLeaderElection({
+        scope: "repair-interrupt",
+        locks: makeInProcessWebLockManager(),
+      });
+      const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
+      const started = yield* Deferred.make<void>();
+      const stopped = yield* Deferred.make<void>();
+      const supervisor = yield* Effect.forkChild(
+        runCloudSyncEngines({
+          clientId: SyncClientId.make("client-1"),
+          election,
+          connect: Effect.succeed({
+            ...connectionTo(transport, listings),
+            repairWorkspace: Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.ensuring(Deferred.succeed(stopped, undefined)),
+            ),
+          }),
+        }).pipe(Effect.provideService(SyncStore, store.service)),
+        { startImmediately: true },
+      );
+      yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(supervisor);
+      yield* Deferred.await(stopped);
+    }),
+  );
+
+  for (const cache of ["complete", "incomplete", "old-generation"] as const) {
+    it.effect(`publishes a ${cache} cache before repair and gates cold bootstrap`, () =>
+      Effect.gen(function* () {
+        const { transport } = yield* makeFeedTransport();
+        const store = yield* makeMemorySyncStore();
+        yield* store.service.commit(COMPANY_A, {
+          checkpoint: {
+            schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
+            bootstrapGeneration:
+              cache === "old-generation"
+                ? SYNC_BOOTSTRAP_GENERATION - 1
+                : SYNC_BOOTSTRAP_GENERATION,
+            companyId: COMPANY_A,
+            cursor: CompanyVersion.make(1),
+            authorizationEpoch: AuthorizationEpoch.make(0),
+            bootstrapped: cache !== "incomplete",
+          },
+          upsertEntities: [
+            {
+              entityKind: "environmentRegistration",
+              entityId: SyncEntityId.make("cached-environment"),
+              version: CompanyVersion.make(1),
+              payload: environmentRegistration(REMOTE_ENVIRONMENT_ID),
+            },
+          ],
+        });
+        const election = yield* makeWebLeaderElection({
+          scope: `repair-${cache}`,
+          locks: makeInProcessWebLockManager(),
+        });
+        const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
+        const repairStarted = yield* Deferred.make<void>();
+        const finishRepair = yield* Deferred.make<void>();
+        const handles =
+          yield* Queue.unbounded<import("./companySyncEngines").CompanySyncEngineMutationHandle>();
+        const bootstrapStarted = yield* Queue.unbounded<void>();
+        let initialized = false;
+        let complete = false;
+        let entities = 0;
+        let bootstrapCalls = 0;
+        const supervisor = yield* Effect.forkChild(
+          runCloudSyncEngines({
+            clientId: SyncClientId.make("client-1"),
+            election,
+            connect: Effect.succeed({
+              ...connectionTo(
+                SyncTransport.of({
+                  ...transport,
+                  listChanges: () => Effect.never,
+                  bootstrap: () => {
+                    bootstrapCalls += 1;
+                    return Queue.offer(bootstrapStarted, undefined).pipe(
+                      Effect.andThen(Effect.never),
+                    );
+                  },
+                }),
+                listings,
+              ),
+              repairWorkspace: Effect.gen(function* () {
+                expect(initialized).toBe(true);
+                expect(complete).toBe(cache === "complete");
+                expect(entities).toBe(cache === "complete" ? 1 : 0);
+                yield* Deferred.succeed(repairStarted, undefined);
+                yield* Deferred.await(finishRepair);
+              }),
+            }),
+            publishCompanyRegistryReplica: (_id, replica) =>
+              Effect.sync(() => {
+                if (replica) entities = replica.view.size;
+              }),
+            publishCompanySyncStatus: (_id, status) =>
+              Effect.sync(() => {
+                if (status) {
+                  initialized = true;
+                  complete = status.bootstrapComplete;
+                }
+              }),
+            publishCompanySyncEngineHandle: (_id, handle) =>
+              handle ? Queue.offer(handles, handle) : Effect.void,
+          }).pipe(Effect.provideService(SyncStore, store.service)),
+          { startImmediately: true },
+        );
+        yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
+        yield* Deferred.await(repairStarted);
+        const handle = yield* Queue.take(handles);
+        const cycle = yield* Effect.forkChild(handle.sync, { startImmediately: true });
+        expect(bootstrapCalls).toBe(0);
+        yield* Deferred.succeed(finishRepair, undefined);
+        if (cache !== "complete") {
+          yield* Queue.take(bootstrapStarted);
+          expect(bootstrapCalls).toBe(1);
+        }
+        yield* Fiber.interrupt(cycle);
+        yield* Fiber.interrupt(supervisor);
+      }),
+    );
+  }
+
   it.effect(
     "publishes the complete discovery set before starting company engines and clears it on stop",
     () =>
