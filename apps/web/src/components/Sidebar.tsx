@@ -290,6 +290,7 @@ const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "pathway:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "pathway:sidebar:snoozed-expanded";
+const WORKING_SHELF_EXPANDED_KEY = "pathway:sidebar:working-expanded";
 // Manual arrangement of the active inbox. Local-only, unlike pinned order:
 // there is no server order key for unpinned threads, so the arranged order
 // lives here as a list of scoped thread keys. Module-level schema/default so
@@ -2170,6 +2171,7 @@ export default function Sidebar() {
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
+  const collapseWorkingThreads = useClientSettings((s) => s.sidebarCollapseWorkingThreads);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
@@ -2662,6 +2664,7 @@ export default function Sidebar() {
     pinnedThreads,
     reorderablePinnedKeys,
     activeThreads,
+    workingThreads,
     snoozedThreads,
     settledThreads,
     snoozeNow,
@@ -2684,9 +2687,10 @@ export default function Sidebar() {
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
+    const working: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
     const loading: EnvironmentThreadShell[] = [];
-    const sections = { active, pinned, snoozed, settled, loading };
+    const sections = { active, pinned, working, snoozed, settled, loading };
     for (const thread of visible) {
       const capabilities = lifecycleCapabilities.get(thread.environmentId);
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
@@ -2702,7 +2706,13 @@ export default function Sidebar() {
         projectCwd: projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
         changeRequests: changeRequestStateByKey,
       });
-      sections[section].push(thread);
+      // Opt-in: inbox threads with an agent at work (not waiting on approval
+      // or input) tuck into the Working shelf until they need the user.
+      const isWorking =
+        section === "active" &&
+        collapseWorkingThreads &&
+        resolveSidebarThreadStatus(thread) === "working";
+      sections[isWorking ? "working" : section].push(thread);
     }
     // One shared rule on every platform (see sortPinnedThreadsByOrderKey):
     // user-arranged keys first, keyless threads in creation order below.
@@ -2721,6 +2731,7 @@ export default function Sidebar() {
           .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
       ),
       activeThreads: sortThreadsForSidebar(active),
+      workingThreads: sortThreadsForSidebar(working),
       // Soonest wake first: "what comes back next" is the shelf's question.
       snoozedThreads: snoozed.toSorted(
         (left, right) =>
@@ -2734,6 +2745,7 @@ export default function Sidebar() {
   }, [
     autoSettleAfterDays,
     changeRequestStateByKey,
+    collapseWorkingThreads,
     lifecycleCapabilities,
     unavailableEnvironmentIds,
     projectCwdByKey,
@@ -2943,6 +2955,28 @@ export default function Sidebar() {
     });
   }, [routeThreadKey, settledShelfExpanded, visibleSettledThreads]);
 
+  // The working shelf mirrors snoozed: collapsed by default, keeping only
+  // the routed thread visible below its header.
+  const [workingShelfExpanded, setWorkingShelfExpanded] = useLocalStorage(
+    WORKING_SHELF_EXPANDED_KEY,
+    false,
+    Schema.Boolean,
+  );
+  const toggleWorkingShelf = useCallback(
+    () => setWorkingShelfExpanded((value) => !value),
+    [setWorkingShelfExpanded],
+  );
+  const visibleWorkingThreads = useMemo(
+    () =>
+      getVisibleThreadsForCollapsibleShelf({
+        threads: workingThreads,
+        isExpanded: workingShelfExpanded,
+        activeThreadKey: routeThreadKey,
+        getThreadKey: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      }),
+    [routeThreadKey, workingShelfExpanded, workingThreads],
+  );
+
   // The snoozed shelf is collapsed by default: out of the way, never gone.
   // Hidden threads don't participate in jump shortcuts or multi-select; only
   // the routed thread remains as a one-row preview below a collapsed header.
@@ -3001,10 +3035,17 @@ export default function Sidebar() {
     () => [
       ...visiblePinnedThreads,
       ...displayedActiveThreads,
+      ...visibleWorkingThreads,
       ...visibleSnoozedThreads,
       ...renderedSettledThreads,
     ],
-    [visiblePinnedThreads, displayedActiveThreads, visibleSnoozedThreads, renderedSettledThreads],
+    [
+      visiblePinnedThreads,
+      displayedActiveThreads,
+      visibleWorkingThreads,
+      visibleSnoozedThreads,
+      renderedSettledThreads,
+    ],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -4824,7 +4865,8 @@ export default function Sidebar() {
                 role="list"
                 className={cn(
                   "flex flex-col gap-px",
-                  snoozedThreads.length + settledThreads.length > 0 && "flex-1",
+                  workingThreads.length + snoozedThreads.length + settledThreads.length > 0 &&
+                    "flex-1",
                 )}
               >
                 {(() => {
@@ -5116,10 +5158,50 @@ export default function Sidebar() {
                   }
                   // The shelves sink to the bottom of the sidebar when the
                   // list is short; once it overflows they simply trail it.
-                  if (snoozedThreads.length > 0 || settledThreads.length > 0) {
+                  if (
+                    workingThreads.length > 0 ||
+                    snoozedThreads.length > 0 ||
+                    settledThreads.length > 0
+                  ) {
                     items.push(
                       <li key="shelves-spacer" aria-hidden className="flex-1 list-none" />,
                     );
+                  }
+                  // Working shelf: first below the spacer, in the sky hue of
+                  // the rows' Working label. Rows stay full cards.
+                  if (workingThreads.length > 0) {
+                    items.push(
+                      <li
+                        key="working-shelf-header"
+                        data-thread-selection-safe
+                        className="list-none"
+                      >
+                        <button
+                          type="button"
+                          onClick={toggleWorkingShelf}
+                          aria-expanded={workingShelfExpanded}
+                          data-testid="sidebar-working-shelf-toggle"
+                          className="mb-1 mt-3 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
+                        >
+                          <span className="text-xs font-medium text-sky-600 dark:text-sky-400">
+                            {workingShelfExpanded
+                              ? "Working"
+                              : `Working (${workingThreads.length})`}
+                          </span>
+                          <span className="h-px flex-1 bg-sky-500/20 dark:bg-sky-400/15" />
+                          <ChevronDownIcon
+                            aria-hidden
+                            className={cn(
+                              "size-3 text-sky-600 transition-transform dark:text-sky-400",
+                              workingShelfExpanded && "rotate-180",
+                            )}
+                          />
+                        </button>
+                      </li>,
+                    );
+                    for (const thread of visibleWorkingThreads) {
+                      items.push(renderThreadRow(thread, "active"));
+                    }
                   }
                   // Snoozed shelf: between the inbox and Settled — out of the
                   // way, never gone. The header always renders while anything
@@ -5228,6 +5310,7 @@ export default function Sidebar() {
           visibleQueuedThreadCount === 0 &&
           pinnedThreads.length +
             activeThreads.length +
+            workingThreads.length +
             snoozedThreads.length +
             settledThreads.length ===
             0 ? (

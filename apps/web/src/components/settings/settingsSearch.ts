@@ -482,6 +482,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "collapse-working-threads",
+    title: "Collapse working threads",
+    to: "/settings/general",
+  },
+  {
     id: "preferred-terminal",
     title: "Open in Terminal",
     to: "/settings/general",
