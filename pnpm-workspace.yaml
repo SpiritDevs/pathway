@@ -75,6 +75,8 @@ minimumReleaseAgeExclude:
 overrides:
   # dbus-next uses native Unix sockets instead of the obsolete usocket addon.
   "dbus-next>usocket": "-"
+  # Packaging rebuilds native modules for the bundled Electron; node-abi must know its ABI (Electron 44 needs 4.35+).
+  "@electron/rebuild>node-abi": ^4.35.0
   "@clerk/backend": "catalog:"
   "@clerk/clerk-js": "catalog:"
   "@clerk/clerk-js>@base-org/account": "-"

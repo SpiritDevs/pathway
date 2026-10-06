@@ -2264,6 +2264,16 @@ const deployConvexBackend = Effect.fn("deployConvexBackend")(function* (input: {
   yield* Effect.log(`[desktop-artifact] Convex backend deployed to ${plan.deploymentName}.`);
 });
 
+// Electron 44 requires macOS 13. electron-updater compares this against os.release(), which is the
+// Darwin version (macOS 13 is Darwin 22). Raise it when Electron raises its minimum.
+export const MAC_MINIMUM_DARWIN_VERSION = "22.0.0";
+
+/** Stops electron-updater offering a macOS update to systems the bundled Electron cannot run on. */
+export function withMacMinimumSystemVersion(manifest: string): string {
+  const withoutExisting = manifest.replace(/^minimumSystemVersion:.*(?:\n|$)/mu, "");
+  return `${withoutExisting.trimEnd()}\nminimumSystemVersion: '${MAC_MINIMUM_DARWIN_VERSION}'\n`;
+}
+
 const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   options: ResolvedBuildOptions,
 ) {
@@ -2686,7 +2696,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     if (!stat || stat.type !== "File") continue;
 
     const to = path.join(options.outputDir, entry);
-    yield* fs.copyFile(from, to);
+    if (options.platform === "mac" && entry.endsWith("-mac.yml")) {
+      const manifest = yield* fs.readFileString(from);
+      yield* fs.writeFileString(to, withMacMinimumSystemVersion(manifest));
+    } else {
+      yield* fs.copyFile(from, to);
+    }
     copiedArtifacts.push(to);
   }
 

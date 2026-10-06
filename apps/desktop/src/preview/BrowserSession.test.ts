@@ -41,7 +41,7 @@ describe("BrowserSession", () => {
         on: vi.fn(),
         clearCache: vi.fn(() => Promise.resolve()),
         clearStorageData: vi.fn(() => Promise.resolve()),
-        getUserAgent: vi.fn(() => "Mozilla/5.0 Electron/41.5.0 pathway/0.0.27"),
+        getUserAgent: vi.fn(() => "Mozilla/5.0 Electron/44.5.1 pathway/0.0.27"),
         setPermissionRequestHandler: vi.fn(),
         setPermissionCheckHandler: vi.fn(),
         setUserAgent: vi.fn(),
@@ -186,7 +186,7 @@ describe("BrowserSession", () => {
         assert.strictEqual(browserSession.clearStorageData.mock.calls.length, 1);
         assert.deepEqual(browserSession.clearStorageData.mock.calls[0], [
           {
-            storages: ["cookies", "localstorage", "indexdb", "websql", "serviceworkers"],
+            storages: ["cookies", "localstorage", "indexdb", "serviceworkers"],
           },
         ]);
         assert.strictEqual(browserSession.clearCache.mock.calls.length, 1);

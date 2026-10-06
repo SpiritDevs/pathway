@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import { beforeEach, vi } from "vite-plus/test";
 
 const { openExternalMock, writeTextMock } = vi.hoisted(() => ({
@@ -54,6 +55,18 @@ describe("ElectronShell", () => {
       const result = yield* electronShell.openExternal("https://example.com/path");
 
       assert.equal(result, false);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
+  it.effect("waits for text writes and propagates clipboard failures", () =>
+    Effect.gen(function* () {
+      const electronShell = yield* ElectronShell.ElectronShell;
+      writeTextMock.mockResolvedValueOnce(undefined);
+      yield* electronShell.copyText("Copied text");
+      assert.deepEqual(writeTextMock.mock.calls, [["Copied text"]]);
+
+      writeTextMock.mockRejectedValueOnce(new Error("Clipboard unavailable"));
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(electronShell.copyText("Failed copy"))));
     }).pipe(Effect.provide(ElectronShell.layer)),
   );
 });
