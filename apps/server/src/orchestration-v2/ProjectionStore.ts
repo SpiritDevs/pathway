@@ -122,6 +122,31 @@ export const ProjectionStoreV2Error = Schema.Union([
 ]);
 export type ProjectionStoreV2Error = typeof ProjectionStoreV2Error.Type;
 
+/** Mutable process-owned state, including terminal dependencies needed to retry an answer. */
+export type ProviderRuntimeRecoveryProjection = Pick<
+  OrchestrationV2ThreadProjection,
+  | "thread"
+  | "runs"
+  | "attempts"
+  | "nodes"
+  | "subagents"
+  | "providerSessions"
+  | "providerThreads"
+  | "providerTurns"
+  | "runtimeRequests"
+  | "messages"
+  | "turnItems"
+>;
+
+export type DelegatedCompletionRecoveryProjection = Pick<
+  OrchestrationV2ThreadProjection,
+  "thread" | "runs" | "subagents" | "providerThreads"
+> & {
+  readonly messages: ReadonlyArray<
+    Pick<OrchestrationV2ConversationMessage, "id" | "delegatedCompletion">
+  >;
+};
+
 export interface ProjectionStoreV2Shape {
   readonly apply: (
     event: OrchestrationV2DomainEvent,
@@ -136,6 +161,12 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, ProjectionStoreV2Error>;
+  readonly getProviderRuntimeRecoveryProjection: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderRuntimeRecoveryProjection, ProjectionStoreV2Error>;
+  readonly getDelegatedCompletionRecoveryProjection: (
+    threadId: ThreadId,
+  ) => Effect.Effect<DelegatedCompletionRecoveryProjection, ProjectionStoreV2Error>;
   /** Conservative candidates for process-loss recovery, including archived threads. */
   readonly getRecoveryThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
@@ -178,6 +209,85 @@ export interface ProjectionStoreV2Shape {
     OrchestrationV2ThreadDetailSnapshot & { readonly schemaVersion: number },
     ProjectionStoreV2Error
   >;
+}
+
+function runtimeRecoveryProjection(
+  projection: OrchestrationV2ThreadProjection,
+): ProviderRuntimeRecoveryProjection {
+  const pending = (status: string) => ["pending", "running", "waiting"].includes(status);
+  const runtimeRequests = projection.runtimeRequests.filter(
+    (request) =>
+      request.status === "pending" ||
+      (request.status === "resolved" &&
+        request.responseCommandId !== undefined &&
+        ["message", "live"].includes(request.responseCapability.type)),
+  );
+  const retryRequests = runtimeRequests.filter(
+    (request) => request.status === "resolved" && request.responseCapability.type === "message",
+  );
+  const turnItems = projection.turnItems.filter(
+    (item) =>
+      pending(item.status) ||
+      (item.type === "user_input_request" &&
+        retryRequests.some((request) => request.id === item.requestId)),
+  );
+  const activeRunIds = new Set(
+    projection.runs
+      .filter((run) =>
+        ["queued", "preparing", "starting", "running", "waiting"].includes(run.status),
+      )
+      .map((run) => run.id),
+  );
+  return {
+    thread: projection.thread,
+    runs: projection.runs.filter(
+      (run) => activeRunIds.has(run.id) || turnItems.some((item) => item.runId === run.id),
+    ),
+    attempts: projection.attempts.filter((attempt) => activeRunIds.has(attempt.runId)),
+    nodes: projection.nodes.filter(
+      (node) => pending(node.status) || retryRequests.some((request) => request.nodeId === node.id),
+    ),
+    subagents: projection.subagents.filter((task) => pending(task.status)),
+    providerSessions: projection.providerSessions.filter(
+      (session) => !["stopped", "error"].includes(session.status),
+    ),
+    providerThreads: projection.providerThreads,
+    providerTurns: projection.providerTurns.filter((turn) =>
+      ["pending", "running"].includes(turn.status),
+    ),
+    runtimeRequests,
+    messages: projection.messages.filter((message) => message.streaming),
+    turnItems,
+  };
+}
+
+function delegatedCompletionRecoveryProjection(
+  projection: OrchestrationV2ThreadProjection,
+): DelegatedCompletionRecoveryProjection {
+  const messages = projection.messages.map((message) => ({
+    id: message.id,
+    ...(message.delegatedCompletion === undefined
+      ? {}
+      : { delegatedCompletion: message.delegatedCompletion }),
+  }));
+  const runs = projection.runs.filter(
+    (run) =>
+      run.delegatedCompletion !== undefined ||
+      messages.some(
+        (message) => message.id === run.userMessageId && message.delegatedCompletion !== undefined,
+      ),
+  );
+  return {
+    thread: projection.thread,
+    runs,
+    messages,
+    subagents: projection.subagents.filter(
+      (task) => task.origin === "app_owned" && runs.some((run) => run.id === task.runId),
+    ),
+    providerThreads: projection.providerThreads.filter((thread) =>
+      runs.some((run) => run.providerThreadId === thread.id),
+    ),
+  };
 }
 
 export class ProjectionStoreV2 extends Context.Service<ProjectionStoreV2, ProjectionStoreV2Shape>()(
@@ -2437,6 +2547,213 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         };
       });
 
+    const getProviderRuntimeRecoveryProjection = Effect.fn(
+      "ProjectionStoreV2.getProviderRuntimeRecoveryProjection",
+    )(
+      function* (threadId: ThreadId) {
+        const threadRows = yield* sql<PayloadRow>`
+        SELECT payload_json FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
+      `;
+        if (threadRows[0] === undefined) {
+          return yield* new ProjectionStoreThreadNotFoundError({ threadId });
+        }
+        const thread = yield* decodeThreadPayload(threadRows[0].payload_json);
+        const requestRows = yield* sql<PayloadRow>`
+        SELECT payload_json FROM orchestration_v2_projection_runtime_requests
+        WHERE thread_id = ${threadId} AND (
+          status = 'pending' OR (
+            status = 'resolved'
+            AND json_extract(payload_json, '$.responseCapability.type') IN ('message', 'live')
+            AND json_extract(payload_json, '$.responseCommandId') IS NOT NULL
+          )
+        ) ORDER BY created_at, runtime_request_id
+      `;
+        const runtimeRequests = yield* decodeRows(
+          decodeRuntimeRequestPayload,
+          threadId,
+        )(requestRows);
+        // An undelivered asynchronous answer reopens its item and node even if they are terminal.
+        const retryRequests = runtimeRequests.filter(
+          (request) =>
+            request.status === "resolved" && request.responseCapability.type === "message",
+        );
+        const itemRows = yield* sql<PayloadRow>`
+        SELECT payload_json FROM orchestration_v2_projection_turn_items
+        WHERE thread_id = ${threadId} AND (
+          status IN ('pending', 'running', 'waiting') OR (
+            type = 'user_input_request'
+            AND json_extract(payload_json, '$.requestId') IN ${sql.in(retryRequests.map((request) => request.id))}
+          )
+        ) ORDER BY ordinal, turn_item_id
+      `;
+        const turnItems = yield* decodeRows(decodeTurnItemPayload, threadId)(itemRows);
+        const runRows = yield* sql<PayloadRow>`
+        SELECT payload_json FROM orchestration_v2_projection_runs
+        WHERE thread_id = ${threadId} AND (
+          status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
+          OR run_id IN ${sql.in(turnItems.flatMap((item) => (item.runId === null ? [] : [item.runId])))}
+        ) ORDER BY ordinal
+      `;
+        const runs = yield* decodeRows(decodeRunPayload, threadId)(runRows);
+        const activeRunIds = runs
+          .filter((run) =>
+            ["queued", "preparing", "starting", "running", "waiting"].includes(run.status),
+          )
+          .map((run) => run.id);
+        const [
+          attemptRows,
+          nodeRows,
+          subagentRows,
+          sessionRows,
+          providerThreadRows,
+          turnRows,
+          messageRows,
+        ] = yield* Effect.all([
+          // Completed attempts still link a nonterminal provider turn to its run.
+          sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_run_attempts
+          WHERE thread_id = ${threadId} AND run_id IN ${sql.in(activeRunIds)}
+          ORDER BY run_id, attempt_ordinal`,
+          sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_nodes
+          WHERE thread_id = ${threadId} AND (
+            status IN ('pending', 'running', 'waiting')
+            OR node_id IN ${sql.in(retryRequests.map((request) => request.nodeId))}
+          ) ORDER BY COALESCE(started_at, ''), node_id`,
+          sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_subagents
+          WHERE thread_id = ${threadId} AND status IN ('pending', 'running', 'waiting')
+          ORDER BY COALESCE(started_at, ''), subagent_id`,
+          sql<PayloadRow>`SELECT sessions.payload_json FROM orchestration_v2_projection_provider_sessions AS sessions
+          JOIN orchestration_v2_projection_provider_session_bindings AS bindings
+            ON bindings.provider_session_id = sessions.provider_session_id
+          WHERE bindings.thread_id = ${threadId} AND sessions.status NOT IN ('stopped', 'error')
+          ORDER BY sessions.updated_at, sessions.provider_session_id`,
+          // Retain the original ordered provider roster for stale background-item identity fallback.
+          sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_provider_threads
+          WHERE thread_id = ${threadId}
+            OR owner_node_id IN (SELECT node_id FROM orchestration_v2_projection_nodes WHERE thread_id = ${threadId})
+            OR provider_thread_id IN (SELECT provider_thread_id FROM orchestration_v2_projection_subagents
+              WHERE thread_id = ${threadId} AND provider_thread_id IS NOT NULL)
+          ORDER BY COALESCE(first_run_ordinal, 0), provider_thread_id`,
+          sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_provider_turns
+          WHERE thread_id = ${threadId} AND status IN ('pending', 'running')
+          ORDER BY provider_thread_id, ordinal`,
+          sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_messages
+          WHERE thread_id = ${threadId} AND streaming = 1 ORDER BY created_at, message_id`,
+        ]);
+        const [
+          attempts,
+          nodes,
+          subagents,
+          providerSessions,
+          providerThreads,
+          providerTurns,
+          messages,
+        ] = yield* Effect.all([
+          decodeRows(decodeRunAttemptPayload, threadId)(attemptRows),
+          decodeRows(decodeNodePayload, threadId)(nodeRows),
+          decodeRows(decodeSubagentPayload, threadId)(subagentRows),
+          decodeRows(decodeProviderSessionPayload, threadId)(sessionRows),
+          decodeRows(decodeProviderThreadPayload, threadId)(providerThreadRows),
+          decodeRows(decodeProviderTurnPayload, threadId)(turnRows),
+          decodeRows(decodeMessagePayload, threadId)(messageRows),
+        ]);
+        return {
+          thread,
+          runs,
+          attempts,
+          nodes,
+          subagents,
+          providerSessions,
+          providerThreads,
+          providerTurns,
+          runtimeRequests,
+          messages,
+          turnItems,
+        } satisfies ProviderRuntimeRecoveryProjection;
+      },
+      (effect, threadId) =>
+        effect.pipe(
+          Effect.mapError((cause) =>
+            isProjectionStoreThreadNotFoundError(cause)
+              ? cause
+              : new ProjectionStoreReadError({ threadId, cause }),
+          ),
+        ),
+    );
+
+    const decodeDeliveryMessage = Schema.decodeUnknownEffect(
+      Schema.fromJsonString(
+        Schema.Struct({
+          id: OrchestrationV2ConversationMessageJsonSchema.fields.id,
+          delegatedCompletion:
+            OrchestrationV2ConversationMessageJsonSchema.fields.delegatedCompletion,
+        }),
+      ),
+    );
+    const getDelegatedCompletionRecoveryProjection = Effect.fn(
+      "ProjectionStoreV2.getDelegatedCompletionRecoveryProjection",
+    )(
+      function* (threadId: ThreadId) {
+        const threadRows = yield* sql<PayloadRow>`
+        SELECT payload_json FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
+      `;
+        if (threadRows[0] === undefined) {
+          return yield* new ProjectionStoreThreadNotFoundError({ threadId });
+        }
+        const thread = yield* decodeThreadPayload(threadRows[0].payload_json);
+        // Message presence and ownership are sufficient; never return or decode text/attachments.
+        const messageRows = yield* sql<PayloadRow>`
+        SELECT json_patch(json_object('id', message_id), json_object(
+          'delegatedCompletion', json_extract(payload_json, '$.delegatedCompletion')
+        )) AS payload_json FROM orchestration_v2_projection_messages
+        WHERE thread_id = ${threadId} ORDER BY created_at, message_id
+      `;
+        const messages = yield* decodeRows(decodeDeliveryMessage, threadId)(messageRows);
+        const runRows = yield* sql<PayloadRow>`
+        SELECT payload_json FROM orchestration_v2_projection_runs
+        WHERE thread_id = ${threadId} AND (
+          json_type(payload_json, '$.delegatedCompletion') = 'object'
+          OR json_extract(payload_json, '$.userMessageId') IN ${sql.in(messages.filter((message) => message.delegatedCompletion !== undefined).map((message) => message.id))}
+        ) ORDER BY ordinal
+      `;
+        const runs = yield* decodeRows(decodeRunPayload, threadId)(runRows);
+        const [subagentRows, providerThreadRows] = yield* Effect.all([
+          sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_subagents
+          WHERE thread_id = ${threadId} AND origin = 'app_owned'
+            AND run_id IN ${sql.in(runs.map((run) => run.id))}
+          ORDER BY COALESCE(started_at, ''), subagent_id`,
+          sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_provider_threads
+          WHERE provider_thread_id IN ${sql.in(runs.flatMap((run) => (run.providerThreadId === null ? [] : [run.providerThreadId])))}
+            AND (
+              thread_id = ${threadId}
+              OR owner_node_id IN (SELECT node_id FROM orchestration_v2_projection_nodes WHERE thread_id = ${threadId})
+              OR provider_thread_id IN (SELECT provider_thread_id FROM orchestration_v2_projection_subagents
+                WHERE thread_id = ${threadId} AND provider_thread_id IS NOT NULL)
+            )
+          ORDER BY COALESCE(first_run_ordinal, 0), provider_thread_id`,
+        ]);
+        const subagents = yield* decodeRows(decodeSubagentPayload, threadId)(subagentRows);
+        const providerThreads = yield* decodeRows(
+          decodeProviderThreadPayload,
+          threadId,
+        )(providerThreadRows);
+        return {
+          thread,
+          runs,
+          subagents,
+          providerThreads,
+          messages,
+        } satisfies DelegatedCompletionRecoveryProjection;
+      },
+      (effect, threadId) =>
+        effect.pipe(
+          Effect.mapError((cause) =>
+            isProjectionStoreThreadNotFoundError(cause)
+              ? cause
+              : new ProjectionStoreReadError({ threadId, cause }),
+          ),
+        ),
+    );
+
     const getThreadProjection: ProjectionStoreV2Shape["getThreadProjection"] = (threadId) =>
       readProjection(threadId, new Set());
 
@@ -3383,6 +3700,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getShellSnapshot,
       getThreadShell,
       getThreadProjection,
+      getProviderRuntimeRecoveryProjection,
+      getDelegatedCompletionRecoveryProjection,
       getRecoveryThreadIds,
       getThreadMetadata,
       getQueuedRunThreadIds,
@@ -3553,6 +3872,24 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               .map((projection) => projection.thread.id)
               .toSorted(),
           ),
+        ),
+      getProviderRuntimeRecoveryProjection: (threadId) =>
+        Ref.get(replayState).pipe(
+          Effect.flatMap((state) => {
+            const projection = state.projections.get(threadId);
+            return projection === undefined
+              ? Effect.fail(new ProjectionStoreThreadNotFoundError({ threadId }))
+              : Effect.succeed(runtimeRecoveryProjection(projection));
+          }),
+        ),
+      getDelegatedCompletionRecoveryProjection: (threadId) =>
+        Ref.get(replayState).pipe(
+          Effect.flatMap((state) => {
+            const projection = state.projections.get(threadId);
+            return projection === undefined
+              ? Effect.fail(new ProjectionStoreThreadNotFoundError({ threadId }))
+              : Effect.succeed(delegatedCompletionRecoveryProjection(projection));
+          }),
         ),
       getThreadProjection: (threadId) =>
         Effect.gen(function* () {

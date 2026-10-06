@@ -3,6 +3,11 @@ import { assert, it } from "@effect/vitest";
 import {
   EventId,
   ContextTransferId,
+  CommandId,
+  RuntimeRequestId,
+  TurnItemId,
+  RunAttemptId,
+  ProviderTurnId,
   MessageId,
   NodeId,
   type OrchestrationV2AppThread,
@@ -45,6 +50,9 @@ import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import { ThreadForkServiceV2 } from "./ThreadForkService.ts";
+import * as EffectWorker from "./EffectWorker.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
+import * as ProviderRuntimeRecovery from "./ProviderRuntimeRecoveryService.ts";
 
 const now = DateTime.makeUnsafe("2026-09-12T00:00:00.000Z");
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -150,6 +158,132 @@ for (const [name, layer] of [
   ["SQLite", storesLayer],
   ["memory", layerMemory],
 ] as const) {
+  it.effect(`${name}: runtime recovery retains completed attempts and stale run identities`, () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const data = fixture("runtime-dependencies");
+      const originalInstance = ProviderInstanceId.make("original-provider");
+      const activeRunId = RunId.make("run:active");
+      const attemptId = RunAttemptId.make("attempt:completed");
+      const providerThreadId = ProviderThreadId.make("provider:active");
+      const providerTurnId = ProviderTurnId.make("turn:active");
+      const nodeId = NodeId.make("node:active");
+      const itemId = TurnItemId.make("item:background");
+      yield* store.apply(threadEvent(data.thread));
+      yield* store.apply(
+        runEvent({
+          ...data.run,
+          providerInstanceId: originalInstance,
+          delegatedCompletion: undefined,
+        }),
+      );
+      yield* store.apply(
+        runEvent({
+          ...data.run,
+          id: activeRunId,
+          ordinal: 2,
+          status: "running",
+          delegatedCompletion: undefined,
+        }),
+      );
+      yield* store.apply({
+        id: EventId.make("event:completed-attempt"),
+        type: "run-attempt.updated",
+        threadId: data.threadId,
+        occurredAt: now,
+        payload: {
+          id: attemptId,
+          runId: activeRunId,
+          attemptOrdinal: 1,
+          rootNodeId: nodeId,
+          providerInstanceId,
+          providerThreadId,
+          providerTurnId,
+          reason: "initial",
+          status: "completed",
+          startedAt: now,
+          completedAt: now,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:active-turn"),
+        type: "provider-turn.updated",
+        threadId: data.threadId,
+        occurredAt: now,
+        payload: {
+          id: providerTurnId,
+          providerThreadId,
+          nodeId,
+          runAttemptId: attemptId,
+          nativeTurnRef: null,
+          ordinal: 1,
+          status: "running",
+          startedAt: now,
+          completedAt: null,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:background-item"),
+        type: "turn-item.updated",
+        threadId: data.threadId,
+        occurredAt: now,
+        payload: {
+          id: itemId,
+          threadId: data.threadId,
+          runId: data.run.id,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "waiting",
+          title: "Background work",
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          type: "command_execution",
+          input: "example",
+          output: "",
+        },
+      });
+      const events: Array<OrchestrationV2DomainEvent> = [];
+      yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService.pipe(
+        Effect.flatMap((service) => service.recover),
+        Effect.provide(ProviderRuntimeRecovery.layer),
+        Effect.provide(
+          Layer.mergeAll(
+            idAllocatorLayer,
+            Layer.mock(EventSinkV2)({
+              commitCommand: (input) =>
+                Effect.sync(() => {
+                  events.push(...input.events);
+                  return { committed: true, cancelledEffectCount: 0 } as never;
+                }),
+            }),
+            Layer.mock(EffectOutbox.EffectOutboxV2)({
+              reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
+            }),
+            Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({
+              runOnce: Effect.succeed(false),
+            }),
+          ),
+        ),
+        Effect.provideService(ProjectionStoreV2, {
+          ...store,
+          getRecoveryThreadIds: () => Effect.succeed([data.threadId]),
+          getThreadProjection: () => Effect.die("Recovery must use the narrow read"),
+        }),
+      );
+      const turn = events.find((event) => event.type === "provider-turn.updated");
+      assert.equal(turn?.payload.status, "cancelled");
+      const item = events.find((event) => event.type === "turn-item.updated");
+      assert.equal(item?.providerInstanceId, originalInstance);
+      assert.equal(item?.payload.status, "cancelled");
+      assert.isFalse(events.some((event) => event.type === "run-attempt.updated"));
+      assert.equal(events.filter((event) => event.type === "run.updated").length, 1);
+    }).pipe(Effect.provide(layer)),
+  );
   it.effect(
     `${name}: recovers only terminal app-owned children whose results are not transferred`,
     () =>
@@ -408,6 +542,173 @@ it.effect("SQLite: a malformed payload does not hide other recovery candidates",
   }).pipe(Effect.provide(storesLayer)),
 );
 
+it.effect(
+  "SQLite: narrow recovery excludes completed output and retains answer retry dependencies",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const data = fixture("narrow-runtime");
+      const requestId = RuntimeRequestId.make("request:retry");
+      const nodeId = NodeId.make("node:retry");
+      const itemId = TurnItemId.make("item:retry");
+      yield* store.apply(threadEvent(data.thread));
+      yield* store.apply(runEvent({ ...data.run, delegatedCompletion: undefined }));
+      yield* store.apply({
+        id: EventId.make("event:retry-request"),
+        type: "runtime-request.updated",
+        threadId: data.threadId,
+        occurredAt: now,
+        payload: {
+          id: requestId,
+          nodeId,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "resolved",
+          responseCommandId: CommandId.make("command:answer"),
+          responseMessageId: data.message.id,
+          responseCapability: {
+            type: "message",
+            providerThreadId: ProviderThreadId.make("provider:retry"),
+          },
+          createdAt: now,
+          resolvedAt: now,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:retry-node"),
+        type: "node.updated",
+        threadId: data.threadId,
+        occurredAt: now,
+        payload: {
+          id: nodeId,
+          threadId: data.threadId,
+          runId: data.run.id,
+          parentNodeId: null,
+          rootNodeId: nodeId,
+          kind: "user_input_request",
+          countsForRun: false,
+          status: "completed",
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          runtimeRequestId: requestId,
+          checkpointScopeId: null,
+          startedAt: now,
+          completedAt: now,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:retry-item"),
+        type: "turn-item.updated",
+        threadId: data.threadId,
+        occurredAt: now,
+        payload: {
+          id: itemId,
+          threadId: data.threadId,
+          runId: data.run.id,
+          nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          parentItemId: null,
+          nativeItemRef: null,
+          ordinal: 1,
+          status: "completed",
+          title: "Answer",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          type: "user_input_request",
+          requestId,
+          questions: [],
+        },
+      });
+      yield* sql`INSERT INTO orchestration_v2_projection_turn_items
+      (turn_item_id, thread_id, run_id, ordinal, type, status, updated_at, payload_json)
+      VALUES ('item:large-completed', ${data.threadId}, ${data.run.id}, 2, 'command_execution', 'completed', 'now', '{')`;
+      const recovery = yield* store.getProviderRuntimeRecoveryProjection(data.threadId);
+      assert.deepEqual(
+        recovery.runtimeRequests.map((request) => request.id),
+        [requestId],
+      );
+      assert.deepEqual(
+        recovery.nodes.map((node) => node.id),
+        [nodeId],
+      );
+      assert.deepEqual(
+        recovery.turnItems.map((item) => item.id),
+        [itemId],
+      );
+      assert.deepEqual(
+        recovery.runs.map((run) => run.id),
+        [data.run.id],
+      );
+      const delivery = yield* store.getDelegatedCompletionRecoveryProjection(data.threadId);
+      assert.isFalse("turnItems" in delivery);
+      assert.equal(
+        (yield* Effect.flip(store.getThreadProjection(data.threadId)))._tag,
+        "ProjectionStoreReadError",
+      );
+    }).pipe(Effect.provide(storesLayer)),
+);
+
+it.effect("SQLite: delivery recovery decodes message ownership without message bodies", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    const data = fixture("narrow-delivery");
+    const foreign = fixture("foreign-owner");
+    const foreignProviderThreadId = ProviderThreadId.make("provider:foreign");
+    const run = { ...data.run, providerThreadId: foreignProviderThreadId };
+    yield* store.apply(threadEvent(data.thread));
+    yield* store.apply(threadEvent(foreign.thread));
+    yield* store.apply(runEvent(run));
+    yield* store.apply(messageEvent(data.message));
+    yield* store.apply({
+      id: EventId.make("event:foreign-provider"),
+      type: "provider-thread.updated",
+      threadId: foreign.threadId,
+      occurredAt: now,
+      payload: {
+        id: foreignProviderThreadId,
+        driver,
+        providerInstanceId,
+        providerSessionId: null,
+        appThreadId: foreign.threadId,
+        ownerNodeId: null,
+        nativeThreadRef: null,
+        nativeConversationHeadRef: null,
+        status: "idle",
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+    assert.isEmpty((yield* store.getThreadProjection(data.threadId)).providerThreads);
+    // A body that cannot pass the full message schema must not prevent ownership reconciliation.
+    yield* sql`UPDATE orchestration_v2_projection_messages
+      SET payload_json = json_set(payload_json, '$.text', json('{}'), '$.attachments', json('{}'))
+      WHERE message_id = ${data.message.id}`;
+    const recovery = yield* store.getDelegatedCompletionRecoveryProjection(data.threadId);
+    assert.deepEqual(recovery.messages, [
+      { id: data.message.id, delegatedCompletion: data.message.delegatedCompletion },
+    ]);
+    assert.deepEqual(recovery.runs, [run]);
+    assert.isEmpty(
+      recovery.providerThreads,
+      "retain the full projection's provider ownership boundary",
+    );
+    assert.equal(
+      (yield* Effect.flip(store.getThreadProjection(data.threadId)))._tag,
+      "ProjectionStoreReadError",
+    );
+  }).pipe(Effect.provide(storesLayer)),
+);
+
 for (const status of ["completed", "interrupted", "failed", "cancelled", "rolled_back"] as const) {
   it.effect(
     `startup reconciles ${status} archived deliveries and re-offers pending work without reading unrelated archived threads`,
@@ -494,13 +795,20 @@ for (const status of ["completed", "interrupted", "failed", "cancelled", "rolled
         const reads: Array<ThreadId> = [];
         const offers: Array<ProviderContinuationRequest> = [];
         const restart = OrchestratorV2.pipe(
-          Effect.asVoid,
+          Effect.flatMap((orchestrator) =>
+            Effect.gen(function* () {
+              assert.isEmpty(reads, "layer acquisition must not reconcile deliveries");
+              yield* orchestrator.recoverDelegatedCompletions;
+            }),
+          ),
           Effect.provide(orchestratorLayer.pipe(Layer.provide(startupDependencies))),
           Effect.provideService(ProjectionStoreV2, {
             ...store,
             getThreadProjection: (threadId) =>
+              Effect.die(`Unexpected full projection read: ${threadId}`),
+            getDelegatedCompletionRecoveryProjection: (threadId) =>
               Effect.sync(() => reads.push(threadId)).pipe(
-                Effect.andThen(store.getThreadProjection(threadId)),
+                Effect.andThen(store.getDelegatedCompletionRecoveryProjection(threadId)),
               ),
           }),
           // All input events predate startup. Only the startup pass should repair
@@ -516,6 +824,8 @@ for (const status of ["completed", "interrupted", "failed", "cancelled", "rolled
         );
         yield* restart;
         assert.notInclude(reads, ordinary.threadId);
+        assert.equal(reads.filter((threadId) => threadId === pending.threadId).length, 1);
+        assert.equal(reads.filter((threadId) => threadId === archived.threadId).length, 2);
         const repaired = yield* store.getThreadProjection(archived.threadId);
         assert.deepEqual(repaired.runs[0]?.delegatedCompletion, {
           disposition: "open",
@@ -532,8 +842,10 @@ for (const status of ["completed", "interrupted", "failed", "cancelled", "rolled
         assert.equal(offers[0]?.delegatedCompletion?.messageId, pending.message.id);
 
         yield* sink.write({ events: [messageEvent(pending.message)] });
+        reads.length = 0;
         yield* restart;
         assert.equal(offers.length, 1, "a persisted delivery message must not be offered again");
+        assert.equal(reads.filter((threadId) => threadId === archived.threadId).length, 1);
         const afterRestart = yield* store.getThreadProjection(archived.threadId);
         assert.deepEqual(
           afterRestart.runs[0]?.delegatedCompletion,

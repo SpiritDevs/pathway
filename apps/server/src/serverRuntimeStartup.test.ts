@@ -26,6 +26,7 @@ it.effect("runs projection repair, recovery, worker startup, and bootstrap in or
       verify: record("verify").pipe(Effect.as({ valid: false })),
       rebuild: record("rebuild").pipe(Effect.as({ valid: true })),
       recover: record("recover").pipe(Effect.as({ closedRequests: 2 })),
+      recoverDeliveries: record("deliveries"),
       startEffectWorker: record("worker"),
       autoBootstrap: record("bootstrap").pipe(Effect.as({ projectId: "project-1" })),
     });
@@ -34,6 +35,7 @@ it.effect("runs projection repair, recovery, worker startup, and bootstrap in or
       "verify",
       "rebuild",
       "recover",
+      "deliveries",
       "worker",
       "bootstrap",
     ]);
@@ -51,6 +53,7 @@ it.effect("does not rebuild valid projections", () =>
       verify: Effect.succeed({ valid: true }),
       rebuild: Ref.set(rebuilt, true).pipe(Effect.as({ valid: true })),
       recover: Effect.void,
+      recoverDeliveries: Effect.void,
       startEffectWorker: Effect.void,
       autoBootstrap: Effect.void,
     });
@@ -158,4 +161,42 @@ it.effect("resolveWelcomeBase derives cwd and project name from server config", 
       projectName: "startup-project",
     });
   }),
+);
+
+it.effect("keeps commands and the worker gated until delivery recovery completes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const gate = yield* ServerRuntimeStartup.makeCommandGate;
+      const deliveryStarted = yield* Deferred.make<void>();
+      const deliveryFinished = yield* Deferred.make<void>();
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const record = (label: string) => Ref.update(calls, (current) => [...current, label]);
+      const startup = yield* ServerRuntimeStartup.runOrderedV2StartupPhases({
+        verify: record("verify").pipe(Effect.as({ valid: true })),
+        rebuild: Effect.die("unexpected rebuild"),
+        recover: record("runtime"),
+        recoverDeliveries: Deferred.succeed(deliveryStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(deliveryFinished)),
+          Effect.andThen(record("deliveries")),
+        ),
+        startEffectWorker: record("worker"),
+        autoBootstrap: record("bootstrap"),
+      }).pipe(Effect.andThen(gate.signalCommandReady), Effect.forkScoped);
+      yield* Deferred.await(deliveryStarted);
+      const command = yield* gate.enqueueCommand(record("command")).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      assert.deepEqual(yield* Ref.get(calls), ["verify", "runtime"]);
+      yield* Deferred.succeed(deliveryFinished, undefined);
+      yield* Fiber.join(startup);
+      yield* Fiber.join(command);
+      assert.deepEqual(yield* Ref.get(calls), [
+        "verify",
+        "runtime",
+        "deliveries",
+        "worker",
+        "bootstrap",
+        "command",
+      ]);
+    }),
+  ),
 );

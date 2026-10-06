@@ -25,6 +25,23 @@ An isolated backend with fresh state reached command readiness in 3.25 seconds b
 
 Route splitting increases request count while reducing download and parse volume. The production build was checked; packaged Electron rendering, high-latency connections, Windows, and WSL were not timed interactively. The figures above do not establish a desktop launch-time guarantee.
 
+## Narrow recovery projections (2026-10-07)
+
+Runtime recovery reads unfinished entities and their terminal dependencies: completed attempts linking running provider turns, answered request items/nodes that may reopen, and original run/provider identities for stale background work. Delegated delivery recovery reads message IDs and ownership without message bodies or turn-item history. It runs as `orchestration-v2.delivery-recovery` after projection verification/repair and runtime recovery, before worker startup and command readiness. Each thread remains locked during ownership reconciliation; snapshots are reused until a write requires a refresh. Candidate queries, including the covering-index UNION, are unchanged.
+
+An isolated comparison against main `45e56b5424` used the same snapshot with 82 runtime candidates, six delivery candidates, and 12 pending child-result candidates. Three alternating samples per strategy each started from a fresh disposable SQLite copy. The audit counted UTF-8 projection JSON returned to schema decoders, timed the recovery effects, and compared normalized emitted events and continuation offers. Runtime event commits and outbox reconciliation used real stores; the effect-worker drain was stubbed to avoid executing provider, checkpoint, or filesystem work. Live terminal subscribers and unrelated queued-run/settle acquisition work were excluded. No server or client was launched.
+
+| Measurement                         |           Full reads |     Narrow reads |
+| ----------------------------------- | -------------------: | ---------------: |
+| Runtime projection JSON             |    141,938,582 bytes |    482,054 bytes |
+| Runtime projection queries          |                1,328 |              902 |
+| Runtime recovery median (range)     |     900 ms (806–941) |  114 ms (88–117) |
+| Delivery projection JSON            |    134,276,458 bytes | 29,763,871 bytes |
+| Delivery projection reads / queries |             58 / 928 |         36 / 488 |
+| Delivery recovery median (range)    | 1,019 ms (995–1,066) | 315 ms (290–318) |
+
+All six runs produced identical runtime summaries and 28 normalized runtime events, plus the same three delivery offers with no delivery writes. Child-result extraction retains full projections because it needs result content and context-transfer data. Timing varied under shared laptop load; these are isolated phase measurements, not an end-to-end startup guarantee. Focused fixtures separately exercise terminal delivery writes and answer retries.
+
 ## Critical path and decisions
 
 | Stage                                             | Code                                                                                                 | Finding and action                                                                                                                                                                                                                                                                                                                                                  |
