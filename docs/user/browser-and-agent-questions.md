@@ -43,6 +43,22 @@ The agent works in whichever browser you are watching. Opening the remote browse
 
 Take browser control before interacting while the agent is working. Use **Take over to assist agent** in the browser panel or above the composer. Resume the agent when you are finished. Any client watching the remote browser can take control. For a local tab, only the desktop showing that tab can take control. A failed attempt to open a browser without a tab does not offer takeover.
 
+### Site information on macOS
+
+In the local browser on a Mac with Apple silicon, click the sliders button at the left of the address bar to open the site information dropdown. It shows the site, its connection status, **Site settings** and **Clear site data**. Use the close button to return to the page.
+
+Click the connection row to open **Security**. It explains the connection's security and shows connection details when available. A local HTTP page is labeled **Local server**. For HTTPS pages with a certificate, click **Certificate is valid** (or **Certificate is not valid**) to open the certificate viewer. Use the back arrow to return to site information.
+
+The certificate viewer has **General** and **Details** tabs. General shows who the certificate was issued to and by, its validity period, and SHA-256 fingerprints for the certificate and public key. Details shows the certificate hierarchy; select a certificate to inspect its fields. Close the viewer to return to the browser.
+
+**Site settings** opens a new tab beside the page. Review or change that site's permissions, such as camera, microphone and location. An explicit Allow or Block applies to that environment's local browser sessions; macOS can still ask for permission to use the device. Close the settings tab when finished and reload the site if needed. Site settings opens for websites, not blank tabs or browser settings pages.
+
+**Clear site data** removes the site's stored data and reloads the page. It can sign you out and discard saved website state. Cookie clearing can also sign you out of related subdomains of the same site. Other environments' local browser sessions are unaffected, and this action keeps the site's permission settings. Change permissions separately in Site settings.
+
+Website logins from earlier desktop versions may need to be entered again after the browser update. Your conversations and the passwords saved in your Pathway account remain available.
+
+These certificate and Site settings controls belong to the macOS local browser. Windows and Linux show connection information and Clear site data. The remote browser, web app and iOS use their existing browser controls.
+
 ### Keyboard in the desktop browser
 
 While you are using a page in a local tab, your keys go to that page, the way they would in any browser. Select all, copy, cut, paste, undo and redo work in its fields. Pathway's own shortcuts, such as Settings, Close Window and zoom, wait until you click back into the app or switch to another view. The menu bar items still work when you click them.

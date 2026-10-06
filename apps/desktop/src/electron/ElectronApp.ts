@@ -41,6 +41,8 @@ export class ElectronAppWhenReadyError extends Schema.TaggedErrorClass<ElectronA
 export class ElectronApp extends Context.Service<
   ElectronApp,
   {
+    readonly isPathwayRuntime: boolean;
+    readonly userDataPath: Effect.Effect<string>;
     readonly metadata: Effect.Effect<ElectronAppMetadata, ElectronAppMetadataReadError>;
     readonly name: Effect.Effect<string>;
     readonly whenReady: Effect.Effect<void, ElectronAppWhenReadyError>;
@@ -91,6 +93,10 @@ const addScopedAppListener = <Args extends ReadonlyArray<unknown>>(
   ).pipe(Effect.asVoid);
 
 export const make = ElectronApp.of({
+  get isPathwayRuntime() {
+    return "pathway" in Electron;
+  },
+  userDataPath: Effect.sync(() => Electron.app.getPath("userData")),
   metadata: Effect.gen(function* () {
     const appVersion = yield* Effect.try({
       try: () => Electron.app.getVersion(),

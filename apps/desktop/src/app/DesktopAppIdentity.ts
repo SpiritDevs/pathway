@@ -17,6 +17,21 @@ const AppPackageMetadata = Schema.Struct({
 });
 const decodeAppPackageMetadata = Schema.decodeEffect(Schema.fromJsonString(AppPackageMetadata));
 
+const RuntimeAppIdentity = Schema.Struct({
+  userDataDirName: Schema.NonEmptyString,
+  legacyUserDataDirName: Schema.NonEmptyString,
+});
+const decodeRuntimeAppIdentity = Schema.decodeEffect(Schema.fromJsonString(RuntimeAppIdentity));
+
+export class DesktopRuntimeAppIdentityReadError extends Schema.TaggedErrorClass<DesktopRuntimeAppIdentityReadError>()(
+  "DesktopRuntimeAppIdentityReadError",
+  { path: Schema.String, cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return `Failed to read the packaged runtime identity at "${this.path}".`;
+  }
+}
+
 export class DesktopUserDataPathResolutionError extends Schema.TaggedErrorClass<DesktopUserDataPathResolutionError>()(
   "DesktopUserDataPathResolutionError",
   {
@@ -32,7 +47,10 @@ export class DesktopUserDataPathResolutionError extends Schema.TaggedErrorClass<
 export class DesktopAppIdentity extends Context.Service<
   DesktopAppIdentity,
   {
-    readonly resolveUserDataPath: Effect.Effect<string, DesktopUserDataPathResolutionError>;
+    readonly resolveUserDataPath: Effect.Effect<
+      string,
+      DesktopUserDataPathResolutionError | DesktopRuntimeAppIdentityReadError
+    >;
     readonly configure: Effect.Effect<void>;
   }
 >()("@spiritdevs/desktop/app/DesktopAppIdentity") {}
@@ -47,9 +65,31 @@ const normalizeCommitHash = (value: string): Option.Option<string> => {
 export const resolveUserDataPath = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
+  const electronApp = yield* ElectronApp.ElectronApp;
+  let identity = {
+    userDataDirName: environment.userDataDirName,
+    legacyUserDataDirName: environment.legacyUserDataDirName,
+  };
+  if (electronApp.isPathwayRuntime) {
+    const identityPath = environment.path.join(
+      environment.resourcesPath,
+      "pathway-runtime-app.json",
+    );
+    const stampedIdentity = yield* Effect.gen(function* () {
+      if (!(yield* fileSystem.exists(identityPath))) return undefined;
+      return yield* fileSystem
+        .readFileString(identityPath)
+        .pipe(Effect.flatMap(decodeRuntimeAppIdentity));
+    }).pipe(
+      Effect.mapError(
+        (cause) => new DesktopRuntimeAppIdentityReadError({ path: identityPath, cause }),
+      ),
+    );
+    if (stampedIdentity) identity = stampedIdentity;
+  }
   const legacyPath = environment.path.join(
     environment.appDataDirectory,
-    environment.legacyUserDataDirName,
+    identity.legacyUserDataDirName,
   );
   const legacyPathExists = yield* fileSystem.exists(legacyPath).pipe(
     Effect.mapError(
@@ -60,9 +100,18 @@ export const resolveUserDataPath = Effect.gen(function* () {
         }),
     ),
   );
-  return legacyPathExists
+  const resolvedPath = legacyPathExists
     ? legacyPath
-    : environment.path.join(environment.appDataDirectory, environment.userDataDirName);
+    : environment.path.join(environment.appDataDirectory, identity.userDataDirName);
+  if (electronApp.isPathwayRuntime) {
+    const runtimePath = yield* electronApp.userDataPath;
+    if (runtimePath !== resolvedPath) {
+      yield* Effect.logError(
+        `Pathway runtime userData path drift: runtime app.getPath('userData') is "${runtimePath}", but the desktop resolved "${resolvedPath}" before app.setPath. Chrome's Profile root must match the packaged identity.`,
+      );
+    }
+  }
+  return resolvedPath;
 }).pipe(Effect.withSpan("desktop.appIdentity.resolveUserDataPath"));
 
 export const make = Effect.gen(function* () {
@@ -113,7 +162,9 @@ export const make = Effect.gen(function* () {
 
   const userDataPath = resolveUserDataPath.pipe(
     Effect.provide(
-      yield* Effect.context<DesktopEnvironment.DesktopEnvironment | FileSystem.FileSystem>(),
+      yield* Effect.context<
+        DesktopEnvironment.DesktopEnvironment | FileSystem.FileSystem | ElectronApp.ElectronApp
+      >(),
     ),
   );
 

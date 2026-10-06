@@ -8,6 +8,7 @@ const {
   autoUpdaterRemoveListenerMock,
   exitMock,
   getAppPathMock,
+  getPathMock,
   getVersionMock,
   isDefaultProtocolClientMock,
   onMock,
@@ -28,6 +29,7 @@ const {
   autoUpdaterRemoveListenerMock: vi.fn(),
   exitMock: vi.fn(),
   getAppPathMock: vi.fn(() => "/app"),
+  getPathMock: vi.fn(() => "/app-data/pathway"),
   getVersionMock: vi.fn(() => "1.2.3"),
   isDefaultProtocolClientMock: vi.fn(() => false),
   onMock: vi.fn(),
@@ -55,6 +57,7 @@ vi.mock("electron", () => ({
       removeSwitch: removeSwitchMock,
     },
     getAppPath: getAppPathMock,
+    getPath: getPathMock,
     getVersion: getVersionMock,
     isDefaultProtocolClient: isDefaultProtocolClientMock,
     isPackaged: true,
@@ -78,6 +81,14 @@ vi.mock("electron", () => ({
 import * as ElectronApp from "./ElectronApp.ts";
 
 describe("ElectronApp", () => {
+  it.effect("reads the current userData path and detects stock Electron", () =>
+    Effect.gen(function* () {
+      const electronApp = yield* ElectronApp.ElectronApp;
+      assert.isFalse(electronApp.isPathwayRuntime);
+      assert.equal(yield* electronApp.userDataPath, "/app-data/pathway");
+      assert.deepEqual(getPathMock.mock.calls.at(-1), ["userData"]);
+    }).pipe(Effect.provide(ElectronApp.layer)),
+  );
   beforeEach(() => {
     appendSwitchMock.mockClear();
     autoUpdaterOnMock.mockClear();
