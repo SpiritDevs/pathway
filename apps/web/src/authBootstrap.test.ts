@@ -292,11 +292,26 @@ describe("resolveInitialServerAuthGateState", () => {
       __setPrimaryHttpRunnerForTests(runner);
       const { resolveInitialServerAuthGateState } = await import("./environments/primary");
       const result = resolveInitialServerAuthGateState();
-      await vi.advanceTimersByTimeAsync(18_000);
+      await vi.advanceTimersByTimeAsync(18_250);
       await expect(result).resolves.toEqual({ status: "authenticated" });
-      expect(attempts).toBe(37);
+      expect(attempts).toBe(40);
     });
   }
+
+  it("retries a brief startup failure after 50ms instead of waiting 500ms", async () => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    const { retryTransientBootstrap } = await import("./environments/primary/auth");
+    const result = retryTransientBootstrap(async () => {
+      if (++attempts === 1) throw new TypeError("Connection refused");
+      return "ready";
+    });
+    await vi.advanceTimersByTimeAsync(49);
+    expect(attempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toBe("ready");
+    expect(attempts).toBe(2);
+  });
 
   for (const desktop of [false, true]) {
     it(`bounds ${desktop ? "desktop" : "web"} startup retries when the server stays unavailable`, async () => {
@@ -310,9 +325,9 @@ describe("resolveInitialServerAuthGateState", () => {
       const { resolveInitialServerAuthGateState } = await import("./environments/primary");
       const result = resolveInitialServerAuthGateState().catch((error: unknown) => error);
       const timeout = desktop ? 60_000 : 15_000;
-      await vi.advanceTimersByTimeAsync(timeout);
+      await vi.advanceTimersByTimeAsync(timeout + 250);
       expect(await result).toMatchObject({ _tag: "PrimaryEnvironmentRequestError" });
-      expect(attempts).toBe(timeout / 500 + 1);
+      expect(attempts).toBe(timeout / 500 + 4);
     });
   }
 

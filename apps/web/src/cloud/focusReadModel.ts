@@ -40,6 +40,7 @@ import {
   threadAlertNotificationsReadyAtom,
 } from "../threadAlerts/state";
 import type { ConvexAuthTokenFetcher } from "./syncTransport";
+import { readCloudSyncReset } from "./syncReset";
 
 export {
   ALL_FOCUS_ID,
@@ -307,6 +308,27 @@ function ambientLocalStorage(): ActiveFocusStorage | null {
   }
 }
 
+export function focusReadModelStorageKey(scope: string, convexUrl: string): string {
+  return `pathway:cloud-sync/${scope}/focus-read-model/${encodeURIComponent(convexUrl)}`;
+}
+
+export function readCachedFocusReadModel(
+  scope: string,
+  convexUrl: string,
+  storage: ActiveFocusStorage | null,
+): FocusReadModel | null {
+  try {
+    if (readCloudSyncReset(scope)) return null;
+    const raw = storage?.getItem(focusReadModelStorageKey(scope, convexUrl));
+    return raw ? Option.getOrNull(decodeCachedFocusReadModel(raw)) : null;
+  } catch {
+    return null;
+  }
+}
+
+const decodeCachedFocusReadModel = Schema.decodeUnknownOption(
+  Schema.fromJsonString(FocusReadModelSchema),
+);
 const decodeFocusReadModel = Schema.decodeUnknownOption(FocusReadModelSchema);
 const decodeFocusUnreadCount = Schema.decodeUnknownOption(
   Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -394,6 +416,12 @@ export function useFocusReadModelRuntime(options: {
   // Changing identity/deployment or unmounting the runtime still clears it.
   useEffect(() => {
     appAtomRegistry.set(focusReadModelOwnerAtom, options.enabled ? options.accountScope : null);
+    appAtomRegistry.set(
+      focusReadModelAtom,
+      options.enabled && options.accountScope && options.convexUrl
+        ? readCachedFocusReadModel(options.accountScope, options.convexUrl, ambientLocalStorage())
+        : null,
+    );
     appAtomRegistry.set(focusReadModelErrorAtom, false);
     return () => {
       appAtomRegistry.set(focusReadModelOwnerAtom, null);
@@ -429,6 +457,14 @@ export function useFocusReadModelRuntime(options: {
           if (Option.isSome(decoded)) {
             appAtomRegistry.set(focusReadModelAtom, decoded.value);
             appAtomRegistry.set(focusReadModelErrorAtom, false);
+            try {
+              ambientLocalStorage()?.setItem(
+                focusReadModelStorageKey(options.accountScope!, options.convexUrl!),
+                JSON.stringify(value),
+              );
+            } catch {
+              // Cached definitions are optional; the live subscription remains authoritative.
+            }
           } else {
             appAtomRegistry.set(focusReadModelErrorAtom, true);
             console.warn("Convex returned an invalid Focus read model.");

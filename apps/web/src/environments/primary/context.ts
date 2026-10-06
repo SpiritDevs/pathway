@@ -9,6 +9,10 @@ import * as Effect from "effect/Effect";
 import { PrimaryEnvironmentRequestError, retryTransientBootstrap } from "./auth";
 import { PrimaryEnvironmentHttpClient } from "./httpClient";
 
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { managedRelaySessionAtom } from "@spiritdevs/client-runtime/relay";
+import { persistPrimaryIdentity } from "./cachedIdentity";
+
 import { runPrimaryHttp } from "../../lib/runtime";
 import { readPrimaryEnvironmentTarget } from "./target";
 
@@ -62,6 +66,11 @@ export function writePrimaryEnvironmentDescriptor(
   descriptor: ExecutionEnvironmentDescriptor | null,
 ): void {
   primaryEnvironmentDescriptor = descriptor;
+  const scope = appAtomRegistry.get(managedRelaySessionAtom)?.accountId;
+  const target = descriptor && scope ? readPrimaryEnvironmentTarget() : null;
+  if (descriptor && scope && target) {
+    persistPrimaryIdentity(scope, target.target.httpBaseUrl, descriptor);
+  }
 }
 
 export function getPrimaryKnownEnvironment(): KnownEnvironment | null {

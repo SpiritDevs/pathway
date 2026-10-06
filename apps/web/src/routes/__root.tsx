@@ -66,7 +66,14 @@ import {
 import { useUiStateStore } from "../uiStateStore";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
-import { resolveInitialServerAuthGateState } from "../environments/primary";
+import { readConnectionAccountScope } from "../connection/accountScope";
+import { environmentCatalog } from "../connection/catalog";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
+import {
+  resolveInitialPrimaryEnvironmentDescriptor,
+  resolveInitialServerAuthGateState,
+} from "../environments/primary";
 import {
   hasHostedPairingRequest,
   isHostedStaticApp,
@@ -129,19 +136,15 @@ export const Route = createRootRoute({
       };
     }
 
-    const authGateState = await resolveInitialServerAuthGateState();
-    return {
-      authGateState,
-    };
+    if (location.pathname === "/pair") {
+      return { authGateState: await resolveInitialServerAuthGateState() };
+    }
+
+    return { authGateState: { status: "pending" } as const };
   },
   component: RootRouteView,
   errorComponent: RootRouteErrorView,
-  // Nothing below can render until `beforeLoad` has resolved the primary
-  // environment, so without a pending component the boot shell blinks out to an
-  // empty background while that bootstrap runs. `pendingMs: 0` hands the splash
-  // straight over; an already-bootstrapped gate state resolves in a microtask,
-  // ahead of that timer, so navigations never flash it. `pendingMinMs: 0` keeps
-  // the default 500ms floor from padding a boot that was quicker than that.
+  // Clerk gates the shell; environment authentication continues after it mounts.
   pendingComponent: EnvironmentPendingView,
   pendingMs: 0,
   pendingMinMs: 0,
@@ -201,7 +204,7 @@ function MissingAuthConfigScreen() {
 }
 
 function ConfiguredClerkAuthGate({ pathname }: { readonly pathname: string }) {
-  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const { getToken, isLoaded, isSignedIn, userId } = useAuth({ treatPendingAsSignedOut: false });
   const { user } = useUser();
   const navigate = useNavigate();
   const metadata = user ? parseProfileMetadata(user.unsafeMetadata) : null;
@@ -238,6 +241,10 @@ function ConfiguredClerkAuthGate({ pathname }: { readonly pathname: string }) {
   const loadingReason = resolveAuthGateLoadingReason({ gateState, isLoaded });
   if (loadingReason) {
     return <SplashScreen reason={loadingReason} />;
+  }
+  const connectionAccount = readConnectionAccountScope();
+  if (isSignedIn && connectionAccount !== null && connectionAccount !== userId) {
+    return <SplashScreen reason="environment" />;
   }
 
   return <RootRouteContent pathname={pathname} />;
@@ -303,7 +310,36 @@ function useWorkspaceRecoveryValidation(options: {
 
 function RootRouteContent({ pathname }: { readonly pathname: string }) {
   const { authGateState } = Route.useRouteContext();
-  const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
+  const [serverGate, setServerGate] = useState<Awaited<
+    ReturnType<typeof resolveInitialServerAuthGateState>
+  > | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
+  const [authAttempt, retryAuth] = useState(0);
+  const retryPrimaryConnection = useAtomCommand(environmentCatalog.retryNow);
+  useEffect(() => {
+    if (authGateState.status !== "pending") return;
+    let active = true;
+    setServerError(null);
+    void resolveInitialServerAuthGateState()
+      .then((gate) => {
+        if (!active) return;
+        setServerGate(gate);
+        if (gate.status === "authenticated") {
+          void resolveInitialPrimaryEnvironmentDescriptor().catch(() => undefined);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active)
+          setServerError(
+            error instanceof Error ? error.message : "Could not connect to the environment.",
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, [authGateState.status, authAttempt]);
+  const primaryEnvironmentAuthenticated =
+    serverGate?.status === "authenticated" || authGateState.status === "authenticated";
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -330,15 +366,18 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
     );
   }
 
-  // Every route below this point is server-backed, so a client without a
-  // session has nothing to render. Sign in in place instead of redirecting to
-  // `/pair`, so the requested route is still the one that renders once the
-  // session exists.
-  if (authGateState.status === "requires-auth") {
+  if (serverGate?.status === "requires-auth") {
     return (
       <>
         <DocumentTitleSync />
-        <ServerPairingGate />
+        <ServerPairingGate
+          onAuthenticated={() => {
+            setServerGate(null);
+            retryAuth((attempt) => attempt + 1);
+            const environmentId = appAtomRegistry.get(primaryEnvironmentIdAtom);
+            if (environmentId !== null) void retryPrimaryConnection(environmentId);
+          }}
+        />
       </>
     );
   }
@@ -391,6 +430,17 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         {primaryEnvironmentAuthenticated && !isChildWindow ? <EmailCaptureToastHost /> : null}
         {primaryEnvironmentAuthenticated && !isChildWindow ? <CalendarAlertHost /> : null}
         {primaryEnvironmentAuthenticated && !isChildWindow ? <ThreadAlertRuntime /> : null}
+        {authGateState.status === "pending" && !serverError ? (
+          <EnvironmentConnectionNotice />
+        ) : null}
+        {serverError ? (
+          <div role="alert" className="px-4 py-2 text-sm">
+            {serverError}{" "}
+            <Button size="sm" onClick={() => retryAuth((attempt) => attempt + 1)}>
+              Retry connection
+            </Button>
+          </div>
+        ) : null}
         {appShell}
         {/* Above the router: a theme draft is judged by walking the app, so the
             editor has to survive navigation away from settings. */}
@@ -400,18 +450,25 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
   );
 }
 
-/**
- * Signs a browser the local environment does not know yet in, rendered in
- * place of the route it blocks. Signing in re-runs the root `beforeLoad`,
- * which is what resolves the gate again, so the route this replaced renders
- * with its shell as soon as the session exists.
- */
-function ServerPairingGate() {
+function EnvironmentConnectionNotice() {
+  const environment = usePrimaryEnvironment();
+  if (environment?.connection.phase === "connected") return null;
+  return (
+    <div role="status" className="px-4 py-2 text-sm text-muted-foreground">
+      {environment?.connection.error ?? "Connecting to the environment."} Server actions will be
+      available when it is ready.
+    </div>
+  );
+}
+
+/** Pair in place, then retry environment authentication without losing the requested route. */
+function ServerPairingGate({ onAuthenticated }: { readonly onAuthenticated: () => void }) {
   const router = useRouter();
 
   return (
     <PairingRouteSurface
       onAuthenticated={() => {
+        onAuthenticated();
         void router.invalidate();
       }}
     />

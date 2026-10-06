@@ -2,7 +2,9 @@ import { EnvironmentId, type DesktopSshEnvironmentTarget } from "@spiritdevs/con
 import { RelayEnvironmentConnectScope } from "@spiritdevs/contracts/relay";
 import { RelayClientTracer } from "@spiritdevs/shared/relayTracing";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -96,6 +98,7 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   readonly authorizeBearer?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeBearer"];
   readonly authorizeDpop?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeDpop"];
   readonly primaryBearerToken?: string;
+  readonly primaryAuth?: ClientCapabilities.PrimaryEnvironmentAuth["Service"];
   readonly prepareSsh?: ClientCapabilities.SshEnvironmentGateway["Service"]["prepare"];
 }) => {
   const profiles = new Map(
@@ -170,9 +173,11 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
     ),
     Layer.succeed(
       ClientCapabilities.PrimaryEnvironmentAuth,
-      ClientCapabilities.PrimaryEnvironmentAuth.of({
-        bearerToken: Effect.succeed(Option.fromNullishOr(options?.primaryBearerToken)),
-      }),
+      ClientCapabilities.PrimaryEnvironmentAuth.of(
+        options?.primaryAuth ?? {
+          bearerToken: Effect.succeed(Option.fromNullishOr(options?.primaryBearerToken)),
+        },
+      ),
     ),
     Layer.succeed(
       ClientCapabilities.RelayDeviceIdentity,
@@ -202,6 +207,70 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
 });
 
 describe("ConnectionResolver", () => {
+  it.effect("waits for primary authentication before preparing cached targets", () =>
+    Effect.gen(function* () {
+      const authenticated = yield* Deferred.make<Option.Option<string>>();
+      const started = yield* Deferred.make<void>();
+      const brokerLayer = yield* makeDependencies({
+        primaryAuth: {
+          bearerToken: Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(authenticated)),
+          ),
+          environmentId: Effect.succeed(ENVIRONMENT_ID),
+        },
+      });
+      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
+      const target = new PrimaryConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "Cached primary",
+        httpBaseUrl: "http://127.0.0.1:3777",
+        wsBaseUrl: "ws://127.0.0.1:3777",
+      });
+      let ready = false;
+      const prepared = yield* Effect.forkChild(
+        broker.prepare(catalogEntry(target)).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              ready = true;
+            }),
+          ),
+        ),
+      );
+      yield* Deferred.await(started);
+      expect(ready).toBe(false);
+      yield* Deferred.succeed(authenticated, Option.none());
+      expect(yield* Fiber.join(prepared)).toMatchObject({
+        environmentId: ENVIRONMENT_ID,
+        httpAuthorization: null,
+      });
+    }),
+  );
+  it.effect(
+    "blocks a cached primary identity when the endpoint serves a different environment",
+    () =>
+      Effect.gen(function* () {
+        const brokerLayer = yield* makeDependencies({
+          primaryAuth: {
+            bearerToken: Effect.succeed(Option.none()),
+            environmentId: Effect.succeed(EnvironmentId.make("replacement-environment")),
+          },
+        });
+        const broker = yield* ConnectionResolver.ConnectionResolver.pipe(
+          Effect.provide(brokerLayer),
+        );
+        const target = new PrimaryConnectionTarget({
+          environmentId: ENVIRONMENT_ID,
+          label: "Cached primary",
+          httpBaseUrl: "http://127.0.0.1:3777",
+          wsBaseUrl: "ws://127.0.0.1:3777",
+        });
+        expect(yield* broker.prepare(catalogEntry(target)).pipe(Effect.flip)).toMatchObject({
+          _tag: "ConnectionBlockedError",
+          reason: "configuration",
+        });
+      }),
+  );
+
   it.effect("prepares a primary environment without remote capabilities", () =>
     Effect.gen(function* () {
       const brokerLayer = yield* makeDependencies();

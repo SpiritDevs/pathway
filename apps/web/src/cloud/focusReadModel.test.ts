@@ -12,6 +12,8 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 
 import {
   ALL_FOCUS_ID,
+  focusReadModelStorageKey,
+  readCachedFocusReadModel,
   focusMutationsAtom,
   focusNotificationsAtom,
   markThreadNotificationsRead,
@@ -235,5 +237,37 @@ describe("thread notification dots", () => {
       appAtomRegistry.set(focusMutationsAtom, null);
       warn.mockRestore();
     }
+  });
+});
+
+describe("cached Focus read model", () => {
+  it("restores a complete model only for its account and deployment", () => {
+    const { storage } = memoryStorage({
+      [focusReadModelStorageKey("a", "https://a.convex.cloud")]: JSON.stringify(READ_MODEL),
+    });
+    expect(readCachedFocusReadModel("a", "https://a.convex.cloud", storage)).toEqual(READ_MODEL);
+    expect(readCachedFocusReadModel("b", "https://a.convex.cloud", storage)).toBeNull();
+    expect(readCachedFocusReadModel("a", "https://b.convex.cloud", storage)).toBeNull();
+  });
+  it("keeps the cold gate when storage is absent or invalid", () => {
+    const key = focusReadModelStorageKey("a", "https://a.convex.cloud");
+    for (const raw of ["{bad", JSON.stringify({ focuses: [] })]) {
+      expect(
+        readCachedFocusReadModel(
+          "a",
+          "https://a.convex.cloud",
+          memoryStorage({ [key]: raw }).storage,
+        ),
+      ).toBeNull();
+    }
+    expect(readCachedFocusReadModel("a", "https://a.convex.cloud", null)).toBeNull();
+    expect(
+      readCachedFocusReadModel("a", "https://a.convex.cloud", {
+        getItem: () => {
+          throw new Error("blocked");
+        },
+        setItem: () => undefined,
+      }),
+    ).toBeNull();
   });
 });

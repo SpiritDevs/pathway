@@ -1,5 +1,7 @@
 # Sidebar
 
+After your account is restored, web and desktop can show your cached thread list and projects while the environment connects. A connection notice explains when server actions are still waiting. The list updates when live data arrives; a first launch waits for the initial data.
+
 On web and desktop, move your pointer to the left edge of the content area to reveal a hidden sidebar. It slides in over your work and slides away when you move off it. Use the sidebar toggle to keep it open.
 
 The current page has a filled background behind its navigation icon. Its background is slightly stronger than the hover highlight and stays visible when you move the pointer away.
