@@ -6,6 +6,7 @@ import {
 } from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -13,7 +14,11 @@ import { PrimaryConnectionTarget, type PreparedConnection } from "../connection/
 import { remoteHttpClientLayer } from "../rpc/http.ts";
 import { ManagedRelayDpopSigner, type ManagedRelayDpopProofInput } from "../relay/managedRelay.ts";
 import { v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
-import { fetchEnvironmentThreadSnapshot } from "./threadSnapshotHttp.ts";
+import {
+  fetchEnvironmentThreadSnapshot,
+  ThreadSnapshotLoader,
+  threadSnapshotLoaderLayer,
+} from "./threadSnapshotHttp.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-history"),
@@ -52,6 +57,33 @@ function httpHarness(snapshot = SNAPSHOT) {
 }
 
 describe("thread history HTTP requests", () => {
+  for (const body of [
+    {
+      _tag: "EnvironmentAuthInvalidError",
+      code: "auth_invalid",
+      reason: "invalid_credential",
+      traceId: "test-trace",
+    },
+    { message: "Unauthorized" },
+  ]) {
+    it.effect(
+      `distinguishes HTTP 401 from transport failures (${"_tag" in body ? "typed" : "legacy"})`,
+      () =>
+        Effect.gen(function* () {
+          const loader = yield* ThreadSnapshotLoader;
+          expect(yield* loader.load(PREPARED, v2ThreadId)).toEqual({ _tag: "Unauthorized" });
+        }).pipe(
+          Effect.provide(
+            threadSnapshotLoaderLayer.pipe(
+              Layer.provide(
+                remoteHttpClientLayer(() => Promise.resolve(Response.json(body, { status: 401 }))),
+              ),
+            ),
+          ),
+        ),
+    );
+  }
+
   it.effect(
     "requests a bounded latest page with local session credentials and decodes its index",
     () =>

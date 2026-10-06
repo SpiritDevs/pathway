@@ -129,6 +129,7 @@ export interface TraceSink {
 export interface LocalFileTracerOptions extends TraceSinkOptions {
   readonly delegate?: Tracer.Tracer;
   readonly sink?: TraceSink;
+  readonly spanToRecord?: (span: SerializableSpan) => EffectTraceRecord | undefined;
 }
 
 type OtlpSpan = OtlpTracer.ScopeSpan["spans"][number];
@@ -136,7 +137,7 @@ type OtlpSpanEvent = OtlpSpan["events"][number];
 type OtlpSpanLink = OtlpSpan["links"][number];
 type OtlpSpanStatus = OtlpSpan["status"];
 
-interface SerializableSpan {
+export interface SerializableSpan {
   readonly name: string;
   readonly traceId: string;
   readonly spanId: string;
@@ -478,14 +479,17 @@ class LocalFileSpan implements Tracer.Span {
   events: Array<[name: string, startTime: bigint, attributes: Record<string, unknown>]>;
   private readonly delegate: Tracer.Span;
   private readonly push: (record: EffectTraceRecord) => void;
+  private readonly spanToRecord: (span: SerializableSpan) => EffectTraceRecord | undefined;
 
   constructor(
     options: Parameters<Tracer.Tracer["span"]>[0],
     delegate: Tracer.Span,
     push: (record: EffectTraceRecord) => void,
+    spanToRecord: (span: SerializableSpan) => EffectTraceRecord | undefined,
   ) {
     this.delegate = delegate;
     this.push = push;
+    this.spanToRecord = spanToRecord;
     this.name = delegate.name;
     this.spanId = delegate.spanId;
     this.traceId = delegate.traceId;
@@ -512,7 +516,8 @@ class LocalFileSpan implements Tracer.Span {
     this.delegate.end(endTime, exit);
 
     if (this.sampled && !isRoutineChildSpan(this)) {
-      this.push(spanToTraceRecord(this));
+      const record = this.spanToRecord(this);
+      if (record !== undefined) this.push(record);
     }
   }
 
@@ -554,7 +559,12 @@ export const makeLocalFileTracer = Effect.fn("makeLocalFileTracer")(function* (
 
   return Tracer.make({
     span(spanOptions) {
-      return new LocalFileSpan(spanOptions, delegate.span(spanOptions), sink.push);
+      return new LocalFileSpan(
+        spanOptions,
+        delegate.span(spanOptions),
+        sink.push,
+        options.spanToRecord ?? spanToTraceRecord,
+      );
     },
     ...(delegate.context ? { context: delegate.context } : {}),
   });

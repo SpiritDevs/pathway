@@ -1,5 +1,6 @@
 import {
   ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2GetThreadProjectionError,
   type EnvironmentId as EnvironmentIdType,
   type OrchestrationV2ThreadDetailSnapshot,
   type OrchestrationV2ThreadProjection,
@@ -14,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -57,10 +59,12 @@ export const THREAD_NOT_FOUND_MAX_ATTEMPTS = 40;
 // clones, an environment that reconnects late). Keep probing so the thread can
 // still materialize, starting at this interval and doubling after each miss up
 // to the max, so an id that never materializes stops costing a request every
-// few seconds. A reprobe signal (such as the thread's shell changing), a
-// replacement session, or a foreground wakeup probes sooner.
+// few seconds. A reprobe signal (such as the thread's shell changing) probes
+// sooner. Session replacement and foreground wakeups keep the retry backoff.
 export const THREAD_DELETED_REPROBE_INTERVAL = "5 seconds";
 export const THREAD_DELETED_REPROBE_MAX_INTERVAL = "5 minutes";
+
+const isThreadProjectionError = Schema.is(OrchestrationV2GetThreadProjectionError);
 
 function statusWithoutLiveData(
   data: Option.Option<OrchestrationV2ThreadProjection>,
@@ -163,6 +167,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   );
   const awaitingCompletion = yield* Ref.make(false);
   const notFoundAttempts = yield* Ref.make(0);
+  let typedNotFound = false;
+  let credentialsRefreshRequested = false;
+  let authRetryDelayMs = 0;
+  const maxRetryDelayMs = Duration.toMillis(THREAD_DELETED_REPROBE_MAX_INTERVAL);
+  let reprobeDelayMs = Duration.toMillis(THREAD_DELETED_REPROBE_INTERVAL);
   const reprobeRequests = yield* Queue.sliding<void>(1);
   if (options?.reprobe !== undefined) {
     yield* options.reprobe.pipe(
@@ -238,6 +247,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   ) {
     const waiting = yield* Ref.get(awaitingCompletion);
     yield* Ref.set(notFoundAttempts, 0);
+    typedNotFound = false;
+    reprobeDelayMs = Duration.toMillis(THREAD_DELETED_REPROBE_INTERVAL);
     yield* SubscriptionRef.update(state, ({ history: previousHistory, ...current }) => ({
       ...current,
       data: Option.some(thread),
@@ -449,7 +460,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     let result = Option.isSome(prepared)
       ? yield* snapshotLoader.load(prepared.value, threadId, request)
       : { _tag: "Unavailable" as const };
-    if (result._tag === "Unavailable") {
+    if (result._tag === "Unavailable" || result._tag === "Unauthorized") {
       const session = yield* SubscriptionRef.get(supervisor.session);
       if (Option.isSome(session)) {
         result = yield* session.value.client[ORCHESTRATION_V2_WS_METHODS.subscribeThread]({
@@ -552,25 +563,43 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Effect.forkScoped,
   );
 
-  // Runs while the thread is in the deleted state with no data. Holds the
-  // socket subscription back while HTTP confirms the thread is missing.
-  // An unavailable HTTP path (including expired credentials) must release
-  // the socket fallback; a healthy socket can outlive its HTTP credential.
+  const loadSnapshot = Effect.fn("EnvironmentThreadState.loadSnapshot")(function* (
+    prepared: Effect.Success<typeof awaitPrepared>,
+  ) {
+    const result = yield* snapshotLoader.load(
+      prepared,
+      threadId,
+      historySupported ? { limit: 50 } : undefined,
+    );
+    if (result._tag === "Unauthorized") {
+      if (authRetryDelayMs === 0) authRetryDelayMs = 1_000;
+      if (!credentialsRefreshRequested) {
+        credentialsRefreshRequested = true;
+        yield* supervisor.retryNow;
+      }
+    } else if (result._tag !== "Unavailable") {
+      credentialsRefreshRequested = false;
+      authRetryDelayMs = 0;
+    }
+    return result;
+  });
+
+  // Keep the delay across socket fallbacks and replacement sessions. A healthy
+  // socket can outlive its HTTP credential, but failures must not reopen the
+  // fast materialization window.
   const recoverDeletedThread = Effect.fn("EnvironmentThreadState.recoverDeletedThread")(function* (
     supportsCompletionMarker: boolean,
   ) {
-    const maxDelayMs = Duration.toMillis(THREAD_DELETED_REPROBE_MAX_INTERVAL);
-    let delayMs = Duration.toMillis(THREAD_DELETED_REPROBE_INTERVAL);
     yield* Queue.clear(reprobeRequests);
     while (true) {
-      yield* Effect.raceFirst(Effect.sleep(delayMs), Queue.take(reprobeRequests));
-      delayMs = Math.min(delayMs * 2, maxDelayMs);
-      const prepared = yield* awaitPrepared;
-      const httpSnapshot = yield* snapshotLoader.load(
-        prepared,
-        threadId,
-        historySupported ? { limit: 50 } : undefined,
+      yield* Effect.raceFirst(
+        Effect.sleep(Math.max(reprobeDelayMs, authRetryDelayMs)),
+        Queue.take(reprobeRequests),
       );
+      authRetryDelayMs = Math.min(authRetryDelayMs * 2, maxRetryDelayMs);
+      reprobeDelayMs = Math.min(reprobeDelayMs * 2, maxRetryDelayMs);
+      const prepared = yield* awaitPrepared;
+      const httpSnapshot = yield* loadSnapshot(prepared);
       if (httpSnapshot._tag === "Snapshot") {
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* applyItem({
@@ -583,14 +612,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         });
         return yield* SubscriptionRef.get(state);
       }
-      if (httpSnapshot._tag === "Unavailable") {
+      if (httpSnapshot._tag === "Unavailable" || httpSnapshot._tag === "Unauthorized") {
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
-        yield* Ref.set(notFoundAttempts, 1);
-        yield* SubscriptionRef.update(state, (current) => ({
-          ...current,
-          status: "synchronizing" as const,
-          error: Option.none(),
-        }));
         return yield* SubscriptionRef.get(state);
       }
     }
@@ -634,22 +657,23 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         yield* setSynchronizing;
 
         let current = yield* SubscriptionRef.get(state);
+        const missingAttempts = yield* Ref.get(notFoundAttempts);
         if (Option.isNone(current.data) && current.status === "deleted") {
           current = yield* recoverDeletedThread(supportsCompletionMarker);
         } else if (
+          missingAttempts > 0 ||
           Option.isNone(current.data) ||
           historySupported !== (current.history !== undefined) ||
           refreshCachedHistory
         ) {
-          const missingAttempts = yield* Ref.get(notFoundAttempts);
+          if (authRetryDelayMs > 0) {
+            yield* Effect.sleep(authRetryDelayMs);
+            authRetryDelayMs = Math.min(authRetryDelayMs * 2, maxRetryDelayMs);
+          }
           const shouldConfirmDeletion = missingAttempts >= THREAD_NOT_FOUND_MAX_ATTEMPTS;
           const prepared = yield* awaitPrepared;
           if (missingAttempts === 0 || shouldConfirmDeletion) {
-            const httpSnapshot = yield* snapshotLoader.load(
-              prepared,
-              threadId,
-              historySupported ? { limit: 50 } : undefined,
-            );
+            const httpSnapshot = yield* loadSnapshot(prepared);
             if (httpSnapshot._tag === "NotFound") {
               if (shouldConfirmDeletion) {
                 yield* setDeleted();
@@ -668,9 +692,18 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               });
               current = yield* SubscriptionRef.get(state);
             } else {
-              // A transport or auth failure cannot confirm deletion. Start a
-              // fresh retry window and let the socket path keep recovering.
-              yield* Ref.set(notFoundAttempts, 1);
+              // HTTP auth/transport failures cannot erase socket-confirmed
+              // absence or its budget. Older servers still require an HTTP 404.
+              yield* Ref.update(notFoundAttempts, (attempts) => Math.max(attempts, 1));
+              if (shouldConfirmDeletion) {
+                if (typedNotFound) {
+                  yield* setDeleted();
+                  current = yield* recoverDeletedThread(supportsCompletionMarker);
+                } else {
+                  yield* Effect.sleep(Math.max(reprobeDelayMs, authRetryDelayMs));
+                  reprobeDelayMs = Math.min(reprobeDelayMs * 2, maxRetryDelayMs);
+                }
+              }
             }
           } else {
             yield* Ref.update(notFoundAttempts, (attempts) => attempts + 1);
@@ -698,7 +731,27 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         };
       }),
       {
-        onExpectedFailure: setStreamError,
+        onExpectedFailure: (cause) =>
+          Effect.gen(function* () {
+            if (
+              cause.reasons.length > 0 &&
+              cause.reasons.every(
+                (reason) =>
+                  reason._tag === "Fail" &&
+                  isThreadProjectionError(reason.error) &&
+                  reason.error.threadId === threadId,
+              )
+            ) {
+              typedNotFound ||= cause.reasons.every(
+                (reason) =>
+                  reason._tag === "Fail" &&
+                  isThreadProjectionError(reason.error) &&
+                  reason.error.reason === "not_found",
+              );
+              yield* Ref.update(notFoundAttempts, (attempts) => Math.max(attempts, 1));
+            }
+            yield* setStreamError(cause);
+          }),
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
       },

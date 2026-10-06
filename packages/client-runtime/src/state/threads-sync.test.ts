@@ -8,6 +8,7 @@ import {
   type OrchestrationV2TurnItem,
   EventId,
   ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2GetThreadProjectionError,
   ThreadId,
   type OrchestrationV2ThreadDetailSnapshot,
   type OrchestrationV2ThreadProjection,
@@ -18,9 +19,11 @@ import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
@@ -120,10 +123,12 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly cached?: OrchestrationV2ThreadProjection;
   readonly httpSnapshot?: Option.Option<OrchestrationV2ThreadDetailSnapshot>;
   readonly httpNotFound?: boolean;
+  readonly httpUnauthorized?: boolean;
   readonly completionMarker?: boolean;
   readonly historySupport?: boolean;
   readonly cachedHistory?: OrchestrationV2ThreadHistory;
   readonly controlledPages?: boolean;
+  readonly socketPage?: OrchestrationV2ThreadDetailSnapshot;
   readonly reprobe?: Stream.Stream<unknown>;
 }) {
   const pageLoads = yield* Queue.unbounded<{
@@ -169,7 +174,11 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
           Effect.andThen(
             Ref.set(lastRequestCompletionMarker, input.requestCompletionMarker === true),
           ),
-          Effect.as(streamFrom(inputs)),
+          Effect.as(
+            options?.socketPage !== undefined && input.history?.before !== undefined
+              ? Stream.make({ kind: "snapshot" as const, ...options.socketPage })
+              : streamFrom(inputs),
+          ),
         ),
       ),
   } as unknown as WsRpcProtocolClient;
@@ -180,6 +189,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     Option.some(PREPARED),
   );
   const httpNotFound = yield* Ref.make(options?.httpNotFound === true);
+  const httpUnauthorized = yield* Ref.make(options?.httpUnauthorized === true);
   const httpSnapshot = yield* Ref.make(
     options?.httpSnapshot ?? Option.none<OrchestrationV2ThreadDetailSnapshot>(),
   );
@@ -194,14 +204,20 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
         : Ref.updateAndGet(loaderCalls, (count) => count + 1).pipe(
             Effect.tap((count) => Queue.offer(loaderStarts, count)),
             Effect.andThen(
-              Effect.all({ notFound: Ref.get(httpNotFound), snapshot: Ref.get(httpSnapshot) }),
+              Effect.all({
+                notFound: Ref.get(httpNotFound),
+                unauthorized: Ref.get(httpUnauthorized),
+                snapshot: Ref.get(httpSnapshot),
+              }),
             ),
-            Effect.map(({ notFound, snapshot }) =>
-              notFound
-                ? ({ _tag: "NotFound" } as const)
-                : threadId === THREAD_ID && Option.isSome(snapshot)
-                  ? ({ _tag: "Snapshot", snapshot: snapshot.value } as const)
-                  : ({ _tag: "Unavailable" } as const),
+            Effect.map(({ notFound, unauthorized, snapshot }) =>
+              unauthorized
+                ? ({ _tag: "Unauthorized" } as const)
+                : notFound
+                  ? ({ _tag: "NotFound" } as const)
+                  : threadId === THREAD_ID && Option.isSome(snapshot)
+                    ? ({ _tag: "Snapshot", snapshot: snapshot.value } as const)
+                    : ({ _tag: "Unavailable" } as const),
             ),
           ),
   });
@@ -278,6 +294,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     removedThreads,
     wakeups,
     httpNotFound,
+    httpUnauthorized,
     httpSnapshot,
     clearSession: SubscriptionRef.set(supervisorSession, Option.none()),
     replaceSession: SubscriptionRef.set(
@@ -294,6 +311,23 @@ const snapshot = (
   kind: "snapshot",
   snapshotSequence,
   projection,
+});
+
+const failMissingThread = Effect.fn("TestEnvironmentThreads.failMissingThread")(function* (
+  harness: Effect.Success<ReturnType<typeof makeHarness>>,
+  typed = true,
+) {
+  yield* Queue.offer(
+    harness.inputs,
+    new OrchestrationV2GetThreadProjectionError({
+      threadId: THREAD_ID,
+      ...(typed ? { reason: "not_found" as const } : {}),
+      message: "Thread not found",
+    }),
+  );
+  yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.error));
+  yield* Effect.yieldNow;
+  yield* TestClock.adjust("250 millis");
 });
 
 const synchronized = (): OrchestrationV2ThreadStreamItem => ({ kind: "synchronized" });
@@ -472,6 +506,174 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  for (const cached of [true, false]) {
+    it.effect(
+      `bounds missing-thread requests over ten minutes (${cached ? "warm" : "cold"} cache)`,
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({
+            httpNotFound: true,
+            ...(cached ? { cached: BASE_PROJECTION } : {}),
+          });
+          for (let attempt = 1; attempt <= THREAD_NOT_FOUND_MAX_ATTEMPTS; attempt += 1) {
+            expect(yield* Queue.take(harness.subscriptionStarts)).toBe(attempt);
+            yield* failMissingThread(harness);
+          }
+          const state = yield* awaitThreadState(
+            harness.observed,
+            (value) => value.status === "deleted",
+          );
+          expect(Option.isNone(state.data)).toBe(true);
+          expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
+          yield* Queue.clear(harness.loaderStarts);
+          for (const seconds of [5, 10, 20, 40, 80, 160]) {
+            yield* TestClock.adjust(`${seconds} seconds`);
+            yield* Queue.take(harness.loaderStarts);
+          }
+          // 10s materialization + 315s probing + 275s idle = ten minutes.
+          yield* TestClock.adjust("275 seconds");
+          expect(yield* Queue.size(harness.loaderStarts)).toBe(0);
+          expect(yield* Ref.get(harness.subscriptionCount)).toBe(40);
+          expect(yield* Ref.get(harness.loaderCalls)).toBe(cached ? 7 : 8);
+          expect((yield* Ref.get(harness.latest)).status).toBe("deleted");
+        }),
+    );
+  }
+
+  it.effect("preserves the missing budget through 401s and refreshes credentials once", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_PROJECTION, httpNotFound: true });
+      for (let attempt = 1; attempt <= THREAD_NOT_FOUND_MAX_ATTEMPTS; attempt += 1) {
+        expect(yield* Queue.take(harness.subscriptionStarts)).toBe(attempt);
+        if (attempt === THREAD_NOT_FOUND_MAX_ATTEMPTS)
+          yield* Ref.set(harness.httpUnauthorized, true);
+        yield* failMissingThread(harness);
+      }
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+      expect(yield* Ref.get(harness.retryCount)).toBe(1);
+      // The refresh replaces the session without opening another fast retry window.
+      yield* harness.clearSession;
+      yield* Effect.yieldNow;
+      yield* harness.replaceSession;
+      yield* Queue.clear(harness.loaderStarts);
+      let attempt = THREAD_NOT_FOUND_MAX_ATTEMPTS;
+      for (const seconds of [5, 10, 20, 40, 80, 160, 300, 300]) {
+        yield* TestClock.adjust(`${seconds} seconds`);
+        yield* Queue.take(harness.loaderStarts);
+        expect(yield* Queue.take(harness.subscriptionStarts)).toBe(++attempt);
+        yield* failMissingThread(harness);
+        expect(yield* Ref.get(harness.retryCount)).toBe(1);
+        expect(yield* Queue.size(harness.subscriptionStarts)).toBe(0);
+        expect((yield* Ref.get(harness.latest)).status).toBe("deleted");
+      }
+    }),
+  );
+
+  it.effect("confirms cached absence from an older server without a typed reason", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_PROJECTION, httpNotFound: true });
+      for (let attempt = 1; attempt <= THREAD_NOT_FOUND_MAX_ATTEMPTS; attempt += 1) {
+        expect(yield* Queue.take(harness.subscriptionStarts)).toBe(attempt);
+        yield* failMissingThread(harness, false);
+      }
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(40);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
+    }),
+  );
+
+  it.effect("exponentially backs off an expired session even before the missing bound", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ httpUnauthorized: true });
+      expect(yield* Queue.take(harness.subscriptionStarts)).toBe(1);
+      for (const [index, seconds] of [1, 2, 4, 8, 16, 32, 64, 128, 256, 300, 300].entries()) {
+        yield* failMissingThread(harness);
+        yield* TestClock.adjust(`${seconds - 0.001} seconds`);
+        expect(yield* Queue.size(harness.subscriptionStarts)).toBe(0);
+        yield* TestClock.adjust("1 milli");
+        expect(yield* Queue.take(harness.subscriptionStarts)).toBe(index + 2);
+      }
+      expect(yield* Ref.get(harness.retryCount)).toBe(1);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([]);
+    }),
+  );
+
+  for (const unauthorized of [true, false]) {
+    it.effect(
+      `preserves an untyped missing budget through HTTP ${unauthorized ? "401" : "Unavailable"}`,
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({ httpNotFound: true });
+          for (let attempt = 1; attempt <= THREAD_NOT_FOUND_MAX_ATTEMPTS; attempt += 1) {
+            expect(yield* Queue.take(harness.subscriptionStarts)).toBe(attempt);
+            if (attempt === THREAD_NOT_FOUND_MAX_ATTEMPTS) {
+              yield* Ref.set(harness.httpNotFound, false);
+              yield* Ref.set(harness.httpUnauthorized, unauthorized);
+            }
+            yield* failMissingThread(harness, false);
+          }
+          // The confirmation failed; the existing socket can still recover after backoff.
+          yield* TestClock.adjust("5 seconds");
+          expect(yield* Queue.take(harness.subscriptionStarts)).toBe(41);
+          expect(yield* Ref.get(harness.removedThreads)).toEqual([]);
+          yield* Ref.set(harness.httpUnauthorized, false);
+          yield* Ref.set(harness.httpNotFound, true);
+          yield* failMissingThread(harness, false);
+          if (unauthorized) yield* TestClock.adjust("1 second");
+          yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+          expect(yield* Ref.get(harness.subscriptionCount)).toBe(41);
+          expect(yield* Ref.get(harness.loaderCalls)).toBe(3);
+          expect(yield* Ref.get(harness.retryCount)).toBe(unauthorized ? 1 : 0);
+        }),
+    );
+  }
+
+  it.effect("keeps the full materialization window for a new thread", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ httpNotFound: true });
+      for (let attempt = 1; attempt < THREAD_NOT_FOUND_MAX_ATTEMPTS; attempt += 1) {
+        expect(yield* Queue.take(harness.subscriptionStarts)).toBe(attempt);
+        yield* failMissingThread(harness);
+      }
+      expect(yield* Queue.take(harness.subscriptionStarts)).toBe(THREAD_NOT_FOUND_MAX_ATTEMPTS);
+      yield* Queue.offer(harness.inputs, snapshot(BASE_PROJECTION));
+      yield* awaitThreadState(harness.observed, (value) => value.status === "live");
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([]);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
+    }),
+  );
+
+  for (const deleted of [false, true]) {
+    it.effect(
+      `stops ${deleted ? "probes" : "fast retries"} when retained thread state is released`,
+      () =>
+        Effect.gen(function* () {
+          const scope = yield* Scope.make();
+          const harness = yield* makeHarness({ cached: BASE_PROJECTION, httpNotFound: true }).pipe(
+            Effect.provideService(Scope.Scope, scope),
+          );
+          if (deleted) {
+            for (let attempt = 1; attempt <= THREAD_NOT_FOUND_MAX_ATTEMPTS; attempt += 1) {
+              expect(yield* Queue.take(harness.subscriptionStarts)).toBe(attempt);
+              yield* failMissingThread(harness);
+            }
+            yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+          } else {
+            expect(yield* Queue.take(harness.subscriptionStarts)).toBe(1);
+            yield* failMissingThread(harness);
+            expect(yield* Queue.take(harness.subscriptionStarts)).toBe(2);
+          }
+          const subscriptions = yield* Ref.get(harness.subscriptionCount);
+          const requests = yield* Ref.get(harness.loaderCalls);
+          yield* Scope.close(scope, Exit.void);
+          yield* TestClock.adjust("10 minutes");
+          expect(yield* Ref.get(harness.subscriptionCount)).toBe(subscriptions);
+          expect(yield* Ref.get(harness.loaderCalls)).toBe(requests);
+        }),
+    );
+  }
+
   it.effect("recovers a wrongly-deleted thread once the owning server materializes it", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ httpNotFound: true });
@@ -588,24 +790,23 @@ describe("EnvironmentThreads", () => {
         yield* harness.replaceSession;
         yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
 
-        // The HTTP loader maps expired credentials / transport failures to
-        // Unavailable. The existing authenticated socket is still usable.
+        // A transport failure does not prevent the authenticated socket fallback.
         yield* Ref.set(harness.httpNotFound, false);
         yield* TestClock.adjust(THREAD_DELETED_REPROBE_INTERVAL);
         expect(yield* Queue.take(harness.subscriptionStarts)).toBe(
           THREAD_NOT_FOUND_MAX_ATTEMPTS + 1,
         );
         expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBeUndefined();
-        const loaderCalls = yield* Ref.get(harness.loaderCalls);
-        for (let retry = 1; retry <= 4; retry += 1) {
+        let retry = 0;
+        for (const seconds of [10, 20, 40, 80]) {
           yield* Queue.offer(harness.inputs, new Error("thread still missing"));
           yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.error));
           yield* Effect.yieldNow;
-          yield* TestClock.adjust("250 millis");
+          yield* TestClock.adjust(`${seconds + 0.25} seconds`);
           expect(yield* Queue.take(harness.subscriptionStarts)).toBe(
-            THREAD_NOT_FOUND_MAX_ATTEMPTS + 1 + retry,
+            THREAD_NOT_FOUND_MAX_ATTEMPTS + 1 + ++retry,
           );
-          expect(yield* Ref.get(harness.loaderCalls)).toBe(loaderCalls);
+          expect((yield* Ref.get(harness.latest)).status).toBe("deleted");
         }
         yield* Queue.offer(harness.inputs, snapshot(BASE_PROJECTION));
         const recovering = yield* awaitThreadState(harness.observed, (value) =>
@@ -990,6 +1191,31 @@ const replyPage = (
   });
 
 describe("paginated environment thread history", () => {
+  it.effect("loads a page through the authenticated socket when HTTP credentials expire", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        cached: historyProjection([4, 5]),
+        cachedHistory: historyMetadata(4, 5),
+        historySupport: true,
+        httpUnauthorized: true,
+        socketPage: {
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+          projection: historyProjection([2, 3, 4]),
+          history: historyMetadata(2, 4),
+        },
+      });
+      expect(yield* Queue.take(harness.subscriptionStarts)).toBe(1);
+      (yield* Ref.get(harness.latest)).history!.request("older");
+      expect(yield* Queue.take(harness.subscriptionStarts)).toBe(2);
+      const loaded = yield* awaitThreadState(
+        harness.observed,
+        (state) => !state.history?.isLoading && itemTexts(state).includes("Message 2"),
+      );
+      expect(itemTexts(loaded)).toEqual(["Message 2", "Message 3", "Message 4", "Message 5"]);
+      expect(loaded.history?.error).toBeNull();
+    }),
+  );
+
   it.effect(
     "loads older once, preserves live rows, and keeps the stream cursor behind future page rows",
     () =>

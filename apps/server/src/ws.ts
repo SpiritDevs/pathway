@@ -25,6 +25,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
@@ -106,6 +107,7 @@ import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import { ProjectionStoreThreadNotFoundError } from "./orchestration-v2/ProjectionStore.ts";
 import {
   threadHistoryNeedsSnapshot,
   threadProjectionExists,
@@ -271,11 +273,25 @@ export const requireThreadResumeTarget = Effect.fn("ws.orchestrationV2.requireTh
     if (target === null) {
       return yield* new OrchestrationV2GetThreadProjectionError({
         threadId,
+        reason: "not_found",
         message: `Orchestration V2 thread ${threadId} is not available on this environment`,
       });
     }
   },
 );
+
+const isProjectionStoreThreadNotFoundError = Schema.is(ProjectionStoreThreadNotFoundError);
+
+export function threadProjectionError(threadId: ThreadId, cause: { readonly cause?: unknown }) {
+  const notFound =
+    isProjectionStoreThreadNotFoundError(cause.cause) && cause.cause.threadId === threadId;
+  return new OrchestrationV2GetThreadProjectionError({
+    threadId,
+    message: `Failed to load orchestration V2 thread ${threadId}`,
+    ...(notFound ? { reason: "not_found" as const } : {}),
+    cause,
+  });
+}
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
@@ -1132,16 +1148,7 @@ const makeWsRpcLayer = (
 
           const snapshot = yield* threadManagement
             .getThreadSnapshot(input.threadId, input.history)
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationV2GetThreadProjectionError({
-                    threadId: input.threadId,
-                    message: `Failed to load orchestration V2 thread ${input.threadId}`,
-                    cause,
-                  }),
-              ),
-            );
+            .pipe(Effect.mapError((cause) => threadProjectionError(input.threadId, cause)));
           const { projection, snapshotSequence } = snapshot;
 
           return Stream.concat(
@@ -1615,16 +1622,9 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
-            threadManagement.getThreadProjection(input.threadId).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationV2GetThreadProjectionError({
-                    threadId: input.threadId,
-                    message: `Failed to load orchestration V2 thread ${input.threadId}`,
-                    cause,
-                  }),
-              ),
-            ),
+            threadManagement
+              .getThreadProjection(input.threadId)
+              .pipe(Effect.mapError((cause) => threadProjectionError(input.threadId, cause))),
             {
               "rpc.aggregate": "orchestrationV2",
               "orchestration_v2.thread_id": input.threadId,
