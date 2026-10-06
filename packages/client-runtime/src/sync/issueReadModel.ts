@@ -10,12 +10,12 @@
 import type { IssueId } from "@spiritdevs/contracts";
 import * as Schema from "effect/Schema";
 
-import {
+import type {
   CloudProjectSyncEntity,
   EnvironmentBindingEntity,
   MembershipEntity,
 } from "./companyDomain.ts";
-import {
+import type {
   IssueAttachmentEntity,
   IssueAuditEventEntity,
   IssueCommentEntity,
@@ -28,26 +28,10 @@ import {
   IssueThreadLinkEntity,
   IssueTodoEntity,
   IssueViewEntity,
-  decodeIssueEntityPayload,
-  type CloudSyncEntity,
+  CloudSyncEntity,
 } from "./issueDomain.ts";
 import * as Option from "effect/Option";
-
-const isCloudProject = Schema.is(CloudProjectSyncEntity);
-const isEnvironmentBinding = Schema.is(EnvironmentBindingEntity);
-const isMembership = Schema.is(MembershipEntity);
-const isIssue = Schema.is(IssueEntity);
-const isIssueStatus = Schema.is(IssueStatusEntity);
-const isIssueLabel = Schema.is(IssueLabelEntity);
-const isIssueMilestone = Schema.is(IssueMilestoneEntity);
-const isIssueCycle = Schema.is(IssueCycleEntity);
-const isIssueView = Schema.is(IssueViewEntity);
-const isIssueTodo = Schema.is(IssueTodoEntity);
-const isIssueRelation = Schema.is(IssueRelationEntity);
-const isIssueComment = Schema.is(IssueCommentEntity);
-const isIssueAttachment = Schema.is(IssueAttachmentEntity);
-const isIssueAuditEvent = Schema.is(IssueAuditEventEntity);
-const isIssueThreadLink = Schema.is(IssueThreadLinkEntity);
+import { decodeIssueEntityPayload } from "./issueDomain.ts";
 
 /** All synced rows needed by issue list screens and per-issue detail composition. */
 export interface SyncedIssueDomainReadModel {
@@ -104,9 +88,12 @@ const decodeDeletedIssueAuditPayload = Schema.decodeUnknownOption(
   Schema.Struct({ deletedIssue: Schema.Unknown }),
 );
 
-/** Narrows and deterministically orders the heterogeneous values from one company replica. */
+const deletedIssuesByEvent = new WeakMap<IssueAuditEventEntity, Option.Option<IssueEntity>>();
+
+/** Orders decoded entities from one company replica; domain codecs own payload validation. */
 export function syncedIssueDomainFromEntities(
-  values: Iterable<unknown>,
+  values: Iterable<CloudSyncEntity>,
+  previous: SyncedIssueDomainReadModel = EMPTY_SYNCED_ISSUE_DOMAIN,
 ): SyncedIssueDomainReadModel {
   const cloudProjects: CloudProjectSyncEntity[] = [];
   const environmentBindings: EnvironmentBindingEntity[] = [];
@@ -125,21 +112,53 @@ export function syncedIssueDomainFromEntities(
   const issueThreadLinks: IssueThreadLinkEntity[] = [];
 
   for (const value of values) {
-    if (isCloudProject(value)) cloudProjects.push(value);
-    else if (isEnvironmentBinding(value)) environmentBindings.push(value);
-    else if (isMembership(value)) memberships.push(value);
-    else if (isIssue(value)) issues.push(value);
-    else if (isIssueStatus(value)) issueStatuses.push(value);
-    else if (isIssueLabel(value)) issueLabels.push(value);
-    else if (isIssueMilestone(value)) issueMilestones.push(value);
-    else if (isIssueCycle(value)) issueCycles.push(value);
-    else if (isIssueView(value)) issueViews.push(value);
-    else if (isIssueTodo(value)) issueTodos.push(value);
-    else if (isIssueRelation(value)) issueRelations.push(value);
-    else if (isIssueComment(value)) issueComments.push(value);
-    else if (isIssueAttachment(value)) issueAttachments.push(value);
-    else if (isIssueAuditEvent(value)) issueAuditEvents.push(value);
-    else if (isIssueThreadLink(value)) issueThreadLinks.push(value);
+    switch (value.entityKind) {
+      case "cloudProject":
+        cloudProjects.push(value);
+        break;
+      case "environmentBinding":
+        environmentBindings.push(value);
+        break;
+      case "membership":
+        memberships.push(value);
+        break;
+      case "issue":
+        issues.push(value);
+        break;
+      case "issueStatus":
+        issueStatuses.push(value);
+        break;
+      case "issueLabel":
+        issueLabels.push(value);
+        break;
+      case "issueMilestone":
+        issueMilestones.push(value);
+        break;
+      case "issueCycle":
+        issueCycles.push(value);
+        break;
+      case "issueView":
+        issueViews.push(value);
+        break;
+      case "issueTodo":
+        issueTodos.push(value);
+        break;
+      case "issueRelation":
+        issueRelations.push(value);
+        break;
+      case "issueComment":
+        issueComments.push(value);
+        break;
+      case "issueAttachment":
+        issueAttachments.push(value);
+        break;
+      case "issueAuditEvent":
+        issueAuditEvents.push(value);
+        break;
+      case "issueThreadLink":
+        issueThreadLinks.push(value);
+        break;
+    }
   }
 
   cloudProjects.sort(
@@ -155,9 +174,14 @@ export function syncedIssueDomainFromEntities(
   const liveIssueIds = new Set(issues.map((issue) => issue.id));
   for (const event of latestDeletionSnapshotByIssue.values()) {
     if (liveIssueIds.has(event.issueId)) continue;
-    const payload = decodeDeletedIssueAuditPayload(event.payload);
-    if (Option.isNone(payload)) continue;
-    const issue = decodeIssueEntityPayload(payload.value.deletedIssue);
+    let issue = deletedIssuesByEvent.get(event);
+    if (issue === undefined) {
+      const payload = decodeDeletedIssueAuditPayload(event.payload);
+      issue = Option.isNone(payload)
+        ? Option.none<IssueEntity>()
+        : decodeIssueEntityPayload(payload.value.deletedIssue);
+      deletedIssuesByEvent.set(event, issue);
+    }
     if (Option.isSome(issue) && issue.value.id === event.issueId && issue.value.deletedAt != null) {
       issues.push(issue.value);
     }
@@ -194,32 +218,52 @@ export function syncedIssueDomainFromEntities(
   issueAttachments.sort((left, right) => left.createdAt - right.createdAt || byId(left, right));
   issueThreadLinks.sort((left, right) => left.createdAt - right.createdAt || byId(left, right));
 
-  return {
-    cloudProjects,
-    environmentBindings,
-    memberships,
-    issues,
-    issueStatuses,
-    issueLabels,
-    issueMilestones,
-    issueCycles,
-    issueViews,
-    issueComments,
-    issueTodos,
-    issueRelations,
-    issueAttachments,
-    issueAuditEvents,
-    issueThreadLinks,
+  const next: SyncedIssueDomainReadModel = {
+    cloudProjects: retainCollection(previous.cloudProjects, cloudProjects),
+    environmentBindings: retainCollection(previous.environmentBindings, environmentBindings),
+    memberships: retainCollection(previous.memberships, memberships),
+    issues: retainCollection(previous.issues, issues),
+    issueStatuses: retainCollection(previous.issueStatuses, issueStatuses),
+    issueLabels: retainCollection(previous.issueLabels, issueLabels),
+    issueMilestones: retainCollection(previous.issueMilestones, issueMilestones),
+    issueCycles: retainCollection(previous.issueCycles, issueCycles),
+    issueViews: retainCollection(previous.issueViews, issueViews),
+    issueTodos: retainCollection(previous.issueTodos, issueTodos),
+    issueRelations: retainCollection(previous.issueRelations, issueRelations),
+    issueComments: retainCollection(previous.issueComments, issueComments),
+    issueAttachments: retainCollection(previous.issueAttachments, issueAttachments),
+    issueAuditEvents: retainCollection(previous.issueAuditEvents, issueAuditEvents),
+    issueThreadLinks: retainCollection(previous.issueThreadLinks, issueThreadLinks),
   };
+  return (Object.keys(next) as Array<keyof SyncedIssueDomainReadModel>).every(
+    (key) => next[key] === previous[key],
+  )
+    ? previous
+    : next;
 }
 
-/** Compatibility wrapper for callers whose absence signal is a nullable replica object. */
+function retainCollection<T>(previous: ReadonlyArray<T>, next: ReadonlyArray<T>): ReadonlyArray<T> {
+  return previous.length === next.length && next.every((value, index) => value === previous[index])
+    ? previous
+    : next;
+}
+
+const domainsByView = new WeakMap<ReadonlyMap<string, unknown>, SyncedIssueDomainReadModel>();
+
+/** The catalog erases entity types; its engine views have already passed the domain codecs. */
 export function syncedIssueDomainFromReplica(
   replica: { readonly view: ReadonlyMap<string, unknown> } | null,
+  previous?: SyncedIssueDomainReadModel,
 ): SyncedIssueDomainReadModel {
-  return replica === null
-    ? EMPTY_SYNCED_ISSUE_DOMAIN
-    : syncedIssueDomainFromEntities(replica.view.values());
+  if (replica === null) return EMPTY_SYNCED_ISSUE_DOMAIN;
+  const cached = domainsByView.get(replica.view);
+  if (cached !== undefined) return cached;
+  const domain = syncedIssueDomainFromEntities(
+    replica.view.values() as Iterable<CloudSyncEntity>,
+    previous,
+  );
+  domainsByView.set(replica.view, domain);
+  return domain;
 }
 
 export function syncedIssueDetailById(
