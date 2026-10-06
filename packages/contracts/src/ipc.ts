@@ -1014,6 +1014,64 @@ export const DesktopPreviewScreenshotArtifactSchema: Schema.Codec<DesktopPreview
     createdAt: Schema.String,
   });
 
+/** A certificate's subject or issuer, as Chromium parses it. */
+export const DesktopPreviewCertificateNameSchema = Schema.Struct({
+  commonName: Schema.optional(Schema.String),
+  organizations: Schema.Array(Schema.String),
+  organizationUnits: Schema.Array(Schema.String),
+  country: Schema.optional(Schema.String),
+  locality: Schema.optional(Schema.String),
+  state: Schema.optional(Schema.String),
+});
+export type DesktopPreviewCertificateName = typeof DesktopPreviewCertificateNameSchema.Type;
+
+export const DesktopPreviewCertificateSchema = Schema.Struct({
+  subject: DesktopPreviewCertificateNameSchema,
+  issuer: DesktopPreviewCertificateNameSchema,
+  serialNumber: Schema.String,
+  /** Milliseconds since the epoch, as the Pathway runtime reports them. */
+  validStart: Schema.Number,
+  /** Milliseconds since the epoch. */
+  validExpiry: Schema.Number,
+  /** Uppercase hex bytes separated by colons, such as `AB:CD:01`. */
+  fingerprintSha256: Schema.String,
+  /** Uppercase hex bytes separated by colons. */
+  publicKeySha256: Schema.String,
+  subjectAlternativeNames: Schema.Array(Schema.String),
+  signatureAlgorithm: Schema.String,
+  publicKeyAlgorithm: Schema.String,
+});
+export type DesktopPreviewCertificate = typeof DesktopPreviewCertificateSchema.Type;
+
+/**
+ * What the local browser knows about the site in a tab, for the address bar's
+ * site information. On stock Electron only the origin and its scheme are known;
+ * the Pathway Chromium runtime adds the connection and certificate chain.
+ */
+export const DesktopPreviewSiteInfoSchema = Schema.Struct({
+  /** False on stock Electron, where Site settings and certificates are unavailable. */
+  runtime: Schema.Boolean,
+  origin: Schema.String,
+  securityState: Schema.Literals(["secure", "neutral", "insecure", "dangerous", "unknown"]),
+  connection: Schema.NullOr(
+    Schema.Struct({
+      protocol: Schema.optional(Schema.String),
+      keyExchange: Schema.optional(Schema.String),
+      cipher: Schema.optional(Schema.String),
+      certificateError: Schema.optional(Schema.String),
+      summary: Schema.String,
+    }),
+  ),
+  /** The chain the connection was verified with, leaf first. Null without TLS or the runtime. */
+  certificate: Schema.NullOr(
+    Schema.Struct({
+      chain: Schema.Array(DesktopPreviewCertificateSchema),
+      isValid: Schema.Boolean,
+    }),
+  ),
+});
+export type DesktopPreviewSiteInfo = typeof DesktopPreviewSiteInfoSchema.Type;
+
 /**
  * Single stack frame captured by react-grab's `getElementContext`. We surface
  * the source file/line so coding agents can jump straight to the JSX that
@@ -1231,6 +1289,11 @@ export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
 export const DesktopPreviewNavigateInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   url: Schema.String,
+});
+
+export const DesktopPreviewOpenSiteSettingsInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  targetTabId: DesktopPreviewTabIdSchema,
 });
 
 export const DesktopPreviewConfigInputSchema = Schema.Struct({
@@ -1582,6 +1645,14 @@ export interface DesktopPreviewBridge {
   captureScreenshot: (tabId: string) => Promise<DesktopPreviewScreenshotArtifact>;
   /** A small JPEG data URL of the page for tab hover cards; null when nothing is painted. */
   captureThumbnail?: (tabId: string) => Promise<string | null>;
+  /** The site in this tab, for the address bar's site information. Null when the page is not a website. */
+  siteInfo?: (tabId: string) => Promise<DesktopPreviewSiteInfo | null>;
+  /**
+   * Loads Chrome's settings for this tab's site into `targetTabId`, a blank tab
+   * the caller just opened. The main process computes the address, so nothing
+   * else produces a `chrome://` URL. Rejects without the Pathway runtime.
+   */
+  openSiteSettings?: (tabId: string, targetTabId: string) => Promise<void>;
   /** Clears the current site's cookies and storage in this tab's browser, then reloads it. */
   clearSiteData?: (tabId: string) => Promise<void>;
   revealArtifact: (path: string) => Promise<void>;

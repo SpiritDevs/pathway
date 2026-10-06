@@ -104,6 +104,8 @@ export class BrowserSession extends Context.Service<
     ) => Effect.Effect<string, BrowserSessionPartitionDerivationError>;
     readonly isPartition: (partition: string) => boolean;
     readonly getSession: (scope?: string) => Effect.Effect<Session, BrowserSessionGetSessionError>;
+    /** The partition a preview session was made from, as the Pathway runtime addresses it. */
+    readonly partitionOf: (session: Session) => Effect.Effect<string | undefined>;
     readonly clearCookies: () => Effect.Effect<void, BrowserSessionStorageClearError>;
     readonly clearCache: () => Effect.Effect<void, BrowserSessionCacheClearError>;
   }
@@ -164,6 +166,10 @@ export const make = Effect.gen(function* BrowserSessionMake() {
     getPartition,
     isPartition: (partition) => partition.startsWith(PREVIEW_PARTITION_PREFIX),
     getSession,
+    partitionOf: Effect.fn("BrowserSession.partitionOf")(function* (browserSession: Session) {
+      const sessions = yield* SynchronizedRef.get(sessionsRef);
+      return [...sessions].find(([, candidate]) => candidate === browserSession)?.[0];
+    }),
     clearCookies: Effect.fn("BrowserSession.clearCookies")(function* () {
       const sessions = yield* SynchronizedRef.get(sessionsRef);
       yield* Effect.all(

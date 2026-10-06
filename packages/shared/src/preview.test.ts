@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   isLoopbackHost,
   isPreviewableUrl,
+  isWebPageUrl,
   newPreviewTabId,
   normalizePreviewUrl,
   PreviewUrlNormalizationError,
@@ -45,6 +46,27 @@ describe("isPreviewableUrl", () => {
   );
 });
 
+describe("isWebPageUrl", () => {
+  it.each(["https://example.com/", "http://localhost:5173/app", "about:blank", ""])(
+    "%s is a web page",
+    (url) => {
+      expect(isWebPageUrl(url)).toBe(true);
+    },
+  );
+
+  it.each([
+    "chrome://settings/content/siteDetails?site=https%3A%2F%2Fexample.com",
+    "chrome://settings@evil.example",
+    "devtools://devtools/bundled/inspector.html",
+    "file:///etc/passwd",
+    "javascript:alert(1)",
+    "about:settings",
+    "https://",
+  ])("%s is not", (url) => {
+    expect(isWebPageUrl(url)).toBe(false);
+  });
+});
+
 describe("normalizePreviewUrl", () => {
   it("treats bare loopback hosts as http", () => {
     expect(normalizePreviewUrl("localhost:5173")).toBe("http://localhost:5173/");
@@ -58,6 +80,19 @@ describe("normalizePreviewUrl", () => {
   it("respects explicit schemes", () => {
     expect(normalizePreviewUrl("https://localhost:5173")).toBe("https://localhost:5173/");
     expect(normalizePreviewUrl("http://example.com/path?q=1")).toBe("http://example.com/path?q=1");
+  });
+
+  it.each([
+    "chrome://settings",
+    "chrome://settings/content/siteDetails?site=https%3A%2F%2Fwww.google.com",
+    "chrome://settings/clearBrowserData",
+    "chrome://settings/resetProfileSettings",
+    "chrome://settings@evil.example",
+    "CHROME://SETTINGS",
+  ])("keeps browser page %s out, since only the desktop main process opens one", (url) => {
+    expect(() => normalizePreviewUrl(url)).toThrow(
+      expect.objectContaining({ reason: "unsupported-protocol", protocol: "chrome:" }),
+    );
   });
 
   it("rejects empty input", () => {

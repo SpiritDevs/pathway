@@ -17,6 +17,7 @@ import type {
   DesktopPreviewRecordingArtifact,
   DesktopPreviewRecordingFrame,
   DesktopPreviewScreenshotArtifact,
+  DesktopPreviewSiteInfo,
   PreviewAutomationClickInput,
   PreviewAutomationActionEvent,
   PreviewAutomationConsoleEntry,
@@ -31,7 +32,7 @@ import type {
 } from "@spiritdevs/contracts";
 import { fillBrowserLoginFields } from "@spiritdevs/shared/browserPasswordAutofill";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
-import { normalizePreviewUrl } from "@spiritdevs/shared/preview";
+import { isWebPageUrl, normalizePreviewUrl } from "@spiritdevs/shared/preview";
 import {
   BrowserWindow,
   ClipboardItem,
@@ -69,6 +70,7 @@ import {
   ELEMENT_PICKED_CHANNEL,
   START_PICK_CHANNEL,
 } from "./GuestProtocol.ts";
+import * as PathwayRuntime from "./PathwayRuntime.ts";
 import { isPreviewAnnotationPayload } from "./PickedElementPayload.ts";
 import { playwrightInjectedRuntimeInstallExpression } from "./PlaywrightInjectedRuntime.ts";
 import { makePreviewAutomationKeySequence } from "./PreviewKeyboard.ts";
@@ -507,6 +509,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   artifactDirectory: string,
   pictureInPicturePreloadPath: string,
 ) {
+  const browserSession = yield* BrowserSession.BrowserSession;
   const fileSystem = yield* FileSystem.FileSystem;
   const hostPlatform = yield* HostProcessPlatform;
   const path = yield* Path.Path;
@@ -745,6 +748,21 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         cause: new Error("The browser tab changed. Select the current tab before trying again."),
       });
     }
+  });
+
+  /** Browser pages are the user's alone. Agents only drive websites and blank tabs. */
+  const requireWebPage = Effect.fn("PreviewManager.requireWebPage")(function* (
+    tabId: string,
+    wc: Electron.WebContents,
+    action: string,
+  ) {
+    if (isWebPageUrl(wc.getURL())) return;
+    return yield* new PreviewOperationError({
+      operation: `${action}.requireWebPage`,
+      tabId,
+      webContentsId: wc.id,
+      cause: new Error("Browser automation only works on websites. This tab shows a browser page."),
+    });
   });
 
   const resolveArtifactPath = (artifactPath: string) =>
@@ -1132,8 +1150,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const control = yield* ensureControlSession(wc);
     const execute = Effect.fn("PreviewManager.executeControlAction")(function* () {
       yield* validateCurrentGuest(tabId, wc);
+      // Checked before every command: the page's own history.back() can return the tab to a
+      // browser page, such as Chrome's settings on the Pathway runtime, partway through an action.
       const send: SendCommand = Effect.fn("PreviewManager.sendCommand")(
         function* (method, commandParams) {
+          yield* requireWebPage(tabId, wc, action);
           return yield* boundedPromise(
             { operation: `${action}.${method}`, tabId, webContentsId: wc.id },
             () => control.debugger.sendCommand(method, commandParams),
@@ -1716,10 +1737,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
   });
 
-  const navigate = Effect.fn("PreviewManager.navigate")(function* (tabId: string, rawUrl: string) {
-    const url = yield* attempt({ operation: "navigate.normalizeUrl", tabId }, () =>
-      normalizePreviewUrl(rawUrl),
-    );
+  /**
+   * Loads an address into a tab, or holds it until the tab's webview registers.
+   * Callers vet the address first: `navigate` keeps it to websites, and only
+   * the main process itself loads a browser page.
+   */
+  const loadUrl = Effect.fn("PreviewManager.loadUrl")(function* (tabId: string, url: string) {
     const updatedAt = yield* currentIso;
     const pending = yield* SynchronizedRef.modify(tabsRef, (tabs) => {
       const current = tabs.get(tabId);
@@ -1769,6 +1792,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     yield* attemptPromise({ operation: "navigate.loadURL", tabId, webContentsId: wc.id }, () =>
       wc.loadURL(url),
     );
+  });
+
+  const navigate = Effect.fn("PreviewManager.navigate")(function* (tabId: string, rawUrl: string) {
+    const url = yield* attempt({ operation: "navigate.normalizeUrl", tabId }, () =>
+      normalizePreviewUrl(rawUrl),
+    );
+    yield* loadUrl(tabId, url);
   });
 
   const withWebContents = Effect.fn("PreviewManager.withWebContents")(function* (
@@ -2142,20 +2172,32 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     return null;
   });
 
+  const siteInfo = Effect.fn("PreviewManager.siteInfo")(function* (tabId: string) {
+    const wc = yield* requireWebContents(tabId);
+    return yield* attemptPromise({ operation: "siteInfo", tabId, webContentsId: wc.id }, () =>
+      PathwayRuntime.siteInfo(wc),
+    );
+  });
+
+  const openSiteSettings = Effect.fn("PreviewManager.openSiteSettings")(function* (
+    tabId: string,
+    targetTabId: string,
+  ) {
+    const wc = yield* requireWebContents(tabId);
+    const url = yield* attempt({ operation: "openSiteSettings", tabId, webContentsId: wc.id }, () =>
+      PathwayRuntime.siteSettingsUrl(wc),
+    );
+    // Straight into the blank tab the renderer opened beside this one. No caller
+    // supplies a browser page's address, and it skips normalizePreviewUrl.
+    yield* loadUrl(targetTabId, url);
+  });
+
   const clearSiteData = Effect.fn("PreviewManager.clearSiteData")(function* (tabId: string) {
     const wc = yield* requireWebContents(tabId);
-    const url = wc.getURL();
-    if (!/^https?:/i.test(url) || !URL.canParse(url)) return;
-    const origin = new URL(url).origin;
-    yield* attemptPromise(
-      { operation: "clearSiteData.clearStorageData", tabId, webContentsId: wc.id },
-      () =>
-        wc.session.clearStorageData({
-          origin,
-          storages: ["cookies", "localstorage", "indexdb", "serviceworkers", "cachestorage"],
-        }),
+    const partition = yield* browserSession.partitionOf(wc.session);
+    yield* attemptPromise({ operation: "clearSiteData", tabId, webContentsId: wc.id }, () =>
+      PathwayRuntime.clearSiteData(wc, partition),
     );
-    if (!wc.isDestroyed()) wc.reload();
   });
 
   const capturePreviewFrame = Effect.fn("PreviewManager.capturePreviewFrame")(function* (
@@ -2855,6 +2897,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         Ref.get(actionTimelineRef),
       ]);
       yield* validateCurrentGuest(tabId, wc);
+      yield* requireWebPage(tabId, wc, "snapshot");
       const sourceSize = sourceImage.getSize();
       const image =
         sourceSize.width > MAX_SCREENSHOT_WIDTH
@@ -3508,6 +3551,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     navigate,
     openPictureInPicture,
     openDevTools,
+    openSiteSettings,
     pickElement,
     refresh,
     registerWebview,
@@ -3518,6 +3562,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     setAnnotationTheme,
     setColorScheme,
     setMainWindow,
+    siteInfo,
     startRecording,
     closePictureInPicture,
     stopRecording,
@@ -3829,6 +3874,13 @@ export class PreviewManager extends Context.Service<
       tabId: string,
     ) => Effect.Effect<DesktopPreviewScreenshotArtifact, PreviewManagerError>;
     readonly captureThumbnail: (tabId: string) => Effect.Effect<string | null, PreviewManagerError>;
+    readonly siteInfo: (
+      tabId: string,
+    ) => Effect.Effect<DesktopPreviewSiteInfo | null, PreviewManagerError>;
+    readonly openSiteSettings: (
+      tabId: string,
+      targetTabId: string,
+    ) => Effect.Effect<void, PreviewManagerError>;
     readonly clearSiteData: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly revealArtifact: (path: string) => Effect.Effect<void, PreviewManagerError>;
     readonly copyArtifactToClipboard: (path: string) => Effect.Effect<void, PreviewManagerError>;
@@ -3965,6 +4017,8 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     cancelPickElement: operations.cancelPickElement,
     captureScreenshot: operations.captureScreenshot,
     captureThumbnail: operations.captureThumbnail,
+    siteInfo: operations.siteInfo,
+    openSiteSettings: operations.openSiteSettings,
     clearSiteData: operations.clearSiteData,
     revealArtifact: operations.revealArtifact,
     copyArtifactToClipboard: operations.copyArtifactToClipboard,

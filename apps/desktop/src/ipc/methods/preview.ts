@@ -10,6 +10,7 @@ import {
   DesktopPreviewAutomationWaitForInputSchema,
   DesktopPreviewConfigInputSchema,
   DesktopPreviewNavigateInputSchema,
+  DesktopPreviewOpenSiteSettingsInputSchema,
   DesktopPreviewRecordingArtifactSchema,
   DesktopPreviewRecordingReadInputSchema,
   DesktopPreviewRecordingReadResultSchema,
@@ -17,6 +18,7 @@ import {
   DesktopPreviewRegisterWebviewInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
   DesktopPreviewSetColorSchemeInputSchema,
+  DesktopPreviewSiteInfoSchema,
   DesktopPreviewTabInputSchema,
   DesktopPreviewWebviewConfigSchema,
   PreviewAnnotationSubmissionResultSchema,
@@ -261,6 +263,26 @@ export const captureThumbnail = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const siteInfo = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SITE_INFO_CHANNEL,
+  payload: DesktopPreviewTabInputSchema,
+  result: Schema.NullOr(DesktopPreviewSiteInfoSchema),
+  handler: Effect.fn("desktop.ipc.preview.siteInfo")(function* ({ tabId }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.siteInfo(tabId);
+  }),
+});
+
+export const openSiteSettings = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_OPEN_SITE_SETTINGS_CHANNEL,
+  payload: DesktopPreviewOpenSiteSettingsInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.openSiteSettings")(function* ({ tabId, targetTabId }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.openSiteSettings(tabId, targetTabId);
+  }),
+});
+
 export const clearSiteData = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_CLEAR_SITE_DATA_CHANNEL,
   payload: DesktopPreviewTabInputSchema,
@@ -427,6 +449,8 @@ export const methods = [
   cancelPickElement,
   captureScreenshot,
   captureThumbnail,
+  siteInfo,
+  openSiteSettings,
   clearSiteData,
   revealArtifact,
   copyArtifactToClipboard,

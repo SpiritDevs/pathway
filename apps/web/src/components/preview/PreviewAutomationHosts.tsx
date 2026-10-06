@@ -6,6 +6,7 @@ import { squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runti
 import {
   FILL_PREVIEW_VIEWPORT,
   PREVIEW_AUTOMATION_OPERATIONS,
+  type DesktopPreviewBridge,
   type EnvironmentId,
   type PreviewAutomationNavigateInput,
   type PreviewAutomationOpenInput,
@@ -54,6 +55,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { previewBridge } from "./previewBridge";
 import { usePreviewAutomationHostStore } from "./previewAutomationHostStore";
 import {
+  assertPreviewAutomationWebPage,
   PreviewAutomationOperationError,
   PreviewAutomationOverlayTimeoutError,
   PreviewAutomationRecordingNotActiveError,
@@ -377,6 +379,16 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
           tabId,
           bridgeAvailable: Boolean(previewBridge),
         };
+        const requireWebPage = async (bridge: DesktopPreviewBridge, runtimeTabId: string) => {
+          const { url } = await bridge.automation.status(runtimeTabId);
+          assertPreviewAutomationWebPage(url, {
+            requestId: request.requestId,
+            operation: request.operation,
+            environmentId,
+            threadId: request.threadId,
+            tabId,
+          });
+        };
         const requireReadyTab = async (options?: { readonly follow?: boolean }) => {
           const bridge = previewBridge;
           const readyTabId = tabId;
@@ -396,6 +408,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             request.operation,
             request.timeoutMs,
           );
+          await requireWebPage(bridge, runtimeTabId);
           return {
             bridge,
             tabId: readyTabId,
@@ -500,6 +513,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             }
             if (reusedExistingTab && resolvedInputUrl && previewBridge) {
               assertPreviewRuntimeCurrent(threadRef, activeTabId, activeRuntimeTabId, request);
+              await requireWebPage(previewBridge, activeRuntimeTabId);
               await previewBridge.navigate(activeRuntimeTabId, resolvedInputUrl);
               await waitForNavigationReadiness(
                 threadRef,

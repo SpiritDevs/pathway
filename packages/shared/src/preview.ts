@@ -47,6 +47,18 @@ export function isPreviewableUrl(rawUrl: string): boolean {
   }
 }
 
+/**
+ * True for the pages anything outside the desktop main process may load or
+ * drive in a browser tab: websites, and the blank page of a new tab. Browser
+ * pages such as `chrome://settings` only ever come from the main process, and
+ * only the user uses them.
+ */
+export function isWebPageUrl(url: string): boolean {
+  if (url === "" || url === "about:blank") return true;
+  const protocol = previewUrlProtocol(url);
+  return (protocol === "http:" || protocol === "https:") && URL.canParse(url);
+}
+
 export class PreviewUrlNormalizationError extends Schema.TaggedErrorClass<PreviewUrlNormalizationError>()(
   "PreviewUrlNormalizationError",
   {

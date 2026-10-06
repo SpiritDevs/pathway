@@ -22,6 +22,7 @@ import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerD
 import { previewAnnotationScreenshotFile } from "~/lib/previewAnnotation";
 import { ensureLocalApi } from "~/localApi";
 import {
+  readThreadPreviewState,
   rememberPreviewUrl,
   updatePreviewServerSnapshot,
   useThreadPreviewState,
@@ -43,10 +44,12 @@ import { beginBlankBrowserOpen, useRightPanelStore } from "~/rightPanelStore";
 import { previewBridge } from "./previewBridge";
 import { subscribeNewTabAddressFocus, subscribePreviewAction } from "./previewActionBus";
 import { isPaneFocused, usePaneId } from "../../panes/usePaneFocus";
+import { closePreviewSession } from "./closePreviewSession";
 import { openPreviewSession } from "./openPreviewSession";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
 import { PreviewMoreMenu } from "./PreviewMoreMenu";
+import { previewSiteActions } from "./PreviewSiteInfo";
 import {
   commitBrowserViewportChange,
   subscribeBrowserViewportChange,
@@ -139,6 +142,7 @@ function DesktopPreviewView({
     ? new URL(environmentHttpBaseUrl).hostname
     : null;
   const open = useAtomCommand(previewEnvironment.open);
+  const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const resize = useAtomCommand(previewEnvironment.resize, "preview viewport resize");
   const environmentOnThisMachine = useEnvironmentOnThisMachine(threadRef.environmentId);
   const environmentLabel = useEnvironment(threadRef.environmentId)?.label ?? "the environment";
@@ -362,6 +366,28 @@ function DesktopPreviewView({
     if (!localApi || !url) return;
     void localApi.shell.openExternal(url).catch(() => undefined);
   }, [url]);
+
+  // A blank tab beside this one, for a page the main process loads into it.
+  const openBlankTab = useCallback(async () => {
+    const result = await openPreviewSession({ openPreview: open, threadRef });
+    if (result._tag !== "Success") return null;
+    const blankTabId = result.value.tabId;
+    useRightPanelStore.getState().openBrowser(threadRef, blankTabId);
+    return {
+      runtimeTabId: previewRuntimeTabId(
+        threadRef,
+        readThreadPreviewState(threadRef).serverEpoch,
+        blankTabId,
+      ),
+      close: () =>
+        void closePreviewSession({
+          closePreview,
+          snapshot: readThreadPreviewState(threadRef).sessions[blankTabId] ?? null,
+          tabId: blankTabId,
+          threadRef,
+        }),
+    };
+  }, [closePreview, open, threadRef]);
 
   const handlePictureInPicture = useCallback(() => {
     if (!tabId) return;
@@ -765,9 +791,9 @@ function DesktopPreviewView({
         onRefresh={handleRefresh}
         onSubmit={(next) => void handleSubmitUrl(next)}
         onOpenInBrowser={tabId ? handleOpenInBrowser : undefined}
-        onClearSiteData={
-          runtimeTabId && previewBridge?.clearSiteData
-            ? () => void previewBridge?.clearSiteData?.(runtimeTabId).catch(() => undefined)
+        siteActions={
+          runtimeTabId && previewBridge
+            ? previewSiteActions(previewBridge, runtimeTabId, openBlankTab)
             : undefined
         }
         onCapture={previewBridge && tabId ? handleCapture : undefined}

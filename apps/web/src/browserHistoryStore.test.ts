@@ -58,6 +58,7 @@ describe("normalizeHistoryUrl", () => {
 
   it("rejects non-http(s), unparseable, and oversized urls", () => {
     expect(normalizeHistoryUrl("ftp://example.com")).toBeNull();
+    expect(normalizeHistoryUrl("chrome://settings/content/siteDetails?site=x")).toBeNull();
     expect(normalizeHistoryUrl("")).toBeNull();
     expect(normalizeHistoryUrl(`http://localhost/${"a".repeat(2048)}`)).toBeNull();
   });
