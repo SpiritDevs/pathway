@@ -15,6 +15,37 @@ export function resolveDelegatedModel(
   return requested ?? projectDefault ?? environmentDefault;
 }
 
+function isDelegationProviderAvailable(provider: ServerProvider): boolean {
+  return (
+    isProviderAvailable(provider) &&
+    provider.enabled &&
+    provider.installed &&
+    provider.status !== "error" &&
+    provider.status !== "disabled" &&
+    provider.auth.status !== "unauthenticated"
+  );
+}
+
+/**
+ * Order the instances offered to coordinator claims. A run without a pinned model takes the first
+ * instance of a coordinator driver, so lead with the user's text-generation instance, then usable
+ * ones, keeping a signed-out duplicate account from being picked just because it was listed first.
+ */
+export function coordinatorProviders(
+  providers: readonly ServerProvider[],
+  preferredInstanceId: string,
+): Array<{ instanceId: string; driver: string }> {
+  const rank = (provider: ServerProvider) =>
+    provider.instanceId === preferredInstanceId
+      ? 0
+      : isDelegationProviderAvailable(provider)
+        ? 1
+        : 2;
+  return [...providers]
+    .sort((left, right) => rank(left) - rank(right))
+    .map((provider) => ({ instanceId: provider.instanceId, driver: provider.driver }));
+}
+
 /** Read cached discovery only; omit account details and bound coordinator context size. */
 export function orchestratorDelegationCatalog(
   providers: readonly ServerProvider[],
@@ -30,13 +61,7 @@ export function orchestratorDelegationCatalog(
       instanceId: provider.instanceId,
       driver: provider.driver,
       name: provider.displayName ?? provider.driver,
-      available:
-        isProviderAvailable(provider) &&
-        provider.enabled &&
-        provider.installed &&
-        provider.status !== "error" &&
-        provider.status !== "disabled" &&
-        provider.auth.status !== "unauthenticated",
+      available: isDelegationProviderAvailable(provider),
       models: models.map((model) => ({
         id: model.slug,
         name: model.name,
