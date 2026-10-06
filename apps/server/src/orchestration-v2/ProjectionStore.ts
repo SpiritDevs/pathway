@@ -2613,48 +2613,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   THEN json_extract(t.payload_json, '$.forkedFrom.threadId')
                 ELSE NULL
               END AS forked_from_run_source_thread_id,
-              (
-                SELECT r.run_id
-                FROM orchestration_v2_projection_runs r
-                WHERE r.thread_id = t.thread_id
-                ORDER BY r.ordinal DESC, r.run_id DESC
-                LIMIT 1
-              ) AS latest_run_id,
-              (
-                SELECT r.status
-                FROM orchestration_v2_projection_runs r
-                WHERE r.thread_id = t.thread_id
-                ORDER BY r.ordinal DESC, r.run_id DESC
-                LIMIT 1
-              ) AS latest_run_status,
-              (
-                SELECT json_extract(r.payload_json, '$.allowanceHold')
-                FROM orchestration_v2_projection_runs r
-                WHERE r.thread_id = t.thread_id
-                ORDER BY r.ordinal DESC, r.run_id DESC
-                LIMIT 1
-              ) AS allowance_hold,
-              (
-                SELECT r.requested_at
-                FROM orchestration_v2_projection_runs r
-                WHERE r.thread_id = t.thread_id
-                ORDER BY r.ordinal DESC, r.run_id DESC
-                LIMIT 1
-              ) AS latest_run_requested_at,
-              (
-                SELECT json_extract(r.payload_json, '$.startedAt')
-                FROM orchestration_v2_projection_runs r
-                WHERE r.thread_id = t.thread_id
-                ORDER BY r.ordinal DESC, r.run_id DESC
-                LIMIT 1
-              ) AS latest_run_started_at,
-              (
-                SELECT r.completed_at
-                FROM orchestration_v2_projection_runs r
-                WHERE r.thread_id = t.thread_id
-                ORDER BY r.ordinal DESC, r.run_id DESC
-                LIMIT 1
-              ) AS latest_run_completed_at,
+              latest_run.run_id AS latest_run_id,
+              latest_run.status AS latest_run_status,
+              json_extract(latest_run.payload_json, '$.allowanceHold') AS allowance_hold,
+              latest_run.requested_at AS latest_run_requested_at,
+              json_extract(latest_run.payload_json, '$.startedAt') AS latest_run_started_at,
+              latest_run.completed_at AS latest_run_completed_at,
               (
                 SELECT r.run_id
                 FROM orchestration_v2_projection_runs r
@@ -2728,6 +2692,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   AND i.run_id IS NULL
               ) AS runless_item_count
             FROM orchestration_v2_projection_threads t
+            LEFT JOIN orchestration_v2_projection_runs latest_run
+              ON latest_run.run_id = (
+                SELECT r.run_id
+                FROM orchestration_v2_projection_runs r
+                WHERE r.thread_id = t.thread_id
+                ORDER BY r.ordinal DESC, r.run_id DESC
+                LIMIT 1
+              )
             WHERE t.deleted_at IS NULL${threadId === undefined ? sql`` : sql` AND t.thread_id = ${threadId}`}
             ORDER BY t.updated_at ASC, t.thread_id ASC
           `;
@@ -3040,6 +3012,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           WHERE status IN ('pending', 'resolved')
           UNION
           SELECT thread_id FROM orchestration_v2_projection_turn_items
+          -- Cover status and thread_id without reading every item's payload page.
+          INDEXED BY orchestration_v2_projection_turn_items_type_status_idx
           WHERE status IN ('pending', 'running', 'waiting')
           UNION
           SELECT bindings.thread_id
@@ -3055,7 +3029,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           UNION
           SELECT nodes.thread_id
           FROM orchestration_v2_projection_provider_threads AS provider_threads
-          JOIN orchestration_v2_projection_nodes AS nodes
+          -- Start with the few provider threads, then look up their owner nodes.
+          CROSS JOIN orchestration_v2_projection_nodes AS nodes
             ON nodes.node_id = provider_threads.owner_node_id
           WHERE provider_threads.status = 'active'
             OR json_array_length(provider_threads.payload_json, '$.pendingBackgroundTasks') > 0

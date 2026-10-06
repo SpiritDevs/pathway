@@ -508,9 +508,11 @@ const makeEventStore = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("OrchestrationEventStore.latestAgentSequence:query")),
     );
 
+  // SQLite otherwise prefers MULTI-INDEX OR over the matching partial sequence index.
   const latestApplicationSequence = sql<{ readonly sequence: number | null }>`
     SELECT MAX(sequence) AS sequence
     FROM orchestration_events
+    INDEXED BY idx_orch_events_application_high_water
     WHERE aggregate_kind = 'project'
       OR (application_event_version = 2 AND aggregate_kind = 'thread')
   `.pipe(

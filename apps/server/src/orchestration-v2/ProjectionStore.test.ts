@@ -77,6 +77,94 @@ it("selects only run-bound history when selecting fork context through a run", (
   );
 });
 
+it.effect("recovers pending items and provider owners while retaining archived threads", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const store = yield* ProjectionStoreV2;
+    const now = "2026-10-07T00:00:00.000Z";
+    for (const id of [
+      "pending",
+      "running",
+      "waiting",
+      "completed",
+      "archived",
+      "deleted",
+      "owner",
+      "background-owner",
+      "inactive-owner",
+      "subagent",
+    ]) {
+      yield* sql`INSERT INTO orchestration_v2_projection_threads ${sql.insert({
+        thread_id: id,
+        title: id,
+        default_provider: "codex",
+        runtime_mode: "full-access",
+        interaction_mode: "default",
+        created_at: now,
+        updated_at: now,
+        archived_at: id === "archived" ? now : null,
+        deleted_at: id === "deleted" ? now : null,
+        payload_json: "{}",
+      })}`;
+    }
+    for (const [threadId, status] of [
+      ["pending", "pending"],
+      ["running", "running"],
+      ["waiting", "waiting"],
+      ["completed", "completed"],
+      ["archived", "pending"],
+      ["deleted", "running"],
+    ]) {
+      yield* sql`INSERT INTO orchestration_v2_projection_turn_items ${sql.insert({
+        turn_item_id: threadId,
+        thread_id: threadId,
+        ordinal: 1,
+        type: "message",
+        status,
+        updated_at: now,
+        payload_json: "{}",
+      })}`;
+    }
+    for (const owner of ["owner", "background-owner", "inactive-owner"]) {
+      yield* sql`INSERT INTO orchestration_v2_projection_nodes ${sql.insert({
+        node_id: owner,
+        thread_id: owner,
+        root_node_id: owner,
+        kind: "provider_turn",
+        status: "completed",
+        payload_json: "{}",
+      })}`;
+      yield* sql`INSERT INTO orchestration_v2_projection_provider_threads ${sql.insert({
+        provider_thread_id: owner,
+        owner_node_id: owner,
+        provider: "codex",
+        status: owner === "owner" ? "active" : "stopped",
+        updated_at: now,
+        payload_json: encodeUnknownJsonString({
+          pendingBackgroundTasks: owner === "background-owner" ? [{ id: "task" }] : [],
+        }),
+      })}`;
+    }
+    yield* sql`INSERT INTO orchestration_v2_projection_subagents ${sql.insert({
+      subagent_id: "subagent",
+      thread_id: "subagent",
+      parent_node_id: "owner",
+      provider: "codex",
+      provider_thread_id: "owner",
+      origin: "provider_owned",
+      status: "completed",
+      updated_at: now,
+      payload_json: "{}",
+    })}`;
+    assert.deepEqual(
+      yield* store.getRecoveryThreadIds(),
+      ["archived", "background-owner", "owner", "pending", "running", "subagent", "waiting"].map(
+        (id) => ThreadId.make(id),
+      ),
+    );
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 it.layer(TestLayer)("ProjectionStoreV2", (it) => {
   it.effect("finds only the latest allowance-held runs for background resumption", () =>
     Effect.gen(function* () {
@@ -588,7 +676,7 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
     }),
   );
 
-  it.effect("only exposes interruptible runs through the shell activeRunId", () =>
+  it.effect("keeps latest run fields together and only exposes interruptible runs as active", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStoreV2;
       const now = yield* DateTime.now;
@@ -647,6 +735,19 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
           deletedAt: null,
         },
       });
+      for (const emptyShell of [
+        yield* projectionStore.getThreadShell(threadId),
+        (yield* projectionStore.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        ),
+      ]) {
+        assert.isOk(emptyShell);
+        assert.isNull(emptyShell?.latestRunId);
+        assert.isUndefined(emptyShell?.allowanceHold);
+        assert.isNull(emptyShell?.latestRunRequestedAt);
+        assert.isNull(emptyShell?.latestRunStartedAt);
+        assert.isNull(emptyShell?.latestRunCompletedAt);
+      }
       yield* projectionStore.apply({
         id: EventId.make("event:projection-shell-interruptible:running"),
         type: "run.created",
@@ -689,6 +790,47 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       );
       assert.equal(shell?.status, "waiting");
       assert.isNull(shell?.activeRunId);
+
+      const latestRunId = RunId.make("run:projection-shell-interruptible:latest");
+      const later = DateTime.add(now, { seconds: 30 });
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-shell-interruptible:latest"),
+        type: "run.created",
+        threadId,
+        runId: latestRunId,
+        occurredAt: later,
+        payload: {
+          ...run,
+          id: latestRunId,
+          ordinal: 2,
+          status: "interrupted",
+          allowanceHold: "Allowance reached",
+          requestedAt: later,
+          startedAt: null,
+          completedAt: later,
+        },
+      });
+      for (const latestShell of [
+        yield* projectionStore.getThreadShell(threadId),
+        (yield* projectionStore.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        ),
+      ]) {
+        assert.equal(latestShell?.latestRunId, latestRunId);
+        assert.equal(latestShell?.allowanceHold, "Allowance reached");
+        assert.equal(
+          latestShell?.latestRunRequestedAt &&
+            DateTime.toEpochMillis(latestShell.latestRunRequestedAt),
+          DateTime.toEpochMillis(later),
+        );
+        assert.isNull(latestShell?.latestRunStartedAt);
+        assert.equal(
+          latestShell?.latestRunCompletedAt &&
+            DateTime.toEpochMillis(latestShell.latestRunCompletedAt),
+          DateTime.toEpochMillis(later),
+        );
+        assert.equal(latestShell?.status, "interrupted");
+      }
     }),
   );
 
