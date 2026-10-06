@@ -162,7 +162,7 @@ export const focusNotificationsAtom = Atom.make<ReadonlyArray<FocusNotification>
   EMPTY_FOCUS_NOTIFICATIONS,
 ).pipe(Atom.keepAlive, Atom.withLabel("focuses:notifications"));
 
-const unreadNotificationThreadKeysAtom = Atom.make(
+export const unreadNotificationThreadKeysAtom = Atom.make(
   (get) =>
     new Set(
       get(focusNotificationsAtom)
@@ -176,6 +176,28 @@ const unreadNotificationThreadKeysAtom = Atom.make(
 export const threadHasUnreadNotificationAtom = Atom.family((threadKey: string) =>
   Atom.make((get) => get(unreadNotificationThreadKeysAtom).has(threadKey)),
 );
+
+export function readThreadHasUnreadNotification(threadKey: string): boolean {
+  return appAtomRegistry.get(unreadNotificationThreadKeysAtom).has(threadKey);
+}
+
+/** Acknowledges a thread's notifications without opening it, as settling it from a list does. */
+export function markThreadNotificationsRead(threadKey: string): void {
+  const markRead = appAtomRegistry.get(focusMutationsAtom)?.markNotificationRead;
+  if (!markRead) return;
+  for (const notification of appAtomRegistry.get(focusNotificationsAtom)) {
+    if (
+      notification.isRead ||
+      scopedThreadKey(scopeThreadRef(notification.environmentId, notification.threadId)) !==
+        threadKey
+    ) {
+      continue;
+    }
+    void markRead(notification.eventId).catch((error: unknown) => {
+      console.warn("Could not mark thread notification as read.", error);
+    });
+  }
+}
 
 function makeFocusMutations(client: ConvexClient): FocusMutations {
   return {

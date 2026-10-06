@@ -275,6 +275,7 @@ import {
   focusNotificationsAtom,
   focusUnreadCountAtom,
   threadHasUnreadNotificationAtom,
+  unreadNotificationThreadKeysAtom,
   visibleFocusProjectKeysAtom,
 } from "../cloud/focusReadModel";
 import type { FocusNotification } from "@spiritdevs/contracts/focus";
@@ -2652,6 +2653,7 @@ export default function Sidebar() {
     [isMobile, router, setOpenMobile],
   );
 
+  const unreadNotificationThreadKeys = useAtomValue(unreadNotificationThreadKeysAtom);
   // Settled threads stay in the live shell stream (settled ≠ archived), so
   // the partition works directly off live shells: no archived-snapshot
   // merging, no optimistic holds. Archived threads remain hidden here —
@@ -2687,13 +2689,13 @@ export default function Sidebar() {
     const sections = { active, pinned, snoozed, settled, loading };
     for (const thread of visible) {
       const capabilities = lifecycleCapabilities.get(thread.environmentId);
+      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
       const section = sidebarThreadSection(thread, {
         now: preciseNow,
         unavailable: unavailableEnvironmentIds.has(thread.environmentId),
         autoSettleAfterDays,
-        queued: queuedStatusByThreadId.has(
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        ),
+        queued: queuedStatusByThreadId.has(threadKey),
+        unread: unreadNotificationThreadKeys.has(threadKey),
         supportsSettlement:
           capabilities === undefined ? undefined : capabilities.threadSettlement === true,
         supportsSnooze: capabilities === undefined ? undefined : capabilities.threadSnooze === true,
@@ -2742,6 +2744,7 @@ export default function Sidebar() {
     snoozeWakeTick,
     agentThreads,
     queuedStatusByThreadId,
+    unreadNotificationThreadKeys,
   ]);
 
   const retainedSettledThreads = useMemo(
