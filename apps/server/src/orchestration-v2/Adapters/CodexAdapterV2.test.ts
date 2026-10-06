@@ -4553,6 +4553,155 @@ describe("CodexAdapterV2 subagent visibility", () => {
     ),
   );
 
+  for (const completion of [
+    "item-fallback",
+    "item-final",
+    "item-interval",
+    "turn",
+    "interrupted",
+  ] as const) {
+    it.effect(`coalesces plan deltas and flushes exact markdown at ${completion} completion`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scenario = `codex-plan-${completion}`;
+          const nativeThreadId = `native-${scenario}-thread`;
+          const nativeTurnId = `native-${scenario}-turn`;
+          const chunks = Array.from({ length: 100 }, (_, index) => `Step ${index}: café ✓\n`);
+          const bufferedMarkdown = chunks.join("");
+          const finalMarkdown =
+            completion === "item-final" ? "# Authoritative final\n" : bufferedMarkdown;
+          const entries: Array<CodexReplay.CodexAppServerReplayEntry> = [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Write a plan." }),
+            ...chunks.map(
+              (delta, index): CodexReplay.CodexAppServerReplayEntry => ({
+                type: "emit_inbound",
+                label: `item/plan/delta/${index}`,
+                frame: {
+                  method: "item/plan/delta",
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    itemId: "plan-1",
+                    delta,
+                  },
+                },
+              }),
+            ),
+          ];
+          if (completion === "item-interval") {
+            entries.push({
+              type: "emit_inbound",
+              label: "turn/plan/updated",
+              frame: {
+                method: "turn/plan/updated",
+                params: {
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  explanation: null,
+                  plan: [],
+                },
+              },
+            });
+          }
+          if (
+            completion === "item-fallback" ||
+            completion === "item-final" ||
+            completion === "item-interval"
+          ) {
+            entries.push({
+              type: "emit_inbound",
+              label: "item/completed/plan",
+              ...(completion === "item-interval" ? { afterMs: 100 } : {}),
+              frame: {
+                method: "item/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  item: {
+                    type: "plan",
+                    id: "plan-1",
+                    text: completion === "item-final" ? finalMarkdown : "",
+                  },
+                  completedAtMs: 1782622441000,
+                },
+              },
+            });
+          }
+          entries.push({
+            type: "emit_inbound",
+            label: "turn/completed",
+            frame: {
+              method: "turn/completed",
+              params: {
+                threadId: nativeThreadId,
+                turn: makeCodexReplayTurn({
+                  id: nativeTurnId,
+                  status: completion === "interrupted" ? "interrupted" : "completed",
+                }),
+              },
+            },
+          });
+          const harness = yield* makeCodexReplayHarness(
+            makeCodexReplayTranscript({ scenario, entries }),
+          );
+          const now = yield* DateTime.now;
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make(`attempt-${scenario}`),
+              text: "Write a plan.",
+            }),
+          );
+          if (completion === "item-interval") {
+            // The todo receipt follows the burst, so advance time only after its deltas drain.
+            yield* harness.awaitEvent(
+              (event) => event.type === "plan.updated" && event.plan.kind === "todo_list",
+            );
+            yield* TestClock.adjust("50 millis");
+            const streaming = yield* harness.awaitEvent((event) => event.type === "plan.updated");
+            if (streaming.type !== "plan.updated" || streaming.plan.kind !== "proposed_plan") {
+              return yield* Effect.die("Expected a streaming proposed plan.");
+            }
+            assert.equal(streaming.plan.markdown, bufferedMarkdown);
+            assert.equal(streaming.plan.status, "active");
+            yield* TestClock.adjust("50 millis");
+          }
+          yield* harness.awaitEvent((event) => event.type === "turn.terminal");
+          const plans = harness.events.filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "plan.updated" }> =>
+              event.type === "plan.updated" && event.plan.kind === "proposed_plan",
+          );
+          const updateCount = completion === "item-interval" ? 2 : 1;
+          assert.lengthOf(plans, updateCount, "100 deltas produce at most two plan updates");
+          const plan = plans.at(-1)?.plan;
+          if (plan?.kind !== "proposed_plan") {
+            return yield* Effect.die("Expected a proposed plan.");
+          }
+          assert.equal(plan.markdown, finalMarkdown);
+          assert.equal(plan.status, "completed");
+          const planNodes = harness.events.filter(
+            (event) => event.type === "node.updated" && event.node.id === plan.nodeId,
+          );
+          assert.lengthOf(planNodes, updateCount);
+          const planItems = harness.events.filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "turn_item.updated" }> =>
+              event.type === "turn_item.updated" && event.turnItem.type === "proposed_plan",
+          );
+          assert.lengthOf(planItems, updateCount);
+          const item = planItems.at(-1)?.turnItem;
+          if (item?.type !== "proposed_plan") {
+            return yield* Effect.die("Expected a proposed plan turn item.");
+          }
+          assert.equal(item.markdown, finalMarkdown);
+          assert.isFalse(item.streaming);
+          assert.equal(item.status, "completed");
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+    );
+  }
+
   it.effect("projects reasoning deltas and drops empty reasoning items", () =>
     Effect.scoped(
       Effect.gen(function* () {
