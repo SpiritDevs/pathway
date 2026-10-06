@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import {
+  PATHWAY_HTML_TOOL_INSTRUCTIONS,
   PATHWAY_ORCHESTRATION_INSTRUCTIONS,
   pathwayOrchestrationPromptForFirstRun,
   pathwayOrchestrationSystemPrompt,
@@ -49,4 +50,11 @@ describe("Pathway orchestration provider instructions", () => {
     assert.equal(pathwayOrchestrationSystemPrompt(false), undefined);
     assert.equal(pathwayOrchestrationSystemPrompt(true), PATHWAY_ORCHESTRATION_INSTRUCTIONS);
   });
+});
+
+it("teaches preview then publication before the reply, once", () => {
+  assert.include(PATHWAY_HTML_TOOL_INSTRUCTIONS, "html_preview");
+  assert.include(PATHWAY_HTML_TOOL_INSTRUCTIONS, "html_render");
+  assert.include(PATHWAY_HTML_TOOL_INSTRUCTIONS, "before your final reply");
+  assert.equal(PATHWAY_ORCHESTRATION_INSTRUCTIONS.split("## Inline HTML pages").length, 2);
 });

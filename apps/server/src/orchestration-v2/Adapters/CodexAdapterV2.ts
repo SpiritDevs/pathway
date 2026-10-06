@@ -1,3 +1,4 @@
+import { compactHtmlToolProjection } from "@spiritdevs/shared/toolOutput";
 import {
   CodexSettings,
   RuntimeRequestId,
@@ -390,8 +391,6 @@ function codexDynamicToolOutput(
 export function projectCodexDynamicToolItem(
   item: CodexDynamicToolItem,
 ): CodexDynamicToolProjection {
-  const output =
-    item.type === "mcpToolCall" ? codexMcpToolOutput(item) : codexDynamicToolOutput(item);
   const toolName =
     item.type === "mcpToolCall"
       ? `${item.server}.${item.tool}`
@@ -401,6 +400,28 @@ export function projectCodexDynamicToolItem(
     input: item.arguments,
     status: codexItemStatus(item.status).turnItem,
   };
+  // Codex carries an MCP result's isError only as a failed status, never on the result itself.
+  const nativeOutput =
+    item.type === "mcpToolCall"
+      ? item.error == null && item.status !== "failed"
+        ? (item.result ?? undefined)
+        : { ...item.result, isError: true, error: item.error?.message }
+      : item.success === false
+        ? { content: item.contentItems, isError: true }
+        : item.contentItems;
+  const compacted = compactHtmlToolProjection({
+    toolName,
+    input: item.arguments,
+    output: nativeOutput,
+  });
+  if (
+    compacted.toolName === "pathway.html_render" ||
+    compacted.toolName === "pathway.html_preview"
+  ) {
+    return { ...projection, ...compacted };
+  }
+  const output =
+    item.type === "mcpToolCall" ? codexMcpToolOutput(item) : codexDynamicToolOutput(item);
   return output === undefined ? projection : { ...projection, output };
 }
 

@@ -1,8 +1,48 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolvePathwayMcpToolPresentation } from "./pathwayMcpToolPresentation.ts";
+import {
+  resolvePathwayMcpToolId,
+  resolvePathwayMcpToolPresentation,
+} from "./pathwayMcpToolPresentation.ts";
 
 describe("resolvePathwayMcpToolPresentation", () => {
+  it("labels inline HTML tools and resolves every own provider spelling", () => {
+    for (const id of ["html_render", "html_preview"]) {
+      for (const spelling of [
+        id,
+        `pathway.${id}`,
+        `pathway/${id}`,
+        `pathway:${id}`,
+        `mcp__pathway__${id}`,
+        `mcp__pathway_code__${id}`,
+        `pathway_${id}`,
+        `pathway_code_${id}`,
+        `${id} completed`,
+      ]) {
+        expect(resolvePathwayMcpToolId(spelling)).toBe(id);
+        expect(resolvePathwayMcpToolPresentation(spelling)?.displayName).toBe(
+          id === "html_render" ? "Render an HTML page" : "Preview an HTML page",
+        );
+      }
+    }
+  });
+
+  it("rejects unrelated servers, unknown ids, and ambiguous underscore suffixes", () => {
+    for (const spelling of [
+      null,
+      undefined,
+      "mcp__other__html_render",
+      "other.html_render",
+      "other_html_render",
+      "pathway-thread_1_html_render",
+      "pathway_other_html_render",
+      "pathway.not_a_tool",
+      "pathway_not_a_tool",
+    ]) {
+      expect(resolvePathwayMcpToolId(spelling)).toBeNull();
+    }
+    expect(resolvePathwayMcpToolId("pathway_pathway_thread_read")).toBe("pathway_thread_read");
+  });
   it("pretty prints Claude and Cursor Pathway MCP tool names", () => {
     expect(resolvePathwayMcpToolPresentation("mcp__pathway__pathway_thread_read")).toEqual({
       displayName: "Read a Pathway thread",

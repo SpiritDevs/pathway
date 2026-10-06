@@ -106,6 +106,8 @@ export type ResolvedAsset = {
   readonly kind: "file";
   readonly path: string;
   readonly download?: boolean;
+  /** A stored `.html` attachment signed for inline display; served inside a sandbox. */
+  readonly inlineHtml?: boolean;
   readonly fileName?: string;
   readonly mimeType?: string;
 };
@@ -331,7 +333,14 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
           resource: input.resource,
         });
       }
-      const shouldDownload = !isWorkspaceImagePreviewPath(attachmentPath);
+      // The stored extension, never the caller's MIME type, decides what may render inline.
+      const disposition = input.resource.disposition;
+      const isHtml = path.extname(attachmentPath).toLowerCase() === ".html";
+      const isImage = isWorkspaceImagePreviewPath(attachmentPath);
+      if (disposition === "inline" && !isHtml && !isImage) {
+        return yield* new AssetPreviewTypeValidationError({ resource: input.resource });
+      }
+      const shouldDownload = disposition === "attachment" || (disposition !== "inline" && !isImage);
       claims = {
         version: 1,
         kind: "attachment",
@@ -498,6 +507,9 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
           kind: "file",
           path: attachmentPath,
           ...(claims.download ? { download: true } : {}),
+          ...(!claims.download && attachmentPath.toLowerCase().endsWith(".html")
+            ? { inlineHtml: true }
+            : {}),
           ...(claims.fileName !== undefined ? { fileName: claims.fileName } : {}),
           ...(claims.mimeType !== undefined ? { mimeType: claims.mimeType } : {}),
         } satisfies ResolvedAsset)

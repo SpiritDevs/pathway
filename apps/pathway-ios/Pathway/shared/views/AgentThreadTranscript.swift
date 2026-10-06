@@ -74,6 +74,9 @@ struct AgentThreadTranscript: View {
             }
         } else if let notice = PathwayComputerNotice(item) {
             AgentTranscriptComputerNotice(item: item, notice: notice, model: model)
+        } else if let render = PathwayHTMLRender(item) {
+            AgentTranscriptHTMLRender(render: render, model: model)
+                .id(render.attachmentID)
         } else {
             AgentTranscriptEventRow(item: item, model: model, onOpenChild: onOpenChild)
         }
@@ -537,7 +540,9 @@ struct AgentTranscriptEventRow: View {
         case "web_search": return "Searched \(item.fields["patterns"]?.arrayValue?.compactMap(\.stringValue).joined(separator: ", ") ?? "the web")"
         case "subagent": return "Agent work"
         case "reasoning": return "Thinking"
-        case "dynamic_tool": return item.fields["toolName"]?.stringValue ?? "Tool call"
+        case "dynamic_tool":
+            let toolName = item.fields["toolName"]?.stringValue
+            return PathwayHTMLRender.toolLabel(toolName) ?? toolName ?? "Tool call"
         case "checkpoint": return "Saved checkpoint"
         default: return item.type.replacingOccurrences(of: "_", with: " ").capitalized
         }

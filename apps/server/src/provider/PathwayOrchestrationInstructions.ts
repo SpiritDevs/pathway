@@ -1,3 +1,10 @@
+export const PATHWAY_HTML_TOOL_INSTRUCTIONS = `
+
+## Inline HTML pages
+
+When a chart, table, diagram, image collage, or mockup would say more than prose, build one self-contained HTML document, check it with \`html_preview\`, then publish it with \`html_render\` before your final reply. The reader sees the page above that reply; add only what the page does not already say. These tools exist only in conversations the user reads directly; subagents and delegated workers answer in text. Follow the page, layout, and theme rules in those tools' descriptions.
+`;
+
 export const PATHWAY_ORCHESTRATION_INSTRUCTIONS = `
 
 ## Pathway orchestration
@@ -9,8 +16,7 @@ The \`pathway\` MCP server provides app-owned orchestration. Treat these concept
 - To start work on another of the user's machines (another environment), call \`delegate_task\` with \`targetEnvironmentId\` and \`targetProjectId\` from \`pathway_environments_list\`. Thread-creation tools always run on this environment.
 - \`schedule_task\` creates persistent recurring work in the app scheduler. Pass \`schedule\` as a structured object, never as JSON text: \`{"type":"interval","everyMs":3600000}\` for an interval, or \`{"type":"fixed_time","timeOfDay":"09:00","weekdays":[1,2,3,4,5]}\` for a wall-clock schedule. By default runs return to the current thread; set \`bindToCurrentThread=false\` only when the user wants a fresh thread for every run. After scheduling, report the returned cadence and next run time.
 
-Tool names may include an MCP prefix (for example \`mcp__pathway__delegate_task\`); the semantics are the same. Keep polling/wait loops bounded, do not duplicate active work, and use stable \`clientRequestId\` values when retrying mutations.
-`;
+Tool names may include an MCP prefix (for example \`mcp__pathway__delegate_task\`); the semantics are the same. Keep polling/wait loops bounded, do not duplicate active work, and use stable \`clientRequestId\` values when retrying mutations.${PATHWAY_HTML_TOOL_INSTRUCTIONS}`;
 
 /** Providers without a system/developer channel receive this context in the first prompt. */
 export function prependPathwayOrchestrationInstructions(prompt: string): string {

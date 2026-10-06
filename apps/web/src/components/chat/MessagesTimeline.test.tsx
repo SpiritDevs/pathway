@@ -240,6 +240,7 @@ function buildProps() {
     onRevertUserMessage: () => {},
     isRevertingCheckpoint: false,
     onImageExpand: () => {},
+    onHtmlRenderExpand: () => {},
     activeThreadEnvironmentId: ACTIVE_THREAD_ENVIRONMENT_ID,
     markdownCwd: undefined,
     resolvedTheme: "light" as const,

@@ -1,3 +1,4 @@
+import { projectCursorDynamicToolCall } from "./CursorAdapterV2.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -250,5 +251,56 @@ describe("CursorAdapterV2", () => {
       subagentChildModelSelection({ parentSelection, reportedModel: undefined }),
       parentSelection,
     );
+  });
+});
+
+describe("Cursor HTML MCP projection", () => {
+  const htmlResult = {
+    htmlRender: { attachmentId: "thread-html-attachment", title: "Chart", height: 400 },
+    message: "Shown",
+  };
+  const rawHtml = "<html><body>Chart</body></html>";
+
+  it("normalizes only Pathway identity and compacts nested MCP text envelopes", () => {
+    for (const providerIdentifier of ["pathway", "other"]) {
+      const output = { isError: false, content: [{ text: { text: JSON.stringify(htmlResult) } }] };
+      const item = projectCursorDynamicToolCall({
+        type: "mcp",
+        args: {
+          providerIdentifier,
+          toolName: "html_render",
+          args: { html: rawHtml, title: "Chart", height: 400 },
+        },
+        result: { status: "success", value: output },
+      });
+      assert.equal(
+        item.toolName,
+        providerIdentifier === "pathway" ? "pathway.html_render" : "mcp__other__html_render",
+      );
+      assert.deepEqual(item.output, providerIdentifier === "pathway" ? htmlResult : output);
+    }
+  });
+  it("preserves native MCP isError and strips PNG data", () => {
+    const item = projectCursorDynamicToolCall({
+      type: "mcp",
+      args: {
+        providerIdentifier: "pathway",
+        toolName: "html_preview",
+        args: { html: rawHtml, width: 390 },
+      },
+      result: {
+        status: "success",
+        value: {
+          isError: true,
+          content: [
+            { text: { text: "Failed" } },
+            { image: { data: "secret-base64", mimeType: "image/png" } },
+          ],
+        },
+      },
+    });
+    assert.deepEqual(item.output, { isError: true, message: "Failed" });
+    assert.notInclude(JSON.stringify(item), "secret-base64");
+    assert.notInclude(JSON.stringify(item), rawHtml);
   });
 });

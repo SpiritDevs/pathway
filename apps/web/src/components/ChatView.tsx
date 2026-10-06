@@ -105,6 +105,7 @@ import {
 } from "../hooks/useComputerControlModeChange.logic";
 import { readComputerControlGenerationForSend } from "../hooks/useThreadComputerStateSeed";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@spiritdevs/shared/chatList";
+import type { HtmlRenderReference } from "@spiritdevs/shared/htmlRender";
 import { AddProjectConnectionDialog } from "./projects/AddProjectConnectionDialog";
 import { projectWorkspaceCwd, projectWorkspaceRuntimeEnv } from "./projects/projectWorkspace.logic";
 import { derivePendingBackgroundWork } from "@spiritdevs/shared/orchestrationV2PendingBackgroundWork";
@@ -404,6 +405,7 @@ import {
   RightPanelMaximizeControl,
 } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
+import { HtmlRenderDialog } from "./chat/HtmlRenderFrame";
 import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./chat/ThreadDetailsPanel";
 import { ThreadWorkspaceMoveDialog } from "./chat/ThreadWorkspaceMoveDialog";
 import { NoActiveThreadState } from "./NoActiveThreadState";
@@ -1785,6 +1787,10 @@ function ChatViewContent(props: ChatViewProps) {
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  const [expandedHtmlRender, setExpandedHtmlRender] = useState<{
+    threadKey: string | null;
+    htmlRender: HtmlRenderReference;
+  } | null>(null);
   const [localOptimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   // The first send belongs to the draft, so returning after navigation can
   // still show it while the server is preparing the thread.
@@ -2208,6 +2214,14 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThread],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  const expandHtmlRender = useCallback(
+    (htmlRender: HtmlRenderReference) =>
+      setExpandedHtmlRender({ threadKey: activeThreadKey, htmlRender }),
+    [activeThreadKey],
+  );
+  useEffect(() => {
+    setExpandedHtmlRender(null);
+  }, [activeThreadKey]);
   // Pins each Computer send to the control epoch it was made in.
   const setComposerComputerControlMode = useComposerDraftStore(
     (store) => store.setComputerControlMode,
@@ -10333,6 +10347,7 @@ function ChatViewContent(props: ChatViewProps) {
                 onRevertUserMessage={onRevertUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
+                onHtmlRenderExpand={expandHtmlRender}
                 markdownCwd={gitCwd ?? undefined}
                 resolvedTheme={resolvedTheme}
                 timestampFormat={timestampFormat}
@@ -10874,6 +10889,14 @@ function ChatViewContent(props: ChatViewProps) {
           onClose={closeExpandedImage}
         />
       )}
+      {expandedHtmlRender !== null && expandedHtmlRender.threadKey === activeThreadKey ? (
+        <HtmlRenderDialog
+          key={`${activeThread.environmentId}:${expandedHtmlRender.htmlRender.attachmentId}`}
+          environmentId={activeThread.environmentId}
+          htmlRender={expandedHtmlRender.htmlRender}
+          onClose={() => setExpandedHtmlRender(null)}
+        />
+      ) : null}
       {props.onOpenIssueContext === undefined && localIssueDetailKey !== null ? (
         <IssueDetailSheet
           issueKey={localIssueDetailKey}

@@ -949,3 +949,162 @@ describe("Computer transcript entries", () => {
     expect(titled).toMatchObject({ kind: "work", entry: { toolTitle: "Capture the login form" } });
   });
 });
+
+describe("HTML renders in the timeline", () => {
+  const runId = RunId.make("render-run");
+  const at = (second: number) =>
+    DateTime.makeUnsafe(`2026-09-04T12:00:${String(second).padStart(2, "0")}.000Z`);
+  const base = (id: string, second: number) => ({
+    id: TurnItemId.make(id),
+    threadId: ThreadId.make("render-thread"),
+    runId,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: second,
+    status: "completed" as const,
+    title: null,
+    startedAt: at(second),
+    completedAt: at(second),
+    updatedAt: at(second),
+  });
+  const visible = (item: OrchestrationV2TurnItem): OrchestrationV2ProjectedTurnItem => ({
+    position: item.ordinal,
+    visibility: "local",
+    sourceThreadId: item.threadId,
+    sourceItemId: item.id,
+    item,
+  });
+  const htmlRender = {
+    attachmentId: "render-thread-chart-html",
+    title: "Chart",
+    height: 420,
+    heights: [
+      [320, 620],
+      [728, 420],
+    ] as Array<[number, number]>,
+  };
+  const renderCall = (
+    status: OrchestrationV2TurnItem["status"],
+    output?: unknown,
+  ): OrchestrationV2TurnItem => ({
+    ...base("render", 2),
+    status,
+    type: "dynamic_tool",
+    toolName: "pathway.html_render",
+    input: { title: "Chart", height: 420, htmlBytes: 2400 },
+    ...(output === undefined ? {} : { output }),
+  });
+  const command = (id: string, second: number): OrchestrationV2TurnItem => ({
+    ...base(id, second),
+    type: "command_execution",
+    input: "vp test run",
+  });
+  const turn = (render: OrchestrationV2TurnItem) => {
+    const items: OrchestrationV2TurnItem[] = [
+      {
+        ...base("prompt", 0),
+        type: "user_message",
+        messageId: MessageId.make("prompt"),
+        inputIntent: "turn_start",
+        text: "Chart it",
+        createdBy: "user",
+        creationSource: "web",
+        attachments: [],
+      },
+      command("before", 1),
+      render,
+      command("after", 3),
+      {
+        ...base("reply", 4),
+        type: "assistant_message",
+        messageId: MessageId.make("reply"),
+        text: "Here it is.",
+        streaming: false,
+      },
+    ];
+    return deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: items.map(visible),
+      optimisticMessages: [],
+    });
+  };
+  const rowsFor = (
+    entries: TimelineEntry[],
+    expanded: { readonly runs?: boolean; readonly attempts?: boolean } = {},
+  ) =>
+    deriveMessagesTimelineRows({
+      timelineEntries: entries,
+      latestRun: {
+        runId,
+        status: "completed",
+        startedAt: DateTime.formatIso(at(0)),
+        completedAt: DateTime.formatIso(at(5)),
+      },
+      ...(expanded.runs ? { expandedRunIds: new Set([runId]) } : {}),
+      ...(expanded.attempts
+        ? { expandedAttemptIds: new Set([RunAttemptId.make("attempt-superseded")]) }
+        : {}),
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    }).map((row) => row.kind);
+  const published = { htmlRender, message: "Published." };
+
+  it("shows a completed render in place, above the reply, through the turn fold", () => {
+    const entries = turn(renderCall("completed", published));
+    const entry = entries.find((candidate) => candidate.kind === "html-render");
+    expect(entry).toMatchObject({ id: "render", runId, htmlRender });
+    expect(entry && timelineEntryIsPersistentResourceCard(entry)).toBe(true);
+    expect(rowsFor(entries)).toEqual(["message", "turn-fold", "html-render", "message"]);
+    expect(rowsFor(entries, { runs: true })).toEqual([
+      "message",
+      "turn-fold",
+      "work",
+      "html-render",
+      "work",
+      "message",
+    ]);
+  });
+
+  it("keeps a render visible when its superseded attempt folds", () => {
+    const attempt = {
+      id: RunAttemptId.make("attempt-superseded"),
+      runId,
+      attemptOrdinal: 1,
+      rootNodeId: NodeId.make("node-superseded"),
+      status: "superseded" as const,
+    };
+    const entries = turn(renderCall("completed", published)).map((entry) =>
+      entry.kind === "message" && entry.message.role === "user" ? entry : { ...entry, attempt },
+    );
+    expect(rowsFor(entries, { runs: true })).toEqual([
+      "message",
+      "turn-fold",
+      "attempt-fold",
+      "html-render",
+    ]);
+    expect(rowsFor(entries, { runs: true, attempts: true })).toEqual([
+      "message",
+      "turn-fold",
+      "attempt-fold",
+      "work",
+      "html-render",
+      "work",
+      "message",
+    ]);
+  });
+
+  it.each([
+    ["running", "running", undefined],
+    ["failed", "failed", { message: "Invalid HTML" }],
+    ["errored", "completed", { ...published, isError: true }],
+    ["malformed", "completed", { htmlRender: { title: "Chart" }, message: "Published." }],
+  ] as const)("keeps a %s call in the work log", (_label, status, output) => {
+    const entries = turn(renderCall(status, output));
+    expect(entries.some((entry) => entry.kind === "html-render")).toBe(false);
+    expect(entries.find((entry) => entry.id === "render")?.kind).toBe("work");
+  });
+});

@@ -1,3 +1,5 @@
+import { projectAcpDynamicToolCall, withVerifiedAcpMcpIdentity } from "./AcpAdapterV2.ts";
+import { normalizeXAiAcpToolCallState } from "../../provider/acp/XAiAcpExtension.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import type * as EffectAcpSchema from "effect-acp/schema";
@@ -375,5 +377,47 @@ describe("ACP permission policy", () => {
       ),
       "ask",
     );
+  });
+});
+
+describe("Grok HTML MCP projection", () => {
+  const htmlResult = {
+    htmlRender: { attachmentId: "thread-html-attachment", title: "Chart", height: 400 },
+    message: "Shown",
+  };
+  const rawHtml = "<html><body>Chart</body></html>";
+
+  it("does not promote a model-written generic title or description to MCP identity", () => {
+    const generic = {
+      toolCallId: "grok-html",
+      title: "Tool",
+      kind: "other",
+      status: "completed" as const,
+      data: {
+        rawInput: {
+          html: rawHtml,
+          description: "mcp__pathway__html_render",
+          title: "Chart",
+          height: 400,
+        },
+        rawOutput: { isError: false, structuredContent: htmlResult, content: [] },
+      },
+    };
+    assert.equal(
+      projectAcpDynamicToolCall(normalizeXAiAcpToolCallState(generic)).toolName,
+      "acp.other",
+    );
+    const native = withVerifiedAcpMcpIdentity(generic, {
+      update: { title: "mcp__pathway__html_render" },
+    });
+    const normalized = projectAcpDynamicToolCall(normalizeXAiAcpToolCallState(native));
+    assert.equal(normalized.toolName, "pathway.html_render");
+    assert.deepEqual(normalized.output, htmlResult);
+    assert.notInclude(JSON.stringify(normalized), rawHtml);
+    const failed = projectAcpDynamicToolCall({
+      ...native,
+      data: { ...native.data, rawOutput: { ...generic.data.rawOutput, isError: true } },
+    });
+    assert.deepEqual(failed.output, { isError: true, message: "Shown" });
   });
 });

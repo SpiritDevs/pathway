@@ -52,6 +52,10 @@ const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const DESKTOP_RENDERER_ORIGINS = ["pathway://app", "pathway-dev://app", "pathway-cua://app"];
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+// Agent-published HTML is not the app. The sandbox gives the page an opaque origin: scripts run,
+// but same-origin cookies, storage, and API calls are out of reach. No modals: pages load
+// without a click (and as the top document on mobile), so they must not raise blocking dialogs.
+const INLINE_HTML_CONTENT_SECURITY_POLICY = "sandbox allow-scripts allow-forms allow-popups";
 
 // #region DEBUG
 const CLOUD_SYNC_DEBUG_PATH = "/Users/coreybaines/GitHub/pathway/.codex/logs/debug.log";
@@ -117,7 +121,12 @@ export function downloadContentDisposition(fileName?: string): string {
 
 export function assetResponseHeaders(
   filePath: string,
-  options?: { readonly download?: boolean; readonly fileName?: string; readonly mimeType?: string },
+  options?: {
+    readonly download?: boolean;
+    readonly inlineHtml?: boolean;
+    readonly fileName?: string;
+    readonly mimeType?: string;
+  },
 ): Record<string, string> {
   const lowerPath = filePath.toLowerCase();
   return {
@@ -131,6 +140,12 @@ export function assetResponseHeaders(
             options.mimeType !== undefined && isSafeDownloadMimeType(options.mimeType)
               ? options.mimeType
               : "application/octet-stream",
+        }
+      : {}),
+    ...(options?.inlineHtml
+      ? {
+          "Content-Security-Policy": INLINE_HTML_CONTENT_SECURITY_POLICY,
+          "Referrer-Policy": "no-referrer",
         }
       : {}),
     ...(!options?.download && (lowerPath.endsWith(".html") || lowerPath.endsWith(".htm"))
@@ -330,16 +345,7 @@ export const assetRouteLayer = HttpRouter.add(
         status: range.status,
         ...(range.status === 206 ? { offset: range.start, bytesToRead: range.length } : {}),
         headers: {
-          ...assetResponseHeaders(
-            asset.path,
-            asset.download
-              ? {
-                  download: true,
-                  ...(asset.fileName !== undefined ? { fileName: asset.fileName } : {}),
-                  ...(asset.mimeType !== undefined ? { mimeType: asset.mimeType } : {}),
-                }
-              : undefined,
-          ),
+          ...assetResponseHeaders(asset.path, asset),
           "accept-ranges": "bytes",
           ...(range.status === 206
             ? {

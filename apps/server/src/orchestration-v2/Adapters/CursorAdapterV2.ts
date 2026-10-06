@@ -1,3 +1,4 @@
+import { compactHtmlToolProjection } from "@spiritdevs/shared/toolOutput";
 import type {
   AgentMessage,
   AgentOptions,
@@ -403,6 +404,23 @@ function cursorToolName(toolCall: ToolCall): string {
   const provider = toolCall.args.providerIdentifier ?? "mcp";
   const tool = toolCall.args.toolName ?? "unknown";
   return `mcp__${provider}__${tool}`;
+}
+
+export function projectCursorDynamicToolCall(toolCall: ToolCall) {
+  const output = cursorToolOutput(toolCall);
+  const compacted = compactHtmlToolProjection({
+    toolName: cursorToolName(toolCall),
+    input: toolCall.type === "mcp" ? toolCall.args.args : toolCall.args,
+    output: toolCall.result?.status === "error" ? { isError: true, error: output } : output,
+  });
+  return compacted.toolName === "pathway.html_render" ||
+    compacted.toolName === "pathway.html_preview"
+    ? compacted
+    : {
+        toolName: cursorToolName(toolCall),
+        input: toolCall.args,
+        ...(output === undefined ? {} : { output }),
+      };
 }
 
 function cursorToolFileName(toolCall: ToolCall): string {
@@ -1237,11 +1255,7 @@ export function makeCursorAdapterV2(
               turnItem = {
                 ...base,
                 type: "dynamic_tool",
-                toolName: cursorToolName(toolCall),
-                input: toolCall.args,
-                ...(cursorToolOutput(toolCall) === undefined
-                  ? {}
-                  : { output: cursorToolOutput(toolCall) }),
+                ...projectCursorDynamicToolCall(toolCall),
               };
           }
           yield* emitProviderEvent({

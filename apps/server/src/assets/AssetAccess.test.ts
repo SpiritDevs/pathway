@@ -471,6 +471,112 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
+  it.effect("signs stored HTML attachments for sandboxed inline display", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const attachmentId = "thread-1-00000000-0000-4000-8000-000000000004-html";
+      const attachmentPath = path.join(config.attachmentsDir, `${attachmentId}.html`);
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+      yield* fileSystem.writeFileString(attachmentPath, "<h1>Chart</h1>");
+
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "attachment",
+          attachmentId,
+          fileName: "Chart.html",
+          mimeType: "text/html",
+          disposition: "inline",
+        },
+      });
+      expect(result.relativeUrl).toMatch(/\/Chart\.html$/);
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const token = suffix.slice(0, suffix.indexOf("/"));
+      const [payload, signature] = token.split(".");
+
+      expect(yield* resolveAsset(token, "ignored.html")).toEqual({
+        kind: "file",
+        path: attachmentPath,
+        inlineHtml: true,
+        fileName: "Chart.html",
+        mimeType: "text/html",
+      });
+      expect(yield* resolveAsset(`${token}x`, "Chart.html")).toBeNull();
+      expect(yield* resolveAsset(`${payload}x.${signature}`, "Chart.html")).toBeNull();
+      yield* TestClock.setTime(result.expiresAt);
+      expect(yield* resolveAsset(token, "Chart.html")).toBeNull();
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("downloads HTML attachments by default and for an attachment disposition", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const htmlId = "thread-1-00000000-0000-4000-8000-000000000005-html";
+      const imageId = "thread-1-00000000-0000-4000-8000-000000000006";
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(config.attachmentsDir, `${htmlId}.html`),
+        "<h1>Chart</h1>",
+      );
+      yield* fileSystem.writeFile(
+        path.join(config.attachmentsDir, `${imageId}.png`),
+        new Uint8Array([1, 2, 3]),
+      );
+      const resolve = (resource: Parameters<typeof issueAssetUrl>[0]["resource"]) =>
+        Effect.gen(function* () {
+          const { relativeUrl } = yield* issueAssetUrl({ resource });
+          const suffix = relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+          return yield* resolveAsset(suffix.slice(0, suffix.indexOf("/")), "ignored");
+        });
+
+      for (const disposition of [undefined, "attachment"] as const) {
+        const asset = yield* resolve({
+          _tag: "attachment",
+          attachmentId: htmlId,
+          mimeType: "text/html",
+          ...(disposition === undefined ? {} : { disposition }),
+        });
+        expect(asset).toMatchObject({ download: true });
+        expect(asset).not.toHaveProperty("inlineHtml");
+      }
+      expect(
+        yield* resolve({ _tag: "attachment", attachmentId: imageId, disposition: "attachment" }),
+      ).toMatchObject({ download: true });
+      expect(
+        yield* resolve({ _tag: "attachment", attachmentId: imageId, disposition: "inline" }),
+      ).toEqual({ kind: "file", path: path.join(config.attachmentsDir, `${imageId}.png`) });
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("never lets a caller MIME type make other attachments active inline content", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+      for (const [index, extension] of [".htm", ".js", ".bin", ".txt"].entries()) {
+        const attachmentId = `thread-1-00000000-0000-4000-8000-00000000001${index}`;
+        yield* fileSystem.writeFileString(
+          path.join(config.attachmentsDir, `${attachmentId}${extension}`),
+          "<script>alert(1)</script>",
+        );
+        const error = yield* issueAssetUrl({
+          resource: {
+            _tag: "attachment",
+            attachmentId,
+            fileName: "page.html",
+            mimeType: "text/html",
+            disposition: "inline",
+          },
+        }).pipe(Effect.flip);
+        expect(error, extension).toBeInstanceOf(AssetPreviewTypeValidationError);
+      }
+    }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect("issues project favicon capabilities with a signed fallback", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

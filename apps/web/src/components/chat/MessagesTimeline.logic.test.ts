@@ -1969,3 +1969,35 @@ describe("prepared turn history and connection recovery", () => {
     ]);
   });
 });
+
+describe("HTML render rows", () => {
+  const htmlRender = { attachmentId: "thread-chart-html", title: "Chart", height: 420 };
+  const rowsFor = (reference: typeof htmlRender & { heights?: Array<[number, number]> }) =>
+    deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "render",
+          kind: "html-render",
+          createdAt: "2026-09-04T12:00:00.000Z",
+          runId: null,
+          htmlRender: reference,
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+  it("keeps an equal page's row so its mounted frame survives a rebuild", () => {
+    const initial = computeStableMessagesTimelineRows(rowsFor({ ...htmlRender }), {
+      byId: new Map(),
+      result: [],
+    });
+    expect(initial.result).toMatchObject([{ kind: "html-render", htmlRender }]);
+    expect(computeStableMessagesTimelineRows(rowsFor({ ...htmlRender }), initial)).toBe(initial);
+
+    const remeasured = rowsFor({ ...htmlRender, heights: [[728, 400]] });
+    expect(computeStableMessagesTimelineRows(remeasured, initial).result[0]).toBe(remeasured[0]);
+  });
+});

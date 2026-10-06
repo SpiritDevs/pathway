@@ -86,6 +86,70 @@ struct AgentThreadTranscriptLayoutTests {
         #expect(cache.rebuildCount == 2)
     }
 
+    @Test func publishedPageStaysAboveTheAnswerWhenItsRunFolds() throws {
+        let page = try render("page", ordinal: 2)
+        let rows = AgentThreadTranscriptLayout.rows([
+            try item("user", type: "user_message", ordinal: 0),
+            try item("command", type: "command_execution", ordinal: 1),
+            page,
+            try item("later", type: "command_execution", ordinal: 3),
+            try item("answer", type: "assistant_message", ordinal: 4)
+        ], activeRunID: nil)
+        #expect(rows.map(\.id) == ["user", "work:run", "page", "answer"])
+        guard case let .work(_, folded, _) = rows[1].content else { Issue.record("Expected settled work fold"); return }
+        #expect(folded.map(\.id) == ["command", "later"])
+
+        // While the run is active the page ends the activity group around it.
+        let active = AgentThreadTranscriptLayout.rows([
+            try item("search", type: "file_search", ordinal: 0), try item("command", type: "command_execution", ordinal: 1),
+            page, try item("later", type: "command_execution", ordinal: 3)
+        ], activeRunID: "run")
+        #expect(active.map(\.id) == ["activity:search", "page", "later"])
+    }
+
+    @Test func unpublishedPagesFoldLikeOtherToolCalls() throws {
+        let rows = AgentThreadTranscriptLayout.rows([
+            try item("user", type: "user_message", ordinal: 0),
+            try render("failed", ordinal: 1, status: "failed"),
+            try item("answer", type: "assistant_message", ordinal: 2)
+        ], activeRunID: nil)
+        #expect(rows.map(\.id) == ["user", "work:run", "answer"])
+    }
+
+    @Test func pageOutputArrivingAfterCompletionRebuildsTheLayout() throws {
+        let cache = AgentThreadTranscriptLayoutCache()
+        let pending = try render("page", ordinal: 0, output: .null)
+        #expect(cache.rows([pending], activeRunID: nil).map(\.id) == ["work:run"])
+        #expect(cache.rows([try render("page", ordinal: 0)], activeRunID: nil).map(\.id) == ["page"])
+        #expect(cache.rebuildCount == 2)
+    }
+
+    @Test func pageMetadataUsesCurrentItemsAndInvalidOutputUnpinsTheRow() throws {
+        let cache = AgentThreadTranscriptLayoutCache()
+        _ = cache.rows([try render("page", ordinal: 0)], activeRunID: nil)
+        let changed: JSONValue = .object(["htmlRender": .object([
+            "attachmentId": .string("thread-replacement-html"), "title": .string("Updated"), "height": .number(600)
+        ])])
+        let rows = cache.rows([try render("page", ordinal: 0, output: changed)], activeRunID: nil)
+        guard case let .item(item) = rows.first?.content else { Issue.record("Expected page row"); return }
+        #expect(PathwayHTMLRender(item)?.attachmentID == "thread-replacement-html")
+        #expect(PathwayHTMLRender(item)?.height == 600)
+        #expect(cache.rebuildCount == 1)
+        let invalid: JSONValue = .object(["htmlRender": changed.objectValue!["htmlRender"]!, "isError": .bool(true)])
+        #expect(cache.rows([try render("page", ordinal: 0, output: invalid)], activeRunID: nil).map(\.id) == ["work:run"])
+        #expect(cache.rebuildCount == 2)
+    }
+
+    private func render(_ id: String, ordinal: Int, status: String = "completed", output: JSONValue? = nil) throws -> PathwayTimelineItem {
+        let reference: JSONValue = .object(["attachmentId": .string("thread-\(id)-html"), "title": .string("Chart"), "height": .number(420)])
+        return try #require(PathwayTimelineItem(json: .object([
+            "id": .string(id), "type": .string("dynamic_tool"), "ordinal": .number(Double(ordinal)), "runId": .string("run"),
+            "status": .string(status), "toolName": .string("pathway.html_render"), "startedAt": .string("2026-09-06T00:00:01Z"),
+            "completedAt": .string("2026-09-06T00:00:02Z"), "updatedAt": .string("2026-09-06T00:00:02Z"),
+            "output": output ?? .object(["htmlRender": reference, "message": .string("Rendered above your reply.")])
+        ])))
+    }
+
     private func item(_ id: String, type: String, ordinal: Int, run: String = "run", status: String = "completed", streaming: Bool = false,
                       start: String = "2026-09-06T00:00:01Z", end: String = "2026-09-06T00:00:02Z") throws -> PathwayTimelineItem {
         try #require(PathwayTimelineItem(json: .object([

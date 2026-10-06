@@ -1,6 +1,9 @@
 import type { ProviderInteractionMode } from "@spiritdevs/contracts";
 
-import { PATHWAY_ORCHESTRATION_INSTRUCTIONS } from "./PathwayOrchestrationInstructions.ts";
+import {
+  PATHWAY_HTML_TOOL_INSTRUCTIONS,
+  PATHWAY_ORCHESTRATION_INSTRUCTIONS,
+} from "./PathwayOrchestrationInstructions.ts";
 
 const PATHWAY_BROWSER_TOOL_INSTRUCTIONS = `
 
@@ -134,6 +137,7 @@ Do not ask "should I proceed?" in the final output. The user can easily switch o
 
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
 ${PATHWAY_BROWSER_TOOL_INSTRUCTIONS}
+${PATHWAY_HTML_TOOL_INSTRUCTIONS}
 </collaboration_mode>`;
 
 export const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default

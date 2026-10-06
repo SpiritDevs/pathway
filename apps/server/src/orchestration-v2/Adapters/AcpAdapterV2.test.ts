@@ -1,3 +1,4 @@
+import { projectAcpDynamicToolCall, withVerifiedAcpMcpIdentity } from "./AcpAdapterV2.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -12519,6 +12520,48 @@ describe("acpPostSettleMonitorPromptShouldSuppress", () => {
     );
     assert.isFalse(
       acpPostSettleMonitorPromptShouldSuppress({ taskId: "task-failed", status: "failed" }),
+    );
+  });
+});
+
+describe("ACP HTML MCP identity", () => {
+  const htmlResult = {
+    htmlRender: { attachmentId: "thread-html-attachment", title: "Chart", height: 400 },
+    message: "Shown",
+  };
+  const rawHtml = "<html><body>Chart</body></html>";
+
+  it("requires a qualified native MCP identity before normalizing a result", () => {
+    const toolCall = {
+      toolCallId: "html-call",
+      title: "Tool",
+      kind: "other",
+      status: "completed" as const,
+      data: {
+        rawInput: { html: rawHtml, title: "Chart", height: 400 },
+        rawOutput: { content: [{ type: "text", text: JSON.stringify(htmlResult) }] },
+      },
+    };
+    const verified = withVerifiedAcpMcpIdentity(toolCall, {
+      update: { title: "mcp__pathway__html_render" },
+    });
+    const item = projectAcpDynamicToolCall(verified);
+    assert.equal(item.toolName, "pathway.html_render");
+    assert.deepEqual(item.output, htmlResult);
+    assert.notInclude(JSON.stringify(item), rawHtml);
+    assert.deepEqual(projectAcpDynamicToolCall(toolCall).output, toolCall.data.rawOutput);
+    const unverified = projectAcpDynamicToolCall({ ...toolCall, title: "html_render" });
+    assert.equal(unverified.toolName, "acp.other");
+    assert.notInclude(JSON.stringify(unverified), rawHtml);
+    assert.deepEqual(projectAcpDynamicToolCall({ ...verified, status: "failed" }).output, {
+      isError: true,
+      message: "Shown",
+    });
+    assert.equal(
+      projectAcpDynamicToolCall(
+        withVerifiedAcpMcpIdentity(toolCall, { update: { title: "mcp__other__html_render" } }),
+      ).toolName,
+      "Tool",
     );
   });
 });

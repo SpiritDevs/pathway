@@ -22,6 +22,7 @@ import {
   resolvePathwayMcpToolPresentation,
   type PathwayMcpToolPresentation,
 } from "@spiritdevs/shared/pathwayMcpToolPresentation";
+import { htmlRenderReferencesEqual, type HtmlRenderReference } from "@spiritdevs/shared/htmlRender";
 import { resolveActivePullRequestAttachments } from "@spiritdevs/shared/sourceControl";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
@@ -257,6 +258,12 @@ export type MessagesTimelineRow =
       projectedItem: OrchestrationV2ProjectedTurnItem;
     }
   | {
+      kind: "html-render";
+      id: string;
+      createdAt: string;
+      htmlRender: HtmlRenderReference;
+    }
+  | {
       kind: "working";
       id: string;
       createdAt: string | null;
@@ -439,6 +446,10 @@ function timelineEntryFoldRunId(entry: TimelineEntry): RunId | null {
   }
   if (entry.kind === "event" && timelineEntryIsPersistentResourceCard(entry)) {
     return entry.projectedItem.item.runId;
+  }
+  // A page joins its turn's fold so the fold row sits above it, and stays visible.
+  if (entry.kind === "html-render") {
+    return entry.runId;
   }
   return null;
 }
@@ -733,6 +744,16 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    if (timelineEntry.kind === "html-render") {
+      nextRows.push({
+        kind: "html-render",
+        id: timelineEntry.id,
+        createdAt: timelineEntry.createdAt,
+        htmlRender: timelineEntry.htmlRender,
+      });
+      continue;
+    }
+
     if (timelineEntry.kind === "event") {
       nextRows.push({
         kind: "event",
@@ -866,6 +887,12 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.proposedPlan === (b as typeof a).proposedPlan &&
         a.projectedItem === (b as typeof a).projectedItem
       );
+
+    case "html-render": {
+      // Entries rebuild on any tool update; an equal page must keep its mounted frame.
+      const bh = b as typeof a;
+      return a.createdAt === bh.createdAt && htmlRenderReferencesEqual(a.htmlRender, bh.htmlRender);
+    }
 
     case "event":
       return a.projectedItem === (b as typeof a).projectedItem;

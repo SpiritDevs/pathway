@@ -106,6 +106,8 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("attachment.cleanup"),
     attachmentIds: Schema.Array(Schema.String),
+    /** Set only by thread deletion: also sweep every HTML render this thread minted. */
+    htmlRenderThreadId: Schema.optional(ThreadId),
   }),
   Schema.Struct({
     type: Schema.Literal("thread-title.generate"),

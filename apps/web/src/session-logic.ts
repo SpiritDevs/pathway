@@ -23,6 +23,7 @@ import type {
 } from "@spiritdevs/client-runtime/state/shell";
 import { computerNoticeOfTurnItem } from "@spiritdevs/client-runtime/state/computer-notice";
 import { turnItemIsWorkspacePreparation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
+import { htmlRenderFromToolItem, type HtmlRenderReference } from "@spiritdevs/shared/htmlRender";
 
 import { computerToolCallHeading } from "./lib/computerToolPresentation";
 import type { ChatMessage, ProposedPlan, SessionPhase, TurnDiffSummary } from "./types";
@@ -121,6 +122,14 @@ export type TimelineEntry = (
       readonly createdAt: string;
       readonly proposedPlan: ProposedPlan;
       readonly projectedItem: OrchestrationV2ProjectedTurnItem;
+    }
+  | {
+      /** A page a completed `html_render` call published, shown where the call happened. */
+      readonly id: string;
+      readonly kind: "html-render";
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly htmlRender: HtmlRenderReference;
     }
   | {
       readonly id: string;
@@ -396,12 +405,14 @@ const PERSISTENT_RESOURCE_V2_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"
   "thread_created",
 ]);
 
+/** Entries that stay visible when their turn or a superseded attempt folds. */
 export function timelineEntryIsPersistentResourceCard(entry: TimelineEntry): boolean {
   return (
-    entry.kind === "event" &&
-    (PERSISTENT_RESOURCE_V2_ITEM_TYPES.has(entry.projectedItem.item.type) ||
-      turnItemIsWorkspacePreparation(entry.projectedItem.item) ||
-      computerNoticeOfTurnItem(entry.projectedItem.item) !== null)
+    entry.kind === "html-render" ||
+    (entry.kind === "event" &&
+      (PERSISTENT_RESOURCE_V2_ITEM_TYPES.has(entry.projectedItem.item.type) ||
+        turnItemIsWorkspacePreparation(entry.projectedItem.item) ||
+        computerNoticeOfTurnItem(entry.projectedItem.item) !== null))
   );
 }
 
@@ -703,6 +714,19 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
         createdAt,
         proposedPlan,
         projectedItem: row,
+        ...attemptMetadata,
+      });
+      continue;
+    }
+
+    const htmlRender = htmlRenderFromToolItem(item);
+    if (htmlRender !== undefined) {
+      entries.push({
+        id: item.id,
+        kind: "html-render",
+        createdAt,
+        runId: item.runId,
+        htmlRender,
         ...attemptMetadata,
       });
       continue;

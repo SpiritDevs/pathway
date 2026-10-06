@@ -38,3 +38,15 @@ it.effect("reports the scoped credential context when preview capability is unav
     expect(error.message).toBe("MCP credential does not grant the preview capability.");
   });
 });
+
+it("offers inline HTML pages only to threads the user reads directly", () => {
+  const thread = (relationshipToParent: "fork" | "subagent" | null) => ({
+    lineage: { relationshipToParent },
+  });
+  expect(McpInvocationContext.threadShowsHtmlRenders(thread(null))).toBe(true);
+  expect(McpInvocationContext.threadShowsHtmlRenders(thread("fork"))).toBe(true);
+  expect(McpInvocationContext.threadShowsHtmlRenders(thread("subagent"))).toBe(false);
+  expect(
+    McpInvocationContext.threadShowsHtmlRenders({ ...thread(null), orchestratorOrigin: {} }),
+  ).toBe(false);
+});

@@ -14,10 +14,12 @@ enum AgentThreadTranscriptLayout {
     private static let persistent = Set(["subagent", "fork", "thread_created", "proposed_plan"])
     private static let attention = Set(["approval_request", "user_input_request", "error", "run_interrupt_request", "run_interrupt_result"])
 
-    /// Rows that never fold: durable links, anything asking for attention, and Computer notices.
+    /// Rows that never fold: durable links, anything asking for attention, Computer notices, and
+    /// published HTML pages, which stay above the reply they belong to.
     private static func isPinned(_ item: PathwayTimelineItem) -> Bool {
         persistent.contains(item.type) || attention.contains(item.type)
             || item.fields["workspacePreparation"]?.objectValue != nil || PathwayComputerNotice(item) != nil
+            || PathwayHTMLRender(item) != nil
     }
 
     static func rows(_ items: [PathwayTimelineItem], activeRunID: String?) -> [AgentTranscriptRow] {
@@ -101,6 +103,8 @@ final class AgentThreadTranscriptLayoutCache {
         let status: String
         let streaming: Bool
         let workspacePreparation: Bool
+        /// Output can land after the status turns completed; a page then pins its row.
+        let htmlRender: Bool
         let startedAt: String?
         let completedAt: String?
         let updatedAt: String?
@@ -118,6 +122,7 @@ final class AgentThreadTranscriptLayoutCache {
             let settled = item.runID != activeRunID && !item.streaming && !["running", "pending", "waiting"].contains(item.status)
             return ItemKey(id: item.id, type: item.type, runID: item.runID, status: item.status,
                            streaming: item.streaming, workspacePreparation: item.fields["workspacePreparation"]?.objectValue != nil,
+                           htmlRender: PathwayHTMLRender(item) != nil,
                            startedAt: settled ? item.fields["startedAt"]?.stringValue : nil,
                            completedAt: settled ? item.fields["completedAt"]?.stringValue : nil,
                            updatedAt: settled ? item.fields["updatedAt"]?.stringValue : nil)
