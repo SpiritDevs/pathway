@@ -12,6 +12,8 @@ import {
   type SyncCycleReceipt,
   type SyncEnqueueReceipt,
   type SyncStoreError,
+  type SyncEngine,
+  type CloudSyncEntity,
 } from "@spiritdevs/client-runtime/sync";
 import type { SyncOperationId } from "@spiritdevs/contracts/cloudSync";
 import type { CompanyId } from "@spiritdevs/contracts/company";
@@ -21,6 +23,7 @@ import { Atom } from "effect/unstable/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 
 export interface CompanySyncEngineMutationHandle {
+  readonly enqueueBatch: SyncEngine<CloudSyncEntity, IssueSyncOperation>["enqueueBatch"];
   readonly enqueue: (input: {
     readonly operationId: SyncOperationId;
     readonly operation: IssueSyncOperation;

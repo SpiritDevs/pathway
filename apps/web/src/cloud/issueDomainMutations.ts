@@ -46,6 +46,27 @@ export interface EnqueueIssueOperationInput<
 
 export type IssueDomainMutationError = IssueSyncUnavailableError | SyncStoreError;
 
+/** Persists one company's operations together while retaining a receipt for each input. */
+export function enqueueIssueOperations(
+  companyId: CompanyId,
+  inputs: ReadonlyArray<Omit<EnqueueIssueOperationInput, "companyId">>,
+  registry: AtomRegistry.AtomRegistry = appAtomRegistry,
+): Effect.Effect<ReadonlyArray<SyncEnqueueReceipt>, IssueDomainMutationError> {
+  if (inputs.length === 0) return Effect.succeed([]);
+  if (registry.get(cloudSyncTabStateAtom).role !== "leader") {
+    return Effect.fail(unavailableError(registry, companyId));
+  }
+  const handle = registry.get(companySyncEngineHandlesAtom).get(companyId);
+  if (handle === undefined) return Effect.fail(unavailableError(registry, companyId));
+  return handle.enqueueBatch(
+    inputs.map((input) => ({
+      operationId: input.operationId ?? SyncOperationId.make(randomUUID()),
+      operation: input.operation,
+      ...(input.operation.dependsOn === undefined ? {} : { dependsOn: input.operation.dependsOn }),
+    })),
+  );
+}
+
 function unavailableError(
   registry: AtomRegistry.AtomRegistry,
   companyId: CompanyId,

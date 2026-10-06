@@ -527,6 +527,7 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
 
       yield* publishHandle(company.companyId, {
         enqueue: engine.enqueue,
+        enqueueBatch: engine.enqueueBatch,
         discardRejected: engine.discardRejected,
         sync: engine.sync,
       });

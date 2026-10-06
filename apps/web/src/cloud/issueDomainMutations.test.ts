@@ -16,6 +16,7 @@ import {
 } from "./companySyncEngines";
 import {
   enqueueIssueOperation,
+  enqueueIssueOperations,
   IssueSyncUnavailableError,
   syncIssueOperations,
 } from "./issueDomainMutations";
@@ -40,6 +41,7 @@ function makeFakeHandle() {
   const seen = new Map<SyncOperationId, LocalSequence>();
   const inputs: Array<Parameters<CompanySyncEngineMutationHandle["enqueue"]>[0]> = [];
   const handle: CompanySyncEngineMutationHandle = {
+    enqueueBatch: (batch) => Effect.forEach(batch, (input) => handle.enqueue(input)),
     enqueue: (input) =>
       Effect.sync(() => {
         inputs.push(input);
@@ -93,6 +95,32 @@ describe("enqueueIssueOperation", () => {
           operation: DELETE_ISSUE,
         },
       ]);
+    }),
+  );
+
+  it.effect("passes a company batch with individual retry ids and dependencies", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeHandle();
+      const firstId = SyncOperationId.make("first");
+      const secondId = SyncOperationId.make("second");
+      const dependent = { ...DELETE_ISSUE, dependsOn: [firstId] };
+      yield* publishCompanySyncEngineHandle(COMPANY_ID, fake.handle);
+      const receipts = yield* enqueueIssueOperations(COMPANY_ID, [
+        { operation: DELETE_ISSUE, operationId: firstId },
+        { operation: dependent, operationId: secondId },
+      ]);
+      expect(receipts.map((receipt) => receipt.operationId)).toEqual([firstId, secondId]);
+      expect(fake.inputs[1]).toEqual({
+        operation: dependent,
+        operationId: secondId,
+        dependsOn: [firstId],
+      });
+      expect(yield* enqueueIssueOperations(COMPANY_ID, [])).toEqual([]);
+      yield* publishCloudSyncTabState({ role: "follower", crossContext: true });
+      expect(
+        yield* Effect.flip(enqueueIssueOperations(COMPANY_ID, [{ operation: DELETE_ISSUE }])),
+      ).toMatchObject({ reason: "not-leader" });
+      expect(fake.inputs).toHaveLength(2);
     }),
   );
 

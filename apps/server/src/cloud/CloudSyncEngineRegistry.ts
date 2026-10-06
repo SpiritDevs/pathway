@@ -66,6 +66,7 @@ export interface CloudSyncIssueEngineHandle {
     readonly dependsOn?: ReadonlyArray<SyncOperationId>;
     readonly actor?: SyncActor;
   }) => Effect.Effect<SyncEnqueueReceipt, SyncStoreError>;
+  readonly enqueueBatch: SyncEngine<CloudSyncEntity, IssueSyncOperation>["enqueueBatch"];
   readonly sync: Effect.Effect<SyncCycleReceipt, SyncStoreError>;
   readonly operationDisposition: (
     operationId: SyncOperationId,
@@ -187,6 +188,7 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
         companyId: input.engine.companyId,
         environmentId: input.environmentId,
         enqueue: input.engine.enqueue,
+        enqueueBatch: input.engine.enqueueBatch,
         sync: input.engine.sync,
         operationDisposition: (operationId) =>
           SubscriptionRef.get(input.engine.state).pipe(

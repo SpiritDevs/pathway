@@ -137,6 +137,7 @@ function readyReplicaReader(
     companyId: ROUTED_COMPANY_ID,
     environmentId: ROUTED_ENVIRONMENT_ID,
     enqueue: () => Effect.die("unused"),
+    enqueueBatch: () => Effect.die("unused"),
     sync: Effect.die("unused"),
     operationDisposition: () => Effect.die("unused"),
     readIssueSnapshot: Effect.succeed({ readModel, bootstrapped: true, quarantined: 0 }),
@@ -437,6 +438,7 @@ describe("IssueTrackerService", () => {
           companyId: ROUTED_COMPANY_ID,
           environmentId: ROUTED_ENVIRONMENT_ID,
           enqueue: () => Effect.die("unused"),
+          enqueueBatch: () => Effect.die("unused"),
           operationDisposition: () => Effect.die("unused"),
           sync: Ref.set(refreshed, true).pipe(Effect.andThen(Ref.get(syncReceipt))),
           readIssueSnapshot: Effect.succeed({
@@ -923,9 +925,14 @@ describe("IssueTrackerService", () => {
           readonly actor: SyncActor;
         }>
       >([]);
+      const enqueuedBatches = yield* Ref.make<ReadonlyArray<number>>([]);
       const handle: CloudSyncIssueEngineHandle = {
         companyId: ROUTED_COMPANY_ID,
         environmentId: ROUTED_ENVIRONMENT_ID,
+        enqueueBatch: (inputs) =>
+          Ref.update(enqueuedBatches, (sizes) => [...sizes, inputs.length]).pipe(
+            Effect.andThen(Effect.forEach(inputs, (input) => handle.enqueue(input))),
+          ),
         enqueue: ({ operationId, operation, actor }) =>
           Effect.gen(function* () {
             if (actor === undefined) throw new Error("A routed write must carry its actor.");
@@ -1440,6 +1447,26 @@ describe("IssueTrackerService", () => {
       assert.strictEqual(
         (yield* tracker.commentsList({ issueId: created.issue.id })).comments.length,
         1,
+      );
+
+      const bulkPeer = yield* tracker.create(
+        { title: "Bulk peer", statusId: IssueStatusId.make("status-routed") },
+        AGENT,
+      );
+      yield* Ref.set(enqueuedBatches, []);
+      yield* tracker.bulkUpdate(
+        { issueIds: [created.issue.id, bulkPeer.issue.id], patch: { priority: "high" } },
+        AGENT,
+      );
+      assert.deepStrictEqual(yield* Ref.get(enqueuedBatches), [2]);
+      const bulkSnapshot = yield* tracker.getSnapshot();
+      assert.strictEqual(
+        bulkSnapshot.issues.find((issue) => issue.id === created.issue.id)?.priority,
+        "high",
+      );
+      assert.strictEqual(
+        bulkSnapshot.issues.find((issue) => issue.id === bulkPeer.issue.id)?.priority,
+        "high",
       );
 
       const local = yield* tracker.readLocalIssueSnapshot;

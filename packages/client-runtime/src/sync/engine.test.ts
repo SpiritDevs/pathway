@@ -13,6 +13,7 @@ import {
 } from "@spiritdevs/contracts/cloudSync";
 import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -33,7 +34,7 @@ import {
 import { makeMemorySyncStore } from "./memoryStore.ts";
 import { syncEntityKey } from "./model.ts";
 import { syncOrderKeyAfter } from "./orderKey.ts";
-import { SyncStore } from "./persistence.ts";
+import { SyncStore, SyncStoreError } from "./persistence.ts";
 import {
   makeTestSyncServer,
   testNoteAdapter,
@@ -114,6 +115,232 @@ describe("SyncEngine", () => {
         expect(after.confirmed).toBe(before.confirmed);
         expect(after.pending).toBe(before.pending);
         expect(after.rejected).toBe(before.rejected);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect(
+    "persists and publishes a 100-operation batch once, with ordered individual receipts",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        const commits = yield* Ref.make(0);
+        const store = {
+          ...harness.store.service,
+          commit: (companyId: CompanyId, batch: Parameters<SyncStore["Service"]["commit"]>[1]) =>
+            Ref.update(commits, (count) => count + 1).pipe(
+              Effect.andThen(harness.store.service.commit(companyId, batch)),
+            ),
+        };
+        yield* Effect.gen(function* () {
+          let applications = 0;
+          const engine = yield* makeSyncEngine({
+            companyId: COMPANY_ID,
+            clientId: SyncClientId.make("client-bulk"),
+            actor: ACTOR,
+            adapter: {
+              ...testNoteAdapter,
+              apply: (input) => {
+                applications++;
+                return testNoteAdapter.apply(input);
+              },
+            },
+          }).pipe(Effect.provideService(SyncStore, store));
+          const started = yield* Deferred.make<void>();
+          const published = yield* Deferred.make<void>();
+          const publications = yield* Ref.make(0);
+          yield* SubscriptionRef.changes(engine.state).pipe(
+            Stream.runForEach((state) =>
+              Ref.update(publications, (count) => count + 1).pipe(
+                Effect.andThen(
+                  state.pending.length === 100
+                    ? Deferred.succeed(published, undefined)
+                    : Deferred.succeed(started, undefined),
+                ),
+              ),
+            ),
+            Effect.forkChild,
+          );
+          yield* Deferred.await(started);
+          const inputs = Array.from({ length: 100 }, (_, i) => ({
+            operationId: operationId(`bulk-${i}`),
+            operation: createNote({
+              id: SyncEntityId.make(`bulk-note-${i}`),
+              title: "Bulk",
+              body: "",
+            }),
+          }));
+          const receipts = yield* engine.enqueueBatch(inputs);
+          yield* Deferred.await(published);
+          expect(yield* Ref.get(commits)).toBe(1);
+          expect(applications).toBe(100);
+          expect(yield* Ref.get(publications)).toBe(2); // Initial state and one optimistic publication.
+          expect(receipts.map((receipt) => receipt.localSequence)).toEqual(
+            Array.from({ length: 100 }, (_, i) => i + 1),
+          );
+          expect(receipts.every((receipt) => receipt.accepted)).toBe(true);
+          const state = yield* SubscriptionRef.get(engine.state);
+          expect(state.view.size).toBe(100);
+          const duplicates = yield* engine.enqueueBatch(inputs);
+          expect(duplicates.every((receipt) => !receipt.accepted)).toBe(true);
+          expect(yield* Ref.get(commits)).toBe(1);
+          expect(yield* SubscriptionRef.get(engine.state)).toBe(state);
+          const restarted = yield* openEngine("client-restarted");
+          expect((yield* SubscriptionRef.get(restarted.state)).pending).toHaveLength(100);
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  it.effect("deduplicates within a batch and preserves blocked dependency receipts", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* Effect.gen(function* () {
+        const engine = yield* openEngine("client-batch");
+        const missing = {
+          operationId: operationId("missing-update"),
+          operation: { _tag: "SetNoteFields", id: NOTE_A, body: "missing" } as TestNoteOperation,
+        };
+        const receipts = yield* engine.enqueueBatch([
+          missing,
+          missing,
+          {
+            operationId: operationId("dependent-create"),
+            operation: createNote({ id: NOTE_B, title: "Dependent", body: "" }),
+            dependsOn: [missing.operationId],
+          },
+        ]);
+        expect(receipts.map((receipt) => receipt.accepted)).toEqual([true, false, true]);
+        expect(receipts.map((receipt) => receipt.localSequence)).toEqual([1, 1, 2]);
+        expect(receipts[0]?.status._tag).toBe("Blocked");
+        expect(receipts[2]?.status._tag).toBe("Blocked");
+        expect((yield* SubscriptionRef.get(engine.state)).view.size).toBe(0);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("does not expose or consume sequences for a batch whose persistence fails", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const fail = yield* Ref.make(true);
+      const store = {
+        ...harness.store.service,
+        commit: (companyId: CompanyId, batch: Parameters<SyncStore["Service"]["commit"]>[1]) =>
+          Ref.get(fail).pipe(
+            Effect.flatMap((failed) =>
+              failed
+                ? Effect.fail(
+                    new SyncStoreError({ operation: "commit", message: "Expected failure" }),
+                  )
+                : harness.store.service.commit(companyId, batch),
+            ),
+          ),
+      };
+      yield* Effect.gen(function* () {
+        const engine = yield* openEngine("client-failure").pipe(
+          Effect.provideService(SyncStore, store),
+        );
+        const before = yield* SubscriptionRef.get(engine.state);
+        const input = {
+          operationId: operationId("retry-batch"),
+          operation: createNote({ id: NOTE_A, title: "Retry", body: "" }),
+        };
+        expect((yield* Effect.exit(engine.enqueueBatch([input])))._tag).toBe("Failure");
+        expect(yield* SubscriptionRef.get(engine.state)).toBe(before);
+        yield* Ref.set(fail, false);
+        expect((yield* engine.enqueueBatch([input]))[0]?.localSequence).toBe(1);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("enqueues during an in-flight flush without losing the new operations", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const sending = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const first = yield* Ref.make(true);
+      const transport = SyncTransport.of({
+        ...harness.server.transport,
+        applyOperations: (input) =>
+          Effect.gen(function* () {
+            if (yield* Ref.getAndSet(first, false)) {
+              yield* Deferred.succeed(sending, undefined);
+              yield* Deferred.await(resume);
+            }
+            return yield* harness.server.transport.applyOperations(input);
+          }),
+      });
+      yield* Effect.gen(function* () {
+        const engine = yield* openEngine("client-in-flight").pipe(
+          Effect.provideService(SyncTransport, transport),
+        );
+        yield* engine.sync;
+        yield* engine.enqueue({
+          operationId: operationId("flight-a"),
+          operation: createNote({ id: NOTE_A, title: "First", body: "" }),
+        });
+        const cycle = yield* Effect.forkChild(engine.sync);
+        yield* Deferred.await(sending);
+        const receipts = yield* engine.enqueueBatch([
+          {
+            operationId: operationId("flight-b"),
+            operation: createNote({ id: NOTE_B, title: "Second", body: "" }),
+          },
+        ]);
+        expect(receipts[0]?.localSequence).toBe(2);
+        expect((yield* SubscriptionRef.get(engine.state)).pending).toHaveLength(2);
+        yield* Deferred.succeed(resume, undefined);
+        expect((yield* Fiber.join(cycle)).acceptedOperations).toBe(2);
+        const state = yield* SubscriptionRef.get(engine.state);
+        expect(state.pending).toHaveLength(0);
+        expect(confirmedNote(state, NOTE_A)?.title).toBe("First");
+        expect(confirmedNote(state, NOTE_B)?.title).toBe("Second");
+        expect((yield* harness.store.snapshot(COMPANY_ID)).outbox).toHaveLength(0);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("serializes simultaneous batches and never reuses their sequences", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const committing = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const first = yield* Ref.make(true);
+      const store = SyncStore.of({
+        ...harness.store.service,
+        commit: (companyId, batch) =>
+          Effect.gen(function* () {
+            if (yield* Ref.getAndSet(first, false)) {
+              yield* Deferred.succeed(committing, undefined);
+              yield* Deferred.await(resume);
+            }
+            yield* harness.store.service.commit(companyId, batch);
+          }),
+      });
+      yield* Effect.gen(function* () {
+        const engine = yield* openEngine("client-concurrent").pipe(
+          Effect.provideService(SyncStore, store),
+        );
+        const firstBatch = yield* Effect.forkChild(
+          engine.enqueueBatch([
+            {
+              operationId: operationId("concurrent-a"),
+              operation: createNote({ id: NOTE_A, title: "First", body: "" }),
+            },
+          ]),
+        );
+        yield* Deferred.await(committing);
+        const secondBatch = yield* Effect.forkChild(
+          engine.enqueueBatch([
+            {
+              operationId: operationId("concurrent-b"),
+              operation: createNote({ id: NOTE_B, title: "Second", body: "" }),
+            },
+          ]),
+        );
+        yield* Deferred.succeed(resume, undefined);
+        expect((yield* Fiber.join(firstBatch))[0]?.localSequence).toBe(1);
+        expect((yield* Fiber.join(secondBatch))[0]?.localSequence).toBe(2);
+        expect((yield* harness.store.snapshot(COMPANY_ID)).outbox).toHaveLength(2);
       }).pipe(Effect.provide(harness.layer));
     }),
   );
