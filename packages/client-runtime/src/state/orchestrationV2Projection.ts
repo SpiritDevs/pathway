@@ -174,12 +174,23 @@ export function applyOrchestrationV2ProjectionEvent(
     case "run.created":
     case "run.updated": {
       const next = { ...base, runs: upsertEntity(base.runs, event.payload) };
-      return { ...next, visibleTurnItems: activeVisibleTurnItems(next) };
+      const hidesRows =
+        event.payload.status === "rolled_back" || event.payload.status === "cancelled";
+      const previous = base.runs.findLast((run) => run.id === event.payload.id);
+      return hidesRows && previous?.status !== event.payload.status
+        ? { ...next, visibleTurnItems: activeVisibleTurnItems(next) }
+        : next;
     }
     case "run-attempt.created":
     case "run-attempt.updated": {
       const next = { ...base, attempts: upsertEntity(base.attempts, event.payload) };
-      return { ...next, visibleTurnItems: activeVisibleTurnItems(next) };
+      const previous = base.attempts.findLast((attempt) => attempt.id === event.payload.id);
+      const hidesRows =
+        event.payload.status === "superseded" &&
+        (previous?.status !== "superseded" ||
+          previous.runId !== event.payload.runId ||
+          previous.rootNodeId !== event.payload.rootNodeId);
+      return hidesRows ? { ...next, visibleTurnItems: activeVisibleTurnItems(next) } : next;
     }
     case "node.updated":
       return { ...base, nodes: upsertEntity(base.nodes, event.payload) };
@@ -210,12 +221,11 @@ export function applyOrchestrationV2ProjectionEvent(
       return { ...base, plans: upsertEntity(base.plans, event.payload) };
     case "turn-item.updated": {
       const next = { ...base, turnItems: upsertEntity(base.turnItems, event.payload) };
-      const visible = { ...next, visibleTurnItems: activeVisibleTurnItems(next) };
       return {
         ...next,
         visibleTurnItems: shouldShowLocalTurnItem(next, event.payload)
-          ? upsertVisibleTurnItem(visible, event.payload)
-          : removeVisibleItem(visible.visibleTurnItems, event.payload.id),
+          ? upsertVisibleTurnItem(next, event.payload)
+          : removeVisibleItem(next.visibleTurnItems, event.payload.id),
       };
     }
     case "checkpoint-scope.created":
