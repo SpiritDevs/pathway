@@ -32,7 +32,11 @@ export function updateSidebarChangeRequest(
   const previous = current.get(key);
   if (
     previous?.source === value.source &&
-    (failed || (previous.state === value.state && value.checkedAt === undefined))
+    (failed ||
+      (previous.state === value.state &&
+        (previous.presentation === value.presentation ||
+          JSON.stringify(previous.presentation) === JSON.stringify(value.presentation)) &&
+        value.checkedAt === undefined))
   )
     return current;
   return new Map(current).set(key, {
@@ -92,6 +96,7 @@ export function sidebarThreadSection(
     return "loading";
   }
   if (!options.supportsSettlement) return "active";
-  if (needsChangeRequest && !known) return "loading";
+  // An unknown PR status must not hide a row: its visible row refreshes the status.
+  if (needsChangeRequest && !known) return "active";
   return settled(known ? cached.state : null) ? "settled" : "active";
 }

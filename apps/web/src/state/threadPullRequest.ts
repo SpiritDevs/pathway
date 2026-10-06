@@ -3,6 +3,8 @@ import type {
   OrchestrationV2PullRequestAttachment,
   ProjectId,
   PullRequestRef,
+  PullRequestDetail,
+  VcsStatusResult,
 } from "@spiritdevs/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { threadPullRequestAttachments } from "@spiritdevs/shared/sourceControl";
@@ -72,11 +74,37 @@ export function sameAttachedPullRequest(
   );
 }
 
+type ThreadPullRequestBadgeDetail = Pick<
+  PullRequestDetail,
+  | "number"
+  | "url"
+  | "title"
+  | "state"
+  | "headBranch"
+  | "baseBranch"
+  | "provider"
+  | "checks"
+  | "isDraft"
+>;
+
+export function threadPullRequestBadgeDetail(
+  detail: ThreadPullRequestBadgeDetail,
+): ThreadPullRequestBadgeDetail {
+  const { number, url, title, state, headBranch, baseBranch, provider, checks, isDraft } = detail;
+  return { number, url, title, state, headBranch, baseBranch, provider, checks, isDraft };
+}
+
 export interface ThreadChangeRequestState {
   readonly source: string;
   readonly state: "open" | "closed" | "merged" | null;
   /** Last conclusive classification check; retained across sidebar navigation. */
   readonly checkedAt?: number | undefined;
+  /** Last successful badge inputs, retained without keeping status queries mounted. */
+  readonly presentation?: {
+    readonly branchPullRequest: VcsStatusResult["pr"];
+    readonly attachedDetails: ReadonlyArray<ThreadPullRequestBadgeDetail>;
+    readonly provider: VcsStatusResult["sourceControlProvider"];
+  };
 }
 
 export function threadChangeRequestSource(
@@ -188,8 +216,18 @@ export const attachedPullRequestsAtom = Atom.family((key: string) =>
       supported: boolean;
     };
     if (!thread) return [];
+    const attachments = threadPullRequestAttachments(thread);
+    if (!supported) {
+      return attachments.map((attachment) => ({
+        attachment,
+        data: null,
+        isPending: false,
+        isLoading: false,
+        error: null,
+      }));
+    }
     const projects = get(environmentProjects.projectsAtom);
-    return threadPullRequestAttachments(thread).map((attachment) => {
+    return attachments.map((attachment) => {
       const target = attachedPullRequestQueryTarget(
         {
           ...thread,
@@ -223,7 +261,7 @@ export const attachedPullRequestsAtom = Atom.family((key: string) =>
 
 export function useAttachedPullRequests(
   thread: ThreadPullRequestTarget | null,
-  { poll = false }: { poll?: boolean } = {},
+  { poll = false, enabled = true }: { poll?: boolean; enabled?: boolean } = {},
 ) {
   const environment = useEnvironment(thread?.environmentId ?? null);
   return useAtomValue(
@@ -237,7 +275,7 @@ export function useAttachedPullRequests(
             }
           : null,
         poll,
-        supported: environment?.descriptor?.capabilities?.pullRequests === true,
+        supported: enabled && environment?.descriptor?.capabilities?.pullRequests === true,
       }),
     ),
   );
