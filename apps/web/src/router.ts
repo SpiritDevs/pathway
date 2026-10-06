@@ -17,6 +17,20 @@ export function getRouter(history: RouterHistory) {
     if (route) void router.loadRouteChunk(route)?.catch(() => undefined);
   }
 
+  // Warm only route code during idle time; preloading data here would create
+  // a thread subscription before navigation. This benefits every chat entry.
+  if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+    window.requestIdleCallback(() => {
+      for (const routeId of [
+        "/_chat/threads_/$environmentId/$threadId",
+        "/_chat/threads_/draft/$draftId",
+      ]) {
+        const route = router.looseRoutesById[routeId];
+        if (route) void router.loadRouteChunk(route)?.catch(() => undefined);
+      }
+    });
+  }
+
   return router;
 }
 
