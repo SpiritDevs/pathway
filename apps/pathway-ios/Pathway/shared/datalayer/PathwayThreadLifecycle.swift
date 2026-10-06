@@ -151,6 +151,8 @@ extension PathwayAgentThread {
 
         if shell.settledOverride == "settled" { return true }
         if shell.settledOverride == "active" { return false }
+        // Subagents and background commands still running after the root turn block auto-settle.
+        if !(shell.pendingBackgroundTasks ?? []).isEmpty { return false }
         // Temporary settlement is adjudicated by the environment after its Git and work checks.
         if shell.isTemporary { return false }
         if changeRequestState == .merged { return true }
