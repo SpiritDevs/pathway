@@ -1,16 +1,9 @@
 /**
  * Issue tracker client state — see `docs/internals/decisions/0006-issue-tracker.md`.
  *
- * The tracker is environment-scoped, and only the primary environment has one worth showing, so
- * every atom here is bound to `primaryEnvironmentIdAtom` rather than being a per-environment
- * family the way threads and pull requests are.
- *
- * Reads go through one subscription: `issues.stream` opens with the whole tracker replayed as
- * diffs and then carries only what changed, so there is no separate `issues.getSnapshot` call.
- * Writes are plain awaited RPCs — the store updates when the server echoes the change back on the
- * stream. There is no optimistic overlay: the socket is local, and the two mechanisms this
- * codebase has for optimism (a shadow atom merged at read time, `projectCommands.ts:47`) each
- * carry a reconciliation problem that a same-machine round trip does not pay for.
+ * Company replicas own synced task reads and writes. The primary environment's legacy tracker
+ * remains available when no replica is loaded. Investigations run on a company-bound checkout;
+ * their history and live stream follow that environment rather than the primary connection.
  *
  * @module state/issues
  */
@@ -25,6 +18,7 @@ import {
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentSubscriptionAtomFamily,
   followStreamInEnvironment,
+  settleAsyncResult,
 } from "@spiritdevs/client-runtime/state/runtime";
 import { pinOrderKeyBetween } from "@spiritdevs/client-runtime/state/thread-sort";
 import { defaultIssueSortOrder } from "@spiritdevs/client-runtime/sync";
@@ -49,6 +43,8 @@ import {
   type IssueDetail,
   type IssueEnrichmentRun,
   type IssueEnrichmentRunId,
+  type IssueEnrichmentStartInput,
+  type IssueEnrichmentRunRefInput,
   type IssueEvent,
   type IssueLabel,
   type IssueMilestone,
@@ -81,6 +77,8 @@ import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef } from "react";
 
 import { scopedCompanyRegistryReplicasAtom } from "../cloud/activeCompany";
+import { companyRegistryReplicasAtom } from "../cloud/companyRegistryReplica";
+import { syncIssueOperations, type IssueDomainMutationError } from "../cloud/issueDomainMutations";
 import {
   issueDomainEntityCompanyIdsAtom,
   issueDomainEntityCompanyId,
@@ -715,18 +713,25 @@ const DISCONNECTED_ISSUES_STREAM_VIEW: IssuesStreamView = {
   status: "disconnected",
 };
 
+const issuesStreamViewAtomFamily = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get): IssuesStreamView => {
+    const generation = Option.getOrNull(
+      AsyncResult.value(get(issuesConnectionGenerationAtom(environmentId))),
+    );
+    if (generation === null) return DISCONNECTED_ISSUES_STREAM_VIEW;
+
+    const changes = get(issuesChanges({ environmentId, input: generation }));
+    const state = Option.getOrElse(AsyncResult.value(changes), () => EMPTY_ISSUES_STREAM_STATE);
+    if (AsyncResult.isFailure(changes)) return { state, status: "error" };
+    return { state, status: AsyncResult.isSuccess(changes) ? "ready" : "loading" };
+  }).pipe(Atom.withLabel(`web-issues-stream-view:${environmentId}`)),
+);
+
 const issuesStreamViewAtom = Atom.make((get): IssuesStreamView => {
   const environmentId = get(primaryEnvironmentIdAtom);
-  if (environmentId === null) return DISCONNECTED_ISSUES_STREAM_VIEW;
-  const generation = Option.getOrNull(
-    AsyncResult.value(get(issuesConnectionGenerationAtom(environmentId))),
-  );
-  if (generation === null) return DISCONNECTED_ISSUES_STREAM_VIEW;
-
-  const changes = get(issuesChanges({ environmentId, input: generation }));
-  const state = Option.getOrElse(AsyncResult.value(changes), () => EMPTY_ISSUES_STREAM_STATE);
-  if (AsyncResult.isFailure(changes)) return { state, status: "error" };
-  return { state, status: AsyncResult.isSuccess(changes) ? "ready" : "loading" };
+  return environmentId === null
+    ? DISCONNECTED_ISSUES_STREAM_VIEW
+    : get(issuesStreamViewAtomFamily(environmentId));
 }).pipe(Atom.withLabel("web-issues-stream-view"));
 
 /** Replica presence is the sync engine's usable-data signal; freshness is owned by the engine. */
@@ -892,10 +897,12 @@ const investigatedIssueIdsAtom = Atom.make(
   (get): ReadonlySet<IssueId> => get(issueAgentStateAtom).investigatedIssueIds,
 ).pipe(Atom.withLabel("web-issues-investigated"));
 
-const issueEnrichmentRunPatchesAtomFamily = Atom.family((issueId: IssueId) =>
-  Atom.make((get): ReadonlyMap<IssueEnrichmentRunId, IssueEnrichmentRun> | undefined =>
-    get(issueAgentStateAtom).runsByIssue.get(issueId),
-  ).pipe(Atom.withLabel(`web-issue-enrichment-runs:${issueId}`)),
+const issueEnrichmentRunPatchesAtomFamily = Atom.family((environmentId: EnvironmentId) =>
+  Atom.family((issueId: IssueId) =>
+    Atom.make((get): ReadonlyMap<IssueEnrichmentRunId, IssueEnrichmentRun> | undefined =>
+      get(issuesStreamViewAtomFamily(environmentId)).state.agents.runsByIssue.get(issueId),
+    ).pipe(Atom.withLabel(`web-issue-enrichment-runs:${environmentId}:${issueId}`)),
+  ),
 );
 
 const EMPTY_ENRICHMENT_RUN_PATCHES_ATOM = Atom.make<
@@ -1716,23 +1723,41 @@ export interface IssueEnrichmentRunsView {
  * One issue's investigations, live. The read seeds the history; the stream carries the run in
  * flight, transcript and all, so an open panel needs no second round trip and no polling.
  */
-export function useIssueEnrichmentRuns(issueId: IssueId | null): IssueEnrichmentRunsView {
-  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+export function useIssueEnrichmentRuns(
+  issueId: IssueId | null,
+  selection?: IssueInvestigationSelection,
+): IssueEnrichmentRunsView {
+  const targetAtom = useMemo(
+    () =>
+      Atom.make((get) =>
+        issueId === null ? null : resolveIssueInvestigationTarget({ get }, issueId, selection),
+      ),
+    [issueId, selection?.environmentId, selection?.localProjectId],
+  );
+  const target = useAtomValue(targetAtom);
   const query = useEnvironmentQuery(
-    environmentId === null || issueId === null
+    target === null || target instanceof IssueTrackerUnavailableError || issueId === null
       ? null
-      : issueEnrichmentRunsQuery({ environmentId, input: { issueId } }),
+      : issueEnrichmentRunsQuery({
+          environmentId: target.environmentId,
+          input: { issueId, ...target.input },
+        }),
   );
   const patches = useAtomValue(
-    issueId === null
+    issueId === null || target === null || target instanceof IssueTrackerUnavailableError
       ? EMPTY_ENRICHMENT_RUN_PATCHES_ATOM
-      : issueEnrichmentRunPatchesAtomFamily(issueId),
+      : issueEnrichmentRunPatchesAtomFamily(target.environmentId)(issueId),
   );
   const runs = useMemo(
     () => mergeIssueEnrichmentRuns(query.data?.runs ?? EMPTY_ENRICHMENT_RUNS_LIST, patches),
     [patches, query.data],
   );
-  return { runs, isPending: query.isPending, error: query.error, refresh: query.refresh };
+  return {
+    runs,
+    isPending: query.isPending,
+    error: target instanceof IssueTrackerUnavailableError ? target.message : query.error,
+    refresh: query.refresh,
+  };
 }
 
 export interface IssueThreadLinksView {
@@ -1923,6 +1948,125 @@ export function useIssueMilestoneHistory(
 export class IssueTrackerUnavailableError extends Data.TaggedError("IssueTrackerUnavailableError")<{
   readonly message: string;
 }> {}
+
+export interface IssueInvestigationSelection {
+  readonly environmentId: EnvironmentId;
+  readonly localProjectId: ProjectId;
+}
+
+/** Investigation executors use the owning company's checkout, independently of tracker scope. */
+export function resolveIssueInvestigationTarget(
+  registry: Pick<AtomRegistry.AtomRegistry, "get">,
+  issueId: IssueId,
+  selection?: IssueInvestigationSelection,
+) {
+  const companyId = issueDomainEntityCompanyId(
+    registry.get(issueDomainEntityCompanyIdsAtom),
+    "issue",
+    issueId,
+  );
+  const primaryEnvironmentId = registry.get(primaryEnvironmentIdAtom);
+  if (companyId === null) {
+    if (registry.get(companyRegistryReplicasAtom).size > 0)
+      return new IssueTrackerUnavailableError({
+        message: "The company that owns this task could not be resolved.",
+      });
+    const environmentId = selection?.environmentId ?? primaryEnvironmentId;
+    return environmentId === null ? null : { environmentId, input: {} };
+  }
+  const domain = registry.get(syncedIssueDomainForCompanyAtomFamily(companyId));
+  const issue = domain?.issues.find((candidate) => candidate.id === issueId);
+  const latest = new Map<string, NonNullable<typeof domain>["environmentBindings"][number]>();
+  for (const binding of domain?.environmentBindings ?? []) {
+    const key = `${binding.environmentId}:${binding.localProjectId}`;
+    const previous = latest.get(key);
+    if (previous === undefined || previous.updatedAt < binding.updatedAt) latest.set(key, binding);
+  }
+  const cloudProjectId =
+    domain?.cloudProjects.find((project) => String(project.id) === issue?.projectId)?.id ??
+    [...latest.values()].find(
+      (binding) =>
+        binding.status === "active" && String(binding.localProjectId) === issue?.projectId,
+    )?.cloudProjectId ??
+    issue?.projectId;
+  const bindings = [...latest.values()].filter(
+    (binding) => binding.status === "active" && binding.cloudProjectId === cloudProjectId,
+  );
+  const preferredBindingId = domain?.cloudProjects.find(
+    (project) => project.id === cloudProjectId,
+  )?.preferredBindingId;
+  const binding =
+    selection === undefined
+      ? (bindings.find((candidate) => candidate.id === preferredBindingId) ??
+        bindings.find((candidate) => candidate.environmentId === primaryEnvironmentId) ??
+        bindings[0])
+      : bindings.find(
+          (candidate) =>
+            candidate.environmentId === selection.environmentId &&
+            candidate.localProjectId === selection.localProjectId,
+        );
+  if (binding === undefined)
+    return new IssueTrackerUnavailableError({
+      message: "This task's project has no active checkout on the selected environment.",
+    });
+  return {
+    environmentId: binding.environmentId,
+    input: { route: { companyId, localProjectId: binding.localProjectId } },
+  };
+}
+
+/** Flushes cloud writes before starting an executor; history and cancellation only need the route. */
+export function routeIssueInvestigationCommand<I extends { readonly issueId: IssueId }, W, A, E>(
+  command: AtomCommand<{ readonly environmentId: EnvironmentId; readonly input: W }, A, E>,
+  rpcInput: (input: I) => W,
+  syncBeforeStart = false,
+): AtomCommand<
+  I & { readonly selection?: IssueInvestigationSelection },
+  A,
+  E | IssueTrackerUnavailableError | IssueDomainMutationError
+> {
+  return {
+    label: command.label,
+    run: async (registry, target) => {
+      const { selection, ...input } = target;
+      const resolved = resolveIssueInvestigationTarget(registry, input.issueId, selection);
+      if (resolved === null || resolved instanceof IssueTrackerUnavailableError)
+        return AsyncResult.fail(
+          resolved ?? new IssueTrackerUnavailableError({ message: "No environment is connected." }),
+        );
+      const route = resolved.input.route;
+      if (syncBeforeStart && route !== undefined) {
+        const synced = await settleAsyncResult(() =>
+          Effect.runPromiseExit(
+            syncIssueOperations(route.companyId, registry).pipe(
+              Effect.flatMap((receipt) =>
+                receipt.error !== null ||
+                receipt.rejectedOperations > 0 ||
+                ["offline", "failed", "disabled"].includes(receipt.outcome)
+                  ? Effect.fail(
+                      new IssueTrackerUnavailableError({
+                        message:
+                          receipt.error?.message ??
+                          "The task changes could not be confirmed by Pathway Cloud. Retry after synchronization completes.",
+                      }),
+                    )
+                  : Effect.void,
+              ),
+            ),
+          ),
+        );
+        if (AsyncResult.isFailure(synced))
+          return AsyncResult.failure<A, IssueTrackerUnavailableError | IssueDomainMutationError>(
+            synced.cause,
+          );
+      }
+      return command.run(registry, {
+        environmentId: resolved.environmentId,
+        input: { ...rpcInput(input as I), ...resolved.input },
+      });
+    },
+  };
+}
 
 const issueCommandScheduler = createAtomCommandScheduler();
 
@@ -2317,21 +2461,30 @@ const commandFailureMessage = (cause: Cause.Cause<unknown>): string => {
     : String(failure);
 };
 
+const startEnrichmentCommand = routeIssueInvestigationCommand(
+  legacyIssueCommands.startEnrichment,
+  (input: IssueEnrichmentStartInput) => input,
+  true,
+);
+const cancelEnrichmentCommand = routeIssueInvestigationCommand(
+  legacyIssueCommands.cancelEnrichment,
+  (input: IssueEnrichmentRunRefInput & { readonly issueId: IssueId }) => ({ runId: input.runId }),
+);
+
 /**
  * Replica triage is an ordinary issue update. The optional investigation remains an
- * environment-local executor and starts only after the durable outbox enqueue has completed.
+ * environment-local executor and starts only after Cloud confirms the task changes.
  */
 const triageAcceptCommand: typeof syncedTriageAcceptCommand = {
   label: syncedTriageAcceptCommand.label,
   run: async (registry, target) => {
-    const replicaRouted = registry.get(scopedCompanyRegistryReplicasAtom).size > 0;
+    const replicaRouted = registry.get(companyRegistryReplicasAtom).size > 0;
     const accepted = await syncedTriageAcceptCommand.run(registry, target);
     if (!replicaRouted || !target.input.runEnrichment || !AsyncResult.isSuccess(accepted)) {
       return accepted;
     }
-    const enrichment = await legacyIssueCommands.startEnrichment.run(registry, {
-      environmentId: target.environmentId,
-      input: { issueId: target.input.issueId },
+    const enrichment = await startEnrichmentCommand.run(registry, {
+      issueId: target.input.issueId,
     });
     return AsyncResult.isSuccess(enrichment)
       ? AsyncResult.success({
@@ -2648,8 +2801,8 @@ export const issueCommands = {
       result: receiptMappedResult,
     }),
   }),
-  startEnrichment: legacyIssueCommands.startEnrichment,
-  cancelEnrichment: legacyIssueCommands.cancelEnrichment,
+  startEnrichment: startEnrichmentCommand,
+  cancelEnrichment: cancelEnrichmentCommand,
   linkThread: legacyIssueCommands.linkThread,
   unlinkThread: legacyIssueCommands.unlinkThread,
   slackSetToken: legacyIssueCommands.slackSetToken,
@@ -2794,9 +2947,8 @@ export const useCreateIssueView = () => usePrimaryIssueCommand(issueCommands.vie
 export const useUpdateIssueView = () => usePrimaryIssueCommand(issueCommands.viewUpdate);
 export const useDeleteIssueView = () => usePrimaryIssueCommand(issueCommands.viewDelete);
 export const useReorderIssueViews = () => usePrimaryIssueCommand(issueCommands.viewsReorder);
-export const useStartIssueEnrichment = () => usePrimaryIssueCommand(issueCommands.startEnrichment);
-export const useCancelIssueEnrichment = () =>
-  usePrimaryIssueCommand(issueCommands.cancelEnrichment);
+export const useStartIssueEnrichment = () => useAtomCommand(issueCommands.startEnrichment);
+export const useCancelIssueEnrichment = () => useAtomCommand(issueCommands.cancelEnrichment);
 export const useLinkIssueThread = () => usePrimaryIssueCommand(issueCommands.linkThread);
 export const useUnlinkIssueThread = () => usePrimaryIssueCommand(issueCommands.unlinkThread);
 /** An empty token disconnects; the server tests the connection before it writes either way. */

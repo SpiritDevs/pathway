@@ -228,6 +228,43 @@ async function seed(
 }
 
 describe("thread access grants", () => {
+  it("resolves the linked Clerk subject to the internal membership user id", async () => {
+    const t = harness();
+    const { targetMembershipId } = await seed(t, ["environments.read"]);
+    const membership = await t.run((ctx) => ctx.db.get(targetMembershipId));
+    const userId = await asEnvironment(t).query(api.connectGrants.accountUser, {});
+    expect(userId).toBe(membership?.userId);
+    expect(userId).not.toBe("owner");
+    expect(await t.run((ctx) => ctx.db.query("connectGrants").collect())).toEqual([]);
+  });
+
+  it("refuses account resolution without the registered proof key or current owner link", async () => {
+    const t = harness();
+    await seed(t, ["environments.read"]);
+    await expect(
+      asEnvironment(t, "thumb-stolen").query(api.connectGrants.accountUser, {}),
+    ).rejects.toThrow(/exactly one Pathway account/u);
+    await t.run(async (ctx) => {
+      const link = await ctx.db.query("relayEnvironmentLinks").first();
+      await ctx.db.patch(link!._id, { revokedAt: "2026-10-07T00:00:00.000Z" });
+    });
+    await expect(asEnvironment(t).query(api.connectGrants.accountUser, {})).rejects.toThrow(
+      /exactly one Pathway account/u,
+    );
+  });
+
+  it("resolves the account that linked the environment rather than its registration creator", async () => {
+    const t = harness();
+    await seed(t, ["environments.read"], { linkedTo: "manager" });
+    const user = await t.run((ctx) =>
+      ctx.db
+        .query("users")
+        .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", "manager"))
+        .unique(),
+    );
+    expect(await asEnvironment(t).query(api.connectGrants.accountUser, {})).toBe(user?._id);
+  });
+
   it("grants the caller's account a single read of a thread in another company", async () => {
     const t = harness();
     const { targetMembershipId } = await seed(t, ["environments.read"]);

@@ -274,6 +274,13 @@ async function environmentAccountUser(ctx: QueryCtx): Promise<{
   return { environmentId: identity.subject, userId: user._id };
 }
 
+/** Resolves the linked account to the same internal user id carried by company memberships. */
+export const accountUser = query({
+  args: {},
+  returns: v.id("users"),
+  handler: async (ctx) => (await environmentAccountUser(ctx)).userId,
+});
+
 /** Authorization and storage half of {@link issueThreadAccess}. */
 export const recordThreadAccess = internalMutation({
   args: { threadId: v.string(), access: threadAccess, tokenHash: v.string() },

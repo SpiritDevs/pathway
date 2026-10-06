@@ -31,6 +31,7 @@ import {
   type IssueSyncOperation,
   type StoredSyncEntity,
   type StoredSyncState,
+  type SyncCycleReceipt,
 } from "@spiritdevs/client-runtime/sync";
 import { CompanyId, MembershipId, TeamId } from "@spiritdevs/contracts/company";
 import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
@@ -367,6 +368,186 @@ const LINEAR_EXPORT = [
 ].join("\n");
 
 describe("IssueTrackerService", () => {
+  it.effect(
+    "investigates a cloud-only task using its checkout and the resolved linked account",
+    () =>
+      Effect.gen(function* () {
+        const entities = [
+          routedStoredEntity("membership", {
+            id: "membership-owner",
+            userId: "internal-cloud-user",
+            state: "active",
+            displayNameSnapshot: "Owner",
+            emailSnapshot: "owner@example.test",
+            invitedByMembershipId: null,
+            joinedAt: 1,
+            createdAt: 1,
+            updatedAt: 1,
+          }),
+          routedStoredEntity("environmentBinding", {
+            id: "binding-owner",
+            cloudProjectId: "cloud-project",
+            environmentId: ROUTED_ENVIRONMENT_ID,
+            localProjectId: PROJECT,
+            localWorkspaceRoot: "/tmp/pathway",
+            status: "active",
+            lastSeenAt: 1,
+            createdAt: 1,
+            updatedAt: 1,
+          }),
+          routedStoredEntity("issue", {
+            id: "cloud-only-task",
+            key: "COR-84",
+            keyNumber: 84,
+            title: "Cloud-only task",
+            description: "",
+            statusId: "cloud-status",
+            priority: "medium",
+            assignee: null,
+            projectId: "cloud-project",
+            milestoneId: null,
+            cycleId: null,
+            parentId: null,
+            sortOrder: "m",
+            labelIds: [],
+            dueDate: null,
+            triage: false,
+            slackSource: null,
+            teamIds: [],
+            workflowOwner: { kind: "company" },
+            workModelSelection: null,
+            automationAssignment: null,
+            pullRequest: null,
+            createdAt: 1,
+            updatedAt: 1,
+          }),
+        ];
+        const model = (yield* readyReplicaReader(entities).read)!;
+        const refreshed = yield* Ref.make(false);
+        const syncReceipt = yield* Ref.make<SyncCycleReceipt>({
+          outcome: "synced",
+          cursor: CompanyVersion.make(1),
+          authorizationEpoch: AuthorizationEpoch.make(1),
+          appliedChanges: 0,
+          acceptedOperations: 0,
+          rejectedOperations: 0,
+          error: null,
+        });
+        const handle: CloudSyncIssueEngineHandle = {
+          companyId: ROUTED_COMPANY_ID,
+          environmentId: ROUTED_ENVIRONMENT_ID,
+          enqueue: () => Effect.die("unused"),
+          operationDisposition: () => Effect.die("unused"),
+          sync: Ref.set(refreshed, true).pipe(Effect.andThen(Ref.get(syncReceipt))),
+          readIssueSnapshot: Effect.succeed({
+            readModel: model,
+            bootstrapped: true,
+            quarantined: 0,
+          }),
+        };
+        const registry: CloudSyncEngineRegistryShape = {
+          expectIssueRouting: () => Effect.void,
+          registerIssueEngine: () => Effect.void,
+          unregisterIssueEngine: () => Effect.void,
+          withIssueEngine: (_input, use) => use,
+          issueEngine: (companyId) =>
+            Effect.succeed(companyId === ROUTED_COMPANY_ID ? handle : null),
+          issueEngineForProject: () => Effect.die("client routes must be explicit"),
+        };
+        const identityCalls: EnvironmentId[] = [];
+        const started = yield* Deferred.make<void>();
+        const tracker = yield* makeIssueTrackerService({
+          syncEngineRegistry: registry,
+          resolveEnvironmentAccountUser: (environmentId) =>
+            Effect.sync(() => {
+              identityCalls.push(environmentId);
+              return "internal-cloud-user";
+            }),
+        }).pipe(
+          Effect.provideService(
+            IssueEnrichmentEngine,
+            makeFakeEngine({
+              start: (request) =>
+                Effect.gen(function* () {
+                  assert.equal(request.issue.projectId, PROJECT);
+                  assert.equal(request.workspaceRoot, "/tmp/pathway");
+                  assert.isTrue(yield* Ref.get(refreshed));
+                  yield* Deferred.succeed(started, undefined);
+                }),
+            }),
+          ),
+        );
+        yield* seedProject(PROJECT, "/tmp/pathway");
+        const issueId = IssueId.make("cloud-only-task");
+        assert.equal(
+          (yield* tracker.startEnrichment({ issueId }).pipe(Effect.flip)).reason,
+          "not-found",
+        );
+        const route = {
+          companyId: ROUTED_COMPANY_ID,
+          environmentId: ROUTED_ENVIRONMENT_ID,
+          localProjectId: PROJECT,
+        };
+        for (const outcome of ["offline", "failed", "disabled"] as const) {
+          yield* Ref.update(syncReceipt, (receipt) => ({ ...receipt, outcome }));
+          const failure = yield* tracker
+            .withCompanyRoute(
+              { ...route, authenticatedSubject: "internal-cloud-user", refresh: true },
+              tracker.startEnrichment({ issueId }),
+            )
+            .pipe(Effect.flip);
+          assert.include(failure.message, "could not synchronize");
+          assert.isFalse(yield* Deferred.isDone(started));
+        }
+        yield* Ref.update(syncReceipt, (receipt) => ({
+          ...receipt,
+          outcome: "synced" as const,
+          rejectedOperations: 1,
+        }));
+        const rejected = yield* tracker
+          .withCompanyRoute(
+            { ...route, authenticatedSubject: "internal-cloud-user", refresh: true },
+            tracker.startEnrichment({ issueId }),
+          )
+          .pipe(Effect.flip);
+        assert.include(rejected.message, "could not synchronize");
+        assert.isFalse(yield* Deferred.isDone(started));
+        yield* Ref.update(syncReceipt, (receipt) => ({ ...receipt, rejectedOperations: 0 }));
+        const { run } = yield* tracker.withCompanyRoute(
+          { ...route, authenticatedSubject: "desktop-bootstrap", refresh: true },
+          tracker.startEnrichment({ issueId }),
+        );
+        yield* Deferred.await(started);
+        assert.equal(run.issueId, issueId);
+        const history = yield* tracker.withCompanyRoute(
+          { ...route, authenticatedSubject: "cloud-connect" },
+          tracker.getEnrichmentRuns({ issueId }),
+        );
+        assert.equal(history.runs[0]?.id, run.id);
+        yield* tracker.withCompanyRoute(
+          { ...route, authenticatedSubject: "internal-cloud-user" },
+          tracker.cancelEnrichment({ runId: run.id }),
+        );
+        assert.deepStrictEqual(identityCalls, [ROUTED_ENVIRONMENT_ID, ROUTED_ENVIRONMENT_ID]);
+        const denied = yield* tracker
+          .withCompanyRoute(
+            { ...route, authenticatedSubject: "foreign-internal-user" },
+            tracker.getEnrichmentRuns({ issueId }),
+          )
+          .pipe(Effect.flip);
+        assert.include(denied.message, "cannot access");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            makeDependencyLayer(),
+            Layer.succeed(IssueEnrichmentEngine, makeFakeEngine()),
+            Layer.succeed(IssueCommentAgentEngine, makeFakeCommentAgentEngine()),
+            Layer.succeed(SlackIntakeEngine, makeFakeSlackEngine()),
+          ),
+        ),
+      ),
+  );
+
   it("keeps bug-report research as findings without applying metadata suggestions", () => {
     assert.deepStrictEqual(
       issueEnrichmentAutomaticPatch({
