@@ -542,7 +542,7 @@ function latestRunModelBefore(
  * model slug when the instance no longer lists it, and to the instance display
  * name (or id) when no model was recorded on the item.
  */
-function ProviderModelEndpoint(props: {
+export function ProviderModelEndpoint(props: {
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly instanceId: ProviderInstanceId;
   readonly model?: string | undefined;
