@@ -12,6 +12,7 @@ import {
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
+  PlanId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -2133,6 +2134,8 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
     Effect.gen(function* () {
       const eventSink = yield* EventSinkV2;
       const maintenance = yield* ProjectionMaintenanceV2;
+      const eventStore = yield* EventStoreV2;
+      const projectionStore = yield* ProjectionStoreV2;
       const sql = yield* SqlClient.SqlClient;
       const now = yield* DateTime.now;
       const threadId = ThreadId.make("thread:foundation-compact-v2");
@@ -2198,7 +2201,34 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
         },
       });
 
-      yield* eventSink.write({
+      const planEvent = (
+        suffix: string,
+        completed: boolean,
+        kind: "proposed_plan" | "todo_list",
+      ): OrchestrationV2DomainEvent => ({
+        id: EventId.make(`event:foundation-compact-v2:${suffix}`),
+        type: "plan.updated",
+        threadId,
+        providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: PlanId.make(`plan:foundation-compact-v2:${kind}`),
+          threadId,
+          runId: null,
+          nodeId: NodeId.make(`node:foundation-compact-v2:${kind}`),
+          status: completed ? "completed" : "active",
+          ...(kind === "proposed_plan"
+            ? { kind, markdown: completed ? "# Final plan\n\nExact content." : "# Partial" }
+            : {
+                kind,
+                steps: [
+                  { id: "step-1", text: "Finish", status: completed ? "completed" : "pending" },
+                ],
+              }),
+        },
+      });
+
+      const written = yield* eventSink.write({
         events: [
           threadCreatedEvent({ id: "event:foundation-compact-v2:create", thread, now }),
           threadStateEvent("metadata", "thread.metadata-updated"),
@@ -2208,14 +2238,31 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
           messageEvent("message-2", "final"),
           turnItemEvent("turn-item-1", "streaming"),
           turnItemEvent("turn-item-2", "final"),
+          planEvent("plan-1", false, "proposed_plan"),
+          planEvent("plan-2", true, "proposed_plan"),
+          planEvent("todo-1", false, "todo_list"),
+          planEvent("todo-2", true, "todo_list"),
         ],
       });
 
+      // A legacy event with the same plan id must survive the V2-only pass.
+      yield* sql`
+        INSERT INTO orchestration_events (
+          event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+        )
+        SELECT 'event:foundation-compact-v1:plan', aggregate_kind, 'thread:legacy-plan',
+          1, event_type, occurred_at, actor_kind, payload_json, metadata_json, 1
+        FROM orchestration_events
+        WHERE event_id = 'event:foundation-compact-v2:plan-1'
+      `;
+      const before = yield* projectionStore.getThreadProjection(threadId);
+      const latestSequence = yield* eventStore.latestSequence();
       const summary = yield* maintenance.compactEventStore;
       // The in-memory persistence layer is shared by this suite, so the pass
       // may also collect superseded full-state events created by earlier
-      // cases. These four are the minimum introduced above.
-      assert.isAtLeast(summary.deletedEventCount, 4);
+      // cases. These six are the minimum introduced above.
+      assert.isAtLeast(summary.deletedEventCount, 6);
       assert.equal(summary.deletedReceiptCount, 0);
       const remaining = yield* sql<{ readonly event_id: string }>`
         SELECT event_id
@@ -2230,10 +2277,28 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
           "event:foundation-compact-v2:visit-2",
           "event:foundation-compact-v2:message-2",
           "event:foundation-compact-v2:turn-item-2",
+          "event:foundation-compact-v2:plan-2",
+          "event:foundation-compact-v2:todo-2",
         ],
       );
+      const legacy =
+        yield* sql`SELECT event_id FROM orchestration_events WHERE event_id = 'event:foundation-compact-v1:plan'`;
+      assert.lengthOf(legacy, 1);
+      assert.equal(yield* eventStore.latestSequence(), latestSequence);
+      const partialPlanSequence = written.find(
+        (stored) => stored.event.id === "event:foundation-compact-v2:plan-1",
+      )?.sequence;
+      if (partialPlanSequence === undefined) {
+        return yield* Effect.die("Expected a partial plan event.");
+      }
+      const resumed = yield* eventSink
+        .stream({ threadId, afterSequence: partialPlanSequence })
+        .pipe(Stream.take(1), Stream.runCollect);
+      assert.equal(resumed[0]?.event.id, "event:foundation-compact-v2:plan-2");
+      assert.deepEqual(yield* projectionStore.getThreadProjection(threadId), before);
       assert.isTrue((yield* maintenance.verify).valid);
       assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.deepEqual(yield* projectionStore.getThreadProjection(threadId), before);
     }),
   );
 });

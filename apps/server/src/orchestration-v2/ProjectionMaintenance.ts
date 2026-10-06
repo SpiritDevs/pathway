@@ -305,8 +305,10 @@ export const layer: Layer.Layer<
             GROUP BY stream_id
           )
       `;
+      // Each payload replaces the whole entity. Keep its latest event and sequence
+      // so replay and range-based cursor resume still recover the current state.
       const supersededEntityRows = (
-        eventType: "message.updated" | "node.updated" | "turn-item.updated",
+        eventType: "message.updated" | "node.updated" | "plan.updated" | "turn-item.updated",
       ) =>
         sql<{ readonly sequence: number }>`
           SELECT sequence
@@ -323,12 +325,14 @@ export const layer: Layer.Layer<
         `;
       const supersededMessageRows = yield* supersededEntityRows("message.updated");
       const supersededNodeRows = yield* supersededEntityRows("node.updated");
+      const supersededPlanRows = yield* supersededEntityRows("plan.updated");
       const supersededTurnItemRows = yield* supersededEntityRows("turn-item.updated");
       const deletedEventCount = yield* deleteEventsBatched(
         [
           ...supersededThreadStateRows,
           ...supersededMessageRows,
           ...supersededNodeRows,
+          ...supersededPlanRows,
           ...supersededTurnItemRows,
         ].map((row) => row.sequence),
       );
