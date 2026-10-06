@@ -20,8 +20,8 @@
 
 **Consequences.**
 
+- **COR-288 implements permission precedence on macOS arm64.** Explicit site settings, changed global user defaults and managed settings win; untouched Chrome defaults defer to Pathway's existing request and check callbacks. All 20 module types and all 65 registered macOS content defaults match stock Chrome 152. Settings now shows Location Ask independently of Pathway's callback, which already allowlists geolocation and notifications. Denial, explicit Allow/Block, reset, precise/approximate location and isolated local managed-policy precedence are verified in [the COR-288 evidence][cor288]. System/cloud policy delivery and hardware grants remain unproven.
 - Each environment's preview partition ([`BrowserSession.ts`](../../apps/desktop/src/preview/BrowserSession.ts)) is a full regular Profile. Profiles load through the synchronous `ProfileManager::GetProfile` on the UI thread, and a load failure crashes the app.
-- **The spike doesn't implement the precedence rule yet.** It lets Chrome's effective value win, defaults included. Only Ask and unmapped types reach Pathway's callbacks. Gate 4 reports geolocation's default as Allow, where stock Chrome asks, so any type whose default is Allow bypasses Pathway's allowlist today. Only Notifications Block → Allow was exercised. No mapped type's default has been audited, and managed policy was never exercised. COR-288 tracks all of this.
 - **`clearSiteData` scope is an open decision before the runtime ships.** Today it clears storage and cache for the exact origin, but cookies for the whole registrable domain, sibling subdomains included. Only `127.0.0.1` was exercised, where the registrable domain falls back to the host. [#279](https://github.com/SpiritDevs/pathway/pull/279) already calls it, and the `cookieCount` the site panel shows (host and parent-domain cookies) doesn't match what Clear deletes.
 - Users' existing Electron browsing data doesn't carry over until a reviewed migration exists.
 
@@ -34,7 +34,7 @@
 - Windows, Linux and macOS x64.
 - ThinLTO and release builds.
 - Signing and notarization.
-- Managed policy.
+- Managed policy delivered by a system or cloud provider; COR-288 verifies Chrome's isolated local test-policy provider.
 - The native CommonJS lexer assertion on a literal Latin-1 character (COR-287), which blocks any release.
 - That Chrome's menu, AppleScript, Dock-reopen and app-shim paths can never create a `Browser`. The profile picker and updater state are unverified.
 - Other Chrome Settings pages, Safe Browsing, hardware and chooser grants, and permission subscriptions.
@@ -59,3 +59,5 @@
 [gate3]: https://github.com/SpiritDevs/pathway-runtime/blob/9469952f58f034273471e273804b738fc458f79f/evidence/gate3-macos.md
 [gate4]: https://github.com/SpiritDevs/pathway-runtime/blob/9469952f58f034273471e273804b738fc458f79f/evidence/gate4-macos.md
 [patches]: https://github.com/SpiritDevs/pathway-runtime/blob/9469952f58f034273471e273804b738fc458f79f/patches/README.md
+
+[cor288]: https://github.com/SpiritDevs/pathway-runtime/blob/518e642489bbe8cf842606e17da800d3f81b7819/evidence/cor-288-macos.md
