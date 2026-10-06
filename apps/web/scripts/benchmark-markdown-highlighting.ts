@@ -61,7 +61,9 @@ try {
     const afterHtml = await request.result;
     if (afterHtml === null)
       throw new Error("Worker highlighting failed; plain fallback remains available");
-    if (afterHtml !== beforeHtml)
+    // A cold first render can hit Shiki's per-line time limit, so compare against a warm render.
+    const warmHtml = highlighter.codeToHtml(code, { lang: language, theme: "pierre-dark" });
+    if (afterHtml !== warmHtml)
       throw new Error("Worker HTML differs from synchronous highlighting");
     console.log(
       JSON.stringify({
