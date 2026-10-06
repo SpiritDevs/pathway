@@ -301,6 +301,13 @@ extension PathwayAgentThreadModel {
         if saved.isFileURL { PathwayAttachmentImageLocations.store(saved, directory: storageDirectory, image: key) }
         return saved
     }
+    /// A signed URL that serves a published page inline. Each mount asks for a fresh one, so a
+    /// page that scrolls back into view never loads with an expired token.
+    func htmlRenderURL(_ render: PathwayHTMLRender) async throws -> URL {
+        guard let connect else { throw PathwayThreadConversationError.message("Connect to the environment to view this page.") }
+        let signed = try await request("assets.createUrl", payload: .object(["resource": render.assetResource]), reportsErrors: false)
+        return try PathwayEnvironmentHTTP.signedAssetURL(signed, base: try await connect.prepare(environment: environment).httpBaseURL)
+    }
     private func resolveAssetURL(_ relative: String) async throws -> URL {
         guard let connect else { throw PathwayThreadConversationError.message("Connect to the environment to access files.") }
         let base = try await connect.prepare(environment: environment).httpBaseURL

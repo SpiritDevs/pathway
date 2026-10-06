@@ -20,6 +20,8 @@ import type { ComputerSurfaceInput, ComputerSurfaceState } from "@spiritdevs/con
  * @module computer/ComputerManager
  */
 import {
+  idleWorkflowRecording,
+  type WorkflowRecordingAction,
   COMPUTER_PROVISION_SUMMARY_MAX_LENGTH,
   COMPUTER_TEXT_MAX_LENGTH,
   type ComputerAccessibilityTreeResult,
@@ -54,6 +56,7 @@ import {
   type ThreadComputerState,
   ThreadId,
 } from "@spiritdevs/contracts";
+import { buildWorkflowRecordingSkillPrompt } from "@spiritdevs/shared/workflowRecordingSkill";
 import { encodeComputerFrame } from "@spiritdevs/shared/computerFrame";
 import { FrameTransport, type FrameSink } from "@spiritdevs/shared/frameTransport";
 import * as Clock from "effect/Clock";
@@ -578,6 +581,25 @@ export class ComputerManager {
   private physicalFailure: string | undefined;
   private readonly activeAuthorities = new Map<string, Set<DesktopAbort>>();
   private readonly authorityTurns = new Map<string, string>();
+
+  recordWorkflow(action: WorkflowRecordingAction, threadId: string) {
+    const recording = this.backend.recording
+      ? this.backend.recording(action, threadId)
+      : action === "status"
+        ? Effect.succeed(idleWorkflowRecording(false))
+        : Effect.fail(
+            new ComputerBackendError({
+              message: "Workflow recording requires a supported macOS desktop environment.",
+            }),
+          );
+    return recording.pipe(
+      Effect.map((status) =>
+        status.phase === "completed" && status.eventsPath && status.metadataPath
+          ? { ...status, skillPrompt: buildWorkflowRecordingSkillPrompt(status) }
+          : status,
+      ),
+    );
+  }
 
   private constructor(parts: ComputerManagerParts, cursorActivity: CursorActivity) {
     const { options } = parts;

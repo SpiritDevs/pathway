@@ -9,6 +9,7 @@
 import {
   type AuthEnvironmentScope,
   type AuthSessionId,
+  WORKFLOW_RECORDING_METHODS,
   COMPUTER_WS_METHODS,
   COMPUTER_SURFACE_METHODS,
   ComputerError,
@@ -135,6 +136,45 @@ export const makeWsComputerRpcLayer = (currentSession: EnvironmentAuth.Authentic
       const surfaceCall = <A, E, R>(method: string, effect: Effect.Effect<A, E, R>) =>
         permits(method) ? effect : Effect.fail(denied(requiredScopeForRpcMethod(method)));
       return WsComputerRpcGroup.of({
+        [WORKFLOW_RECORDING_METHODS.status]: (input) =>
+          surfaceCall(
+            WORKFLOW_RECORDING_METHODS.status,
+            computerService.manager
+              .recordWorkflow("status", input.threadId)
+              .pipe(Effect.mapError((error) => new ComputerError({ message: error.message }))),
+          ),
+        [WORKFLOW_RECORDING_METHODS.start]: (input) =>
+          surfaceCall(
+            WORKFLOW_RECORDING_METHODS.start,
+            serverSettings.getSettings.pipe(
+              Effect.mapError(
+                () => new ComputerError({ message: "Failed to read the Computer access policy." }),
+              ),
+              Effect.flatMap((settings) =>
+                requireComputerAccess(settings.computer.accessPolicy, currentSession.scopes),
+              ),
+              Effect.andThen(
+                computerService.manager
+                  .recordWorkflow("start", input.threadId)
+                  .pipe(Effect.mapError((error) => new ComputerError({ message: error.message }))),
+              ),
+            ),
+          ),
+        [WORKFLOW_RECORDING_METHODS.stop]: (input) =>
+          surfaceCall(
+            WORKFLOW_RECORDING_METHODS.stop,
+            computerService.manager
+              .recordWorkflow("stop", input.threadId)
+              .pipe(Effect.mapError((error) => new ComputerError({ message: error.message }))),
+          ),
+        [WORKFLOW_RECORDING_METHODS.cancel]: (input) =>
+          surfaceCall(
+            WORKFLOW_RECORDING_METHODS.cancel,
+            computerService.manager
+              .recordWorkflow("cancel", input.threadId)
+              .pipe(Effect.mapError((error) => new ComputerError({ message: error.message }))),
+          ),
+
         [COMPUTER_SURFACE_METHODS.getState]: () =>
           surfaceCall(
             COMPUTER_SURFACE_METHODS.getState,

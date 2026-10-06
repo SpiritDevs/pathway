@@ -21,6 +21,8 @@ export interface BuiltInSlashCommandItem {
 export function buildBuiltInSlashCommandItems(input: {
   /** Whether this environment's server could ever drive a desktop. */
   readonly computerUseAvailable: boolean;
+  /** Whether this thread can record a skill on the environment's Mac. */
+  readonly recordSkillAvailable?: boolean;
 }): BuiltInSlashCommandItem[] {
   return [
     {
@@ -55,6 +57,24 @@ export function buildBuiltInSlashCommandItems(input: {
           },
         ]
       : []),
+    ...(input.recordSkillAvailable
+      ? [
+          {
+            id: "slash:record-skill",
+            type: "slash-command" as const,
+            command: "record-skill" as const,
+            label: "Record a skill",
+            description: "Show the agent a task on this environment's Mac",
+          },
+        ]
+      : []),
+    {
+      id: "slash:sketch",
+      type: "slash-command",
+      command: "sketch",
+      label: "Sketch",
+      description: "Draw a sketch to attach",
+    },
     {
       id: "slash:model",
       type: "slash-command",

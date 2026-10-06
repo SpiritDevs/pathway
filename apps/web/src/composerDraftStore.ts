@@ -68,6 +68,7 @@ import { getDefaultServerModel } from "./providerModels";
 import { UnifiedSettings } from "@spiritdevs/contracts/settings";
 import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
 import type { ComposerComputerControlMode } from "./computerControlMode";
+import { SketchScene, decodeSketchScene } from "./lib/sketch";
 const isSnapShotSource = Schema.is(SnapShotSource);
 const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
@@ -104,6 +105,7 @@ export const PersistedComposerImageAttachment = Schema.Struct({
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
   source: Schema.optionalKey(SnapShotSource),
+  sketch: Schema.optionalKey(SketchScene),
   dataUrl: Schema.optionalKey(Schema.String),
   attachmentId: Schema.optionalKey(Schema.String),
   environmentId: Schema.optionalKey(Schema.String),
@@ -113,6 +115,7 @@ export type PersistedComposerImageAttachment = typeof PersistedComposerImageAtta
 export interface ComposerImageAttachment extends Omit<ChatImageAttachment, "previewUrl"> {
   previewUrl: string;
   file: File;
+  sketch?: SketchScene;
 }
 
 export interface ComposerFileAttachment extends Omit<ChatFileAttachment, "previewUrl"> {
@@ -603,6 +606,11 @@ interface ComposerDraftStoreState {
   ) => void;
   addImage: (threadRef: ComposerThreadTarget, image: ComposerAttachment) => boolean;
   addImages: (threadRef: ComposerThreadTarget, images: ComposerAttachment[]) => void;
+  replaceImage: (
+    threadRef: ComposerThreadTarget,
+    imageId: string,
+    image: ComposerImageAttachment,
+  ) => boolean;
   removeImage: (threadRef: ComposerThreadTarget, imageId: string) => void;
   setFileUpload: (
     threadRef: ComposerThreadTarget,
@@ -1370,6 +1378,7 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerImageAtt
     typeof environmentId === "string" &&
     environmentId.length > 0;
   if (!hasDataUrl && !hasUploadedFileMarker) return null;
+  const sketch = decodeSketchScene(candidate.sketch);
   return {
     ...(type === "image" || type === "file" ? { type } : {}),
     id,
@@ -1377,6 +1386,7 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerImageAtt
     mimeType,
     sizeBytes,
     ...(isSnapShotSource(candidate.source) ? { source: candidate.source } : {}),
+    ...(sketch ? { sketch } : {}),
     ...(hasDataUrl ? { dataUrl } : {}),
     ...(hasUploadedFileMarker ? { attachmentId, environmentId } : {}),
   };
@@ -2556,6 +2566,7 @@ export function hydrateImagesFromPersisted(
             previewUrl: attachment.dataUrl ?? "",
             file: file!,
             ...(attachment.source ? { source: attachment.source } : {}),
+            ...(attachment.sketch ? { sketch: attachment.sketch } : {}),
           } satisfies ComposerImageAttachment),
     ];
   });
@@ -3521,6 +3532,37 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             };
           });
         },
+        replaceImage: (threadRef, imageId, image) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
+          if (threadKey.length === 0) return false;
+          const existing = get().draftsByThreadKey[threadKey];
+          const index = existing?.images.findIndex((attachment) => attachment.id === imageId) ?? -1;
+          if (!existing || index === -1) return false;
+          const previous = existing.images[index]!;
+          if (previous.previewUrl !== image.previewUrl) {
+            revokeObjectPreviewUrl(previous.previewUrl);
+          }
+          set((state) => {
+            const current = state.draftsByThreadKey[threadKey];
+            if (!current) return state;
+            return {
+              draftsByThreadKey: {
+                ...state.draftsByThreadKey,
+                [threadKey]: {
+                  ...current,
+                  images: current.images.map((attachment) =>
+                    attachment.id === imageId ? { ...image, id: imageId } : attachment,
+                  ),
+                  nonPersistedImageIds: current.nonPersistedImageIds.filter((id) => id !== imageId),
+                  persistedAttachments: current.persistedAttachments.filter(
+                    (attachment) => attachment.id !== imageId,
+                  ),
+                },
+              },
+            };
+          });
+          return true;
+        },
         removeImage: (threadRef, imageId) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
           if (threadKey.length === 0) {
@@ -4195,6 +4237,7 @@ export function captureComposerDraft(
         sizeBytes: image.sizeBytes,
         ...(image.previewUrl.startsWith("data:") ? { dataUrl: image.previewUrl } : {}),
         ...(image.type === "image" && image.source ? { source: image.source } : {}),
+        ...(image.type === "image" && image.sketch ? { sketch: image.sketch } : {}),
         ...(image.type === "file"
           ? { attachmentId: image.uploadedAttachmentId, environmentId: image.uploadEnvironmentId }
           : {}),

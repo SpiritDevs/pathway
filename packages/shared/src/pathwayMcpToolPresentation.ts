@@ -91,6 +91,8 @@ const PATHWAY_MCP_TOOL_DISPLAY_NAMES: Record<string, string> = {
   email_latest_code: "Get latest email code",
   email_list: "List captured email",
   email_get: "Read captured email",
+  html_preview: "Preview an HTML page",
+  html_render: "Render an HTML page",
 };
 
 function normalizePathwayMcpToolLabel(value: string): string {
@@ -116,14 +118,28 @@ function resolvePathwayMcpToolName(value: string): string | null {
     return namespaceMatch.groups.tool ?? null;
   }
 
+  // OpenCode joins the stable server name and tool with one underscore.
+  // Match a complete known id, never an arbitrary other-server suffix.
+  for (const server of PATHWAY_MCP_SERVER_ALIASES) {
+    if (label.toLowerCase().startsWith(`${server}_`)) {
+      const tool = label.slice(server.length + 1);
+      if (Object.hasOwn(PATHWAY_MCP_TOOL_DISPLAY_NAMES, tool)) return tool;
+    }
+  }
+
   return Object.hasOwn(PATHWAY_MCP_TOOL_DISPLAY_NAMES, label) ? label : null;
+}
+
+/** The bare tool id for a known Pathway MCP spelling. */
+export function resolvePathwayMcpToolId(toolName: string | null | undefined): string | null {
+  const name = toolName == null ? null : resolvePathwayMcpToolName(toolName);
+  return name !== null && Object.hasOwn(PATHWAY_MCP_TOOL_DISPLAY_NAMES, name) ? name : null;
 }
 
 export function resolvePathwayMcpToolPresentation(
   toolName: string | null | undefined,
 ): PathwayMcpToolPresentation | null {
-  const resolvedToolName =
-    toolName === undefined || toolName === null ? null : resolvePathwayMcpToolName(toolName);
+  const resolvedToolName = resolvePathwayMcpToolId(toolName);
   if (resolvedToolName === null) return null;
   const displayName = PATHWAY_MCP_TOOL_DISPLAY_NAMES[resolvedToolName];
   return displayName === undefined ? null : { displayName, logo: "pathway" };

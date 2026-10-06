@@ -6,9 +6,11 @@ import {
 } from "@spiritdevs/contracts";
 import {
   BotIcon,
+  CircleDotIcon,
   CpuIcon,
   MonitorIcon,
   PencilRulerIcon,
+  SignatureIcon,
   SparklesIcon,
   TargetIcon,
 } from "lucide-react";
@@ -77,6 +79,8 @@ const TOOL_ICONS: Record<ComposerSlashCommand, typeof BotIcon> = {
   plan: PencilRulerIcon,
   default: BotIcon,
   "computer-use": MonitorIcon,
+  sketch: SignatureIcon,
+  "record-skill": CircleDotIcon,
   model: CpuIcon,
 };
 

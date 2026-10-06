@@ -67,6 +67,16 @@ describe("sidebar lifecycle loading", () => {
     expect(classify({ ...thread, latestUserMessageAt: now })).toBe("active");
   });
 
+  it("keeps unread threads in place until they are read, then settles them as usual", () => {
+    const changeRequests = new Map([[key, merged]]);
+    const settled = { ...thread, settledOverride: "settled" as const };
+    expect(classify(thread, { changeRequests, unread: true })).toBe("active");
+    expect(classify(settled, { unread: true })).toBe("active");
+    expect(classify({ ...settled, pinnedAt: now }, { unread: true })).toBe("pinned");
+    expect(classify(thread, { changeRequests, unread: false })).toBe("settled");
+    expect(classify(settled, { unread: false })).toBe("settled");
+  });
+
   it("honors snoozing and restores the pin exactly at wake", () => {
     const snoozed = { ...thread, pinnedAt: now, snoozedUntil: "2026-09-12T13:00:00.000Z" };
     expect(classify(snoozed)).toBe("snoozed");

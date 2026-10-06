@@ -27,6 +27,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpProviderSession from "../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import { EventSinkV2 } from "./EventSink.ts";
@@ -386,6 +387,7 @@ export const layerWithOptions = (
                   providerInstanceId,
                   providerDriverKind,
                   enableComputerControl: computerControlRequests.get(threadId) === true,
+                  enableHtmlRenders: McpInvocationContext.threadShowsHtmlRenders(projection.thread),
                 });
                 McpProviderSession.setMcpProviderSession(credential.config);
                 reserveMcpCredential(threadId, credential.config.providerSessionId);

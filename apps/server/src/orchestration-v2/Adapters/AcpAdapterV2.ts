@@ -1,3 +1,5 @@
+import { resolvePathwayMcpToolId } from "@spiritdevs/shared/pathwayMcpToolPresentation";
+import { compactHtmlToolProjection } from "@spiritdevs/shared/toolOutput";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -97,6 +99,41 @@ import {
 } from "../ProviderAdapter.ts";
 
 export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
+
+/** Capture only a qualified MCP identifier from the native notification, before display normalization. */
+export function withVerifiedAcpMcpIdentity(
+  toolCall: AcpToolCallState,
+  rawPayload: unknown,
+): AcpToolCallState {
+  const update = unknownRecord(unknownRecord(rawPayload)?.update);
+  const name = update?.title;
+  if (typeof name !== "string" || !/^(?:mcp__pathway__|pathway[.:/]|pathway_)/.test(name))
+    return toolCall;
+  const id = resolvePathwayMcpToolId(name);
+  return id === "html_render" || id === "html_preview"
+    ? { ...toolCall, data: { ...toolCall.data, pathwayMcpToolName: `pathway.${id}` } }
+    : toolCall;
+}
+
+export function projectAcpDynamicToolCall(toolCall: AcpToolCallState) {
+  const verifiedName = toolCall.data.pathwayMcpToolName;
+  const verified =
+    verifiedName === "pathway.html_render" || verifiedName === "pathway.html_preview";
+  const name = toolCall.title ?? toolCall.kind ?? null;
+  const input = toolCall.data.rawInput ?? {};
+  const output = toolCall.data.rawOutput ?? toolCall.data.content;
+  const id = resolvePathwayMcpToolId(verified ? verifiedName : name);
+  if (id !== "html_render" && id !== "html_preview") {
+    return { toolName: name, input, ...(output === undefined ? {} : { output }) };
+  }
+  const compacted = compactHtmlToolProjection({
+    toolName: `pathway.${id}`,
+    input,
+    output: toolCall.status === "failed" ? { isError: true, content: output } : output,
+  });
+  // A display title is not identity: keep its HTML and images off the wire, but never show a page.
+  return verified ? compacted : { ...compacted, toolName: "acp.other" };
+}
 
 export interface AcpAdapterV2RuntimeInput {
   readonly cwd: string;
@@ -2838,9 +2875,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 turnItem = {
                   ...base,
                   type: "dynamic_tool",
-                  toolName: toolCall.title ?? toolCall.kind ?? null,
-                  input: rawInput ?? {},
-                  ...(rawOutput === undefined ? {} : { output: rawOutput }),
+                  ...projectAcpDynamicToolCall(toolCall),
                 };
               }
           }
@@ -3625,7 +3660,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               const parsed = parseSessionUpdateEvent(notification);
               for (const event of parsed.events) {
                 if (event._tag === "ToolCallUpdated") {
-                  yield* emitTool(context, event.toolCall);
+                  yield* emitTool(
+                    context,
+                    withVerifiedAcpMcpIdentity(event.toolCall, event.rawPayload),
+                  );
                 } else if (event._tag === "PlanUpdated") {
                   yield* emitPlan(context, event.payload);
                 }

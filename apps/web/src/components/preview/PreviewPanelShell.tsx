@@ -89,7 +89,8 @@ function PreviewPanelShellFrame(
         "relative flex h-full min-h-0 min-w-0 max-w-full flex-col self-stretch bg-background",
         isInline
           ? props.maximized
-            ? "flex-1 rounded-xl border border-sidebar-border shadow-sm/5"
+            ? // Maximized, it fills the page's own frame, which supplies the border.
+              "flex-1"
             : "shrink-0 rounded-xl border border-sidebar-border shadow-sm/5"
           : props.mode === "sheet"
             ? "w-full overflow-hidden rounded-[inherit]"

@@ -22,6 +22,8 @@ Each panel has its own sidebar, which you can collapse without affecting the oth
 
 Drag the line between two panels to resize them. Double-click it to give every panel an equal share. Double-clicking the edge of a thread's side panel works the same way: it takes half the width.
 
+To give a thread's side panel the whole page, click **Maximize panel** in the top-right corner. The thread becomes the first of the panel's tabs: click it to see the chat, or click any other tab, or open something, to go back to the panel. Click **Restore panel**, or hide the side panel, to put it back beside the chat. The Pull requests page works the same way, with the list as its first tab.
+
 Panels are remembered on each device, so they are still there after you restart Pathway. A link you share opens only the page it points to, not your panels.
 
 ## Opening a window

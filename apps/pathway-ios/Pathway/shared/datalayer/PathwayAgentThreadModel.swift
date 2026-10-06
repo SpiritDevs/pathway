@@ -282,6 +282,8 @@ final class PathwayAgentThreadModel {
     @ObservationIgnored var computerControlGeneration: Int?
     /// Advances whenever this chat's connection ends or is replaced; fences Computer reads.
     @ObservationIgnored var computerConnection = 0
+    /// Record a skill for this thread, recorded on the environment's Mac.
+    let workflowRecording = PathwayWorkflowRecordingModel()
     /// Advances when a connection ends or settings change, so an older config read cannot land.
     @ObservationIgnored var configRevision = 0
     private(set) var browserTakeover: [String: JSONValue]?

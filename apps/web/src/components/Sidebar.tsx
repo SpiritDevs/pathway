@@ -275,6 +275,7 @@ import {
   focusNotificationsAtom,
   focusUnreadCountAtom,
   threadHasUnreadNotificationAtom,
+  unreadNotificationThreadKeysAtom,
   visibleFocusProjectKeysAtom,
 } from "../cloud/focusReadModel";
 import type { FocusNotification } from "@spiritdevs/contracts/focus";
@@ -415,7 +416,7 @@ function ThreadProviderIconStack({ models }: { models: ReadonlyArray<SidebarThre
   }
   const stacked = [...byInstance.values()].slice(-MAX_STACKED_PROVIDER_ICONS);
   return (
-    <span className="inline-flex shrink-0 items-center -space-x-1 opacity-60">
+    <span className="inline-flex shrink-0 items-center -space-x-1">
       {stacked.map((model, index) => (
         <ProviderInstanceIcon
           key={model.providerEntry.instanceId}
@@ -540,7 +541,7 @@ function SidebarThreadTooltip({
                 accentColor={model.providerEntry.accentColor}
                 showBadge={model.showBadge}
                 badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-2.5 min-w-2.5 px-px text-[6px]"
-                iconClassName="size-3 shrink-0 grayscale opacity-60"
+                iconClassName="size-3 shrink-0"
               />
               <div className="min-w-0 truncate text-foreground/75">{model.label}</div>
             </div>
@@ -2652,6 +2653,7 @@ export default function Sidebar() {
     [isMobile, router, setOpenMobile],
   );
 
+  const unreadNotificationThreadKeys = useAtomValue(unreadNotificationThreadKeysAtom);
   // Settled threads stay in the live shell stream (settled ≠ archived), so
   // the partition works directly off live shells: no archived-snapshot
   // merging, no optimistic holds. Archived threads remain hidden here —
@@ -2687,13 +2689,13 @@ export default function Sidebar() {
     const sections = { active, pinned, snoozed, settled, loading };
     for (const thread of visible) {
       const capabilities = lifecycleCapabilities.get(thread.environmentId);
+      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
       const section = sidebarThreadSection(thread, {
         now: preciseNow,
         unavailable: unavailableEnvironmentIds.has(thread.environmentId),
         autoSettleAfterDays,
-        queued: queuedStatusByThreadId.has(
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        ),
+        queued: queuedStatusByThreadId.has(threadKey),
+        unread: unreadNotificationThreadKeys.has(threadKey),
         supportsSettlement:
           capabilities === undefined ? undefined : capabilities.threadSettlement === true,
         supportsSnooze: capabilities === undefined ? undefined : capabilities.threadSnooze === true,
@@ -2742,6 +2744,7 @@ export default function Sidebar() {
     snoozeWakeTick,
     agentThreads,
     queuedStatusByThreadId,
+    unreadNotificationThreadKeys,
   ]);
 
   const retainedSettledThreads = useMemo(

@@ -6,6 +6,8 @@ On iOS, thread actions update the list immediately while the environment saves t
 
 An idle thread with linked pull requests settles automatically when all of them are merged. An open or closed-without-merging PR, or a status that cannot be determined, prevents automatic settlement. Unlink a PR from the thread if it should no longer count toward settlement. The settled banner and sidebar use the same linked PR statuses. Once a PR is reported as merged, an older cached status does not keep it active or offer Merge again.
 
+A thread with an unread notification (the blue dot beside it) stays where it is in the sidebar instead of moving to Settled, even if a merged PR, inactivity or Settle after completion would otherwise settle it. Once you open the thread, it settles as usual. Settling it yourself also marks its notifications read.
+
 When you return to Agent Threads from another section, recently loaded PR grouping is retained. Threads waiting for a PR status check appear after that check completes; already loaded rows stay visible. A loading message distinguishes this from an empty thread list.
 
 If the agent is still working, hold Control while hovering over **Settle** to reveal **Settle after completion**. Control-click the button to schedule the thread to settle only after the agent has returned its final response and no queued or background work remains. You can also choose **Settle after completion** from the thread action menu, including on touch devices.

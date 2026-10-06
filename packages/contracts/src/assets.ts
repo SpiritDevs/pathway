@@ -23,6 +23,7 @@ export const AssetResource = Schema.Union([
     /** Optional display metadata baked into signed download URLs. */
     fileName: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
     mimeType: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(100))),
+    disposition: Schema.optionalKey(Schema.Literals(["inline", "attachment"])),
   }),
   Schema.TaggedStruct("project-favicon", {
     cwd: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),

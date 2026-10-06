@@ -1,3 +1,4 @@
+import { projectClaudeDynamicToolCall } from "./ClaudeAdapterV2.ts";
 import { USAGE_RECOVERY_MESSAGE_PREFIX } from "../../providerUsage/usageRecoveryPolicy.ts";
 import { BUNDLED_MODEL_MANIFEST } from "../../provider/ModelManifest.ts";
 import type {
@@ -5926,4 +5927,46 @@ it("uses refreshed model capabilities at the Claude SDK boundary", () => {
   assert.strictEqual(options.model, "claude-future[1m]");
   assert.strictEqual(options.effort, "xhigh");
   assert.deepEqual(options.settings, { fastMode: true });
+});
+
+describe("Claude HTML MCP projection", () => {
+  const htmlResult = {
+    htmlRender: { attachmentId: "thread-html-attachment", title: "Chart", height: 400 },
+    message: "Shown",
+  };
+  const rawHtml = "<html><body>Chart</body></html>";
+
+  it("reads native content blocks before unwrapping and preserves is_error", () => {
+    for (const is_error of [false, true]) {
+      const output = {
+        type: "tool_result",
+        tool_use_id: "html-call",
+        is_error,
+        content: [{ type: "text", text: JSON.stringify(htmlResult) }],
+      };
+      const item = projectClaudeDynamicToolCall({
+        toolName: "mcp__pathway__html_render",
+        input: { html: rawHtml, title: "Chart", height: 400 },
+        output,
+        fallbackOutput: output.content,
+      });
+      assert.equal(item.toolName, "pathway.html_render");
+      assert.deepEqual(item.output, is_error ? { isError: true, message: "Shown" } : htmlResult);
+      assert.notInclude(JSON.stringify(item), rawHtml);
+    }
+  });
+  it("keeps unrelated output unchanged and permits HTML in read-only mode", () => {
+    const output = [{ type: "image", data: "unrelated-data" }];
+    assert.deepEqual(
+      projectClaudeDynamicToolCall({
+        toolName: "mcp__other__html_render",
+        input: { html: rawHtml },
+        output,
+        fallbackOutput: output,
+      }).output,
+      output,
+    );
+    assert.include(CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS, "mcp__pathway__html_render");
+    assert.include(CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS, "mcp__pathway__html_preview");
+  });
 });

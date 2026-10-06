@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import type { SnapShotSource } from "@spiritdevs/contracts";
+import type { SnapShotSource, WorkflowRecordingStatus } from "@spiritdevs/contracts";
 import {
   SNAP_SHOT_ATTACHMENT_FRAME_CLASS,
   SnapShotAttachmentDetails,
@@ -45,8 +45,10 @@ import {
 import { serializeComposerFileLink } from "@spiritdevs/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@spiritdevs/shared/model";
 import {
+  lazy,
   memo,
   type ReactNode,
+  Suspense,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -148,6 +150,18 @@ import { useComputerSupport } from "../../hooks/useComputerSupport";
 import { useComputerControlEffortHint } from "../../hooks/useComputerControlEffortHint";
 import { ComposerComputerControlEffortHint } from "./ComposerComputerControlEffortHint";
 import {
+  isWorkflowRecordingBlocked,
+  onWorkflowRecordingStartRequested,
+  useWorkflowRecording,
+  useWorkflowRecordingAvailable,
+} from "../../hooks/useWorkflowRecording";
+import { ComposerWorkflowRecordingStrip } from "./ComposerWorkflowRecordingStrip";
+import {
+  appendWorkflowSkillPrompt,
+  removeWorkflowSkillPrompt,
+} from "./composerWorkflowRecording.logic";
+import { useEnvironment } from "../../state/environments";
+import {
   getComposerPromptInjectionState,
   getComposerProviderState,
   renderProviderTraitsMenuContent,
@@ -156,6 +170,8 @@ import {
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { resolveContextWindowModelDisplayName } from "./ContextWindowMeter.logic";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
+import type { SketchDialogResult } from "../sketch/SketchDialog";
+import type { SketchScene } from "~/lib/sketch";
 import { basenameOfPath } from "../../pierre-icons";
 import { formatAttachmentSizeLabel } from "../../lib/attachmentSize";
 import {
@@ -267,6 +283,7 @@ import { toastManager } from "../ui/toast";
 import {
   BotIcon,
   CircleAlertIcon,
+  CircleDotIcon,
   LoaderCircleIcon,
   FileTextIcon,
   MonitorIcon,
@@ -276,6 +293,7 @@ import {
   LockIcon,
   LockOpenIcon,
   PenLineIcon,
+  SignatureIcon,
   SparklesIcon,
   XIcon,
 } from "lucide-react";
@@ -310,6 +328,8 @@ import { formatProviderSkillDisplayName } from "../../providerSkillPresentation"
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
+
+const SketchDialog = lazy(() => import("../sketch/SketchDialog"));
 
 const runtimeModeConfig: Record<
   RuntimeMode,
@@ -827,6 +847,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
+  const replaceComposerDraftImage = useComposerDraftStore((store) => store.replaceImage);
   const insertComposerDraftTerminalContext = useComposerDraftStore(
     (store) => store.insertTerminalContext,
   );
@@ -1123,6 +1144,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [composerMenuAnchor, setComposerMenuAnchor] = useState<HTMLDivElement | null>(null);
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
+  // The draft target is captured on open: the sketch lands in the thread it was started from.
+  const [sketchEditor, setSketchEditor] = useState<{
+    imageId: string | null;
+    scene: SketchScene | null;
+    draftTarget: ScopedThreadRef | DraftId;
+  } | null>(null);
   const [addMenuPathQuery, setAddMenuPathQuery] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1283,6 +1310,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     pendingUserInputs.length > 0 ||
     (showPlanFollowUpPrompt && activeProposedPlan !== null);
   const computerUseAvailable = useComputerSupport(environmentId);
+  // Record a skill: owned by a durable thread, recorded on the environment's Mac.
+  const recordSkillAllowed = useWorkflowRecordingAvailable(environmentId);
+  const workflowRecording = useWorkflowRecording({
+    environmentId: recordSkillAllowed ? environmentId : null,
+    threadId: recordSkillAllowed && routeKind === "server" ? routeThreadRef.threadId : null,
+  });
+  const recordSkillEnvironment = useEnvironment(environmentId);
+  const recordSkillTargetName =
+    workflowRecording.status?.targetName ?? recordSkillEnvironment?.label ?? "this Mac";
+  // Status is only read once the user records here, so offer it until the
+  // server says this environment cannot record.
+  const recordSkillOffered = recordSkillAllowed && workflowRecording.status?.supported !== false;
+  const recordSkillBusy =
+    workflowRecording.pending !== null || isWorkflowRecordingBlocked(workflowRecording.status);
+  const recordSkillSlashAvailable =
+    recordSkillOffered && routeKind === "server" && !recordSkillBusy;
   const addMenuSkills = useMemo(
     () =>
       composerAddSkillItems({ provider: selectedProvider, skills: composerCatalog?.skills ?? [] }),
@@ -1308,6 +1351,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (!composerTrigger) return [];
     const toolItems = buildBuiltInSlashCommandItems({
       computerUseAvailable,
+      recordSkillAvailable: recordSkillSlashAvailable,
     }) satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
     const skillItems = (query: string) =>
       searchProviderSkills(composerCatalog?.skills ?? [], query).map((skill) => ({
@@ -1371,6 +1415,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerCatalog,
     workspaceEntries.entries,
     computerUseAvailable,
+    recordSkillSlashAvailable,
   ]);
 
   const composerMenuOpen = Boolean(composerTrigger);
@@ -1505,6 +1550,75 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setComposerDraftPrompt(composerDraftTarget, nextPrompt);
     },
     [composerDraftTarget, setComposerDraftPrompt],
+  );
+
+  // Hands a finished recording to this (its owner) thread as an editable prompt.
+  // Appends after whatever is drafted; the user decides when to send.
+  // The server builds the prompt for completed recordings only.
+  const workflowSkillPrompt =
+    workflowRecording.status?.phase === "completed"
+      ? (workflowRecording.status.skillPrompt ?? null)
+      : null;
+  const workflowSkillPromptAdded =
+    workflowSkillPrompt !== null && prompt.includes(workflowSkillPrompt);
+  const appendWorkflowRecordingSkillPrompt = useCallback(
+    (status: WorkflowRecordingStatus) => {
+      if (!status.skillPrompt) return;
+      const next = appendWorkflowSkillPrompt(promptRef.current, status.skillPrompt);
+      if (next !== promptRef.current) setPromptFromTraits(next);
+    },
+    [promptRef, setPromptFromTraits],
+  );
+  // Discard and a new recording both delete the saved files, so the exact
+  // prompt pointing at them leaves the draft too. Edited text stays.
+  const withdrawWorkflowSkillPrompt = useCallback(() => {
+    if (workflowSkillPrompt === null) return;
+    const next = removeWorkflowSkillPrompt(promptRef.current, workflowSkillPrompt);
+    if (next !== promptRef.current) setPromptFromTraits(next);
+  }, [promptRef, setPromptFromTraits, workflowSkillPrompt]);
+  const workflowRecordingThreadId = routeKind === "server" ? routeThreadRef.threadId : null;
+  // Another device can discard or replace this thread's saved recording; its
+  // unedited prompt then leaves this draft the same way as with Discard here.
+  const shownWorkflowSkillPrompt = useRef<{ threadId: string | null; prompt: string | null }>({
+    threadId: null,
+    prompt: null,
+  });
+  useEffect(() => {
+    const shown = shownWorkflowSkillPrompt.current;
+    shownWorkflowSkillPrompt.current = {
+      threadId: workflowRecordingThreadId,
+      prompt: workflowSkillPrompt,
+    };
+    if (
+      shown.prompt === null ||
+      shown.prompt === workflowSkillPrompt ||
+      shown.threadId !== workflowRecordingThreadId
+    )
+      return;
+    const next = removeWorkflowSkillPrompt(promptRef.current, shown.prompt);
+    if (next !== promptRef.current) setPromptFromTraits(next);
+  }, [promptRef, setPromptFromTraits, workflowRecordingThreadId, workflowSkillPrompt]);
+  const { cancel: cancelWorkflowRecording, start: beginWorkflowRecording } = workflowRecording;
+  const discardWorkflowRecording = useCallback(() => {
+    withdrawWorkflowSkillPrompt();
+    cancelWorkflowRecording();
+  }, [cancelWorkflowRecording, withdrawWorkflowSkillPrompt]);
+  // The one start path for the Add menu, /record-skill, and the command palette.
+  const startWorkflowRecording = useCallback(() => {
+    withdrawWorkflowSkillPrompt();
+    beginWorkflowRecording();
+  }, [beginWorkflowRecording, withdrawWorkflowSkillPrompt]);
+  useEffect(
+    () =>
+      onWorkflowRecordingStartRequested((target) => {
+        if (
+          target.environmentId === environmentId &&
+          target.threadId === workflowRecordingThreadId &&
+          !recordSkillBusy
+        )
+          startWorkflowRecording();
+      }),
+    [environmentId, recordSkillBusy, startWorkflowRecording, workflowRecordingThreadId],
   );
 
   const removeComposerImageFromDraft = useCallback(
@@ -1755,6 +1869,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 sizeBytes: image.sizeBytes,
                 dataUrl,
                 ...(image.source ? { source: image.source } : {}),
+                ...(image.sketch ? { sketch: image.sketch } : {}),
               });
             } catch {
               const existingPersisted = existingPersistedById.get(image.id);
@@ -1966,6 +2081,34 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }
           return;
         }
+        if (item.command === "sketch") {
+          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            focusEditorAfterReplace: false,
+          });
+          if (!applied) return;
+          setComposerHighlightedItemId(null);
+          if (composerImagesRef.current.length >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+            toastManager.add({
+              type: "error",
+              title: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`,
+            });
+            return;
+          }
+          setSketchEditor({ imageId: null, scene: null, draftTarget: composerDraftTarget });
+          return;
+        }
+        if (item.command === "record-skill") {
+          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            focusEditorAfterReplace: false,
+          });
+          if (applied) {
+            setComposerHighlightedItemId(null);
+            startWorkflowRecording();
+          }
+          return;
+        }
         if (item.command === "computer-use") {
           // The server only reads /computer-use from the start of the message.
           const expectedText = snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd);
@@ -2032,7 +2175,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       handleInteractionModeChange,
       resolveActiveComposerTrigger,
       composerDraftTarget,
+      composerImagesRef,
       setGoalMode,
+      startWorkflowRecording,
     ],
   );
 
@@ -2578,6 +2723,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           ...(image.source
             ? { source: resizeSnapShotSource(image.source, result.image.imageSize) }
             : {}),
+          ...(image.sketch ? { sketch: image.sketch } : {}),
         } satisfies PersistedComposerImageAttachment;
         encodedImageAttachments.push(attachment);
         usedAttachmentChars += attachment.dataUrl.length;
@@ -2821,6 +2967,48 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
     if (file) releaseDraftAttachment(file);
     removeComposerImageFromDraft(imageId);
+  };
+
+  /**
+   * A sketch attaches as an ordinary PNG that also carries its vector scene, so the
+   * thumbnail reopens the editor until the message is sent. Edits replace it in place.
+   */
+  const saveSketch = async ({ scene, image }: SketchDialogResult) => {
+    if (!sketchEditor) return;
+    const { imageId, draftTarget } = sketchEditor;
+    const draftImages = getComposerDraft(draftTarget)?.images ?? [];
+    const existing = draftImages.find((attachment) => attachment.id === imageId);
+    if (!existing && draftImages.length >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+      throw new Error(
+        `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`,
+      );
+    }
+    const name =
+      existing?.name ?? `sketch-${new Date().toTimeString().slice(0, 8).replaceAll(":", "")}.png`;
+    const compressed = await compressImageToByteLimit(
+      new File([image], name, { type: "image/png" }),
+      PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+    );
+    if (!compressed.ok) throw new Error("This sketch is too large to attach.");
+    const attachment: ComposerImageAttachment = {
+      type: "image",
+      id: existing?.id ?? randomUUID(),
+      name: normalizeComposerAttachmentName(compressed.file.name, "image"),
+      mimeType: compressed.file.type,
+      sizeBytes: compressed.file.size,
+      previewUrl: URL.createObjectURL(compressed.file),
+      file: compressed.file,
+      sketch: scene,
+    };
+    const attached = existing
+      ? replaceComposerDraftImage(draftTarget, existing.id, attachment)
+      : addComposerDraftImage(draftTarget, attachment);
+    if (!attached) {
+      URL.revokeObjectURL(attachment.previewUrl);
+      throw new Error("The sketch could not be attached. Try again.");
+    }
+    setSketchEditor(null);
+    scheduleComposerFocus();
   };
 
   const onAttachmentInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -3175,6 +3363,34 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           },
         ]
       : []),
+    {
+      id: "sketch",
+      label: "Sketch",
+      description: "Draw a sketch",
+      icon: <SignatureIcon className="size-4" />,
+      disabled:
+        pendingUserInputs.length > 0 || composerImages.length >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+      run: () => setSketchEditor({ imageId: null, scene: null, draftTarget: composerDraftTarget }),
+    },
+    ...(recordSkillOffered
+      ? [
+          {
+            id: "record-skill",
+            label: "Record a skill",
+            description:
+              routeKind === "draft"
+                ? "Send a message first. Recordings belong to a thread."
+                : workflowRecording.status?.phase === "busy"
+                  ? `Another thread is recording on ${recordSkillTargetName}`
+                  : workflowRecording.status?.phase === "completed"
+                    ? "Replaces this thread's saved recording"
+                    : `Show the agent a task on ${recordSkillTargetName}`,
+            icon: <CircleDotIcon className="size-4" />,
+            disabled: routeKind === "draft" || recordSkillBusy || pendingUserInputs.length > 0,
+            run: startWorkflowRecording,
+          },
+        ]
+      : []),
   ];
   const setAddMenuOpen = (open: boolean) => {
     setIsAddMenuOpen(open);
@@ -3292,6 +3508,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         accept={maxFileAttachmentBytes === null ? "image/*" : undefined}
         onChange={onAttachmentInputChange}
       />
+      {sketchEditor ? (
+        <Suspense fallback={null}>
+          <SketchDialog
+            initialScene={sketchEditor.scene}
+            onCancel={() => {
+              setSketchEditor(null);
+              scheduleComposerFocus();
+            }}
+            onDone={saveSketch}
+          />
+        </Suspense>
+      ) : null}
       <div
         className={cn(
           "group rounded-[22px] p-px transition-colors duration-200",
@@ -3357,6 +3585,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               <ComposerComputerControlEffortHint
                 onApply={computerControlEffortHint.apply}
                 onDismiss={computerControlEffortHint.dismiss}
+              />
+            </div>
+          ) : null}
+          {routeKind === "server" ? (
+            <div
+              className={cn(
+                "border-b border-border/65 bg-muted/20 empty:hidden",
+                hasComposerHeaderPanel || computerControlEffortHint.show
+                  ? null
+                  : "rounded-t-[19px]",
+              )}
+            >
+              <ComposerWorkflowRecordingStrip
+                recording={workflowRecording}
+                targetName={recordSkillTargetName}
+                promptAdded={workflowSkillPromptAdded}
+                onCreateSkill={appendWorkflowRecordingSkillPrompt}
+                onDiscard={discardWorkflowRecording}
               />
             </div>
           ) : null}
@@ -3555,6 +3801,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 </button>
                               ) : null}
                             </>
+                          ) : image.previewUrl && image.sketch ? (
+                            <button
+                              type="button"
+                              className="relative h-full w-full cursor-pointer"
+                              aria-label={`Edit ${image.name}`}
+                              title="Edit sketch"
+                              onClick={() =>
+                                setSketchEditor({
+                                  imageId: image.id,
+                                  scene: image.sketch ?? null,
+                                  draftTarget: composerDraftTarget,
+                                })
+                              }
+                            >
+                              <img
+                                src={image.previewUrl}
+                                alt={image.name}
+                                className="h-full w-full object-cover"
+                              />
+                              <span className="absolute bottom-1 left-1 inline-flex rounded bg-background/85 p-0.5 text-muted-foreground">
+                                <SignatureIcon className="size-3" aria-hidden="true" />
+                              </span>
+                            </button>
                           ) : image.previewUrl ? (
                             <button
                               type="button"

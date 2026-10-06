@@ -85,6 +85,7 @@ export interface FixtureOptions
         | "onInputMonitorArmedChange"
         | "frameTap"
         | "shield"
+        | "workflowRecorder"
         | "startupTimeoutMs"
         | "nativeRevision"
         | "ownPids"
@@ -367,6 +368,7 @@ export const makeFixture = Effect.fn("makeFixture")(function* (options: FixtureO
       : {}),
     ...(options.frameTap ? { frameTap: options.frameTap } : {}),
     ...(options.shield ? { shield: options.shield } : {}),
+    ...(options.workflowRecorder ? { workflowRecorder: options.workflowRecorder } : {}),
     ...(options.startupTimeoutMs ? { startupTimeoutMs: options.startupTimeoutMs } : {}),
     ...(options.nativeRevision !== undefined ? { nativeRevision: options.nativeRevision } : {}),
     ...(options.ownPids ? { ownPids: options.ownPids } : {}),

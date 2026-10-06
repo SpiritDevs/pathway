@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 /**
  * The Cua backend. Cua owns native actions; Pathway owns admission, session
  * authority, explicit delivery policy and the provider result.
@@ -15,6 +16,8 @@
  * @module computer/CuaComputerBackend
  */
 import {
+  idleWorkflowRecording,
+  WorkflowRecordingStatus,
   COMPUTER_WINDOW_LIST_MAX_LENGTH,
   type ComputerAccessibilityTreeApp,
   type ComputerAccessibilityTreeWindow,
@@ -157,6 +160,8 @@ const actionError = (
   Effect.fail(new CuaActionError(message, effect, code, inputPause));
 
 /** Synara's bare `Error` throws: a fault with no delivery verdict. */
+const decodeWorkflowRecordingStatus = Schema.decodeUnknownEffect(WorkflowRecordingStatus);
+
 const plainError = (message: string): Effect.Effect<never, ComputerBackendError> =>
   Effect.fail(new ComputerBackendError({ message }));
 
@@ -2273,6 +2278,33 @@ export const makeCuaComputerBackend = (options: CuaComputerBackendOptions = {}) 
     yield* Effect.addFinalizer(dispose);
 
     const backend = {
+      recording: (action, threadId) =>
+        Effect.gen(function* () {
+          if (state.disposed || !endpoint) {
+            if (action === "status") return idleWorkflowRecording(false);
+            return yield* guiHostRequired();
+          }
+          const reply = yield* transport(
+            endpoint,
+            {
+              method: "workflow_recording",
+              action,
+              task: { threadId },
+              capability,
+            },
+            { mutation: action !== "status", timeoutMs: CUA_HOST_TIMEOUT_MS },
+            { abortable: false },
+          );
+          if (!reply.ok) return yield* plainError(reply.error ?? "Workflow recording failed.");
+          return yield* decodeWorkflowRecordingStatus(reply.result).pipe(
+            Effect.mapError(
+              () =>
+                new ComputerBackendError({
+                  message: "Invalid workflow recording status from the desktop host.",
+                }),
+            ),
+          );
+        }),
       computerId: DEFAULT_COMPUTER_ID,
       // The AXPress/meta-key dialect is macOS semantics; Windows and Linux
       // drivers speak the generic desktop dialect (press, ctrl+chords). The

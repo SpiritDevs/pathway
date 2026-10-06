@@ -4,16 +4,12 @@ import { resolveThreadPanelPresentation } from "./rightPanelLayout";
 
 describe("resolveThreadPanelPresentation", () => {
   it("uses the stable workspace width minus the real right panel width", () => {
-    expect(resolveThreadPanelPresentation(null, 0, false)).toBe("inline");
-    expect(resolveThreadPanelPresentation(1_104, 0, false)).toBe("inline");
-    expect(resolveThreadPanelPresentation(1_103, 0, false)).toBe("popover");
+    expect(resolveThreadPanelPresentation(null, 0)).toBe("inline");
+    expect(resolveThreadPanelPresentation(1_104, 0)).toBe("inline");
+    expect(resolveThreadPanelPresentation(1_103, 0)).toBe("popover");
 
-    expect(resolveThreadPanelPresentation(1_400, 0, false)).toBe("inline");
-    expect(resolveThreadPanelPresentation(1_400, 540, false)).toBe("popover");
-    expect(resolveThreadPanelPresentation(1_644, 540, false)).toBe("inline");
-  });
-
-  it("uses a popover while the right panel overlays the chat", () => {
-    expect(resolveThreadPanelPresentation(2_000, 0, true)).toBe("popover");
+    expect(resolveThreadPanelPresentation(1_400, 0)).toBe("inline");
+    expect(resolveThreadPanelPresentation(1_400, 540)).toBe("popover");
+    expect(resolveThreadPanelPresentation(1_644, 540)).toBe("inline");
   });
 });

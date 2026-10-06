@@ -121,6 +121,11 @@ export interface ThreadRightPanelState {
   isOpen: boolean;
   activeSurfaceId: string | null;
   surfaces: RightPanelSurface[];
+  /**
+   * While maximized, the covered page shows through its own first tab instead of a surface.
+   * Opening or picking any surface clears it.
+   */
+  pageTabActive?: boolean;
 }
 
 export interface ThreadPanelVisibility {
@@ -161,6 +166,7 @@ interface RightPanelStoreState {
   activateTerminal: (ref: ScopedThreadRef, surfaceId: string, terminalId: string) => void;
   closeTerminal: (ref: ScopedThreadRef, surfaceId: string, terminalId: string) => void;
   activateSurface: (ref: ScopedThreadRef, surfaceId: string) => void;
+  setPageTabActive: (ref: ScopedThreadRef, active: boolean) => void;
   /** Moves a tab to `toIndex` in the tab strip. */
   moveSurface: (ref: ScopedThreadRef, surfaceId: string, toIndex: number) => void;
   closeSurface: (ref: ScopedThreadRef, surfaceId: string) => void;
@@ -225,7 +231,6 @@ const browserSurface = (tabId: string | null): RightPanelSurface =>
     ? { id: `browser:${tabId}`, kind: "preview", resourceId: tabId }
     : { id: `browser:new:${randomUUID()}`, kind: "preview", resourceId: null };
 
-/** Shows a browser page, letting it take the place of the blank tab the user is looking at. */
 /**
  * Blank tabs waiting on the page they asked to open, by thread. The server's new
  * tab can arrive before the open call returns; it takes the blank's place rather
@@ -247,15 +252,16 @@ export function beginBlankBrowserOpen(ref: ScopedThreadRef): () => void {
   };
 }
 
-const showBrowserSurface = (
+/** Shows a surface, letting it take the place of the blank tab the user is looking at. */
+const showSurface = (
   current: ThreadRightPanelState,
   surface: RightPanelSurface,
 ): ThreadRightPanelState => {
   const blank = current.surfaces.find(
     (entry) => entry.id === current.activeSurfaceId && isBlankBrowserSurface(entry),
   );
-  if (!blank) return upsertSurface(current, surface);
-  // The blank's slot goes to the page, even when its tab already landed elsewhere.
+  if (!blank) return appendSurface(current, surface);
+  // The blank's slot goes to the surface, even when its tab already landed elsewhere.
   return {
     isOpen: true,
     surfaces: current.surfaces.flatMap((entry) =>
@@ -323,17 +329,29 @@ export function pullRequestSurface(target: {
   };
 }
 
-const upsertSurface = (
+const appendSurface = (
   current: ThreadRightPanelState,
   surface: RightPanelSurface,
-  activate = true,
 ): ThreadRightPanelState => ({
   isOpen: true,
   surfaces: current.surfaces.some((entry) => entry.id === surface.id)
     ? current.surfaces
     : [...current.surfaces, surface],
-  activeSurfaceId: activate ? surface.id : current.activeSurfaceId,
+  activeSurfaceId: surface.id,
 });
+
+/** Opens a surface. A tool opened from a blank tab replaces it; another browser tab sits beside it. */
+/** The state with its surface showing, for actions that pick one. */
+const withoutPageTab = ({
+  pageTabActive: _pageTabActive,
+  ...state
+}: ThreadRightPanelState): ThreadRightPanelState => state;
+
+const upsertSurface = (
+  current: ThreadRightPanelState,
+  surface: RightPanelSurface,
+): ThreadRightPanelState =>
+  surface.kind === "preview" ? appendSurface(current, surface) : showSurface(current, surface);
 
 /** An open panel always shows a tab: the first one, or a new browser tab when none are left. */
 const withOpenTab = (state: ThreadRightPanelState): ThreadRightPanelState => {
@@ -633,14 +651,14 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         set((state) =>
           updateThread(state, ref, (current) =>
             tabId
-              ? showBrowserSurface(current, browserSurface(tabId))
+              ? showSurface(current, browserSurface(tabId))
               : upsertSurface(current, browserSurface(null)),
           ),
         ),
       openRemoteBrowser: (ref) =>
         set((state) =>
           updateThread(state, ref, (current) =>
-            showBrowserSurface(current, {
+            showSurface(current, {
               id: REMOTE_BROWSER_SURFACE_ID,
               kind: "preview",
               resourceId: null,
@@ -699,7 +717,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       splitTerminal: (ref, surfaceId, terminalId, direction = "horizontal") =>
         set((state) =>
           updateThread(state, ref, (current) => ({
-            ...current,
+            ...withoutPageTab(current),
             isOpen: true,
             activeSurfaceId: surfaceId,
             surfaces: current.surfaces.map((surface) => {
@@ -719,7 +737,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       activateTerminal: (ref, surfaceId, terminalId) =>
         set((state) =>
           updateThread(state, ref, (current) => ({
-            ...current,
+            ...withoutPageTab(current),
             activeSurfaceId: surfaceId,
             surfaces: current.surfaces.map((surface) =>
               surface.id === surfaceId &&
@@ -773,8 +791,18 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         set((state) =>
           updateThread(state, ref, (current) =>
             current.surfaces.some((surface) => surface.id === surfaceId)
-              ? { ...current, isOpen: true, activeSurfaceId: surfaceId }
+              ? { ...withoutPageTab(current), isOpen: true, activeSurfaceId: surfaceId }
               : current,
+          ),
+        ),
+      setPageTabActive: (ref, active) =>
+        set((state) =>
+          updateThread(state, ref, (current) =>
+            (current.pageTabActive ?? false) === active
+              ? current
+              : active
+                ? { ...current, pageTabActive: true }
+                : withoutPageTab(current),
           ),
         ),
       moveSurface: (ref, surfaceId, toIndex) =>

@@ -49,6 +49,8 @@ export function sidebarThreadSection(
     readonly now: string;
     readonly autoSettleAfterDays: number | null;
     readonly queued: boolean;
+    /** The thread has news the user has not opened yet (the sidebar's blue dot). */
+    readonly unread?: boolean;
     readonly supportsSettlement: boolean | undefined;
     readonly supportsSnooze: boolean | undefined;
     readonly unavailable?: boolean;
@@ -61,6 +63,8 @@ export function sidebarThreadSection(
   if (snoozed && options.supportsSnooze === undefined && !options.unavailable) return "loading";
   if (snoozed && options.supportsSnooze) return "snoozed";
   if (thread.pinnedAt != null) return "pinned";
+  // Unseen news never settles out of view; once it is read the thread settles as usual.
+  if (options.unread) return "active";
   if (options.supportsSettlement === false) return "active";
 
   const cached = options.changeRequests.get(

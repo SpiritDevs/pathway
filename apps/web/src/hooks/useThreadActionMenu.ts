@@ -1,4 +1,5 @@
 import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import { readThreadHasUnreadNotification } from "../cloud/focusReadModel";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
@@ -139,6 +140,8 @@ export function useThreadActionMenu(input: {
           isPinned: thread.pinnedAt != null,
           isSettled:
             supports.settlement &&
+            // Matches the sidebar, which keeps unread threads out of Settled.
+            !readThreadHasUnreadNotification(scopedThreadKey(threadRef)) &&
             effectiveSettled(thread, {
               // Minute-quantized like useNowMinute, so this classification
               // can never disagree with the sidebar partition or ChatView's

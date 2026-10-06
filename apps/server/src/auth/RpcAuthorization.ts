@@ -2,7 +2,7 @@ import { SIM_BUILD_WS_METHODS } from "@spiritdevs/contracts/simBuild";
 import { RELEASE_WS_METHODS } from "@spiritdevs/contracts/releases";
 import { XCODE_WS_METHODS } from "@spiritdevs/contracts/xcode";
 import { APPLE_WS_METHODS } from "@spiritdevs/contracts/apple";
-import { COMPUTER_SURFACE_METHODS } from "@spiritdevs/contracts";
+import { COMPUTER_SURFACE_METHODS, WORKFLOW_RECORDING_METHODS } from "@spiritdevs/contracts";
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
@@ -322,6 +322,10 @@ export const RPC_REQUIRED_SCOPES = {
   // Computer: watching is a read and acting is a write. These only admit the call; the
   // environment's Computer access policy is applied by the handlers, because it reads live
   // settings and never restricts watching or Stop.
+  [WORKFLOW_RECORDING_METHODS.status]: AuthOrchestrationReadScope,
+  [WORKFLOW_RECORDING_METHODS.start]: AuthOrchestrationOperateScope,
+  [WORKFLOW_RECORDING_METHODS.stop]: AuthOrchestrationOperateScope,
+  [WORKFLOW_RECORDING_METHODS.cancel]: AuthOrchestrationOperateScope,
   [COMPUTER_SURFACE_METHODS.getState]: AuthOrchestrationReadScope,
   [COMPUTER_SURFACE_METHODS.subscribe]: AuthOrchestrationReadScope,
   [COMPUTER_SURFACE_METHODS.takeControl]: AuthOrchestrationOperateScope,

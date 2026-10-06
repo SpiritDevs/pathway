@@ -1,3 +1,4 @@
+import { HtmlToolkit } from "./toolkits/html/tools.ts";
 import { SimBuildToolkit } from "./toolkits/simBuild/tools.ts";
 import { DeviceToolkit } from "./toolkits/device/tools.ts";
 import * as Context from "effect/Context";
@@ -13,6 +14,7 @@ import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 /** The complete provider-facing tool catalog served by Pathway's production MCP endpoint. */
 export const PATHWAY_MCP_TOOLS = [
   ...Object.values(PreviewToolkit.tools),
+  ...Object.values(HtmlToolkit.tools),
   ...Object.values(DeviceToolkit.tools),
   ...Object.values(SimBuildToolkit.tools),
   ...Object.values(IssuesToolkit.tools),

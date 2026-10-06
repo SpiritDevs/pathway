@@ -24,6 +24,10 @@ enum PathwayHelperMode {
     /// Masked-activation shield host: reads engage/release commands on stdin
     /// and owns the Pathway-side overlay panels for their lease's lifetime.
     case shield
+    /// User-confirmed workflow demonstration for Record a skill. Emits
+    /// `workflow-started`, `workflow-event`, `workflow-ended`, and `error`;
+    /// stdin `stop` / `cancel`, EOF cancels.
+    case recordWorkflow(targetName: String?)
 }
 
 struct PathwayHelperOptions {
@@ -38,6 +42,7 @@ struct PathwayHelperOptions {
         var frameWindowID: String?
         var frameSocketPath: String?
         var frameOwnerPID: String?
+        var targetName: String?
         var index = 0
 
         // Consumes the value token after a flag, keeping the "--flag requires
@@ -56,7 +61,7 @@ struct PathwayHelperOptions {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--prepare-permission-setup", "--release-held-input", "--permission-guide", "--computer-frames", "--escape-monitor", "--shield":
+            case "--check-permissions", "--request-permissions", "--prepare-permission-setup", "--release-held-input", "--permission-guide", "--computer-frames", "--escape-monitor", "--shield", "--record-workflow":
                 guard requestedMode == nil else {
                     throw PathwayHelperFailure(
                         code: "invalid_arguments",
@@ -85,6 +90,8 @@ struct PathwayHelperOptions {
                 frameSocketPath = try readValue("--out", "a socket path")
             case "--pid":
                 frameOwnerPID = try readValue("--pid", "a process identifier")
+            case "--target-name":
+                targetName = try readValue("--target-name", "a value")
             default:
                 throw PathwayHelperFailure(
                     code: "invalid_arguments",
@@ -103,7 +110,18 @@ struct PathwayHelperOptions {
            frameWindowID != nil || frameSocketPath != nil || frameOwnerPID != nil {
             throw PathwayHelperFailure(code: "invalid_arguments", message: "Frame arguments are only used by the computer frames mode.")
         }
+        if requestedMode != "--record-workflow", targetName != nil {
+            throw PathwayHelperFailure(code: "invalid_arguments", message: "--target-name is only used by the workflow recorder.")
+        }
         switch requestedMode {
+        case "--record-workflow":
+            guard permissions.isEmpty, (targetName?.count ?? 0) <= 256 else {
+                throw PathwayHelperFailure(
+                    code: "invalid_arguments",
+                    message: "--record-workflow accepts only --target-name with at most 256 characters."
+                )
+            }
+            return PathwayHelperOptions(mode: .recordWorkflow(targetName: targetName))
         case "--permission-guide":
             guard permissions.isEmpty, let guidePane,
                   guidePane == "accessibility" || guidePane == "input-monitoring" || guidePane == "screen-recording",
@@ -201,7 +219,7 @@ struct PathwayHelperOptions {
         default:
             throw PathwayHelperFailure(
                 code: "invalid_arguments",
-                message: "Expected --check-permissions, --request-permissions, --prepare-permission-setup, --release-held-input, --permission-guide, --computer-frames, --escape-monitor, or --shield."
+                message: "Expected --check-permissions, --request-permissions, --prepare-permission-setup, --release-held-input, --permission-guide, --computer-frames, --escape-monitor, --shield, or --record-workflow."
             )
         }
     }

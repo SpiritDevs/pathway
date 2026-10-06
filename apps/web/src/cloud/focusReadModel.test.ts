@@ -6,12 +6,18 @@ import {
   type FocusNotification,
 } from "@spiritdevs/contracts/focus";
 import { FocusId, FocusProjectKey, type FocusReadModel } from "@spiritdevs/contracts/focus";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+import { appAtomRegistry } from "../rpc/atomRegistry";
 
 import {
   ALL_FOCUS_ID,
+  focusMutationsAtom,
   focusNotificationsAtom,
+  markThreadNotificationsRead,
+  readThreadHasUnreadNotification,
   threadHasUnreadNotificationAtom,
+  type FocusMutations,
   activeFocusIdStorageKey,
   persistActiveFocusSelection,
   readActiveFocusId,
@@ -196,6 +202,38 @@ describe("thread notification dots", () => {
     } finally {
       unmount();
       registry.dispose();
+    }
+  });
+
+  it("clears a settled thread's dot at once, even when Cloud fails to record the read", async () => {
+    const notification: FocusNotification = {
+      id: FocusNotificationId.make("settle-unread"),
+      eventId: AttentionEventId.make("settle-unread"),
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("settled-thread"),
+      projectKey: FocusProjectKey.make("env:project"),
+      eventKind: "finished-unsettled",
+      createdAt: 1,
+      isRead: false,
+      alertEligibleAtCreation: true,
+    };
+    const markNotificationRead = vi.fn(() => Promise.reject(new Error("Cloud unavailable")));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    appAtomRegistry.set(focusNotificationsAtom, [notification]);
+    appAtomRegistry.set(focusMutationsAtom, {
+      markNotificationRead,
+    } as Partial<FocusMutations> as FocusMutations);
+    try {
+      expect(readThreadHasUnreadNotification("env:settled-thread")).toBe(true);
+      markThreadNotificationsRead("env:settled-thread");
+      expect(markNotificationRead).toHaveBeenCalledWith("settle-unread");
+      expect(readThreadHasUnreadNotification("env:settled-thread")).toBe(false);
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+      expect(readThreadHasUnreadNotification("env:settled-thread")).toBe(false);
+    } finally {
+      appAtomRegistry.set(focusNotificationsAtom, []);
+      appAtomRegistry.set(focusMutationsAtom, null);
+      warn.mockRestore();
     }
   });
 });

@@ -105,6 +105,7 @@ import {
 } from "../hooks/useComputerControlModeChange.logic";
 import { readComputerControlGenerationForSend } from "../hooks/useThreadComputerStateSeed";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@spiritdevs/shared/chatList";
+import type { HtmlRenderReference } from "@spiritdevs/shared/htmlRender";
 import { AddProjectConnectionDialog } from "./projects/AddProjectConnectionDialog";
 import { projectWorkspaceCwd, projectWorkspaceRuntimeEnv } from "./projects/projectWorkspace.logic";
 import { derivePendingBackgroundWork } from "@spiritdevs/shared/orchestrationV2PendingBackgroundWork";
@@ -210,7 +211,6 @@ import {
   RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
   resolveThreadPanelPresentation,
   shouldMountRightPanelSheet,
-  shouldPresentRightPanelAsSheet,
 } from "../rightPanelLayout";
 import { isPaneFocused, useIsNarrowPane, useIsSplitWindow, usePaneId } from "../panes/usePaneFocus";
 import {
@@ -274,6 +274,7 @@ import {
   AlarmClockIcon,
   CheckCircle2Icon,
   GitBranchIcon,
+  MessagesSquareIcon,
   Minimize2Icon,
   PaperclipIcon,
   TriangleAlertIcon,
@@ -401,9 +402,10 @@ import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
 import {
   PanelLayoutControls,
   type PanelLayoutControlsProps,
-  RightPanelPopOutControl,
+  RightPanelMaximizeControl,
 } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
+import { HtmlRenderDialog } from "./chat/HtmlRenderFrame";
 import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./chat/ThreadDetailsPanel";
 import { ThreadWorkspaceMoveDialog } from "./chat/ThreadWorkspaceMoveDialog";
 import { NoActiveThreadState } from "./NoActiveThreadState";
@@ -1785,6 +1787,10 @@ function ChatViewContent(props: ChatViewProps) {
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  const [expandedHtmlRender, setExpandedHtmlRender] = useState<{
+    threadKey: string | null;
+    htmlRender: HtmlRenderReference;
+  } | null>(null);
   const [localOptimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   // The first send belongs to the draft, so returning after navigation can
   // still show it while the server is preparing the thread.
@@ -1850,7 +1856,7 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
-  const [poppedOutRightPanelThreadKey, setPoppedOutRightPanelThreadKey] = useState<string | null>(
+  const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
     null,
   );
   const [respondingRequestIds, setRespondingRequestIds] = useState<RuntimeRequestId[]>([]);
@@ -2208,6 +2214,14 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThread],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  const expandHtmlRender = useCallback(
+    (htmlRender: HtmlRenderReference) =>
+      setExpandedHtmlRender({ threadKey: activeThreadKey, htmlRender }),
+    [activeThreadKey],
+  );
+  useEffect(() => {
+    setExpandedHtmlRender(null);
+  }, [activeThreadKey]);
   // Pins each Computer send to the control epoch it was made in.
   const setComposerComputerControlMode = useComposerDraftStore(
     (store) => store.setComputerControlMode,
@@ -2333,15 +2347,15 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const previewPanelOpen = activeRightPanelKind === "preview";
   const rightPanelOpen = !isPanelPresentation && rightPanelState.isOpen;
-  const canPopOutRightPanel = rightPanelOpen && !shouldUseRightPanelSheet;
-  const rightPanelPoppedOut =
-    canPopOutRightPanel && poppedOutRightPanelThreadKey === routeThreadKey;
-  const rightPanelUsesSheet = shouldPresentRightPanelAsSheet({
-    viewportRequiresSheet: shouldUseRightPanelSheet,
-    poppedOut: rightPanelPoppedOut,
-  });
+  const rightPanelUsesSheet = shouldUseRightPanelSheet;
+  // Maximizing needs the panel's tabs in the top bar, where they stay while the chat shows.
+  const canMaximizeRightPanel =
+    rightPanelOpen && !rightPanelUsesSheet && !splitWindow && workspaceTopBarActionsHost !== null;
+  const rightPanelMaximized =
+    canMaximizeRightPanel && maximizedRightPanelThreadKey === routeThreadKey;
+  const threadTabActive = rightPanelMaximized && rightPanelState.pageTabActive === true;
   const inlineRightPanelOwnsTitleBar = rightPanelOpen && !rightPanelUsesSheet;
-  // Popped out, or a sheet because the window is too narrow to dock: either way it floats.
+  // A sheet because the window is too narrow to dock.
   const rightPanelFloating = rightPanelOpen && rightPanelUsesSheet;
   const threadPanelPresentation = isPanelPresentation
     ? "popover"
@@ -2350,7 +2364,6 @@ function ChatViewContent(props: ChatViewProps) {
         // Measure the conversation itself; the workspace row also includes
         // adjacent panels and stays wide when their divider squeezes the chat.
         0,
-        rightPanelPoppedOut,
       );
   const storedThreadPanelOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(
@@ -4850,7 +4863,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadRef, previewPanelOpen, revealBrowserSurface]);
   const closePreviewPanel = useCallback(() => {
     if (activeThreadRef) {
-      setPoppedOutRightPanelThreadKey(null);
+      setMaximizedRightPanelThreadKey(null);
       useRightPanelStore.getState().close(activeThreadRef);
     }
   }, [activeThreadRef]);
@@ -5045,12 +5058,14 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().setThreadPanelOpen(activeThreadRef, "popover", false);
   }, [activeThreadRef]);
-  const toggleRightPanelPoppedOut = useCallback(() => {
-    if (!canPopOutRightPanel) return;
-    setPoppedOutRightPanelThreadKey((threadKey) =>
+  const toggleRightPanelMaximized = useCallback(() => {
+    if (!canMaximizeRightPanel || !activeThreadRef) return;
+    // Maximizing shows the panel's surface; the thread tab is one click away.
+    useRightPanelStore.getState().setPageTabActive(activeThreadRef, false);
+    setMaximizedRightPanelThreadKey((threadKey) =>
       threadKey === routeThreadKey ? null : routeThreadKey,
     );
-  }, [canPopOutRightPanel, routeThreadKey]);
+  }, [activeThreadRef, canMaximizeRightPanel, routeThreadKey]);
   const cleanupRightPanelSurfaces = useCallback(
     (surfaces: readonly RightPanelSurface[]) => {
       if (!activeThreadRef) return;
@@ -10011,7 +10026,8 @@ function ChatViewContent(props: ChatViewProps) {
     terminalShortcutLabel: shortcutLabelForCommand(keybindings, "terminal.toggle"),
     threadPanelOpen,
     threadPanelPresentation,
-    threadPanelPopoverAnchor: threadPanelPopoverAnchorRef,
+    // Side chats have no header to anchor to, so their popover sizes from its own toggle.
+    ...(isPanelPresentation ? {} : { threadPanelPopoverAnchor: threadPanelPopoverAnchorRef }),
     ...(threadPanelPresentation === "popover"
       ? {
           threadPanelPopoverContent: (
@@ -10056,20 +10072,17 @@ function ChatViewContent(props: ChatViewProps) {
   const workspaceTopBarPanelToggles = workspaceTopBarActionsHost
     ? createPortal(
         <>
-          {canPopOutRightPanel || rightPanelFloating ? (
-            <RightPanelPopOutControl
-              poppedOut={rightPanelFloating}
-              onToggle={rightPanelFloating ? closePreviewPanel : toggleRightPanelPoppedOut}
-              hidesWhenPoppedOut
+          {canMaximizeRightPanel ? (
+            <RightPanelMaximizeControl
+              maximized={rightPanelMaximized}
+              onToggle={toggleRightPanelMaximized}
             />
           ) : null}
-          {/* Docked and floating are exclusive here: only the current mode's toggle is
-              pressed, pressing it hides the panel, and pressing the other switches mode
-              (or hides a sheet that has no room to dock). */}
+          {/* A sheet floats over the page, so the toggle only shows pressed while docked. */}
           <PanelLayoutControls
             {...panelToggleControlProps}
             rightPanelOpen={rightPanelOpen && !rightPanelFloating}
-            onToggleRightPanel={rightPanelPoppedOut ? toggleRightPanelPoppedOut : toggleRightPanel}
+            onToggleRightPanel={toggleRightPanel}
             showThreadPanelControl={false}
             showTerminalControl={false}
           />
@@ -10095,22 +10108,7 @@ function ChatViewContent(props: ChatViewProps) {
           : "workspace-titlebar-controls mr-px",
       )}
     >
-      {rightPanelOpen && !rightPanelUsesSheet && workspaceTopBarActionsHost === null ? (
-        <RightPanelPopOutControl poppedOut={false} onToggle={toggleRightPanelPoppedOut} />
-      ) : null}
       {panelToggleControls}
-    </div>
-  );
-  // Without the top bar, the sheet covers the page and keeps every toggle.
-  const sheetPanelToggleControls = renderPanelToggleControls(false);
-  // With the top bar showing, the dock and right panel toggles stay put in its corner and
-  // the popped-out panel keeps only the thread controls the hidden header would show.
-  const poppedOutRightPanelControls = workspaceTopBarActionsHost ? (
-    panelToggleControls
-  ) : (
-    <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-      <RightPanelPopOutControl poppedOut onToggle={toggleRightPanelPoppedOut} />
-      {sheetPanelToggleControls}
     </div>
   );
   const sideChatThreadPanelControl = isPanelPresentation ? (
@@ -10125,6 +10123,53 @@ function ChatViewContent(props: ChatViewProps) {
     </RightPanelTabBarActions>
   ) : null;
 
+  const rightPanelTabsProps = {
+    surfaces: rightPanelState.surfaces,
+    activeSurfaceId: activeRightPanelSurface?.id ?? null,
+    pendingSurfaceIds: pendingFileSurfaceIds,
+    previewSessions: activePreviewState.sessions,
+    terminalLabelsById: activeTerminalLabelsById,
+    threadTitlesById: rightPanelThreadTitlesById,
+    onActivate: activateRightPanelSurface,
+    onCloseSurface: closeRightPanelSurface,
+    onCloseOtherSurfaces: closeOtherRightPanelSurfaces,
+    onCloseSurfacesToRight: closeRightPanelSurfacesToRight,
+    onMoveSurface: moveRightPanelSurface,
+    onCloseAllSurfaces: closeAllRightPanelSurfaces,
+    onCopyFilePath: copyRightPanelFilePath,
+    onAddDevice:
+      isServerThread && activeThreadRef && serverConfig?.deviceWorkspace === true
+        ? () => useRightPanelStore.getState().open(activeThreadRef, "device")
+        : undefined,
+    onAddBrowser: createBrowserSurface,
+    browser: browserTabContext,
+    ...(remoteBrowserEnabled && hasLocalBrowser && !environmentOnThisMachine
+      ? { onOpenInRemoteBrowser: openInRemoteBrowser }
+      : {}),
+    onAddTerminal: addTerminalSurface,
+    onOpenBottomTerminal: openBottomTerminal,
+    toolShortcuts: rightPanelToolShortcuts,
+    onAddDiff: addDiffSurface,
+    onAddFiles: addFilesSurface,
+    onAddPullRequest: addPullRequestSurface,
+    onAddAgents: addAgentsSurface,
+    ...(computerServed ? { onAddComputer: addComputerSurface } : {}),
+    onAddSideChat: createSideChat,
+    browserAvailable: true,
+    terminalAvailable: activeWorkspaceRoot !== undefined,
+    diffAvailable: isServerThread && isGitRepo,
+    filesAvailable: activeWorkspaceRoot !== undefined,
+    pullRequestAvailable: pullRequestSurfaceAvailable,
+    agentsAvailable: true,
+    sideChatAvailable:
+      isServerThread &&
+      !activeThread.temporary &&
+      latestSideChatSourceRun !== null &&
+      !activeEnvironmentUnavailable,
+    pullRequestStatuses: pullRequestTabStatuses,
+    liveAgentCount: agentPanelModel.liveCount,
+  };
+
   const workspaceFileDropHandlers = makeWorkspaceFileDropHandlers({
     setDragActive: setIsWorkspaceFileDragActive,
     addFiles: (files) => composerRef.current?.addDroppedFiles(files),
@@ -10133,7 +10178,11 @@ function ChatViewContent(props: ChatViewProps) {
   return (
     <div
       ref={workspaceLayoutRef}
-      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
+      className={cn(
+        "relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background",
+        // Keeps a maximized panel under the sidebar when it slides out.
+        rightPanelMaximized && "isolate",
+      )}
       data-side-chat-surface={isPanelPresentation ? "true" : undefined}
     >
       {sideChatThreadPanelControl}
@@ -10298,6 +10347,7 @@ function ChatViewContent(props: ChatViewProps) {
                 onRevertUserMessage={onRevertUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
+                onHtmlRenderExpand={expandHtmlRender}
                 markdownCwd={gitCwd ?? undefined}
                 resolvedTheme={resolvedTheme}
                 timestampFormat={timestampFormat}
@@ -10773,59 +10823,38 @@ function ChatViewContent(props: ChatViewProps) {
         ) : null}
       </div>
 
-      {!rightPanelUsesSheet ? (
+      {rightPanelMaximized && activeThreadRef ? (
+        // Maximized, the panel covers the chat. Its thread tab hides the panel to show the
+        // chat underneath, while the tabs stay in the top bar.
+        <div
+          className={cn("absolute inset-0 z-50 flex", threadTabActive && "invisible")}
+          data-right-panel-maximized={threadTabActive ? "page" : "panel"}
+        >
+          <RightPanelTabs
+            mode="inline"
+            maximized
+            inlineSize={previewPanelInlineSize}
+            layoutControls={panelLayoutControls}
+            {...rightPanelTabsProps}
+            leadingTab={{
+              title: activeThread.title,
+              icon: MessagesSquareIcon,
+              active: threadTabActive,
+              onActivate: () =>
+                useRightPanelStore.getState().setPageTabActive(activeThreadRef, true),
+            }}
+          >
+            {threadTabActive ? null : rightPanelContent}
+          </RightPanelTabs>
+        </div>
+      ) : !rightPanelUsesSheet ? (
         <InlineRightPanelPortal open={rightPanelOpen && activeThreadRef !== null}>
           {activeThreadRef ? (
             <RightPanelTabs
               mode="inline"
               inlineSize={previewPanelInlineSize}
               layoutControls={panelLayoutControls}
-              surfaces={rightPanelState.surfaces}
-              activeSurfaceId={activeRightPanelSurface?.id ?? null}
-              pendingSurfaceIds={pendingFileSurfaceIds}
-              previewSessions={activePreviewState.sessions}
-              terminalLabelsById={activeTerminalLabelsById}
-              threadTitlesById={rightPanelThreadTitlesById}
-              onActivate={activateRightPanelSurface}
-              onCloseSurface={closeRightPanelSurface}
-              onCloseOtherSurfaces={closeOtherRightPanelSurfaces}
-              onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
-              onMoveSurface={moveRightPanelSurface}
-              onCloseAllSurfaces={closeAllRightPanelSurfaces}
-              onCopyFilePath={copyRightPanelFilePath}
-              onAddDevice={
-                isServerThread && activeThreadRef && serverConfig?.deviceWorkspace === true
-                  ? () => useRightPanelStore.getState().open(activeThreadRef, "device")
-                  : undefined
-              }
-              onAddBrowser={createBrowserSurface}
-              browser={browserTabContext}
-              {...(remoteBrowserEnabled && hasLocalBrowser && !environmentOnThisMachine
-                ? { onOpenInRemoteBrowser: openInRemoteBrowser }
-                : {})}
-              onAddTerminal={addTerminalSurface}
-              onOpenBottomTerminal={openBottomTerminal}
-              toolShortcuts={rightPanelToolShortcuts}
-              onAddDiff={addDiffSurface}
-              onAddFiles={addFilesSurface}
-              onAddPullRequest={addPullRequestSurface}
-              onAddAgents={addAgentsSurface}
-              {...(computerServed ? { onAddComputer: addComputerSurface } : {})}
-              onAddSideChat={createSideChat}
-              browserAvailable
-              terminalAvailable={activeWorkspaceRoot !== undefined}
-              diffAvailable={isServerThread && isGitRepo}
-              filesAvailable={activeWorkspaceRoot !== undefined}
-              pullRequestAvailable={pullRequestSurfaceAvailable}
-              agentsAvailable
-              sideChatAvailable={
-                isServerThread &&
-                !activeThread.temporary &&
-                latestSideChatSourceRun !== null &&
-                !activeEnvironmentUnavailable
-              }
-              pullRequestStatuses={pullRequestTabStatuses}
-              liveAgentCount={agentPanelModel.liveCount}
+              {...rightPanelTabsProps}
             >
               {rightPanelContent}
             </RightPanelTabs>
@@ -10844,57 +10873,8 @@ function ChatViewContent(props: ChatViewProps) {
             // (pr-3 in the tab bar plus this pixel equals the absolute
             // right inset plus mr-px), so the cluster does not creep when
             // the sheet opens.
-            layoutControls={
-              <div className="mr-px flex items-center">
-                {rightPanelPoppedOut ? poppedOutRightPanelControls : panelToggleControls}
-              </div>
-            }
-            surfaces={rightPanelState.surfaces}
-            activeSurfaceId={activeRightPanelSurface?.id ?? null}
-            pendingSurfaceIds={pendingFileSurfaceIds}
-            previewSessions={activePreviewState.sessions}
-            terminalLabelsById={activeTerminalLabelsById}
-            threadTitlesById={rightPanelThreadTitlesById}
-            onActivate={activateRightPanelSurface}
-            onCloseSurface={closeRightPanelSurface}
-            onCloseOtherSurfaces={closeOtherRightPanelSurfaces}
-            onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
-            onMoveSurface={moveRightPanelSurface}
-            onCloseAllSurfaces={closeAllRightPanelSurfaces}
-            onCopyFilePath={copyRightPanelFilePath}
-            onAddDevice={
-              isServerThread && activeThreadRef && serverConfig?.deviceWorkspace === true
-                ? () => useRightPanelStore.getState().open(activeThreadRef, "device")
-                : undefined
-            }
-            onAddBrowser={createBrowserSurface}
-            browser={browserTabContext}
-            {...(remoteBrowserEnabled && hasLocalBrowser && !environmentOnThisMachine
-              ? { onOpenInRemoteBrowser: openInRemoteBrowser }
-              : {})}
-            onAddTerminal={addTerminalSurface}
-            onOpenBottomTerminal={openBottomTerminal}
-            toolShortcuts={rightPanelToolShortcuts}
-            onAddDiff={addDiffSurface}
-            onAddFiles={addFilesSurface}
-            onAddPullRequest={addPullRequestSurface}
-            onAddAgents={addAgentsSurface}
-            {...(computerServed ? { onAddComputer: addComputerSurface } : {})}
-            onAddSideChat={createSideChat}
-            browserAvailable
-            terminalAvailable={activeWorkspaceRoot !== undefined}
-            diffAvailable={isServerThread && isGitRepo}
-            filesAvailable={activeWorkspaceRoot !== undefined}
-            pullRequestAvailable={pullRequestSurfaceAvailable}
-            agentsAvailable
-            sideChatAvailable={
-              isServerThread &&
-              !activeThread.temporary &&
-              latestSideChatSourceRun !== null &&
-              !activeEnvironmentUnavailable
-            }
-            pullRequestStatuses={pullRequestTabStatuses}
-            liveAgentCount={agentPanelModel.liveCount}
+            layoutControls={<div className="mr-px flex items-center">{panelToggleControls}</div>}
+            {...rightPanelTabsProps}
           >
             {rightPanelContent}
           </RightPanelTabs>
@@ -10909,6 +10889,14 @@ function ChatViewContent(props: ChatViewProps) {
           onClose={closeExpandedImage}
         />
       )}
+      {expandedHtmlRender !== null && expandedHtmlRender.threadKey === activeThreadKey ? (
+        <HtmlRenderDialog
+          key={`${activeThread.environmentId}:${expandedHtmlRender.htmlRender.attachmentId}`}
+          environmentId={activeThread.environmentId}
+          htmlRender={expandedHtmlRender.htmlRender}
+          onClose={() => setExpandedHtmlRender(null)}
+        />
+      ) : null}
       {props.onOpenIssueContext === undefined && localIssueDetailKey !== null ? (
         <IssueDetailSheet
           issueKey={localIssueDetailKey}

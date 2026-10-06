@@ -154,6 +154,18 @@ export function parseAttachmentFileExtension(attachmentId: string): string | nul
   return normalizedId?.match(ATTACHMENT_ID_PATTERN)?.[3]?.toLowerCase() ?? null;
 }
 
+/**
+ * Whether an id is exactly one `createAttachmentId(threadId, "html")` minted for this thread,
+ * which is how published HTML renders are stored.
+ */
+export function isThreadHtmlRenderAttachmentId(threadId: string, attachmentId: string): boolean {
+  const threadSegment = toSafeThreadAttachmentSegment(threadId);
+  const uuid = parseAttachmentUuid(attachmentId);
+  return (
+    threadSegment !== null && uuid !== null && attachmentId === `${threadSegment}-${uuid}-html`
+  );
+}
+
 export function parseIssueSegmentFromAttachmentId(attachmentId: string): string | null {
   const normalizedId = normalizeAttachmentId(attachmentId);
   if (normalizedId === null) {

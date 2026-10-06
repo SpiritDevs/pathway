@@ -23,6 +23,7 @@ import {
   Plus,
   TerminalSquare,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import {
   type ComponentProps,
@@ -51,6 +52,7 @@ import {
 } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
+import { SidebarTrigger, useSidebar } from "~/components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { useTheme } from "~/hooks/useTheme";
@@ -63,9 +65,18 @@ import { NewTabToolsProvider, type PanelSurfaceAction } from "./preview/newTabTo
 import { PreviewFavicon } from "./preview/PreviewFavicon";
 import { previewBridge } from "./preview/previewBridge";
 
+/** A fixed first tab for the page a maximized panel covers. While active, no surface shows. */
+export interface RightPanelLeadingTab {
+  readonly title: string;
+  readonly icon: LucideIcon;
+  readonly active: boolean;
+  readonly onActivate: () => void;
+}
+
 interface RightPanelTabsProps {
   mode: PreviewPanelMode;
   maximized?: boolean;
+  leadingTab?: RightPanelLeadingTab | undefined;
   /** Forwarded to PreviewPanelShell so this surface persists its own width. */
   widthStorageKey?: string;
   /** Forwarded to PreviewPanelShell as the initial width before a user resize. */
@@ -252,7 +263,6 @@ function buildSurfaceActions(props: RightPanelTabsProps): PanelSurfaceAction[] {
                 label: "Open at bottom",
                 shortcut: props.toolShortcuts?.["terminal-drawer"] ?? null,
                 onClick: props.onOpenBottomTerminal,
-                keepsTab: true,
               },
             ],
           }
@@ -665,27 +675,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const inTopBar = topBarTabsHost !== null;
   const surfaceActions = buildSurfaceActions(props);
   const newTabAction = surfaceActions.find((action) => action.kind === "preview");
-  const activeSurface = props.surfaces.find((surface) => surface.id === props.activeSurfaceId);
-  // A blank browser tab offers the other surfaces; picking one takes the tab's place.
-  const replaceBlankTab = (open: () => void) => () => {
-    open();
-    if (activeSurface?.kind === "preview") props.onCloseSurface(activeSurface);
-  };
+  // A blank browser tab offers the other surfaces; the store puts the one picked in its place.
   const newTabTools = surfaceActions
     .filter((action) => action.kind !== "preview" && action.available)
     .map((action) => ({
       ...action,
       shortcut: props.toolShortcuts?.[action.kind as RightPanelKind] ?? null,
-      onClick: replaceBlankTab(action.onClick),
-      ...(action.alternatives
-        ? {
-            alternatives: action.alternatives.map((alternative) =>
-              alternative.keepsTab
-                ? alternative
-                : { ...alternative, onClick: replaceBlankTab(alternative.onClick) },
-            ),
-          }
-        : {}),
     }));
 
   const handleTabContextMenu = useCallback(
@@ -784,7 +779,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   useEffect(() => {
     const activeTab = tabListRef.current?.querySelector<HTMLElement>("[data-active-tab='true']");
     activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [props.activeSurfaceId]);
+  }, [props.activeSurfaceId, props.leadingTab?.active]);
 
   const tabBar = (
     <div
@@ -803,6 +798,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       style={inTopBar ? { marginLeft: topBarTabStripOffset } : undefined}
       data-right-panel-tabbar
     >
+      {inTopBar && props.leadingTab && !props.leadingTab.active ? <CoveredSidebarToggle /> : null}
       {inTopBar ? <div aria-hidden className="mr-1 h-5 w-px shrink-0 bg-sidebar-border" /> : null}
       <ScrollArea
         ref={tabListRef}
@@ -819,6 +815,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             event.currentTarget.parentElement?.scrollBy({ left: event.deltaY });
           }}
         >
+          {props.leadingTab ? <LeadingTab tab={props.leadingTab} inTopBar={inTopBar} /> : null}
           <DndContext
             sensors={tabDragSensors}
             modifiers={[restrictToHorizontalAxis]}
@@ -830,7 +827,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
               disabled={!props.onMoveSurface}
             >
               {props.surfaces.map((surface) => {
-                const active = surface.id === props.activeSurfaceId;
+                const active = surface.id === props.activeSurfaceId && !props.leadingTab?.active;
                 const pending = props.pendingSurfaceIds.has(surface.id);
                 const remotePage = props.browser?.remotePage ?? null;
                 const title = resolveRightPanelSurfaceTitle(
@@ -967,7 +964,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         className="flex min-h-0 flex-1 flex-col"
         data-right-panel-surface-content
       >
-        {props.activeSurfaceId === null ? (
+        {props.leadingTab?.active ? null : props.activeSurfaceId === null ? (
           <RightPanelEmptyState actions={surfaceActions} />
         ) : (
           <RightPanelTabBarActionsContext.Provider value={tabBarActionsHost}>
@@ -976,6 +973,51 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         )}
       </div>
     </PreviewPanelShell>
+  );
+}
+
+/**
+ * A maximized panel covers the collapsed sidebar's own toggle, so the tab strip carries one
+ * while the panel shows.
+ */
+function CoveredSidebarToggle() {
+  const { state } = useSidebar();
+  if (state !== "collapsed") return null;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <SidebarTrigger
+            className="mr-1 shrink-0 rounded-lg text-muted-foreground hover:bg-sidebar-foreground/6 hover:text-foreground"
+            aria-label="Toggle main sidebar"
+          />
+        }
+      />
+      <TooltipPopup side="bottom">Toggle main sidebar</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function LeadingTab({ tab, inTopBar }: { tab: RightPanelLeadingTab; inTopBar: boolean }) {
+  const Icon = tab.icon;
+  return (
+    <button
+      type="button"
+      data-active-tab={tab.active}
+      onClick={tab.onActivate}
+      className={cn(
+        "cursor-pointer flex h-7 w-56 min-w-24 shrink items-center gap-2 rounded-lg px-2.5 text-xs",
+        tab.active
+          ? "bg-background text-foreground shadow-xs ring-1 ring-border/70 dark:ring-white/8"
+          : cn(
+              "text-muted-foreground hover:text-foreground",
+              inTopBar ? "hover:bg-sidebar-foreground/6" : "hover:bg-accent/60",
+            ),
+      )}
+    >
+      <Icon className="size-3 shrink-0" />
+      <span className="truncate">{tab.title}</span>
+    </button>
   );
 }
 

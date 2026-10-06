@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
+import { act, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { create, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({ status: "loading" }));
 vi.mock("@clerk/react", () => ({
@@ -11,8 +12,13 @@ vi.mock("@clerk/react", () => ({
   ClerkLoaded: ({ children }: { children: ReactNode }) =>
     state.status === "ready" ? children : null,
 }));
+vi.mock("@clerk/electron/react", () => ({
+  ClerkProvider: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock("@clerk/electron/passkeys", () => ({ passkeys: {} }));
 
 import { ClerkStartupBoundary } from "./ClerkStartupBoundary";
+import ElectronClerkProvider from "./ElectronClerkProvider";
 
 const render = () =>
   renderToStaticMarkup(<ClerkStartupBoundary>Protected app</ClerkStartupBoundary>);
@@ -40,5 +46,45 @@ describe("Clerk startup", () => {
   it("retains the primary client's existing auth gate", () => {
     state.status = "ready";
     expect(render()).toContain("Protected app");
+  });
+});
+
+describe("desktop Clerk startup", () => {
+  let renderer: ReactTestRenderer | undefined;
+  const reload = vi.fn();
+
+  beforeEach(() => {
+    state.status = "error";
+    reload.mockClear();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("window", { location: { reload } });
+  });
+
+  afterEach(async () => {
+    await act(async () => renderer?.unmount());
+    renderer = undefined;
+    vi.unstubAllGlobals();
+  });
+
+  it("shows one alert and a working retry action for a reported Clerk failure", async () => {
+    await act(async () => {
+      renderer = create(
+        <ElectronClerkProvider publishableKey="pk_test_startup">
+          Protected app
+        </ElectronClerkProvider>,
+      );
+    });
+    const contents = JSON.stringify(renderer!.toJSON());
+    expect(contents).toContain("Unable to check your account");
+    expect(contents).not.toContain("boot-spinner");
+    expect(contents).not.toContain("Protected app");
+    expect(renderer!.root.findAllByProps({ role: "alert" })).toHaveLength(1);
+    expect(renderer!.root.findByType("p").children.join("")).toBe(
+      "Pathway couldn't start its sign-in service. Check your connection and try again.",
+    );
+    const retry = renderer!.root.findByType("button");
+    expect(retry.children.join("")).toBe("Try again");
+    await act(async () => retry.props.onClick());
+    expect(reload).toHaveBeenCalledOnce();
   });
 });

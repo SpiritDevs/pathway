@@ -106,7 +106,9 @@ struct AgentThreadsView: View {
         }
         .task(id: appModel.cloud.threads.map(\.id)) { await openPendingThread() }
         .task(id: appModel.cloud.threadQueue.threads.map(\.id)) { await openPendingThread() }
-        .task(id: appModel.localStorageDirectory) { await focuses.observe(cloud: appModel.cloud, storageDirectory: appModel.localStorageDirectory) }
+        .task(id: FocusObservationKey(storageDirectory: appModel.localStorageDirectory, isCloudReady: !appModel.cloud.companies.isEmpty)) {
+            await focuses.observe(cloud: appModel.cloud, storageDirectory: appModel.localStorageDirectory)
+        }
         .sheet(isPresented: $creatingFocus) { PathwayFocusEditorView(model: focuses) }
         .sheet(isPresented: $creatingProject) { PathwayCreateProjectView(focuses: focuses) }
         .sheet(isPresented: $showingNotifications) { PathwayFocusNotificationsView(model: focuses) }
@@ -386,7 +388,10 @@ struct AgentThreadsView: View {
         return appModel.cloud.environments.filter { ids.contains($0.id) }
     }
 
-    private var activeThreads: [PathwayAgentThread] { appModel.cloud.activeThreads.filter(matches) }
+    /// A thread with an unread notification stays in place instead of settling until it is read.
+    private var activeThreads: [PathwayAgentThread] {
+        (appModel.cloud.activeThreads + appModel.cloud.settledThreads.filter(focuses.hasUnreadNotification)).filter(matches)
+    }
     private var focusView: PathwayFocusView { focuses.view(for: focuses.selectedID) }
     private var isPinnedCollapsed: Bool { focuses.collapsedPinnedFocusIDs.contains(focuses.selectedID) }
     /// Pinned threads keep their arranged order above the Focus's chosen sort.
@@ -397,7 +402,9 @@ struct AgentThreadsView: View {
         }
     }
     private var snoozedThreads: [PathwayAgentThread] { appModel.cloud.snoozedThreads.filter(matches) }
-    private var settledThreads: [PathwayAgentThread] { appModel.cloud.settledThreads.filter(matches) }
+    private var settledThreads: [PathwayAgentThread] {
+        appModel.cloud.settledThreads.filter { matches($0) && !focuses.hasUnreadNotification($0) }
+    }
     private var archivedThreads: [PathwayAgentThread] { appModel.cloud.threads.filter { $0.shell.archivedAt != nil && matches($0) } }
 
     private func matches(_ thread: PathwayAgentThread) -> Bool {
@@ -753,6 +760,10 @@ private extension AgentThreadsView {
                 cloud: appModel.cloud,
                 request: appModel.cloud.environmentRequest
             )
+            if action == .settle || action == .discardAndSettle,
+               threadActions.errorMessage == nil, threadActions.unfinishedGitThread == nil {
+                focuses.markThreadRead(thread, cloud: appModel.cloud)
+            }
         }
     }
 
@@ -1814,4 +1825,9 @@ private struct AgentThreadDestination: Hashable {
     let workspaceRoot: String?
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
     nonisolated func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
+private struct FocusObservationKey: Equatable {
+    let storageDirectory: URL?
+    let isCloudReady: Bool
 }

@@ -133,6 +133,10 @@ import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
+import {
+  requestWorkflowRecordingStart,
+  useWorkflowRecordingAvailable,
+} from "../hooks/useWorkflowRecording";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import {
@@ -1314,6 +1318,7 @@ function OpenCommandPaletteDialog(props: {
 
   const activeThreadId = activeThread?.id;
   const computerServed = useComputerEventsServed(activeThread?.environmentId ?? null);
+  const recordSkillAllowed = useWorkflowRecordingAvailable(activeThread?.environmentId ?? null);
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
   const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
@@ -2187,6 +2192,28 @@ function OpenCommandPaletteDialog(props: {
           .open(scopeThreadRef(activeThread.environmentId, activeThread.id), "computer");
       },
     });
+  // The composer owns the start: it skips a thread that is already recording,
+  // clears a stale hand-off prompt, then its strip shows the confirmation,
+  // controls, busy state, and any error.
+  if (activeThread && recordSkillAllowed) {
+    const recordSkillTarget =
+      environments.find((environment) => environment.environmentId === activeThread.environmentId)
+        ?.label ?? "this environment's Mac";
+    actionItems.push({
+      kind: "action",
+      value: "action:record-skill",
+      searchTerms: ["record", "skill", "demonstrate", "teach", "workflow", "record a skill"],
+      title: "Record a skill",
+      description: `Show the agent a task on ${recordSkillTarget}`,
+      icon: <CircleDotIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        requestWorkflowRecordingStart({
+          environmentId: activeThread.environmentId,
+          threadId: activeThread.id,
+        });
+      },
+    });
+  }
   if (activeThread && activeThread.projectId !== null)
     actionItems.push({
       kind: "action",

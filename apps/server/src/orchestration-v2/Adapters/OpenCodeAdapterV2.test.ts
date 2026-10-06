@@ -1,3 +1,4 @@
+import { projectOpenCodeDynamicToolCall } from "./OpenCodeAdapterV2.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -413,6 +414,43 @@ describe("openCodeAllowsComputerPermission", () => {
     assert.isFalse(openCodeAllowsComputerPermission(admitted, asked("pathway_computer_click"), []));
     assert.isTrue(
       openCodeAllowsComputerPermission(admitted, permission, ["pathway", "pathway_browser"]),
+    );
+  });
+});
+
+describe("OpenCode HTML MCP projection", () => {
+  const htmlResult = {
+    htmlRender: { attachmentId: "thread-html-attachment", title: "Chart", height: 400 },
+    message: "Shown",
+  };
+  const rawHtml = "<html><body>Chart</body></html>";
+
+  it("normalizes pathway_html_render JSON output and preserves error state", () => {
+    const state = {
+      status: "completed" as const,
+      input: { html: rawHtml, title: "Chart", height: 400 },
+      output: JSON.stringify(htmlResult),
+      title: "Render HTML",
+      metadata: {},
+      time: { start: 1, end: 2 },
+    };
+    const item = projectOpenCodeDynamicToolCall({ tool: "pathway_html_render", state });
+    assert.equal(item.toolName, "pathway.html_render");
+    assert.deepEqual(item.output, htmlResult);
+    assert.notInclude(JSON.stringify(item), rawHtml);
+    const failed = projectOpenCodeDynamicToolCall({
+      tool: "pathway_html_render",
+      state: {
+        status: "error",
+        input: state.input,
+        error: "Cancelled",
+        time: { start: 1, end: 2 },
+      },
+    });
+    assert.deepEqual(failed.output, { isError: true, message: "Cancelled" });
+    assert.deepEqual(
+      projectOpenCodeDynamicToolCall({ tool: "other_html_render", state }).output,
+      state.output,
     );
   });
 });

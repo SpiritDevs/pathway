@@ -1,3 +1,4 @@
+import { compactHtmlToolProjection } from "@spiritdevs/shared/toolOutput";
 import type {
   Event as OpenCodeEvent,
   Message as OpenCodeMessage,
@@ -756,6 +757,30 @@ function toolOutput(part: ToolPart): string | undefined {
   return undefined;
 }
 
+export function projectOpenCodeDynamicToolCall(part: Pick<ToolPart, "tool" | "state">) {
+  const output =
+    part.state.status === "completed"
+      ? part.state.output
+      : part.state.status === "error"
+        ? { isError: true, message: part.state.error }
+        : undefined;
+  const compacted = compactHtmlToolProjection({
+    toolName: part.tool,
+    input: part.state.input,
+    output,
+  });
+  return compacted.toolName === "pathway.html_render" ||
+    compacted.toolName === "pathway.html_preview"
+    ? compacted
+    : {
+        toolName: part.tool,
+        input: part.state.input,
+        ...(output === undefined
+          ? {}
+          : { output: part.state.status === "error" ? part.state.error : output }),
+      };
+}
+
 function toolStartedAt(part: ToolPart, now: DateTime.Utc): DateTime.Utc {
   return dateTimeFromEpoch(
     part.state.status === "pending" ? undefined : part.state.time.start,
@@ -1500,9 +1525,7 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
             turnItem = {
               ...base,
               type: "dynamic_tool",
-              toolName: part.tool,
-              input,
-              ...(output === undefined ? {} : { output }),
+              ...projectOpenCodeDynamicToolCall(part),
             };
           }
           yield* emitProviderEvent({

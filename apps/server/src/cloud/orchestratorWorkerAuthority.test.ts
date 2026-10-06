@@ -21,3 +21,11 @@ describe("delegated worker privileges", () => {
     expect(checkWorkerToolAccess(access, "future_tool", {})).toContain("permissions");
   });
 });
+
+for (const name of ["html_preview", "html_render"]) {
+  it(`${name} is never available to orchestrator workers`, () => {
+    expect(
+      checkWorkerToolAccess({ allowed: true, capabilities: ["threads.delegate"] }, name, {}),
+    ).toContain("permissions");
+  });
+}

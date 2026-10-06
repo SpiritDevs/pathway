@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./workflowRecordingSkill": {
+      "types": "./src/workflowRecordingSkill.ts",
+      "import": "./src/workflowRecordingSkill.ts"
+    },
     "./cuaDriverRelease.json": "./src/cuaDriverRelease.json",
     "./desktopFlavor": {
       "types": "./src/desktopFlavor.ts",
@@ -303,6 +307,18 @@
     "./environmentSurface": {
       "types": "./src/environmentSurface.ts",
       "import": "./src/environmentSurface.ts"
+    },
+    "./htmlRender": {
+      "types": "./src/htmlRender.ts",
+      "import": "./src/htmlRender.ts"
+    },
+    "./toolOutput": {
+      "types": "./src/toolOutput.ts",
+      "import": "./src/toolOutput.ts"
+    },
+    "./themePalettes": {
+      "types": "./src/themePalettes.ts",
+      "import": "./src/themePalettes.ts"
     }
   },
   "scripts": {

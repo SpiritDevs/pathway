@@ -179,6 +179,8 @@ struct NewAgentThreadMessageEditor: View {
         case let .insert(text): replacement = text
         case let .model(value): model.selectedProviderID = value.instanceId; model.selectedModelID = value.model; replacement = ""
         case let .mode(mode): model.interactionMode = mode; replacement = ""
+        // Recording needs an existing thread; new-thread suggestions never offer it.
+        case .recordSkill: replacement = ""
         }
         guard let result = original.replacing(in: model.prompt, with: replacement) else { return }
         model.prompt = result.text

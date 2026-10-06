@@ -1,3 +1,5 @@
+import { idleWorkflowRecording, WorkflowRecordingAction } from "@spiritdevs/contracts";
+import type { WorkflowRecorder } from "./WorkflowRecorder.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- the host socket, driver sockets and capability compare are Node primitives the driver protocol is defined over.
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
@@ -55,6 +57,8 @@ export class CuaHostError extends Schema.TaggedErrorClass<CuaHostError>()("CuaHo
 }) {}
 
 const isCuaHostError = Schema.is(CuaHostError);
+const decodeWorkflowRecordingAction = Schema.decodeUnknownOption(WorkflowRecordingAction);
+
 const hostError = (message: string) => new CuaHostError({ message });
 const toHostError = (cause: unknown) =>
   isCuaHostError(cause) ? cause : hostError(cause instanceof Error ? cause.message : String(cause));
@@ -133,6 +137,7 @@ export interface CuaCursorStyle {
 }
 
 export interface CuaDriverHostOptions {
+  readonly workflowRecorder?: WorkflowRecorder;
   readonly binaryPath: string;
   readonly bundleId: string;
   readonly capability: string;
@@ -650,6 +655,24 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
           message,
           requery_hint:
             "After physical input stops, observe a usable window of the affected app with computer_get_state and its exact window_id. Do not replay an uncertain action.",
+        },
+      },
+    };
+  };
+
+  const workflowRecordingReply = (): CuaReply => {
+    const message =
+      "Computer input is paused while the person records a skill on this Mac. Wait for the recording to end, then read fresh state before continuing.";
+    return {
+      ok: true,
+      result: {
+        isError: true,
+        content: [{ type: "text", text: message }],
+        structuredContent: {
+          effect: "refused",
+          code: "computer_input_paused",
+          layer: "driver-host",
+          message,
         },
       },
     };
@@ -2113,6 +2136,23 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
     admitted: TaskRequest | undefined,
   ): Effect.Effect<CuaReply, CuaHostError> =>
     Effect.gen(function* () {
+      if (request.method === "workflow_recording") {
+        if (!task) return yield* hostError("Recording thread attribution is required.");
+        const decoded = decodeWorkflowRecordingAction(request.action);
+        if (Option.isNone(decoded)) return yield* hostError("Invalid recording action.");
+        const action = decoded.value;
+        if (!options.workflowRecorder) {
+          if (action === "status")
+            return { ok: true, result: idleWorkflowRecording(false) } satisfies CuaReply;
+          return yield* hostError("Workflow recording is unavailable on this host.");
+        }
+        if (action === "start" && (closed || suspended || desktopPauses.size > 0))
+          return yield* hostError("Recording cannot start while the desktop host is paused.");
+        const result = yield* options.workflowRecorder
+          .call(action, task.threadId)
+          .pipe(Effect.mapError(toHostError));
+        return { ok: true, result } satisfies CuaReply;
+      }
       const taskStopped = () =>
         admitted?.stopped === true ||
         (task !== undefined && userStoppedTasks.has(cuaComputerTaskKey(task)));
@@ -2181,6 +2221,15 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
         return yield* hostError("Computer host is suspended while the backend is stopping.");
       if (taskStopped()) return taskStoppedReply();
       const requestName = typeof request.name === "string" ? request.name : undefined;
+      // A live demonstration is the person's alone: synthetic input from an agent
+      // or another device would land in the recording. Observation stays open.
+      if (
+        request.method === "call" &&
+        requestName !== undefined &&
+        (CUA_ACTION_TOOLS.has(requestName) || CUA_BROWSER_MUTATION_TOOLS.has(requestName)) &&
+        options.workflowRecorder?.isActive?.() === true
+      )
+        return workflowRecordingReply();
       const activeComputerWork =
         request.method === "call" &&
         requestName !== undefined &&
@@ -2622,10 +2671,16 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
     return endpoint;
   });
 
+  // Ending a recording never blocks or fails stopping agent input; it runs after or alongside.
+  const cancelRecording = (options.workflowRecorder?.cancelActive ?? Effect.void).pipe(
+    Effect.catch((error) => log(`workflow recording cancel failed: ${error.message}`)),
+  );
+
   const dispose = Effect.gen(function* () {
     closed = true;
     updateInputMonitorArmed();
     const stopExit = yield* Effect.exit(stopNow().await);
+    yield* cancelRecording;
     if (options.frameTap) yield* Effect.ignore(options.frameTap.dispose);
     if (options.shield) yield* Effect.ignore(options.shield.dispose);
     for (const socket of connections) socket.destroy();
@@ -2649,7 +2704,7 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
     stop: Effect.suspend(() => stopNow().await),
     suspend: Effect.suspend(() => {
       suspended = true;
-      return stopNow().await;
+      return stopNow().await.pipe(Effect.ensuring(cancelRecording));
     }),
     resume: Effect.sync(() => {
       if (!closed) suspended = false;
@@ -2662,6 +2717,7 @@ export const makeCuaDriverHost = Effect.fn("makeCuaDriverHost")(function* (
         browserObservationRequired = true;
         const task = stopNow();
         yield* log(`desktop input paused (${reason}); requiring fresh desktop observation`);
+        yield* cancelRecording;
         yield* task.await;
       }),
     resumeDesktop: (reason) =>

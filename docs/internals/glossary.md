@@ -136,7 +136,7 @@ The desktop app's own webview. Its `localhost` is the user's machine. The deskto
 _Avoid_: This desktop (as a host choice)
 
 **Pathway runtime**:
-The desktop app's own Electron, built inside a full Chromium tree with Chrome's browser layer linked in, and pinned by `apps/desktop/pathway-runtime.json` ([ADR 0049](../adr/0049-desktop-runs-on-a-pathway-chromium-runtime.md)). It gives the local browser Chrome's real site information, certificates, settings pages and per-site permissions, with Pathway's UI on top.
+The desktop app's own Electron, built inside a full Chromium tree with Chrome's browser layer linked in, and pinned by `apps/desktop/pathway-runtime.json` ([ADR 0049](../adr/0049-desktop-runs-on-a-pathway-chromium-runtime.md), [pin](desktop-runtime.md)). It gives the local browser Chrome's real site information, certificates, settings pages and per-site permissions, with Pathway's UI on top.
 _Avoid_: Stock Electron (for the shipped runtime), owl (that is OpenAI's)
 
 **Model manifest**:
@@ -399,3 +399,12 @@ is separate from durable local delivery and from provider startup.
 **Attached thread**:
 A thread whose lineage names a parent but no fork or subagent relationship (`relationshipToParent: null`). It lists under its parent in Lineage rather than in the sidebar, and returns to the sidebar once that parent is gone. It has none of the fork or subagent behavior, such as merge-back, completion delivery, or cascading delete. `thread.parent.set` makes any thread an attached thread, or with a null parent returns it to the sidebar. Neither changes `rootThreadId`, which still scopes the conversation folder. `lineage.parentEnvironmentId` is set when the parent lives on another environment, as with a thread started there by `delegate_task`.
 _Avoid_: Linked thread, child thread (when no subagent is meant)
+
+## Conversation content
+
+**HTML render**:
+An agent-authored, self-contained page published into a thread by the `html_render` tool. It is stored as a thread attachment and shown inline above the agent's reply, in the reader's theme. See [HTML renders](html-renders.md).
+_Avoid_: Visualization (that is a `visualize{}` card linking a live workspace file), artifact. In user-facing text, call it a visual reply.
+
+**HTML render bridge**:
+The JSON-RPC messages, a subset of MCP Apps over `postMessage`, between a render and its client: `ui/notifications/host-context-changed` (theme), `ui/open-link`, and `ui/notifications/size-changed`.
