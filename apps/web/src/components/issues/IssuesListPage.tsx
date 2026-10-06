@@ -102,7 +102,7 @@ import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
 import { ISSUE_INVESTIGATE_BLOCK_REASONS, issueInvestigateBlock } from "./issueEnrichment.logic";
 import { buildIssuesTalkContexts, issueTalkHostProjectId } from "./issueStartWork.logic";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
-import { useIssueProjectOptions } from "./useIssueProjectOptions";
+import { resolveIssueEnvironmentProject, useIssueProjectOptions } from "./useIssueProjectOptions";
 import {
   EMPTY_ISSUES_BOARD_COLUMNS,
   issuesBoardColumns,
@@ -625,18 +625,26 @@ function IssuesListView({
 
   const bulkInvestigate = (projectId: ProjectId) => {
     void (async () => {
+      const assignmentProjectId =
+        issueProjects.find((candidate) => candidate.projectIds.includes(projectId))?.id ??
+        projectId;
       for (const issue of selectedIssues) {
         if (issue.deletedAt !== null || investigatingIssueIds.has(issue.id)) continue;
-        if (issue.projectId !== projectId) {
+        if (issue.projectId !== projectId && issue.projectId !== assignmentProjectId) {
           const assignmentFailed = reportIssueWriteFailure(
             `Failed to assign ${issue.key} to the project`,
-            await updateIssue({ issueId: issue.id, patch: { projectId } }),
+            await updateIssue({ issueId: issue.id, patch: { projectId: assignmentProjectId } }),
           );
           if (assignmentFailed) continue;
         }
         reportIssueWriteFailure(
           `Failed to investigate ${issue.key}`,
-          await startEnrichment({ issueId: issue.id }),
+          await startEnrichment({
+            issueId: issue.id,
+            ...(primaryEnvironmentId === null
+              ? {}
+              : { selection: { environmentId: primaryEnvironmentId, localProjectId: projectId } }),
+          }),
         );
       }
     })();
@@ -829,38 +837,34 @@ function IssuesListView({
 
   const contextIssues = contextMenu?.issues ?? NO_CONTEXT_ISSUES;
   const contextIssue = contextIssues.length === 1 ? (contextIssues[0] ?? null) : null;
-  const contextInvestigateProjectId =
+  const contextInvestigationProject =
     contextIssue === null
       ? null
-      : directInvestigateProjectId(investigationProjects, contextIssue.projectId);
-  // Investigate needs a directory to read. A sole eligible project can be assigned automatically;
-  // otherwise the issue's current project must be one this environment can investigate.
+      : (resolveIssueEnvironmentProject({
+          issueProjectId: contextIssue.projectId,
+          projects: issueProjects,
+          selectedPhysicalProjectKey: null,
+          preferredEnvironmentId: primaryEnvironmentId,
+        }) ??
+        investigationProjects.find(
+          (candidate) =>
+            candidate.id ===
+            directInvestigateProjectId(investigationProjects, contextIssue.projectId),
+        ) ??
+        null);
+  // A filed task uses its project's default environment. A sole eligible checkout can be
+  // assigned automatically when no checkout resolves for its current project.
   const investigateBlockReason = useMemo(() => {
     if (contextIssue === null) return null;
-    const project =
-      contextInvestigateProjectId === null
-        ? null
-        : (projects.find(
-            (candidate) =>
-              candidate.id === contextInvestigateProjectId &&
-              candidate.environmentId === primaryEnvironmentId,
-          ) ?? null);
     const block = issueInvestigateBlock({
       connected: storeStatus !== "disconnected",
       deleted: contextIssue.deletedAt !== null,
-      projectId: contextInvestigateProjectId,
-      workspaceRoot: project?.workspaceRoot,
+      projectId: contextInvestigationProject?.id ?? null,
+      workspaceRoot: contextInvestigationProject?.workspaceRoot,
       hasRunInFlight: investigatingIssueIds.has(contextIssue.id),
     });
     return block === null ? null : ISSUE_INVESTIGATE_BLOCK_REASONS[block];
-  }, [
-    contextInvestigateProjectId,
-    contextIssue,
-    investigatingIssueIds,
-    primaryEnvironmentId,
-    projects,
-    storeStatus,
-  ]);
+  }, [contextInvestigationProject, contextIssue, investigatingIssueIds, storeStatus]);
 
   const { copyToClipboard: copyIssueField } = useCopyToClipboard<IssueContextMenuCopyField>({
     target: "task",
@@ -915,14 +919,16 @@ function IssuesListView({
 
   // The run reports into the sheet's investigation tab, so the sheet is what a press opens.
   const investigateContextIssue = (issue: Issue) => {
-    const projectId = directInvestigateProjectId(investigationProjects, issue.projectId);
-    if (projectId === null) return;
+    const projectId = contextInvestigationProject?.id;
+    if (projectId === undefined) return;
+    const assignmentProjectId =
+      issueProjects.find((candidate) => candidate.projectIds.includes(projectId))?.id ?? projectId;
     openIssue(issue);
     void (async () => {
-      if (issue.projectId !== projectId) {
+      if (issue.projectId !== projectId && issue.projectId !== assignmentProjectId) {
         const assignmentFailed = reportIssueWriteFailure(
           "Failed to assign the task to the project",
-          await updateIssue({ issueId: issue.id, patch: { projectId } }),
+          await updateIssue({ issueId: issue.id, patch: { projectId: assignmentProjectId } }),
         );
         if (assignmentFailed) return;
       }

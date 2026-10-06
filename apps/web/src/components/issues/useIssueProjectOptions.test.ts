@@ -307,5 +307,13 @@ describe("buildIssueProjectOptions", () => {
         preferredEnvironmentId: EnvironmentId.make("local"),
       })?.id,
     ).toBe("pathway-remote");
+    expect(
+      resolveIssueEnvironmentProject({
+        issueProjectId: ProjectId.make("pathway-company"),
+        projects,
+        selectedPhysicalProjectKey: "local:pathway-local",
+        preferredEnvironmentId: EnvironmentId.make("remote-1"),
+      })?.id,
+    ).toBe("pathway-local");
   });
 });

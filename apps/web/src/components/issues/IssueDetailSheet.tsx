@@ -593,14 +593,6 @@ function IssueDetailBody({
   const environmentControl = useEnvironmentControl();
   const [defaultPhysicalProjectKey, setDefaultPhysicalProjectKey] = useState<string | null>(null);
   const [launchPhysicalProjectKey, setLaunchPhysicalProjectKey] = useState<string | null>(null);
-  // Both agent tails are read whenever a sheet opens, like the change log and the detail beside
-  // them: the header has to know whether an investigation has ever run, and the rail has to list
-  // the threads. Two small reads on a local socket, patched live by the stream afterwards.
-  const {
-    runs: enrichmentRuns,
-    isPending: runsPending,
-    error: runsError,
-  } = useIssueEnrichmentRuns(issue.id);
   const { links: threadLinks } = useIssueThreadLinks(issue.id);
 
   const updateIssue = useUpdateIssue();
@@ -717,6 +709,18 @@ function IssueDetailBody({
     ],
   );
   const agentEnvironmentId = project?.environmentId ?? primaryEnvironmentId;
+  const investigationSelection = useMemo(
+    () =>
+      project === null
+        ? undefined
+        : { environmentId: project.environmentId, localProjectId: project.id },
+    [project?.environmentId, project?.id],
+  );
+  const {
+    runs: enrichmentRuns,
+    isPending: runsPending,
+    error: runsError,
+  } = useIssueEnrichmentRuns(issue.id, investigationSelection);
   const primarySettings = usePrimarySettings();
   const agentSettings = useEnvironmentSettings(agentEnvironmentId);
   const timestampFormat = primarySettings.timestampFormat;
@@ -1045,9 +1049,9 @@ function IssueDetailBody({
     () =>
       projects.filter(
         (candidate) =>
-          candidate.environmentId === primaryEnvironmentId && candidate.workspaceRoot != null,
+          candidate.environmentId === agentEnvironmentId && candidate.workspaceRoot != null,
       ),
-    [primaryEnvironmentId, projects],
+    [agentEnvironmentId, projects],
   );
   const investigateMenuBlock =
     investigationProjects.length === 0
@@ -1060,13 +1064,24 @@ function IssueDetailBody({
 
   const handleInvestigate = useCallback(
     (projectId: ProjectId) => {
+      const selectedProject = issueProjects
+        .flatMap((candidate) => candidate.environmentProjects)
+        .find(
+          (candidate) =>
+            candidate.environmentId === agentEnvironmentId && candidate.id === projectId,
+        );
+      if (selectedProject !== undefined)
+        setLaunchPhysicalProjectKey(selectedProject.physicalProjectKey);
       setActiveTab("investigation");
       setInvestigationRequested(true);
       void (async () => {
-        if (issue.projectId !== projectId) {
+        if (issue.projectId !== projectId && !issueProject?.projectIds.includes(projectId)) {
+          const assignmentProjectId =
+            issueProjects.find((candidate) => candidate.projectIds.includes(projectId))?.id ??
+            projectId;
           const assignmentFailed = reportFailure(
             "Failed to assign the task to the project",
-            await updateIssue({ issueId: issue.id, patch: { projectId } }),
+            await updateIssue({ issueId: issue.id, patch: { projectId: assignmentProjectId } }),
           );
           if (assignmentFailed) {
             setInvestigationRequested(false);
@@ -1075,12 +1090,25 @@ function IssueDetailBody({
         }
         const failed = reportFailure(
           "Failed to start the investigation",
-          await startEnrichment({ issueId: issue.id }),
+          await startEnrichment({
+            issueId: issue.id,
+            ...(agentEnvironmentId === null
+              ? {}
+              : { selection: { environmentId: agentEnvironmentId, localProjectId: projectId } }),
+          }),
         );
         if (failed) setInvestigationRequested(false);
       })();
     },
-    [issue.id, issue.projectId, startEnrichment, updateIssue],
+    [
+      agentEnvironmentId,
+      issue.id,
+      issue.projectId,
+      issueProject,
+      issueProjects,
+      startEnrichment,
+      updateIssue,
+    ],
   );
 
   const handleAddTodo = useCallback(() => {
@@ -1139,10 +1167,17 @@ function IssueDetailBody({
   const handleCancelRun = useCallback(
     (runId: IssueEnrichmentRunId) => {
       void (async () => {
-        reportFailure("Failed to cancel the investigation", await cancelEnrichment({ runId }));
+        reportFailure(
+          "Failed to cancel the investigation",
+          await cancelEnrichment({
+            runId,
+            issueId: issue.id,
+            ...(investigationSelection === undefined ? {} : { selection: investigationSelection }),
+          }),
+        );
       })();
     },
-    [cancelEnrichment],
+    [cancelEnrichment, investigationSelection, issue.id],
   );
 
   const threadsById = useMemo(() => {
@@ -1636,7 +1671,7 @@ function IssueDetailBody({
       >
         {!runsPending && enrichmentRuns.length === 0 && !investigating ? (
           <IssueInvestigateProjectMenu
-            currentProjectId={issue.projectId}
+            currentProjectId={project?.id ?? issue.projectId}
             disabledReason={investigateMenuBlock}
             onSelect={handleInvestigate}
             projects={investigationProjects}
@@ -1841,7 +1876,7 @@ function IssueDetailBody({
                       </p>
                     </div>
                     <IssueInvestigateProjectMenu
-                      currentProjectId={issue.projectId}
+                      currentProjectId={project?.id ?? issue.projectId}
                       disabledReason={investigateMenuBlock}
                       onSelect={handleInvestigate}
                       projects={investigationProjects}

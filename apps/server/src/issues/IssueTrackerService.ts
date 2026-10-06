@@ -214,6 +214,7 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as HttpClient from "effect/unstable/http/HttpClient";
 
 import {
   createIssueAttachmentId,
@@ -224,6 +225,7 @@ import {
 } from "../attachmentStore.ts";
 import { ServerSecretStore, type SecretStoreError } from "../auth/ServerSecretStore.ts";
 import { CLOUD_LINKED_USER_ID } from "../cloud/config.ts";
+import { resolveEnvironmentAccountUser } from "../cloud/environmentAccountUser.ts";
 import {
   CloudSyncEngineRegistry,
   type CloudSyncIssueEngineHandle,
@@ -1372,6 +1374,9 @@ function applyIssuePatch(input: {
 export interface IssueTrackerServiceOptions {
   readonly replicaReader?: IssueReplicaReader;
   readonly syncEngineRegistry?: CloudSyncEngineRegistry["Service"] | null;
+  readonly resolveEnvironmentAccountUser?: (
+    environmentId: EnvironmentId,
+  ) => Effect.Effect<string, IssueTrackerError>;
 }
 
 export const makeIssueTrackerService = Effect.fn(function* (
@@ -1410,6 +1415,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   // The bot token is a secret like any other on this server, so it goes through the same store:
   // `<secretsDir>/slack-bot-token.bin`, 0600, written through a temp file and a rename.
   const secretStore = yield* ServerSecretStore;
+  const httpClient = yield* Effect.serviceOption(HttpClient.HttpClient);
   const serverConfig = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -1506,13 +1512,30 @@ export const makeIssueTrackerService = Effect.fn(function* (
       if (syncEngineRegistry === null)
         return yield* invalid("Cloud task synchronization is unavailable.");
       let userId = input.authenticatedSubject;
-      if (userId === "cloud-connect") {
-        const linked = yield* secretStore
-          .get(CLOUD_LINKED_USER_ID)
-          .pipe(Effect.mapError(() => invalid("Could not read the connected account")));
-        if (Option.isNone(linked))
-          return yield* invalid("Sign in to the environment before investigating.");
-        userId = new TextDecoder().decode(linked.value);
+      if (
+        [
+          "cloud-connect",
+          "desktop-bootstrap",
+          "one-time-token",
+          "cli-issued-session",
+          "administrative-bootstrap",
+        ].includes(userId)
+      ) {
+        if (options.resolveEnvironmentAccountUser !== undefined) {
+          userId = yield* options.resolveEnvironmentAccountUser(input.environmentId);
+        } else {
+          if (Option.isNone(httpClient))
+            return yield* invalid("Could not authenticate the connected Pathway account.");
+          userId = yield* resolveEnvironmentAccountUser(input.environmentId).pipe(
+            Effect.provideService(ServerSecretStore, secretStore),
+            Effect.provideService(HttpClient.HttpClient, httpClient.value),
+            Effect.mapError(() =>
+              invalid(
+                "Could not resolve the connected Pathway account. Check the Cloud connection and retry.",
+              ),
+            ),
+          );
+        }
       }
       const route = yield* resolveClientIssueRoute(syncEngineRegistry, {
         ...input,
@@ -1520,13 +1543,22 @@ export const makeIssueTrackerService = Effect.fn(function* (
         userId,
       });
       if (input.refresh) {
-        yield* route.engine.sync.pipe(
+        const receipt = yield* route.engine.sync.pipe(
           Effect.mapError(() =>
             invalid(
               "The report could not synchronize to this environment. Retry when it reconnects.",
             ),
           ),
         );
+        if (
+          receipt.error !== null ||
+          receipt.rejectedOperations > 0 ||
+          ["offline", "failed", "disabled"].includes(receipt.outcome)
+        ) {
+          return yield* invalid(
+            "The task could not synchronize to this environment. Retry when synchronization completes.",
+          );
+        }
       }
       return yield* effect.pipe(
         Effect.provideService(PinnedIssueReplicaRoute, route),
