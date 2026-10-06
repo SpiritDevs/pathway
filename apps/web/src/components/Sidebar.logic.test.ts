@@ -2142,3 +2142,16 @@ describe("sortPinnedThreadsForSidebar", () => {
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
   });
 });
+
+describe("bounded sidebar search", () => {
+  it("keeps the first 100 matches in roster order", () => {
+    const threads = Array.from({ length: 150 }, (_, id) => ({
+      id,
+      title: `Matching thread ${id}`,
+    }));
+    const results = searchSidebarThreadsByTitle(threads, "matching");
+    expect(results).toHaveLength(100);
+    expect(results).toEqual(threads.slice(0, 100));
+    expect(searchSidebarThreadsByTitle(threads, "thread 149")).toEqual([threads[149]]);
+  });
+});

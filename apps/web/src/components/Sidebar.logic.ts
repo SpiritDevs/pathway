@@ -20,6 +20,7 @@ import { resolveServerBackedAppStageLabel } from "../branding.logic";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 200;
+export const SIDEBAR_THREAD_SEARCH_RESULT_LIMIT = 100;
 // Visible sidebar rows are prewarmed into the thread-detail cache so opening a
 // nearby thread usually reuses an already-hot subscription. Each prewarmed
 // thread holds a live, fully hydrated detail subscription (all messages and
@@ -662,11 +663,13 @@ export function firstValidTimestamp(
 export function sortThreadsForSidebar<
   T extends { readonly id: string; readonly createdAt: string },
 >(threads: readonly T[]): T[] {
-  return [...threads].toSorted(
-    (left, right) =>
-      parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
-      left.id.localeCompare(right.id),
-  );
+  return threads
+    .map((thread) => ({ thread, timestamp: parseTimestampMs(thread.createdAt) }))
+    .sort(
+      (left, right) =>
+        right.timestamp - left.timestamp || left.thread.id.localeCompare(right.thread.id),
+    )
+    .map(({ thread }) => thread);
 }
 
 // Pinned-reorder key math and the keyed sort live in client-runtime
@@ -689,7 +692,13 @@ export function searchSidebarThreadsByTitle<T extends { readonly title: string }
 ): T[] {
   const normalizedQuery = query.trim().toLowerCase();
   if (normalizedQuery.length === 0) return [];
-  return threads.filter((thread) => thread.title.toLowerCase().includes(normalizedQuery));
+  const results: T[] = [];
+  for (const thread of threads) {
+    if (!thread.title.toLowerCase().includes(normalizedQuery)) continue;
+    results.push(thread);
+    if (results.length === SIDEBAR_THREAD_SEARCH_RESULT_LIMIT) break;
+  }
+  return results;
 }
 
 /** Collapsed lifecycle shelves keep only the routed thread visible. This
@@ -748,9 +757,13 @@ export function sortSettledThreadsForSidebar<
     const timestamp = resolveSettledTimestamp(thread);
     return timestamp === null ? 0 : Date.parse(timestamp);
   };
-  return [...threads].toSorted(
-    (left, right) => timestampMs(right) - timestampMs(left) || left.id.localeCompare(right.id),
-  );
+  return threads
+    .map((thread) => ({ thread, timestamp: timestampMs(thread) }))
+    .sort(
+      (left, right) =>
+        right.timestamp - left.timestamp || left.thread.id.localeCompare(right.thread.id),
+    )
+    .map(({ thread }) => thread);
 }
 
 type SidebarThreadModel = SidebarThreadSummary["usedModels"][number];

@@ -1,45 +1,76 @@
-import { scopeThreadRef, scopedThreadKey } from "@spiritdevs/client-runtime/environment";
-import { useEffect } from "react";
+import { parseScopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import { createElement, useCallback, useEffect, useState } from "react";
+import type { ScopedThreadRef } from "@spiritdevs/contracts";
 
-import { useThreadShells } from "../state/entities";
+import { useThreadShell } from "../state/entities";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useUiStateStore } from "../uiStateStore";
 
-// Module-level so each thread is considered once per page load. The visit
-// command is idempotent server-side (the server keeps max(stored, supplied)),
-// so repeats across page loads are harmless — this only avoids re-dispatching
-// within a session.
 const migratedThreadKeys = new Set<string>();
 
-/**
- * One-way migration of the browser-local visited watermarks into servers with
- * visited tracking. Before tracking existed, "Done" lived in this browser's
- * localStorage; pushing those watermarks up seeds the server value so other
- * devices see the same read state. The server never rewinds a newer visit, so
- * this cannot clobber progress made elsewhere.
- */
-export function useThreadVisitedMigration(): void {
-  const threads = useThreadShells();
-  const visitThreadMutation = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
+export function pendingThreadVisitedMigrations(
+  watermarks: Readonly<Record<string, string>>,
+  migrated: ReadonlySet<string>,
+) {
+  return Object.entries(watermarks).flatMap(([key, visitedAt]) => {
+    const ref = parseScopedThreadKey(key);
+    return ref !== null && !migrated.has(key) && Number.isFinite(Date.parse(visitedAt))
+      ? [{ key, ref, visitedAt }]
+      : [];
+  });
+}
+
+function ThreadVisitedMigration({
+  threadKey,
+  threadRef,
+  visitedAt,
+  onComplete,
+}: {
+  threadKey: string;
+  threadRef: ScopedThreadRef;
+  visitedAt: string;
+  onComplete: (key: string) => void;
+}) {
+  const thread = useThreadShell(threadRef);
+  const visit = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   useEffect(() => {
-    for (const thread of threads) {
-      // Field absent → the environment's server has no visited tracking; keep
-      // the local value in play and reconsider if the server upgrades.
-      if (thread.lastVisitedAt === undefined) continue;
-      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      if (migratedThreadKeys.has(threadKey)) continue;
+    // Keep only outstanding watermarks subscribed while an environment loads
+    // or upgrades from a server without visited tracking.
+    if (thread === null || thread.lastVisitedAt === undefined) return;
+    if (!migratedThreadKeys.has(threadKey)) {
       migratedThreadKeys.add(threadKey);
-      const local = useUiStateStore.getState().threadLastVisitedAtById[threadKey];
-      if (!local) continue;
-      const localMs = Date.parse(local);
-      if (!Number.isFinite(localMs)) continue;
-      const serverMs = thread.lastVisitedAt === null ? null : Date.parse(thread.lastVisitedAt);
-      if (serverMs !== null && Number.isFinite(serverMs) && serverMs >= localMs) continue;
-      void visitThreadMutation({
-        environmentId: thread.environmentId,
-        input: { threadId: thread.id, visitedAt: local },
-      });
+      const serverMs = thread.lastVisitedAt === null ? NaN : Date.parse(thread.lastVisitedAt);
+      if (!Number.isFinite(serverMs) || serverMs < Date.parse(visitedAt)) {
+        void visit({
+          environmentId: threadRef.environmentId,
+          input: { threadId: threadRef.threadId, visitedAt },
+        });
+      }
     }
-  }, [threads, visitThreadMutation]);
+    onComplete(threadKey);
+  }, [thread, threadKey, threadRef, visitedAt, visit, onComplete]);
+  return null;
+}
+
+/** Seeds server watermarks once, then unmounts each completed thread subscription. */
+export function ThreadVisitedMigrationCoordinator() {
+  const [pending, setPending] = useState(() =>
+    pendingThreadVisitedMigrations(
+      useUiStateStore.getState().threadLastVisitedAtById,
+      migratedThreadKeys,
+    ),
+  );
+  const onComplete = useCallback((key: string) => {
+    setPending((current) => current.filter((entry) => entry.key !== key));
+  }, []);
+  return pending.map((entry) =>
+    createElement(ThreadVisitedMigration, {
+      key: entry.key,
+      threadKey: entry.key,
+      threadRef: entry.ref,
+      visitedAt: entry.visitedAt,
+      onComplete,
+    }),
+  );
 }

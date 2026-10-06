@@ -244,9 +244,10 @@ export function sortPinnedThreadsByOrderKey<
     const rightKey = right.pinOrderKey!;
     return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : identityTiebreak(left, right);
   });
+  const timestamps = new Map(keyless.map((thread) => [thread, Date.parse(thread.createdAt)]));
   keyless.sort((left, right) => {
-    const leftMs = Date.parse(left.createdAt);
-    const rightMs = Date.parse(right.createdAt);
+    const leftMs = timestamps.get(left)!;
+    const rightMs = timestamps.get(right)!;
     return (
       (Number.isNaN(rightMs) ? 0 : rightMs) - (Number.isNaN(leftMs) ? 0 : leftMs) ||
       identityTiebreak(left, right)
