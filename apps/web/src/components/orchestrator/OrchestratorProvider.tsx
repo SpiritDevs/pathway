@@ -19,6 +19,7 @@ import { useBusinessToolsCloud, useBusinessToolsQuery } from "../contacts/busine
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { resolveShortcutCommand } from "../../keybindings";
 import { OrchestratorNotificationHost } from "./OrchestratorNotificationHost";
+import { createConversationDraftStore } from "./conversationDraftStore";
 import { OrchestratorContext } from "./OrchestratorContext";
 
 function useOrchestratorState() {
@@ -69,7 +70,7 @@ function useOrchestratorState() {
   );
   const [sendingChats, setSendingChats] = useState<string[]>([]);
   const [recipients, setRecipients] = useState<Record<string, string | undefined>>({});
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [drafts] = useState(createConversationDraftStore);
   const [replies, setReplies] = useState<Record<string, ConversationReply | undefined>>({});
   const scrollPositions = useRef(new Map<string, number>());
   const [error, setError] = useState<string>();
@@ -122,14 +123,14 @@ function useOrchestratorState() {
     setFloating(false);
     setSelection(null);
     selectSettings(null);
-    setDrafts({});
+    drafts.clear();
     setRecipients({});
     setReplies({});
     pendingMessages.current.clear();
     setSendingChats([]);
     scrollPositions.current.clear();
     setError(undefined);
-  }, [cloud.accountID]);
+  }, [cloud.accountID, drafts]);
   // A resolved avatar query confirms account provisioning; avoid racing the first sign-in.
   const needsPersonal = personalAvatar.value === null;
   useEffect(() => {
@@ -233,8 +234,8 @@ function useOrchestratorState() {
     replies,
     setReply: (id: string, reply: ConversationReply | undefined) => {
       if (reply) setRecipients((current) => ({ ...current, [id]: undefined }));
-      const next = transitionConversationReply(drafts[id] ?? "", replies[id], reply);
-      if (next.draft !== undefined) setDrafts((current) => ({ ...current, [id]: next.draft! }));
+      const next = transitionConversationReply(drafts.get(id), replies[id], reply);
+      if (next.draft !== undefined) drafts.set(id, next.draft);
       setReplies((current) => ({ ...current, [id]: next.reply }));
     },
     pendingMessages,
@@ -244,8 +245,12 @@ function useOrchestratorState() {
         sending ? [...new Set([...current, id])] : current.filter((chatId) => chatId !== id),
       ),
     setDraft: (id: string, text: string) => {
-      setDrafts((current) => ({ ...current, [id]: text }));
-      if (!text) setRecipients((current) => ({ ...current, [id]: undefined }));
+      drafts.set(id, text);
+      if (!text) {
+        setRecipients((current) =>
+          current[id] === undefined ? current : { ...current, [id]: undefined },
+        );
+      }
     },
     scrollPositions,
     personalAvatar: personalAvatar.value ?? undefined,

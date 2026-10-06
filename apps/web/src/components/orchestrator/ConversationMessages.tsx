@@ -13,6 +13,7 @@ import {
   Suspense,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type RefObject,
@@ -81,27 +82,40 @@ export function ConversationMessages({
   const initialized = useRef(false);
   const stopFlight = useRef<(() => void) | undefined>(undefined);
   useEffect(() => () => stopFlight.current?.(), []);
-  const messages = [
-    ...new Map(
+  const messages = useMemo(
+    () =>
       [
-        ...Object.values(olderPages).flatMap((page) => page.messages),
-        ...(result.value?.messages ?? []),
-      ].map((message) => [message.id, message]),
-    ).values(),
-  ].sort((a, b) => a.sequence - b.sequence);
-  const visible = search
-    ? messages.filter((message) =>
-        (
-          message.text +
-          message.senderName +
-          (message.attachments ?? []).map((a) => a.name).join(" ")
+        ...new Map(
+          [
+            ...Object.values(olderPages).flatMap((page) => page.messages),
+            ...(result.value?.messages ?? []),
+          ].map((message) => [message.id, message]),
+        ).values(),
+      ].sort((a, b) => a.sequence - b.sequence),
+    [olderPages, result.value?.messages],
+  );
+  const visible = useMemo(() => {
+    const query = search.toLowerCase();
+    return query
+      ? messages.filter((message) =>
+          (
+            message.text +
+            message.senderName +
+            (message.attachments ?? []).map((attachment) => attachment.name).join(" ")
+          )
+            .toLowerCase()
+            .includes(query),
         )
-          .toLowerCase()
-          .includes(search.toLowerCase()),
-      )
-    : messages;
-  const hiddenReplyPreviews = redundantReplyPreviews(search ? [] : messages);
-  const timeline = buildConversationTimeline(visible, search ? [] : work);
+      : messages;
+  }, [messages, search]);
+  const hiddenReplyPreviews = useMemo(
+    () => redundantReplyPreviews(search ? [] : messages),
+    [messages, search],
+  );
+  const timeline = useMemo(
+    () => buildConversationTimeline(visible, search ? [] : work),
+    [visible, search, work],
+  );
   useLayoutEffect(() => {
     const element = container.current;
     if (!element || !result.value) return;
