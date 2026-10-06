@@ -83,6 +83,16 @@ describe("ClientSettings composer context strip", () => {
   });
 });
 
+describe("ClientSettings working shelf", () => {
+  it("defaults off and accepts a preference", () => {
+    expect(decodeClientSettings({}).sidebarCollapseWorkingThreads).toBe(false);
+    expect(
+      decodeClientSettingsPatch({ sidebarCollapseWorkingThreads: true })
+        .sidebarCollapseWorkingThreads,
+    ).toBe(true);
+  });
+});
+
 describe("ClientSettings primary navigation view order", () => {
   it("defaults to the movable view order and accepts a user preference", () => {
     expect(decodeClientSettings({}).primaryNavigationViewOrder).toEqual([

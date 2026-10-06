@@ -15,3 +15,5 @@ The slide animation follows your system's reduced-motion preference.
 When the sidebar has a blue header background, its toggle icon turns white while the panel is visible and returns to its normal color when the panel hides.
 
 Each thread row shows an icon for its agent. When a thread has switched between providers, their icons stack with the most recent in front. Hover a thread to see every model it has used, with the current model last.
+
+To keep running work out of your thread list, turn on **Collapse working threads** in Settings → General. Threads with an agent at work then move into a collapsible **Working** section at the bottom of the sidebar, above Snoozed and Settled. A thread leaves Working once the agent finishes, fails, or needs your approval or input. The thread you have open stays visible below the section header even while it is collapsed. Pinned threads stay pinned.

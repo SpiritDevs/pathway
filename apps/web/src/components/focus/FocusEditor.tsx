@@ -487,7 +487,7 @@ export function FocusEditor(props: {
               variant="ghost"
               disabled={saving}
               onClick={() => setConfirmingDelete(true)}
-              className="text-destructive-foreground"
+              className="gap-1.5 text-destructive-foreground [--control-icon-color:currentColor] [:hover,[data-pressed]]:bg-destructive/10"
             >
               <Trash2Icon />
               Delete

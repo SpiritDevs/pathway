@@ -518,6 +518,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
         : []),
+      ...(settings.sidebarCollapseWorkingThreads !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarCollapseWorkingThreads
+        ? ["Collapse working threads"]
+        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...getChangedTypographySettingLabels(settings),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
@@ -575,6 +579,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.persistComposerContextStrip,
       settings.enableProviderUpdateChecks,
       settings.sidebarAutoSettleAfterDays,
+      settings.sidebarCollapseWorkingThreads,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
@@ -659,6 +664,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
+      sidebarCollapseWorkingThreads: DEFAULT_UNIFIED_SETTINGS.sidebarCollapseWorkingThreads,
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
@@ -2088,6 +2094,34 @@ export function GeneralSettingsPanel() {
             }
           />
         ) : null}
+
+        <SettingsRow
+          {...searchableSetting("collapse-working-threads")}
+          description="Move threads with an agent at work into a collapsible Working section at the bottom of the sidebar. They return when the agent finishes or needs your input."
+          resetAction={
+            settings.sidebarCollapseWorkingThreads !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarCollapseWorkingThreads ? (
+              <SettingResetButton
+                label="collapse working threads"
+                onClick={() =>
+                  updateSettings({
+                    sidebarCollapseWorkingThreads:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarCollapseWorkingThreads,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarCollapseWorkingThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarCollapseWorkingThreads: Boolean(checked) })
+              }
+              aria-label="Collapse working threads"
+            />
+          }
+        />
 
         <SettingsRow
           {...searchableSetting("preferred-terminal")}
