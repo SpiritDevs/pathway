@@ -173,7 +173,7 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
       Effect.map((state) => {
         if (cachedReadModel === undefined || cachedView !== state.view) {
           cachedView = state.view;
-          cachedReadModel = syncedIssueDomainFromEntities(state.view.values());
+          cachedReadModel = syncedIssueDomainFromEntities(state.view.values(), cachedReadModel);
         }
         return {
           readModel: cachedReadModel,

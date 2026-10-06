@@ -45,8 +45,12 @@ import * as DateTime from "effect/DateTime";
 export const isoTimestampFromReplica = (timestamp: number) =>
   DateTime.formatIso(DateTime.makeUnsafe(timestamp));
 
+const issuesByEntity = new WeakMap<IssueEntity, Issue>();
+
 export function issueFromReplica(entity: IssueEntity): Issue {
-  return {
+  const cached = issuesByEntity.get(entity);
+  if (cached !== undefined) return cached;
+  const issue: Issue = {
     id: entity.id,
     // "Draft" and the triage empty-status sentinel are intentional optimistic UI values. The
     // legacy codecs cannot decode them, but consumers already treat both fields as display keys.
@@ -77,6 +81,8 @@ export function issueFromReplica(entity: IssueEntity): Issue {
         ? null
         : isoTimestampFromReplica(entity.deletedAt),
   };
+  issuesByEntity.set(entity, issue);
+  return issue;
 }
 
 function completeEffectiveStatus(status: EffectiveStatus): status is EffectiveStatus & {
@@ -534,36 +540,85 @@ export interface IssueCollectionProjection {
   readonly views: ReadonlyArray<IssueView>;
 }
 
+function cacheCollection<A extends object, B>(
+  project: (source: ReadonlyArray<A>) => ReadonlyArray<B>,
+) {
+  const cache = new WeakMap<ReadonlyArray<A>, ReadonlyArray<B>>();
+  return (source: ReadonlyArray<A>) => {
+    const cached = cache.get(source);
+    if (cached !== undefined) return cached;
+    const result = project(source);
+    cache.set(source, result);
+    return result;
+  };
+}
+
+function cacheEntity<A extends object, B>(project: (source: A) => B) {
+  const cache = new WeakMap<A, B>();
+  return (source: A) => {
+    const cached = cache.get(source);
+    if (cached !== undefined) return cached;
+    const result = project(source);
+    cache.set(source, result);
+    return result;
+  };
+}
+const projectLabel = cacheEntity(labelFromReplica);
+const projectMilestone = cacheEntity(milestoneFromReplica);
+const projectCycle = cacheEntity(cycleFromReplica);
+const projectView = cacheEntity(viewFromReplica);
+
+const projectIssues = cacheCollection((entities: ReadonlyArray<IssueEntity>) =>
+  entities.map(issueFromReplica),
+);
+const projectStatuses = cacheCollection(effectiveIssueStatusesFromReplica);
+const projectLabels = cacheCollection((entities: ReadonlyArray<IssueLabelEntity>) =>
+  entities
+    .map(projectLabel)
+    .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
+);
+const projectMilestones = cacheCollection((entities: ReadonlyArray<IssueMilestoneEntity>) =>
+  entities
+    .map(projectMilestone)
+    .sort(
+      (left, right) =>
+        left.projectId.localeCompare(right.projectId) ||
+        left.position - right.position ||
+        left.id.localeCompare(right.id),
+    ),
+);
+const projectCycles = cacheCollection((entities: ReadonlyArray<IssueCycleEntity>) =>
+  entities
+    .map(projectCycle)
+    .sort(
+      (left, right) =>
+        left.startDate.localeCompare(right.startDate) ||
+        left.endDate.localeCompare(right.endDate) ||
+        left.id.localeCompare(right.id),
+    ),
+);
+const projectViews = cacheCollection((entities: ReadonlyArray<IssueViewEntity>) =>
+  entities
+    .map(projectView)
+    .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id)),
+);
+
+const collectionsByReadModel = new WeakMap<SyncedIssueDomainReadModel, IssueCollectionProjection>();
+
 /** Projects the exact replica-owned fields shared by web IssuesStore and server IssuesSnapshot. */
 export function issueCollectionProjectionFromReplica(
   readModel: SyncedIssueDomainReadModel,
 ): IssueCollectionProjection {
-  return {
-    issues: readModel.issues.map(issueFromReplica),
-    statuses: effectiveIssueStatusesFromReplica(readModel.issueStatuses),
-    labels: readModel.issueLabels
-      .map(labelFromReplica)
-      .sort(
-        (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
-      ),
-    milestones: readModel.issueMilestones
-      .map(milestoneFromReplica)
-      .sort(
-        (left, right) =>
-          left.projectId.localeCompare(right.projectId) ||
-          left.position - right.position ||
-          left.id.localeCompare(right.id),
-      ),
-    cycles: readModel.issueCycles
-      .map(cycleFromReplica)
-      .sort(
-        (left, right) =>
-          left.startDate.localeCompare(right.startDate) ||
-          left.endDate.localeCompare(right.endDate) ||
-          left.id.localeCompare(right.id),
-      ),
-    views: readModel.issueViews
-      .map(viewFromReplica)
-      .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id)),
+  const cached = collectionsByReadModel.get(readModel);
+  if (cached !== undefined) return cached;
+  const projected = {
+    issues: projectIssues(readModel.issues),
+    statuses: projectStatuses(readModel.issueStatuses),
+    labels: projectLabels(readModel.issueLabels),
+    milestones: projectMilestones(readModel.issueMilestones),
+    cycles: projectCycles(readModel.issueCycles),
+    views: projectViews(readModel.issueViews),
   };
+  collectionsByReadModel.set(readModel, projected);
+  return projected;
 }

@@ -39,7 +39,11 @@ import { Atom } from "effect/unstable/reactivity";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { CompanyDiscoveryState } from "./companyRegistryReplica";
+import {
+  companyRegistryReplicasAtom,
+  publishCompanyRegistryReplica,
+  type CompanyDiscoveryState,
+} from "./companyRegistryReplica";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
   automaticEnvironmentRegistrationServiceRoleId,
@@ -903,6 +907,83 @@ describe("runCloudSyncEngines", () => {
       });
       expect(yield* Queue.take(published)).toEqual({ companyId: COMPANY_A, phase: null });
       yield* Fiber.interrupt(supervisor);
+    }),
+  );
+
+  it.effect("keeps phase status flowing without republishing an unchanged replica", () =>
+    Effect.gen(function* () {
+      const store = yield* makeMemorySyncStore();
+      const version = CompanyVersion.make(1);
+      const authorizationEpoch = AuthorizationEpoch.make(1);
+      yield* store.service.commit(COMPANY_A, {
+        checkpoint: {
+          schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
+          bootstrapGeneration: SYNC_BOOTSTRAP_GENERATION,
+          companyId: COMPANY_A,
+          cursor: version,
+          authorizationEpoch,
+          bootstrapped: true,
+        },
+      });
+      const { transport: feed } = yield* makeFeedTransport();
+      const transport = SyncTransport.of({
+        ...feed,
+        listChanges: () =>
+          Effect.succeed({
+            _tag: "Changes",
+            companyId: COMPANY_A,
+            authorizationEpoch,
+            cursor: version,
+            latestVersion: version,
+            changes: [],
+            hasMore: false,
+          }),
+      });
+      const election = yield* makeWebLeaderElection({
+        scope: "phase-identity",
+        locks: makeInProcessWebLockManager(),
+      });
+      const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
+      const handles =
+        yield* Queue.unbounded<import("./companySyncEngines").CompanySyncEngineMutationHandle>();
+      const statuses = yield* Queue.unbounded<string>();
+      const replicaPublications = yield* Ref.make(0);
+      const supervisor = yield* Effect.forkChild(
+        runCloudSyncEngines({
+          clientId: SyncClientId.make("phase-client"),
+          election,
+          connect: Effect.succeed(connectionTo(transport, listings)),
+          publishCompanySyncEngineHandle: (_, handle) =>
+            handle === null ? Effect.void : Queue.offer(handles, handle),
+          publishCompanyRegistryReplica: (_, replica) =>
+            replica === null ? Effect.void : Ref.update(replicaPublications, (count) => count + 1),
+          publishCompanySyncStatus: (_, status) =>
+            status === null ? Effect.void : Queue.offer(statuses, status.phase),
+        }).pipe(Effect.provideService(SyncStore, store.service)),
+      );
+      yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
+      const handle = yield* Queue.take(handles);
+      expect(yield* Queue.take(statuses)).toBe("reconnecting");
+      expect(yield* Ref.get(replicaPublications)).toBe(1);
+      yield* handle.sync;
+      expect(yield* Queue.take(statuses)).toBe("live");
+      expect(yield* Queue.take(statuses)).toBe("live");
+      expect(yield* Ref.get(replicaPublications)).toBe(1);
+      yield* Fiber.interrupt(supervisor);
+    }),
+  );
+
+  it.effect("retains the registry map when a publisher sends the same view again", () =>
+    Effect.gen(function* () {
+      const replica = { view: new Map<string, unknown>() };
+      yield* publishCompanyRegistryReplica(COMPANY_A, replica);
+      const before = appAtomRegistry.get(companyRegistryReplicasAtom);
+      yield* publishCompanyRegistryReplica(COMPANY_A, { view: replica.view });
+      expect(appAtomRegistry.get(companyRegistryReplicasAtom)).toBe(before);
+      yield* publishCompanyRegistryReplica(COMPANY_A, null);
+      const removed = appAtomRegistry.get(companyRegistryReplicasAtom);
+      yield* publishCompanyRegistryReplica(COMPANY_A, null);
+      expect(appAtomRegistry.get(companyRegistryReplicasAtom)).toBe(removed);
     }),
   );
 

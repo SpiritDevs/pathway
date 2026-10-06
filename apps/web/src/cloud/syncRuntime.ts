@@ -495,12 +495,15 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
       const publishReplica = options.publishCompanyRegistryReplica;
       const publishStatus = options.publishCompanySyncStatus;
       if (publishReplica !== undefined || publishStatus !== undefined) {
+        let previousView: ReadonlyMap<string, unknown> | undefined;
         yield* SubscriptionRef.changes(engine.state).pipe(
           Stream.runForEach((state) => {
             const status = deriveCompanySyncStatus(state);
+            const replicaChanged = previousView !== state.view;
+            previousView = state.view;
             return Effect.all(
               [
-                publishReplica?.(company.companyId, state),
+                replicaChanged ? publishReplica?.(company.companyId, state) : undefined,
                 publishStatus?.(company.companyId, status),
               ].filter((effect): effect is Effect.Effect<void> => effect !== undefined),
               { discard: true },
