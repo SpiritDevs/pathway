@@ -1126,6 +1126,22 @@ export const OrchestrationV2WorkspacePreparation = Schema.Struct({
 });
 export type OrchestrationV2WorkspacePreparation = typeof OrchestrationV2WorkspacePreparation.Type;
 
+/** Metadata for an inline output preview; complete output stays on the environment. */
+export const OrchestrationV2ToolOutputPreview = Schema.Struct({
+  totalBytes: NonNegativeInt,
+  format: Schema.Literals(["text", "json"]),
+});
+export type OrchestrationV2ToolOutputPreview = typeof OrchestrationV2ToolOutputPreview.Type;
+
+export const OrchestrationV2ToolOutput = Schema.Struct({
+  ...OrchestrationV2ToolOutputPreview.fields,
+  text: Schema.String,
+});
+
+/** References deduplicate visible items; compact payloads also bound tool output. */
+export const OrchestrationV2ThreadPayloadFormat = Schema.Literals(["references-v1", "compact-v1"]);
+export type OrchestrationV2ThreadPayloadFormat = typeof OrchestrationV2ThreadPayloadFormat.Type;
+
 export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1184,6 +1200,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     type: Schema.Literal("command_execution"),
     input: Schema.String,
     output: Schema.optional(Schema.String),
+    outputPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
     exitCode: Schema.optional(Schema.Int),
     workspacePreparation: Schema.optional(OrchestrationV2WorkspacePreparation),
   }),
@@ -1320,6 +1337,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     toolName: Schema.NullOr(TrimmedNonEmptyString),
     input: Schema.Unknown,
     output: Schema.optional(Schema.Unknown),
+    outputPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
   }),
 ]);
 export type OrchestrationV2TurnItem = typeof OrchestrationV2TurnItem.Type;
@@ -1517,6 +1535,25 @@ export const OrchestrationV2ThreadProjection = Schema.Struct({
   updatedAt: Schema.DateTimeUtc,
 });
 export type OrchestrationV2ThreadProjection = typeof OrchestrationV2ThreadProjection.Type;
+
+/** Opt-in wire representation. Inherited and synthetic items are sent once in a separate pool. */
+export const OrchestrationV2CompactThreadProjection = OrchestrationV2ThreadProjection.mapFields(
+  (fields) => ({
+    ...fields,
+    payloadFormat: OrchestrationV2ThreadPayloadFormat,
+    referencedTurnItems: Schema.Array(OrchestrationV2TurnItem),
+    visibleTurnItems: Schema.Array(
+      OrchestrationV2ProjectedTurnItem.mapFields(({ item: _, ...reference }) => reference),
+    ),
+  }),
+);
+export type OrchestrationV2CompactThreadProjection =
+  typeof OrchestrationV2CompactThreadProjection.Type;
+export const OrchestrationV2ThreadProjectionWire = Schema.Union([
+  OrchestrationV2CompactThreadProjection,
+  OrchestrationV2ThreadProjection,
+]);
+export type OrchestrationV2ThreadProjectionWire = typeof OrchestrationV2ThreadProjectionWire.Type;
 
 const REPLACEABLE_INITIAL_THREAD_SIDE_EFFECT_ITEM_TYPES = new Set([
   "command_execution",
@@ -1977,6 +2014,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     type: Schema.Literal("command_execution"),
     input: Schema.String,
     output: Schema.optional(Schema.String),
+    outputPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
     exitCode: Schema.optional(Schema.Int),
     workspacePreparation: Schema.optional(OrchestrationV2WorkspacePreparation),
   }),
@@ -2110,6 +2148,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     toolName: Schema.NullOr(TrimmedNonEmptyString),
     input: Schema.Unknown,
     output: Schema.optional(Schema.Unknown),
+    outputPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
   }),
 ]);
 export type OrchestrationV2TurnItemJson = typeof OrchestrationV2TurnItemJson.Type;
@@ -3066,6 +3105,7 @@ export type OrchestrationV2ThreadHistory = typeof OrchestrationV2ThreadHistory.T
 
 export const OrchestrationV2SubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
+  payloadFormat: Schema.optionalKey(OrchestrationV2ThreadPayloadFormat),
   /** Opts into bounded snapshots, including when a reconnect has a large backlog. */
   history: Schema.optionalKey(OrchestrationV2ThreadHistoryRequest),
   /**
@@ -3088,6 +3128,14 @@ export const OrchestrationV2ThreadDetailSnapshot = Schema.Struct({
 });
 export type OrchestrationV2ThreadDetailSnapshot = typeof OrchestrationV2ThreadDetailSnapshot.Type;
 
+export const OrchestrationV2ThreadDetailSnapshotWire =
+  OrchestrationV2ThreadDetailSnapshot.mapFields((fields) => ({
+    ...fields,
+    projection: OrchestrationV2ThreadProjectionWire,
+  }));
+export type OrchestrationV2ThreadDetailSnapshotWire =
+  typeof OrchestrationV2ThreadDetailSnapshotWire.Type;
+
 export const OrchestrationV2ThreadStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("synchronized"),
@@ -3095,7 +3143,7 @@ export const OrchestrationV2ThreadStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("snapshot"),
     snapshotSequence: NonNegativeInt,
-    projection: OrchestrationV2ThreadProjection,
+    projection: OrchestrationV2ThreadProjectionWire,
     history: Schema.optionalKey(OrchestrationV2ThreadHistory),
   }),
   Schema.Struct({

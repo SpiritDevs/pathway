@@ -50,6 +50,10 @@ const LegacyShellStreamItem = Schema.Union([
 ]);
 const decodeLegacyShellStreamItem = Schema.decodeUnknownSync(LegacyShellStreamItem);
 const decodeOrchestrationV2Command = Schema.decodeUnknownSync(OrchestrationV2Command);
+const decodeSubscribeThreadInput = Schema.decodeUnknownSync(OrchestrationV2SubscribeThreadInput);
+const decodeLegacySubscribeThreadInput = Schema.decodeUnknownSync(
+  OrchestrationV2SubscribeThreadInput.mapFields(({ payloadFormat: _, ...fields }) => fields),
+);
 const decodeOrchestrationV2TurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItem);
 const decodeOrchestrationV2TurnItemJson = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
 const decodeOrchestrationV2CheckpointScope = Schema.decodeUnknownSync(
@@ -97,6 +101,19 @@ describe("orchestration V2 contracts", () => {
       decode({ threadId: "thread:history", history: { limit: 50, around: "message:target" } })
         .history,
     ).toEqual({ limit: 50, around: "message:target" });
+  });
+
+  it("versions compact payloads explicitly and lets older servers ignore the request option", () => {
+    const request = { threadId: "thread:compact", payloadFormat: "compact-v1" };
+    expect(decodeSubscribeThreadInput(request).payloadFormat).toBe("compact-v1");
+    expect(decodeLegacySubscribeThreadInput(request)).toEqual({ threadId: "thread:compact" });
+    expect(decodeSubscribeThreadInput({ threadId: "thread:legacy" }).payloadFormat).toBeUndefined();
+    expect(() =>
+      decodeSubscribeThreadInput({
+        ...request,
+        payloadFormat: "unknown-v2",
+      }),
+    ).toThrow();
   });
 
   it("rejects unbounded or fractional thread history requests", () => {

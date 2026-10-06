@@ -5,3 +5,7 @@ Right-click a conversation, or focus it and press Shift+F10, to open its menu. P
 The conversation owner can archive or delete it. Both actions request that its unfinished agent work stop. Offline workers may take longer to confirm. You can read the conversation and see its stopping status under Archived conversations while confirmation is pending.
 
 After an archive finishes, Restore conversation makes it available again. Cancelled work stays cancelled. Delete asks for confirmation and removes the conversation from your list once its work has stopped.
+
+## Long tool output
+
+Large command and tool results show an output preview in the conversation details. Choose **Show all** to load the complete output from the connected environment. If the environment is disconnected, reconnect and try again. The complete result stays saved on the environment.

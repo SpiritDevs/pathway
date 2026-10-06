@@ -1,12 +1,17 @@
+import { fetchEnvironmentToolOutput } from "@spiritdevs/client-runtime/state/threads";
 import type {
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2ToolOutputPreview,
   RunId,
   ThreadId,
 } from "@spiritdevs/contracts";
+import * as DateTime from "effect/DateTime";
 import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "lucide-react";
 import { memo, type ReactNode, useMemo, useState } from "react";
 
+import { runtime } from "../../lib/runtime";
+import { readPreparedConnection } from "../../state/session";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import { Button } from "../ui/button";
@@ -60,24 +65,61 @@ export function structuredValuePreview(text: string, showAll: boolean): string {
     : text.slice(-STRUCTURED_VALUE_PREVIEW_CHARS);
 }
 
-function StructuredValue({ value }: { readonly value: unknown }) {
+function StructuredValue({
+  value,
+  outputPreview,
+  loadFull,
+}: {
+  readonly value: unknown;
+  readonly outputPreview?: OrchestrationV2ToolOutputPreview | undefined;
+  readonly loadFull?: (() => Promise<string>) | undefined;
+}) {
   const [showAll, setShowAll] = useState(false);
+  const [fullText, setFullText] = useState<string>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>();
   const text = useMemo(
     () => (typeof value === "string" ? value : JSON.stringify(value, null, 2)),
     [value],
   );
   if (!text) return null;
-  const preview = structuredValuePreview(text, showAll);
+  const preview =
+    fullText ?? (outputPreview === undefined ? structuredValuePreview(text, showAll) : text);
+  const canExpand =
+    fullText === undefined && (outputPreview !== undefined || preview.length < text.length);
   return (
     <div className="space-y-1">
-      {preview.length < text.length ? (
+      {canExpand ? (
         <button
           type="button"
           className="text-[11px] text-muted-foreground underline"
-          onClick={() => setShowAll(true)}
+          disabled={loading}
+          onClick={async () => {
+            if (outputPreview === undefined) {
+              setShowAll(true);
+              return;
+            }
+            if (loadFull === undefined) return;
+            setLoading(true);
+            setError(undefined);
+            try {
+              setFullText(await loadFull());
+            } catch {
+              setError("Could not load full output. Try again.");
+            } finally {
+              setLoading(false);
+            }
+          }}
         >
-          Show all {Math.ceil(text.length / 1024)} KB
+          {loading
+            ? "Loading output…"
+            : `Show all ${Math.ceil((outputPreview?.totalBytes ?? text.length) / 1024)} KB`}
         </button>
+      ) : null}
+      {error ? (
+        <p role="alert" className="text-[11px] text-destructive">
+          {error}
+        </p>
       ) : null}
       <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/50 bg-background/60 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground select-text">
         {preview}
@@ -93,6 +135,18 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
     sourceThreadId: props.projectedItem.sourceThreadId,
     sourceItemId: props.projectedItem.sourceItemId,
   });
+  const loadFullOutput = async () => {
+    const prepared = readPreparedConnection(props.environmentId);
+    if (prepared === null) throw new Error("The environment is disconnected.");
+    const output = await runtime.runPromise(
+      fetchEnvironmentToolOutput({
+        prepared,
+        threadId: item.threadId,
+        itemId: item.id,
+      }),
+    );
+    return output.text;
+  };
   const duration = durationLabel(item.startedAt, item.completedAt);
   const latestAttempt = support.attempts.at(-1) ?? null;
   const runtimeRequest = support.runtimeRequest;
@@ -174,7 +228,14 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
       {item.type === "command_execution" ? (
         <div className="space-y-2">
           <StructuredValue value={item.input} />
-          {item.output !== undefined ? <StructuredValue value={item.output} /> : null}
+          {item.output !== undefined ? (
+            <StructuredValue
+              key={`${item.id}:${DateTime.toEpochMillis(item.updatedAt)}`}
+              value={item.output}
+              outputPreview={item.outputPreview}
+              loadFull={loadFullOutput}
+            />
+          ) : null}
           {item.exitCode !== undefined ? (
             <p className={item.exitCode === 0 ? "text-emerald-600" : "text-destructive"}>
               Process exited with code {item.exitCode}
@@ -265,7 +326,12 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
               <p className="mb-1 text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
                 Output
               </p>
-              <StructuredValue value={item.output} />
+              <StructuredValue
+                key={`${item.id}:${DateTime.toEpochMillis(item.updatedAt)}`}
+                value={item.output}
+                outputPreview={item.outputPreview}
+                loadFull={loadFullOutput}
+              />
             </div>
           ) : null}
         </div>

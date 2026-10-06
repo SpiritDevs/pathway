@@ -28,6 +28,7 @@ import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
 import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
+import { resolveThreadProjectionPayload } from "./threadPayload.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
 import {
@@ -321,7 +322,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       indexSequence = item.snapshotSequence;
       yield* SubscriptionRef.set(lastSequence, item.snapshotSequence);
       yield* setThread(
-        item.projection,
+        resolveThreadProjectionPayload(item.projection),
         item.history === undefined
           ? null
           : {
@@ -466,13 +467,20 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         result = yield* session.value.client[ORCHESTRATION_V2_WS_METHODS.subscribeThread]({
           threadId,
           history: request,
+          payloadFormat: "compact-v1",
         }).pipe(
           Stream.filter((item) => item.kind === "snapshot"),
           Stream.runHead,
           Effect.timeout("6 seconds"),
           Effect.map((item) =>
             Option.isSome(item)
-              ? { _tag: "Snapshot" as const, snapshot: item.value }
+              ? {
+                  _tag: "Snapshot" as const,
+                  snapshot: {
+                    ...item.value,
+                    projection: resolveThreadProjectionPayload(item.value.projection),
+                  },
+                }
               : { _tag: "Unavailable" as const },
           ),
           Effect.orElseSucceed(() => ({ _tag: "Unavailable" as const })),
@@ -725,6 +733,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
         return {
           threadId,
+          payloadFormat: "compact-v1" as const,
           ...(canResume ? { afterSequence: sequence } : {}),
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
           ...(historySupported ? { history: { limit: 50 } } : {}),

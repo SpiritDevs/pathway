@@ -30,13 +30,16 @@ import {
   EnvironmentId,
   PortSchema,
   ThreadId,
+  TurnItemId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { EnvironmentRelayLinkState } from "./cloudProject.ts";
 import {
   OrchestrationV2ShellSnapshot,
-  OrchestrationV2ThreadDetailSnapshot,
+  OrchestrationV2ThreadDetailSnapshotWire,
+  OrchestrationV2ThreadPayloadFormat,
+  OrchestrationV2ToolOutput,
   OrchestrationV2ThreadHistoryRequest,
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
@@ -100,6 +103,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "project_mutation_failed",
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
+  "orchestration_tool_output_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -174,7 +178,10 @@ export class EnvironmentInternalError extends Schema.TaggedErrorClass<Environmen
   }
 }
 
-export const EnvironmentResourceNotFoundReason = Schema.Literals(["thread_not_found"]);
+export const EnvironmentResourceNotFoundReason = Schema.Literals([
+  "thread_not_found",
+  "tool_output_not_found",
+]);
 export type EnvironmentResourceNotFoundReason = typeof EnvironmentResourceNotFoundReason.Type;
 
 export class EnvironmentResourceNotFoundError extends Schema.TaggedErrorClass<EnvironmentResourceNotFoundError>()(
@@ -523,9 +530,18 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       params: EnvironmentOrchestrationThreadSnapshotParams,
       query: Schema.Struct({
         ...OrchestrationV2ThreadHistoryRequest.fields,
+        payloadFormat: Schema.optionalKey(OrchestrationV2ThreadPayloadFormat),
         limit: Schema.optionalKey(OrchestrationV2ThreadHistoryRequest.fields.limit),
       }),
-      success: OrchestrationV2ThreadDetailSnapshot,
+      success: OrchestrationV2ThreadDetailSnapshotWire,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("toolOutput", "/api/orchestration/threads/:threadId/items/:itemId/output", {
+      headers: OptionalBearerHeaders,
+      params: Schema.Struct({ threadId: ThreadId, itemId: TurnItemId }),
+      success: OrchestrationV2ToolOutput,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
