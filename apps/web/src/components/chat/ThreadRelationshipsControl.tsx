@@ -55,6 +55,7 @@ import { useThreadProjection, useThreadShells } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { cn } from "../../lib/utils";
+import { PROVIDER_ICON_BY_PROVIDER } from "./providerIconUtils";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -345,6 +346,17 @@ function useThreadRelationshipsModel(props: {
     setBusyAction(null);
   };
 
+  // A subagent row shows the brand icon of the provider it runs on, when that provider is known.
+  const providerIcon = (threadId: ThreadId) => {
+    const thread = graph.nodes.get(threadId)?.thread;
+    if (!thread) return null;
+    const environmentId = environmentByThreadId.get(threadId) ?? props.environmentId;
+    const driver = serverConfigs
+      .get(environmentId)
+      ?.providers.find((provider) => provider.instanceId === thread.providerInstanceId)?.driver;
+    return driver === undefined ? null : (PROVIDER_ICON_BY_PROVIDER[driver] ?? null);
+  };
+
   const parentTitle =
     mergeTargetThreadId === null
       ? null
@@ -367,6 +379,7 @@ function useThreadRelationshipsModel(props: {
     openThread,
     parentMenuItems,
     parentTitle,
+    providerIcon,
     runParentMenuAction,
     showParentContextMenu,
     settleChat,
@@ -536,6 +549,7 @@ export function ThreadLineagePanel() {
     openThread,
     parentMenuItems,
     parentTitle,
+    providerIcon,
     runParentMenuAction,
     showMore,
     showParentContextMenu,
@@ -612,7 +626,7 @@ export function ThreadLineagePanel() {
             const RelationshipIcon = isParent
               ? CornerLeftUpIcon
               : isSubagent
-                ? BotIcon
+                ? (providerIcon(threadId) ?? BotIcon)
                 : edge.kind === "attached"
                   ? CornerDownRightIcon
                   : GitForkIcon;
