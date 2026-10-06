@@ -318,20 +318,6 @@ function useFocusSelection() {
   return { activeFocusId, setActiveFocusId, visibleFocuses };
 }
 
-// #region DEBUG
-function debugAgentThreadProjectCreate(
-  hypothesis: "H12" | "H13" | "H14",
-  event: string,
-  fields: Readonly<Record<string, string | number | boolean | null>>,
-): void {
-  void fetch("/api/__debug/cloud-sync", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ hypothesis, event, fields }),
-  }).catch(() => undefined);
-}
-// #endregion DEBUG
-
 function getLocalFileManagerName(platform: string): string {
   if (isMacPlatform(platform)) {
     return "Finder";
@@ -2741,17 +2727,6 @@ function OpenCommandPaletteDialog(props: {
         readonly cloudProjectId: string;
       } | null;
     }) => {
-      // #region DEBUG
-      const createStartedAt = performance.now();
-      debugAgentThreadProjectCreate("H12", "agent-project-create-started", {
-        choiceKind: input.choice?.kind ?? "none",
-        hasExistingTarget: input.existingTarget != null,
-        activeCompanyAvailable: activeCompanyId !== null,
-        environmentControlAvailable: environmentControl !== null,
-        scopedProjectCount: projects.length,
-        workspaceProjectCount: workspaceProjects.length,
-      });
-      // #endregion DEBUG
       if (environmentControl === null) return false;
       let ownerCompanyId: CompanyId;
       try {
@@ -2794,12 +2769,6 @@ function OpenCommandPaletteDialog(props: {
         },
       });
       const projectRef = scopeProjectRef(input.environmentId, projectId);
-      // #region DEBUG
-      debugAgentThreadProjectCreate("H12", "agent-project-create-finished", {
-        durationMs: Math.round(performance.now() - createStartedAt),
-        resultTag: createResult._tag,
-      });
-      // #endregion DEBUG
       if (createResult._tag === "Failure") {
         if (isAtomCommandInterrupted(createResult)) {
           return false;
@@ -2836,15 +2805,6 @@ function OpenCommandPaletteDialog(props: {
         activeCompanyId: ownerCompanyId,
         availableCompanyIds: companies.map((company) => company.id),
       });
-      // #region DEBUG
-      debugAgentThreadProjectCreate("H13", "agent-project-binding-decision", {
-        choiceKind: input.choice?.kind ?? "none",
-        availableCompanyCount: companies.length,
-        bindingTargetAvailable: bindingTarget !== null,
-        environmentControlAvailable: environmentControl !== null,
-        hasExistingCloudProject: bindingTarget?.cloudProjectId != null,
-      });
-      // #endregion DEBUG
       if (environmentControl !== null && bindingTarget !== null) {
         const automaticAssignmentProjectKey = scopedProjectKey(projectRef);
         markProjectAutomaticAssignmentPending(automaticAssignmentProjectKey);
@@ -2868,12 +2828,6 @@ function OpenCommandPaletteDialog(props: {
             setActiveCompanyId(bindingTarget.companyId);
           }
           const projectVisible = await waitForProject(projectRef);
-          // #region DEBUG
-          debugAgentThreadProjectCreate("H13", "agent-project-binding-projected", {
-            projectVisible,
-            elapsedSinceCreateMs: Math.round(performance.now() - createStartedAt),
-          });
-          // #endregion DEBUG
           if (!projectVisible) {
             toastManager.add(
               stackedThreadToast({
@@ -2898,19 +2852,7 @@ function OpenCommandPaletteDialog(props: {
         }
       }
 
-      // #region DEBUG
-      const navigationStartedAt = performance.now();
-      debugAgentThreadProjectCreate("H14", "agent-project-navigation-started", {
-        elapsedSinceCreateMs: Math.round(performance.now() - createStartedAt),
-      });
-      // #endregion DEBUG
       const navigationResult = await settlePromise(() => handleNewThread(projectRef));
-      // #region DEBUG
-      debugAgentThreadProjectCreate("H14", "agent-project-navigation-finished", {
-        durationMs: Math.round(performance.now() - navigationStartedAt),
-        resultTag: navigationResult._tag,
-      });
-      // #endregion DEBUG
       if (navigationResult._tag === "Failure") {
         const error = squashAtomCommandFailure(navigationResult);
         toastManager.add(

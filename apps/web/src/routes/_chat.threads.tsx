@@ -25,20 +25,6 @@ import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { cn } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
-// #region DEBUG
-function debugThreadsLanding(
-  hypothesis: string,
-  event: string,
-  fields: Readonly<Record<string, string | number | boolean | null>>,
-): void {
-  void fetch("/api/__debug/cloud-sync", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ hypothesis, event, fields }),
-  }).catch(() => undefined);
-}
-// #endregion DEBUG
-
 function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
   const { environments } = useEnvironments();
@@ -77,59 +63,16 @@ function IndexDraftLanding() {
   );
 
   useEffect(() => {
-    // #region DEBUG
-    debugThreadsLanding("H1/H2", "landing-state-observed", {
-      bootstrapped,
-      projectCount: projects.length,
-      workspaceProjectCount: workspaceProjects.length,
-      threadStartAvailability: workspaceThreadStartAvailability(workspaceProjects),
-      threadCount: threads.length,
-      agentThreadCount: agentThreads.length,
-      hasMostRecentProject: mostRecentProject !== null,
-      starting: startingRef.current,
-      failed: startState.failed,
-    });
-    // #endregion DEBUG
-  }, [
-    agentThreads.length,
-    bootstrapped,
-    mostRecentProject,
-    projects.length,
-    startState.failed,
-    threads.length,
-    workspaceProjects,
-  ]);
-
-  useEffect(() => {
     if (mostRecentProject === null || startingRef.current) {
       return;
     }
     startingRef.current = true;
-    // #region DEBUG
-    debugThreadsLanding("H3", "draft-start-requested", {
-      projectCount: projects.length,
-      bootstrapped,
-    });
-    // #endregion DEBUG
     void handleNewThread(scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id), {
       replace: true,
-    })
-      .then(() => {
-        // #region DEBUG
-        debugThreadsLanding("H3", "draft-start-resolved", {
-          projectCount: projects.length,
-        });
-        // #endregion DEBUG
-      })
-      .catch(() => {
-        // #region DEBUG
-        debugThreadsLanding("H3", "draft-start-rejected", {
-          projectCount: projects.length,
-        });
-        // #endregion DEBUG
-        startingRef.current = false;
-        setStartState((state) => ({ ...state, failed: true }));
-      });
+    }).catch(() => {
+      startingRef.current = false;
+      setStartState((state) => ({ ...state, failed: true }));
+    });
   }, [handleNewThread, mostRecentProject, startState.retryRequest]);
 
   if (!bootstrapped) {

@@ -299,24 +299,6 @@ const ACTIVE_ORDER_KEY = "pathway:sidebar:active-order";
 const ActiveOrderSchema = Schema.Array(Schema.String);
 const EMPTY_ACTIVE_ORDER: readonly string[] = [];
 
-// #region DEBUG
-function debugSidebarProjects(
-  projectCount: number,
-  workspaceProjectCount: number,
-  threadStartAvailability: string,
-): void {
-  void fetch("/api/__debug/cloud-sync", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      hypothesis: "H2",
-      event: "sidebar-projects-observed",
-      fields: { projectCount, workspaceProjectCount, threadStartAvailability },
-    }),
-  }).catch(() => undefined);
-}
-// #endregion DEBUG
-
 function compactSidebarTimeLabel(label: string): string {
   if (label === "just now") return "now";
   return label.endsWith(" ago") ? label.slice(0, -4) : label;
@@ -2353,12 +2335,6 @@ export default function Sidebar() {
     queueDestinations.length > 0
       ? "available"
       : workspaceThreadStartAvailability(workspaceProjects);
-
-  useEffect(() => {
-    // #region DEBUG
-    debugSidebarProjects(projects.length, workspaceProjects.length, threadStartAvailability);
-    // #endregion DEBUG
-  }, [projects.length, threadStartAvailability, workspaceProjects.length]);
 
   const singleWorkspaceProject =
     focusScopedWorkspaceProjects.length === 1 ? (focusScopedWorkspaceProjects[0] ?? null) : null;

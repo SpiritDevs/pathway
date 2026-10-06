@@ -25,19 +25,6 @@ import {
   resolveRelayClerkTokenOptions,
 } from "./publicConfig";
 
-// #region DEBUG
-function debugAlwaysOnCloudLink(
-  event: string,
-  fields: Readonly<Record<string, string | number | boolean | null>>,
-): void {
-  void fetch("/api/__debug/cloud-sync", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ hypothesis: "H3", event, fields }),
-  }).catch(() => undefined);
-}
-// #endregion DEBUG
-
 export interface CloudLinkDesiredState {
   readonly managedTunnel: boolean;
   readonly publish: boolean;
@@ -472,19 +459,6 @@ export function useAlwaysOnCloudLink(): void {
     controller.linkState.data !== null;
 
   useEffect(() => {
-    // #region DEBUG
-    debugAlwaysOnCloudLink("reconcile-effect-entered", {
-      eligible: eligible ?? null,
-      isSatisfied,
-      isSignedIn: controller.isSignedIn ?? null,
-      manualRelinkRequestId: retryStatus.manualRelinkRequestId,
-      manualRetryRequestId: retryStatus.manualRetryRequestId,
-      phase: retryStatus.phase,
-      currentLocalHttpPort: currentLocalHttpPort ?? null,
-      managedTunnelLocalPort: controller.linkState.data?.managedTunnelLocalPort ?? null,
-      targetReady: target !== null,
-    });
-    // #endregion DEBUG
     if (!eligible || target === null) {
       publishAlwaysOnCloudLinkStatus({
         phase: "idle",
@@ -523,13 +497,6 @@ export function useAlwaysOnCloudLink(): void {
 
     const reconcile = async () => {
       const attempt = attemptsCompleted + 1;
-      // #region DEBUG
-      debugAlwaysOnCloudLink("reconcile-attempt-started", {
-        attempt,
-        manualRelink: isManualRelink,
-        manualRetry: isManualRetry,
-      });
-      // #endregion DEBUG
       publishAlwaysOnCloudLinkStatus({
         phase: "connecting",
         attempt,
@@ -539,13 +506,6 @@ export function useAlwaysOnCloudLink(): void {
       const result = await (isManualRelink ? relinkCloudState : reconcileCloudState)(
         ALWAYS_ON_CLOUD_LINK_STATE,
       );
-      // #region DEBUG
-      debugAlwaysOnCloudLink("reconcile-attempt-finished", {
-        attempt,
-        completed: result.completed,
-        hasError: result.error !== null,
-      });
-      // #endregion DEBUG
       if (cancelled) return;
       attemptsCompleted = attempt;
       if (result.completed) {
