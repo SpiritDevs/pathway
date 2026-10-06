@@ -14,6 +14,8 @@ import { DEV_PROXIED_PATH_PREFIXES } from "@spiritdevs/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
 
+import { desktopRendererHtmlPlugin } from "./scripts/desktopRendererHtml";
+
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
 
@@ -168,6 +170,7 @@ export default defineConfig(() => {
         presets: [reactCompilerPreset()],
       }),
       tailwindcss(),
+      desktopRendererHtmlPlugin(),
     ],
     optimizeDeps: {
       include: [
