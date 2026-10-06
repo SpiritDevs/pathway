@@ -17,6 +17,7 @@ import type {
   DesktopPreviewRecordingArtifact,
   DesktopPreviewRecordingFrame,
   DesktopPreviewScreenshotArtifact,
+  DesktopPreviewSiteInfo,
   PreviewAutomationClickInput,
   PreviewAutomationActionEvent,
   PreviewAutomationConsoleEntry,
@@ -69,6 +70,7 @@ import {
   ELEMENT_PICKED_CHANNEL,
   START_PICK_CHANNEL,
 } from "./GuestProtocol.ts";
+import * as PathwayRuntime from "./PathwayRuntime.ts";
 import { isPreviewAnnotationPayload } from "./PickedElementPayload.ts";
 import { playwrightInjectedRuntimeInstallExpression } from "./PlaywrightInjectedRuntime.ts";
 import { makePreviewAutomationKeySequence } from "./PreviewKeyboard.ts";
@@ -507,6 +509,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   artifactDirectory: string,
   pictureInPicturePreloadPath: string,
 ) {
+  const browserSession = yield* BrowserSession.BrowserSession;
   const fileSystem = yield* FileSystem.FileSystem;
   const hostPlatform = yield* HostProcessPlatform;
   const path = yield* Path.Path;
@@ -2142,20 +2145,28 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     return null;
   });
 
+  const siteInfo = Effect.fn("PreviewManager.siteInfo")(function* (tabId: string) {
+    const wc = yield* requireWebContents(tabId);
+    return yield* attemptPromise({ operation: "siteInfo", tabId, webContentsId: wc.id }, () =>
+      PathwayRuntime.siteInfo(wc),
+    );
+  });
+
+  const openSiteSettings = Effect.fn("PreviewManager.openSiteSettings")(function* (tabId: string) {
+    const wc = yield* requireWebContents(tabId);
+    const url = yield* attempt({ operation: "openSiteSettings", tabId, webContentsId: wc.id }, () =>
+      PathwayRuntime.siteSettingsUrl(wc),
+    );
+    // Opens beside this tab, as a link with target="_blank" would.
+    yield* emitOpenInNewTab({ tabId, url });
+  });
+
   const clearSiteData = Effect.fn("PreviewManager.clearSiteData")(function* (tabId: string) {
     const wc = yield* requireWebContents(tabId);
-    const url = wc.getURL();
-    if (!/^https?:/i.test(url) || !URL.canParse(url)) return;
-    const origin = new URL(url).origin;
-    yield* attemptPromise(
-      { operation: "clearSiteData.clearStorageData", tabId, webContentsId: wc.id },
-      () =>
-        wc.session.clearStorageData({
-          origin,
-          storages: ["cookies", "localstorage", "indexdb", "serviceworkers", "cachestorage"],
-        }),
+    const partition = yield* browserSession.partitionOf(wc.session);
+    yield* attemptPromise({ operation: "clearSiteData", tabId, webContentsId: wc.id }, () =>
+      PathwayRuntime.clearSiteData(wc, partition),
     );
-    if (!wc.isDestroyed()) wc.reload();
   });
 
   const capturePreviewFrame = Effect.fn("PreviewManager.capturePreviewFrame")(function* (
@@ -3508,6 +3519,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     navigate,
     openPictureInPicture,
     openDevTools,
+    openSiteSettings,
     pickElement,
     refresh,
     registerWebview,
@@ -3518,6 +3530,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     setAnnotationTheme,
     setColorScheme,
     setMainWindow,
+    siteInfo,
     startRecording,
     closePictureInPicture,
     stopRecording,
@@ -3829,6 +3842,10 @@ export class PreviewManager extends Context.Service<
       tabId: string,
     ) => Effect.Effect<DesktopPreviewScreenshotArtifact, PreviewManagerError>;
     readonly captureThumbnail: (tabId: string) => Effect.Effect<string | null, PreviewManagerError>;
+    readonly siteInfo: (
+      tabId: string,
+    ) => Effect.Effect<DesktopPreviewSiteInfo | null, PreviewManagerError>;
+    readonly openSiteSettings: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly clearSiteData: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly revealArtifact: (path: string) => Effect.Effect<void, PreviewManagerError>;
     readonly copyArtifactToClipboard: (path: string) => Effect.Effect<void, PreviewManagerError>;
@@ -3965,6 +3982,8 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     cancelPickElement: operations.cancelPickElement,
     captureScreenshot: operations.captureScreenshot,
     captureThumbnail: operations.captureThumbnail,
+    siteInfo: operations.siteInfo,
+    openSiteSettings: operations.openSiteSettings,
     clearSiteData: operations.clearSiteData,
     revealArtifact: operations.revealArtifact,
     copyArtifactToClipboard: operations.copyArtifactToClipboard,

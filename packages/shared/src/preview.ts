@@ -74,6 +74,8 @@ function previewUrlProtocol(rawUrl: string): string | undefined {
  * - Bare loopback hosts (`localhost`, `localhost:5173`) become `http://...`.
  * - Bare public hosts (`example.com`) become `https://...`.
  * - Already-qualified URLs are validated and returned as `URL.href`.
+ * - `chrome://settings` pages pass through. The Pathway Chromium runtime serves
+ *   them in browser tabs, for example for a site's settings.
  *
  * Throws `PreviewUrlNormalizationError` for empty, unparseable, or
  * unsupported-protocol inputs.
@@ -98,7 +100,8 @@ export function normalizePreviewUrl(rawUrl: string): string {
       cause,
     });
   }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+  const chromeSettings = parsed.protocol === "chrome:" && parsed.host === "settings";
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:" && !chromeSettings) {
     throw new PreviewUrlNormalizationError({
       inputLength: rawUrl.length,
       reason: "unsupported-protocol",

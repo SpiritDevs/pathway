@@ -137,6 +137,7 @@ const {
   fromId,
   getFocusedWebContents,
   mkdir,
+  pathwayRuntime,
   showItemInFolder,
   webviewSend,
   writeFile,
@@ -150,6 +151,8 @@ const {
   fromId: vi.fn((_id?: number) => null),
   getFocusedWebContents: vi.fn(() => null),
   mkdir: vi.fn((_path: string) => undefined),
+  // `electron.pathway` on the Pathway Chromium runtime; undefined on stock Electron.
+  pathwayRuntime: { current: undefined as { settingsUrl: (origin: string) => string } | undefined },
   showItemInFolder: vi.fn(),
   webviewSend: vi.fn(),
   writeFile: vi.fn((_path: string, _data: Uint8Array) => undefined),
@@ -170,6 +173,9 @@ vi.mock("electron", () => ({
   nativeImage: {
     createFromPath,
   },
+  get pathway() {
+    return pathwayRuntime.current;
+  },
   shell: {
     showItemInFolder,
   },
@@ -188,6 +194,7 @@ const browserSessionLayer = Layer.succeed(
     getPartition: () => Effect.succeed("persist:pathway-preview-test"),
     isPartition: (partition) => partition.startsWith("persist:pathway-preview-"),
     getSession: () => Effect.die("unexpected getSession"),
+    partitionOf: () => Effect.succeed("persist:pathway-preview-test"),
     clearCookies: () => Effect.void,
     clearCache: () => Effect.void,
   }),
@@ -524,6 +531,51 @@ describe("PreviewManager", () => {
         expect(events.slice(1)).toEqual([
           expect.objectContaining({ tabId: "tab_popup", blockedReason: expect.any(String) }),
           expect.objectContaining({ tabId: "tab_popup", blockedReason: expect.any(String) }),
+        ]);
+      }),
+    ),
+  );
+
+  effectIt.effect("opens Site settings beside the tab only on the Pathway runtime", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        fromId.mockReturnValue(
+          makeTestPreviewWebContents(async () => {
+            throw new Error("unexpected capture");
+          }),
+        );
+        const events: Array<{ tabId: string; url: string }> = [];
+        yield* manager.subscribeOpenInNewTab((event) =>
+          Effect.sync(() => {
+            events.push(event);
+          }),
+        );
+        yield* manager.createTab("tab_site");
+        yield* manager.registerWebview("tab_site", 42);
+
+        pathwayRuntime.current = undefined;
+        const stock = yield* manager
+          .openSiteSettings("tab_site")
+          .pipe(Effect.match({ onFailure: (error) => error._tag, onSuccess: () => "opened" }));
+        expect(stock).toBe("PreviewOperationError");
+        expect(yield* manager.siteInfo("tab_site")).toMatchObject({
+          runtime: false,
+          origin: "https://example.com",
+          certificate: null,
+        });
+
+        pathwayRuntime.current = {
+          settingsUrl: (origin) =>
+            `chrome://settings/content/siteDetails?site=${encodeURIComponent(origin)}`,
+        };
+        yield* manager
+          .openSiteSettings("tab_site")
+          .pipe(Effect.ensuring(Effect.sync(() => (pathwayRuntime.current = undefined))));
+        expect(events).toEqual([
+          {
+            tabId: "tab_site",
+            url: "chrome://settings/content/siteDetails?site=https%3A%2F%2Fexample.com",
+          },
         ]);
       }),
     ),

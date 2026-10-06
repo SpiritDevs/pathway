@@ -23,7 +23,11 @@ Every browser tab is either **remote** or **local**:
 
 Hover a browser tab to see the page's title, its site, whether it is remote or local, and where it runs, above a preview of the page. Remote previews are live; local previews are a snapshot taken when you hover.
 
-In a local tab, the address bar shows just the site once you leave it. Click it to see and edit the full address. The sliders button at its left shows whether the connection is secure, and **Clear site data** signs you out of that site and reloads it.
+In a local tab, the address bar shows just the site once you leave it. Click it to see and edit the full address. The sliders button at its left opens the site's information:
+
+- The connection row shows whether the connection is secure. Choose it for the details, then choose **Certificate is valid** to open the site's certificate. **General** shows who the certificate was issued to and by, when it is valid, and its SHA-256 fingerprints. **Details** shows the whole chain; choose a certificate in it to see its fields.
+- **Clear site data** signs you out of that site and reloads it.
+- **Site settings** opens the site's permissions and data in a new tab.
 
 When the thread's environment is another machine, the browser opens remote by default. When it is the machine the desktop app runs on, it opens local. The web app and iOS always use the remote browser. On desktop, choose either one from the **+** menu in the panel's tab bar. Both kinds of tab can sit side by side.
 

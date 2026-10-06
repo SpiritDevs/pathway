@@ -37,6 +37,8 @@ export function normalizeHistoryUrl(raw: string): string | null {
   } catch {
     return null;
   }
+  // History lists websites. Chrome's own pages stay out of it, as they do in Chrome.
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
   parsed.username = parsed.password = "";
   return parsed.href.length > BROWSER_HISTORY_MAX_URL_LENGTH ? null : parsed.href;
 }

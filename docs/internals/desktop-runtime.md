@@ -26,6 +26,18 @@ Build arm64 and x64 separately; there is no universal archive.
 
 Default packaging, dev launch and release CI still use npm Electron. They switch to the pin in [Phase 3](../plans/desktop-chromium-runtime.md#phase-3-runtime-packaging).
 
+## The `pathway` module
+
+The runtime adds a `pathway` module to `require("electron")` in the main process. `apps/desktop/src/preview/PathwayRuntime.ts` is the only place the app reads it. It feature-detects the module on each call, so the same build runs on stock Electron:
+
+| Local browser                      | On the runtime                                                                  | On stock Electron                                             |
+| ---------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Site information (`siteInfo` IPC)  | Chromium's security state, connection and certificate chain (PEMs stay in main) | The origin, and secure or not from its scheme; no certificate |
+| Site settings (`openSiteSettings`) | Opens `chrome://settings/content/siteDetails` in a new tab beside the page      | Not offered                                                   |
+| Clear site data (`clearSiteData`)  | Chrome's browsing-data remover for the tab's partition                          | The Electron session's `clearStorageData`                     |
+
+`normalizePreviewUrl` lets `chrome://settings` pages through, and no other `chrome://` page, so that a settings tab can open like any other tab.
+
 ## Archive contents
 
 electron-builder strips `resources/default_app.asar` and the `version` file only from the Electron it downloads itself. It ships a custom `electronDist` as-is.

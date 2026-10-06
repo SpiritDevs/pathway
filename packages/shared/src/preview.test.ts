@@ -60,6 +60,13 @@ describe("normalizePreviewUrl", () => {
     expect(normalizePreviewUrl("http://example.com/path?q=1")).toBe("http://example.com/path?q=1");
   });
 
+  it("lets Chrome's settings pages through, and no other chrome:// page", () => {
+    const siteSettings = "chrome://settings/content/siteDetails?site=https%3A%2F%2Fwww.google.com";
+    expect(normalizePreviewUrl(siteSettings)).toBe(siteSettings);
+    expect(normalizePreviewUrl("chrome://settings")).toBe("chrome://settings");
+    expect(() => normalizePreviewUrl("chrome://crash")).toThrow(PreviewUrlNormalizationError);
+  });
+
   it("rejects empty input", () => {
     try {
       normalizePreviewUrl("   ");

@@ -17,6 +17,7 @@ import {
   DesktopPreviewRegisterWebviewInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
   DesktopPreviewSetColorSchemeInputSchema,
+  DesktopPreviewSiteInfoSchema,
   DesktopPreviewTabInputSchema,
   DesktopPreviewWebviewConfigSchema,
   PreviewAnnotationSubmissionResultSchema,
@@ -261,6 +262,22 @@ export const captureThumbnail = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const siteInfo = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SITE_INFO_CHANNEL,
+  payload: DesktopPreviewTabInputSchema,
+  result: Schema.NullOr(DesktopPreviewSiteInfoSchema),
+  handler: Effect.fn("desktop.ipc.preview.siteInfo")(function* ({ tabId }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.siteInfo(tabId);
+  }),
+});
+
+export const openSiteSettings = tabMethod(
+  IpcChannels.PREVIEW_OPEN_SITE_SETTINGS_CHANNEL,
+  "desktop.ipc.preview.openSiteSettings",
+  (manager, tabId) => manager.openSiteSettings(tabId),
+);
+
 export const clearSiteData = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_CLEAR_SITE_DATA_CHANNEL,
   payload: DesktopPreviewTabInputSchema,
@@ -427,6 +444,8 @@ export const methods = [
   cancelPickElement,
   captureScreenshot,
   captureThumbnail,
+  siteInfo,
+  openSiteSettings,
   clearSiteData,
   revealArtifact,
   copyArtifactToClipboard,

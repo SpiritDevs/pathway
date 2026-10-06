@@ -21,7 +21,7 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/in
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 
-import { PreviewSiteInfo } from "./PreviewSiteInfo";
+import { PreviewSiteInfo, type PreviewSiteActions } from "./PreviewSiteInfo";
 
 interface Props {
   url: string;
@@ -36,8 +36,8 @@ interface Props {
   onForward: () => void;
   onRefresh: () => void;
   onSubmit: (url: string) => void;
-  /** Clears the current site's cookies and storage; offered from the site button. */
-  onClearSiteData?: (() => void) | undefined;
+  /** What the site button at the start of the address bar can show and do. */
+  siteActions?: PreviewSiteActions | undefined;
   /** When provided, renders an "Open in browser" affordance to the right. */
   onOpenInBrowser?: (() => void) | undefined;
   onCapture?: ((record: boolean) => void) | undefined;
@@ -92,7 +92,7 @@ export function PreviewChromeRow({
   onRefresh,
   onSubmit,
   onOpenInBrowser,
-  onClearSiteData,
+  siteActions,
   onCapture,
   captureDisabled,
   recording,
@@ -198,7 +198,7 @@ export function PreviewChromeRow({
         >
           {!inputFocused ? (
             <InputGroupAddon align="inline-start" className="ps-1">
-              <PreviewSiteInfo url={url} onClearSiteData={onClearSiteData} />
+              <PreviewSiteInfo url={url} actions={siteActions} />
             </InputGroupAddon>
           ) : null}
           <Tooltip>

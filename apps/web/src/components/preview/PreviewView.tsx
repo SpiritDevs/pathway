@@ -47,6 +47,7 @@ import { openPreviewSession } from "./openPreviewSession";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
 import { PreviewMoreMenu } from "./PreviewMoreMenu";
+import { previewSiteActions } from "./PreviewSiteInfo";
 import {
   commitBrowserViewportChange,
   subscribeBrowserViewportChange,
@@ -765,9 +766,9 @@ function DesktopPreviewView({
         onRefresh={handleRefresh}
         onSubmit={(next) => void handleSubmitUrl(next)}
         onOpenInBrowser={tabId ? handleOpenInBrowser : undefined}
-        onClearSiteData={
-          runtimeTabId && previewBridge?.clearSiteData
-            ? () => void previewBridge?.clearSiteData?.(runtimeTabId).catch(() => undefined)
+        siteActions={
+          runtimeTabId && previewBridge
+            ? previewSiteActions(previewBridge, runtimeTabId)
             : undefined
         }
         onCapture={previewBridge && tabId ? handleCapture : undefined}
