@@ -1684,22 +1684,21 @@ export const makeIssueTrackerService = Effect.fn(function* (
     const route = yield* ActiveIssueReplicaRoute;
     const engine = route.engine;
     const readModel = yield* route.read;
-    const operationIds: SyncOperationId[] = [];
+    const inputs = [];
     for (const plan of plans) {
       const operationId = plan.operationId ?? SyncOperationId.make(yield* newId);
       const operation = yield* translateOperationProjectIds(route, readModel, plan.operation);
-      const receipt = yield* engine
-        .enqueue({
-          operationId,
-          operation,
-          actor: plan.actor ?? route.actor,
-        })
-        .pipe(Effect.mapError((error) => syncWriteFailure(error.message)));
-      if (!receipt.accepted && plan.acceptExisting !== true) {
-        return yield* syncWriteFailure(`operation ${operationId} was already enqueued`);
-      }
-      operationIds.push(operationId);
+      inputs.push({ operationId, operation, actor: plan.actor ?? route.actor });
     }
+    const receipts = yield* engine
+      .enqueueBatch(inputs)
+      .pipe(Effect.mapError((error) => syncWriteFailure(error.message)));
+    for (const [index, receipt] of receipts.entries()) {
+      if (!receipt.accepted && plans[index]?.acceptExisting !== true) {
+        return yield* syncWriteFailure(`operation ${receipt.operationId} was already enqueued`);
+      }
+    }
+    const operationIds = inputs.map((input) => input.operationId);
     return { engine, operationIds, route };
   });
 

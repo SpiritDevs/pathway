@@ -26,7 +26,7 @@ import {
 } from "../cloud/issueDomainReadModel";
 import {
   IssueSyncUnavailableError,
-  enqueueIssueOperation,
+  enqueueIssueOperations,
   type IssueDomainMutationError,
 } from "../cloud/issueDomainMutations";
 import { companySyncEngineHandlesAtom } from "../cloud/companySyncEngines";
@@ -110,14 +110,31 @@ export function routeIssueMutationCommand<I, A, E>(
         if (unavailable !== null) {
           return settleAsyncResult(() => Effect.runPromiseExit(Effect.fail(unavailable)));
         }
+        const byCompany = new Map<
+          CompanyId,
+          Array<{ readonly index: number; readonly operation: IssueSyncOperation }>
+        >();
+        routed.forEach(({ companyId, operation }, index) => {
+          const group = byCompany.get(companyId) ?? [];
+          group.push({ index, operation });
+          byCompany.set(companyId, group);
+        });
         return settleAsyncResult(() =>
           Effect.runPromiseExit(
-            Effect.forEach(
-              routed,
-              ({ companyId, operation }) =>
-                enqueueIssueOperation({ companyId, operation }, registry),
-              { concurrency: 1 },
-            ).pipe(Effect.map(plan.result)),
+            Effect.gen(function* () {
+              const receipts: SyncEnqueueReceipt[] = [];
+              for (const [companyId, group] of byCompany) {
+                const batch = yield* enqueueIssueOperations(
+                  companyId,
+                  group.map(({ operation }) => ({ operation })),
+                  registry,
+                );
+                group.forEach(({ index }, i) => {
+                  receipts[index] = batch[i]!;
+                });
+              }
+              return plan.result(receipts);
+            }),
           ),
         );
       };

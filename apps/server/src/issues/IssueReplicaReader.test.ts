@@ -283,6 +283,7 @@ describe("routeReplicaIssueRead", () => {
           companyId: COMPANY_ID,
           environmentId: ENVIRONMENT_ID,
           enqueue: () => Effect.die("unused"),
+          enqueueBatch: () => Effect.die("unused"),
           operationDisposition: () => Effect.die("unused"),
           sync: Effect.succeed({
             outcome: "synced",
@@ -402,6 +403,7 @@ describe("routeReplicaIssueRead", () => {
         companyId: COMPANY_ID,
         environmentId: ENVIRONMENT_ID,
         enqueue: () => Effect.die("unused"),
+        enqueueBatch: () => Effect.die("unused"),
         sync: Effect.die("unused"),
         operationDisposition: () => Effect.die("unused"),
         readIssueSnapshot: Effect.succeed({

@@ -14,7 +14,10 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { companyRegistryReplicasAtom } from "../cloud/companyRegistryReplica";
-import { companySyncEngineHandlesAtom } from "../cloud/companySyncEngines";
+import {
+  type CompanySyncEngineMutationHandle,
+  companySyncEngineHandlesAtom,
+} from "../cloud/companySyncEngines";
 import { cloudSyncTabStateAtom } from "../cloud/syncStatus";
 import { appAtomRegistry, resetAppAtomRegistryForTests } from "../rpc/atomRegistry";
 import {
@@ -270,6 +273,7 @@ describe("cloud task investigation routing", () => {
           COMPANY,
           {
             enqueue: () => Effect.die("unused"),
+            enqueueBatch: () => Effect.die("unused"),
             discardRejected: () => Effect.void,
             sync: Effect.tryPromise({
               try: () => {
@@ -309,6 +313,7 @@ describe("cloud task investigation routing", () => {
             COMPANY,
             {
               enqueue: () => Effect.die("unused"),
+              enqueueBatch: () => Effect.die("unused"),
               discardRejected: () => Effect.void,
               sync: Effect.succeed({
                 ...RECEIPT,
@@ -350,22 +355,24 @@ describe("cloud task investigation routing", () => {
 
   it("keeps triage acceptance and refuses investigation until Cloud confirms the write", async () => {
     const order: string[] = [];
+    const enqueue: CompanySyncEngineMutationHandle["enqueue"] = (input) =>
+      Effect.sync(() => {
+        order.push("enqueue");
+        return {
+          accepted: true,
+          operationId: input.operationId,
+          localSequence: LocalSequence.make(1),
+          status: { _tag: "Pending" as const },
+        };
+      });
     appAtomRegistry.set(
       companySyncEngineHandlesAtom,
       new Map([
         [
           COMPANY,
           {
-            enqueue: (input) =>
-              Effect.sync(() => {
-                order.push("enqueue");
-                return {
-                  accepted: true,
-                  operationId: input.operationId,
-                  localSequence: LocalSequence.make(1),
-                  status: { _tag: "Pending" as const },
-                };
-              }),
+            enqueue,
+            enqueueBatch: (inputs) => Effect.forEach(inputs, enqueue),
             discardRejected: () => Effect.void,
             sync: Effect.sync(() => {
               order.push("sync");

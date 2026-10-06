@@ -108,6 +108,9 @@ function publishAllReplicas(): void {
 function fakeHandle() {
   const inputs: Array<Parameters<CompanySyncEngineMutationHandle["enqueue"]>[0]> = [];
   const handle: CompanySyncEngineMutationHandle = {
+    enqueueBatch: vi.fn((batch: Parameters<CompanySyncEngineMutationHandle["enqueueBatch"]>[0]) =>
+      Effect.forEach(batch, (input) => handle.enqueue(input)),
+    ),
     enqueue: (input) =>
       Effect.sync(() => {
         inputs.push(input);
@@ -161,6 +164,50 @@ describe("routeIssueMutationCommand", () => {
     expect(fake.inputs).toHaveLength(1);
     expect(fake.inputs[0]?.operation).toEqual(DELETE_ISSUE);
     expect(fake.inputs[0]?.operationId).toEqual(expect.any(String));
+  });
+
+  it("enqueues a bulk edit once per company and keeps receipt order across companies", async () => {
+    publishAllReplicas();
+    const fakeA = fakeHandle();
+    const fakeB = fakeHandle();
+    appAtomRegistry.set(
+      companySyncEngineHandlesAtom,
+      new Map([
+        [COMPANY_ID, fakeA.handle],
+        [COMPANY_B_ID, fakeB.handle],
+      ]),
+    );
+    const deleteB = issueSyncOperation({
+      kind: "issue.delete",
+      entityId: SyncEntityId.make("issue-b"),
+      args: {},
+    });
+    const legacy = legacyCommand();
+    let receipts: ReadonlyArray<SyncEnqueueReceipt> = [];
+    const command = routeIssueMutationCommand(legacy.command, {
+      scheduler: createAtomCommandScheduler(),
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+      plan: () => ({
+        operations: [DELETE_ISSUE, deleteB, DELETE_ISSUE],
+        result: (result) => {
+          receipts = result;
+          return "sync";
+        },
+      }),
+    });
+    const result = await command.run(appAtomRegistry, {
+      environmentId: ENVIRONMENT_ID,
+      input: { issueId: ISSUE_ID },
+    });
+    expect(AsyncResult.isSuccess(result) && result.value).toBe("sync");
+    expect(fakeA.handle.enqueueBatch).toHaveBeenCalledOnce();
+    expect(fakeB.handle.enqueueBatch).toHaveBeenCalledOnce();
+    expect(fakeA.inputs).toHaveLength(2);
+    expect(receipts.map((receipt) => receipt.operationId)).toEqual([
+      fakeA.inputs[0]?.operationId,
+      fakeB.inputs[0]?.operationId,
+      fakeA.inputs[1]?.operationId,
+    ]);
   });
 
   it("settles enqueue failures into the same command failure channel", async () => {

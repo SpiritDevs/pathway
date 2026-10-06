@@ -44,7 +44,6 @@ import { decodeSyncOperation, type SyncDomainAdapter } from "./adapter.ts";
 import {
   SYNC_BOOTSTRAP_GENERATION,
   SYNC_DOCUMENT_SCHEMA_VERSION,
-  type StoredOutboxEntry,
   type StoredSyncCheckpoint,
   type StoredSyncQuarantine,
   type StoredSyncRejection,
@@ -59,7 +58,6 @@ import {
 import {
   applyReceipts,
   decodeOutbox,
-  nextLocalSequence,
   overlay,
   pruneAcknowledged,
   sendableOperations,
@@ -133,17 +131,25 @@ export interface SyncEnqueueReceipt {
   readonly status: PendingSyncStatus;
 }
 
+export interface SyncEnqueueInput<Operation> {
+  readonly operationId: SyncOperationId;
+  readonly operation: Operation;
+  readonly dependsOn?: ReadonlyArray<SyncOperationId>;
+  /** Service-authored attribution; authorization still comes from the transport identity. */
+  readonly actor?: SyncActor;
+}
+
 export interface SyncEngine<Entity, Operation> {
   readonly companyId: CompanyId;
   readonly state: SubscriptionRef.SubscriptionRef<SyncEngineState<Entity, Operation>>;
   /** Durably records one optimistic operation and republishes the overlay. */
-  readonly enqueue: (input: {
-    readonly operationId: SyncOperationId;
-    readonly operation: Operation;
-    readonly dependsOn?: ReadonlyArray<SyncOperationId>;
-    /** Service-authored attribution; authorization still comes from the transport identity. */
-    readonly actor?: SyncActor;
-  }) => Effect.Effect<SyncEnqueueReceipt, SyncStoreError>;
+  readonly enqueue: (
+    input: SyncEnqueueInput<Operation>,
+  ) => Effect.Effect<SyncEnqueueReceipt, SyncStoreError>;
+  /** Persists a company batch atomically, then overlays, publishes and wakes the driver once. */
+  readonly enqueueBatch: (
+    inputs: ReadonlyArray<SyncEnqueueInput<Operation>>,
+  ) => Effect.Effect<ReadonlyArray<SyncEnqueueReceipt>, SyncStoreError>;
   /** One full cycle: drain the feed, flush the outbox, drain again to confirm. */
   readonly sync: Effect.Effect<SyncCycleReceipt, SyncStoreError>;
   /**
@@ -230,6 +236,8 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
   const transport = yield* SyncTransport;
   // One cycle at a time: draining and flushing both move the cursor and the outbox.
   const cycleLock = yield* Semaphore.make(1);
+  // Local writes serialize only their durable state updates, never a network wait.
+  const mutationLock = yield* Semaphore.make(1);
   // Enqueues can happen faster than the network can flush them. One pending wake is enough: the
   // next cycle reads the whole durable outbox, so retaining N identical signals would only run N
   // empty follow-up cycles.
@@ -383,7 +391,7 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     if (pruned.removed.length === 0) return;
     yield* store.commit(companyId, { removeOutbox: pruned.removed });
     yield* Ref.set(entriesRef, pruned.entries);
-  });
+  }, mutationLock.withPermits(1));
 
   /**
    * One pass over the bootstrap pages, from an empty replica.
@@ -550,16 +558,23 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
       if (batch.length === 0) return { accepted, rejected };
 
       const result = yield* transport.applyOperations({ companyId, operations: batch });
-      const receipts = applyReceipts({ entries, receipts: result.receipts });
-      yield* store.commit(companyId, {
-        upsertOutbox: receipts.updated,
-        removeOutbox: receipts.removed,
-        appendRejected: receipts.rejections,
-      });
-      yield* Ref.set(entriesRef, receipts.entries);
-      if (receipts.rejections.length > 0) {
-        yield* Ref.update(rejectedRef, (current) => [...current, ...receipts.rejections]);
-      }
+      // New local edits may have arrived while the transport was answering this batch.
+      const receipts = yield* mutationLock.withPermits(1)(
+        Effect.gen(function* () {
+          const current = yield* Ref.get(entriesRef);
+          const receipts = applyReceipts({ entries: current, receipts: result.receipts });
+          yield* store.commit(companyId, {
+            upsertOutbox: receipts.updated,
+            removeOutbox: receipts.removed,
+            appendRejected: receipts.rejections,
+          });
+          yield* Ref.set(entriesRef, receipts.entries);
+          if (receipts.rejections.length > 0) {
+            yield* Ref.update(rejectedRef, (current) => [...current, ...receipts.rejections]);
+          }
+          return receipts;
+        }),
+      );
       accepted += receipts.accepted;
       rejected += receipts.rejections.length;
       // A server that answered nothing for the batch would otherwise be retried forever.
@@ -653,78 +668,84 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     Effect.suspend(() => runCycle),
   );
 
-  const enqueue = Effect.fn("SyncEngine.enqueue")(function* (input: {
-    readonly operationId: SyncOperationId;
-    readonly operation: Operation;
-    readonly dependsOn?: ReadonlyArray<SyncOperationId>;
-    readonly actor?: SyncActor;
-  }) {
+  const enqueueBatch = Effect.fn("SyncEngine.enqueueBatch")(function* (
+    inputs: ReadonlyArray<SyncEnqueueInput<Operation>>,
+  ) {
+    if (inputs.length === 0) return [];
     const entries = yield* Ref.get(entriesRef);
     const rejections = yield* Ref.get(rejectedRef);
-    // Deduplicated locally as well as on the server: a retried command must not queue twice.
-    const existing = entries.find((entry) => entry.envelope.operationId === input.operationId);
-    const alreadyRejected = rejections.some(
-      (rejection) => rejection.envelope.operationId === input.operationId,
-    );
-    if (existing !== undefined || alreadyRejected) {
-      return {
-        accepted: false,
-        operationId: input.operationId,
-        localSequence: existing?.envelope.localSequence ?? LocalSequence.make(0),
-        status: { _tag: "Pending" },
-      } satisfies SyncEnqueueReceipt;
-    }
-
+    const known = new Map(entries.map((entry) => [entry.envelope.operationId, entry]));
+    const rejectedIds = new Set(rejections.map((entry) => entry.envelope.operationId));
     const replica = yield* Ref.get(replicaRef);
-    const target = adapter.operationTarget(input.operation);
-    const localSequence = nextLocalSequence(entries, yield* Ref.get(highWaterRef));
-    const envelope: SyncOperationEnvelope = {
-      protocolVersion: SYNC_PROTOCOL_VERSION,
-      operationId: input.operationId,
-      companyId,
-      clientId,
-      environmentId,
-      actor: input.actor ?? actor,
-      localSequence,
-      baseVersion: replica.cursor,
-      entityId: target.entityId,
-      dependsOn: input.dependsOn ?? adapter.operationDependencies?.(input.operation) ?? [],
-      kind: adapter.operationKind(input.operation),
-      args: adapter.operationCodec.encode(input.operation),
-    };
-    // Read once, here, and replayed from the row for the rest of the operation's life: the overlay
-    // is recomputed on every publish, so a domain reducer that read a clock instead would move a
-    // pending row's timestamps on every retry and every unrelated edit.
+    let highWater = yield* Ref.get(highWaterRef);
+    const appended: OutboxEntry<Operation>[] = [];
+    const receipts: SyncEnqueueReceipt[] = [];
     const occurredAt = yield* Clock.currentTimeMillis;
-    const entry: OutboxEntry<Operation> = {
-      envelope,
-      operation: toSyncOperation(envelope, input.operation),
-      status: { _tag: "Pending" },
-      occurredAt,
-    };
-    const row: StoredOutboxEntry = storedOutboxEntry(entry, entry.status);
-    // The mark is raised in the same write that stores the row, so a crash between them cannot
-    // leave a sequence issued but unrecorded.
-    yield* store.commit(companyId, { upsertOutbox: [row], localSequenceHighWater: localSequence });
-    yield* Ref.set(highWaterRef, localSequence);
-    yield* Ref.set(entriesRef, [...entries, entry]);
+    for (const input of inputs) {
+      const existing = known.get(input.operationId);
+      if (existing !== undefined || rejectedIds.has(input.operationId)) {
+        receipts.push({
+          accepted: false,
+          operationId: input.operationId,
+          localSequence: existing?.envelope.localSequence ?? LocalSequence.make(0),
+          status: { _tag: "Pending" },
+        });
+        continue;
+      }
+      const target = adapter.operationTarget(input.operation);
+      highWater = LocalSequence.make(highWater + 1);
+      const envelope: SyncOperationEnvelope = {
+        protocolVersion: SYNC_PROTOCOL_VERSION,
+        operationId: input.operationId,
+        companyId,
+        clientId,
+        environmentId,
+        actor: input.actor ?? actor,
+        localSequence: highWater,
+        baseVersion: replica.cursor,
+        entityId: target.entityId,
+        dependsOn: input.dependsOn ?? adapter.operationDependencies?.(input.operation) ?? [],
+        kind: adapter.operationKind(input.operation),
+        args: adapter.operationCodec.encode(input.operation),
+      };
+      const entry: OutboxEntry<Operation> = {
+        envelope,
+        operation: toSyncOperation(envelope, input.operation),
+        status: { _tag: "Pending" },
+        occurredAt,
+      };
+      appended.push(entry);
+      known.set(input.operationId, entry);
+      receipts.push({
+        accepted: true,
+        operationId: input.operationId,
+        localSequence: highWater,
+        status: { _tag: "Pending" },
+      });
+    }
+    if (appended.length === 0) return receipts;
+    // Persist the rows and sequence mark together before exposing any optimistic state.
+    yield* store.commit(companyId, {
+      upsertOutbox: appended.map((entry) => storedOutboxEntry(entry, entry.status)),
+      localSequenceHighWater: highWater,
+    });
+    yield* Ref.set(highWaterRef, highWater);
+    yield* Ref.set(entriesRef, [...entries, ...appended]);
     yield* publish;
-    // Persistence and the optimistic view land before the driver is poked. If `run` has not started
-    // yet, the sliding queue retains this wake; if a cycle is already in flight, it guarantees one
-    // follow-up pass that sees everything enqueued meanwhile.
     yield* Queue.offer(localWakeups, undefined);
-
     const published = yield* SubscriptionRef.get(state);
-    const status: PendingSyncStatus = published.pending.find(
-      (pending) => pending.operation.operationId === input.operationId,
-    )?.status ?? { _tag: "Pending" };
-    return {
-      accepted: true,
-      operationId: input.operationId,
-      localSequence: envelope.localSequence,
-      status,
-    } satisfies SyncEnqueueReceipt;
-  });
+    const statuses = new Map(
+      published.pending.map((pending) => [pending.operation.operationId, pending.status]),
+    );
+    return receipts.map((receipt) =>
+      receipt.accepted
+        ? { ...receipt, status: statuses.get(receipt.operationId) ?? receipt.status }
+        : receipt,
+    );
+  }, mutationLock.withPermits(1));
+
+  const enqueue = (input: SyncEnqueueInput<Operation>) =>
+    enqueueBatch([input]).pipe(Effect.map((receipts) => receipts[0]!));
 
   const discardRejected = Effect.fn("SyncEngine.discardRejected")(function* (
     operationIds: ReadonlyArray<SyncOperationId>,
@@ -736,7 +757,7 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
       current.filter((rejection) => !removed.has(rejection.envelope.operationId)),
     );
     yield* publish;
-  });
+  }, mutationLock.withPermits(1));
 
   const discardQuarantined = Effect.fn("SyncEngine.discardQuarantined")(function* (
     operationIds: ReadonlyArray<SyncOperationId>,
@@ -790,6 +811,7 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     companyId,
     state,
     enqueue,
+    enqueueBatch,
     sync,
     run,
     discardRejected,
