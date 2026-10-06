@@ -33,6 +33,10 @@ export function publishCompanyRegistryReplica(
 ): Effect.Effect<void> {
   return Effect.sync(() => {
     appAtomRegistry.update(companyRegistryReplicasAtom, (current) => {
+      if (
+        replica === null ? !current.has(companyId) : current.get(companyId)?.view === replica.view
+      )
+        return current;
       const next = new Map(current);
       if (replica === null) {
         next.delete(companyId);

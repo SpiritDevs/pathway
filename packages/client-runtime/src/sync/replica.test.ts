@@ -71,6 +71,8 @@ describe("applyConfirmedChanges", () => {
       "confirmed",
     );
     expect(drained.upserts).toEqual([]);
+    expect(drained.replica.entities).toBe(seeded.entities);
+    expect(drained.replica.entityVersions).toBe(seeded.entityVersions);
   });
 
   it("keeps a higher-version tombstone across seed pages", () => {

@@ -293,6 +293,13 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     });
   }
 
+  let cachedEntities: typeof confirmed.replica.entities | undefined;
+  let confirmedView: ReadonlyMap<string, Entity> = new Map();
+  let cachedEntries: typeof outbox.entries | undefined;
+  let cachedRejections: typeof stored.rejected | undefined;
+  let applied: ReturnType<typeof overlay<Entity, Operation>> | undefined;
+  let rejected: ReadonlyArray<RejectedSyncOperation<Operation>> = [];
+
   const renderState = Effect.fn("SyncEngine.renderState")(function* () {
     const replica = yield* Ref.get(replicaRef);
     const entries = yield* Ref.get(entriesRef);
@@ -301,9 +308,26 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     const phase = yield* Ref.get(phaseRef);
     const lastError = yield* Ref.get(errorRef);
     const bootstrapped = yield* Ref.get(bootstrappedRef);
-    const applied = overlay({ replica, entries, adapter, rejected: rejections });
-    const confirmedView = new Map<string, Entity>();
-    for (const [key, entity] of replica.entities) confirmedView.set(key, entity.entity);
+    const entitiesChanged = cachedEntities !== replica.entities;
+    if (entitiesChanged) {
+      const next = new Map<string, Entity>();
+      for (const [key, entity] of replica.entities) next.set(key, entity.entity);
+      confirmedView = next;
+      cachedEntities = replica.entities;
+    }
+    if (
+      applied === undefined ||
+      entitiesChanged ||
+      cachedEntries !== entries ||
+      cachedRejections !== rejections
+    ) {
+      applied = overlay({ replica, entries, adapter, rejected: rejections });
+      cachedEntries = entries;
+    }
+    if (cachedRejections !== rejections) {
+      rejected = decodeRejections({ adapter, rejections });
+      cachedRejections = rejections;
+    }
     return {
       phase,
       cursor: replica.cursor,
@@ -312,7 +336,7 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
       confirmed: confirmedView,
       view: applied.view,
       pending: applied.pending,
-      rejected: decodeRejections({ adapter, rejections }),
+      rejected,
       quarantined,
       lastError,
       presentation: presentSyncState({
@@ -518,6 +542,7 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     let rejected = 0;
     for (;;) {
       const entries = yield* Ref.get(entriesRef);
+      if (entries.length === 0) return { accepted, rejected };
       const rejections = yield* Ref.get(rejectedRef);
       const replica = yield* Ref.get(replicaRef);
       const applied = overlay({ replica, entries, adapter, rejected: rejections });
@@ -532,7 +557,9 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
         appendRejected: receipts.rejections,
       });
       yield* Ref.set(entriesRef, receipts.entries);
-      yield* Ref.update(rejectedRef, (current) => [...current, ...receipts.rejections]);
+      if (receipts.rejections.length > 0) {
+        yield* Ref.update(rejectedRef, (current) => [...current, ...receipts.rejections]);
+      }
       accepted += receipts.accepted;
       rejected += receipts.rejections.length;
       // A server that answered nothing for the batch would otherwise be retried forever.

@@ -144,8 +144,16 @@ export function applyConfirmedChanges<Entity, Operation>(input: {
   readonly authorizationEpoch: AuthorizationEpoch;
   readonly mode?: "drain" | "seed";
 }): ConfirmedChangeResult<Entity> {
-  const entities = new Map(input.replica.entities);
-  const entityVersions = new Map(input.replica.entityVersions);
+  let entities = input.replica.entities;
+  let entityVersions = input.replica.entityVersions;
+  const writableEntities = () => {
+    if (entities === input.replica.entities) entities = new Map(entities);
+    return entities as Map<string, ConfirmedEntity<Entity>>;
+  };
+  const writableVersions = () => {
+    if (entityVersions === input.replica.entityVersions) entityVersions = new Map(entityVersions);
+    return entityVersions as Map<string, CompanyVersion>;
+  };
   const upserts = new Map<string, StoredSyncEntity>();
   const deletes = new Map<string, SyncEntityKey>();
   const merge = input.adapter.mergeConfirmed;
@@ -162,14 +170,14 @@ export function applyConfirmedChanges<Entity, Operation>(input: {
     // A tombstone always wins locally. `mergeConfirmed` only guards live entities; a domain that
     // wants a delete to survive as a record models that as an entity field, not as a local ghost.
     if (change.changeKind === "tombstone") {
-      entities.delete(mapKey);
-      entityVersions.set(mapKey, change.version);
+      writableEntities().delete(mapKey);
+      writableVersions().set(mapKey, change.version);
       upserts.delete(mapKey);
       deletes.set(mapKey, key);
       for (const cascaded of cascadeTombstonedEntities({
         adapter: input.adapter,
         origin: key,
-        entities,
+        entities: writableEntities(),
       })) {
         const cascadedKey = syncEntityKey(cascaded);
         upserts.delete(cascadedKey);
@@ -188,8 +196,8 @@ export function applyConfirmedChanges<Entity, Operation>(input: {
       merge === undefined
         ? decoded.value
         : merge({ current: current?.entity ?? null, incoming: decoded.value });
-    entities.set(mapKey, { key, version: change.version, entity });
-    entityVersions.set(mapKey, change.version);
+    writableEntities().set(mapKey, { key, version: change.version, entity });
+    writableVersions().set(mapKey, change.version);
     deletes.delete(mapKey);
     upserts.set(mapKey, {
       entityKind: change.entityKind,

@@ -96,6 +96,28 @@ const confirmedNote = (state: NoteState, id: SyncEntityId): TestNote | null =>
   state.confirmed.get(syncEntityKey(testNoteKey(id))) ?? null;
 
 describe("SyncEngine", () => {
+  it.effect("retains replica maps and pending state through an unchanged sync cycle", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* Effect.gen(function* () {
+        const engine = yield* openEngine("client-stable");
+        yield* engine.enqueue({
+          operationId: operationId("stable-create"),
+          operation: createNote({ id: NOTE_A, title: "Stable", body: "" }),
+        });
+        yield* engine.sync;
+        const before = yield* SubscriptionRef.get(engine.state);
+        yield* engine.sync;
+        const after = yield* SubscriptionRef.get(engine.state);
+        expect(after.phase).toBe("ready");
+        expect(after.view).toBe(before.view);
+        expect(after.confirmed).toBe(before.confirmed);
+        expect(after.pending).toBe(before.pending);
+        expect(after.rejected).toBe(before.rejected);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
   it.effect("merges edits to different fields of the same entity", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();

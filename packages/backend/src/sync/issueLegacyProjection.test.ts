@@ -3,7 +3,7 @@ import {
   syncedIssueDomainFromEntities,
   type IssueStatusEntity,
 } from "@spiritdevs/client-runtime/sync";
-import { IssueStatusId } from "@spiritdevs/contracts";
+import { IssueId, IssueStatusId } from "@spiritdevs/contracts";
 import { TeamId } from "@spiritdevs/contracts/company";
 import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   effectiveIssueStatusesForOwnerFromReplica,
   issueFromReplica,
+  issueCollectionProjectionFromReplica,
 } from "./issueLegacyProjection.ts";
 
 describe("issueFromReplica", () => {
@@ -54,6 +55,21 @@ describe("issueFromReplica", () => {
     if (entity.entityKind !== "issue") throw new Error("Decoded the wrong entity kind.");
 
     const projected = issueFromReplica(entity);
+    expect(issueFromReplica(entity)).toBe(projected);
+    const unchanged = { ...entity, id: IssueId.make("unchanged"), keyNumber: entity.keyNumber + 1 };
+    const beforeDomain = syncedIssueDomainFromEntities([entity, unchanged]);
+    const before = issueCollectionProjectionFromReplica(beforeDomain);
+    const afterDomain = syncedIssueDomainFromEntities(
+      [{ ...entity, title: "Updated" }, unchanged],
+      beforeDomain,
+    );
+    const after = issueCollectionProjectionFromReplica(afterDomain);
+    expect(after.issues[0]?.title).toBe("Updated");
+    expect(after.issues[0]).not.toBe(before.issues[0]);
+    expect(after.issues[1]).toBe(before.issues[1]);
+    expect(after.statuses).toBe(before.statuses);
+    expect(after.labels).toBe(before.labels);
+    expect(issueCollectionProjectionFromReplica(beforeDomain)).toBe(before);
     expect(projected.triage).toBe(true);
     expect(projected.statusId).toBe("");
     expect(projected.slackSource).toEqual({
