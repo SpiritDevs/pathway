@@ -4,7 +4,14 @@ import { eligibleRecipients, recipientTarget } from "./conversationRecipients";
 import { mapEnvironmentControlError } from "../../cloud/environmentControl";
 import { ConversationAttachmentDrafts } from "./ConversationAttachments";
 import { shouldHandleComposerAttachmentPaste } from "../chat/composerAttachmentFiles";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type RefObject,
+} from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
 import {
@@ -83,7 +90,13 @@ export function Composer({
       state.setError(errorMessage(cause));
     }
   };
-  const text = state.drafts[chat.id] ?? "";
+  const draftStore = state.drafts;
+  const subscribeToDraft = useCallback(
+    (listener: () => void) => draftStore.subscribe(chat.id, listener),
+    [chat.id, draftStore],
+  );
+  const readDraft = useCallback(() => draftStore.get(chat.id), [chat.id, draftStore]);
+  const text = useSyncExternalStore(subscribeToDraft, readDraft, readDraft);
   const contacts = state.contacts.filter((contact) => chat.orchestratorIds.includes(contact.id));
   const recipients = [
     ...eligibleRecipients(contacts, chat.orchestratorIds),
