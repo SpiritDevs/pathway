@@ -1,12 +1,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { ClaudeSettings, ProviderInstanceId } from "@spiritdevs/contracts";
+import { ClaudeSettings, ProviderInstanceId, TextGenerationError } from "@spiritdevs/contracts";
 import { isHostWindows } from "@spiritdevs/shared/hostProcess";
 import { createModelSelection } from "@spiritdevs/shared/model";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { expect } from "vite-plus/test";
 
@@ -416,4 +417,52 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
         }),
     ),
   );
+  for (const operation of ["generateThreadTitle", "investigate"] as const) {
+    for (const source of ["stderr", "stdout"] as const) {
+      const diagnostic = "discard-me" + "x".repeat(24_000) + "final-auth-failure";
+      it.effect(`caps ${source} for ${operation} while retaining the final diagnostic`, () =>
+        withFakeClaudeEnv(
+          {
+            output: source === "stdout" ? diagnostic : "",
+            exitCode: 1,
+            stderr: source === "stderr" ? diagnostic : "",
+          },
+          (textGeneration) =>
+            Effect.gen(function* () {
+              const modelSelection = createModelSelection(
+                ProviderInstanceId.make("claudeAgent"),
+                "claude-sonnet-4-6",
+              );
+              const result = yield* (
+                operation === "investigate"
+                  ? textGeneration
+                      .investigate({
+                        cwd: process.cwd(),
+                        prompt: "Investigate.",
+                        modelSelection,
+                      })
+                      .pipe(Effect.asVoid)
+                  : textGeneration
+                      .generateThreadTitle({
+                        cwd: process.cwd(),
+                        message: "Title this.",
+                        modelSelection,
+                      })
+                      .pipe(Effect.asVoid)
+              ).pipe(Effect.result);
+              expect(Result.isFailure(result)).toBe(true);
+              if (Result.isFailure(result)) {
+                expect(result.failure).toBeInstanceOf(TextGenerationError);
+                expect(Buffer.byteLength(result.failure.detail)).toBeLessThanOrEqual(
+                  16 * 1024 + 40,
+                );
+                expect(result.failure.detail).toContain("[truncated earlier output]");
+                expect(result.failure.detail).toContain("final-auth-failure");
+                expect(result.failure.detail).not.toContain("discard-me");
+              }
+            }),
+        ),
+      );
+    }
+  }
 });

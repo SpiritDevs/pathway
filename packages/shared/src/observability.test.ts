@@ -3,6 +3,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -18,6 +20,7 @@ import {
   compactTraceAttributes,
   errorTag,
   makeLocalFileTracer,
+  spanToTraceRecord,
   makeTraceSink,
   type TraceRecord,
   type TraceSinkFlushStats,
@@ -138,6 +141,31 @@ describe("truncateTraceAttributes", () => {
 });
 
 describe("observability", () => {
+  it("bounds failed span causes while preserving the error header and diagnostic tail", () => {
+    const error = new Error("failure header " + "x".repeat(200_000) + " final diagnostic");
+    error.stack = error.message;
+    const record = spanToTraceRecord({
+      name: "failed-span",
+      traceId: "trace",
+      spanId: "span",
+      sampled: true,
+      kind: "internal",
+      parent: Option.none(),
+      attributes: new Map(),
+      events: [],
+      links: [],
+      status: { _tag: "Ended", startTime: 1n, endTime: 2n, exit: Exit.fail(error) },
+    });
+    assert.equal(record.exit._tag, "Failure");
+    if (record.exit._tag === "Success") return;
+    assert.isAtMost(record.exit.cause.length, 8 * 1024);
+    assert.include(record.exit.cause, "failure header");
+    assert.include(record.exit.cause, "[truncated]");
+    assert.include(record.exit.cause, "final diagnostic");
+    assert.isBelow(JSON.stringify(record).length, 9 * 1024);
+    assert.isAbove(error.message.length, 200_000);
+  });
+
   it("normalizes circular arrays, maps, and sets without recursing forever", () => {
     const array: Array<unknown> = ["alpha"];
     array.push(array);
