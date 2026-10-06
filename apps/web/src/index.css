@@ -2172,7 +2172,7 @@ code {
    diffs and file previews take the size through --diffs-font-size. */
 .chat-markdown .chat-markdown-shiki .shiki,
 .chat-markdown pre code {
-  font-size: var(--font-size-code, inherit);
+  font-size: var(--font-size-code, 0.75rem);
 }
 
 /* @pierre/diffs surfaces (diffs, file previews, annotatable code, search
@@ -2619,11 +2619,18 @@ label:has(> select#reasoning-effort) select {
   background: color-mix(in srgb, var(--foreground) 8%, transparent);
 }
 
+/* Plain and highlighted code share the pre's line box, so highlighting does
+   not move the following content when a custom code size is selected. */
 .chat-markdown .chat-markdown-codeblock pre {
+  font-size: var(--font-size-code, 0.75rem);
   margin: 0;
   border: none;
   border-radius: 0;
   background: transparent;
+}
+
+.chat-markdown .chat-markdown-codeblock pre code {
+  font-size: inherit;
 }
 
 .chat-markdown .chat-markdown-codeblock[data-wrap="true"] pre {
