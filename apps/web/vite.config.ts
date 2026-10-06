@@ -154,6 +154,7 @@ const allowedHosts = configuredAllowedHosts;
 export default defineConfig(() => {
   return {
     assetsInclude: ["**/*.wasm"],
+    worker: { format: "es" as const },
     plugins: [
       devCompressionPlugin(),
       tanstackRouter({ autoCodeSplitting: true }),

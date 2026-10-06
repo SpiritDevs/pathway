@@ -9,7 +9,7 @@ vi.mock("@pierre/diffs", () => ({
   getSharedHighlighter,
 }));
 
-import { getSyntaxHighlighterPromise } from "./syntaxHighlighting";
+import { getSyntaxHighlighterPromise, highlightCode } from "./syntaxHighlighting";
 
 it("caches the recovered text highlighter for unsupported languages", async () => {
   const textHighlighter = {} as DiffsHighlighter;
@@ -25,4 +25,17 @@ it("caches the recovered text highlighter for unsupported languages", async () =
 
   expect(second).toBe(first);
   expect(getSharedHighlighter).toHaveBeenCalledTimes(2);
+});
+
+it("falls back to text when tokenization rejects a language", async () => {
+  const codeToHtml = vi.fn<(code: string, options: { lang: string; theme: string }) => string>();
+  codeToHtml.mockImplementation((_code, options) => {
+    if (options.lang !== "text") throw new Error("unsupported language");
+    return "<pre>plain</pre>";
+  });
+  getSharedHighlighter.mockResolvedValue({ codeToHtml });
+  await expect(highlightCode("real code", "fallback-code-test", "pierre-dark")).resolves.toBe(
+    "<pre>plain</pre>",
+  );
+  expect(codeToHtml).toHaveBeenLastCalledWith("real code", { lang: "text", theme: "pierre-dark" });
 });

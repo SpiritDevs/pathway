@@ -1,6 +1,6 @@
 import type { DiffsHighlighter, SupportedLanguages } from "@pierre/diffs";
 
-import { resolveDiffThemeName } from "./diffRendering";
+import { resolveDiffThemeName, type DiffThemeName } from "./diffRendering";
 
 const highlighterPromiseCache = new Map<string, Promise<DiffsHighlighter>>();
 
@@ -29,4 +29,13 @@ export function getSyntaxHighlighterPromise(language: string): Promise<DiffsHigh
     });
   highlighterPromiseCache.set(language, promise);
   return promise;
+}
+
+export async function highlightCode(code: string, language: string, themeName: DiffThemeName) {
+  const highlighter = await getSyntaxHighlighterPromise(language);
+  try {
+    return highlighter.codeToHtml(code, { lang: language, theme: themeName });
+  } catch {
+    return highlighter.codeToHtml(code, { lang: "text", theme: themeName });
+  }
 }
