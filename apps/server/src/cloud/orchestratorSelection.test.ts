@@ -6,6 +6,7 @@ import {
   delegationSelectionProblem,
 } from "@spiritdevs/contracts/aiOrchestrator";
 import {
+  coordinatorProviders,
   discoveredDelegationSelectionProblem,
   orchestratorDelegationCatalog,
   resolveDelegatedModel,
@@ -171,4 +172,23 @@ it("defers only omitted entries in partial cloud catalogs, retaining authoritati
       true,
     ),
   ).toContain("unsupported");
+});
+
+it("offers the text-generation account first so unpinned coordinator runs avoid a signed-out duplicate", () => {
+  const work = Schema.decodeUnknownSync(ServerProvider)({
+    ...Schema.encodeSync(ServerProvider)(snapshot),
+    instanceId: "codex_work",
+    auth: { status: "unauthenticated" },
+  });
+  const personal = { ...snapshot, instanceId: ProviderInstanceId.make("codex") };
+  const claude = {
+    ...snapshot,
+    instanceId: ProviderInstanceId.make("claudeAgent"),
+    driver: ProviderDriverKind.make("claudeAgent"),
+  };
+  expect(coordinatorProviders([work, claude, personal], "codex")).toEqual([
+    { instanceId: "codex", driver: "codex" },
+    { instanceId: "claudeAgent", driver: "claudeAgent" },
+    { instanceId: "codex_work", driver: "codex" },
+  ]);
 });

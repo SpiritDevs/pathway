@@ -49,7 +49,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
-import { orchestratorDelegationCatalog } from "./orchestratorSelection.ts";
+import { coordinatorProviders, orchestratorDelegationCatalog } from "./orchestratorSelection.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { forkParkedFiber } from "../serverActivation.ts";
@@ -924,14 +924,28 @@ export const orchestratorLayer = () =>
                         }),
                     ),
                   ),
-                  providers: registry.listInstances.pipe(
-                    Effect.map((instances) =>
-                      instances.map((instance) => ({
-                        instanceId: instance.instanceId,
-                        driver: instance.driverKind,
-                      })),
-                    ),
-                  ),
+                  providers: Effect.gen(function* () {
+                    const instances = yield* registry.listInstances;
+                    const ordered = Effect.gen(function* () {
+                      const snapshots = yield* Effect.all(
+                        instances.map((instance) => instance.snapshot.getSnapshot),
+                      );
+                      const config = yield* serverSettings.getSettings;
+                      return coordinatorProviders(
+                        snapshots,
+                        config.textGenerationModelSelection.instanceId,
+                      );
+                    });
+                    // Unreadable settings keep the registry order rather than blocking claims.
+                    return yield* ordered.pipe(
+                      Effect.orElseSucceed(() =>
+                        instances.map((instance) => ({
+                          instanceId: instance.instanceId,
+                          driver: instance.driverKind,
+                        })),
+                      ),
+                    );
+                  }),
                 });
                 const wakeups = yield* makeWorkerWakeups({
                   companyId,
