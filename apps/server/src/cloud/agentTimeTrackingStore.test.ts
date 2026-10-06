@@ -32,7 +32,8 @@ const setup = Effect.gen(function* () {
   yield* sql`DROP TABLE IF EXISTS agent_time_tracking_sessions`;
   yield* sql`DROP TABLE IF EXISTS agent_time_tracking_cursors`;
   yield* sql`CREATE TABLE orchestration_events (
-    sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT, command_id TEXT, stream_id TEXT, event_type TEXT,
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT, command_id TEXT,
+    aggregate_kind TEXT NOT NULL DEFAULT 'thread', stream_id TEXT, event_type TEXT,
     occurred_at TEXT, payload_json TEXT, metadata_json TEXT, application_event_version INTEGER
   )`;
   yield* migration;
@@ -118,6 +119,41 @@ layer("durable agent time capture", (it) => {
         description: "Reviewed project documentation and explained the app structure.",
       });
       assert.isNull(yield* store.nextSummary());
+    }),
+  );
+
+  it.effect("keeps summary messages and run provenance within the thread aggregate", () =>
+    Effect.gen(function* () {
+      yield* setup;
+      const sql = yield* SqlClient.SqlClient;
+      const run = runEvent("running", 0, "run.created");
+      // A project can share the stream id and payload ids with a thread.
+      // Its run must not supply the user message selected for the summary.
+      yield* sql`INSERT INTO orchestration_events
+        (aggregate_kind, stream_id, event_type, payload_json, metadata_json, application_event_version)
+        VALUES ('project', ${run.threadId}, 'run.created',
+          ${encodeJson({ id: "run-1", userMessageId: "project-message" })}, '{}', 2)`;
+      const store = yield* makeAgentTimeTrackingStore("company-1");
+      yield* append(run);
+      yield* append(runEvent("completed", 30));
+      yield* store.capture();
+      const session = (yield* store.nextSummary())!;
+      for (const message of [
+        { aggregate: "thread", id: "message-1", text: "thread prompt", runId: null },
+        { aggregate: "thread", id: "project-message", text: "project prompt", runId: null },
+        { aggregate: "project", id: "project-work", text: "project work", runId: session.id },
+        { aggregate: "thread", id: "thread-work", text: "thread work", runId: session.id },
+      ]) {
+        yield* sql`INSERT INTO orchestration_events
+          (aggregate_kind, stream_id, event_type, payload_json, metadata_json, application_event_version)
+          VALUES (${message.aggregate}, ${session.threadId}, 'message.updated',
+            ${encodeJson({ id: message.id, text: message.text })}, ${encodeJson({ runId: message.runId })}, 2)`;
+      }
+      const context = yield* store.summaryContext(session);
+      assert.include(context, "thread prompt");
+      assert.include(context, "thread work");
+      assert.notInclude(context, "project prompt");
+      assert.notInclude(context, "project work");
     }),
   );
   for (const scenario of [
@@ -394,6 +430,14 @@ layer("durable agent time capture", (it) => {
       (event_id, stream_id, event_type, occurred_at, payload_json, metadata_json, application_event_version)
       VALUES ('move-event', 'thread-1', 'thread.metadata-updated', ${timestamp(5)},
         '{"projectId":"project-2","title":"Moved feature","lineage":{"relationshipToParent":null}}', '{}', 2)`;
+      yield* sql`INSERT INTO orchestration_events
+        (aggregate_kind, stream_id, event_type, payload_json, metadata_json, application_event_version)
+        VALUES ('project', 'thread-1', 'thread.metadata-updated',
+          '{"projectId":"wrong-project","title":"Other aggregate"}', '{}', 2)`;
+      yield* sql`INSERT INTO orchestration_events
+        (stream_id, event_type, payload_json, metadata_json, application_event_version)
+        VALUES ('thread-1', 'thread.metadata-updated',
+          '{"projectId":"legacy-project","title":"Legacy event"}', '{}', 1)`;
       yield* append(runEvent("running", 10, "run.created"));
       yield* sql`INSERT INTO orchestration_events
       (event_id, stream_id, event_type, occurred_at, payload_json, metadata_json, application_event_version)

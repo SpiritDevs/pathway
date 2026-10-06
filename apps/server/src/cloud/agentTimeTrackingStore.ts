@@ -80,8 +80,8 @@ export const makeAgentTimeTrackingStore = Effect.fn("AgentTimeTrackingStore.make
             const projects = yield* sql<{ project_id: string; title: string }>`SELECT
               json_extract(payload_json, '$.projectId') AS project_id,
               json_extract(payload_json, '$.title') AS title
-            FROM orchestration_events WHERE stream_id = ${row.stream_id}
-              AND sequence <= ${row.sequence} AND application_event_version = 2
+            FROM orchestration_events WHERE aggregate_kind = 'thread' AND stream_id = ${row.stream_id}
+              AND sequence <= ${row.sequence} AND +application_event_version = 2
               AND event_type LIKE 'thread.%' AND json_extract(payload_json, '$.projectId') IS NOT NULL
               AND COALESCE(json_extract(payload_json, '$.lineage.relationshipToParent'), '') != 'subagent'
               ORDER BY sequence DESC LIMIT 1`;
@@ -179,10 +179,10 @@ export const makeAgentTimeTrackingStore = Effect.fn("AgentTimeTrackingStore.make
       event_type: string;
       payload: string;
     }>`SELECT event_type, substr(payload_json, 1, 4000) AS payload
-      FROM orchestration_events WHERE stream_id = ${session.threadId}
+      FROM orchestration_events WHERE aggregate_kind = 'thread' AND stream_id = ${session.threadId}
       AND (json_extract(metadata_json, '$.runId') = ${session.id}
         OR json_extract(payload_json, '$.runId') = ${session.id}
-        OR json_extract(payload_json, '$.id') = (SELECT json_extract(payload_json, '$.userMessageId') FROM orchestration_events WHERE stream_id = ${session.threadId} AND event_type = 'run.created' AND json_extract(payload_json, '$.id') = ${session.id} LIMIT 1))
+        OR json_extract(payload_json, '$.id') = (SELECT json_extract(payload_json, '$.userMessageId') FROM orchestration_events WHERE aggregate_kind = 'thread' AND stream_id = ${session.threadId} AND event_type = 'run.created' AND json_extract(payload_json, '$.id') = ${session.id} LIMIT 1))
       AND event_type IN ('message.updated', 'tool-call.updated', 'run.updated')
       GROUP BY event_type, json_extract(payload_json, '$.id')
       ORDER BY MAX(sequence) DESC LIMIT 40`;

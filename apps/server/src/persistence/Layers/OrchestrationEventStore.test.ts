@@ -195,6 +195,7 @@ layer("OrchestrationEventStore", (it) => {
           },
         ],
       });
+      assert.equal(yield* eventStore.latestApplicationSequence, threadEvent!.sequence);
 
       const applicationEvents = yield* eventStore
         .streamApplicationEvents({ afterSequence: baselineSequence })
@@ -315,6 +316,7 @@ layer("OrchestrationEventStore", (it) => {
         0,
       );
       assert.equal(yield* eventStore.latestAgentSequence(), a2!.sequence);
+      assert.equal(yield* eventStore.latestApplicationSequence, a2!.sequence);
     }),
   );
 });
