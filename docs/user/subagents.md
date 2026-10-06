@@ -2,7 +2,7 @@
 
 Agents can delegate work to subagents. Open a subagent's card in the conversation or its entry in Lineage to inspect the child conversation.
 
-In Lineage, each subagent shows the icon of the provider it runs on, how long it has been working, and its status. Hover over a subagent to see its model and what it is doing right now. Finished subagents move into a collapsed Previous agents group below the ones still running.
+On web and desktop, each subagent in Lineage shows the icon of the provider it runs on, how long it has been working, and its status. Hover over a subagent to see its model and what it is doing right now. Finished subagents move into a collapsed Previous agents group below the ones still running.
 
 Codex task names appear as readable labels. For example, `audit_server` appears as "Audit server" in the conversation, Lineage, and the child conversation's title. Nested subagents use their own task name; their relationship to the parent remains in Lineage. Previously saved conversations retain their saved titles.
 

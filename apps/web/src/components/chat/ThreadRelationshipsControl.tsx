@@ -498,12 +498,16 @@ function useThreadRelationshipsModel(props: {
     serverConfigs.get(environmentByThreadId.get(threadId) ?? props.environmentId)?.providers ?? [];
 
   // A subagent row shows the brand icon of the provider it runs on, when that provider is known.
+  // The parent's subagent record is authoritative; the child shell covers subagents without one.
   const providerIcon = (threadId: ThreadId) => {
     const thread = graph.nodes.get(threadId)?.thread;
-    if (!thread) return null;
-    const driver = providersFor(threadId).find(
-      (provider) => provider.instanceId === thread.providerInstanceId,
-    )?.driver;
+    const driver =
+      subagentByThreadId.get(threadId)?.driver ??
+      (thread
+        ? providersFor(threadId).find(
+            (provider) => provider.instanceId === thread.providerInstanceId,
+          )?.driver
+        : undefined);
     return driver === undefined ? null : (PROVIDER_ICON_BY_PROVIDER[driver] ?? null);
   };
 

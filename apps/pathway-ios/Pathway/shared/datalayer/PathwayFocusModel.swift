@@ -56,6 +56,8 @@ struct PathwayFocusNotification: Decodable, Identifiable {
     var errorMessage: String?
     @ObservationIgnored private var preferenceKey: String?
     @ObservationIgnored private var observationGeneration = 0
+    /// Notifications read on this device ahead of Cloud, so a slow or failed read never strands a thread settled by hand.
+    @ObservationIgnored private var locallyReadIDs: Set<String> = []
 
     func includes(_ thread: PathwayAgentThread) -> Bool {
         if selectedID == "all" { return true }
@@ -160,7 +162,8 @@ struct PathwayFocusNotification: Decodable, Identifiable {
         do {
             for try await value in cloud.subscribe(name: "focusNotifications:list", arguments: .object(["limit": .number(200)])) {
                 guard !Task.isCancelled, generation == observationGeneration else { return }
-                notifications = try decodePathwayPayload([PathwayFocusNotification].self, from: value).filter { $0.isRead != true }
+                notifications = try decodePathwayPayload([PathwayFocusNotification].self, from: value)
+                    .filter { $0.isRead != true && !locallyReadIDs.contains($0.id) }
                 unreadThreadKeys = Set(notifications.map { "\($0.environmentId):\($0.threadId)" })
             }
         } catch is CancellationError {} catch { if generation == observationGeneration { errorMessage = error.localizedDescription } }
@@ -168,6 +171,20 @@ struct PathwayFocusNotification: Decodable, Identifiable {
 
     func hasUnreadNotification(_ thread: PathwayAgentThread) -> Bool {
         unreadThreadKeys.contains("\(thread.environmentId):\(thread.threadId)")
+    }
+
+    /// Unread threads stay out of Settled, so settling one by hand counts as reading it.
+    func markThreadRead(_ thread: PathwayAgentThread, cloud: PathwayCloudModel) {
+        let unread = notifications.filter { $0.environmentId == thread.environmentId && $0.threadId == thread.threadId }
+        guard !unread.isEmpty else { return }
+        locallyReadIDs.formUnion(unread.map(\.id))
+        notifications.removeAll { locallyReadIDs.contains($0.id) }
+        unreadThreadKeys = Set(notifications.map { "\($0.environmentId):\($0.threadId)" })
+        Task {
+            for row in unread {
+                _ = try? await cloud.request(kind: "mutation", name: "focusNotifications:markRead", arguments: .object(["eventId": .string(row.id)]))
+            }
+        }
     }
 
     static func readThreadNotifications(environmentID: String, threadID: String, cloud: PathwayCloudModel) async throws {
