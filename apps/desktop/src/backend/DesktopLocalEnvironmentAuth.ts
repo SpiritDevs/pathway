@@ -20,6 +20,15 @@ export class DesktopLocalEnvironmentAuthBackendNotConfiguredError extends Schema
   }
 }
 
+export class DesktopLocalEnvironmentAuthBackendNotReadyError extends Schema.TaggedErrorClass<DesktopLocalEnvironmentAuthBackendNotReadyError>()(
+  "DesktopLocalEnvironmentAuthBackendNotReadyError",
+  {},
+) {
+  override get message(): string {
+    return "Local backend is still starting. Retry shortly.";
+  }
+}
+
 export class DesktopLocalEnvironmentAuthSessionBootstrapError extends Schema.TaggedErrorClass<DesktopLocalEnvironmentAuthSessionBootstrapError>()(
   "DesktopLocalEnvironmentAuthSessionBootstrapError",
   { cause: Schema.Defect() },
@@ -31,6 +40,7 @@ export class DesktopLocalEnvironmentAuthSessionBootstrapError extends Schema.Tag
 
 export const DesktopLocalEnvironmentAuthError = Schema.Union([
   DesktopLocalEnvironmentAuthBackendNotConfiguredError,
+  DesktopLocalEnvironmentAuthBackendNotReadyError,
   DesktopLocalEnvironmentAuthSessionBootstrapError,
 ]);
 export type DesktopLocalEnvironmentAuthError = typeof DesktopLocalEnvironmentAuthError.Type;
@@ -62,6 +72,9 @@ export const make = Effect.gen(function* () {
         if (Option.isNone(configOption)) {
           return yield* new DesktopLocalEnvironmentAuthBackendNotConfiguredError();
         }
+        if (primary === undefined || !(yield* primary.snapshot).ready) {
+          return yield* new DesktopLocalEnvironmentAuthBackendNotReadyError();
+        }
         const config = configOption.value;
         const credential = config.bootstrap.desktopBootstrapToken;
         if (!credential) {
@@ -70,6 +83,7 @@ export const make = Effect.gen(function* () {
         const session = yield* bootstrapRemoteBearerSession({
           httpBaseUrl: config.httpBaseUrl.href,
           credential,
+          timeoutMs: 1000,
           clientMetadata: {
             label: "Pathway Desktop",
             deviceType: "desktop",

@@ -27,6 +27,20 @@ describe("desktop primary auth", () => {
     expect(getLocalEnvironmentBearerToken).toHaveBeenCalledTimes(1);
   });
 
+  it("retries a failed pre-ready token request without caching its rejection", async () => {
+    const getLocalEnvironmentBearerToken = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Local backend is still starting"))
+      .mockResolvedValue("ready-token");
+    window.desktopBridge = { getLocalEnvironmentBearerToken } as unknown as DesktopBridge;
+    await expect(readDesktopPrimaryBearerToken()).rejects.toThrow(
+      "Local backend is still starting",
+    );
+    await expect(readDesktopPrimaryBearerToken()).resolves.toBe("ready-token");
+    await expect(readDesktopPrimaryBearerToken()).resolves.toBe("ready-token");
+    expect(getLocalEnvironmentBearerToken).toHaveBeenCalledTimes(2);
+  });
+
   it("does not require desktop auth in a browser", async () => {
     await expect(readDesktopPrimaryBearerToken()).resolves.toBeNull();
   });
