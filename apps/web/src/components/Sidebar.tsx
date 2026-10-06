@@ -415,7 +415,7 @@ function ThreadProviderIconStack({ models }: { models: ReadonlyArray<SidebarThre
   }
   const stacked = [...byInstance.values()].slice(-MAX_STACKED_PROVIDER_ICONS);
   return (
-    <span className="inline-flex shrink-0 items-center -space-x-1 opacity-60">
+    <span className="inline-flex shrink-0 items-center -space-x-1">
       {stacked.map((model, index) => (
         <ProviderInstanceIcon
           key={model.providerEntry.instanceId}
@@ -540,7 +540,7 @@ function SidebarThreadTooltip({
                 accentColor={model.providerEntry.accentColor}
                 showBadge={model.showBadge}
                 badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-2.5 min-w-2.5 px-px text-[6px]"
-                iconClassName="size-3 shrink-0 grayscale opacity-60"
+                iconClassName="size-3 shrink-0"
               />
               <div className="min-w-0 truncate text-foreground/75">{model.label}</div>
             </div>
