@@ -23,7 +23,7 @@ import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
-import { resolveServerEnvironmentDevice } from "./ServerEnvironmentDevice.ts";
+import { makeCachedServerEnvironmentDevice } from "./ServerEnvironmentDevice.ts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedErrorClass<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
@@ -140,7 +140,8 @@ export const make = Effect.gen(function* () {
   const environmentId = EnvironmentId.make(environmentIdRaw);
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
   const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
-  const device = yield* resolveServerEnvironmentDevice(hostname);
+  const deviceCache = yield* makeCachedServerEnvironmentDevice(hostname, serverConfig.stateDir);
+  const device = yield* deviceCache.getDevice;
   const launcher = yield* resolveServiceLauncherMode();
   const serverSelfUpdate = resolveServerSelfUpdateCapability({
     desktopManaged: serverConfig.mode === "desktop",
@@ -206,7 +207,7 @@ export const make = Effect.gen(function* () {
 
   return ServerEnvironment.of({
     getEnvironmentId: Effect.succeed(environmentId),
-    getDescriptor: Effect.succeed(descriptor),
+    getDescriptor: deviceCache.getDevice.pipe(Effect.map((device) => ({ ...descriptor, device }))),
   });
 });
 

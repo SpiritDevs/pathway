@@ -1,6 +1,9 @@
-import type { ExecutionEnvironmentDevice } from "@spiritdevs/contracts";
-import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
+import { ExecutionEnvironmentDevice } from "@spiritdevs/contracts";
+import { HostProcessPlatform, HostProcessArchitecture } from "@spiritdevs/shared/hostProcess";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
 import * as ProcessRunner from "../processRunner.ts";
 
@@ -93,5 +96,67 @@ export const resolveServerEnvironmentDevice = Effect.fn("resolveServerEnvironmen
 
     if (result === null || result.code !== 0 || result.timedOut) return fallback;
     return parseMacHardwareProfile(result.stdout, hostname) ?? fallback;
+  },
+);
+
+const CachedDevice = Schema.Struct({
+  version: Schema.Literal(1),
+  platform: Schema.String,
+  architecture: Schema.String,
+  hostname: Schema.String,
+  device: ExecutionEnvironmentDevice,
+});
+
+const decodeCachedDevice = Schema.decodeUnknownEffect(Schema.fromJsonString(CachedDevice));
+const encodeCachedDevice = Schema.encodeEffect(Schema.fromJsonString(CachedDevice));
+
+export const makeCachedServerEnvironmentDevice = Effect.fn("makeCachedServerEnvironmentDevice")(
+  function* (hostname: string, stateDir: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const platform = yield* HostProcessPlatform;
+    const architecture = yield* HostProcessArchitecture;
+    const cachePath = path.join(stateDir, "environment-device.json");
+    const cached = yield* fs
+      .readFileString(cachePath)
+      .pipe(Effect.flatMap(decodeCachedDevice), Effect.option);
+    let device: ExecutionEnvironmentDevice = {
+      kind: "unknown",
+      ...(hostname.trim() ? { hostname: hostname.trim() } : {}),
+    };
+    if (
+      cached._tag === "Some" &&
+      cached.value.platform === platform &&
+      cached.value.architecture === architecture &&
+      cached.value.hostname === hostname
+    ) {
+      device = cached.value.device;
+    }
+    const refresh = yield* Effect.gen(function* () {
+      if (platform !== "darwin") return;
+      const fresh = yield* resolveServerEnvironmentDevice(hostname);
+      // A failed probe must not replace the last successfully collected descriptor.
+      if (fresh.model === undefined && fresh.modelIdentifier === undefined) return;
+      device = fresh;
+      yield* fs.makeDirectory(stateDir, { recursive: true }).pipe(
+        Effect.andThen(
+          encodeCachedDevice({
+            version: 1,
+            platform,
+            architecture,
+            hostname,
+            device: fresh,
+          }),
+        ),
+        Effect.flatMap((encoded) =>
+          fs.writeFileString(`${cachePath}.tmp`, encoded, { mode: 0o600 }),
+        ),
+        Effect.andThen(fs.rename(`${cachePath}.tmp`, cachePath)),
+        Effect.catch((cause) =>
+          Effect.logDebug("Failed to persist environment hardware profile", { cause }),
+        ),
+      );
+    }).pipe(Effect.forkScoped);
+    return { getDevice: Effect.sync(() => device), refresh };
   },
 );
