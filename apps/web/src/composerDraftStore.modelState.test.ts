@@ -85,6 +85,32 @@ function deriveEffective(input?: {
 }
 
 describe("subagent composer model state", () => {
+  it("uses lightweight shell metadata without a runtime effort or task payload", () => {
+    const metadata = {
+      childThreadId: THREAD_ID,
+      origin: "provider_native" as const,
+      driver: CLAUDE,
+      model: "opus",
+      options: [{ id: "effort", value: "max" }],
+    };
+    expect(
+      deriveComposerControlsLocked({
+        relationshipToParent: "subagent",
+        matchedSubagentOrigin: metadata.origin,
+      }),
+    ).toBe(true);
+    expect(
+      deriveSubagentComposerModelSelection({
+        threadId: THREAD_ID,
+        relationshipToParent: "subagent",
+        providerInstanceId: CLAUDE_INSTANCE,
+        threadModelSelection: threadSelection,
+        parentThreadModelSelection: threadSelection,
+        runtimeSubagents: [metadata],
+      }),
+    ).toEqual(createModelSelection(CLAUDE_INSTANCE, "opus", metadata.options));
+  });
+
   it("locks controls for provider-native subagent children", () => {
     expect(
       deriveComposerControlsLocked({

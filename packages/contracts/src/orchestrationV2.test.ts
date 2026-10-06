@@ -931,6 +931,8 @@ describe("orchestration V2 contracts", () => {
 
     expect(shell.pendingBackgroundTasks).toEqual([]);
     expect(shell.attachedPullRequest).toBeNull();
+    // Undefined distinguishes older servers from a modern empty roster.
+    expect(shell.subagentComposerStates).toBeUndefined();
   });
 
   it("decodes an exact-run continuation launch with target model and workspace policy", () => {

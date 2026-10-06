@@ -1619,7 +1619,18 @@ export const OrchestrationV2LatestVisibleMessageSummary = Schema.Struct({
 export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
+/** Composer metadata for linked children, without task prompts, results or history. */
+export const OrchestrationV2SubagentComposerState = Schema.Struct({
+  childThreadId: ThreadId,
+  origin: OrchestrationV2Subagent.fields.origin,
+  driver: ProviderDriverKind,
+  model: Schema.NullOr(Schema.String),
+  options: Schema.NullOr(ProviderOptionSelections),
+});
+
 export const OrchestrationV2ThreadShell = Schema.Struct({
+  /** Omitted by servers that predate lightweight subagent composer metadata. */
+  subagentComposerStates: Schema.optional(Schema.Array(OrchestrationV2SubagentComposerState)),
   allowanceHold: Schema.optional(Schema.NullOr(Schema.String)),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
