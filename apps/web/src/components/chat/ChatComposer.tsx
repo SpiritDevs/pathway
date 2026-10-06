@@ -1319,8 +1319,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const recordSkillEnvironment = useEnvironment(environmentId);
   const recordSkillTargetName =
     workflowRecording.status?.targetName ?? recordSkillEnvironment?.label ?? "this Mac";
-  const recordSkillOffered =
-    recordSkillAllowed && (routeKind === "draft" || workflowRecording.status?.supported === true);
+  // Status is only read once the user records here, so offer it until the
+  // server says this environment cannot record.
+  const recordSkillOffered = recordSkillAllowed && workflowRecording.status?.supported !== false;
   const recordSkillBusy =
     workflowRecording.pending !== null || isWorkflowRecordingBlocked(workflowRecording.status);
   const recordSkillSlashAvailable =
@@ -1610,10 +1611,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   useEffect(
     () =>
       onWorkflowRecordingStartRequested((target) => {
-        if (target.environmentId === environmentId && target.threadId === workflowRecordingThreadId)
+        if (
+          target.environmentId === environmentId &&
+          target.threadId === workflowRecordingThreadId &&
+          !recordSkillBusy
+        )
           startWorkflowRecording();
       }),
-    [environmentId, startWorkflowRecording, workflowRecordingThreadId],
+    [environmentId, recordSkillBusy, startWorkflowRecording, workflowRecordingThreadId],
   );
 
   const removeComposerImageFromDraft = useCallback(

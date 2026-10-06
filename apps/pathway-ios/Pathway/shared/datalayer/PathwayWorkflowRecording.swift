@@ -63,6 +63,9 @@ final class PathwayWorkflowRecordingModel {
     @ObservationIgnored private var version = 0
     /// The read in flight, if any. Only that read may release it.
     @ObservationIgnored private var reading: UUID?
+    /// Threads where this session has used Record a skill. Only these read the recorder, so
+    /// opening any other thread never touches the Mac's host. Settled threads go quiet again.
+    private static var engagedThreads: Set<String> = []
 
     /// How often to re-read: every second while live, slowly while another thread records or a
     /// saved recording waits, so its hand-off never points at files another device deleted.
@@ -74,7 +77,7 @@ final class PathwayWorkflowRecordingModel {
     func clearError() { error = nil }
 
     func refresh(_ thread: PathwayAgentThreadModel) async {
-        guard reading == nil else { return }
+        guard reading == nil, Self.engagedThreads.contains(Self.key(thread)) else { return }
         let read = UUID()
         let current = version
         reading = read
@@ -82,7 +85,7 @@ final class PathwayWorkflowRecordingModel {
         do {
             let value = try await thread.request("computer.recording.status", payload: Self.payload(thread), reportsErrors: false)
             guard current == version else { return }
-            status = PathwayWorkflowRecordingStatus(value)
+            settle(PathwayWorkflowRecordingStatus(value), thread: thread)
             error = nil
         } catch is CancellationError {
         } catch {
@@ -92,8 +95,9 @@ final class PathwayWorkflowRecordingModel {
         }
     }
 
-    /// Reads once, then keeps reading while `pollInterval` asks for it. The caller restarts this
-    /// when the scene returns to the foreground or the interval changes.
+    /// Reads once if this thread has used recording, then keeps reading while `pollInterval` asks
+    /// for it. The caller restarts this when the scene returns to the foreground or the interval
+    /// changes.
     func watch(_ thread: PathwayAgentThreadModel) async {
         await refresh(thread)
         while let interval = pollInterval {
@@ -103,6 +107,7 @@ final class PathwayWorkflowRecordingModel {
     }
 
     func perform(_ command: Command, thread: PathwayAgentThreadModel) async {
+        Self.engagedThreads.insert(Self.key(thread))
         version += 1
         reading = nil
         let current = version
@@ -113,7 +118,7 @@ final class PathwayWorkflowRecordingModel {
             guard current == version else { return }
             version += 1
             pending = nil
-            status = PathwayWorkflowRecordingStatus(value)
+            settle(PathwayWorkflowRecordingStatus(value), thread: thread)
         } catch {
             guard current == version else { return }
             version += 1
@@ -121,6 +126,16 @@ final class PathwayWorkflowRecordingModel {
             if !(error is CancellationError) { self.error = error.localizedDescription }
             await refresh(thread)
         }
+    }
+
+    private func settle(_ next: PathwayWorkflowRecordingStatus?, thread: PathwayAgentThreadModel) {
+        status = next
+        let retained = next?.isActive == true || ["busy", "completed", "failed"].contains(next?.phase ?? "")
+        if !retained { Self.engagedThreads.remove(Self.key(thread)) }
+    }
+
+    private static func key(_ thread: PathwayAgentThreadModel) -> String {
+        "\(thread.thread.environmentId):\(thread.threadID)"
     }
 
     private static func payload(_ thread: PathwayAgentThreadModel) -> JSONValue {
@@ -132,7 +147,7 @@ extension PathwayAgentThreadModel {
     /// Recording needs the environment's Mac, a thread the server knows, and Computer access.
     var offersWorkflowRecording: Bool {
         serverConfig["environment"]?.objectValue?["platform"]?.objectValue?["os"]?.stringValue == "darwin"
-            && isSubscriptionReady && workflowRecording.status?.supported == true && !computerAccessDenied
+            && isSubscriptionReady && workflowRecording.status?.supported != false && !computerAccessDenied
     }
 
     /// Another recording on the Mac, or one already starting here.

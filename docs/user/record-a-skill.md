@@ -66,5 +66,9 @@ deleted, and its unedited prompt leaves your draft the same way as with Discard.
 skill does not delete the recording. It stays on the Mac, including across restarts, until you
 discard it, record again in that thread, or delete the thread.
 
-If you discard or replace the recording from another device, a device with the thread open
-removes the unedited prompt from its draft within a few seconds.
+Pathway only checks the recorder for threads where you have used Record a skill since opening the
+app, so opening other threads never contacts the Mac. After a restart, a saved recording no longer
+shows its **Create skill** prompt.
+
+If you discard or replace the recording from another device, a device that is following that
+thread's recording removes the unedited prompt from its draft within a few seconds.

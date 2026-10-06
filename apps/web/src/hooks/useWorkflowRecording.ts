@@ -22,12 +22,27 @@ const ACTIVE_POLL_MS = 1_000;
 // discarded or replaced from another device; re-check slowly.
 const SETTLED_POLL_MS = 5_000;
 
+// Threads where this session has used Record a skill. Only these read the
+// recorder, so opening any other thread never touches the Mac's host. Kept at
+// module scope so switching away and back finds a live recording again.
+const engagedThreads = new Set<string>();
+const engagementKey = (environmentId: EnvironmentId, threadId: ThreadId) =>
+  `${environmentId}:${threadId}`;
+// A settled thread (idle, cancelled) has nothing left to show, so it goes quiet.
+const settle = (key: string, status: WorkflowRecordingStatus) => {
+  if (!isWorkflowRecordingRetained(status)) engagedThreads.delete(key);
+};
+
 export const isWorkflowRecordingActive = (status: WorkflowRecordingStatus | null) =>
   status !== null && ACTIVE_PHASES.has(status.phase);
 
 /** Whether this thread cannot start a recording right now (its own or another thread's). */
 export const isWorkflowRecordingBlocked = (status: WorkflowRecordingStatus | null) =>
   isWorkflowRecordingActive(status) || status?.phase === "busy";
+
+/** Whether the thread still has a recording to follow: live, waiting, saved, or failed. */
+const isWorkflowRecordingRetained = (status: WorkflowRecordingStatus) =>
+  isWorkflowRecordingBlocked(status) || status.phase === "completed" || status.phase === "failed";
 
 /**
  * Whether this client may record on the environment: its server runs on macOS,
@@ -88,10 +103,12 @@ const describeFailure = (outcome: Parameters<typeof squashAtomCommandFailure>[0]
 };
 
 /**
- * Record a skill for one durable thread. Reads the status once per thread,
- * then every second while a recording is live (every five while another
- * thread records or a saved recording waits) and only while the window is
- * visible, one request at a time. Returning to the window re-reads it.
+ * Record a skill for one durable thread. Nothing is read until the user starts
+ * a recording here this session. From then on it reads the status on thread
+ * open, every second while a recording is live (every five while another
+ * thread records or a saved recording waits), and only while the window is
+ * visible, one request at a time. Returning to the window re-reads it. Once the
+ * status settles, the thread goes quiet again.
  */
 export function useWorkflowRecording(input: {
   readonly environmentId: EnvironmentId | null;
@@ -149,6 +166,8 @@ export function useWorkflowRecording(input: {
 
   const refresh = useCallback(() => {
     if (!environmentId || !threadId || reading.current) return;
+    const key = engagementKey(environmentId, threadId);
+    if (!engagedThreads.has(key)) return;
     const read = {};
     const current = version.current;
     reading.current = read;
@@ -158,6 +177,7 @@ export function useWorkflowRecording(input: {
         if (outcome._tag === "Success") {
           applyStatus(outcome.value);
           setError(null);
+          settle(key, outcome.value);
         } else if (!isAtomCommandInterrupted(outcome)) {
           // Keep the last known status so live Stop/Cancel stay reachable.
           setError(describeFailure(outcome));
@@ -191,6 +211,7 @@ export function useWorkflowRecording(input: {
   const run = useCallback(
     (command: RecordingCommand) => {
       if (!environmentId || !threadId) return;
+      engagedThreads.add(engagementKey(environmentId, threadId));
       const execute =
         command === "start" ? startRecording : command === "stop" ? stopRecording : cancelRecording;
       const current = ++version.current;
@@ -202,6 +223,7 @@ export function useWorkflowRecording(input: {
         setPending(null);
         if (outcome._tag === "Success") {
           applyStatus(outcome.value);
+          settle(engagementKey(environmentId, threadId), outcome.value);
           schedulePoll();
           return;
         }
