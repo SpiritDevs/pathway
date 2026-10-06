@@ -29,6 +29,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { BrowserTakeoverService } from "./orchestration-v2/BrowserTakeoverService.ts";
 import * as EffectWorker from "./orchestration-v2/EffectWorker.ts";
+import { OrchestratorV2 } from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
@@ -338,17 +339,20 @@ export function runOrderedV2StartupPhases<
   VerifyError,
   RebuildError,
   RecoveryError,
+  DeliveryRecoveryError,
   WorkerError,
   BootstrapError,
   VerifyContext,
   RebuildContext,
   RecoveryContext,
+  DeliveryRecoveryContext,
   WorkerContext,
   BootstrapContext,
 >(input: {
   readonly verify: Effect.Effect<Verification, VerifyError, VerifyContext>;
   readonly rebuild: Effect.Effect<RebuildVerification, RebuildError, RebuildContext>;
   readonly recover: Effect.Effect<Recovery, RecoveryError, RecoveryContext>;
+  readonly recoverDeliveries: Effect.Effect<void, DeliveryRecoveryError, DeliveryRecoveryContext>;
   readonly startEffectWorker: Effect.Effect<void, WorkerError, WorkerContext>;
   readonly autoBootstrap: Effect.Effect<Bootstrap, BootstrapError, BootstrapContext>;
 }) {
@@ -363,6 +367,7 @@ export function runOrderedV2StartupPhases<
       }
     }
     const recovery = yield* input.recover;
+    yield* input.recoverDeliveries;
     yield* input.startEffectWorker;
     const bootstrap = yield* input.autoBootstrap;
     return { recovery, bootstrap } as const;
@@ -375,6 +380,7 @@ export const make = (options?: StartupOptions) =>
     const keybindings = yield* Keybindings.Keybindings;
     const projectionMaintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
     const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
+    const orchestrator = yield* OrchestratorV2;
     const browserTakeover = yield* BrowserTakeoverService;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
@@ -473,6 +479,10 @@ export const make = (options?: StartupOptions) =>
           projectionMaintenance.rebuild,
         ),
         recover: runStartupPhase("orchestration-v2.recovery", providerRuntimeRecovery.recover),
+        recoverDeliveries: runStartupPhase(
+          "orchestration-v2.delivery-recovery",
+          orchestrator.recoverDelegatedCompletions,
+        ),
         startEffectWorker: runStartupPhase(
           "orchestration-v2.effect-worker.start",
           startEffectWorkerWithRelay({

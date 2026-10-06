@@ -1,9 +1,4 @@
-import {
-  CommandId,
-  type OrchestrationV2DomainEvent,
-  type OrchestrationV2ThreadProjection,
-  ThreadId,
-} from "@spiritdevs/contracts";
+import { CommandId, type OrchestrationV2DomainEvent, ThreadId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -56,7 +51,7 @@ export class ProviderRuntimeRecoveryService extends Context.Service<
   }
 >()("@spiritdevs/pathway/orchestration-v2/ProviderRuntimeRecoveryService") {}
 
-function nonterminalRuns(projection: OrchestrationV2ThreadProjection) {
+function nonterminalRuns(projection: ProjectionStore.ProviderRuntimeRecoveryProjection) {
   return projection.runs.filter((run) => {
     const status: string = run.status;
     return (
@@ -86,7 +81,7 @@ function isNonterminalNodeStatus(status: string): boolean {
 }
 
 function providerThreadHasPendingBackgroundTasks(
-  providerThread: OrchestrationV2ThreadProjection["providerThreads"][number],
+  providerThread: ProjectionStore.ProviderRuntimeRecoveryProjection["providerThreads"][number],
 ): boolean {
   return (providerThread.pendingBackgroundTasks?.length ?? 0) > 0;
 }
@@ -98,9 +93,9 @@ function providerThreadHasPendingBackgroundTasks(
  * first provider thread, then the thread's selected provider.
  */
 function resolveStaleBackgroundItemProviderInstanceId(
-  item: OrchestrationV2ThreadProjection["turnItems"][number],
-  projection: OrchestrationV2ThreadProjection,
-): OrchestrationV2ThreadProjection["thread"]["providerInstanceId"] {
+  item: ProjectionStore.ProviderRuntimeRecoveryProjection["turnItems"][number],
+  projection: ProjectionStore.ProviderRuntimeRecoveryProjection,
+): ProjectionStore.ProviderRuntimeRecoveryProjection["thread"]["providerInstanceId"] {
   if (item.runId !== null) {
     const run = projection.runs.find((candidate) => candidate.id === item.runId);
     if (run !== undefined) {
@@ -128,9 +123,12 @@ export const make = Effect.gen(function* () {
   const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
   const outbox = yield* EffectOutbox.EffectOutboxV2;
   const reconcileProjection = Effect.fn("ProviderRuntimeRecoveryService.reconcileProjection")(
-    function* (projection: OrchestrationV2ThreadProjection, trigger: "startup" | "shutdown") {
+    function* (
+      projection: ProjectionStore.ProviderRuntimeRecoveryProjection,
+      trigger: "startup" | "shutdown",
+    ) {
       const now = yield* DateTime.now;
-      const runs = [] as Array<OrchestrationV2ThreadProjection["runs"][number]>;
+      const runs = [] as Array<ProjectionStore.ProviderRuntimeRecoveryProjection["runs"][number]>;
       for (const run of nonterminalRuns(projection)) {
         if (run.status === "waiting") {
           const checkpointEffects = yield* outbox
@@ -572,7 +570,7 @@ export const make = Effect.gen(function* () {
       let closedRequests = 0;
       let retiredEffects = 0;
       for (const threadId of threadIds) {
-        const projection = yield* projections.getThreadProjection(threadId).pipe(
+        const projection = yield* projections.getProviderRuntimeRecoveryProjection(threadId).pipe(
           Effect.mapError(
             (cause) =>
               new ProviderRuntimeRecoveryError({

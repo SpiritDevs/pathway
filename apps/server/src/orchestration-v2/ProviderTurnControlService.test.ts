@@ -223,6 +223,10 @@ it.effect(
           getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
           getThreadShell: () => Effect.die("unused getThreadShell"),
           getThreadProjection: () => Ref.get(projection),
+          getProviderRuntimeRecoveryProjection: () =>
+            Effect.die("unused getProviderRuntimeRecoveryProjection"),
+          getDelegatedCompletionRecoveryProjection: () =>
+            Effect.die("unused getDelegatedCompletionRecoveryProjection"),
           getRecoveryThreadIds: () => Effect.die("unused getRecoveryThreadIds"),
           getDelegatedCompletionRecoveryThreadIds: () =>
             Effect.die("unused getDelegatedCompletionRecoveryThreadIds"),
