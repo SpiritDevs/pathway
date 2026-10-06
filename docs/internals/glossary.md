@@ -136,8 +136,12 @@ The desktop app's own webview. Its `localhost` is the user's machine. The deskto
 _Avoid_: This desktop (as a host choice)
 
 **Pathway runtime**:
-The desktop app's own Electron, built inside a full Chromium tree with Chrome's browser layer linked in, and pinned by `apps/desktop/pathway-runtime.json` ([ADR 0049](../adr/0049-desktop-runs-on-a-pathway-chromium-runtime.md), [pin](desktop-runtime.md)). It gives the local browser Chrome's real site information, certificates, settings pages and per-site permissions, with Pathway's UI on top.
+The desktop app's own Electron, built inside a full Chromium tree with Chrome's browser layer linked in, and pinned by `apps/desktop/pathway-runtime.json` ([ADR 0049](../adr/0049-desktop-runs-on-a-pathway-chromium-runtime.md), [ADR 0050](../adr/0050-compose-chrome-profiles-with-electron-sessions.md), [pin](desktop-runtime.md)). It gives the local browser Chrome's real site information, certificates, settings pages and per-site permissions, with Pathway's UI on top.
 _Avoid_: Stock Electron (for the shipped runtime), owl (that is OpenAI's)
+
+**Chrome Profile**:
+Chrome's per-user browser state on the Pathway runtime: storage, cookies, content settings and preferences. Each Electron session is backed by one, and each `persist:*` partition gets its own ([ADR 0050](../adr/0050-compose-chrome-profiles-with-electron-sessions.md)). Always qualify it as a Chrome Profile; a bare "profile" is an avoid-word for Focus.
+_Avoid_: Profile (unqualified), browser profile
 
 **Browser page**:
 A local browser tab's page that isn't a website or a blank tab, such as `chrome://settings` on the Pathway runtime ([browser pages](desktop-runtime.md#browser-pages)). Only the desktop main process opens one, and agents can't automate it.

@@ -20,7 +20,7 @@ Tracked under COR-243, with one milestone per phase.
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ---------------- | -------------------------------------------------------------------------------------------------- |
 | 0. Build hosts and CI         | Interim host: the fleet Mac Studio synced and built. Dedicated build Mac still needed.                                                                                                                                                                                                                     | Blocked: no host | Blocked: no host | `SpiritDevs/pathway-runtime` created (private). Remote cache deferred until dedicated hosts exist. |
 | 1. Stock Electron from source | arm64 built from source; Pathway packaged against it and starts isolated, unsigned. The account-check stall came from a stale Clerk key in the test build (COR-253); sign-in on the runtime is not yet verified, and the build scripts have not yet run end to end. x64 waits for the dedicated build Mac. | Not started      | Not started      | Electron 44.5.1 upgrade in #270; pinned-archive packaging in #269                                  |
-| 2. Chrome's browser layer     | Source survey done (COR-256). Spike waits for the dedicated build Mac.                                                                                                                                                                                                                                     | Not started      | Not started      | Starting point: Chrome owns startup and real Profiles, one Profile per `persist:*` partition       |
+| 2. Chrome's browser layer     | macOS arm64 spike passed Gates 1–4 ([ADR 0050](../adr/0050-compose-chrome-profiles-with-electron-sessions.md)). Release blockers: COR-287, COR-288.                                                                                                                                                        | Pending          | Pending          | Chrome owns startup and real Profiles, one Profile per `persist:*` partition                       |
 | 3. Runtime packaging          | Not started                                                                                                                                                                                                                                                                                                | Not started      | Not started      |                                                                                                    |
 | 4. Pathway UI on Chromium     | Not started                                                                                                                                                                                                                                                                                                | Not started      | Not started      |                                                                                                    |
 | 5. Release cadence            | Not started                                                                                                                                                                                                                                                                                                | Not started      | Not started      |                                                                                                    |
@@ -59,12 +59,13 @@ What `apps/desktop` sees:
 
 - **Unchanged.** Every Electron API Pathway uses today keeps working, so the app runs on the runtime with no code changes until Phase 4.
 - **Chrome's browser layer.** `chrome://` WebUI pages, such as `chrome://settings/content/siteDetails`, load in Pathway's webview guests. Per-site content settings and site data apply to the preview partitions (`persist:pathway-preview-*`).
-- **A `pathway` main-process module** (names are settled in the Phase 2 ADR):
+- **A `pathway` main-process module** (names are settled in [ADR 0050](../adr/0050-compose-chrome-profiles-with-electron-sessions.md)):
   - `siteInfo(webContents)`: origin, security state, connection summary, the certificate chain (PEM plus parsed fields), and cookie and storage usage.
   - `contentSettings.get` / `set` / `reset` for an origin in a partition.
   - `clearSiteData(partition, origin)` through Chrome's browsing-data remover.
+  - `settingsUrl(origin)`: the `chrome://settings` site details URL for an origin.
 
-How preview partitions map onto Chrome profiles is the main design question in Phase 2.
+Each preview partition is its own Chrome Profile. [ADR 0050](../adr/0050-compose-chrome-profiles-with-electron-sessions.md) records the mapping.
 
 ## Phase 0: build hosts and CI
 
@@ -126,7 +127,7 @@ This is the unknown. Make Electron live inside Chrome's startup path, as Codex d
   - profiles, and how preview partitions map to them;
   - how webview guests attach to a Chrome profile;
   - which Chrome UI stays suppressed so Pathway's own UI can replace it.
-- Timebox the spike. Write what worked as ADR 0050 before building further.
+- Timebox the spike. Write what worked as [ADR 0050](../adr/0050-compose-chrome-profiles-with-electron-sessions.md) before building further.
 
 **Exit:**
 
