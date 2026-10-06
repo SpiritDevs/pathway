@@ -79,6 +79,7 @@ export interface EnvironmentThreadShell {
   readonly title: string;
   readonly providerInstanceId: ProviderInstanceId;
   readonly modelSelection: OrchestrationV2ThreadShell["modelSelection"];
+  readonly subagentComposerStates?: OrchestrationV2ThreadShell["subagentComposerStates"];
   /** Models the thread's runs used, latest use last; empty before the first run. */
   readonly usedModels: NonNullable<OrchestrationV2ThreadShell["usedModels"]>;
   readonly runtimeMode: OrchestrationV2ThreadShell["runtimeMode"];
@@ -208,6 +209,9 @@ export function presentThreadShell(
     title: thread.title,
     providerInstanceId: thread.providerInstanceId,
     modelSelection: thread.modelSelection,
+    ...(thread.subagentComposerStates === undefined
+      ? {}
+      : { subagentComposerStates: thread.subagentComposerStates }),
     usedModels: thread.usedModels ?? [],
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,

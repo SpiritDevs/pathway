@@ -46,6 +46,7 @@ import {
   MessageId,
   type ModelSelection,
   type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadShell,
   type ProjectScript,
   type ProjectId,
   type ProviderApprovalDecision,
@@ -559,6 +560,9 @@ const TIMELINE_SCROLL_CANCEL_SENTINEL = Object.freeze({});
 const VISIT_DISPATCH_THROTTLE_MS = 10_000;
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PROJECTION_RUNS: OrchestrationV2ThreadProjection["runs"] = [];
+const EMPTY_SUBAGENT_COMPOSER_STATES: NonNullable<
+  OrchestrationV2ThreadShell["subagentComposerStates"]
+> = [];
 const EMPTY_PROJECTION_SUBAGENTS: OrchestrationV2ThreadProjection["subagents"] = [];
 const EMPTY_EXECUTION_NODES: OrchestrationV2ThreadProjection["nodes"] = [];
 const EMPTY_ATTACHMENT_IDS: string[] = [];
@@ -2101,10 +2105,18 @@ function ChatViewContent(props: ChatViewProps) {
     return scopeThreadRef(parentSubagentEnvironmentId, parentSubagentThreadId);
   }, [parentSubagentEnvironmentId, parentSubagentThreadId]);
   const parentSubagentThread = useThreadShell(parentSubagentThreadRef);
-  const parentSubagentProjection = useThreadProjection(parentSubagentThreadRef);
+  // Older remote servers omit shell metadata. Keep their detail subscription,
+  // including when the parent has left the active shell list (e.g. archived).
+  const fallbackParentSubagentProjection = useThreadProjection(
+    parentSubagentThread?.subagentComposerStates === undefined ? parentSubagentThreadRef : null,
+  );
   const parentRuntimeSubagents = useMemo(
-    () => projectedSubagentsToRuntime(parentSubagentProjection?.projection.subagents ?? []),
-    [parentSubagentProjection?.projection.subagents],
+    () =>
+      parentSubagentThread?.subagentComposerStates ??
+      (fallbackParentSubagentProjection
+        ? projectedSubagentsToRuntime(fallbackParentSubagentProjection.projection.subagents)
+        : EMPTY_SUBAGENT_COMPOSER_STATES),
+    [parentSubagentThread?.subagentComposerStates, fallbackParentSubagentProjection],
   );
   const matchedParentSubagent = useMemo(() => {
     if (activeThread?.lineage.relationshipToParent !== "subagent") {

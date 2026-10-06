@@ -243,6 +243,104 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       assert.deepEqual(yield* store.getAllowanceHeldThreadIds(), []);
     }),
   );
+  it.effect("keeps subagent composer metadata in shells without task payloads", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:composer-shell");
+      const childThreadId = ThreadId.make("thread:composer-child");
+      yield* store.apply({
+        id: EventId.make("event:composer-shell:thread"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId: null,
+          title: "Composer shell",
+          lastVisitedAt: null,
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          deletedAt: null,
+        },
+      });
+      const task = {
+        id: NodeId.make("node:composer-shell"),
+        threadId,
+        runId: null,
+        parentNodeId: NodeId.make("node:composer-parent"),
+        origin: "provider_native" as const,
+        createdBy: "agent" as const,
+        driver,
+        providerInstanceId,
+        providerThreadId: null,
+        childThreadId,
+        nativeTaskRef: null,
+        prompt: "large prompt".repeat(100_000),
+        title: null,
+        model: "gpt-5.4-mini",
+        status: "running" as const,
+        result: "large result".repeat(100_000),
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      };
+      for (const options of [undefined, [{ id: "reasoningEffort", value: "high" }]]) {
+        yield* store.apply({
+          id: EventId.make(`event:composer-shell:${options ? "options" : "legacy"}`),
+          type: "subagent.updated",
+          threadId,
+          occurredAt: now,
+          payload: { ...task, options },
+        });
+        const expected = [
+          {
+            childThreadId,
+            origin: task.origin,
+            driver,
+            model: task.model,
+            options: options ?? null,
+          },
+        ];
+        const projection = yield* store.getThreadProjection(threadId);
+        const shell = yield* store.getThreadShell(threadId);
+        const snapshot = yield* store.getShellSnapshot();
+        for (const value of [
+          threadShellFromProjection(projection),
+          shell!,
+          snapshot.threads.find((t) => t.id === threadId)!,
+        ]) {
+          assert.deepEqual(value.subagentComposerStates, expected);
+          const roundTrip = yield* decodeThreadShell(yield* encodeThreadShell(value));
+          assert.deepEqual(roundTrip.subagentComposerStates, expected);
+          assert.isBelow(encodeUnknownJsonString(value.subagentComposerStates).length, 300);
+        }
+      }
+      yield* store.apply({
+        id: EventId.make("event:composer-shell:unlinked"),
+        type: "subagent.updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...task, childThreadId: null },
+      });
+      assert.deepEqual((yield* store.getThreadShell(threadId))?.subagentComposerStates, []);
+    }),
+  );
+
   it.effect("truncates latest visible message text in thread shells", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStoreV2;

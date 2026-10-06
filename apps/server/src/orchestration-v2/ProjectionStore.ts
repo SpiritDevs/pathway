@@ -31,6 +31,7 @@ import {
   OrchestrationV2RunJson as OrchestrationV2RunJsonSchema,
   OrchestrationV2RuntimeRequestJson as OrchestrationV2RuntimeRequestJsonSchema,
   OrchestrationV2SubagentJson as OrchestrationV2SubagentJsonSchema,
+  OrchestrationV2SubagentComposerState,
   OrchestrationV2TurnItemJson as OrchestrationV2TurnItemJsonSchema,
   ProviderInstanceId,
   RunId,
@@ -528,6 +529,7 @@ type PayloadRow = {
 };
 
 type ShellThreadRow = {
+  readonly subagent_composer_states_json: string;
   readonly thread_id: string;
   readonly payload_json: string;
   readonly forked_from_run_source_thread_id: string | null;
@@ -624,6 +626,9 @@ const decodeNodePayload = Schema.decodeUnknownEffect(
 );
 const decodeSubagentPayload = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2SubagentJsonSchema),
+);
+const decodeSubagentComposerStates = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Array(OrchestrationV2SubagentComposerState)),
 );
 const decodeProviderSessionPayload = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2ProviderSessionJsonSchema),
@@ -1000,6 +1005,19 @@ export function threadShellFromProjection(
     title: projection.thread.title,
     providerInstanceId: projection.thread.providerInstanceId,
     modelSelection: projection.thread.modelSelection,
+    subagentComposerStates: projection.subagents.flatMap((subagent) =>
+      subagent.childThreadId === null
+        ? []
+        : [
+            {
+              childThreadId: subagent.childThreadId,
+              origin: subagent.origin,
+              driver: subagent.driver,
+              model: subagent.model,
+              options: subagent.options ?? null,
+            },
+          ],
+    ),
     usedModels: usedModelsFromRuns(
       projection.runs.map((run) => ({
         ordinal: run.ordinal,
@@ -1087,6 +1105,7 @@ function isActivityRunForShell(
 }
 
 type ShellThreadState = {
+  readonly subagentComposerStates: OrchestrationV2ThreadShell["subagentComposerStates"];
   readonly allowanceHold: string | null;
   readonly thread: OrchestrationV2ThreadProjection["thread"];
   readonly latestRunId: RunId | null;
@@ -1217,6 +1236,7 @@ function shellFromState(input: {
     providerInstanceId: input.state.thread.providerInstanceId,
     modelSelection: input.state.thread.modelSelection,
     usedModels: input.state.usedModels,
+    subagentComposerStates: input.state.subagentComposerStates,
     runtimeMode: input.state.thread.runtimeMode,
     interactionMode: input.state.thread.interactionMode,
     branch: input.state.thread.branch,
@@ -2608,6 +2628,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             SELECT
               t.thread_id,
               t.payload_json,
+              (
+                SELECT json_group_array(json_object(
+                  'childThreadId', subagent.child_thread_id,
+                  'origin', json_extract(subagent.payload_json, '$.origin'),
+                  'driver', json_extract(subagent.payload_json, '$.driver'),
+                  'model', json_extract(subagent.payload_json, '$.model'),
+                  'options', json_extract(subagent.payload_json, '$.options')
+                ))
+                FROM (
+                  SELECT child_thread_id, payload_json
+                  FROM orchestration_v2_projection_subagents
+                  WHERE thread_id = t.thread_id AND child_thread_id IS NOT NULL
+                  ORDER BY COALESCE(started_at, ''), subagent_id ASC
+                ) subagent
+              ) AS subagent_composer_states_json,
               CASE
                 WHEN json_extract(t.payload_json, '$.forkedFrom.type') = 'run'
                   THEN json_extract(t.payload_json, '$.forkedFrom.threadId')
@@ -2997,6 +3032,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           runOrdinalById: runOrdinalsByThreadId.get(ThreadId.make(row.thread_id)) ?? new Map(),
           itemCountByRunId: itemCountsByThreadId.get(ThreadId.make(row.thread_id)) ?? new Map(),
           usedModels: usedModelsByThreadId.get(thread.id) ?? [],
+          subagentComposerStates: yield* decodeSubagentComposerStates(
+            row.subagent_composer_states_json,
+          ),
         } satisfies ShellThreadState;
       });
 

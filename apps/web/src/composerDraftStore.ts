@@ -712,7 +712,9 @@ export function deriveSubagentComposerModelSelection(input: {
   threadModelSelection: ModelSelection | null | undefined;
   parentThreadModelSelection: ModelSelection | null | undefined;
   runtimeSubagents: ReadonlyArray<
-    Pick<RuntimeSubagent, "childThreadId" | "driver" | "model" | "effort" | "options">
+    Pick<RuntimeSubagent, "childThreadId" | "driver" | "model" | "options"> & {
+      readonly effort?: RuntimeSubagent["effort"];
+    }
   >;
 }): ModelSelection | null {
   if (input.relationshipToParent !== "subagent") {

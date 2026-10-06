@@ -1,4 +1,9 @@
-import { EnvironmentId, ThreadId, type OrchestrationV2ShellSnapshot } from "@spiritdevs/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  ProviderDriverKind,
+  type OrchestrationV2ShellSnapshot,
+} from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { Atom, AtomRegistry } from "effect/unstable/reactivity";
 
@@ -55,13 +60,31 @@ describe("environment thread shell atoms", () => {
         kind: "thread.updated",
         sequence: 1,
         location: "active",
-        thread: { ...current.threads[0]!, title: "Renamed" },
+        thread: {
+          ...current.threads[0]!,
+          title: "Renamed",
+          subagentComposerStates: [
+            {
+              childThreadId: ThreadId.make("child"),
+              origin: "provider_native",
+              driver: ProviderDriverKind.make("codex"),
+              model: "gpt-5.4-mini",
+              options: null,
+            },
+          ],
+        },
       }),
     );
 
     const nextAll = registry.get(shell.threadShellsAtom);
     expect(nextAll.map((thread) => thread.id)).toEqual(all.map((thread) => thread.id));
     expect(nextAll[0]?.title).toBe("Renamed");
+    expect(first?.subagentComposerStates).toBeUndefined();
+    expect(nextAll[0]?.subagentComposerStates?.[0]).toMatchObject({
+      childThreadId: "child",
+      origin: "provider_native",
+      model: "gpt-5.4-mini",
+    });
     expect(registry.get(shell.threadShellAtom(firstRef))).toBe(nextAll[0]);
     expect(registry.get(shell.threadShellAtom(secondRef))).toBe(second);
     expect(registry.get(shell.environmentThreadShellsAtom(ENVIRONMENT_B))).toBe(listB);
