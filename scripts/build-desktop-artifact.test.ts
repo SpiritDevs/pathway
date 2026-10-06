@@ -172,9 +172,24 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
-  it.effect("rejects the committed official Electron pin for a runtime release", () =>
+  it.effect("accepts the committed Pathway runtime pin for a runtime release", () =>
+    assertPathwayRuntimeRelease("mac", "arm64", true),
+  );
+
+  it.effect("rejects the official Electron pin for a runtime release", () =>
     Effect.gen(function* () {
-      const error = yield* assertPathwayRuntimeRelease("mac", "arm64", true).pipe(Effect.flip);
+      const pin = {
+        ...pathwayRuntime,
+        runtimeVersion: "44.5.1",
+        archives: {
+          ...pathwayRuntime.archives,
+          "darwin-arm64": {
+            url: "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-darwin-arm64.zip",
+            sha256: "1d75703019bb16461ae65f3081d7e6f5c0b11e901d0ccb5c343bcf7bcdd6435c",
+          },
+        },
+      };
+      const error = yield* assertPathwayRuntimeRelease("mac", "arm64", true, pin).pipe(Effect.flip);
       assert.instanceOf(error, PathwayRuntimeReleaseGuardError);
       assert.include(error.message, "darwin-arm64 requires a Pathway runtimeVersion");
       assert.include(error.message, "URL and SHA-256");

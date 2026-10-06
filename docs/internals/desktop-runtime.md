@@ -10,7 +10,7 @@ The desktop app is moving onto the [Pathway runtime](glossary.md): Electron buil
 - `electronVersion`, the Electron release the runtime is built from;
 - an archive URL and SHA-256 for each of `darwin-arm64`, `darwin-x64`, `win32-x64`, `win32-arm64`, `linux-x64` and `linux-arm64`.
 
-Until `pathway-runtime` publishes Pathway's own archives, the pin points at the official Electron release zips. Their hashes come from that release's `SHASUMS256.txt`.
+`darwin-arm64` points at Pathway's own archive, runtime `44.5.1-pathway.1`, published on the private `pathway-runtime` repository. The other platforms point at the official Electron release zips; their hashes come from that release's `SHASUMS256.txt`.
 
 `electronVersion` must equal the npm `electron` version in `apps/desktop/package.json`. The npm package still supplies types and the dev binary, and a test fails when the two drift. Bump them together.
 
@@ -24,7 +24,7 @@ Until `pathway-runtime` publishes Pathway's own archives, the pin points at the 
 
 Build arm64 and x64 separately; there is no universal archive.
 
-Default packaging and `vp run dev` still use npm Electron. The macOS arm64 release job uses `--pinned-runtime --require-pathway-runtime` for nightly builds. Stable macOS stays on stock Electron until the dedicated build Mac replaces the interim archive with ThinLTO and symbols. Windows and Linux stay on stock Electron. Before any build or backend deployment, the guard requires pinned macOS arm64 packaging and a `runtimeVersion` matching `^\d+\.\d+\.\d+-pathway\.\d+$`, regardless of the archive host. The version identifies a Pathway runtime with the native identity reader. With the committed pin unchanged, macOS nightly releases intentionally stop with instructions to publish and pin the Pathway archive.
+Default packaging and `vp run dev` still use npm Electron. The macOS arm64 release job uses `--pinned-runtime --require-pathway-runtime` for nightly builds. Stable macOS stays on stock Electron until the dedicated build Mac replaces the interim archive with ThinLTO and symbols. Windows and Linux stay on stock Electron. Before any build or backend deployment, the guard requires pinned macOS arm64 packaging and a `runtimeVersion` matching `^\d+\.\d+\.\d+-pathway\.\d+$`, regardless of the archive host. The version identifies a Pathway runtime with the native identity reader. If the pin points at a stock archive, macOS nightly releases stop with instructions to publish and pin a Pathway archive.
 
 ### Download authentication and hosting
 
@@ -46,7 +46,7 @@ Pinned packaging writes `Contents/Resources/pathway-runtime-app.json` outside th
 
 Nightly retains the production directory names used by stable. The cua flavor stamps `pathway-cua` for both fields. The native runtime reads the stamp before Chrome starts and chooses the existing legacy directory under Application Support if present, otherwise the new directory. An explicit `--user-data-dir` wins over the stamp.
 
-The native reader is authoritative on the Pathway runtime: desktop `resolveUserDataPath` returns `app.getPath('userData')` without inspecting the stamp or resolving directories. CI validates the build-time stamp, and native startup reports stamp warnings. Stock Electron retains its existing desktop identity and legacy-directory resolution, including packaged development mode. The native reader is implemented in [pathway-runtime PR #2](https://github.com/SpiritDevs/pathway-runtime/pull/2); the hosted nightly pin must include it.
+The native reader is authoritative on the Pathway runtime: desktop `resolveUserDataPath` returns `app.getPath('userData')` without inspecting the stamp or resolving directories. CI validates the build-time stamp. Without a valid stamp or an explicit `--user-data-dir`, the runtime refuses to start (exit code 78) rather than create a fallback folder, so a development launch on the runtime must pass `--user-data-dir`. Stock Electron retains its existing desktop identity and legacy-directory resolution, including packaged development mode. The native reader ships in runtime `44.5.1-pathway.1`.
 
 ### macOS signing and permission prompts
 
@@ -54,7 +54,7 @@ The existing Developer ID signing, provisioning profile, notarization and staple
 
 Nested framework and helper signing uses the inherited file with hardened runtime enabled, including native resource executables such as `cua-driver` and `pathway-helper`. These binaries retain their own signing and TCC identities. Frameworks inherit their host executable's capabilities ([Apple Hardened Runtime](https://developer.apple.com/documentation/security/hardened-runtime), [electron-builder macOS options](https://www.electron.build/v26/docs/mac/)). CI checks the app and Chromium helper entitlements and runtime flags, prints each native helper's effective entitlements, verifies the entire signature with `codesign --verify --deep --strict`, and validates the stapled ticket.
 
-The first signed runtime build must check the inherited device grants on all nested binaries and test whether camera and microphone work with device keys on the main app only. If they do, remove those keys from the inherited file and the CI helper requirements; otherwise record why the helpers require them. The current signing behavior is retained until that check. A signed runtime release has not yet been exercised; it waits on the hosted pin.
+The first signed runtime build must check the inherited device grants on all nested binaries and test whether camera and microphone work with device keys on the main app only. If they do, remove those keys from the inherited file and the CI helper requirements; otherwise record why the helpers require them. The current signing behavior is retained until that check. A signed runtime release has not yet been exercised.
 
 The packaged `Info.plist` supplies `NSAudioCaptureUsageDescription` for system audio during screen sharing, `NSCameraUsageDescription`, `NSMicrophoneUsageDescription`, `NSLocationUsageDescription` (the macOS location key) and `NSBluetoothAlwaysUsageDescription`, plus the existing screen capture, accessibility and local network descriptions. Microphone copy covers dictation and websites. CI checks these website usage strings. They support macOS permission prompts ([Apple camera key](https://developer.apple.com/documentation/bundleresources/information-property-list/nscamerausagedescription), [location key](https://developer.apple.com/documentation/bundleresources/information-property-list/nslocationusagedescription), [Bluetooth key](https://developer.apple.com/documentation/bundleresources/information-property-list/nsbluetoothalwaysusagedescription)); they do not grant a website permission or prove hardware access. System audio, camera, microphone, location and Bluetooth prompts still need validation on a signed build.
 

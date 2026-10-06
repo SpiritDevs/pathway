@@ -55,9 +55,9 @@ The certificate viewer has **General** and **Details** tabs. General shows who t
 
 **Clear site data** removes the site's stored data and reloads the page. It can sign you out and discard saved website state. Cookie clearing can also sign you out of related subdomains of the same site. Other environments' local browser sessions are unaffected, and this action keeps the site's permission settings. Change permissions separately in Site settings.
 
-A website in the local browser may ask you to sign in again. Your conversations and the passwords saved in your Pathway account remain available.
+After you update to Pathway Nightly, a website in the local browser may ask you to sign in again. Your conversations and the passwords saved in your Pathway account remain available.
 
-After switching from Nightly back to a stable build, changes made in Nightly don't carry over.
+Pathway Nightly copies the local browser data and app state stored on this Mac the first time it opens. After that, Nightly and stable builds keep separate copies, so website sign-ins, drafts and other local data changed in one don't appear in the other. Conversations aren't affected.
 
 These certificate and Site settings controls belong to Pathway Nightly on macOS. Stable macOS, Windows and Linux show connection information and Clear site data. The remote browser, web app and iOS use their existing browser controls.
 

@@ -1,11 +1,11 @@
 {
   "runtimeName": "pathway",
   "electronVersion": "44.5.1",
-  "runtimeVersion": "44.5.1",
+  "runtimeVersion": "44.5.1-pathway.1",
   "archives": {
     "darwin-arm64": {
-      "url": "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-darwin-arm64.zip",
-      "sha256": "1d75703019bb16461ae65f3081d7e6f5c0b11e901d0ccb5c343bcf7bcdd6435c"
+      "url": "https://api.github.com/repos/SpiritDevs/pathway-runtime/releases/assets/616792498",
+      "sha256": "0b129ca0c7e759d7781f2395d77937e28b327f9ec92dbf2c4728dd7269d7efba"
     },
     "darwin-x64": {
       "url": "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-darwin-x64.zip",
