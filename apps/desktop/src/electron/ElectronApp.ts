@@ -67,7 +67,6 @@ export class ElectronApp extends Context.Service<
     ) => Effect.Effect<boolean>;
     readonly setDesktopName: (desktopName: string) => Effect.Effect<void>;
     readonly appendCommandLineSwitch: (switchName: string, value?: string) => Effect.Effect<void>;
-    readonly hasCommandLineSwitch: (switchName: string) => Effect.Effect<boolean>;
     readonly onBeforeQuitForUpdate: (
       listener: () => void,
     ) => Effect.Effect<void, never, Scope.Scope>;
@@ -176,8 +175,6 @@ export const make = ElectronApp.of({
       };
       linuxApp.setDesktopName?.(desktopName);
     }),
-  hasCommandLineSwitch: (switchName) =>
-    Effect.sync(() => Electron.app.commandLine.hasSwitch(switchName)),
   appendCommandLineSwitch: (switchName, value) =>
     Effect.sync(() => {
       if (value === undefined) {

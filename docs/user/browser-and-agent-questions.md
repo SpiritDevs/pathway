@@ -43,9 +43,9 @@ The agent works in whichever browser you are watching. Opening the remote browse
 
 Take browser control before interacting while the agent is working. Use **Take over to assist agent** in the browser panel or above the composer. Resume the agent when you are finished. Any client watching the remote browser can take control. For a local tab, only the desktop showing that tab can take control. A failed attempt to open a browser without a tab does not offer takeover.
 
-### Site information on macOS
+### Site information in Pathway Nightly on macOS
 
-In the local browser on a Mac with Apple silicon, click the sliders button at the left of the address bar to open the site information dropdown. It shows the site, its connection status, **Site settings** and **Clear site data**. Use the close button to return to the page.
+In Pathway Nightly's local browser on a Mac with Apple silicon, click the sliders button at the left of the address bar to open the site information dropdown. It shows the site, its connection status, **Site settings** and **Clear site data**. Use the close button to return to the page.
 
 Click the connection row to open **Security**. It explains the connection's security and shows connection details when available. A local HTTP page is labeled **Local server**. For HTTPS pages with a certificate, click **Certificate is valid** (or **Certificate is not valid**) to open the certificate viewer. Use the back arrow to return to site information.
 
@@ -55,9 +55,11 @@ The certificate viewer has **General** and **Details** tabs. General shows who t
 
 **Clear site data** removes the site's stored data and reloads the page. It can sign you out and discard saved website state. Cookie clearing can also sign you out of related subdomains of the same site. Other environments' local browser sessions are unaffected, and this action keeps the site's permission settings. Change permissions separately in Site settings.
 
-Website logins from earlier desktop versions may need to be entered again after the browser update. Your conversations and the passwords saved in your Pathway account remain available.
+A website in the local browser may ask you to sign in again. Your conversations and the passwords saved in your Pathway account remain available.
 
-These certificate and Site settings controls belong to the macOS local browser. Windows and Linux show connection information and Clear site data. The remote browser, web app and iOS use their existing browser controls.
+After switching from Nightly back to a stable build, changes made in Nightly don't carry over.
+
+These certificate and Site settings controls belong to Pathway Nightly on macOS. Stable macOS, Windows and Linux show connection information and Clear site data. The remote browser, web app and iOS use their existing browser controls.
 
 ### Keyboard in the desktop browser
 

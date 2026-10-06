@@ -39,7 +39,6 @@ describe("DesktopLifecycle", () => {
         setAsDefaultProtocolClient: () => Effect.succeed(true),
         setDesktopName: () => Effect.void,
         appendCommandLineSwitch: () => Effect.void,
-        hasCommandLineSwitch: () => Effect.succeed(false),
         removeCommandLineSwitch: () => Effect.void,
         onBeforeQuitForUpdate: (listener) =>
           Effect.acquireRelease(

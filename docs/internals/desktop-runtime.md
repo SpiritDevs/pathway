@@ -24,13 +24,13 @@ Until `pathway-runtime` publishes Pathway's own archives, the pin points at the 
 
 Build arm64 and x64 separately; there is no universal archive.
 
-Default packaging and `vp run dev` still use npm Electron. The macOS arm64 release job uses `--pinned-runtime --require-pathway-runtime` for stable and nightly builds. Windows and Linux stay on stock Electron. Before any build or backend deployment, the guard requires pinned macOS arm64 packaging and a `runtimeVersion` matching `^\d+\.\d+\.\d+-pathway\.\d+$`, regardless of the archive host. The version identifies a Pathway runtime with the native identity reader. With the committed pin unchanged, macOS releases intentionally stop with instructions to publish and pin the Pathway archive.
+Default packaging and `vp run dev` still use npm Electron. The macOS arm64 release job uses `--pinned-runtime --require-pathway-runtime` for nightly builds. Stable macOS stays on stock Electron until the dedicated build Mac replaces the interim archive with ThinLTO and symbols. Windows and Linux stay on stock Electron. Before any build or backend deployment, the guard requires pinned macOS arm64 packaging and a `runtimeVersion` matching `^\d+\.\d+\.\d+-pathway\.\d+$`, regardless of the archive host. The version identifies a Pathway runtime with the native identity reader. With the committed pin unchanged, macOS nightly releases intentionally stop with instructions to publish and pin the Pathway archive.
 
 ### Download authentication and hosting
 
 `PATHWAY_RUNTIME_DOWNLOAD_TOKEN` is optional. When supplied, the downloader sends `Authorization: Bearer <token>` and `Accept: application/octet-stream` only to the exact host `api.github.com`. Other archive hosts receive no token. It uses Fetch's default redirect handling, which follows GitHub's redirect to the asset host without forwarding authorization across origins. The token is read as a redacted config value, and authorization headers are redacted from HTTP errors. Without the variable, the request headers are unchanged. Verified cache hits need no token.
 
-Release CI mints a short-lived token with the existing `RELEASE_APP_ID` / `RELEASE_APP_PRIVATE_KEY` through `actions/create-github-app-token@v2`, limited to `SpiritDevs/pathway-runtime` with Contents read permission. No additional long-lived token secret is needed.
+Nightly release CI mints a short-lived token with the existing `RELEASE_APP_ID` / `RELEASE_APP_PRIVATE_KEY` through `actions/create-github-app-token@v2`, limited to `SpiritDevs/pathway-runtime` with Contents read permission. No additional long-lived token secret is needed.
 
 **One-time setup:** add `SpiritDevs/pathway-runtime` to the Pathway Release GitHub App's selected repositories. Ensure the installation permits Contents read and that the existing app secrets are available to the release job's production environment.
 
@@ -44,9 +44,9 @@ Pinned packaging writes `Contents/Resources/pathway-runtime-app.json` outside th
 { "userDataDirName": "pathway", "legacyUserDataDirName": "Pathway (Alpha)" }
 ```
 
-Stable and nightly share those names. The cua flavor stamps `pathway-cua` for both fields. The native runtime reads this file before Chrome starts; Chrome must choose the existing legacy directory under Application Support if present, otherwise the new directory. Desktop `resolveUserDataPath` reads the same file only when `"pathway" in Electron`, with the same legacy-exists rule. These stamped names win even if `VITE_DEV_SERVER_URL` is present at launch. Stock Electron's packaged development mode remains unchanged, and a runtime without a stamp keeps the existing development identity resolution.
+Nightly retains the production directory names used by stable. The cua flavor stamps `pathway-cua` for both fields. The native runtime reads the stamp before Chrome starts and chooses the existing legacy directory under Application Support if present, otherwise the new directory. An explicit `--user-data-dir` wins over the stamp.
 
-An explicit `--user-data-dir` switch is authoritative on the runtime: desktop resolution returns `app.getPath('userData')` without probing the stamp or logging drift, matching the native reader. Otherwise, before either Clerk initialization or normal startup calls `app.setPath`, resolution compares the runtime's path with the resolved path and logs an error naming both if they differ. Setting the JS path cannot repair a Chrome Profile root fixed earlier; any drift is a native startup defect. The native reader is implemented in [pathway-runtime PR #2](https://github.com/SpiritDevs/pathway-runtime/pull/2), with isolated user-data evidence for `44.5.1-pathway.1`; the hosted pin must include it.
+The native reader is authoritative on the Pathway runtime: desktop `resolveUserDataPath` returns `app.getPath('userData')` without inspecting the stamp or resolving directories. CI validates the build-time stamp, and native startup reports stamp warnings. Stock Electron retains its existing desktop identity and legacy-directory resolution, including packaged development mode. The native reader is implemented in [pathway-runtime PR #2](https://github.com/SpiritDevs/pathway-runtime/pull/2); the hosted nightly pin must include it.
 
 ### macOS signing and permission prompts
 
@@ -82,7 +82,7 @@ Only the main process ever produces a `chrome://` address. `normalizePreviewUrl`
   - `blob:` and `data:` documents aren't web pages either, so agents can't drive them. That is the deliberate default.
   - Users still use the settings page themselves.
 
-The macOS local-browser features are documented in [Browser work and agent questions](../user/browser-and-agent-questions.md#site-information-on-macos). Windows and Linux retain stock Electron's scheme-based connection information and Clear site data, without certificates or Site settings.
+The Pathway Nightly macOS local-browser features are documented in [Browser work and agent questions](../user/browser-and-agent-questions.md#site-information-in-pathway-nightly-on-macos). Stable macOS, Windows and Linux retain stock Electron's scheme-based connection information and Clear site data, without certificates or Site settings.
 
 ## Archive contents
 

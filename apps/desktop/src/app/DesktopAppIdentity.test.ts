@@ -3,7 +3,6 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Logger from "effect/Logger";
 import * as PlatformError from "effect/PlatformError";
 
 import type * as Electron from "electron";
@@ -38,7 +37,6 @@ const makeElectronAppLayer = (
   calls: ElectronAppCalls,
   isPathwayRuntime = false,
   runtimeUserDataPath = "/Users/alice/Library/Application Support/pathway",
-  hasUserDataDirSwitch = false,
 ) =>
   Layer.succeed(ElectronApp.ElectronApp, {
     isPathwayRuntime,
@@ -64,10 +62,6 @@ const makeElectronAppLayer = (
     setAsDefaultProtocolClient: () => Effect.succeed(true),
     setDesktopName: () => Effect.void,
     appendCommandLineSwitch: () => Effect.void,
-    hasCommandLineSwitch: (name) => {
-      assert.equal(name, "user-data-dir");
-      return Effect.succeed(hasUserDataDirSwitch);
-    },
     onBeforeQuitForUpdate: () => Effect.void,
     removeCommandLineSwitch: () => Effect.void,
     on: () => Effect.void,
@@ -106,9 +100,7 @@ const withIdentity = <A, E, R>(
     readonly legacyPathProbeError?: PlatformError.PlatformError;
     readonly packageJson?: string;
     readonly isPathwayRuntime?: boolean;
-    readonly runtimeIdentity?: string | undefined;
     readonly runtimeUserDataPath?: string;
-    readonly hasUserDataDirSwitch?: boolean;
     readonly probedPaths?: string[];
   } = {},
 ) => {
@@ -124,29 +116,18 @@ const withIdentity = <A, E, R>(
           FileSystem.layerNoop({
             exists: (path) => {
               input.probedPaths?.push(path);
-              return path.endsWith("/pathway-runtime-app.json")
-                ? Effect.succeed(input.runtimeIdentity !== undefined)
-                : input.legacyPathProbeError
-                  ? Effect.fail(input.legacyPathProbeError)
-                  : Effect.succeed(
-                      input.legacyPathExists === true && path.includes("Pathway (Alpha)"),
-                    );
+              return input.legacyPathProbeError
+                ? Effect.fail(input.legacyPathProbeError)
+                : Effect.succeed(
+                    input.legacyPathExists === true && path.includes("Pathway (Alpha)"),
+                  );
             },
-            readFileString: (path) =>
-              Effect.succeed(
-                path.endsWith("/pathway-runtime-app.json")
-                  ? (input.runtimeIdentity ?? "")
-                  : (input.packageJson ?? '{"pathwayCommitHash":"abcdef1234567890"}'),
-              ),
+            readFileString: () =>
+              Effect.succeed(input.packageJson ?? '{"pathwayCommitHash":"abcdef1234567890"}'),
           }),
         ),
         Layer.provideMerge(
-          makeElectronAppLayer(
-            calls,
-            input.isPathwayRuntime,
-            input.runtimeUserDataPath,
-            input.hasUserDataDirSwitch,
-          ),
+          makeElectronAppLayer(calls, input.isPathwayRuntime, input.runtimeUserDataPath),
         ),
         Layer.provideMerge(makeEnvironmentLayer(input.environment)),
       ),
@@ -155,155 +136,37 @@ const withIdentity = <A, E, R>(
 };
 
 describe("DesktopAppIdentity", () => {
-  it.effect.each([false, true])(
-    "honors an explicit user-data-dir only on the runtime (runtime: %s)",
-    (isPathwayRuntime) => {
-      const probedPaths: string[] = [];
-      const messages: unknown[] = [];
-      const logger = Logger.make((options) => {
-        messages.push(options.message);
-      });
-      return withIdentity(
-        Effect.gen(function* () {
-          const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-          assert.equal(
-            yield* identity.resolveUserDataPath,
-            isPathwayRuntime
-              ? "/isolated/runtime-profile"
-              : "/Users/alice/Library/Application Support/Pathway (Alpha)",
-          );
-          assert.equal(messages.length, 0);
-          if (isPathwayRuntime) assert.deepEqual(probedPaths, []);
-        }),
-        {
-          isPathwayRuntime,
-          hasUserDataDirSwitch: true,
-          runtimeUserDataPath: "/isolated/runtime-profile",
-          runtimeIdentity: JSON.stringify({
-            userDataDirName: "pathway",
-            legacyUserDataDirName: "Pathway (Alpha)",
-          }),
-          legacyPathExists: true,
-          probedPaths,
-        },
-      ).pipe(Effect.provide(Logger.layer([logger])));
-    },
-  );
+  it.effect("uses the native runtime userData path without inspecting desktop identity", () => {
+    const probedPaths: string[] = [];
+    return withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        assert.equal(yield* identity.resolveUserDataPath, "/native/selected-profile");
+        assert.deepEqual(probedPaths, []);
+      }),
+      {
+        isPathwayRuntime: true,
+        runtimeUserDataPath: "/native/selected-profile",
+        environment: { env: { VITE_DEV_SERVER_URL: "http://localhost:5173" } },
+        probedPaths,
+      },
+    );
+  });
 
-  it.effect.each([false, true])(
-    "uses the runtime release stamp in development with legacy path present: %s",
-    (legacyPathExists) =>
-      withIdentity(
-        Effect.gen(function* () {
-          const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-          assert.equal(
-            yield* identity.resolveUserDataPath,
-            `/Users/alice/Library/Application Support/${legacyPathExists ? "Pathway (Alpha)" : "pathway"}`,
-          );
-        }),
-        {
-          environment: { env: { VITE_DEV_SERVER_URL: "http://localhost:5173" } },
-          isPathwayRuntime: true,
-          runtimeIdentity: JSON.stringify({
-            userDataDirName: "pathway",
-            legacyUserDataDirName: "Pathway (Alpha)",
-          }),
-          runtimeUserDataPath: `/Users/alice/Library/Application Support/${legacyPathExists ? "Pathway (Alpha)" : "pathway"}`,
-          legacyPathExists,
-        },
-      ),
-  );
-
-  it.effect("uses the cua stamp regardless of the development URL", () =>
+  it.effect.each([
+    { env: {}, directory: "pathway" },
+    { env: { VITE_DEV_SERVER_URL: "http://localhost:5173" }, directory: "pathway-dev" },
+  ])("preserves stock Electron identity (%j)", ({ env, directory }) =>
     withIdentity(
       Effect.gen(function* () {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         assert.equal(
           yield* identity.resolveUserDataPath,
-          "/Users/alice/Library/Application Support/pathway-cua",
+          `/Users/alice/Library/Application Support/${directory}`,
         );
       }),
-      {
-        environment: { flavor: "cua", env: { VITE_DEV_SERVER_URL: "http://localhost:5173" } },
-        isPathwayRuntime: true,
-        runtimeIdentity: JSON.stringify({
-          userDataDirName: "pathway-cua",
-          legacyUserDataDirName: "pathway-cua",
-        }),
-        runtimeUserDataPath: "/Users/alice/Library/Application Support/pathway-cua",
-      },
+      { environment: { env }, runtimeUserDataPath: "/native/ignored-profile" },
     ),
-  );
-
-  it.effect.each([false, true])(
-    "preserves development identity without an applicable stamp (runtime: %s)",
-    (isPathwayRuntime) => {
-      const probedPaths: string[] = [];
-      return withIdentity(
-        Effect.gen(function* () {
-          const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-          assert.equal(
-            yield* identity.resolveUserDataPath,
-            "/Users/alice/Library/Application Support/pathway-dev",
-          );
-          assert.equal(
-            probedPaths.some((path) => path.endsWith("/pathway-runtime-app.json")),
-            isPathwayRuntime,
-          );
-        }),
-        {
-          environment: { env: { VITE_DEV_SERVER_URL: "http://localhost:5173" } },
-          isPathwayRuntime,
-          runtimeIdentity: isPathwayRuntime
-            ? undefined
-            : JSON.stringify({
-                userDataDirName: "pathway",
-                legacyUserDataDirName: "Pathway (Alpha)",
-              }),
-          runtimeUserDataPath: "/Users/alice/Library/Application Support/pathway-dev",
-          probedPaths,
-        },
-      );
-    },
-  );
-
-  it.effect("fails clearly on a corrupt runtime identity", () =>
-    withIdentity(
-      Effect.gen(function* () {
-        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-        const error = yield* identity.resolveUserDataPath.pipe(Effect.flip);
-        assert.instanceOf(error, DesktopAppIdentity.DesktopRuntimeAppIdentityReadError);
-        assert.include(error.message, "pathway-runtime-app.json");
-      }),
-      { isPathwayRuntime: true, runtimeIdentity: "{}" },
-    ),
-  );
-
-  it.effect.each([false, true])(
-    "reports path drift only on the runtime (runtime: %s)",
-    (isPathwayRuntime) => {
-      const messages: unknown[] = [];
-      const logger = Logger.make((options) => {
-        messages.push(options.message);
-      });
-      return withIdentity(
-        Effect.gen(function* () {
-          const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-          assert.equal(
-            yield* identity.resolveUserDataPath,
-            "/Users/alice/Library/Application Support/pathway",
-          );
-          const logged = messages.flat().join("\n");
-          if (isPathwayRuntime) {
-            assert.include(logged, "Pathway runtime userData path drift");
-            assert.include(logged, "/runtime/wrong-root");
-            assert.include(logged, "/Users/alice/Library/Application Support/pathway");
-            assert.include(logged, "before app.setPath");
-          } else assert.equal(messages.length, 0);
-        }),
-        { isPathwayRuntime, runtimeUserDataPath: "/runtime/wrong-root" },
-      ).pipe(Effect.provide(Logger.layer([logger])));
-    },
   );
 
   it.effect("keeps using the legacy userData path when it already exists", () =>
