@@ -21,7 +21,7 @@ import { cn } from "../lib/utils";
 import { whenIdle } from "../lib/whenIdle";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode } from "../hooks/useSettings";
-import { useThreadVisitedMigration } from "../hooks/useThreadVisitedMigration";
+import { ThreadVisitedMigrationCoordinator } from "../hooks/useThreadVisitedMigration";
 import ThreadSidebar from "./Sidebar";
 import { ContextualSidebarHeader } from "./sidebar/ContextualSidebarHeader";
 import {
@@ -236,8 +236,6 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
 function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   useWarmSecondarySidebars();
-  // Seeds server-side visited tracking from this browser's localStorage the
-  useThreadVisitedMigration();
   const pathname = useLocation({ select: (location) => location.pathname });
   const shellStyle = {
     "--primary-navigation-rail-width": isChildWindow ? "0px" : PRIMARY_NAVIGATION_RAIL_WIDTH,
@@ -265,6 +263,7 @@ function AppSidebarLayoutContent({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-dvh min-h-0 w-full bg-workspace-frame" style={shellStyle}>
+      <ThreadVisitedMigrationCoordinator />
       <ThreadQueueRuntime />
       <ProviderUpdateCheckCoordinator />
       <ProjectProjectionRetention />

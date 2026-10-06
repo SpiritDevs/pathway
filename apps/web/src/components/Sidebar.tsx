@@ -154,7 +154,9 @@ import { pendingDraftSendHold } from "../lib/pendingDraftSend";
 import {
   useProjects,
   useThreadRefs,
-  useThreadShells,
+  useThreadRoster,
+  useThreadShell,
+  readThreadShell,
   useThreadTitlesByKey,
 } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
@@ -1128,14 +1130,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     onUnpin,
     openPullRequestsInRightPanel,
     renamingTitle,
-    thread,
+    thread: rosterThread,
     variant,
     variantAction,
   } = props;
   const threadRef = useMemo(
-    () => scopeThreadRef(thread.environmentId, thread.id),
-    [thread.environmentId, thread.id],
+    () => scopeThreadRef(rosterThread.environmentId, rosterThread.id),
+    [rosterThread.environmentId, rosterThread.id],
   );
+  const thread = useThreadShell(threadRef) ?? rosterThread;
   const threadKey = scopedThreadKey(threadRef);
   const hasUnreadNotification = useAtomValue(threadHasUnreadNotificationAtom(threadKey));
   const isRegeneratingTitle = thread.titleRegeneration != null;
@@ -2038,12 +2041,14 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   isHighlighted: boolean;
   isRouteActive: boolean;
   resultId: string;
-  onHighlight: () => void;
-  onSelect: () => void;
+  index: number;
+  onHighlight: (index: number) => void;
+  onSelect: (thread: SidebarThreadSummary) => void;
   onOpenIssue: (issueKey: string) => void;
   onOpenSideChat: (parentRef: ScopedThreadRef, sideChatThreadId: ThreadId) => void;
 }) {
-  const { thread } = props;
+  const thread =
+    useThreadShell(scopeThreadRef(props.thread.environmentId, props.thread.id)) ?? props.thread;
   // Same details tooltip as the regular rows: a search hit is still a thread,
   // and the hover card is how you disambiguate identically-titled results.
   const gitCwd = thread.worktreePath ?? props.projectCwd;
@@ -2090,8 +2095,8 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
               aria-label={
                 props.projectTitle ? `${thread.title}, ${props.projectTitle}` : thread.title
               }
-              onMouseMove={props.onHighlight}
-              onClick={props.onSelect}
+              onMouseMove={() => props.onHighlight(props.index)}
+              onClick={() => props.onSelect(thread)}
               className={cn(
                 "flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm outline-none",
                 props.isHighlighted || props.isRouteActive
@@ -2170,7 +2175,7 @@ export default function Sidebar() {
       }),
     [focuses, focusAssignments, visibleFocusProjectKeys],
   );
-  const threads = useThreadShells();
+  const threads = useThreadRoster();
   const focusSwipe = useFocusSwipe({
     hasConversations: threads.some(
       (thread) => thread.projectId === null && thread.archivedAt === null,
@@ -2746,11 +2751,10 @@ export default function Sidebar() {
       activeThreads: sortThreadsForSidebar(active),
       workingThreads: sortThreadsForSidebar(working),
       // Soonest wake first: "what comes back next" is the shelf's question.
-      snoozedThreads: snoozed.toSorted(
-        (left, right) =>
-          firstValidTimestampMs(left.snoozedUntil ?? null) -
-          firstValidTimestampMs(right.snoozedUntil ?? null),
-      ),
+      snoozedThreads: snoozed
+        .map((thread) => ({ thread, timestamp: firstValidTimestampMs(thread.snoozedUntil) }))
+        .sort((left, right) => left.timestamp - right.timestamp)
+        .map(({ thread }) => thread),
       settledThreads: sortSettledThreadsForSidebar(settled),
       snoozeNow: preciseNow,
       loadingThreads: loading,
@@ -3093,6 +3097,12 @@ export default function Sidebar() {
   // event and defeat row memoization during streaming.
   const threadByKeyRef = useRef(threadByKey);
   threadByKeyRef.current = threadByKey;
+  const readRenderedThread = useCallback((key: string) => {
+    const roster = threadByKeyRef.current.get(key);
+    return roster === undefined
+      ? undefined
+      : (readThreadShell(scopeThreadRef(roster.environmentId, roster.id)) ?? undefined);
+  }, []);
   // handleNewThread is inherently unstable (depends on the projects list);
   // a ref keeps it out of attemptSettle's dependency array.
   const handleNewThreadRef = useRef(newThreadContext.handleNewThread);
@@ -3193,18 +3203,11 @@ export default function Sidebar() {
       clearThreadSearch();
       navigateToThread(scopeThreadRef(thread.environmentId, thread.id));
     },
-    [
-      activeFocusId,
-      focuses,
-      clearThreadSearch,
-      focusIdByProjectKey,
-      navigateToThread,
-      setActiveFocusId,
-    ],
+    [clearThreadSearch, focusIdByProjectKey, navigateToThread, setActiveFocusId],
   );
   const selectFocusNotification = useCallback(
     (notification: FocusNotification) => {
-      const thread = threadByKeyRef.current.get(
+      const thread = readRenderedThread(
         scopedThreadKey(scopeThreadRef(notification.environmentId, notification.threadId)),
       );
       const projectKey = thread
@@ -3217,7 +3220,14 @@ export default function Sidebar() {
       );
       navigateToThread(scopeThreadRef(notification.environmentId, notification.threadId));
     },
-    [activeFocusId, focuses, focusIdByProjectKey, navigateToThread, setActiveFocusId],
+    [
+      activeFocusId,
+      focuses,
+      focusIdByProjectKey,
+      navigateToThread,
+      readRenderedThread,
+      setActiveFocusId,
+    ],
   );
   const handleThreadSearchKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {
@@ -3329,7 +3339,7 @@ export default function Sidebar() {
   const planForwardNavigation = useCallback(
     (threadKey: string, coParkingKeys?: ReadonlySet<string>): (() => void) | null => {
       if (routeThreadKeyRef.current !== threadKey) return null;
-      const shell = threadByKeyRef.current.get(threadKey);
+      const shell = readRenderedThread(threadKey);
       const orderedKeys = orderedThreadKeysRef.current;
       const settledKeys = settledThreadKeysRef.current;
       const snoozedKeys = snoozedThreadKeysRef.current;
@@ -3340,7 +3350,7 @@ export default function Sidebar() {
           : ([...orderedKeys.slice(currentIndex + 1), ...orderedKeys.slice(0, currentIndex)].find(
               (key) => !settledKeys.has(key) && !snoozedKeys.has(key) && !coParkingKeys?.has(key),
             ) ?? null);
-      const nextThread = nextCardKey ? threadByKeyRef.current.get(nextCardKey) : null;
+      const nextThread = nextCardKey ? readRenderedThread(nextCardKey) : null;
       return nextThread
         ? () => navigateToThread(scopeThreadRef(nextThread.environmentId, nextThread.id))
         : shell
@@ -3351,7 +3361,7 @@ export default function Sidebar() {
               })
           : () => void router.navigate({ to: "/threads" });
     },
-    [navigateToThread, router],
+    [navigateToThread, readRenderedThread, router],
   );
 
   const attemptSettle = useCallback(
@@ -3751,7 +3761,7 @@ export default function Sidebar() {
       // it — a mixed selection with blocked-on-you work would half-apply.
       const selectionNow = new Date();
       const selectedThreads = threadKeys.flatMap((threadKey) => {
-        const thread = threadByKeyRef.current.get(threadKey);
+        const thread = readRenderedThread(threadKey);
         return thread ? [thread] : [];
       });
       const canSnoozeSelection = selectedThreads.every(
@@ -3886,7 +3896,7 @@ export default function Sidebar() {
         // clears the pin as part of settling, so they park like the rest.
         const coSettlingKeys = new Set(threadKeys);
         for (const threadKey of threadKeys) {
-          const thread = threadByKeyRef.current.get(threadKey);
+          const thread = readRenderedThread(threadKey);
           if (!thread || thread.settledOverride === "settled") continue;
           attemptSettle(scopeThreadRef(thread.environmentId, thread.id), { coSettlingKeys });
         }
@@ -3895,7 +3905,7 @@ export default function Sidebar() {
       }
       if (clicked.value === "mark-unread") {
         for (const threadKey of threadKeys) {
-          const thread = threadByKeyRef.current.get(threadKey);
+          const thread = readRenderedThread(threadKey);
           markThreadUnread(threadKey, thread?.latestRun?.completedAt);
         }
         clearSelection();
@@ -3920,7 +3930,7 @@ export default function Sidebar() {
       // as deleted and remove a worktree they still point at.
       const deletedThreadKeys = new Set<string>();
       for (const threadKey of threadKeys) {
-        const thread = threadByKeyRef.current.get(threadKey);
+        const thread = readRenderedThread(threadKey);
         if (!thread) continue;
         const result = await deleteThread(scopeThreadRef(thread.environmentId, thread.id), {
           deletedThreadKeys,
@@ -3951,6 +3961,7 @@ export default function Sidebar() {
       markThreadUnread,
       performSnooze,
       removeFromSelection,
+      readRenderedThread,
       serverConfigs,
       attemptUnsnooze,
       updateThreadMetadata,
@@ -4029,7 +4040,7 @@ export default function Sidebar() {
           await handleMultiSelectContextMenu(position);
           return;
         }
-        const thread = threadByKeyRef.current.get(threadKey);
+        const thread = readRenderedThread(threadKey);
         if (!thread) return;
         const threadWorkspacePath =
           thread.worktreePath ??
@@ -4295,6 +4306,7 @@ export default function Sidebar() {
       handleMultiSelectContextMenu,
       markThreadUnread,
       projectCwdByKey,
+      readRenderedThread,
       serverConfigs,
       setThreadParent,
       startThreadRename,
@@ -4834,8 +4846,9 @@ export default function Sidebar() {
                             isHighlighted={activeSearchResultIndex === index}
                             isRouteActive={routeThreadKey === threadKey}
                             resultId={`sidebar-thread-search-result-${index}`}
-                            onHighlight={() => setActiveSearchResultIndex(index)}
-                            onSelect={() => selectThreadSearchResult(thread)}
+                            index={index}
+                            onHighlight={setActiveSearchResultIndex}
+                            onSelect={selectThreadSearchResult}
                             onOpenSideChat={openSideChat}
                             onOpenIssue={openIssue}
                           />

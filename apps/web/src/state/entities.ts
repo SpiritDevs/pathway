@@ -30,7 +30,7 @@ const EMPTY_VISIBLE_TURN_ITEMS: ReadonlyArray<OrchestrationV2ProjectedTurnItem> 
 let previousThreadTitlesByKey: ReadonlyMap<string, string> = new Map();
 const threadTitlesByKeyAtom = Atom.make((get) => {
   const next = new Map(
-    get(environmentThreadShells.threadShellsAtom).map(
+    get(environmentThreadShells.threadRosterAtom).map(
       (thread) =>
         [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread.title] as const,
     ),
@@ -130,6 +130,10 @@ export function useServerConfigs(): ReadonlyMap<EnvironmentId, ServerConfig> {
 
 export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.threadShellsAtom);
+}
+
+export function useThreadRoster(): ReadonlyArray<EnvironmentThreadShell> {
+  return useAtomValue(environmentThreadShells.threadRosterAtom);
 }
 
 export function useThreadTitlesByKey(): ReadonlyMap<string, string> {
