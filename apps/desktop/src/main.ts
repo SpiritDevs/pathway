@@ -177,6 +177,7 @@ const desktopDictationLayer = DesktopDictation.layer.pipe(
 const desktopBackendLayer = DesktopBackendPool.layer.pipe(
   Layer.provideMerge(DesktopAppIdentity.layer),
   Layer.provideMerge(DesktopBackendConfiguration.layer),
+  Layer.provideMerge(DesktopShellEnvironment.layer),
   // Inert unless PATHWAY_COMPUTER_USE=1 on macOS.
   Layer.provideMerge(DesktopComputerHost.layer),
   Layer.provideMerge(DesktopWslEnvironment.layer),
@@ -199,7 +200,6 @@ const desktopApplicationLayer = Layer.mergeAll(
   DesktopLifecycle.layer,
   DesktopApplicationMenu.layer,
   DesktopLinuxUrlHandler.layer,
-  DesktopShellEnvironment.layer,
   desktopSshLayer,
   // Escape on the desktop also stops the backend's Computer turns.
   ComputerEmergencyStopNotice.layer,

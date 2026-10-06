@@ -741,7 +741,10 @@ export const makeServerLayer = Layer.unwrap(
     const routesReady = yield* Deferred.make<void>();
     const launcherLayer = ServiceLauncherClient.layer;
 
-    yield* fixPath({ shellEnvironmentHydrated: config.shellEnvironmentHydrated });
+    yield* fixPath({
+      shellEnvironmentHydrated: config.shellEnvironmentHydrated,
+      shellEnvironmentFd: config.shellEnvironmentFd,
+    });
 
     const httpListeningLayer = Layer.effectDiscard(
       Effect.gen(function* () {

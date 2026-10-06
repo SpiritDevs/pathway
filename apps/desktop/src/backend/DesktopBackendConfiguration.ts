@@ -22,6 +22,7 @@ import { DesktopComputer, type DesktopComputerHandoff } from "../computer/Deskto
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedErrorClass<DesktopBackendObservabilitySettingsReadError>()(
@@ -370,6 +371,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     input: SharedBootstrapInput & {
       readonly resourceMonitorPath: Option.Option<string>;
       readonly computerHandoff: Option.Option<DesktopComputerHandoff>;
+      readonly shellEnvironment: DesktopShellEnvironment.DesktopShellEnvironment["Service"];
     },
   ): Effect.fn.Return<
     DesktopBackendManager.DesktopBackendStartConfig,
@@ -392,7 +394,8 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         onSome: (desktopEnvironmentId) => ({ desktopEnvironmentId }),
       }),
       desktopParentPid: process.pid,
-      shellEnvironmentHydrated: true,
+      shellEnvironmentHydrated: yield* input.shellEnvironment.isReady,
+      shellEnvironmentFd: 6,
       desktopTelemetryFd: 4,
       desktopTelemetryControlFd: 5,
       ...Option.match(input.resourceMonitorPath, {
@@ -425,6 +428,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       extendEnv: true,
       bootstrap,
       bootstrapDelivery: "fd3",
+      shellEnvironment: input.shellEnvironment.refreshedEnvironment,
       httpBaseUrl: backendExposure.httpBaseUrl,
       captureOutput: true,
       preflightFailure: Option.none(),
@@ -629,6 +633,7 @@ export const make = Effect.gen(function* () {
   const settings = yield* DesktopAppSettings.DesktopAppSettings;
   const crypto = yield* Crypto.Crypto;
   const computer = yield* DesktopComputer;
+  const shellEnvironment = yield* DesktopShellEnvironment.DesktopShellEnvironment;
   // SynchronizedRef (not a plain Ref) so the read-generate-write is atomic.
   // crypto.randomBytes is a yield point, and resolvePrimary + resolveWsl can
   // resolve concurrently; with a plain Ref both could observe None, generate
@@ -735,6 +740,7 @@ export const make = Effect.gen(function* () {
       ...shared,
       resourceMonitorPath,
       computerHandoff: computer.handoff,
+      shellEnvironment,
     }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),
