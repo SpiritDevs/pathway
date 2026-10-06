@@ -38,6 +38,7 @@ const makeElectronAppLayer = (
   calls: ElectronAppCalls,
   isPathwayRuntime = false,
   runtimeUserDataPath = "/Users/alice/Library/Application Support/pathway",
+  hasUserDataDirSwitch = false,
 ) =>
   Layer.succeed(ElectronApp.ElectronApp, {
     isPathwayRuntime,
@@ -63,6 +64,10 @@ const makeElectronAppLayer = (
     setAsDefaultProtocolClient: () => Effect.succeed(true),
     setDesktopName: () => Effect.void,
     appendCommandLineSwitch: () => Effect.void,
+    hasCommandLineSwitch: (name) => {
+      assert.equal(name, "user-data-dir");
+      return Effect.succeed(hasUserDataDirSwitch);
+    },
     onBeforeQuitForUpdate: () => Effect.void,
     removeCommandLineSwitch: () => Effect.void,
     on: () => Effect.void,
@@ -103,6 +108,7 @@ const withIdentity = <A, E, R>(
     readonly isPathwayRuntime?: boolean;
     readonly runtimeIdentity?: string | undefined;
     readonly runtimeUserDataPath?: string;
+    readonly hasUserDataDirSwitch?: boolean;
     readonly probedPaths?: string[];
   } = {},
 ) => {
@@ -135,7 +141,12 @@ const withIdentity = <A, E, R>(
           }),
         ),
         Layer.provideMerge(
-          makeElectronAppLayer(calls, input.isPathwayRuntime, input.runtimeUserDataPath),
+          makeElectronAppLayer(
+            calls,
+            input.isPathwayRuntime,
+            input.runtimeUserDataPath,
+            input.hasUserDataDirSwitch,
+          ),
         ),
         Layer.provideMerge(makeEnvironmentLayer(input.environment)),
       ),
@@ -144,6 +155,41 @@ const withIdentity = <A, E, R>(
 };
 
 describe("DesktopAppIdentity", () => {
+  it.effect.each([false, true])(
+    "honors an explicit user-data-dir only on the runtime (runtime: %s)",
+    (isPathwayRuntime) => {
+      const probedPaths: string[] = [];
+      const messages: unknown[] = [];
+      const logger = Logger.make((options) => {
+        messages.push(options.message);
+      });
+      return withIdentity(
+        Effect.gen(function* () {
+          const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+          assert.equal(
+            yield* identity.resolveUserDataPath,
+            isPathwayRuntime
+              ? "/isolated/runtime-profile"
+              : "/Users/alice/Library/Application Support/Pathway (Alpha)",
+          );
+          assert.equal(messages.length, 0);
+          if (isPathwayRuntime) assert.deepEqual(probedPaths, []);
+        }),
+        {
+          isPathwayRuntime,
+          hasUserDataDirSwitch: true,
+          runtimeUserDataPath: "/isolated/runtime-profile",
+          runtimeIdentity: JSON.stringify({
+            userDataDirName: "pathway",
+            legacyUserDataDirName: "Pathway (Alpha)",
+          }),
+          legacyPathExists: true,
+          probedPaths,
+        },
+      ).pipe(Effect.provide(Logger.layer([logger])));
+    },
+  );
+
   it.effect.each([false, true])(
     "uses the runtime release stamp in development with legacy path present: %s",
     (legacyPathExists) =>

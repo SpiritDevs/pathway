@@ -44,6 +44,7 @@ function makeElectronAppLayer(
     setAsDefaultProtocolClient: () => Effect.succeed(true),
     setDesktopName: () => Effect.void,
     appendCommandLineSwitch: () => Effect.void,
+    hasCommandLineSwitch: () => Effect.succeed(false),
     removeCommandLineSwitch: () => Effect.void,
     onBeforeQuitForUpdate: () => Effect.void,
     on: () => Effect.void,

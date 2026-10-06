@@ -1,5 +1,6 @@
 import {
   PATHWAY_CUA_DESKTOP_IDENTITY,
+  PATHWAY_PRODUCTION_DESKTOP_IDENTITY,
   type PathwayDesktopFlavor,
 } from "@spiritdevs/shared/desktopFlavor";
 import { fromLenientJson } from "@spiritdevs/shared/schemaJson";
@@ -66,8 +67,10 @@ export function resolveDesktopRuntimeIdentity(input: {
     displayName: undefined,
     scheme: dev ? "pathway-dev" : "pathway",
     defaultHomeDirName: ".pathway",
-    userDataDirName: dev ? "pathway-dev" : "pathway",
-    legacyUserDataDirName: dev ? "Pathway (Dev)" : "Pathway (Alpha)",
+    userDataDirName: dev ? "pathway-dev" : PATHWAY_PRODUCTION_DESKTOP_IDENTITY.userDataDirName,
+    legacyUserDataDirName: dev
+      ? "Pathway (Dev)"
+      : PATHWAY_PRODUCTION_DESKTOP_IDENTITY.legacyUserDataDirName,
     appUserModelId: dev ? "com.spiritdevs.pathway.dev" : "com.spiritdevs.pathway",
     linuxWmClass: dev ? "pathway-dev" : "pathway",
     linuxDesktopEntryName: resolveLinuxDesktopEntryName(dev),

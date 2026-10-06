@@ -66,6 +66,9 @@ export const resolveUserDataPath = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const electronApp = yield* ElectronApp.ElectronApp;
+  if (electronApp.isPathwayRuntime && (yield* electronApp.hasCommandLineSwitch("user-data-dir"))) {
+    return yield* electronApp.userDataPath;
+  }
   let identity = {
     userDataDirName: environment.userDataDirName,
     legacyUserDataDirName: environment.legacyUserDataDirName,

@@ -1,4 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- The fixture observes native Fetch redirect headers on a real loopback socket.
+import * as NodeHttp from "node:http";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
@@ -174,29 +176,51 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     Effect.gen(function* () {
       const error = yield* assertPathwayRuntimeRelease("mac", "arm64", true).pipe(Effect.flip);
       assert.instanceOf(error, PathwayRuntimeReleaseGuardError);
-      assert.include(error.message, "darwin-arm64 still points at the official Electron archive");
+      assert.include(error.message, "darwin-arm64 requires a Pathway runtimeVersion");
       assert.include(error.message, "URL and SHA-256");
-      const apiPin = {
+    }),
+  );
+
+  it.effect.each([
+    "44.5.1",
+    "44.5.1-pathway",
+    "44.5.1-pathway.1-extra",
+    "v44.5.1-pathway.1",
+    "44.5-pathway.1",
+    "44.5.1-pathway.x",
+  ])("rejects a non-Pathway runtime version from a mirror: %s", (runtimeVersion) =>
+    Effect.gen(function* () {
+      const pin = {
         ...pathwayRuntime,
+        runtimeVersion,
         archives: {
           ...pathwayRuntime.archives,
           "darwin-arm64": {
             ...pathwayRuntime.archives["darwin-arm64"],
-            url: "https://api.github.com/repos/electron/electron/releases/assets/123",
+            url: "https://npmmirror.com/mirrors/electron/electron-v44.5.1-darwin-arm64.zip",
           },
         },
       };
       assert.instanceOf(
-        yield* assertPathwayRuntimeRelease("mac", "arm64", true, apiPin).pipe(Effect.flip),
+        yield* assertPathwayRuntimeRelease("mac", "arm64", true, pin).pipe(Effect.flip),
         PathwayRuntimeReleaseGuardError,
       );
+    }),
+  );
+
+  it.effect.each([
+    "https://api.github.com/repos/SpiritDevs/pathway-runtime/releases/assets/123",
+    "https://cdn.example.invalid/pathway-runtime.zip",
+  ])("accepts a Pathway runtime version independently of hosting: %s", (url) =>
+    Effect.gen(function* () {
       const runtimePin = {
-        ...apiPin,
+        ...pathwayRuntime,
+        runtimeVersion: "44.5.1-pathway.1",
         archives: {
-          ...apiPin.archives,
+          ...pathwayRuntime.archives,
           "darwin-arm64": {
-            ...apiPin.archives["darwin-arm64"],
-            url: "https://api.github.com/repos/SpiritDevs/pathway-runtime/releases/assets/123",
+            ...pathwayRuntime.archives["darwin-arm64"],
+            url,
           },
         },
       };
@@ -313,7 +337,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("authenticates GitHub API assets and enables Fetch redirects without network", () =>
+  it.effect("authenticates GitHub API assets without network", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const cacheDir = yield* fs.makeTempDirectoryScoped();
@@ -329,8 +353,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const headers = new Headers(init?.headers);
         assert.equal(headers.get("Authorization"), "Bearer test-download-token");
         assert.equal(headers.get("Accept"), "application/octet-stream");
-        assert.equal(init?.redirect, "follow");
-        // Fetch itself handles the 302 to GitHub's asset host; return its final response.
         return new Response(contents);
       };
       const downloaded = yield* cachePinnedRuntimeArchive(archive, cacheDir).pipe(
@@ -346,6 +368,104 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
       assert.equal(yield* fs.readFileString(downloaded), contents);
       assert.equal(calls, 1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    "https://cdn.example.invalid/runtime.zip",
+    "https://github.com/SpiritDevs/pathway-runtime/releases/download/v1/runtime.zip",
+    "https://api.github.com.example.invalid/runtime.zip",
+  ])("does not send a GitHub token to %s", (url) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fs.makeTempDirectoryScoped();
+      const contents = "public runtime fixture";
+      const archive = { url, sha256: sha256Hex(new TextEncoder().encode(contents)) };
+      const client = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) => {
+          assert.isUndefined(request.headers.authorization);
+          return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(contents)));
+        }),
+      );
+      const downloaded = yield* cachePinnedRuntimeArchive(archive, cacheDir).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            client,
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: { PATHWAY_RUNTIME_DOWNLOAD_TOKEN: "test-download-token" },
+              }),
+            ),
+          ),
+        ),
+      );
+      assert.equal(yield* fs.readFileString(downloaded), contents);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("drops authorization when Fetch redirects to another host", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fs.makeTempDirectoryScoped();
+      const contents = "redirected runtime fixture";
+      const archive = {
+        url: "https://api.github.com/repos/SpiritDevs/pathway-runtime/releases/assets/123",
+        sha256: sha256Hex(new TextEncoder().encode(contents)),
+      };
+      const requests: Array<{ host: string | undefined; authorization: string | undefined }> = [];
+      const server = NodeHttp.createServer((request, response) => {
+        requests.push({ host: request.headers.host, authorization: request.headers.authorization });
+        if (request.url === "/asset") {
+          response.writeHead(302, { Location: `http://localhost:${port}/runtime.zip` });
+          response.end();
+        } else {
+          response.end(contents);
+        }
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(
+          () =>
+            new Promise<void>((resolve) => {
+              server.close(() => resolve());
+              server.closeAllConnections();
+            }),
+        ),
+      );
+      yield* Effect.promise(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.once("error", reject);
+            server.listen(0, "127.0.0.1", resolve);
+          }),
+      );
+      const address = server.address();
+      assert.isNotNull(address);
+      assert.notEqual(typeof address, "string");
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      // Route only the initial API request to a loopback fixture. Native Fetch
+      // handles the actual cross-host redirect, including credential stripping.
+      const fetch: typeof globalThis.fetch = (url, init) => {
+        assert.equal(String(url), archive.url);
+        // @effect-diagnostics-next-line globalFetch:off -- Exercise Fetch's own credential stripping rather than simulating the redirect.
+        return globalThis.fetch(`http://127.0.0.1:${port}/asset`, init);
+      };
+      const downloaded = yield* cachePinnedRuntimeArchive(archive, cacheDir).pipe(
+        Effect.provide(FetchHttpClient.layer),
+        Effect.provideService(FetchHttpClient.Fetch, fetch),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: { PATHWAY_RUNTIME_DOWNLOAD_TOKEN: "test-download-token" },
+            }),
+          ),
+        ),
+      );
+      assert.equal(yield* fs.readFileString(downloaded), contents);
+      assert.deepEqual(requests, [
+        { host: `127.0.0.1:${port}`, authorization: "Bearer test-download-token" },
+        { host: `localhost:${port}`, authorization: undefined },
+      ]);
     }).pipe(Effect.scoped),
   );
 
@@ -1070,6 +1190,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         { name: "Pathway", schemes: ["pathway", "pathway-dev"] },
       ]);
       assert.deepStrictEqual(mac.extendInfo, {
+        NSAudioCaptureUsageDescription:
+          "Pathway lets websites capture system audio when you share your screen with them.",
         NSMicrophoneUsageDescription:
           "Pathway uses your microphone for dictation and websites you allow to record audio. Dictation is processed on this computer.",
         NSCameraUsageDescription: "Pathway lets websites use your camera when you allow them.",

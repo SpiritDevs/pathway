@@ -7,6 +7,7 @@ import { fromYaml } from "@spiritdevs/shared/schemaYaml";
 import {
   PATHWAY_CUA_DESKTOP_IDENTITY,
   PATHWAY_DESKTOP_FLAVORS,
+  PATHWAY_PRODUCTION_DESKTOP_IDENTITY,
   type PathwayDesktopFlavor,
 } from "@spiritdevs/shared/desktopFlavor";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
@@ -298,15 +299,11 @@ export const assertPathwayRuntimeRelease = Effect.fn("assertPathwayRuntimeReleas
       reason: "--require-pathway-runtime needs --pinned-runtime --platform mac --arch arm64.",
     });
   }
-  const archive = yield* resolvePinnedRuntimeArchive(platform, arch, pin);
-  const url = new URL(archive.url);
-  if (
-    (url.hostname === "github.com" || url.hostname === "api.github.com") &&
-    /^\/(?:repos\/)?electron\/electron\//iu.test(url.pathname)
-  ) {
+  yield* resolvePinnedRuntimeArchive(platform, arch, pin);
+  if (!/^\d+\.\d+\.\d+-pathway\.\d+$/u.test(pin.runtimeVersion)) {
     return yield* new PathwayRuntimeReleaseGuardError({
       reason:
-        "darwin-arm64 still points at the official Electron archive. Publish the Pathway Chromium runtime and update its URL and SHA-256 in apps/desktop/pathway-runtime.json before releasing.",
+        "darwin-arm64 requires a Pathway runtimeVersion matching <major>.<minor>.<patch>-pathway.<revision>. Publish the Pathway Chromium runtime with the native identity reader and update its runtimeVersion, URL and SHA-256 in apps/desktop/pathway-runtime.json before releasing.",
     });
   }
 });
@@ -318,7 +315,7 @@ export function runtimeAppIdentity(flavor: PathwayDesktopFlavor) {
         userDataDirName: PATHWAY_CUA_DESKTOP_IDENTITY.userDataDirName,
         legacyUserDataDirName: PATHWAY_CUA_DESKTOP_IDENTITY.userDataDirName,
       }
-    : { userDataDirName: "pathway", legacyUserDataDirName: "Pathway (Alpha)" };
+    : PATHWAY_PRODUCTION_DESKTOP_IDENTITY;
 }
 
 export const stageRuntimeAppIdentity = Effect.fn("stageRuntimeAppIdentity")(function* (
@@ -398,17 +395,19 @@ export const cachePinnedRuntimeArchive = Effect.fn("cachePinnedRuntimeArchive")(
       });
       const downloadPath = path.join(downloadDir, "runtime.zip");
       const token = yield* Config.redacted("PATHWAY_RUNTIME_DOWNLOAD_TOKEN").pipe(Config.option);
-      const headers = Option.match(token, {
-        onNone: () => undefined,
-        onSome: (value) => ({
-          Authorization: `Bearer ${Redacted.value(value)}`,
-          Accept: "application/octet-stream",
-        }),
-      });
+      const headers =
+        new URL(archive.url).hostname === "api.github.com"
+          ? Option.match(token, {
+              onNone: () => undefined,
+              onSome: (value) => ({
+                Authorization: `Bearer ${Redacted.value(value)}`,
+                Accept: "application/octet-stream",
+              }),
+            })
+          : undefined;
       yield* Effect.log(`[desktop-artifact] Downloading pinned runtime: ${archive.url}`);
+      // Fetch follows GitHub's asset redirect and drops credentials when the origin changes.
       yield* HttpClient.get(archive.url, { headers }).pipe(
-        // Fetch follows GitHub's asset redirect and drops credentials when the origin changes.
-        Effect.provideService(FetchHttpClient.RequestInit, { redirect: "follow" }),
         Effect.flatMap(HttpClientResponse.filterStatusOk),
         HttpClientResponse.stream,
         Stream.run(fs.sink(downloadPath)),
@@ -2136,6 +2135,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // fails dev servers on private IPs with ERR_ADDRESS_UNREACHABLE instead
       // of prompting. The webview and the agent browser both need the grant.
       extendInfo: {
+        NSAudioCaptureUsageDescription:
+          "Pathway lets websites capture system audio when you share your screen with them.",
         NSMicrophoneUsageDescription:
           "Pathway uses your microphone for dictation and websites you allow to record audio. Dictation is processed on this computer.",
         NSCameraUsageDescription: "Pathway lets websites use your camera when you allow them.",

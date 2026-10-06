@@ -553,11 +553,19 @@ jobs:
             exit 1
           fi
           app="${apps[0]}"
-          for key in NSCameraUsageDescription NSMicrophoneUsageDescription NSLocationUsageDescription NSBluetoothAlwaysUsageDescription; do
-            description="$(/usr/libexec/PlistBuddy -c "Print :$key" "$app/Contents/Info.plist")"
+          for key in NSAudioCaptureUsageDescription NSCameraUsageDescription NSMicrophoneUsageDescription NSLocationUsageDescription NSBluetoothAlwaysUsageDescription; do
+            description="$(/usr/libexec/PlistBuddy -c "Print :$key" "$app/Contents/Info.plist" || true)"
             test -n "$description" || { echo "Release app is missing $key." >&2; exit 1; }
           done
           test -f "$app/Contents/Resources/pathway-runtime-app.json" || { echo "Runtime identity stamp is missing." >&2; exit 1; }
+          node --input-type=module - "$app/Contents/Resources/pathway-runtime-app.json" <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          assert.deepEqual(JSON.parse(readFileSync(process.argv[2], 'utf8')), {
+            userDataDirName: 'pathway',
+            legacyUserDataDirName: 'Pathway (Alpha)',
+          }, 'Release runtime identity stamp must contain both production directory names.');
+          NODE
           /usr/bin/codesign --verify --deep --strict --verbose=2 "$app"
           signature="$(/usr/bin/codesign --display --verbose=4 "$app" 2>&1)"
           if ! /usr/bin/grep -q '^Authority=Developer ID Application: ' <<< "$signature"; then
@@ -579,7 +587,9 @@ jobs:
               exit 1
             fi
             entitlements="$verification_dir/runtime-entitlements.plist"
-            /usr/bin/codesign -d --entitlements :- "$executable_bundle" > "$entitlements" 2>/dev/null
+            /usr/bin/codesign -d --entitlements - --xml "$executable_bundle" > "$entitlements" 2>/dev/null
+            echo "Effective entitlements: $executable_bundle"
+            /bin/cat "$entitlements"
             for key in \
               com.apple.security.cs.allow-jit \
               com.apple.security.cs.allow-unsigned-executable-memory \
@@ -588,10 +598,24 @@ jobs:
               com.apple.security.device.camera \
               com.apple.security.personal-information.location \
               com.apple.security.device.bluetooth; do
-              value="$(/usr/libexec/PlistBuddy -c "Print :$key" "$entitlements")"
+              value="$(/usr/libexec/PlistBuddy -c "Print :$key" "$entitlements" || true)"
               test "$value" == true || { echo "Missing $key in $executable_bundle." >&2; exit 1; }
             done
           done
+          # entitlementsInherit also applies to native resource executables.
+          # Keep their effective grants visible for the first signed runtime audit.
+          while IFS= read -r -d '' helper; do
+            if /usr/bin/file -b "$helper" | /usr/bin/grep -q '^Mach-O.*executable'; then
+              echo "Effective entitlements: $helper"
+              /usr/bin/codesign -d --entitlements - --xml "$helper"
+            fi
+          done < <(/usr/bin/find \
+            "$app/Contents/Frameworks" \
+            "$app/Contents/Resources/cua-driver" \
+            "$app/Contents/Resources/pathway-helper" \
+            "$app/Contents/Resources/dictation" \
+            "$app/Contents/Resources/resource-monitor" \
+            -type f -print0)
           # The Computer Use binaries embed an Info.plist so electron-builder's
           # re-sign keeps their identifiers; macOS ties TCC grants to them.
           for nested in \

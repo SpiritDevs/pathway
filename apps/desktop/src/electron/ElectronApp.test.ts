@@ -10,6 +10,7 @@ const {
   getAppPathMock,
   getPathMock,
   getVersionMock,
+  hasSwitchMock,
   isDefaultProtocolClientMock,
   onMock,
   quitMock,
@@ -31,6 +32,7 @@ const {
   getAppPathMock: vi.fn(() => "/app"),
   getPathMock: vi.fn(() => "/app-data/pathway"),
   getVersionMock: vi.fn(() => "1.2.3"),
+  hasSwitchMock: vi.fn(() => false),
   isDefaultProtocolClientMock: vi.fn(() => false),
   onMock: vi.fn(),
   quitMock: vi.fn(),
@@ -54,6 +56,7 @@ vi.mock("electron", () => ({
   app: {
     commandLine: {
       appendSwitch: appendSwitchMock,
+      hasSwitch: hasSwitchMock,
       removeSwitch: removeSwitchMock,
     },
     getAppPath: getAppPathMock,
@@ -94,6 +97,7 @@ describe("ElectronApp", () => {
     autoUpdaterOnMock.mockClear();
     autoUpdaterRemoveListenerMock.mockClear();
     exitMock.mockClear();
+    hasSwitchMock.mockClear();
     onMock.mockClear();
     quitMock.mockClear();
     relaunchMock.mockClear();
@@ -114,6 +118,16 @@ describe("ElectronApp", () => {
         resourcesPath: process.resourcesPath,
         runningUnderArm64Translation: false,
       });
+    }).pipe(Effect.provide(ElectronApp.layer)),
+  );
+
+  it.effect("reads explicit command-line switches from Electron", () =>
+    Effect.gen(function* () {
+      const electronApp = yield* ElectronApp.ElectronApp;
+      hasSwitchMock.mockReturnValueOnce(true);
+      assert.isTrue(yield* electronApp.hasCommandLineSwitch("user-data-dir"));
+      assert.isFalse(yield* electronApp.hasCommandLineSwitch("user-data-dir"));
+      assert.deepEqual(hasSwitchMock.mock.calls, [["user-data-dir"], ["user-data-dir"]]);
     }).pipe(Effect.provide(ElectronApp.layer)),
   );
 
