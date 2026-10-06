@@ -31,11 +31,16 @@ export function getSyntaxHighlighterPromise(language: string): Promise<DiffsHigh
   return promise;
 }
 
-export async function highlightCode(code: string, language: string, themeName: DiffThemeName) {
+export async function highlightCode(
+  code: string,
+  language: string,
+  themeName: DiffThemeName,
+  options?: { readonly tokenizeTimeLimit?: number },
+) {
   const highlighter = await getSyntaxHighlighterPromise(language);
   try {
-    return highlighter.codeToHtml(code, { lang: language, theme: themeName });
+    return highlighter.codeToHtml(code, { lang: language, theme: themeName, ...options });
   } catch {
-    return highlighter.codeToHtml(code, { lang: "text", theme: themeName });
+    return highlighter.codeToHtml(code, { lang: "text", theme: themeName, ...options });
   }
 }
