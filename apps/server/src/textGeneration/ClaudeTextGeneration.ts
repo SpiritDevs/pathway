@@ -28,6 +28,8 @@ import {
 } from "./TextGenerationPrompts.ts";
 import {
   INVESTIGATION_TIMEOUT_MS,
+  cliErrorOutputTail,
+  readCliStderr,
   normalizeCliError,
   sanitizeCommitSubject,
   sanitizePrTitle,
@@ -222,7 +224,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       const [stdout, stderr, exitCode] = yield* Effect.all(
         [
           readStreamAsString(operation, child.stdout),
-          readStreamAsString(operation, child.stderr),
+          readCliStderr("claude", operation, child.stderr),
           child.exitCode.pipe(
             Effect.mapError((cause) =>
               normalizeCliError("claude", operation, cause, "Failed to read Claude CLI exit code"),
@@ -235,7 +237,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       if (exitCode !== 0) {
         const stderrDetail = stderr.trim();
         const stdoutDetail = stdout.trim();
-        const detail = stderrDetail.length > 0 ? stderrDetail : stdoutDetail;
+        const detail = cliErrorOutputTail(stderrDetail.length > 0 ? stderrDetail : stdoutDetail);
         return yield* new TextGenerationError({
           operation,
           detail:
@@ -367,7 +369,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       const [stdout, stderr, exitCode] = yield* Effect.all(
         [
           streamStdoutAsString(operation, child.stdout, input.onOutput),
-          readStreamAsString(operation, child.stderr),
+          readCliStderr("claude", operation, child.stderr),
           child.exitCode.pipe(
             Effect.mapError((cause) =>
               normalizeCliError("claude", operation, cause, "Failed to read Claude CLI exit code"),
@@ -378,7 +380,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       );
 
       if (exitCode !== 0) {
-        const detail = stderr.trim().length > 0 ? stderr.trim() : stdout.trim();
+        const detail = cliErrorOutputTail(stderr.trim().length > 0 ? stderr.trim() : stdout.trim());
         return yield* new TextGenerationError({
           operation,
           detail:

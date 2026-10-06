@@ -4,7 +4,11 @@ import { DEFAULT_PERSONALITY } from "@spiritdevs/contracts/orchestratorAvatar";
 import { describe, expect, it } from "@effect/vitest";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { CompanyId } from "@spiritdevs/contracts/company";
-import type { OrchestrationV2ThreadProjection } from "@spiritdevs/contracts";
+import {
+  ProviderDriverKind,
+  TextGenerationError,
+  type OrchestrationV2ThreadProjection,
+} from "@spiritdevs/contracts";
 import type { ConvexClientLike } from "./convexSyncTransport.ts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -14,6 +18,7 @@ import { OrchestratorRun, type OrchestratorDecision } from "@spiritdevs/contract
 import {
   decodeOrchestratorDecision,
   executeOrchestratorRun,
+  orchestratorGenerationError,
   orchestratorPrompt,
   makeOrchestratorBackend,
   OrchestratorError,
@@ -69,6 +74,59 @@ function backend() {
 }
 
 describe("tool-free coordinator reasoning", () => {
+  it("names the provider whose credentials need to be renewed", () => {
+    for (const [driver, label] of [
+      ["codex", "Codex"],
+      ["claudeAgent", "Claude"],
+      ["cursor", "Cursor"],
+      ["grok", "Grok"],
+      ["opencode", "OpenCode"],
+    ] as const) {
+      const error = orchestratorGenerationError(
+        new TextGenerationError({ operation: "investigate", detail: "status: 401" }),
+        ProviderDriverKind.make(driver),
+      );
+      expect(error.reason).toBe(`Sign in to ${label} again, then retry coordinator reasoning.`);
+      expect(error.retryModel).toBe(false);
+    }
+  });
+
+  for (const detail of ["refresh_token_reused", "401 Unauthorized", "ECONNRESET"]) {
+    it.effect(`passes the retry policy for ${detail} without exposing provider output`, () =>
+      Effect.gen(function* () {
+        const test = backend();
+        const retryPolicies: Array<boolean | undefined> = [];
+        const error = orchestratorGenerationError(
+          new TextGenerationError({
+            operation: "investigate",
+            detail: `${detail}: private provider output`,
+          }),
+          ProviderDriverKind.make("codex"),
+        );
+        const outcome = yield* executeOrchestratorRun(
+          {
+            ...test.api,
+            fail: (job, reason, retryModel) => {
+              retryPolicies.push(retryModel);
+              return test.api.fail(job, reason);
+            },
+          },
+          job,
+          () => Effect.fail(error),
+        );
+        expect(outcome).toBe("failed");
+        expect(retryPolicies).toEqual([detail === "ECONNRESET" ? undefined : false]);
+        expect(test.failures).toEqual([
+          detail === "ECONNRESET"
+            ? "Coordinator reasoning failed. Check the provider selection and retry."
+            : "Sign in to Codex again, then retry coordinator reasoning.",
+        ]);
+        expect(test.completions).toEqual([]);
+        expect(test.failures.join()).not.toContain("private provider output");
+      }),
+    );
+  }
+
   it.effect("returns a failed worker's partial findings with its failure status", () =>
     Effect.gen(function* () {
       const captured: unknown[] = [];
@@ -443,16 +501,32 @@ describe("tool-free coordinator reasoning", () => {
       yield* backend.renew(job);
       yield* backend.complete(job, result);
       yield* backend.fail(job, "Retry");
+      yield* backend.fail(job, "Sign in to Codex again.", false);
       expect(calls.map((call) => call.name)).toEqual([
         "aiOrchestratorJobs:claim",
         "aiOrchestratorJobs:renew",
         "aiOrchestratorJobs:complete",
+        "aiOrchestratorJobs:failRun",
         "aiOrchestratorJobs:failRun",
       ]);
       expect(calls[0]?.args).toEqual({
         companyId: "company",
         providers: [{ instanceId: "codex", driver: "codex" }],
         refreshPresence: false,
+      });
+      expect(calls[3]?.args).toEqual({
+        companyId: "company",
+        jobId: job.id,
+        generation: job.generation,
+        error: "Retry",
+        retryModel: true,
+      });
+      expect(calls[4]?.args).toEqual({
+        companyId: "company",
+        jobId: job.id,
+        generation: job.generation,
+        error: "Sign in to Codex again.",
+        retryModel: false,
       });
     }),
   );

@@ -8,7 +8,7 @@ Open Orchestrators from the navigation rail, command palette, or companion short
 
 Open the main Settings area and find the **Orchestrators** group. Select a contact to configure its overview, instructions, models, environments, responsibilities, permissions, memory, notifications, or work limits.
 
-The default model is GPT-6 Astra with high reasoning. Drag model choices into fallback order and configure each choice's environment, provider, model, and supported options. A selected environment must be connected and able to run that provider.
+The default model is GPT-6 Astra with high reasoning. Drag model choices into fallback order and configure each choice's environment, provider, model, and supported options. A selected environment must be connected and able to run that provider. If coordinator reasoning fails because the provider rejects its credentials, Pathway stops automatic retries. Sign in to that provider again, then retry the message.
 
 Instructions shape how the coordinator communicates and plans. Coding remains delegated to worker threads. Permissions control which Pathway actions the coordinator and its workers can use. Direction and settings-management permissions are separate.
 

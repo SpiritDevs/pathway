@@ -232,6 +232,21 @@ export function compactTraceAttributes(
   return Object.fromEntries(entries);
 }
 
+const TRACE_CAUSE_MAX_LENGTH = 8 * 1024;
+const TRACE_CAUSE_TRUNCATION_MARKER = "\n…[truncated]…\n";
+
+function formatTraceCause(cause: Cause.Cause<unknown>): string {
+  const pretty = Cause.pretty(cause);
+  if (pretty.length <= TRACE_CAUSE_MAX_LENGTH) return pretty;
+  const retainedLength = TRACE_CAUSE_MAX_LENGTH - TRACE_CAUSE_TRUNCATION_MARKER.length;
+  const headLength = Math.ceil(retainedLength / 2);
+  return (
+    pretty.slice(0, headLength) +
+    TRACE_CAUSE_TRUNCATION_MARKER +
+    pretty.slice(-(retainedLength - headLength))
+  );
+}
+
 function formatTraceExit(exit: Exit.Exit<unknown, unknown>): EffectTraceRecord["exit"] {
   if (ExitRuntime.isSuccess(exit)) {
     return { _tag: "Success" };
@@ -239,12 +254,12 @@ function formatTraceExit(exit: Exit.Exit<unknown, unknown>): EffectTraceRecord["
   if (Cause.hasInterruptsOnly(exit.cause)) {
     return {
       _tag: "Interrupted",
-      cause: Cause.pretty(exit.cause),
+      cause: formatTraceCause(exit.cause),
     };
   }
   return {
     _tag: "Failure",
-    cause: Cause.pretty(exit.cause),
+    cause: formatTraceCause(exit.cause),
   };
 }
 

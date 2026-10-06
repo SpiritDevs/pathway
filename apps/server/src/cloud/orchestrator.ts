@@ -48,6 +48,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { isTextGenerationAuthenticationError } from "../textGeneration/TextGenerationUtils.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { coordinatorProviders, orchestratorDelegationCatalog } from "./orchestratorSelection.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
@@ -101,7 +102,31 @@ const decodePendingResults = Schema.decodeUnknownEffect(
 );
 export class OrchestratorError extends Data.TaggedError("OrchestratorError")<{
   readonly reason: string;
+  readonly retryModel?: boolean;
 }> {}
+/** Sanitizes provider failures before they leave this environment. */
+export function orchestratorGenerationError(
+  error: unknown,
+  provider: ProviderDriverKind,
+): OrchestratorError {
+  if (error instanceof OrchestratorError) return error;
+  if (isTextGenerationAuthenticationError(error)) {
+    const label =
+      provider === "claudeAgent"
+        ? "Claude"
+        : provider === "opencode"
+          ? "OpenCode"
+          : provider.charAt(0).toUpperCase() + provider.slice(1);
+    return new OrchestratorError({
+      reason: `Sign in to ${label} again, then retry coordinator reasoning.`,
+      retryModel: false,
+    });
+  }
+  return new OrchestratorError({
+    reason: "Coordinator reasoning failed. Check the provider selection and retry.",
+  });
+}
+
 export function routingDecision(job: OrchestratorRun, text: string): OrchestratorDecision {
   const decoded = decodeRoute(
     text
@@ -393,7 +418,11 @@ export const executeOrchestratorRun = Effect.fn("cloud.orchestrator.execute")(fu
       error instanceof OrchestratorError
         ? error.reason
         : "Coordinator reasoning failed. Check the selected provider and model, then retry.";
-    yield* backend.fail(job, reason);
+    yield* backend.fail(
+      job,
+      reason,
+      error instanceof OrchestratorError ? error.retryModel : undefined,
+    );
     yield* backend.confirmStopped?.(job) ?? Effect.void;
     return "failed" as const;
   }
@@ -833,7 +862,11 @@ export const orchestratorLayer = () =>
                   .pipe(
                     Effect.timeout("15 seconds"),
                     Effect.raceFirst(monitor),
-                    Effect.catch(() => Effect.succeed({ text: "" })),
+                    Effect.catch((error) =>
+                      isTextGenerationAuthenticationError(error)
+                        ? Effect.fail(orchestratorGenerationError(error, instance.driverKind))
+                        : Effect.succeed({ text: "" }),
+                    ),
                   );
                 return routingDecision(job, routed.text);
               }
@@ -864,7 +897,12 @@ export const orchestratorLayer = () =>
                   imagePaths: attachments.imagePaths,
                   modelSelection: job.selection,
                 })
-                .pipe(Effect.raceFirst(monitor));
+                .pipe(
+                  Effect.mapError((error) =>
+                    orchestratorGenerationError(error, instance.driverKind),
+                  ),
+                  Effect.raceFirst(monitor),
+                );
               return yield* decodeOrchestratorDecision(response.text);
             }).pipe(
               Effect.mapError((error) =>

@@ -1,5 +1,8 @@
 import { TextGenerationError } from "@spiritdevs/contracts";
+import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 const isTextGenerationError = Schema.is(TextGenerationError);
 
@@ -119,4 +122,61 @@ export function normalizeCliError(
     detail: fallback,
     cause: error,
   });
+}
+
+const CLI_ERROR_MAX_BYTES = 16 * 1024;
+const CLI_ERROR_TRUNCATION_MARKER = "[truncated earlier output]\n";
+
+/** Retains the diagnostic tail without splitting a UTF-8 character. */
+export function cliErrorOutputTail(output: string): string {
+  const bytes = Buffer.from(output);
+  if (bytes.length <= CLI_ERROR_MAX_BYTES) return output;
+  let start = bytes.length - CLI_ERROR_MAX_BYTES + CLI_ERROR_TRUNCATION_MARKER.length;
+  while ((bytes[start]! & 0xc0) === 0x80) start += 1;
+  return CLI_ERROR_TRUNCATION_MARKER + bytes.subarray(start).toString("utf8");
+}
+
+/** Drains stderr while retaining only its tail, including across stream chunks. */
+export const readCliStderr = <E>(
+  cliName: string,
+  operation: string,
+  stream: Stream.Stream<Uint8Array, E>,
+) =>
+  stream.pipe(
+    Stream.decodeText(),
+    Stream.runFold(
+      () => ({ output: "", truncated: false }),
+      (state, chunk) => {
+        const combined = state.output + chunk;
+        const output = cliErrorOutputTail(combined);
+        const truncated = output !== combined;
+        return {
+          output: truncated ? output.slice(CLI_ERROR_TRUNCATION_MARKER.length) : output,
+          truncated: state.truncated || truncated,
+        };
+      },
+    ),
+    Effect.map(({ output, truncated }) =>
+      truncated ? cliErrorOutputTail(CLI_ERROR_TRUNCATION_MARKER + output) : output,
+    ),
+    Effect.mapError((cause) =>
+      normalizeCliError(cliName, operation, cause, "Failed to collect process output"),
+    ),
+  );
+
+/** Only explicit provider credential failures are terminal; quota and transport errors may recover. */
+export function isTextGenerationAuthenticationError(error: unknown): boolean {
+  if (!isTextGenerationError(error)) return false;
+  const authenticationFailure =
+    /\brefresh_token_reused\b|refresh token (?:was|has) already (?:been )?used|\b401\s+unauthori[sz]ed\b|\b(?:http(?: error)?|status(?: code)?)["':=\s]+401\b/i;
+  if (authenticationFailure.test(error.detail)) return true;
+  let cause = error.cause;
+  for (let depth = 0; depth < 4 && Predicate.isObject(cause); depth += 1) {
+    if (cause.status === 401 || cause.statusCode === 401 || cause.code === "refresh_token_reused")
+      return true;
+    if (Predicate.isObject(cause.response) && cause.response.status === 401) return true;
+    if (typeof cause.message === "string" && authenticationFailure.test(cause.message)) return true;
+    cause = cause.cause;
+  }
+  return false;
 }

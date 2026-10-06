@@ -33,6 +33,7 @@ function makeFakeCodexBinary(
     output: string;
     exitCode?: number;
     stderr?: string;
+    stdout?: string;
     requireImage?: boolean;
     requireImageCount?: number;
     requireServiceTier?: string;
@@ -175,6 +176,9 @@ function makeFakeCodexBinary(
               `printf "%s\\n" ${JSON.stringify(input.stderr)} >&2`,
             ]
           : []),
+        ...(input.stdout !== undefined
+          ? ["cat <<'__PATHWAY_FAKE_CODEX_STDOUT__'", input.stdout, "__PATHWAY_FAKE_CODEX_STDOUT__"]
+          : []),
         'if [ -n "$output_path" ]; then',
         "  cat > \"$output_path\" <<'__PATHWAY_FAKE_CODEX_OUTPUT__'",
         input.output,
@@ -194,6 +198,7 @@ function withFakeCodexEnv<A, E, R>(
     output: string;
     exitCode?: number;
     stderr?: string;
+    stdout?: string;
     requireImage?: boolean;
     requireImageCount?: number;
     requireServiceTier?: string;
@@ -794,4 +799,53 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
         }),
     ),
   );
+  for (const operation of ["generateThreadTitle", "investigate"] as const) {
+    for (const source of ["stderr", "stdout"] as const) {
+      const diagnostic = "discard-me" + "x".repeat(24_000) + "final-auth-failure";
+      it.effect(`caps ${source} for ${operation} while retaining the final diagnostic`, () =>
+        withFakeCodexEnv(
+          {
+            output: "",
+            exitCode: 1,
+            stderr: source === "stderr" ? diagnostic : "",
+            stdout: source === "stdout" ? diagnostic : "",
+          },
+          (textGeneration) =>
+            Effect.gen(function* () {
+              const modelSelection = createModelSelection(
+                ProviderInstanceId.make("codex"),
+                "gpt-5.4-mini",
+              );
+              const result = yield* (
+                operation === "investigate"
+                  ? textGeneration
+                      .investigate({
+                        cwd: process.cwd(),
+                        prompt: "Investigate.",
+                        modelSelection,
+                      })
+                      .pipe(Effect.asVoid)
+                  : textGeneration
+                      .generateThreadTitle({
+                        cwd: process.cwd(),
+                        message: "Title this.",
+                        modelSelection,
+                      })
+                      .pipe(Effect.asVoid)
+              ).pipe(Effect.result);
+              expect(Result.isFailure(result)).toBe(true);
+              if (Result.isFailure(result)) {
+                expect(result.failure).toBeInstanceOf(TextGenerationError);
+                expect(Buffer.byteLength(result.failure.detail)).toBeLessThanOrEqual(
+                  16 * 1024 + 40,
+                );
+                expect(result.failure.detail).toContain("[truncated earlier output]");
+                expect(result.failure.detail).toContain("final-auth-failure");
+                expect(result.failure.detail).not.toContain("discard-me");
+              }
+            }),
+        ),
+      );
+    }
+  }
 });
