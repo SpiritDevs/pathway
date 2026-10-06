@@ -15,6 +15,7 @@ import { CUA_HOST_SOCKET_ENV } from "@spiritdevs/shared/cuaDriverProtocol";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { DesktopComputer, inertDesktopComputer } from "../computer/DesktopComputer.ts";
+import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
@@ -35,6 +36,13 @@ const encodePersistedServerObservabilitySettingsDocument = Schema.encodeEffect(
 const isDesktopBackendObservabilitySettingsReadError = Schema.is(
   DesktopBackendConfiguration.DesktopBackendObservabilitySettingsReadError,
 );
+
+const shellEnvironmentLayer = Layer.succeed(DesktopShellEnvironment.DesktopShellEnvironment, {
+  installIntoProcess: Effect.void,
+  startRefresh: Effect.void,
+  isReady: Effect.succeed(true),
+  refreshedEnvironment: Effect.succeed({ PATH: "/shell/bin" }),
+});
 
 const serverExposureLayer = Layer.succeed(DesktopServerExposure.DesktopServerExposure, {
   getState: Effect.die("unexpected getState"),
@@ -116,6 +124,7 @@ const withHarness = <A, E, R>(
       Effect.provide(
         DesktopBackendConfiguration.layer.pipe(
           Layer.provideMerge(serverExposureLayer),
+          Layer.provide(shellEnvironmentLayer),
           Layer.provideMerge(DesktopAppSettings.layerTest()),
           Layer.provideMerge(DesktopWslEnvironment.layerTest()),
           Layer.provideMerge(makeEnvironmentLayer(baseDir, environmentOptions)),
@@ -151,6 +160,8 @@ describe("DesktopBackendConfiguration", () => {
         assert.equal(first.bootstrap.host, "0.0.0.0");
         assert.equal(first.bootstrap.pathwayHome, environment.baseDir);
         assert.isTrue(first.bootstrap.shellEnvironmentHydrated);
+        assert.equal(first.bootstrap.shellEnvironmentFd, 6);
+        assert.deepEqual(yield* first.shellEnvironment!, { PATH: "/shell/bin" });
         assert.match(first.bootstrap.desktopBootstrapToken, /^[0-9a-f]{48}$/i);
         assert.equal(second.bootstrap.desktopBootstrapToken, first.bootstrap.desktopBootstrapToken);
         assert.match(first.bootstrap.desktopEnvironmentId ?? "", /^[0-9a-f-]{36}$/i);
@@ -213,6 +224,7 @@ describe("DesktopBackendConfiguration", () => {
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
             Layer.provideMerge(serverExposureLayer),
+            Layer.provide(shellEnvironmentLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(
               DesktopWslEnvironment.layerTest({
@@ -277,6 +289,7 @@ describe("DesktopBackendConfiguration", () => {
           Effect.provide(
             DesktopBackendConfiguration.layer.pipe(
               Layer.provideMerge(serverExposureLayer),
+              Layer.provide(shellEnvironmentLayer),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
               Layer.provideMerge(
                 DesktopWslEnvironment.layerTest({
@@ -446,6 +459,7 @@ describe("DesktopBackendConfiguration", () => {
           Layer.mergeAll(
             DesktopBackendConfiguration.layer.pipe(
               Layer.provideMerge(serverExposureLayer),
+              Layer.provide(shellEnvironmentLayer),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
               Layer.provideMerge(DesktopWslEnvironment.layerTest()),
               Layer.provideMerge(
@@ -493,6 +507,7 @@ describe("DesktopBackendConfiguration", () => {
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
             Layer.provideMerge(serverExposureLayer),
+            Layer.provide(shellEnvironmentLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(DesktopWslEnvironment.layerTest()),
             Layer.provideMerge(
@@ -551,6 +566,7 @@ describe("DesktopBackendConfiguration", () => {
           Effect.provide(
             DesktopBackendConfiguration.layer.pipe(
               Layer.provideMerge(serverExposureLayer),
+              Layer.provide(shellEnvironmentLayer),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
               Layer.provideMerge(
                 DesktopWslEnvironment.layerTest({
@@ -595,6 +611,7 @@ describe("DesktopBackendConfiguration", () => {
           Effect.provide(
             DesktopBackendConfiguration.layer.pipe(
               Layer.provideMerge(serverExposureLayer),
+              Layer.provide(shellEnvironmentLayer),
               Layer.provideMerge(
                 DesktopAppSettings.layerTest({
                   ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
@@ -631,6 +648,7 @@ describe("DesktopBackendConfiguration", () => {
           Effect.provide(
             DesktopBackendConfiguration.layer.pipe(
               Layer.provideMerge(serverExposureLayer),
+              Layer.provide(shellEnvironmentLayer),
               Layer.provideMerge(
                 DesktopAppSettings.layerTest({
                   ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
@@ -671,6 +689,7 @@ describe("DesktopBackendConfiguration", () => {
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
             Layer.provideMerge(serverExposureLayer),
+            Layer.provide(shellEnvironmentLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(
               DesktopWslEnvironment.layerTest({
@@ -705,6 +724,7 @@ describe("DesktopBackendConfiguration", () => {
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
             Layer.provideMerge(serverExposureLayer),
+            Layer.provide(shellEnvironmentLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(
               DesktopWslEnvironment.layerTest({
@@ -737,6 +757,7 @@ describe("DesktopBackendConfiguration", () => {
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
             Layer.provideMerge(serverExposureLayer),
+            Layer.provide(shellEnvironmentLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(
               DesktopWslEnvironment.layerTest({
@@ -766,6 +787,7 @@ describe("DesktopBackendConfiguration", () => {
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
             Layer.provideMerge(serverExposureLayer),
+            Layer.provide(shellEnvironmentLayer),
             Layer.provideMerge(
               DesktopAppSettings.layerTest({
                 ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
@@ -813,6 +835,7 @@ describe("DesktopBackendConfiguration", () => {
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
             Layer.provideMerge(serverExposureLayer),
+            Layer.provide(shellEnvironmentLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(DesktopWslEnvironment.layerTest()),
             Layer.provideMerge(
@@ -858,6 +881,7 @@ describe("DesktopBackendConfiguration", () => {
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
             Layer.provideMerge(serverExposureLayer),
+            Layer.provide(shellEnvironmentLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(DesktopWslEnvironment.layerTest()),
             Layer.provideMerge(
@@ -901,6 +925,7 @@ describe("DesktopBackendConfiguration", () => {
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
             Layer.provideMerge(serverExposureLayer),
+            Layer.provide(shellEnvironmentLayer),
             Layer.provideMerge(
               DesktopAppSettings.layerTest({
                 ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
@@ -929,6 +954,7 @@ describe("DesktopBackendConfiguration", () => {
     const runtime = ManagedRuntime.make(
       DesktopBackendConfiguration.layer.pipe(
         Layer.provideMerge(serverExposureLayer),
+        Layer.provide(shellEnvironmentLayer),
         Layer.provideMerge(DesktopAppSettings.layerTest()),
         Layer.provideMerge(DesktopWslEnvironment.layer),
         // isAvailable on win32 only touches the filesystem, never the spawner,

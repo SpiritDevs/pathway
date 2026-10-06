@@ -1,5 +1,6 @@
 import {
   DesktopBackendBootstrap,
+  DesktopShellEnvironmentPatch,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
   DesktopTelemetryControlMessage,
 } from "@spiritdevs/contracts";
@@ -26,6 +27,9 @@ import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 
+const decodeShellEnvironment = Schema.decodeEffect(
+  Schema.fromJsonString(DesktopShellEnvironmentPatch),
+);
 const decodeDesktopBackendBootstrap = Schema.decodeEffect(
   Schema.fromJsonString(DesktopBackendBootstrap),
 );
@@ -220,6 +224,7 @@ describe("DesktopBackendManager", () => {
         let spawnedCommand: ChildProcess.Command | undefined;
         let bootstrapJson = "";
         let telemetryJson = "";
+        let shellJson = "";
         let readyCount = 0;
         const ready = yield* Deferred.make<void>();
         const exited = yield* Queue.unbounded<void>();
@@ -233,6 +238,10 @@ describe("DesktopBackendManager", () => {
                 const fd3 = command.options.additionalFds?.fd3;
                 if (fd3?.type === "input" && fd3.stream) {
                   bootstrapJson = yield* fd3.stream.pipe(Stream.decodeText(), Stream.mkString);
+                }
+                const fd6 = command.options.additionalFds?.fd6;
+                if (fd6?.type === "input" && fd6.stream) {
+                  shellJson = yield* fd6.stream.pipe(Stream.decodeText(), Stream.mkString);
                 }
                 const fd4 = command.options.additionalFds?.fd4;
                 if (fd4?.type === "input" && fd4.stream) {
@@ -250,7 +259,8 @@ describe("DesktopBackendManager", () => {
         const instance = yield* makeTestInstance({
           config: {
             ...baseConfig,
-            bootstrap: configWithObservability,
+            bootstrap: { ...configWithObservability, shellEnvironmentFd: 6 },
+            shellEnvironment: Effect.succeed({ PATH: "/fresh/bin", LC_CTYPE: "en_US.UTF-8" }),
           },
           spawnerLayer,
           desktopTelemetryStream: Stream.encodeText(
@@ -288,7 +298,14 @@ describe("DesktopBackendManager", () => {
           2_000,
         );
 
-        assert.deepEqual(yield* decodeBootstrap(bootstrapJson), configWithObservability);
+        assert.deepEqual(yield* decodeBootstrap(bootstrapJson), {
+          ...configWithObservability,
+          shellEnvironmentFd: 6,
+        });
+        assert.deepEqual(yield* decodeShellEnvironment(shellJson.trim()), {
+          PATH: "/fresh/bin",
+          LC_CTYPE: "en_US.UTF-8",
+        });
         assert.equal(
           telemetryJson,
           '{"version":1,"type":"desktopTelemetryHello","electronPid":123}\n',

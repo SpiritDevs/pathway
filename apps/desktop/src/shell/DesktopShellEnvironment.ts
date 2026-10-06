@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeOS from "node:os";
+import { DesktopShellEnvironmentPatch } from "@spiritdevs/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Scope from "effect/Scope";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -64,6 +69,9 @@ export class DesktopShellEnvironment extends Context.Service<
   DesktopShellEnvironment,
   {
     readonly installIntoProcess: Effect.Effect<void>;
+    readonly startRefresh: Effect.Effect<void, never, Scope.Scope>;
+    readonly isReady: Effect.Effect<boolean>;
+    readonly refreshedEnvironment: Effect.Effect<DesktopShellEnvironmentPatch>;
   }
 >()("@spiritdevs/desktop/shell/DesktopShellEnvironment") {}
 
@@ -383,7 +391,7 @@ const readWindowsEnvironment = Effect.fn("desktop.shellEnvironment.readWindowsEn
 const installWindowsEnvironment = Effect.fn("desktop.shellEnvironment.installWindowsEnvironment")(
   function* (
     config: ShellEnvironmentConfig,
-  ): Effect.fn.Return<void, never, ChildProcessSpawner.ChildProcessSpawner> {
+  ): Effect.fn.Return<boolean, never, ChildProcessSpawner.ChildProcessSpawner> {
     // Concurrent, not sequential: these two probes are independent (only their
     // results are combined below) and each spawns its own PowerShell. Run in
     // series they sit at offset 0 of desktop.startup, before anything else, and
@@ -412,6 +420,7 @@ const installWindowsEnvironment = Effect.fn("desktop.shellEnvironment.installWin
     if (!config.env.FNM_MULTISHELL_PATH && profile.FNM_MULTISHELL_PATH) {
       config.env.FNM_MULTISHELL_PATH = profile.FNM_MULTISHELL_PATH;
     }
+    return Boolean(profile.PATH || noProfile.PATH);
   },
 );
 
@@ -419,7 +428,7 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
   function* (
     config: ShellEnvironmentConfig,
   ): Effect.fn.Return<
-    void,
+    boolean,
     never,
     ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
   > {
@@ -515,37 +524,215 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
         }
       }
     }
+    return Boolean(shellEnvironment.PATH || Option.isSome(launchctlPath));
   },
 );
 
 const installShellEnvironment = (
   config: ShellEnvironmentConfig,
-): Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem> => {
+): Effect.Effect<
+  boolean,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+> => {
   if (config.platform === "win32") {
     return installWindowsEnvironment(config);
   }
   if (config.platform === "darwin" || config.platform === "linux") {
     return installPosixEnvironment(config);
   }
-  return Effect.void;
+  return Effect.succeed(false);
 };
+
+const ShellEnvironmentCache = Schema.Struct({
+  version: Schema.Literal(1),
+  platform: Schema.String,
+  shell: Schema.String,
+  bootTimeMs: Schema.Number,
+  savedAtMs: Schema.Number,
+  inheritedEnvironment: DesktopShellEnvironmentPatch,
+  profiles: Schema.Record(Schema.String, Schema.NullOr(Schema.Number)),
+  directories: Schema.Array(Schema.String),
+  environment: DesktopShellEnvironmentPatch,
+});
+const decodeShellEnvironmentCache = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ShellEnvironmentCache),
+);
+const encodeShellEnvironmentCache = Schema.encodeEffect(
+  Schema.fromJsonString(ShellEnvironmentCache),
+);
+const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const PROFILE_NAMES = [
+  ".profile",
+  ".bash_profile",
+  ".bash_login",
+  ".bashrc",
+  ".zshenv",
+  ".zprofile",
+  ".zshrc",
+  ".zlogin",
+];
 
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const installIntoProcess: DesktopShellEnvironment["Service"]["installIntoProcess"] =
-    installShellEnvironment({
-      env: process.env,
-      platform: environment.platform,
-      userShell: Option.none(),
+  const inherited = { ...process.env };
+  const names = Object.keys(DesktopShellEnvironmentPatch.fields) as Array<
+    keyof DesktopShellEnvironmentPatch
+  >;
+  const cachePath = environment.path.join(environment.stateDir, "shell-environment.json");
+  const shell = inherited.SHELL ?? "";
+  const now = yield* DateTime.nowAsDate;
+  const bootTimeMs = now.getTime() - NodeOS.uptime() * 1000;
+  const profilePaths =
+    environment.platform === "win32"
+      ? [
+          ...["PowerShell", "WindowsPowerShell"].map((folder) =>
+            environment.path.join(environment.homeDirectory, "Documents", folder),
+          ),
+          ...(inherited.ProgramFiles
+            ? [environment.path.join(inherited.ProgramFiles, "PowerShell", "7")]
+            : []),
+          ...(inherited.SystemRoot
+            ? [environment.path.join(inherited.SystemRoot, "System32", "WindowsPowerShell", "v1.0")]
+            : []),
+        ].flatMap((directory) =>
+          ["profile.ps1", "Microsoft.PowerShell_profile.ps1"].map((name) =>
+            environment.path.join(directory, name),
+          ),
+        )
+      : [
+          shell,
+          ...PROFILE_NAMES.map((name) => environment.path.join(environment.homeDirectory, name)),
+          "/etc/profile",
+          "/etc/zshenv",
+          "/etc/zprofile",
+          "/etc/zshrc",
+          "/etc/zsh/zshenv",
+          "/etc/zsh/zprofile",
+          "/etc/zsh/zshrc",
+          ...(inherited.ZDOTDIR
+            ? PROFILE_NAMES.filter((name) => name.startsWith(".z")).map((name) =>
+                environment.path.join(inherited.ZDOTDIR!, name),
+              )
+            : []),
+        ].filter(Boolean);
+  const profiles = Object.fromEntries(
+    yield* Effect.forEach(
+      profilePaths,
+      (path) =>
+        fileSystem.stat(path).pipe(
+          Effect.map(
+            (stat) =>
+              [path, Option.getOrNull(Option.map(stat.mtime, (time) => time.getTime()))] as const,
+          ),
+          Effect.orElseSucceed(() => [path, null] as const),
+        ),
+      { concurrency: "unbounded" },
+    ),
+  );
+  let ready = false;
+  let refreshStarted = false;
+  const snapshot = (env: NodeJS.ProcessEnv): DesktopShellEnvironmentPatch =>
+    Object.fromEntries(
+      names.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
+    );
+  const apply = (patch: DesktopShellEnvironmentPatch, replace = false) => {
+    for (const name of names) {
+      if (patch[name] !== undefined) process.env[name] = patch[name];
+      else if (replace) delete process.env[name];
+    }
+  };
+  const refresh = yield* Effect.cached(
+    Effect.gen(function* () {
+      // Refresh from the launch environment so removed shell entries do not survive in cached PATH.
+      const fresh = { ...inherited };
+      const validated = yield* installShellEnvironment({
+        env: fresh,
+        platform: environment.platform,
+        userShell: Option.none(),
+      });
+      const patch = snapshot(fresh);
+      if (!validated && ready) return;
+      apply(patch, true);
+      ready = true;
+      if (validated) {
+        const savedAt = yield* DateTime.nowAsDate;
+        const directories = yield* Effect.filter(
+          (fresh.PATH ?? "").split(pathDelimiter(environment.platform)),
+          (entry) => fileSystem.exists(entry).pipe(Effect.orElseSucceed(() => false)),
+        );
+        yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true }).pipe(
+          Effect.andThen(
+            encodeShellEnvironmentCache({
+              version: 1,
+              platform: environment.platform,
+              shell,
+              bootTimeMs,
+              savedAtMs: savedAt.getTime(),
+              profiles,
+              directories,
+              inheritedEnvironment: snapshot(inherited),
+              environment: patch,
+            }),
+          ),
+          Effect.flatMap((encoded) =>
+            fileSystem.writeFileString(`${cachePath}.tmp`, encoded, { mode: 0o600 }),
+          ),
+          Effect.andThen(fileSystem.rename(`${cachePath}.tmp`, cachePath)),
+          Effect.catch((cause) =>
+            Effect.logDebug("Failed to persist desktop shell environment", { cause }),
+          ),
+        );
+      }
     }).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      Effect.withSpan("desktop.shellEnvironment.installIntoProcess"),
-    );
-
-  return DesktopShellEnvironment.of({ installIntoProcess });
+      Effect.withSpan("desktop.shellEnvironment.refresh"),
+    ),
+  );
+  const startRefresh = Effect.gen(function* () {
+    if (refreshStarted) return;
+    refreshStarted = true;
+    const cache = yield* fileSystem
+      .readFileString(cachePath)
+      .pipe(Effect.flatMap(decodeShellEnvironmentCache), Effect.option);
+    if (Option.isSome(cache)) {
+      const saved = cache.value;
+      // Cached shell output can include ephemeral sockets and fnm paths.
+      const valid =
+        saved.platform === environment.platform &&
+        saved.shell === shell &&
+        Math.abs(saved.bootTimeMs - bootTimeMs) < 5000 &&
+        now.getTime() >= saved.savedAtMs &&
+        now.getTime() - saved.savedAtMs < CACHE_MAX_AGE_MS &&
+        Object.keys(saved.profiles).length === Object.keys(profiles).length &&
+        Object.entries(profiles).every(([path, mtime]) => saved.profiles[path] === mtime) &&
+        names.every((name) => saved.inheritedEnvironment[name] === inherited[name]) &&
+        Boolean(saved.environment.PATH);
+      const requiredPaths = [
+        ...saved.directories,
+        ...(saved.environment.SSH_AUTH_SOCK ? [saved.environment.SSH_AUTH_SOCK] : []),
+      ];
+      const directoriesExist =
+        valid &&
+        (yield* Effect.forEach(requiredPaths, (entry) =>
+          fileSystem.exists(entry).pipe(Effect.orElseSucceed(() => false)),
+        )).every(Boolean);
+      if (directoriesExist) {
+        apply(saved.environment);
+        ready = true;
+      }
+    }
+    yield* Effect.forkScoped(refresh);
+  }).pipe(Effect.withSpan("desktop.shellEnvironment.startRefresh"));
+  return DesktopShellEnvironment.of({
+    installIntoProcess: refresh,
+    startRefresh,
+    isReady: Effect.sync(() => ready),
+    refreshedEnvironment: refresh.pipe(Effect.andThen(Effect.sync(() => snapshot(process.env)))),
+  });
 });
 
 export const layer = Layer.effect(DesktopShellEnvironment, make);

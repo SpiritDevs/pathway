@@ -44,6 +44,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   DesktopBackendBootstrap,
+  DesktopShellEnvironmentPatch,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   DesktopTelemetryControlMessage,
@@ -89,6 +90,7 @@ export interface BackendProcessContext {
 export type DesktopBackendBootstrapDelivery = "fd3" | "stdin";
 
 export interface DesktopBackendStartConfig extends BackendProcessContext {
+  readonly shellEnvironment?: Effect.Effect<DesktopShellEnvironmentPatch>;
   readonly args: ReadonlyArray<string>;
   readonly env: Record<string, string | undefined>;
   // When true the spawner merges the desktop process.env on top of `env`;
@@ -434,6 +436,9 @@ function drainBackendOutput(
   );
 }
 
+const encodeShellEnvironment = Schema.encodeSync(
+  Schema.fromJsonString(DesktopShellEnvironmentPatch),
+);
 const encodeBootstrapJson = Schema.encodeEffect(Schema.fromJsonString(DesktopBackendBootstrap));
 const decodeDesktopTelemetryControlLine = Schema.decodeUnknownEffect(
   Schema.fromJsonString(DesktopTelemetryControlMessage),
@@ -474,6 +479,19 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
         type: "output",
       };
     }
+  }
+  if (
+    options.bootstrap.shellEnvironmentFd !== undefined &&
+    options.shellEnvironment !== undefined
+  ) {
+    additionalFds[`fd${options.bootstrap.shellEnvironmentFd}`] = {
+      type: "input",
+      stream: Stream.encodeText(
+        Stream.fromEffect(options.shellEnvironment).pipe(
+          Stream.map((patch) => `${encodeShellEnvironment(patch)}\n`),
+        ),
+      ),
+    };
   }
   const command = ChildProcess.make(options.executablePath, options.args, {
     cwd: options.cwd,

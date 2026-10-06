@@ -81,6 +81,7 @@ export class ServerConfig extends Context.Service<
     readonly desktopEnvironmentId?: EnvironmentId | undefined;
     readonly desktopParentPid?: number | undefined;
     readonly shellEnvironmentHydrated?: boolean | undefined;
+    readonly shellEnvironmentFd?: number | undefined;
     readonly desktopTelemetryFd?: number | undefined;
     readonly desktopTelemetryControlFd?: number | undefined;
     readonly resourceMonitorPath?: string | undefined;

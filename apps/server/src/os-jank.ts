@@ -1,3 +1,7 @@
+import { DesktopShellEnvironmentPatch } from "@spiritdevs/contracts";
+import * as Option from "effect/Option";
+import * as Scope from "effect/Scope";
+import { readBootstrapEnvelope } from "./bootstrap.ts";
 import { HostProcessEnvironment, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import {
   listLoginShellCandidates,
@@ -50,10 +54,27 @@ export function hydratePosixHome(
 
 export const fixPath = Effect.fn("fixPath")(function* (options?: {
   readonly shellEnvironmentHydrated?: boolean | undefined;
-}): Effect.fn.Return<void, never, FileSystem.FileSystem | Path.Path> {
+  readonly shellEnvironmentFd?: number | undefined;
+}): Effect.fn.Return<void, never, FileSystem.FileSystem | Path.Path | Scope.Scope> {
   const platform = yield* HostProcessPlatform;
   const env = yield* HostProcessEnvironment;
 
+  if (options?.shellEnvironmentFd !== undefined) {
+    const receive = receiveDesktopShellEnvironment(options.shellEnvironmentFd).pipe(
+      Effect.provideService(HostProcessEnvironment, env),
+      Effect.catch((cause) =>
+        Effect.logWarning("Failed to receive desktop shell environment", { cause }).pipe(
+          Effect.as(false),
+        ),
+      ),
+    );
+    if (options.shellEnvironmentHydrated) {
+      yield* Effect.forkScoped(receive);
+    } else if (yield* receive) {
+      if (platform !== "win32") yield* Effect.sync(() => hydratePosixHome(env));
+      return;
+    }
+  }
   if (platform === "win32") {
     if (options?.shellEnvironmentHydrated) return;
     const repairedEnvironment = yield* resolveWindowsEnvironment(env).pipe(
@@ -81,7 +102,7 @@ export const fixPath = Effect.fn("fixPath")(function* (options?: {
       }),
     ),
   );
-  // The native desktop already waited for shell hydration before spawning us.
+  // The native desktop supplied a validated cached environment or a fresh handoff.
   // Preserve HOME repair above; WSL and standalone servers still need their own PATH.
   if (options?.shellEnvironmentHydrated) return;
   yield* Effect.sync(() => hydratePosixPath(env, platform)).pipe(
@@ -111,3 +132,20 @@ export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
   }
   return resolve(yield* expandHomePath(raw.trim()));
 });
+
+export const receiveDesktopShellEnvironment = Effect.fn("receiveDesktopShellEnvironment")(
+  function* (fd: number) {
+    const env = yield* HostProcessEnvironment;
+    const patch = yield* readBootstrapEnvelope(DesktopShellEnvironmentPatch, fd, {
+      timeoutMs: 30_000,
+    });
+    if (Option.isNone(patch) || !patch.value.PATH) return false;
+    for (const name of Object.keys(DesktopShellEnvironmentPatch.fields) as Array<
+      keyof DesktopShellEnvironmentPatch
+    >) {
+      if (patch.value[name] !== undefined) env[name] = patch.value[name];
+      else delete env[name];
+    }
+    return true;
+  },
+);

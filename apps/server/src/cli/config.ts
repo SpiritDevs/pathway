@@ -344,6 +344,9 @@ export const resolveServerConfig = (
       ...(desktopEnvironmentId === undefined ? {} : { desktopEnvironmentId }),
       desktopParentPid,
       shellEnvironmentHydrated: bootstrap?.shellEnvironmentHydrated ?? false,
+      ...(bootstrap?.shellEnvironmentFd === undefined
+        ? {}
+        : { shellEnvironmentFd: bootstrap.shellEnvironmentFd }),
       desktopTelemetryFd,
       desktopTelemetryControlFd,
       resourceMonitorPath,

@@ -1,11 +1,15 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
@@ -69,33 +73,48 @@ function runShellEnvironment(input: {
   readonly platform: NodeJS.Platform;
   readonly handler: (command: ChildProcess.Command) => string;
   readonly failure?: PlatformError.PlatformError;
+  readonly stateDir?: string;
+  readonly probe?: (command: ChildProcess.Command) => Effect.Effect<string>;
+  readonly run?: (
+    service: DesktopShellEnvironment.DesktopShellEnvironment["Service"],
+  ) => Effect.Effect<void, never, Scope.Scope>;
 }) {
-  const environmentLayer = Layer.succeed(
-    DesktopEnvironment.DesktopEnvironment,
-    DesktopEnvironment.DesktopEnvironment.of({
-      platform: input.platform,
-    } as DesktopEnvironment.DesktopEnvironment["Service"]),
-  );
-  const spawnerLayer = Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make((command) =>
-      input.failure === undefined
-        ? Effect.succeed(makeProcess(input.handler(command)))
-        : Effect.fail(input.failure),
-    ),
-  );
-
   const program = Effect.gen(function* () {
-    const shellEnvironment = yield* DesktopShellEnvironment.DesktopShellEnvironment;
-    yield* shellEnvironment.installIntoProcess;
-  }).pipe(
-    Effect.provide(
-      DesktopShellEnvironment.layer.pipe(
-        Layer.provide(Layer.mergeAll(environmentLayer, NodeServices.layer, spawnerLayer)),
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const stateDir =
+      input.stateDir ??
+      (yield* fileSystem.makeTempDirectoryScoped({ prefix: "pathway-shell-test-" }));
+    const environmentLayer = Layer.succeed(
+      DesktopEnvironment.DesktopEnvironment,
+      DesktopEnvironment.DesktopEnvironment.of({
+        platform: input.platform,
+        path,
+        stateDir,
+        homeDirectory: stateDir,
+      } as DesktopEnvironment.DesktopEnvironment["Service"]),
+    );
+    const spawnerLayer = Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make((command) =>
+        input.failure === undefined
+          ? (input.probe?.(command) ?? Effect.succeed(input.handler(command))).pipe(
+              Effect.map(makeProcess),
+            )
+          : Effect.fail(input.failure),
       ),
-    ),
-  );
-
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* DesktopShellEnvironment.DesktopShellEnvironment;
+      yield* input.run?.(service) ?? service.installIntoProcess;
+    }).pipe(
+      Effect.provide(
+        DesktopShellEnvironment.layer.pipe(
+          Layer.provide(Layer.mergeAll(environmentLayer, NodeServices.layer, spawnerLayer)),
+        ),
+      ),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
   return withProcessEnv(input.env, program);
 }
 
@@ -446,3 +465,164 @@ describe("DesktopShellEnvironment", () => {
     );
   });
 });
+
+it.effect("starts discovery in the background and gates a first-launch environment handoff", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const env = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+    yield* runShellEnvironment({
+      env,
+      platform: "darwin",
+      handler: () => "",
+      probe: () =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as(envOutput({ PATH: "/fresh/bin:/usr/bin", LC_CTYPE: "en_US.UTF-8" })),
+        ),
+      run: (service) =>
+        Effect.gen(function* () {
+          yield* service.startRefresh;
+          yield* Deferred.await(started);
+          assert.isFalse(yield* service.isReady);
+          assert.equal(env.PATH, "/usr/bin");
+          yield* Deferred.succeed(release, undefined);
+          const patch = yield* service.refreshedEnvironment;
+          assert.equal(patch.PATH, "/fresh/bin:/usr/bin");
+          assert.isTrue(yield* service.isReady);
+        }),
+    });
+  }),
+);
+
+it.effect("reuses validated cache while refreshing, and invalidates changed startup files", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-shell-cache-test-" });
+    const env = () => ({ SHELL: "/bin/zsh", PATH: "/usr/bin" });
+    yield* runShellEnvironment({
+      env: env(),
+      platform: "darwin",
+      stateDir,
+      handler: () => envOutput({ PATH: "/cached/bin:/usr/bin" }),
+    });
+    const release = yield* Deferred.make<void>();
+    yield* runShellEnvironment({
+      env: env(),
+      platform: "darwin",
+      stateDir,
+      handler: () => "",
+      probe: () =>
+        Deferred.await(release).pipe(Effect.as(envOutput({ PATH: "/updated/bin:/usr/bin" }))),
+      run: (service) =>
+        Effect.gen(function* () {
+          yield* service.startRefresh;
+          assert.isTrue(yield* service.isReady);
+          assert.equal(process.env.PATH, "/cached/bin:/usr/bin");
+          yield* Deferred.succeed(release, undefined);
+          assert.equal((yield* service.refreshedEnvironment).PATH, "/updated/bin:/usr/bin");
+          assert.notInclude(process.env.PATH, "/cached/bin");
+        }),
+    });
+    yield* fs.writeFileString(path.join(stateDir, ".zshrc"), "export PATH=/changed/bin:$PATH");
+    const changed = yield* Deferred.make<void>();
+    yield* runShellEnvironment({
+      env: env(),
+      platform: "darwin",
+      stateDir,
+      handler: () => "",
+      probe: () =>
+        Deferred.await(changed).pipe(Effect.as(envOutput({ PATH: "/changed/bin:/usr/bin" }))),
+      run: (service) =>
+        Effect.gen(function* () {
+          yield* service.startRefresh;
+          assert.isFalse(yield* service.isReady);
+          assert.equal(process.env.PATH, "/usr/bin");
+          yield* Deferred.succeed(changed, undefined);
+          yield* service.refreshedEnvironment;
+        }),
+    });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("keeps the last valid shell cache when discovery fails and rejects corrupt caches", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-shell-failed-refresh-" });
+    const env = () => ({ SHELL: "/bin/zsh", PATH: "/usr/bin", PRIVATE_TOKEN: "must-not-persist" });
+    yield* runShellEnvironment({
+      env: env(),
+      platform: "linux",
+      stateDir,
+      handler: () => envOutput({ PATH: "/cached/bin:/usr/bin" }),
+    });
+    const cachePath = path.join(stateDir, "shell-environment.json");
+    const saved = yield* fs.readFileString(cachePath);
+    assert.notInclude(saved, "must-not-persist");
+    yield* runShellEnvironment({
+      env: env(),
+      platform: "linux",
+      stateDir,
+      handler: () => "",
+      run: (service) =>
+        Effect.gen(function* () {
+          yield* service.startRefresh;
+          assert.isTrue(yield* service.isReady);
+          assert.equal((yield* service.refreshedEnvironment).PATH, "/cached/bin:/usr/bin");
+        }),
+    });
+    assert.equal(yield* fs.readFileString(cachePath), saved);
+    yield* fs.writeFileString(cachePath, "corrupt-json");
+    const release = yield* Deferred.make<void>();
+    yield* runShellEnvironment({
+      env: env(),
+      platform: "linux",
+      stateDir,
+      handler: () => "",
+      probe: () =>
+        Deferred.await(release).pipe(Effect.as(envOutput({ PATH: "/fresh/bin:/usr/bin" }))),
+      run: (service) =>
+        Effect.gen(function* () {
+          yield* service.startRefresh;
+          assert.isFalse(yield* service.isReady);
+          yield* Deferred.succeed(release, undefined);
+          assert.equal((yield* service.refreshedEnvironment).PATH, "/fresh/bin:/usr/bin");
+        }),
+    });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("rejects a cache when a previously existing PATH directory disappears", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-shell-directory-" });
+    const bin = path.join(stateDir, "bin");
+    yield* fs.makeDirectory(bin);
+    const env = () => ({ SHELL: "/bin/zsh", PATH: "/usr/bin" });
+    yield* runShellEnvironment({
+      env: env(),
+      platform: "darwin",
+      stateDir,
+      handler: () => envOutput({ PATH: `${bin}:/usr/bin` }),
+    });
+    yield* fs.remove(bin, { recursive: true });
+    const release = yield* Deferred.make<void>();
+    yield* runShellEnvironment({
+      env: env(),
+      platform: "darwin",
+      stateDir,
+      handler: () => "",
+      probe: () => Deferred.await(release).pipe(Effect.as(envOutput({ PATH: "/usr/bin" }))),
+      run: (service) =>
+        Effect.gen(function* () {
+          yield* service.startRefresh;
+          assert.isFalse(yield* service.isReady);
+          yield* Deferred.succeed(release, undefined);
+          yield* service.refreshedEnvironment;
+        }),
+    });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

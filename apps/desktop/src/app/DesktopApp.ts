@@ -260,7 +260,11 @@ const startup = Effect.gen(function* () {
   const updates = yield* DesktopUpdates.DesktopUpdates;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
 
-  yield* shellEnvironment.installIntoProcess;
+  yield* shellEnvironment.startRefresh;
+  // Linux safeStorage selection must see the session desktop before Electron becomes ready.
+  if (environment.platform === "linux" && !(yield* shellEnvironment.isReady)) {
+    yield* shellEnvironment.installIntoProcess;
+  }
   const hasCommandLinePasswordStore =
     preReadyElectronOptions.linuxPasswordStoreCommandLine !== null;
   const linuxElectronOptions =
