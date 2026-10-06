@@ -50,7 +50,8 @@ describe("ElectronProtocol", () => {
     const path = yield* Path.Path;
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-ui-" });
     yield* fs.makeDirectory(path.join(directory, "assets"));
-    yield* fs.writeFileString(path.join(directory, "index.html"), "<main>Pathway</main>");
+    yield* fs.writeFileString(path.join(directory, "index.html"), "<main>Hosted</main>");
+    yield* fs.writeFileString(path.join(directory, "desktop.html"), "<main>Pathway</main>");
     yield* fs.writeFileString(path.join(directory, "assets/app.js"), "export {}");
     yield* fs.writeFileString(path.join(directory, "assets/app theme.css"), "body {}");
     return directory;
@@ -243,7 +244,7 @@ describe("ElectronProtocol", () => {
       });
       netFetchMock.mockImplementation(async (url: string, init: RequestInit) => {
         if (!url.startsWith("file:")) throw new Error("Backend is still starting");
-        const contents = url.endsWith("index.html")
+        const contents = url.endsWith("desktop.html")
           ? "<main>Pathway</main>"
           : url.endsWith("app.js")
             ? "export {}"
@@ -262,8 +263,8 @@ describe("ElectronProtocol", () => {
             bundledRendererDirectory,
           });
           for (const [pathname, file, body] of [
-            ["/", "index.html", "<main>Pathway</main>"],
-            ["/threads/123?tab=changes", "index.html", "<main>Pathway</main>"],
+            ["/", "desktop.html", "<main>Pathway</main>"],
+            ["/threads/123?tab=changes", "desktop.html", "<main>Pathway</main>"],
             ["/assets/app.js?v=1", "assets/app.js", "export {}"],
             ["/assets/app%20theme.css", "assets/app theme.css", "body {}"],
           ]) {

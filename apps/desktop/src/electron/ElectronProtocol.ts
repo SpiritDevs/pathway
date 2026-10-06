@@ -272,7 +272,7 @@ async function serveBundledRenderer(
   // Client routes use the same SPA entry on navigation and reload. Missing
   // assets stay 404s so a missing script never receives HTML as JavaScript.
   if (pathname === "/" || !path.extname(filePath)) {
-    filePath = path.join(root, "index.html");
+    filePath = path.join(root, "desktop.html");
   }
   const info = await Effect.runPromise(
     fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => undefined)),
