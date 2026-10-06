@@ -52,6 +52,7 @@ import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
 import {
   readPrimaryEnvironmentDescriptor,
   resolveInitialPrimaryEnvironmentDescriptor,
+  writePrimaryEnvironmentDescriptor,
 } from "../environments/primary/context";
 import {
   readPrimaryEnvironmentTarget,
@@ -66,6 +67,9 @@ import {
   readDesktopSecondaryBootstrapsResult,
   type DesktopSecondaryBootstrapsRead,
 } from "./desktopLocal";
+import { resolveInitialServerAuthGateState } from "../environments/primary/auth";
+import { readCachedPrimaryIdentity } from "../environments/primary/cachedIdentity";
+import { awaitConnectionAccountScope } from "./accountScope";
 import { connectionStorageLayer } from "./storage";
 
 let nextObservedRpcRequestId = 0;
@@ -261,14 +265,38 @@ const capabilitiesLayer = Layer.effectContext(
             ),
     });
     const primaryAuth = PrimaryEnvironmentAuth.of({
-      bearerToken: Effect.tryPromise({
-        try: readDesktopPrimaryBearerToken,
+      environmentId: Effect.tryPromise({
+        try: resolveInitialPrimaryEnvironmentDescriptor,
         catch: (cause) =>
           new ConnectionTransientError({
             reason: "remote-unavailable",
-            detail: `Could not load the desktop primary credential: ${String(cause)}`,
+            detail: `Waiting for environment identity: ${String(cause)}`,
           }),
-      }).pipe(Effect.map(Option.fromNullishOr)),
+      }).pipe(Effect.map((descriptor) => descriptor.environmentId)),
+      bearerToken: Effect.gen(function* () {
+        const gate = yield* Effect.tryPromise({
+          try: resolveInitialServerAuthGateState,
+          catch: (cause) =>
+            new ConnectionTransientError({
+              reason: "remote-unavailable",
+              detail: `Waiting for environment authentication: ${String(cause)}`,
+            }),
+        });
+        if (gate.status !== "authenticated") {
+          return yield* new ConnectionBlockedError({
+            reason: "authentication",
+            detail: "Connect this environment to use server actions.",
+          });
+        }
+        return yield* Effect.tryPromise({
+          try: readDesktopPrimaryBearerToken,
+          catch: (cause) =>
+            new ConnectionTransientError({
+              reason: "remote-unavailable",
+              detail: `Could not load the desktop primary credential: ${String(cause)}`,
+            }),
+        }).pipe(Effect.map(Option.fromNullishOr));
+      }),
     });
     const ssh = SshEnvironmentGateway.of({
       provision: Effect.fn("web.connectionPlatform.ssh.provision")(function* (target) {
@@ -341,9 +369,17 @@ const capabilitiesLayer = Layer.effectContext(
 const loadPrimaryConnectionRegistration = Effect.fn(
   "web.connectionPlatform.loadPrimaryConnectionRegistration",
 )(function* (resolved: PrimaryEnvironmentTarget) {
-  const descriptor = yield* fetchRemoteEnvironmentDescriptor({
-    httpBaseUrl: resolved.target.httpBaseUrl,
-  }).pipe(Effect.provide(primaryEnvironmentHttpLayer), Effect.mapError(mapRemoteEnvironmentError));
+  const scope = yield* awaitConnectionAccountScope();
+  const descriptor =
+    readPrimaryEnvironmentDescriptor() ??
+    readCachedPrimaryIdentity(scope, resolved.target.httpBaseUrl) ??
+    (yield* fetchRemoteEnvironmentDescriptor({
+      httpBaseUrl: resolved.target.httpBaseUrl,
+    }).pipe(
+      Effect.provide(primaryEnvironmentHttpLayer),
+      Effect.mapError(mapRemoteEnvironmentError),
+      Effect.tap((descriptor) => Effect.sync(() => writePrimaryEnvironmentDescriptor(descriptor))),
+    ));
   return new PrimaryConnectionRegistration({
     target: new PrimaryConnectionTarget({
       environmentId: descriptor.environmentId,
@@ -544,7 +580,7 @@ const platformConnectionSourceLayer = Layer.effect(
         });
       } else if (primaryTopologyRead.target !== null) {
         const primaryTarget = primaryTopologyRead.target;
-        const signature = `primary|${primaryTarget.target.httpBaseUrl}|${primaryTarget.target.wsBaseUrl}`;
+        const signature = `primary|${primaryTarget.target.httpBaseUrl}|${primaryTarget.target.wsBaseUrl}|${readPrimaryEnvironmentDescriptor()?.environmentId ?? ""}`;
         const cached = previous.get(PRIMARY_LOCAL_ENVIRONMENT_ID);
         if (
           cached !== undefined &&

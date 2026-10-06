@@ -65,6 +65,7 @@ export class PrimaryEnvironmentAuth extends Context.Service<
   PrimaryEnvironmentAuth,
   {
     readonly bearerToken: Effect.Effect<Option.Option<string>, ConnectionAttemptError>;
+    readonly environmentId?: Effect.Effect<EnvironmentId, ConnectionAttemptError>;
   }
 >()("@spiritdevs/client-runtime/platform/capabilities/PrimaryEnvironmentAuth") {}
 

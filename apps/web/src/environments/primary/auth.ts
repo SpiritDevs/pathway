@@ -283,13 +283,15 @@ const BOOTSTRAP_RETRY_TIMEOUT_MS = 15_000;
 // Bundled desktop UI can open before the local HTTP listener exists. Give its
 // cold boot the same one-minute budget as the desktop backend readiness probe.
 const DESKTOP_BOOTSTRAP_RETRY_TIMEOUT_MS = 60_000;
-const BOOTSTRAP_RETRY_STEP_MS = 500;
+const BOOTSTRAP_RETRY_STEP_MS = 50;
+const BOOTSTRAP_RETRY_MAX_STEP_MS = 500;
 
 export async function retryTransientBootstrap<T>(operation: () => Promise<T>): Promise<T> {
   const startedAt = Date.now();
   const timeoutMs = getDesktopBootstrapCredential()
     ? DESKTOP_BOOTSTRAP_RETRY_TIMEOUT_MS
     : BOOTSTRAP_RETRY_TIMEOUT_MS;
+  let retryDelayMs = BOOTSTRAP_RETRY_STEP_MS;
   while (true) {
     try {
       return await operation();
@@ -302,7 +304,8 @@ export async function retryTransientBootstrap<T>(operation: () => Promise<T>): P
         throw error;
       }
 
-      await waitForBootstrapRetry(BOOTSTRAP_RETRY_STEP_MS);
+      await waitForBootstrapRetry(retryDelayMs);
+      retryDelayMs = Math.min(retryDelayMs * 2, BOOTSTRAP_RETRY_MAX_STEP_MS);
     }
   }
 }

@@ -43,8 +43,10 @@ vi.mock("convex/browser", () => ({ ConvexClient: runtime.Client }));
 import { focusReadModelAtom } from "@spiritdevs/client-runtime/state/focuses";
 import { appAtomRegistry, resetAppAtomRegistryForTests } from "../rpc/atomRegistry";
 import { threadAlertNotificationsReadyAtom } from "../threadAlerts/state";
+import { cloudSyncResetMarkerKey } from "./syncReset";
 import {
   FOCUS_FUNCTION_REFERENCES,
+  focusReadModelStorageKey,
   focusMutationsAtom,
   focusNotificationsAtom,
   useFocusReadModelRuntime,
@@ -104,6 +106,7 @@ afterEach(() => {
   for (const cleanup of cleanups) cleanup();
   resetAppAtomRegistryForTests();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("Focus notification subscription readiness", () => {
@@ -207,4 +210,55 @@ describe("Focus definitions across subscription restarts", () => {
     definitions(replacement).receive(model);
     expect(appAtomRegistry.get(focusReadModelAtom)).toEqual(model);
   });
+});
+
+it("paints scoped cached Focus definitions before the subscription answers and replaces them live", () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+  };
+  vi.stubGlobal("window", { localStorage: storage });
+  const cached = { focuses: [], assignments: [], viewPreferences: [] };
+  values.set(
+    focusReadModelStorageKey("account-a", "https://example.convex.cloud"),
+    JSON.stringify(cached),
+  );
+  const { client, render } = mount("account-a");
+  expect(appAtomRegistry.get(focusReadModelAtom)).toEqual(cached);
+  const live = {
+    ...cached,
+    viewPreferences: [
+      { focusId: "all", sortOrder: "updated", collapsiblePinned: false, updatedAt: 2 },
+    ],
+  };
+  client.subscriptions
+    .find((row) => row.reference === FOCUS_FUNCTION_REFERENCES.readModel)!
+    .receive(live);
+  expect(appAtomRegistry.get(focusReadModelAtom)).toEqual(live);
+  expect(
+    JSON.parse(
+      storage.getItem(focusReadModelStorageKey("account-a", "https://example.convex.cloud"))!,
+    ),
+  ).toEqual(live);
+  render("account-b");
+  expect(appAtomRegistry.get(focusReadModelAtom)).toBeNull();
+});
+
+it("keeps the cold Focus gate after sign-out marked this account for a reset", () => {
+  const values = new Map([
+    [
+      focusReadModelStorageKey("account-a", "https://example.convex.cloud"),
+      JSON.stringify({ focuses: [], assignments: [], viewPreferences: [] }),
+    ],
+    [cloudSyncResetMarkerKey("account-a"), "pending"],
+  ]);
+  vi.stubGlobal("window", {
+    localStorage: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    },
+  });
+  mount("account-a");
+  expect(appAtomRegistry.get(focusReadModelAtom)).toBeNull();
 });

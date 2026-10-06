@@ -62,6 +62,15 @@ const makePrimaryBroker = Effect.fn("clientRuntime.connection.broker.makePrimary
     target: PrimaryConnectionTarget,
   ) {
     const bearerToken = yield* auth.bearerToken;
+    if (auth.environmentId !== undefined) {
+      const environmentId = yield* auth.environmentId;
+      if (environmentId !== target.environmentId) {
+        return yield* environmentMismatchError({
+          expected: target.environmentId,
+          actual: environmentId,
+        });
+      }
+    }
     if (Option.isNone(bearerToken)) {
       return {
         environmentId: target.environmentId,

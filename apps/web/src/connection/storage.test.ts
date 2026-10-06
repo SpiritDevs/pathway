@@ -5,7 +5,10 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { afterEach, vi } from "vite-plus/test";
 
-import { makeCatalogBackend, makeCatalogStore } from "./storage";
+import { connectionCacheDatabaseName } from "./accountScope";
+import { IDBFactory } from "fake-indexeddb";
+
+import { adoptLegacyConnectionCache, makeCatalogBackend, makeCatalogStore } from "./storage";
 
 const emptyCatalog = {
   schemaVersion: 1,
@@ -90,4 +93,58 @@ describe("makeCatalogBackend", () => {
       expect(setConnectionCatalog).toHaveBeenCalledWith("{}");
     }),
   );
+});
+
+it("isolates environment snapshots from other accounts and legacy unscoped storage", () => {
+  expect(connectionCacheDatabaseName("account-a")).not.toBe(
+    connectionCacheDatabaseName("account-b"),
+  );
+  expect(connectionCacheDatabaseName("account-a")).not.toBe("pathway:connection-runtime");
+  expect(connectionCacheDatabaseName("a/b")).not.toBe(connectionCacheDatabaseName("a%2Fb"));
+});
+
+const openStores = (factory: IDBFactory, name: string) =>
+  new Promise<IDBDatabase>((resolve, reject) => {
+    const request = factory.open(name, 4);
+    request.addEventListener("upgradeneeded", () => {
+      for (const store of ["catalog", "shell", "thread", "server-config", "vcs-refs"]) {
+        request.result.createObjectStore(store);
+      }
+    });
+    request.addEventListener("success", () => resolve(request.result));
+    request.addEventListener("error", () => reject(request.error));
+  });
+
+const readValue = (database: IDBDatabase, store: string, key: string) =>
+  new Promise<unknown>((resolve) => {
+    const request = database.transaction(store).objectStore(store).get(key);
+    request.addEventListener("success", () => resolve(request.result));
+  });
+
+it("moves the unscoped cache into the first account cache so saved connections survive", async () => {
+  const factory = new IDBFactory();
+  const legacy = await openStores(factory, "pathway:connection-runtime");
+  const seed = legacy.transaction(["catalog", "thread"], "readwrite");
+  seed.objectStore("catalog").put("saved-catalog", "catalog");
+  seed.objectStore("thread").put("cached-thread", "env:thread-1");
+  await new Promise((resolve) => seed.addEventListener("complete", resolve));
+  legacy.close();
+
+  const scoped = await openStores(factory, connectionCacheDatabaseName("account-a"));
+  await adoptLegacyConnectionCache(factory, scoped);
+
+  expect(await readValue(scoped, "catalog", "catalog")).toBe("saved-catalog");
+  expect(await readValue(scoped, "thread", "env:thread-1")).toBe("cached-thread");
+  const remaining = await factory.databases();
+  expect(remaining.map((database) => database.name)).not.toContain("pathway:connection-runtime");
+});
+
+it("leaves nothing behind when there was no unscoped cache", async () => {
+  const factory = new IDBFactory();
+  const scoped = await openStores(factory, connectionCacheDatabaseName("account-a"));
+  await adoptLegacyConnectionCache(factory, scoped);
+  const remaining = await factory.databases();
+  expect(remaining.map((database) => database.name)).toEqual([
+    connectionCacheDatabaseName("account-a"),
+  ]);
 });

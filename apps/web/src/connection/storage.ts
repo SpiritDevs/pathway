@@ -31,7 +31,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
-const DATABASE_NAME = "pathway:connection-runtime";
+import { awaitConnectionAccountScope, connectionCacheDatabaseName } from "./accountScope";
 const DATABASE_VERSION = 4;
 const CATALOG_STORE_NAME = "catalog";
 const SHELL_STORE_NAME = "shell";
@@ -100,7 +100,63 @@ function persistenceError(
   });
 }
 
-const openDatabase = Effect.fn("web.connectionStorage.openDatabase")(function* () {
+const LEGACY_DATABASE_NAME = "pathway:connection-runtime";
+const STORE_NAMES = [
+  CATALOG_STORE_NAME,
+  SHELL_STORE_NAME,
+  THREAD_STORE_NAME,
+  SERVER_CONFIG_STORE_NAME,
+  VCS_REFS_STORE_NAME,
+];
+
+/**
+ * Moves the cache from before account scoping into the first account cache created on this
+ * origin, then deletes it, so saved web connections and cached threads survive the upgrade. A
+ * failed copy leaves the legacy database in place for the next attempt.
+ */
+export function adoptLegacyConnectionCache(factory: IDBFactory, target: IDBDatabase) {
+  return new Promise<void>((resolve) => {
+    const request = factory.open(LEGACY_DATABASE_NAME);
+    request.addEventListener("error", () => resolve());
+    request.addEventListener("success", () => {
+      const legacy = request.result;
+      const keep = () => {
+        legacy.close();
+        resolve();
+      };
+      const finish = () => {
+        legacy.close();
+        const deletion = factory.deleteDatabase(LEGACY_DATABASE_NAME);
+        // Another tab can block the delete; it completes once that tab closes.
+        for (const event of ["success", "error", "blocked"]) {
+          deletion.addEventListener(event, () => resolve());
+        }
+      };
+      const names = STORE_NAMES.filter((name) => legacy.objectStoreNames.contains(name));
+      if (names.length === 0) return finish();
+      const entries: Array<readonly [string, IDBValidKey, unknown]> = [];
+      const read = legacy.transaction(names, "readonly");
+      for (const name of names) {
+        const cursor = read.objectStore(name).openCursor();
+        cursor.addEventListener("success", () => {
+          if (cursor.result === null) return;
+          entries.push([name, cursor.result.key, cursor.result.value]);
+          cursor.result.continue();
+        });
+      }
+      read.addEventListener("error", keep);
+      read.addEventListener("complete", () => {
+        const write = target.transaction(names, "readwrite");
+        for (const [name, key, value] of entries) write.objectStore(name).put(value, key);
+        write.addEventListener("complete", finish);
+        write.addEventListener("error", keep);
+        write.addEventListener("abort", keep);
+      });
+    });
+  });
+}
+
+const openDatabase = Effect.fn("web.connectionStorage.openDatabase")(function* (scope: string) {
   return yield* Effect.callback<IDBDatabase, ConnectionTransientError>((resume) => {
     if (typeof indexedDB === "undefined") {
       resume(
@@ -108,8 +164,10 @@ const openDatabase = Effect.fn("web.connectionStorage.openDatabase")(function* (
       );
       return;
     }
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.addEventListener("upgradeneeded", () => {
+    let created = false;
+    const request = indexedDB.open(connectionCacheDatabaseName(scope), DATABASE_VERSION);
+    request.addEventListener("upgradeneeded", (event) => {
+      created = event.oldVersion === 0;
       if (!request.result.objectStoreNames.contains(CATALOG_STORE_NAME)) {
         request.result.createObjectStore(CATALOG_STORE_NAME);
       }
@@ -130,7 +188,11 @@ const openDatabase = Effect.fn("web.connectionStorage.openDatabase")(function* (
       resume(Effect.fail(catalogError("open", request.error ?? "Unknown IndexedDB error")));
     });
     request.addEventListener("success", () => {
-      resume(Effect.succeed(request.result));
+      const database = request.result;
+      if (!created) return resume(Effect.succeed(database));
+      void adoptLegacyConnectionCache(indexedDB, database).then(() =>
+        resume(Effect.succeed(database)),
+      );
     });
   });
 });
@@ -358,7 +420,8 @@ export const makeCatalogStore = Effect.fn("web.connectionStorage.makeCatalogStor
 
 export const connectionStorageLayer = Layer.effectContext(
   Effect.gen(function* () {
-    const database = yield* Effect.acquireRelease(openDatabase(), (database) =>
+    const accountScope = yield* awaitConnectionAccountScope();
+    const database = yield* Effect.acquireRelease(openDatabase(accountScope), (database) =>
       Effect.sync(() => database.close()),
     );
     const catalog = yield* makeCatalogStore(makeCatalogBackend(database));

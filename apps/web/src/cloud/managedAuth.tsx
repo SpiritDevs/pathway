@@ -8,6 +8,7 @@ import {
 import * as Effect from "effect/Effect";
 import { useEffect, useRef, type ReactNode } from "react";
 
+import { readConnectionAccountScope } from "../connection/accountScope";
 import { environmentCatalog } from "../connection/catalog";
 import { runtime } from "../lib/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -94,6 +95,11 @@ export function ManagedRelayAuthProvider({ children }: { readonly children: Reac
       const tokenProvider = () => getToken(resolveRelayClerkTokenOptions());
       const activateSession = () => {
         if (!cancelled) {
+          const connectionAccount = readConnectionAccountScope();
+          if (connectionAccount !== null && connectionAccount !== userId) {
+            window.location.reload();
+            return;
+          }
           activateManagedRelayAuthentication(userId, tokenProvider);
         }
       };
