@@ -13,6 +13,7 @@ import * as ServerConfig from "../../config.ts";
 import * as ResourceAttribution from "../../resourceTelemetry/ResourceAttribution.ts";
 import { ServerLoggerLive } from "../../serverLogger.ts";
 import * as BrowserTraceCollector from "../BrowserTraceCollector.ts";
+import { threadSubscriptionTraceRecord } from "../ThreadSubscriptionTrace.ts";
 
 const otlpSerializationLayer = OtlpSerialization.layerJson;
 
@@ -64,6 +65,7 @@ export const ObservabilityLive = Layer.unwrap(
           maxFiles: config.traceMaxFiles,
           batchWindowMs: config.traceBatchWindowMs,
           sink,
+          spanToRecord: threadSubscriptionTraceRecord,
           ...(delegate ? { delegate } : {}),
         });
 

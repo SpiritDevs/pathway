@@ -45,11 +45,13 @@ import {
   resolveAvailableEditorsForConfig,
   refreshLocalGitStatusAfterMutation,
   requireThreadResumeTarget,
+  threadProjectionError,
   dispatchActor,
   resolveIssueConnectionActor,
   serverSettingsRpcHandlers,
   wsProjectUpdateInputFromMutation,
 } from "./ws.ts";
+import { ProjectionStoreThreadNotFoundError } from "./orchestration-v2/ProjectionStore.ts";
 
 it.effect(
   "rejects a cached thread resume when the owning environment no longer has the thread",
@@ -60,7 +62,39 @@ it.effect(
 
       assert.strictEqual(failure._tag, "OrchestrationV2GetThreadProjectionError");
       assert.strictEqual(failure.threadId, threadId);
+      assert.strictEqual(failure.reason, "not_found");
     }),
+);
+
+it("types missing projections without misclassifying missing fork sources or read failures", () => {
+  const threadId = ThreadId.make("thread:missing");
+  assert.strictEqual(
+    threadProjectionError(threadId, {
+      cause: new ProjectionStoreThreadNotFoundError({ threadId }),
+    }).reason,
+    "not_found",
+  );
+  assert.isUndefined(
+    threadProjectionError(threadId, {
+      cause: new ProjectionStoreThreadNotFoundError({
+        threadId: ThreadId.make("thread:fork-source"),
+      }),
+    }).reason,
+  );
+  assert.isUndefined(
+    threadProjectionError(threadId, { cause: new Error("database failure") }).reason,
+  );
+});
+
+it.effect("keeps resume lookup failures distinct from thread absence", () =>
+  Effect.gen(function* () {
+    const cause = new Error("database failure");
+    const failure = yield* Effect.flip(
+      requireThreadResumeTarget(ThreadId.make("thread:missing"), Effect.fail(cause)),
+    );
+    assert.isUndefined(failure.reason);
+    assert.strictEqual(failure.cause, cause);
+  }),
 );
 
 it.effect("allows a cached thread resume when the owning environment still has the thread", () =>

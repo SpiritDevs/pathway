@@ -8,4 +8,6 @@ The conversation index on the left includes earlier messages that have not been 
 
 Loading history does not change the agent's context or delete any messages. If a request fails, the messages you already loaded remain available and you can retry after reconnecting.
 
+If a cached conversation is missing from its environment, Pathway briefly retries before showing it as unavailable and clearing the cached copy. It keeps checking less often, so a new conversation that takes longer to become available can still appear automatically. Expired connection credentials trigger a reconnect, and repeated failures slow down the checks.
+
 The environment must support paged history. Connections to older versions continue to load conversations as before.

@@ -77,11 +77,12 @@ export type ThreadSnapshotLoadResult =
       readonly snapshot: OrchestrationV2ThreadDetailSnapshot;
     }
   | { readonly _tag: "NotFound" }
+  | { readonly _tag: "Unauthorized" }
   | { readonly _tag: "Unavailable" };
 
 /**
- * Loads a thread's detail snapshot over HTTP, returning `Option.none()` when it
- * cannot be loaded (so the caller falls back to the socket-embedded snapshot).
+ * Loads a thread's detail snapshot over HTTP, distinguishing missing threads,
+ * expired credentials and unavailable transport for the caller's recovery policy.
  * Decouples the thread state machine from the underlying HTTP + DPoP details and
  * keeps them out of test contexts.
  */
@@ -126,6 +127,12 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
           // environment commits thread.create. Keep 404 distinct for diagnostics so thread state
           // can use its bounded materialization retries before deciding the id is genuinely deleted.
           Effect.catchTags({
+            EnvironmentAuthInvalidError: () =>
+              Effect.succeed<ThreadSnapshotLoadResult>({ _tag: "Unauthorized" }),
+            RemoteEnvironmentAuthUndeclaredStatusError: (error) =>
+              error.status === 401
+                ? Effect.succeed<ThreadSnapshotLoadResult>({ _tag: "Unauthorized" })
+                : Effect.fail(error),
             EnvironmentResourceNotFoundError: () =>
               Effect.logDebug(
                 "Thread snapshot not found over HTTP; waiting for the thread stream.",

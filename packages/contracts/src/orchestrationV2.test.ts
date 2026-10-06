@@ -26,6 +26,7 @@ import {
   OrchestrationV2ContinuationLaunchInput,
   OrchestrationV2DomainEvent,
   OrchestrationV2DomainEventJson,
+  OrchestrationV2GetThreadProjectionError,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderThreadJson,
   OrchestrationV2ShellSnapshot,
@@ -71,6 +72,24 @@ const decodeOrchestrationV2ContinuationLaunchInput = Schema.decodeUnknownSync(
 );
 
 describe("orchestration V2 contracts", () => {
+  it("keeps thread absence reasons compatible with legacy errors and decoders", () => {
+    const legacy = Schema.TaggedStruct("OrchestrationV2GetThreadProjectionError", {
+      threadId: ThreadId,
+      message: Schema.String,
+      cause: Schema.optional(Schema.Defect()),
+    });
+    const error = {
+      _tag: "OrchestrationV2GetThreadProjectionError",
+      threadId: "thread:missing",
+      message: "Missing thread",
+    };
+    const decode = Schema.decodeUnknownSync(OrchestrationV2GetThreadProjectionError);
+    expect(decode(error).reason).toBeUndefined();
+    expect(decode({ ...error, reason: "not_found" }).reason).toBe("not_found");
+    expect(Schema.decodeUnknownSync(legacy)({ ...error, reason: "not_found" })).toEqual(error);
+    expect(() => decode({ ...error, reason: "unknown" })).toThrow();
+  });
+
   it("keeps thread history windows opt-in and accepts stable paging targets", () => {
     const decode = Schema.decodeUnknownSync(OrchestrationV2SubscribeThreadInput);
     expect(decode({ threadId: "thread:history" }).history).toBeUndefined();

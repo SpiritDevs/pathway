@@ -3122,6 +3122,7 @@ export class OrchestrationV2GetThreadProjectionError extends Schema.TaggedErrorC
   {
     threadId: ThreadId,
     message: Schema.String,
+    reason: Schema.optional(Schema.Literal("not_found")),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
