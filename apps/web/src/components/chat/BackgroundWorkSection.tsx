@@ -63,7 +63,7 @@ export function BackgroundWorkSection({
         </button>
       </div>
       <div id={detailsId} hidden={!expanded} className="px-3.5 pb-2.5">
-        <ul className="max-h-40 space-y-2 overflow-y-auto text-xs">
+        <ul className="space-y-2 text-xs">
           {tasks.map((task) => (
             <li key={task.taskId} className="break-words">
               {task.description ?? "Background task"}

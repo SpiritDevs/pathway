@@ -21,7 +21,7 @@ export function PendingQuestionsSection({
       <h3 className="px-3.5 pb-1 pt-3 text-[11px] font-medium text-muted-foreground">
         Pending questions
       </h3>
-      <div className="flex max-h-64 flex-col gap-1 overflow-y-auto px-2 pb-2.5">
+      <div className="flex flex-col gap-1 px-2 pb-2.5">
         {prompts.map((prompt) => {
           const title = prompt.questions.map((question) => question.question).join("\n");
           const busy = respondingRequestIds.includes(prompt.requestId);
