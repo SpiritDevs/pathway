@@ -178,10 +178,11 @@ export function createSidebarPrRevalidation(registry: ContextType<typeof Registr
         [...eligible].filter(([token, { key, source }]) => {
           if (attempted.has(token)) return false;
           const retained = input.retainedStates.get(key);
+          // No answer for the current source yet: check it once so the thread can leave loading.
+          if (retained?.source !== source) return true;
           return (
-            retained?.source === source &&
-            (retained.checkedAt === undefined ||
-              Date.now() - retained.checkedAt >= HISTORY_FRESHNESS_MS)
+            retained.checkedAt === undefined ||
+            Date.now() - retained.checkedAt >= HISTORY_FRESHNESS_MS
           );
         }),
       );

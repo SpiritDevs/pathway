@@ -2776,23 +2776,32 @@ export default function Sidebar() {
     unreadNotificationThreadKeys,
   ]);
 
-  const retainedSettledThreads = useMemo(
-    () =>
-      settledThreads.filter(
+  // Background PR checks cover retained Settled rows and threads still waiting on a first answer.
+  const revalidatedThreads = useMemo(() => {
+    const connected = (thread: EnvironmentThreadShell) =>
+      environments.some(
+        (environment) =>
+          environment.environmentId === thread.environmentId &&
+          environment.connection.phase === "connected",
+      );
+    return [
+      ...settledThreads.filter(
         (thread) =>
           thread.settledOverride == null &&
-          environments.some(
-            (environment) =>
-              environment.environmentId === thread.environmentId &&
-              environment.connection.phase === "connected",
-          ) &&
+          connected(thread) &&
           retainedStates.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
       ),
-    [settledThreads, environments, retainedStates],
-  );
+      ...loadingThreads.filter((thread) => {
+        const cached = changeRequestStateByKey.get(
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        );
+        return connected(thread) && cached?.source !== threadChangeRequestSource(thread);
+      }),
+    ];
+  }, [settledThreads, loadingThreads, environments, retainedStates, changeRequestStateByKey]);
   useSidebarPrRevalidation(
     threadScope,
-    retainedSettledThreads,
+    revalidatedThreads,
     projects,
     retainedStates,
     handleChangeRequestState,

@@ -77,6 +77,20 @@ it("rechecks stale retained branches without mounting rows and stamps conclusive
   ]);
 });
 
+it("checks threads with no answer for their current source once, so they can leave loading", async () => {
+  const unseen = { ...thread, id: ThreadId.make("unseen") };
+  const moved = { ...thread, id: ThreadId.make("moved"), branch: "moved" };
+  const input = {
+    ...inputFor([unseen, moved]),
+    retainedStates: new Map([[keyFor(moved), { source: "old-branch", state: "merged" as const }]]),
+  };
+  const pass = mount();
+  await pass.update(input);
+  expect(input.onResult.mock.calls.map(([key]) => key)).toEqual([keyFor(unseen), keyFor(moved)]);
+  await pass.update(input);
+  expect(input.onResult).toHaveBeenCalledTimes(2);
+});
+
 it("shares one host read across all 106 threads targeting the same worktree, through the entire pass", async () => {
   const input = inputFor(history);
   await mount().update(input);

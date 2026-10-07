@@ -34,8 +34,8 @@ const classify = (
 afterEach(() => vi.useRealTimers());
 
 describe("sidebar lifecycle loading", () => {
-  it("keeps unresolved PR history visible so near-viewport rows can classify it", () => {
-    expect(classify()).toBe("active");
+  it("holds unresolved PR history in loading until the background check answers", () => {
+    expect(classify()).toBe("loading");
     expect(classify(thread, { changeRequests: new Map([[key, merged]]) })).toBe("settled");
     expect(classify(thread, { changeRequests: new Map([[key, { ...merged, state: null }]]) })).toBe(
       "active",
@@ -88,11 +88,11 @@ describe("sidebar lifecycle loading", () => {
 
   it("reclassifies changed PR sources and keeps environments separate", () => {
     const changeRequests = new Map([[key, merged]]);
-    expect(classify({ ...thread, branch: "new-work" }, { changeRequests })).toBe("active");
+    expect(classify({ ...thread, branch: "new-work" }, { changeRequests })).toBe("loading");
     expect(
       classify({ ...thread, environmentId: EnvironmentId.make("other") }, { changeRequests }),
-    ).toBe("active");
-    expect(classify({ ...thread, worktreePath: "/another" }, { changeRequests })).toBe("active");
+    ).toBe("loading");
+    expect(classify({ ...thread, worktreePath: "/another" }, { changeRequests })).toBe("loading");
   });
 
   it("does not auto-settle an old branch before discovering its open PR", () => {
@@ -101,7 +101,7 @@ describe("sidebar lifecycle loading", () => {
       createdAt: "2026-08-01T00:00:00.000Z",
       latestUserMessageAt: "2026-08-01T00:00:00.000Z",
     };
-    expect(classify(old, { autoSettleAfterDays: 1 })).toBe("active");
+    expect(classify(old, { autoSettleAfterDays: 1 })).toBe("loading");
     expect(
       classify(old, {
         autoSettleAfterDays: 1,
@@ -160,7 +160,7 @@ it("keeps uncached remote threads navigable while offline and reclassifies after
   expect(classify(thread, { unavailable: true, changeRequests: new Map([[key, merged]]) })).toBe(
     "settled",
   );
-  expect(classify(thread, { unavailable: false })).toBe("active");
+  expect(classify(thread, { unavailable: false })).toBe("loading");
   expect(
     classify(thread, {
       unavailable: false,

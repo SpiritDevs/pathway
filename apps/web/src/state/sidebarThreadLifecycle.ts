@@ -96,7 +96,8 @@ export function sidebarThreadSection(
     return "loading";
   }
   if (!options.supportsSettlement) return "active";
-  // An unknown PR status must not hide a row: its visible row refreshes the status.
-  if (needsChangeRequest && !known) return "active";
+  // An unknown PR status waits for the sidebar's background check instead of rendering a row:
+  // classifying through visible rows promotes a whole unseen backlog into Active at once.
+  if (needsChangeRequest && !known) return "loading";
   return settled(known ? cached.state : null) ? "settled" : "active";
 }
