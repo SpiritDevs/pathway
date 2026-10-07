@@ -12,4 +12,8 @@ Load spans include the original error code/description, destination URL, `isMain
 
 These events preserve what Electron reports; they do not supply CDP's `blockedReason` or `corsErrorStatus`, and some browser checks may not emit a load event. A timeout or absence of an asset GET alone does not establish Local Network Access, CSP, HTTPS upgrade or any other specific cause. If the trace does not establish the reason, capture Network/Log events from the real renderer and its out-of-process iframe target with the maintainer's approval.
 
+When comparing an isolated reproduction with an installed app, check the runtime as well as the Electron version. macOS ARM Nightly packages the private Pathway runtime pinned in `apps/desktop/pathway-runtime.json`; development, Linux and Windows currently use stock Electron. Matching `process.versions.electron` alone does not establish matching Chromium or permission behavior. Record `process.versions.chrome` and whether the main-process Electron module exposes `pathway`. See [Desktop runtime pin](../internals/desktop-runtime.md).
+
+Compare both a fresh isolated profile and a retained profile when investigating cache or persisted permissions. Successful iframe navigations can use the HTTP cache without reaching the asset server. Capture the frame's actual navigation and response, including cache status, before interpreting zero server GETs as a blocked request. Never start a test against the live Pathway userdata directory.
+
 The diagnostics leave iframe navigation, sandboxing, permissions, response headers and retry behavior unchanged. Subframe failures do not reload the main window. They cover the Electron desktop shell; browser web and native mobile clients do not emit these desktop events.
