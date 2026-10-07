@@ -1,4 +1,5 @@
 import { projectClaudeDynamicToolCall } from "./ClaudeAdapterV2.ts";
+import { CLAUDE_DELEGATION_GUARD_HOOKS } from "./ClaudeDelegationGuard.ts";
 import { USAGE_RECOVERY_MESSAGE_PREFIX } from "../../providerUsage/usageRecoveryPolicy.ts";
 import { BUNDLED_MODEL_MANIFEST } from "../../provider/ModelManifest.ts";
 import type {
@@ -577,6 +578,7 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
       assert.equal(systemPrompt.type, "preset");
       assert.equal(systemPrompt.preset, "claude_code");
       assert.include(systemPrompt.append ?? "", "use `delegate_task`");
+      assert.strictEqual(options.hooks, CLAUDE_DELEGATION_GUARD_HOOKS);
       const logged = loggedClaudeQueryOptions(options);
       assert.equal(logged.hasMcpServers, true);
       assert.notInclude(JSON.stringify(logged), "secret-claude-token");
@@ -698,6 +700,7 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
     });
     assert.isTrue(options.includePartialMessages);
     assert.isTrue(options.forwardSubagentText);
+    assert.isUndefined(options.hooks, "the delegation guard needs the Pathway MCP");
     assert.deepEqual(
       loggedClaudeQueryOptions(options).forwardSubagentText,
       true,

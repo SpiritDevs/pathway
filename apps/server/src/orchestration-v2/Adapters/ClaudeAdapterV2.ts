@@ -102,6 +102,7 @@ import {
   type PushedProviderUsageSnapshot,
 } from "../../providerUsage/ProviderUsageService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { CLAUDE_DELEGATION_GUARD_HOOKS } from "./ClaudeDelegationGuard.ts";
 import { IdAllocatorV2, type IdAllocatorV2Shape } from "../IdAllocator.ts";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
@@ -862,6 +863,7 @@ export function makeClaudeQueryOptions(input: {
             preset: "claude_code" as const,
             append: PATHWAY_ORCHESTRATION_INSTRUCTIONS,
           },
+          hooks: CLAUDE_DELEGATION_GUARD_HOOKS,
         }),
     ...(Object.keys(extraArgs).length === 0 ? {} : { extraArgs }),
   };
