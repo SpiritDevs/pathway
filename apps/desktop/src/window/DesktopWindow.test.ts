@@ -1084,6 +1084,119 @@ describe("DesktopWindow", () => {
     }),
   );
 
+  it.effect(
+    "traces subframe failures and renderer warnings without reloading the main window",
+    () =>
+      Effect.gen(function* () {
+        const diagnosticsLogged = Promise.withResolvers<void>();
+        const records: Array<{
+          readonly message: unknown;
+          readonly span: string | undefined;
+          readonly annotations: Readonly<Record<string, unknown>>;
+        }> = [];
+        const logger = Logger.make(({ fiber, message }) => {
+          const currentSpan = fiber.currentSpan;
+          const span = currentSpan?._tag === "Span" ? currentSpan.name : undefined;
+          if (!span?.startsWith("desktop.window.renderer")) return;
+          records.push({
+            message,
+            span,
+            annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+          });
+          if (records.length === 5) diagnosticsLogged.resolve();
+        });
+        const fakeWindow = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const layer = makeTestLayer({ window: fakeWindow.window, createCount, mainWindow }).pipe(
+          Layer.provideMerge(Logger.layer([logger], { mergeWithExisting: false })),
+        );
+        const assetUrl = "http://127.0.0.1:3800/api/assets/payload.signature/probe.html#theme";
+        const redactedUrl = "http://127.0.0.1:3800/api/assets/[redacted]/probe.html";
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+          const consoleMessage = fakeWindow.webContentsListeners.get("console-message");
+          const provisionalFailure = fakeWindow.webContentsListeners.get(
+            "did-fail-provisional-load",
+          );
+          const loadFailure = fakeWindow.webContentsListeners.get("did-fail-load");
+          if (!consoleMessage || !provisionalFailure || !loadFailure) {
+            return yield* Effect.die("renderer diagnostic listeners were not registered");
+          }
+          const consoleDetails = {
+            level: "warning",
+            message: `Refused to frame '${assetUrl}' because of local network access.`,
+            sourceId: assetUrl,
+            lineNumber: 12,
+            frame: { detached: false, processId: 42, routingId: 7 },
+          };
+          consoleMessage({ ...consoleDetails, level: "info" });
+          consoleMessage({ ...consoleDetails, level: "debug" });
+          consoleMessage(consoleDetails);
+          consoleMessage({
+            ...consoleDetails,
+            level: "error",
+            frame: {
+              detached: true,
+              get processId() {
+                throw new Error("frame is detached");
+              },
+              get routingId() {
+                throw new Error("frame is detached");
+              },
+            },
+          });
+          provisionalFailure({}, -3, "ERR_ABORTED", assetUrl, false, 42, 7);
+          provisionalFailure({}, -138, "ERR_NETWORK_ACCESS_DENIED", assetUrl, false, 42, 7);
+          loadFailure({}, -102, "ERR_CONNECTION_REFUSED", assetUrl, false, 42, 7);
+          yield* Effect.promise(() => diagnosticsLogged.promise);
+          yield* TestClock.adjust(100);
+          assert.equal(fakeWindow.loadURL.mock.calls.length, 1);
+          assert.equal(fakeWindow.reload.mock.calls.length, 0);
+        }).pipe(Effect.provide(layer));
+
+        assert.equal(records.length, 5);
+        assert.equal(records[0]?.span, "desktop.window.rendererConsoleMessage");
+        assert.deepEqual(records[0]?.annotations, {
+          component: "desktop-window",
+          windowRole: "main",
+          level: "warning",
+          message: `Refused to frame '${redactedUrl}' because of local network access.`,
+          sourceId: redactedUrl,
+          lineNumber: 12,
+          frameProcessId: 42,
+          frameRoutingId: 7,
+        });
+        assert.equal(records[1]?.annotations.level, "error");
+        assert.isUndefined(records[1]?.annotations.frameProcessId);
+        assert.isUndefined(records[1]?.annotations.frameRoutingId);
+        for (const [index, errorCode, errorDescription] of [
+          [2, -3, "ERR_ABORTED"],
+          [3, -138, "ERR_NETWORK_ACCESS_DENIED"],
+          [4, -102, "ERR_CONNECTION_REFUSED"],
+        ] as const) {
+          assert.equal(
+            records[index]?.span,
+            index === 4
+              ? "desktop.window.rendererLoadFailed"
+              : "desktop.window.rendererProvisionalLoadFailed",
+          );
+          assert.deepEqual(records[index]?.annotations, {
+            component: "desktop-window",
+            windowRole: "main",
+            errorCode,
+            errorDescription,
+            url: redactedUrl,
+            isMainFrame: false,
+            frameProcessId: 42,
+            frameRoutingId: 7,
+          });
+        }
+      }),
+  );
+
   it.effect("recovers when the development renderer is temporarily unreachable", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
