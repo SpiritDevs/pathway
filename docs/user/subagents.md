@@ -4,6 +4,8 @@ Agents can delegate work to subagents. Open a subagent's card in the conversatio
 
 On web and desktop, each subagent in Lineage shows the icon of the provider it runs on, how long it has been working, and its status. Hover over a subagent to see its model and what it is doing right now. Finished subagents move into a collapsed Previous agents group below the ones still running.
 
+On web and desktop, a subagent's conversation replaces the message box with a one-line bar. The bar shows the model and effort the subagent runs on, how long it has been working or took to finish, and an Open parent button that goes back to the conversation that started it. Subagents started through Pathway can still take messages: choose Message to open the full message box, where you can also change the model. Subagents a provider runs itself say Runs on its own and can't take messages. If a subagent is waiting on an approval or a question, the message box opens so you can answer.
+
 A subagent started through Pathway gets the same access as the agent that started it. When that agent has full access, so do all of its subagents, so they don't stop for approvals you have already waived.
 
 When a subagent stops to ask something, such as whether it may change a file outside the scope it was given, the question goes to the agent that started it. That agent answers when the decision is part of the work it handed off, and the subagent carries on. When the question needs your judgement, the agent asks you and passes your answer back. You can still answer a subagent's question yourself in its conversation.

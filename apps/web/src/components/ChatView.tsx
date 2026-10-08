@@ -388,6 +388,8 @@ import {
 } from "../state/entities";
 import { useEnvironmentShellBootstrapped } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { SubagentComposerBar } from "./chat/SubagentComposerBar";
+import { deriveSubagentBarStatus, describeSubagentModel } from "./chat/SubagentComposerBar.logic";
 import { applyComposerGoalIntent } from "./chat/composerAddMenu.logic";
 import { IssueDetailSheet } from "./issues/IssueDetailSheet";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
@@ -4031,8 +4033,50 @@ function ChatViewContent(props: ChatViewProps) {
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
   // Default true while loading to avoid toolbar flicker.
   const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
+  // A subagent thread rests on a one-line bar instead of the composer. An
+  // app-owned subagent still takes messages, so its bar expands the composer
+  // for this visit. Requests waiting on the user always get the composer.
+  const [expandedSubagentComposerKey, setExpandedSubagentComposerKey] = useState<string | null>(
+    null,
+  );
+  const showSubagentComposerBar =
+    isServerThread &&
+    activeThread?.lineage.relationshipToParent === "subagent" &&
+    expandedSubagentComposerKey !== routeThreadKey &&
+    activePendingApproval === null &&
+    pendingUserInputs.length === 0;
+  const subagentBarModelSelection =
+    activeSubagentModelSelection ?? activeThread?.modelSelection ?? null;
+  const subagentBarProviderEntry =
+    showSubagentComposerBar && subagentBarModelSelection
+      ? (continuationProviderEntries.find(
+          (entry) => entry.instanceId === subagentBarModelSelection.instanceId,
+        ) ?? null)
+      : null;
+  const subagentBarModel = useMemo(
+    () =>
+      showSubagentComposerBar && subagentBarModelSelection
+        ? describeSubagentModel(
+            subagentBarModelSelection,
+            subagentBarProviderEntry?.driverKind ?? null,
+            subagentBarProviderEntry?.models ?? [],
+          )
+        : null,
+    [showSubagentComposerBar, subagentBarModelSelection, subagentBarProviderEntry],
+  );
+  const subagentBarStatus = useMemo(
+    () =>
+      showSubagentComposerBar
+        ? deriveSubagentBarStatus({
+            run: activeActivityRun,
+            nodes: serverProjection?.nodes ?? [],
+          })
+        : null,
+    [activeActivityRun, serverProjection?.nodes, showSubagentComposerBar],
+  );
   const showComposerContextStrip =
     !isPanelPresentation &&
+    !showSubagentComposerBar &&
     shouldShowComposerContextStrip({
       isDraftHeroState,
       isGitRepo,
@@ -4041,6 +4085,7 @@ function ChatViewContent(props: ChatViewProps) {
     });
   const renderComposerContextStrip =
     !isPanelPresentation &&
+    !showSubagentComposerBar &&
     isGitRepo &&
     activeProject !== null &&
     (routeKind === "draft" || settings.persistComposerContextStrip);
@@ -10540,153 +10585,186 @@ function ChatViewContent(props: ChatViewProps) {
                     <div className="chat-composer-glass-shell chat-composer-glass-shell-with-context chat-composer-content-sized-shell relative mx-auto w-full max-w-3xl">
                       <div className="relative z-10 w-full">
                         <div className="relative z-10">
-                          <ChatComposer
-                            environmentControl={
-                              activeThread.projectId === null ? (
-                                <BranchToolbarEnvironmentSelector
-                                  environmentId={activeThread.environmentId}
-                                  availableEnvironments={selectableEnvironments}
-                                  envLocked={envLocked || draftPlacement.locked}
-                                  onEnvironmentChange={onEnvironmentChange}
-                                />
-                              ) : undefined
-                            }
-                            composerRef={composerRef}
-                            stashSlot={stashSlot}
-                            composerDraftTarget={composerDraftTarget}
-                            environmentId={environmentId}
-                            maxFileAttachmentBytes={maxFileAttachmentBytes}
-                            uploadFilesToEnvironment={uploadFilesToEnvironment}
-                            questionAttachments={{
-                              enabled:
-                                serverConfig?.environment.capabilities.questionAttachments ===
-                                  true &&
-                                activePendingProgress?.activeQuestion?.isOther !== false &&
-                                activePendingProgress?.activeQuestion?.isSecret !== true,
-                              drafts: questionAttachmentDrafts.filter(
-                                (draft) =>
-                                  draft.questionId === activePendingProgress?.activeQuestion?.id,
-                              ),
-                              add: (files) => {
-                                const questionId = activePendingProgress?.activeQuestion?.id;
-                                if (!questionId || activePendingIsResponding) return;
-                                void addQuestionAttachments({
-                                  environmentId,
-                                  key: questionAttachmentsKey,
-                                  questionId,
-                                  files,
-                                  maxFileBytes: maxFileAttachmentBytes,
-                                }).then((error) => {
-                                  if (error && activeThreadId)
-                                    setThreadError(activeThreadId, error);
-                                });
-                              },
-                              remove: (id) =>
-                                removeQuestionAttachment(environmentId, questionAttachmentsKey, id),
-                              retry: (id) => {
-                                void retryQuestionAttachment(
-                                  environmentId,
-                                  questionAttachmentsKey,
-                                  id,
-                                );
-                              },
-                            }}
-                            routeKind={routeKind}
-                            routeThreadRef={routeThreadRef}
-                            draftId={draftId}
-                            activeThreadId={activeThreadId}
-                            activeThreadEnvironmentId={activeThread?.environmentId}
-                            activeThread={activeThread}
-                            isServerThread={isServerThread}
-                            isLocalDraftThread={isLocalDraftThread}
-                            projectSelectionRequired={
-                              isLocalDraftThread &&
-                              activeThread.projectId !== null &&
-                              activeProject === null
-                            }
-                            phase={phase}
-                            isConnecting={false}
-                            isSendBusy={isSendBusy || draftPlacement.blocked}
-                            isPreparingWorktree={isPreparingWorktree}
-                            environmentUnavailable={null}
-                            activePendingApproval={activePendingApproval}
-                            pendingApprovals={pendingApprovals}
-                            pendingUserInputs={pendingUserInputs}
-                            onDismissAsyncQuestion={
-                              activePendingUserInput?.isBlocking === false
-                                ? closeAsyncQuestion
-                                : undefined
-                            }
-                            activePendingProgress={activePendingProgress}
-                            activePendingResolvedAnswers={activePendingResolvedAnswers}
-                            activePendingIsResponding={activePendingIsResponding}
-                            activePendingDraftAnswers={activePendingDraftAnswers}
-                            activePendingQuestionIndex={activePendingQuestionIndex}
-                            respondingRequestIds={respondingRequestIds}
-                            showPlanFollowUpPrompt={showPlanFollowUpPrompt}
-                            activeProposedPlan={activeProposedPlan}
-                            runtimeMode={runtimeMode}
-                            interactionMode={interactionMode}
-                            composerControlsLocked={composerControlsLocked}
-                            contextCompactionInProgress={isContextCompacting}
-                            lockedProvider={modelPickerLockedProvider}
-                            providerCatalogLoaded={
-                              serverConfig !== null || queueDestination !== undefined
-                            }
-                            providerStatuses={providerStatuses as ServerProvider[]}
-                            activeProjectDefaultModelSelection={
-                              activeProject?.defaultModelSelection
-                            }
-                            activeSubagentModelSelection={activeSubagentModelSelection}
-                            activeThreadModelSelection={activeThread?.modelSelection}
-                            activeContextWindow={activeContextWindow}
-                            compactDisabled={compactDisabled}
-                            compactDisabledReason={compactDisabledReason}
-                            resolvedTheme={resolvedTheme}
-                            settings={settings}
-                            keybindings={keybindings}
-                            shortcutScope={isPanelPresentation ? "side-chat" : "page"}
-                            terminalOpen={Boolean(terminalUiState.terminalOpen)}
-                            gitCwd={gitCwd}
-                            promptRef={promptRef}
-                            composerImagesRef={composerImagesRef}
-                            composerTerminalContextsRef={composerTerminalContextsRef}
-                            composerElementContextsRef={composerElementContextsRef}
-                            shouldAutoScrollRef={isAtEndRef}
-                            scheduleStickToBottom={scrollToEnd}
-                            onSend={onSend}
-                            onInterrupt={onInterrupt}
-                            onImplementPlanInNewThread={onImplementPlanInNewThread}
-                            sideChatAvailable={
-                              isServerThread &&
-                              !activeThread.temporary &&
-                              latestSideChatSourceRun !== null &&
-                              !activeEnvironmentUnavailable
-                            }
-                            onStartInNewChat={onStartInNewChat}
-                            onStartInSideChat={onStartInSideChat}
-                            onRespondToApproval={onRespondToApproval}
-                            onSelectActivePendingUserInputOption={
-                              onSelectActivePendingUserInputOption
-                            }
-                            onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
-                            onPreviousActivePendingUserInputQuestion={
-                              onPreviousActivePendingUserInputQuestion
-                            }
-                            onChangeActivePendingUserInputCustomAnswer={
-                              onChangeActivePendingUserInputCustomAnswer
-                            }
-                            onProviderModelSelect={onProviderModelSelect}
-                            getModelDisabledReason={getModelDisabledReason}
-                            toggleInteractionMode={toggleInteractionMode}
-                            handleRuntimeModeChange={handleRuntimeModeChange}
-                            handleInteractionModeChange={handleInteractionModeChange}
-                            focusComposer={focusComposer}
-                            scheduleComposerFocus={scheduleComposerFocus}
-                            setThreadError={setThreadError}
-                            onExpandImage={onExpandTimelineImage}
-                            onOpenIssueContext={openIssueContext}
-                          />
+                          {showSubagentComposerBar ? (
+                            <SubagentComposerBar
+                              provider={subagentBarProviderEntry}
+                              showInstanceBadge={
+                                subagentBarProviderEntry !== null &&
+                                shouldShowProviderInstanceBadge(
+                                  subagentBarProviderEntry,
+                                  continuationProviderEntries,
+                                )
+                              }
+                              modelLabel={subagentBarModel?.modelLabel ?? "Subagent"}
+                              effortLabel={subagentBarModel?.effortLabel ?? null}
+                              status={subagentBarStatus}
+                              onMessage={
+                                composerControlsLocked
+                                  ? null
+                                  : () => {
+                                      setExpandedSubagentComposerKey(routeThreadKey);
+                                      scheduleComposerFocus();
+                                    }
+                              }
+                              onOpenParent={
+                                parentThreadLink
+                                  ? () => onOpenRelatedThread(parentThreadLink.threadId)
+                                  : null
+                              }
+                            />
+                          ) : (
+                            <ChatComposer
+                              environmentControl={
+                                activeThread.projectId === null ? (
+                                  <BranchToolbarEnvironmentSelector
+                                    environmentId={activeThread.environmentId}
+                                    availableEnvironments={selectableEnvironments}
+                                    envLocked={envLocked || draftPlacement.locked}
+                                    onEnvironmentChange={onEnvironmentChange}
+                                  />
+                                ) : undefined
+                              }
+                              composerRef={composerRef}
+                              stashSlot={stashSlot}
+                              composerDraftTarget={composerDraftTarget}
+                              environmentId={environmentId}
+                              maxFileAttachmentBytes={maxFileAttachmentBytes}
+                              uploadFilesToEnvironment={uploadFilesToEnvironment}
+                              questionAttachments={{
+                                enabled:
+                                  serverConfig?.environment.capabilities.questionAttachments ===
+                                    true &&
+                                  activePendingProgress?.activeQuestion?.isOther !== false &&
+                                  activePendingProgress?.activeQuestion?.isSecret !== true,
+                                drafts: questionAttachmentDrafts.filter(
+                                  (draft) =>
+                                    draft.questionId === activePendingProgress?.activeQuestion?.id,
+                                ),
+                                add: (files) => {
+                                  const questionId = activePendingProgress?.activeQuestion?.id;
+                                  if (!questionId || activePendingIsResponding) return;
+                                  void addQuestionAttachments({
+                                    environmentId,
+                                    key: questionAttachmentsKey,
+                                    questionId,
+                                    files,
+                                    maxFileBytes: maxFileAttachmentBytes,
+                                  }).then((error) => {
+                                    if (error && activeThreadId)
+                                      setThreadError(activeThreadId, error);
+                                  });
+                                },
+                                remove: (id) =>
+                                  removeQuestionAttachment(
+                                    environmentId,
+                                    questionAttachmentsKey,
+                                    id,
+                                  ),
+                                retry: (id) => {
+                                  void retryQuestionAttachment(
+                                    environmentId,
+                                    questionAttachmentsKey,
+                                    id,
+                                  );
+                                },
+                              }}
+                              routeKind={routeKind}
+                              routeThreadRef={routeThreadRef}
+                              draftId={draftId}
+                              activeThreadId={activeThreadId}
+                              activeThreadEnvironmentId={activeThread?.environmentId}
+                              activeThread={activeThread}
+                              isServerThread={isServerThread}
+                              isLocalDraftThread={isLocalDraftThread}
+                              projectSelectionRequired={
+                                isLocalDraftThread &&
+                                activeThread.projectId !== null &&
+                                activeProject === null
+                              }
+                              phase={phase}
+                              isConnecting={false}
+                              isSendBusy={isSendBusy || draftPlacement.blocked}
+                              isPreparingWorktree={isPreparingWorktree}
+                              environmentUnavailable={null}
+                              activePendingApproval={activePendingApproval}
+                              pendingApprovals={pendingApprovals}
+                              pendingUserInputs={pendingUserInputs}
+                              onDismissAsyncQuestion={
+                                activePendingUserInput?.isBlocking === false
+                                  ? closeAsyncQuestion
+                                  : undefined
+                              }
+                              activePendingProgress={activePendingProgress}
+                              activePendingResolvedAnswers={activePendingResolvedAnswers}
+                              activePendingIsResponding={activePendingIsResponding}
+                              activePendingDraftAnswers={activePendingDraftAnswers}
+                              activePendingQuestionIndex={activePendingQuestionIndex}
+                              respondingRequestIds={respondingRequestIds}
+                              showPlanFollowUpPrompt={showPlanFollowUpPrompt}
+                              activeProposedPlan={activeProposedPlan}
+                              runtimeMode={runtimeMode}
+                              interactionMode={interactionMode}
+                              composerControlsLocked={composerControlsLocked}
+                              contextCompactionInProgress={isContextCompacting}
+                              lockedProvider={modelPickerLockedProvider}
+                              providerCatalogLoaded={
+                                serverConfig !== null || queueDestination !== undefined
+                              }
+                              providerStatuses={providerStatuses as ServerProvider[]}
+                              activeProjectDefaultModelSelection={
+                                activeProject?.defaultModelSelection
+                              }
+                              activeSubagentModelSelection={activeSubagentModelSelection}
+                              activeThreadModelSelection={activeThread?.modelSelection}
+                              activeContextWindow={activeContextWindow}
+                              compactDisabled={compactDisabled}
+                              compactDisabledReason={compactDisabledReason}
+                              resolvedTheme={resolvedTheme}
+                              settings={settings}
+                              keybindings={keybindings}
+                              shortcutScope={isPanelPresentation ? "side-chat" : "page"}
+                              terminalOpen={Boolean(terminalUiState.terminalOpen)}
+                              gitCwd={gitCwd}
+                              promptRef={promptRef}
+                              composerImagesRef={composerImagesRef}
+                              composerTerminalContextsRef={composerTerminalContextsRef}
+                              composerElementContextsRef={composerElementContextsRef}
+                              shouldAutoScrollRef={isAtEndRef}
+                              scheduleStickToBottom={scrollToEnd}
+                              onSend={onSend}
+                              onInterrupt={onInterrupt}
+                              onImplementPlanInNewThread={onImplementPlanInNewThread}
+                              sideChatAvailable={
+                                isServerThread &&
+                                !activeThread.temporary &&
+                                latestSideChatSourceRun !== null &&
+                                !activeEnvironmentUnavailable
+                              }
+                              onStartInNewChat={onStartInNewChat}
+                              onStartInSideChat={onStartInSideChat}
+                              onRespondToApproval={onRespondToApproval}
+                              onSelectActivePendingUserInputOption={
+                                onSelectActivePendingUserInputOption
+                              }
+                              onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
+                              onPreviousActivePendingUserInputQuestion={
+                                onPreviousActivePendingUserInputQuestion
+                              }
+                              onChangeActivePendingUserInputCustomAnswer={
+                                onChangeActivePendingUserInputCustomAnswer
+                              }
+                              onProviderModelSelect={onProviderModelSelect}
+                              getModelDisabledReason={getModelDisabledReason}
+                              toggleInteractionMode={toggleInteractionMode}
+                              handleRuntimeModeChange={handleRuntimeModeChange}
+                              handleInteractionModeChange={handleInteractionModeChange}
+                              focusComposer={focusComposer}
+                              scheduleComposerFocus={scheduleComposerFocus}
+                              setThreadError={setThreadError}
+                              onExpandImage={onExpandTimelineImage}
+                              onOpenIssueContext={openIssueContext}
+                            />
+                          )}
                         </div>
                       </div>
                     </div>
