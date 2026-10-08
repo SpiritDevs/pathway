@@ -104,7 +104,11 @@ credentials. Set `APNS_ENABLED=false` to run the relay without mobile push notif
 Activities; web, desktop, Convex sync, and remote agent control remain available. Pathway Connect
 endpoints and connector tokens come from Cyndrbase Connect's `EndpointService`: set
 `CYNDRBASE_CONNECT_API_URL`, `CYNDRBASE_CONNECT_EDGE_URL` (the `wss://…/connect/v1` URL environments
-dial), and `CYNDRBASE_CONNECT_ADMIN_KEY`. Without them managed tunnels fail as not configured. Production adopts
+dial), and `CYNDRBASE_CONNECT_ADMIN_KEY`; remote URLs must use https/wss. Without them managed
+tunnels fail as not configured. The edge must forward its public scheme (`--public-scheme https`
+behind TLS), or DPoP-signed requests to environments fail URL checks. Environments whose stored
+connector config predates Connect fetch a new one at startup from
+`POST /v1/environments/:environmentId/managed-endpoint` with their environment credential. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 

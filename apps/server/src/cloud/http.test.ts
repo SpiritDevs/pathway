@@ -7,7 +7,12 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as PlatformError from "effect/PlatformError";
 import * as Tracer from "effect/Tracer";
-import { HttpClient, HttpServerRequest } from "effect/unstable/http";
+import {
+  HttpClient,
+  HttpClientResponse,
+  HttpServerRequest,
+  type HttpClientRequest,
+} from "effect/unstable/http";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
@@ -45,9 +50,12 @@ import * as CliTokenManager from "./CliTokenManager.ts";
 import type { RelayLinkProofRequest } from "@spiritdevs/contracts/relay";
 import {
   CLOUD_MANAGED_TUNNEL_LOCAL_PORT,
+  CLOUD_ENDPOINT_RUNTIME_CONFIG,
   CLOUD_LINKED_USER_ID,
   CLOUD_MINT_PUBLIC_KEY,
+  decodeRuntimeConfig,
   RELAY_ISSUER_SECRET,
+  RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
   RELAY_URL_SECRET,
 } from "./config.ts";
 import {
@@ -61,6 +69,7 @@ import {
   managedTunnelLocalPortFromRequest,
   readCloudLinkState,
   reconcileDesiredCloudLink,
+  reprovisionStoredManagedEndpointWith,
 } from "./http.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "./traceRelayRequest.ts";
@@ -604,6 +613,95 @@ describe("link proof provider kinds", () => {
   });
 });
 
+describe("stored managed endpoint reprovisioning", () => {
+  const connectConfig = {
+    environmentId: EnvironmentId.make("environment-1"),
+    providerKind: "pathway_relay" as const,
+    connectorToken: "connect-token",
+    edgeUrl: "wss://edge.example.test/connect/v1",
+    endpointId: "endpoint-1",
+  };
+  const setup = (storedConfig: unknown) => {
+    const values = new Map<string, Uint8Array>(
+      [
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        [CLOUD_ENDPOINT_RUNTIME_CONFIG, JSON.stringify(storedConfig)],
+        [CLOUD_MANAGED_TUNNEL_LOCAL_PORT, "3800"],
+        [RELAY_URL_SECRET, "https://relay.example.test"],
+        [RELAY_ENVIRONMENT_CREDENTIAL_SECRET, "environment-credential"],
+        [CLOUD_LINKED_USER_ID, "user-1"],
+      ].map(([name, value]) => [name!, new TextEncoder().encode(value)] as const),
+    );
+    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+    const applied: Array<ManagedEndpointRuntime.ManagedEndpointConnection | null> = [];
+    const secrets: ServerSecretStore.ServerSecretStore["Service"] = {
+      get: (name) => Effect.sync(() => Option.fromNullishOr(values.get(name))),
+      set: (name, value) => Effect.sync(() => void values.set(name, value)),
+      create: unusedSecretStoreOperation,
+      getOrCreateRandom: unusedSecretStoreOperation,
+      remove: unusedSecretStoreOperation,
+    };
+    const environment: ServerEnvironment.ServerEnvironment["Service"] = {
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-1")),
+      getDescriptor: Effect.die("unused"),
+    };
+    const dependencies = {
+      secrets,
+      environment,
+      httpClient: HttpClient.make((request) =>
+        Effect.sync(() => {
+          requests.push(request);
+          return HttpClientResponse.fromWeb(
+            request,
+            Response.json({ endpointRuntime: connectConfig }),
+          );
+        }),
+      ),
+      endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime.of({
+        applyConfig: (connection) =>
+          Effect.sync(() => {
+            applied.push(connection);
+            return { status: "running" as const, endpointId: "endpoint-1", pid: 123 };
+          }),
+      }),
+    } as CloudHttpDependencies;
+    return { dependencies, values, requests, applied };
+  };
+
+  it.effect("replaces a cloudflared config using this environment's relay credential", () =>
+    Effect.gen(function* () {
+      const { dependencies, values, requests, applied } = setup({
+        environmentId: "environment-1",
+        providerKind: "cloudflare_tunnel",
+        connectorToken: "cloudflared-token",
+        tunnelId: "tunnel-1",
+      });
+
+      expect(yield* reprovisionStoredManagedEndpointWith(dependencies, 3_900)).toBe(true);
+
+      expect(requests.map((request) => request.url)).toEqual([
+        "https://relay.example.test/v1/environments/environment-1/managed-endpoint",
+      ]);
+      expect(requests[0]?.headers.authorization).toBe("Bearer environment-credential");
+      // The stored port is the listener the user authorized when linking.
+      expect(applied).toEqual([{ config: connectConfig, originPort: 3_800 }]);
+      expect(
+        decodeRuntimeConfig(new TextDecoder().decode(values.get(CLOUD_ENDPOINT_RUNTIME_CONFIG))),
+      ).toEqual(Option.some(connectConfig));
+    }),
+  );
+
+  it.effect("leaves a current Connect config alone", () =>
+    Effect.gen(function* () {
+      const { dependencies, requests, applied } = setup(connectConfig);
+
+      expect(yield* reprovisionStoredManagedEndpointWith(dependencies, 3_900)).toBe(false);
+      expect(requests).toEqual([]);
+      expect(applied).toEqual([]);
+    }),
+  );
+});
+
 describe("cloud relay config replacement", () => {
   it.effect("adopts the newly proven account without requiring the stale local link", () =>
     Effect.gen(function* () {
@@ -678,17 +776,21 @@ describe("cloud relay config replacement", () => {
       }).publicKey;
       const runtimeConfig = {
         environmentId: EnvironmentId.make("environment-1"),
+        providerKind: "pathway_relay" as const,
+        connectorToken: "connector-token",
         edgeUrl: "wss://edge.example.test/connect/v1",
         endpointId: "endpoint-1",
-        connectorToken: "connector-token",
-        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3_800 },
       };
+      const applied: Array<ManagedEndpointRuntime.ManagedEndpointConnection | null> = [];
       const dependencies = {
         secrets,
         currentLocalHttpPort: 3_800,
         endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime.of({
-          applyConfig: () =>
-            Effect.succeed({ status: "running" as const, endpointId: "endpoint-1", pid: 123 }),
+          applyConfig: (connection) =>
+            Effect.sync(() => {
+              applied.push(connection);
+              return { status: "running" as const, endpointId: "endpoint-1", pid: 123 };
+            }),
         }),
       } as CloudHttpDependencies;
 
@@ -705,6 +807,8 @@ describe("cloud relay config replacement", () => {
         3_800,
       );
 
+      // The connector exposes only the authorized listener, never a payload-chosen origin.
+      expect(applied).toEqual([{ config: runtimeConfig, originPort: 3_800 }]);
       expect(new TextDecoder().decode(values.get(CLOUD_MANAGED_TUNNEL_LOCAL_PORT))).toBe("3800");
       expect(yield* readCloudLinkState(dependencies)).toMatchObject({
         linked: true,

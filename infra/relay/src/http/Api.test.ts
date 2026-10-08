@@ -28,6 +28,7 @@ import {
   RELAY_ENVIRONMENT_DPOP_ACCESS_ASSERTION_TYP,
   RelayEnvironmentCredentialTokenType,
   RelayEnvironmentConnectScope,
+  RelayEnvironmentPrincipal,
   type RelayConvexServiceTokenRequest,
   type RelayEnvironmentDpopAccessTokenRequest,
 } from "@spiritdevs/contracts/relay";
@@ -44,6 +45,7 @@ import {
   relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
   relayNotFoundRoute,
+  reprovisionManagedEndpoint,
   revokeEnvironmentLinkRecord,
   traceRelayHttpRequestWith,
   unlinkEnvironmentRecord,
@@ -360,6 +362,7 @@ function relayUnlinkTestLayer(input?: {
   readonly getForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["getForUser"];
   readonly prepareDeprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["prepareDeprovision"];
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
+  readonly provision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["provision"];
 }) {
   return Layer.mergeAll(
     Layer.succeed(
@@ -388,7 +391,7 @@ function relayUnlinkTestLayer(input?: {
     Layer.succeed(
       ManagedEndpointProvider.ManagedEndpointProvider,
       ManagedEndpointProvider.ManagedEndpointProvider.of({
-        provision: () => Effect.die("unused provision"),
+        provision: input?.provision ?? (() => Effect.die("unused provision")),
         prepareDeprovision: input?.prepareDeprovision ?? (() => Effect.succeed(null)),
         deprovision: input?.deprovision ?? (() => Effect.void),
       }),
@@ -407,6 +410,58 @@ const linkedEnvironmentRecord = {
   environmentPublicKey: "public-key",
   linkedAt: "2026-07-28T00:00:00.000Z",
 } as const;
+
+describe("relay managed endpoint reprovisioning", () => {
+  const runtime = {
+    environmentId: EnvironmentId.make("environment-1"),
+    providerKind: "pathway_relay",
+    connectorToken: "connector-token",
+    edgeUrl: "wss://edge.example.test/connect/v1",
+    endpointId: "endpoint-1",
+  } as const;
+  const reprovision = (principal: { environmentId: string; environmentPublicKey: string }) => {
+    const provisioned: Array<unknown> = [];
+    const effect = reprovisionManagedEndpoint({
+      environmentId: "environment-1",
+      cloudUserId: "user-1",
+    }).pipe(
+      Effect.provideService(RelayEnvironmentPrincipal, principal),
+      Effect.provide(
+        relayUnlinkTestLayer({
+          getForUser: () => Effect.succeed(linkedEnvironmentRecord),
+          provision: (input) =>
+            Effect.sync(() => {
+              provisioned.push(input);
+              return { endpoint: linkedEnvironmentRecord.endpoint, runtime };
+            }),
+        }),
+      ),
+    );
+    return { effect, provisioned };
+  };
+
+  it.effect("issues a fresh connector config for the calling environment's own link", () => {
+    const { effect, provisioned } = reprovision({
+      environmentId: "environment-1",
+      environmentPublicKey: "public-key",
+    });
+    return Effect.gen(function* () {
+      expect(yield* effect).toEqual(runtime);
+      expect(provisioned).toEqual([{ userId: "user-1", environmentId: "environment-1" }]);
+    });
+  });
+
+  it.effect("refuses a credential that does not belong to that link", () => {
+    const { effect, provisioned } = reprovision({
+      environmentId: "environment-1",
+      environmentPublicKey: "another-link-key",
+    });
+    return Effect.gen(function* () {
+      expect((yield* Effect.flip(effect))._tag).toBe("Unauthorized");
+      expect(provisioned).toEqual([]);
+    });
+  });
+});
 
 describe("relay environment unlink", () => {
   it.effect("revokes the link and its credentials with one atomic Convex mutation", () => {

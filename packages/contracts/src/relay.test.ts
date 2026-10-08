@@ -8,6 +8,8 @@ import {
   RelayApi,
   RelayDeviceRegistrationRequest,
   RelayEnvironmentDpopAccessTokenRequest,
+  RelayManagedEndpointProviderKind,
+  RelayManagedEndpointRuntimeConfig,
 } from "./relay.ts";
 
 describe("relay Convex connect grants", () => {
@@ -96,5 +98,44 @@ describe("native notification device platforms", () => {
     expect(() => decode({ ...device, pushToStartToken: "unsupported" })).toThrow(
       "Live Activities are not supported on visionOS",
     );
+  });
+});
+
+// The runtime config as servers before Cyndrbase Connect decode it.
+const decodePreConnect = Schema.decodeUnknownSync(
+  Schema.Struct({
+    environmentId: Schema.String,
+    providerKind: RelayManagedEndpointProviderKind,
+    connectorToken: Schema.String,
+    tunnelId: Schema.optional(Schema.String),
+    tunnelName: Schema.optional(Schema.String),
+  }),
+);
+const decodeRuntimeConfig = Schema.decodeUnknownSync(RelayManagedEndpointRuntimeConfig);
+
+describe("managed endpoint runtime config across versions", () => {
+  const connect = {
+    environmentId: "environment-1",
+    providerKind: "pathway_relay",
+    connectorToken: "connector-token",
+    edgeUrl: "wss://edge.example.test/connect/v1",
+    endpointId: "endpoint-1",
+  } as const;
+  const cloudflared = {
+    environmentId: "environment-1",
+    providerKind: "cloudflare_tunnel",
+    connectorToken: "cloudflared-token",
+    tunnelId: "tunnel-1",
+    tunnelName: "tunnel-name",
+  } as const;
+
+  it("lets older servers decode a Connect config they will not run", () => {
+    expect(decodePreConnect(connect).providerKind).toBe("pathway_relay");
+  });
+
+  it("decodes a stored cloudflared config without Connect fields", () => {
+    const decoded = decodeRuntimeConfig(cloudflared);
+    expect(decoded.edgeUrl).toBeUndefined();
+    expect(decoded.endpointId).toBeUndefined();
   });
 });

@@ -178,14 +178,16 @@ export const RelayManagedEndpointOrigin = Schema.Struct({
 export type RelayManagedEndpointOrigin = typeof RelayManagedEndpointOrigin.Type;
 
 // What an environment needs to run its Cyndrbase Connect connector: the edge's
-// `/connect/v1` URL, the endpoint it serves, a token scoped to that endpoint, and the
-// loopback origin the relay validated at link time.
+// `/connect/v1` URL, the endpoint it serves, and a token scoped to that endpoint. Relays
+// send providerKind "pathway_relay", so servers that predate Connect decode the config and
+// report it unsupported rather than starting cloudflared. A config without edgeUrl or
+// endpointId was issued for cloudflared and must be reprovisioned.
 export const RelayManagedEndpointRuntimeConfig = Schema.Struct({
   environmentId: EnvironmentId,
-  edgeUrl: TrimmedNonEmptyString,
-  endpointId: TrimmedNonEmptyString,
+  providerKind: RelayManagedEndpointProviderKind,
   connectorToken: TrimmedNonEmptyString,
-  origin: RelayManagedEndpointOrigin,
+  edgeUrl: Schema.optional(TrimmedNonEmptyString),
+  endpointId: Schema.optional(TrimmedNonEmptyString),
 });
 export type RelayManagedEndpointRuntimeConfig = typeof RelayManagedEndpointRuntimeConfig.Type;
 
@@ -1318,7 +1320,31 @@ export const RelayDpopClientGroup = HttpApiGroup.make("dpopClient")
   .annotate(OpenApi.Description, "DPoP-authenticated client access to linked environments.")
   .middleware(RelayDpopClientAuth);
 
+export const RelayManagedEndpointReprovisionRequest = Schema.Struct({
+  cloudUserId: TrimmedNonEmptyString,
+});
+export const RelayManagedEndpointReprovisionResponse = Schema.Struct({
+  endpointRuntime: RelayManagedEndpointRuntimeConfig,
+});
+
 export const RelayServerGroup = HttpApiGroup.make("server")
+  .add(
+    HttpApiEndpoint.post(
+      "reprovisionManagedEndpoint",
+      "/v1/environments/:environmentId/managed-endpoint",
+      {
+        params: Schema.Struct({ environmentId: EnvironmentId }),
+        payload: RelayManagedEndpointReprovisionRequest,
+        success: RelayManagedEndpointReprovisionResponse,
+        error: RelayAuthAndInternalErrors,
+      },
+    )
+      .annotate(OpenApi.Summary, "Reprovision a managed endpoint")
+      .annotate(
+        OpenApi.Description,
+        "Issues a fresh connector configuration for the calling environment's managed link, so an environment whose stored configuration predates Cyndrbase Connect can restore its tunnel without a client relinking it.",
+      ),
+  )
   .add(
     HttpApiEndpoint.post(
       "publishAgentActivity",
@@ -1334,7 +1360,7 @@ export const RelayServerGroup = HttpApiGroup.make("server")
       },
     ).annotate(OpenApi.Summary, "Publish agent activity"),
   )
-  .annotate(OpenApi.Description, "Environment-authenticated activity publication.")
+  .annotate(OpenApi.Description, "Environment-authenticated activity publication and endpoints.")
   .middleware(RelayEnvironmentAuth);
 
 export const RelayApi = HttpApi.make("RelayApi")

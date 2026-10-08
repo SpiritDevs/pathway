@@ -52,7 +52,7 @@ interface ConnectCall {
 }
 
 /** An in-memory EndpointService with the edge's replay, plan and not-found behavior. */
-function makeConnectEdge() {
+function makeConnectEdge(options?: { readonly failApplyRevoke?: () => boolean }) {
   const calls: Array<ConnectCall> = [];
   const authorizations = new Set<string>();
   const endpoints = new Map<string, string>();
@@ -116,6 +116,13 @@ function makeConnectEdge() {
       );
       calls.push({ method, body });
       authorizations.add(request.headers["authorization"] ?? "");
+      // A transient failure leaves no receipt, so the retry runs again.
+      if (method === "ApplyRevokeConnectorToken" && options?.failApplyRevoke?.()) {
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json({ code: "unavailable" }, { status: 503 }),
+        );
+      }
       const receiptKey = `${method}:${body.idempotencyKey ?? ""}`;
       const [status, json] =
         (body.idempotencyKey && receipts.get(receiptKey)) || handle(method, body);
@@ -211,7 +218,8 @@ function expectedManagedHostname(environmentId: string, userId = "user_ABC"): st
 }
 
 const key = { userId: "user_ABC", environmentId: "env_ABC" } as const;
-const request = { ...key, origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 } } as const;
+const request = key;
+const tokenIdOf = (connectorToken: string) => connectorToken.replace("secret-", "");
 
 describe("ManagedEndpointProvider", () => {
   it.effect("provisions a public Connect endpoint and an endpoint-scoped connector token", () => {
@@ -231,10 +239,10 @@ describe("ManagedEndpointProvider", () => {
         },
         runtime: {
           environmentId: "env_ABC",
+          providerKind: "pathway_relay",
+          connectorToken: "secret-token-2",
           edgeUrl: "wss://edge.example.test/connect/v1",
           endpointId: "endpoint-1",
-          connectorToken: "secret-token-2",
-          origin: request.origin,
         },
       });
       expect(edge.calls.map((call) => call.method)).toEqual([
@@ -313,18 +321,52 @@ describe("ManagedEndpointProvider", () => {
     }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
   });
 
-  it.effect("rejects non-loopback origins before calling Connect", () => {
+  it.effect("a failed token record keeps the old token live and tracked", () => {
     const edge = makeConnectEdge();
+    let failures = 0;
+    const allocations = makeAllocations({ failRecordDns: () => failures-- > 0 });
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-      const error = yield* Effect.flip(
-        provider.provision({ ...key, origin: { localHttpHost: "192.0.2.1", localHttpPort: 3773 } }),
+      const first = yield* provider.provision(request);
+      failures = 1;
+      const error = yield* Effect.flip(provider.provision(request));
+      expect(error).toMatchObject({ stage: "record-connector-token" });
+      const oldTokenId = tokenIdOf(first.runtime.connectorToken);
+      expect(allocations.allocations.get("user_ABC:env_ABC")?.dnsRecordId).toBe(oldTokenId);
+      expect(edge.tokens.has(oldTokenId)).toBe(true);
+
+      // The retry reuses the token the failed attempt issued, then revokes the old one.
+      const retried = yield* provider.provision(request);
+      const newTokenId = tokenIdOf(retried.runtime.connectorToken);
+      expect(edge.calls.filter((call) => call.method === "CreateConnectorToken")).toHaveLength(3);
+      expect([...edge.tokens.keys()]).toEqual([newTokenId]);
+      expect(allocations.allocations.get("user_ABC:env_ABC")?.dnsRecordId).toBe(newTokenId);
+    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
+  });
+
+  it.effect("a failed revocation still returns the new token and retries later", () => {
+    let failures = 0;
+    const edge = makeConnectEdge({ failApplyRevoke: () => failures-- > 0 });
+    const allocations = makeAllocations();
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      const first = yield* provider.provision(request);
+      failures = 1;
+      const second = yield* provider.provision(request);
+      const oldTokenId = tokenIdOf(first.runtime.connectorToken);
+      const newTokenId = tokenIdOf(second.runtime.connectorToken);
+      expect(edge.tokens.has(oldTokenId)).toBe(true);
+      expect(allocations.allocations.get("user_ABC:env_ABC")?.dnsRecordId).toBe(
+        `${newTokenId} ${oldTokenId}`,
       );
 
-      expect(error._tag).toBe("ManagedEndpointOriginNotAllowed");
-      expect(edge.calls).toEqual([]);
-    }).pipe(Effect.provide(providerLayer(edge)));
+      const third = yield* provider.provision(request);
+      const currentTokenId = tokenIdOf(third.runtime.connectorToken);
+      expect([...edge.tokens.keys()]).toEqual([currentTokenId]);
+      expect(allocations.allocations.get("user_ABC:env_ABC")?.dnsRecordId).toBe(currentTokenId);
+    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
   });
 
   it.effect("fails closed when Cyndrbase Connect is not configured", () =>
@@ -393,9 +435,8 @@ describe("ManagedEndpointProvider", () => {
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-      const origin = request.origin;
-      yield* provider.provision({ userId: "user_ABC", environmentId: "env_shared", origin });
-      yield* provider.provision({ userId: "user_DEF", environmentId: "env_shared", origin });
+      yield* provider.provision({ userId: "user_ABC", environmentId: "env_shared" });
+      yield* provider.provision({ userId: "user_DEF", environmentId: "env_shared" });
 
       expect([...edge.endpoints.values()]).toEqual([
         expectedManagedHostname("env_shared", "user_ABC"),

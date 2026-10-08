@@ -10,7 +10,6 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import { EnvironmentId } from "@spiritdevs/contracts";
 import type {
   RelayManagedEndpoint,
-  RelayManagedEndpointOrigin,
   RelayManagedEndpointRuntimeConfig,
 } from "@spiritdevs/contracts/relay";
 
@@ -49,7 +48,6 @@ const ManagedEndpointProvisioningStage = Schema.Literals([
   "ensure-endpoint",
   "record-endpoint",
   "create-connector-token",
-  "revoke-previous-token",
   "record-connector-token",
   "mark-allocation-ready",
 ]);
@@ -95,24 +93,9 @@ export class ManagedEndpointDeprovisioningFailed extends Schema.TaggedErrorClass
   }
 }
 
-export class ManagedEndpointOriginNotAllowed extends Schema.TaggedErrorClass<ManagedEndpointOriginNotAllowed>()(
-  "ManagedEndpointOriginNotAllowed",
-  {
-    userId: Schema.String,
-    environmentId: Schema.String,
-    host: Schema.String,
-    port: Schema.Number,
-  },
-) {
-  override get message(): string {
-    return `Managed endpoint origin '${this.host}:${this.port}' is not allowed for user '${this.userId}', environment '${this.environmentId}'`;
-  }
-}
-
 export type ManagedEndpointProviderError =
   | ManagedEndpointProvisioningNotConfigured
   | ManagedEndpointProvisioningFailed
-  | ManagedEndpointOriginNotAllowed
   | ManagedTunnelLimits.ManagedTunnelLimitExceeded;
 
 export interface ManagedEndpointProvisioningResult {
@@ -128,7 +111,6 @@ export class ManagedEndpointProvider extends Context.Service<
     readonly provision: (input: {
       readonly userId: string;
       readonly environmentId: string;
-      readonly origin: RelayManagedEndpointOrigin;
     }) => Effect.Effect<ManagedEndpointProvisioningResult, ManagedEndpointProviderError>;
     /**
      * Captures the allocation generation owned by an unlink before its link
@@ -192,23 +174,10 @@ const requireSettings = Effect.fnUntraced(function* (
   return { baseDomain, namespace, connect };
 });
 
-function normalizeHostname(hostname: string): string {
-  return hostname
-    .trim()
-    .toLowerCase()
-    .replace(/\.$/u, "")
-    .replace(/^\[(.*)\]$/u, "$1");
-}
-
-function isLoopbackOrigin(origin: RelayManagedEndpointOrigin): boolean {
-  const hostname = normalizeHostname(origin.localHttpHost);
-  return (
-    (hostname === "127.0.0.1" || hostname === "::1" || hostname === "localhost") &&
-    Number.isInteger(origin.localHttpPort) &&
-    origin.localHttpPort > 0 &&
-    origin.localHttpPort <= 65_535
-  );
-}
+// The allocation's dnsRecordId column (named before Connect) holds the current connector
+// token ID followed by replaced token IDs still awaiting revocation, space-separated.
+const recordedTokenIds = (dnsRecordId: string | null) =>
+  dnsRecordId?.split(" ").filter((id) => id.length > 0) ?? [];
 
 const isNotFound = (error: CyndrbaseConnectRpcError) => error.code === "not_found";
 const isConnectRpcError = Schema.is(CyndrbaseConnectRpcError);
@@ -319,13 +288,13 @@ export const make = Effect.gen(function* () {
       }
       const key = { userId: input.userId, environmentId: input.environmentId };
       const endpointId = allocation.tunnelId;
-      const connectorTokenId = allocation.dnsRecordId;
+      const connectorTokenIds = recordedTokenIds(allocation.dnsRecordId);
       const failed = (stage: typeof ManagedEndpointDeprovisioningStage.Type) => (cause: unknown) =>
         new ManagedEndpointDeprovisioningFailed({
           ...key,
           stage,
           ...(endpointId === null ? {} : { endpointId }),
-          ...(connectorTokenId === null ? {} : { connectorTokenId }),
+          ...(allocation.dnsRecordId === null ? {} : { connectorTokenId: allocation.dnsRecordId }),
           cause,
         });
       const claimedAt = yield* allocations
@@ -336,10 +305,10 @@ export const make = Effect.gen(function* () {
       }
       // Without Connect settings this relay cannot have issued anything to clean up.
       const connect = config.cyndrbaseConnect;
-      if (connect && connectorTokenId !== null) {
-        yield* revokeConnectorToken(connect, connectorTokenId).pipe(
-          Effect.mapError(failed("revoke-connector-token")),
-        );
+      if (connect) {
+        yield* Effect.forEach(connectorTokenIds, (id) => revokeConnectorToken(connect, id), {
+          discard: true,
+        }).pipe(Effect.mapError(failed("revoke-connector-token")));
       }
       if (connect && endpointId !== null) {
         yield* removeEndpoint(connect, endpointId).pipe(Effect.mapError(failed("remove-endpoint")));
@@ -352,17 +321,7 @@ export const make = Effect.gen(function* () {
       yield* Effect.annotateCurrentSpan({
         "relay.user_id": input.userId,
         "relay.environment_id": input.environmentId,
-        "relay.managed_endpoint.origin_host": input.origin.localHttpHost,
-        "relay.managed_endpoint.origin_port": input.origin.localHttpPort,
       });
-      if (!isLoopbackOrigin(input.origin)) {
-        return yield* new ManagedEndpointOriginNotAllowed({
-          userId: input.userId,
-          environmentId: input.environmentId,
-          host: input.origin.localHttpHost,
-          port: input.origin.localHttpPort,
-        });
-      }
       const settings = yield* requireSettings(config, input);
       const key = { userId: input.userId, environmentId: input.environmentId };
       const environmentHash = yield* crypto
@@ -452,40 +411,57 @@ export const make = Effect.gen(function* () {
           .pipe(Effect.mapError(failed("record-endpoint", { endpointId })));
       }
 
-      // Every provision rotates the connector token. The key names the token it replaces,
-      // so a retry reuses the same new token, and the old one is revoked before the new
-      // one is recorded: no failure leaves a live token the allocation does not track.
-      const previousTokenId = allocation.dnsRecordId;
+      // Every provision rotates the connector token: issue, record, then revoke what it
+      // replaced. The key names the replaced token, so a retry after a failed record reuses
+      // the same new token while the old one stays tracked. A failed revocation also stays
+      // recorded, for the next provision or unlink to retry.
+      const replacedTokenIds = recordedTokenIds(allocation.dnsRecordId);
       const token = yield* rpc(
         settings.connect,
         "CreateConnectorToken",
         {
           endpointIds: [endpointId],
-          idempotencyKey: `token:${endpointId}:${previousTokenId ?? "none"}`,
+          idempotencyKey: `token:${endpointId}:${replacedTokenIds[0] ?? "none"}`,
         },
         ConnectToken,
       ).pipe(Effect.mapError(failed("create-connector-token", { endpointId })));
       const connectorTokenId = token.connectorToken.id;
-      if (previousTokenId !== null) {
-        yield* revokeConnectorToken(settings.connect, previousTokenId).pipe(
-          Effect.mapError(failed("revoke-previous-token", { endpointId, connectorTokenId })),
-        );
-      }
+      const replaced = replacedTokenIds.filter((id) => id !== connectorTokenId);
       yield* allocations
-        .recordDns({ ...key, dnsRecordId: connectorTokenId })
+        .recordDns({ ...key, dnsRecordId: [connectorTokenId, ...replaced].join(" ") })
         .pipe(Effect.mapError(failed("record-connector-token", { endpointId, connectorTokenId })));
       yield* allocations
         .markReady(key)
         .pipe(Effect.mapError(failed("mark-allocation-ready", { endpointId, connectorTokenId })));
+      const unrevoked = yield* Effect.forEach(replaced, (id) =>
+        revokeConnectorToken(settings.connect, id).pipe(
+          Effect.as(null),
+          Effect.catch((error) =>
+            Effect.logWarning("Replaced connector token is still live; will retry revocation", {
+              connectorTokenId: id,
+              code: error.code,
+            }).pipe(Effect.as(id)),
+          ),
+        ),
+      ).pipe(Effect.map((ids) => ids.filter((id) => id !== null)));
+      if (unrevoked.length < replaced.length) {
+        yield* allocations
+          .recordDns({ ...key, dnsRecordId: [connectorTokenId, ...unrevoked].join(" ") })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Could not forget revoked connector tokens; will retry", { error }),
+            ),
+          );
+      }
 
       return {
         endpoint: managedEndpointForHostname(hostname),
         runtime: {
           environmentId: EnvironmentId.make(input.environmentId),
+          providerKind: "pathway_relay",
+          connectorToken: token.token,
           edgeUrl: settings.connect.edgeUrl,
           endpointId,
-          connectorToken: token.token,
-          origin: input.origin,
         },
       } satisfies ManagedEndpointProvisioningResult;
     }),

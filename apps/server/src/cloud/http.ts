@@ -28,6 +28,7 @@ import {
   RelayEnvironmentConnectSendScope,
   RelayEnvironmentLinkChallengeResponse,
   RelayEnvironmentLinkResponse,
+  RelayManagedEndpointReprovisionResponse,
   RelayEnvironmentMintResponseProofPayload,
   type RelayEnvironmentMintResponse as RelayEnvironmentMintResponseShape,
   RelayEnvironmentLinkProof,
@@ -72,6 +73,7 @@ import {
   CLOUD_LINKED_USER_ID,
   CLOUD_MINT_PUBLIC_KEY,
   decodeManagedTunnelLocalPort,
+  decodeRuntimeConfig,
   encodeEndpointRuntimeConfigJson,
   encodeManagedTunnelLocalPort,
   PUBLISH_AGENT_ACTIVITY_SECRET,
@@ -543,8 +545,15 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
 ) {
   yield* validateRelayConfigPayload(payload);
   yield* validateCloudMintPublicKey(payload.cloudMintPublicKey);
+  if (payload.endpointRuntime && managedTunnelLocalPort === undefined) {
+    return yield* new EnvironmentHttpBadRequestError({
+      message: "A managed endpoint needs an authorized local listener.",
+    });
+  }
   const endpointRuntimeStatus = yield* dependencies.endpointRuntime.applyConfig(
-    payload.endpointRuntime,
+    payload.endpointRuntime && managedTunnelLocalPort !== undefined
+      ? { config: payload.endpointRuntime, originPort: managedTunnelLocalPort }
+      : null,
   );
   const ok =
     endpointRuntimeStatus.status === "disabled" || endpointRuntimeStatus.status === "running";
@@ -575,8 +584,6 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
     if (managedTunnelLocalPort !== undefined) {
       const encodedPort = yield* encodeManagedTunnelLocalPort(managedTunnelLocalPort);
       yield* dependencies.secrets.set(CLOUD_MANAGED_TUNNEL_LOCAL_PORT, stringToBytes(encodedPort));
-    } else {
-      yield* dependencies.secrets.remove(CLOUD_MANAGED_TUNNEL_LOCAL_PORT);
     }
   } else {
     yield* dependencies.secrets.remove(CLOUD_ENDPOINT_RUNTIME_CONFIG);
@@ -729,6 +736,70 @@ export const reconcileDesiredCloudLink = Effect.fn("environment.cloud.reconcileD
     return yield* reconcileDesiredCloudLinkWith(yield* cloudHttpDependencies, localOrigin);
   },
 );
+
+/**
+ * Restores the tunnel of a link whose stored connector config predates Cyndrbase Connect,
+ * using this environment's own relay credential. CLI links relink on startup instead.
+ */
+export const reprovisionStoredManagedEndpointWith = Effect.fn(
+  "environment.cloud.reprovisionStoredManagedEndpoint",
+)(function* (dependencies: CloudHttpDependencies, listenerPort: number) {
+  const read = (name: string) =>
+    dependencies.secrets.get(name).pipe(Effect.map(Option.map(bytesToString)));
+  const config = Option.flatMap(yield* read(CLOUD_ENDPOINT_RUNTIME_CONFIG), decodeRuntimeConfig);
+  const storedPort = Option.flatMap(
+    yield* read(CLOUD_MANAGED_TUNNEL_LOCAL_PORT),
+    decodeManagedTunnelLocalPort,
+  );
+  if (
+    Option.isNone(config) ||
+    (ManagedEndpointRuntime.connectorTarget(config.value) !== null && Option.isSome(storedPort))
+  ) {
+    return false;
+  }
+  const [relayUrl, credential, cloudUserId] = yield* Effect.all([
+    read(RELAY_URL_SECRET),
+    read(RELAY_ENVIRONMENT_CREDENTIAL_SECRET),
+    read(CLOUD_LINKED_USER_ID),
+  ]);
+  if (Option.isNone(relayUrl) || Option.isNone(credential) || Option.isNone(cloudUserId)) {
+    return false;
+  }
+  const environmentId = yield* dependencies.environment.getEnvironmentId;
+  const { endpointRuntime } = yield* relayClientRequest(dependencies, {
+    url: `${relayUrl.value}/v1/environments/${encodeURIComponent(environmentId)}/managed-endpoint`,
+    token: credential.value,
+    payload: { cloudUserId: cloudUserId.value },
+    schema: RelayManagedEndpointReprovisionResponse,
+  });
+  const originPort = Option.getOrElse(storedPort, () => listenerPort);
+  const endpointRuntimeStatus = yield* dependencies.endpointRuntime.applyConfig({
+    config: endpointRuntime,
+    originPort,
+  });
+  if (endpointRuntimeStatus.status !== "running") {
+    return yield* new EnvironmentCloudEndpointUnavailableError({
+      message: "Managed endpoint runtime could not be started.",
+      endpointRuntimeStatus,
+    });
+  }
+  yield* dependencies.secrets.set(
+    CLOUD_ENDPOINT_RUNTIME_CONFIG,
+    stringToBytes(yield* encodeEndpointRuntimeConfigJson(endpointRuntime)),
+  );
+  yield* dependencies.secrets.set(
+    CLOUD_MANAGED_TUNNEL_LOCAL_PORT,
+    stringToBytes(yield* encodeManagedTunnelLocalPort(originPort)),
+  );
+  return true;
+});
+
+export const reprovisionStoredManagedEndpoint = (listenerPort: number) =>
+  cloudHttpDependencies.pipe(
+    Effect.flatMap((dependencies) =>
+      reprovisionStoredManagedEndpointWith(dependencies, listenerPort),
+    ),
+  );
 
 export const readCloudLinkState = Effect.fn("environment.cloud.readLinkState")(function* (
   dependencies: CloudHttpDependencies,

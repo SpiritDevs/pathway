@@ -42,19 +42,41 @@ export interface CyndrbaseConnectConfiguration {
   readonly adminKey: Redacted.Redacted<string>;
 }
 
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+// The admin key and connector tokens cross these URLs, so remote ones must use TLS.
+const secureUrl = (secure: string, plain: string) =>
+  Schema.String.check(
+    Schema.makeFilter((value) => {
+      let url: URL;
+      try {
+        url = new URL(value.trim());
+      } catch {
+        return `must be a ${secure} URL`;
+      }
+      return (
+        url.protocol === `${secure}:` ||
+        (url.protocol === `${plain}:` && LOOPBACK_HOSTS.has(url.hostname)) ||
+        `must be a ${secure} URL; ${plain} is only allowed on loopback`
+      );
+    }),
+  );
+
 /**
  * Optional so stages without a Connect edge still deploy; provisioning then fails as not
  * configured.
  */
 export const loadCyndrbaseConnect = Effect.gen(function* () {
-  const apiUrl = Option.filter(
+  const configured = Option.filter(
     yield* Config.option(Config.string("CYNDRBASE_CONNECT_API_URL")),
     (value) => value.trim().length > 0,
   );
-  if (Option.isNone(apiUrl)) return undefined;
+  if (Option.isNone(configured)) return undefined;
+  const apiUrl = yield* Config.schema(secureUrl("https", "http"), "CYNDRBASE_CONNECT_API_URL");
+  const edgeUrl = yield* Config.schema(secureUrl("wss", "ws"), "CYNDRBASE_CONNECT_EDGE_URL");
   return {
-    apiUrl: apiUrl.value.trim().replace(/\/+$/u, ""),
-    edgeUrl: yield* Config.nonEmptyString("CYNDRBASE_CONNECT_EDGE_URL"),
+    apiUrl: apiUrl.trim().replace(/\/+$/u, ""),
+    edgeUrl: edgeUrl.trim(),
     adminKey: yield* Config.redacted("CYNDRBASE_CONNECT_ADMIN_KEY"),
   } satisfies CyndrbaseConnectConfiguration;
 });
