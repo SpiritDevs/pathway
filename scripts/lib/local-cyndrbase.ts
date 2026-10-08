@@ -293,21 +293,23 @@ export const startLocalCyndrbase = Effect.fn("startLocalCyndrbase")(function* (i
     return yield* failure("cyndrd did not report its origins.");
   }
 
-  const cyndr = (args: ReadonlyArray<string>) =>
+  const cyndr = (args: ReadonlyArray<string>, input?: string) =>
     ChildProcess.make(process.execPath, [path.join(cli, "dist/cyndr.js"), ...args], {
       cwd: backend,
       env: { CYNDRBASE_URL: url, CYNDRBASE_DEPLOYMENT: DEPLOYMENT, CYNDRBASE_DEPLOY_KEY: key },
       extendEnv: true,
+      ...(input === undefined ? {} : { stdin: Stream.make(new TextEncoder().encode(input)) }),
     });
   // Convex sets CONVEX_SITE_URL itself; Cyndrbase leaves it to the deployment's environment.
   for (const [name, value] of Object.entries({
     ...input.deployment.values,
     CONVEX_SITE_URL: siteUrl,
   })) {
-    yield* run(cyndr(["env", "set", name, value]), `cyndr env set ${name}`);
+    yield* run(cyndr(["env", "set", name], value), `cyndr env set ${name}`);
   }
+  // Values go over stdin, so secrets never appear in process listings.
   for (const [name, value] of Object.entries(input.deployment.secrets)) {
-    yield* run(cyndr(["env", "set", name, value, "--secret"]), `cyndr env set ${name}`);
+    yield* run(cyndr(["env", "set", name, "--secret"], value), `cyndr env set ${name}`);
   }
   // Deploys, then keeps redeploying on backend changes for the life of the dev runner.
   yield* start(cyndr(["dev"]), "cyndr", (line) => line === "Watching for changes.");
