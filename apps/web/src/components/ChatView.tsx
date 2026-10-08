@@ -1679,8 +1679,9 @@ function ChatViewContent(props: ChatViewProps) {
     [serverThread, serverVisibleTurnItems],
   );
   const committedServerMessageIds = useMemo(
-    () => deriveCommittedServerUserMessageIds(presentedServerVisibleTurnItems),
-    [presentedServerVisibleTurnItems],
+    () =>
+      deriveCommittedServerUserMessageIds(presentedServerVisibleTurnItems, threadHistory?.index),
+    [presentedServerVisibleTurnItems, threadHistory?.index],
   );
   const queuedMessageControls = useMemo(
     () =>

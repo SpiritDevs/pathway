@@ -803,15 +803,21 @@ export function createLocalDispatchSnapshot(
  * `message.updated` can land in `projection.messages` one event earlier than
  * the matching `turn-item.updated`. Basing optimistic eviction on visible user
  * turn items avoids dropping steer rows in that gap.
+ *
+ * A paged thread loads only a window of rows, so `historyIndex`, which lists
+ * every user message in the thread, covers sends outside it. Without it, a
+ * queued or optimistic copy of an older send reappears at the end.
  */
 export function deriveCommittedServerUserMessageIds(
   visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+  historyIndex: ReadonlyArray<{ readonly messageId: ChatMessage["id"] }> = [],
 ): ReadonlySet<ChatMessage["id"]> {
-  return new Set(
-    visibleTurnItems.flatMap((row) =>
+  return new Set([
+    ...visibleTurnItems.flatMap((row) =>
       row.item.type === "user_message" ? [row.item.messageId] : [],
     ),
-  );
+    ...historyIndex.map((entry) => entry.messageId),
+  ]);
 }
 
 /**
