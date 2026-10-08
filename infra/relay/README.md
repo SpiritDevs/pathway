@@ -166,6 +166,18 @@ After a successful deploy, the wrapper updates the repository-root `.env` file w
 URL. That makes subsequent source builds point at the relay that was just deployed without copying
 the URL manually.
 
+### Cutover from Convex
+
+The relay validates connect grants, registrations and other relay state in the deployment named by
+`CYNDRBASE_DEPLOYMENT_URL`, but installed clients create them in whichever backend their build
+baked in. Pointing the relay at Cyndrbase while clients still write to Convex refuses every grant
+those clients issue. Cut over in this order:
+
+1. Import the Convex data into Cyndrbase (IDs preserved) and keep it in sync until cutover.
+2. Ship desktop, web and iOS builds that use the Cyndrbase deployment, and wait for adoption.
+3. Pause Convex writes, drain the last changes, then set `CYNDRBASE_DEPLOYMENT_URL` and deploy the
+   relay. Clients still on Convex builds lose cloud sync and connect until they update.
+
 ### Deployment CI
 
 The relay is versioned separately from client releases. `.github/workflows/deploy-relay.yml` deploys
