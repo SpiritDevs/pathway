@@ -55,7 +55,7 @@ The following configuration is required. Environment-scoped entries belong to th
 `APPLE_API_KEY` contains the key contents; the workflow writes a private temporary file. `MACOS_PROVISIONING_PROFILE` is base64-encoded. Both temporary files are removed on step exit. The release App must be installed on this repository, allowed to write contents, and allowed to push the intended version bump under main's branch rules.
 
 The iOS TestFlight workflow reuses the Apple API key, team ID and production public configuration,
-but still reads its backend URL from the `CONVEX_URL` variable. It additionally needs
+including `CYNDRBASE_DEPLOYMENT_URL`. It additionally needs
 `IOS_DEVELOPMENT_CERTIFICATE` and `IOS_DEVELOPMENT_CERTIFICATE_PASSWORD`, plus API access to automatic provisioning and cloud-managed distribution signing. Its
 `ios-testflight/latest` tag tracks successful default-branch uploads. See the
 [Apple client release runbook](apple-client-release.md#testflight-workflow) for setup and tester delivery.

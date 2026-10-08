@@ -24,16 +24,16 @@ The job uses the existing `production` GitHub environment and `FLEET_APPLE_RUNNE
 Use a dedicated CI account with one job per host, Xcode 26.2 or newer, and the iOS SDK installed.
 The workflow needs these environment or repository entries:
 
-| Type               | Name                                                        | Value                                                                                                                    |
-| ------------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Secret             | `APPLE_API_KEY`                                             | Contents of the App Store Connect team API `.p8` key, as used by the desktop release.                                    |
-| Secret             | `APPLE_API_KEY_ID`                                          | That key's ID.                                                                                                           |
-| Secret             | `APPLE_API_ISSUER`                                          | The team's App Store Connect issuer ID.                                                                                  |
-| Secret             | `IOS_DEVELOPMENT_CERTIFICATE`                               | Base64-encoded `.p12` containing an Apple Development certificate and its private key for the app's team.                |
-| Secret             | `IOS_DEVELOPMENT_CERTIFICATE_PASSWORD`                      | Password used to export that `.p12`.                                                                                     |
-| Variable           | `APPLE_TEAM_ID`                                             | The team that owns the app, currently `4444F36N8Z`.                                                                      |
-| Variables          | `CLERK_PUBLISHABLE_KEY`, `CLERK_JWT_TEMPLATE`, `CONVEX_URL` | Existing production public app configuration. The Clerk key must start with `pk_live_`.                                  |
-| Optional variables | `RELAY_DOMAIN`, `PATHWAY_WEB_LATEST_DOMAIN`                 | Relay and hosted app hostnames. Defaults match the native configuration: `relay.spiritdevs.com` and `app.pathwayos.dev`. |
+| Type               | Name                                                                      | Value                                                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Secret             | `APPLE_API_KEY`                                                           | Contents of the App Store Connect team API `.p8` key, as used by the desktop release.                                                                    |
+| Secret             | `APPLE_API_KEY_ID`                                                        | That key's ID.                                                                                                                                           |
+| Secret             | `APPLE_API_ISSUER`                                                        | The team's App Store Connect issuer ID.                                                                                                                  |
+| Secret             | `IOS_DEVELOPMENT_CERTIFICATE`                                             | Base64-encoded `.p12` containing an Apple Development certificate and its private key for the app's team.                                                |
+| Secret             | `IOS_DEVELOPMENT_CERTIFICATE_PASSWORD`                                    | Password used to export that `.p12`.                                                                                                                     |
+| Variable           | `APPLE_TEAM_ID`                                                           | The team that owns the app, currently `4444F36N8Z`.                                                                                                      |
+| Variables          | `CLERK_PUBLISHABLE_KEY`, `CLERK_JWT_TEMPLATE`, `CYNDRBASE_DEPLOYMENT_URL` | Production public app configuration. The Clerk key must start with `pk_live_`. Until `CYNDRBASE_DEPLOYMENT_URL` exists the workflow skips with a notice. |
+| Optional variables | `RELAY_DOMAIN`, `PATHWAY_WEB_LATEST_DOMAIN`                               | Relay and hosted app hostnames. Defaults match the native configuration: `relay.spiritdevs.com` and `app.pathwayos.dev`.                                 |
 
 Export the Apple Development identity from Keychain Access including its private key, then
 encode it with `base64 -i certificate.p12 | pbcopy` when configuring the secret. The desktop

@@ -54,10 +54,33 @@ jobs:
             echo "should_release=true" >> "$GITHUB_OUTPUT"
           fi
 
-  release:
-    name: Build and upload to TestFlight
+  cyndrbase:
+    name: Require Cyndrbase deployment
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
     needs: check_changes
     if: needs.check_changes.outputs.should_release == 'true'
+    timeout-minutes: 5
+    environment:
+      name: production
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check for a Cyndrbase deployment
+        id: check
+        env:
+          CYNDRBASE_DEPLOYMENT_URL: ${{ vars.CYNDRBASE_DEPLOYMENT_URL }}
+        run: |
+          if [[ -n "$CYNDRBASE_DEPLOYMENT_URL" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=TestFlight release skipped::The production environment has no CYNDRBASE_DEPLOYMENT_URL, so the TestFlight release is skipped. It never falls back to Convex."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    name: Build and upload to TestFlight
+    needs: [check_changes, cyndrbase]
+    if: needs.check_changes.outputs.should_release == 'true' && needs.cyndrbase.outputs.configured == 'true'
     runs-on: ${{ fromJSON(vars.FLEET_APPLE_RUNNER || '["self-hosted","fleet-macos-arm64","xcode"]') }}
     timeout-minutes: 60
     permissions:
@@ -94,7 +117,7 @@ jobs:
           IOS_DEVELOPMENT_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DEVELOPMENT_CERTIFICATE_PASSWORD }}
           PATHWAY_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
           PATHWAY_CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
-          PATHWAY_CONVEX_URL: ${{ vars.CONVEX_URL }}
+          PATHWAY_CYNDRBASE_URL: ${{ vars.CYNDRBASE_DEPLOYMENT_URL }}
           PATHWAY_RELAY_URL: https://${{ vars.RELAY_DOMAIN || 'relay.spiritdevs.com' }}
           PATHWAY_HOSTED_APP_URL: https://${{ vars.PATHWAY_WEB_LATEST_DOMAIN || 'app.pathwayos.dev' }}
         run: bash scripts/ios/release-testflight.sh

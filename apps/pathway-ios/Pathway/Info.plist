@@ -32,8 +32,8 @@
 	<string>$(PATHWAY_CLERK_PUBLISHABLE_KEY)</string>
 	<key>PATHWAY_CLERK_JWT_TEMPLATE</key>
 	<string>$(PATHWAY_CLERK_JWT_TEMPLATE)</string>
-	<key>PATHWAY_CONVEX_URL</key>
-	<string>$(PATHWAY_CONVEX_URL)</string>
+	<key>PATHWAY_CYNDRBASE_URL</key>
+	<string>$(PATHWAY_CYNDRBASE_URL)</string>
 	<key>PATHWAY_RELAY_URL</key>
 	<string>$(PATHWAY_RELAY_URL)</string>
 	<key>PATHWAY_SITE_URL</key>

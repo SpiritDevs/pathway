@@ -9,14 +9,14 @@ all use native Pathway identities.
 
 - Xcode 26.2 or newer with the iOS and visionOS platform components
 - SwiftFormat and SwiftLint for local checks
-- Pathway's public Clerk, Convex, and relay configuration
+- Pathway's public Clerk, Cyndrbase, and relay configuration
 
 ## Public configuration
 
 The native app uses the same repository-root public identifiers as Pathway web and desktop:
 
 - `PATHWAY_CLERK_PUBLISHABLE_KEY`
-- `PATHWAY_CONVEX_URL`
+- `PATHWAY_CYNDRBASE_URL`
 - `PATHWAY_RELAY_URL` (defaults to `https://relay.spiritdevs.com`)
 
 Set the values in the repository-root `.env` or `.env.local`, then generate the ignored Xcode

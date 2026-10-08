@@ -3,7 +3,7 @@ import Foundation
 enum AppConfiguration {
     static let clerkPublishableKey = nonemptyString(forInfoKey: "PATHWAY_CLERK_PUBLISHABLE_KEY")
     static let clerkJWTTemplate = nonemptyString(forInfoKey: "PATHWAY_CLERK_JWT_TEMPLATE")
-    static let convexDeploymentURL = optionalURL(forInfoKey: "PATHWAY_CONVEX_URL")
+    static let convexDeploymentURL = optionalURL(forInfoKey: "PATHWAY_CYNDRBASE_URL")
     static let relayURL = optionalURL(forInfoKey: "PATHWAY_RELAY_URL")
     static let siteURL = optionalURL(forInfoKey: "PATHWAY_SITE_URL")
     static let mailSetupURL = siteURL?.appending(path: "settings/email")
@@ -12,7 +12,7 @@ enum AppConfiguration {
         [
             clerkPublishableKey == nil ? "PATHWAY_CLERK_PUBLISHABLE_KEY" : nil,
             clerkJWTTemplate == nil ? "PATHWAY_CLERK_JWT_TEMPLATE" : nil,
-            convexDeploymentURL == nil ? "PATHWAY_CONVEX_URL" : nil,
+            convexDeploymentURL == nil ? "PATHWAY_CYNDRBASE_URL" : nil,
             relayURL == nil ? "PATHWAY_RELAY_URL" : nil
         ].compactMap(\.self)
     }
