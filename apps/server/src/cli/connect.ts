@@ -1,9 +1,4 @@
-import {
-  AuthRelayWriteScope,
-  EnvironmentHttpApi,
-  type RelayClientInstallProgressEvent,
-  type RelayClientInstallProgressStage,
-} from "@spiritdevs/contracts";
+import { AuthRelayWriteScope, EnvironmentHttpApi } from "@spiritdevs/contracts";
 import { RelayOkResponse } from "@spiritdevs/contracts/relay";
 import * as RelayClient from "@spiritdevs/shared/relayClient";
 import { withRelayClientTracing } from "@spiritdevs/shared/relayTracing";
@@ -157,26 +152,16 @@ interface CloudCliStatus {
 
 function formatRelayClientStatus(executable: RelayClient.RelayClientStatus): ReadonlyArray<string> {
   switch (executable.status) {
-    case "available": {
-      const source =
-        executable.source === "path"
-          ? "PATH"
-          : executable.source === "managed"
-            ? "managed install"
-            : "configured override";
+    case "available":
       return [
-        `  Relay client: available via ${source}`,
+        "  Relay client: bundled",
         `    Path: ${executable.executablePath}`,
         `    Version: ${executable.version}`,
       ];
-    }
     case "missing":
       return ["  Relay client: not installed"];
     case "unsupported":
-      return [
-        `  Relay client: unsupported on ${executable.platform}-${executable.arch}`,
-        `    Managed version: ${executable.version}`,
-      ];
+      return [`  Relay client: not included for ${executable.platform}-${executable.arch}`];
   }
 }
 
@@ -211,58 +196,6 @@ function formatCloudStatus(status: CloudCliStatus, options?: { readonly json?: b
 }
 
 const CLOUD_CLI_LIVE_SERVER_TIMEOUT = Duration.seconds(5);
-
-const confirmRelayClientInstall = (version: string) =>
-  Prompt.run(
-    Prompt.confirm({
-      message: `The Pathway relay client is required for Pathway Connect. Download and install version ${version}?`,
-      initial: false,
-    }),
-  );
-
-function relayClientInstallProgressMessage(stage: RelayClientInstallProgressStage): string {
-  switch (stage) {
-    case "checking":
-      return "Checking existing installation";
-    case "waiting_for_lock":
-      return "Waiting for installation lock";
-    case "downloading":
-      return "Downloading";
-    case "verifying":
-      return "Verifying download";
-    case "installing":
-      return "Installing";
-    case "validating":
-      return "Validating executable";
-    case "activating":
-      return "Activating installation";
-  }
-}
-
-const reportRelayClientInstallProgress = (event: RelayClientInstallProgressEvent) =>
-  event.type === "progress"
-    ? Console.log(`Relay client: ${relayClientInstallProgressMessage(event.stage)}...`)
-    : Effect.void;
-
-export const acquireRelayClientForLink = Effect.fn("cloud.cli.acquire_relay_client_for_link")(
-  function* <ConfirmError, ConfirmContext>(
-    relayClient: RelayClient.RelayClient["Service"],
-    confirmInstall: (version: string) => Effect.Effect<boolean, ConfirmError, ConfirmContext>,
-    reportProgress: (event: RelayClientInstallProgressEvent) => Effect.Effect<void>,
-  ) {
-    const executable = yield* relayClient.resolve;
-    if (executable.status === "available") {
-      return Option.some(executable);
-    }
-    if (executable.status === "unsupported") {
-      return Option.some(yield* relayClient.installWithProgress(reportProgress));
-    }
-    if (!(yield* confirmInstall(executable.version))) {
-      return Option.none();
-    }
-    return Option.some(yield* relayClient.installWithProgress(reportProgress));
-  },
-);
 
 const withCloudCliSessionToken = <A, E, R>(
   environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"],
@@ -445,7 +378,7 @@ const runCloudCommand = Effect.fn("cloud.cli.run_cloud_command")(function* <A, E
       Layer.provide(ServerSecretStore.layer),
       Layer.provide(ExternalLauncher.layer),
     ),
-    RelayClient.layerCloudflared({ baseDir: config.baseDir }),
+    RelayClient.layer,
     EnvironmentAuth.runtimeLayer,
     ServerEnvironment.layer,
     bootServiceLayer(config),
@@ -461,7 +394,7 @@ const runCloudCommand = Effect.fn("cloud.cli.run_cloud_command")(function* <A, E
 const connectedAs = (identity: string | null): string => (identity ? ` as ${identity}` : "");
 
 export function formatRelayClientReady(version: string): string {
-  return `✓ Relay client ready · cloudflared ${version}`;
+  return `✓ Relay client ready · Cyndrbase connector ${version}`;
 }
 
 const linkEnvironmentForConnect = Effect.fn("cloud.cli.link_environment")(function* (options: {
@@ -470,17 +403,13 @@ const linkEnvironmentForConnect = Effect.fn("cloud.cli.link_environment")(functi
 }) {
   const publishOnly = options.publishOnly ?? false;
   if (!publishOnly) {
-    const relayClient = yield* RelayClient.RelayClient;
-    const installed = yield* acquireRelayClientForLink(
-      relayClient,
-      confirmRelayClientInstall,
-      reportRelayClientInstallProgress,
-    );
-    if (Option.isNone(installed)) {
-      yield* Console.log("Pathway Connect setup cancelled. The relay client was not installed.");
+    const executable = yield* (yield* RelayClient.RelayClient).resolve;
+    if (executable.status !== "available") {
+      yield* Console.log(formatRelayClientStatus(executable).join("\n"));
+      yield* Console.log("Pathway Connect needs a relay client; use --publish-only instead.");
       return null;
     }
-    yield* Console.log(formatRelayClientReady(installed.value.version));
+    yield* Console.log(formatRelayClientReady(executable.version));
   }
 
   const identity = yield* authorizeCli(options);

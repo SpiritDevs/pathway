@@ -332,11 +332,7 @@ import {
   PullRequestThreadResolutionInput,
   PullRequestUnavailableError,
 } from "./pullRequest.ts";
-import {
-  RelayClientInstallFailedError,
-  RelayClientInstallProgressEventSchema,
-  RelayClientStatusSchema,
-} from "./relayClient.ts";
+import { RelayClientStatusSchema } from "./relayClient.ts";
 import {
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationGetWorkflowScriptError,
@@ -617,7 +613,6 @@ export const WS_METHODS = {
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
-  cloudInstallRelayClient: "cloud.installRelayClient",
   cloudIssueImportPreview: "cloud.issueImport.preview",
   cloudIssueImportExecute: "cloud.issueImport.execute",
 
@@ -897,13 +892,6 @@ export const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayC
   payload: Schema.Struct({}),
   success: RelayClientStatusSchema,
   error: EnvironmentAuthorizationError,
-});
-
-export const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRelayClient, {
-  payload: Schema.Struct({}),
-  success: RelayClientInstallProgressEventSchema,
-  error: Schema.Union([RelayClientInstallFailedError, EnvironmentAuthorizationError]),
-  stream: true,
 });
 
 export const WsCloudIssueImportPreviewRpc = Rpc.make(WS_METHODS.cloudIssueImportPreview, {
@@ -2587,7 +2575,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
   WsCloudGetRelayClientStatusRpc,
-  WsCloudInstallRelayClientRpc,
   WsCloudIssueImportPreviewRpc,
   WsCloudIssueImportExecuteRpc,
   WsPullRequestsListRpc,

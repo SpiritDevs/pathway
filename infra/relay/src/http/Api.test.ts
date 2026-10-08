@@ -391,7 +391,6 @@ function relayUnlinkTestLayer(input?: {
         provision: () => Effect.die("unused provision"),
         prepareDeprovision: input?.prepareDeprovision ?? (() => Effect.succeed(null)),
         deprovision: input?.deprovision ?? (() => Effect.void),
-        release: () => Effect.die("unused release"),
       }),
     ),
   );

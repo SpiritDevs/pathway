@@ -1078,9 +1078,6 @@ describe("Convex relay repositories", () => {
         if (reference === functionName(api.relayPersistence.reserveManagedEndpointAllocation)) {
           return Effect.succeed({ status: "reserved", allocation });
         }
-        if (reference === functionName(api.relayPersistence.claimManagedEndpointRelease)) {
-          return Effect.succeed(true);
-        }
         if (reference === functionName(api.relayPersistence.claimManagedEndpointDeprovision)) {
           return Effect.succeed("claim-generation");
         }
@@ -1117,14 +1114,6 @@ describe("Convex relay repositories", () => {
       });
       yield* allocations.markReady({ userId: "user-one", environmentId: "env-one" });
       expect(
-        yield* allocations.claimRelease({
-          userId: "user-one",
-          environmentId: "env-one",
-          tunnelId: "tunnel-one",
-          updatedAt: "generation-one",
-        }),
-      ).toBe(true);
-      expect(
         yield* allocations.claimDeprovision({
           userId: "user-one",
           environmentId: "env-one",
@@ -1146,19 +1135,11 @@ describe("Convex relay repositories", () => {
         functionName(api.relayPersistence.recordManagedEndpointTunnel),
         functionName(api.relayPersistence.recordManagedEndpointDns),
         functionName(api.relayPersistence.markManagedEndpointReady),
-        functionName(api.relayPersistence.claimManagedEndpointRelease),
         functionName(api.relayPersistence.claimManagedEndpointDeprovision),
         functionName(api.relayPersistence.removeManagedEndpointAllocation),
         functionName(api.relayPersistence.removeClaimedManagedEndpointAllocation),
       ]);
       expect(calls[5]?.args).toEqual({
-        userId: "user-one",
-        environmentId: "env-one",
-        tunnelId: "tunnel-one",
-        updatedAt: "generation-one",
-        claimedAt: "1970-01-01T00:00:00.000Z",
-      });
-      expect(calls[6]?.args).toEqual({
         userId: "user-one",
         environmentId: "env-one",
         updatedAt: "generation-one",

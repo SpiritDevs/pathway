@@ -10,17 +10,21 @@ import { RelayConvexClient } from "../db.ts";
 import { isManagedEndpointHostname, managedEndpointForHostname } from "../deploymentConfig.ts";
 import { ManagedTunnelLimitExceeded } from "./ManagedTunnelLimits.ts";
 
+// The persisted column names predate Cyndrbase Connect.
 export interface ManagedEndpointAllocation {
   readonly userId: string;
   readonly environmentId: string;
   readonly hostname: string;
+  /** The Connect endpoint ID. */
   readonly tunnelId: string | null;
+  /** Reserved per environment so hostnames stay unique. */
   readonly tunnelName: string;
+  /** The ID of the connector token most recently issued for the endpoint. */
   readonly dnsRecordId: string | null;
   readonly readyAt: string | null;
   /**
    * Doubles as the allocation's generation marker: every mutation rewrites it,
-   * so `claimRelease` can detect a provision that raced a release.
+   * so `claimDeprovision` can detect a provision that raced an unlink.
    */
   readonly updatedAt: string;
 }
@@ -50,7 +54,6 @@ export class ManagedEndpointAllocationPersistenceError extends Schema.TaggedErro
       "record-tunnel",
       "record-dns",
       "mark-ready",
-      "claim-release",
       "claim-deprovision",
       "remove",
       "remove-claimed",
@@ -88,11 +91,6 @@ interface RecordManagedEndpointDnsInput extends ManagedEndpointAllocationKey {
   readonly dnsRecordId: string;
 }
 
-interface ClaimManagedEndpointReleaseInput extends ManagedEndpointAllocationKey {
-  readonly tunnelId: string;
-  readonly updatedAt: string;
-}
-
 interface ClaimManagedEndpointDeprovisionInput extends ManagedEndpointAllocationKey {
   readonly updatedAt: string;
 }
@@ -122,16 +120,6 @@ export class ManagedEndpointAllocations extends Context.Service<
     readonly markReady: (
       input: ManagedEndpointAllocationKey,
     ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
-    /**
-     * Atomically claims the right to delete the allocation's tunnel: succeeds
-     * only while the recorded tunnel and generation still match what the
-     * caller loaded. A concurrent provision rewrites `updatedAt` when it
-     * records its tunnel, which makes a stale claim fail and keeps the freshly
-     * issued tunnel alive.
-     */
-    readonly claimRelease: (
-      input: ClaimManagedEndpointReleaseInput,
-    ) => Effect.Effect<boolean, ManagedEndpointAllocationPersistenceError>;
     /**
      * Claims the complete allocation for teardown only if its generation still
      * matches the snapshot captured by the unlink operation.
@@ -252,28 +240,6 @@ export const make = Effect.gen(function* () {
             }),
         ),
       );
-    }),
-    claimRelease: Effect.fn("relay.managed_endpoint_allocations.claim_release")(function* (
-      input: ClaimManagedEndpointReleaseInput,
-    ) {
-      return yield* client
-        .mutation(api.relayPersistence.claimManagedEndpointRelease, {
-          ...input,
-          claimedAt: DateTime.formatIso(yield* DateTime.now),
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointAllocationPersistenceError({
-                operation: "claim-release",
-                stage: "database-request",
-                userId: input.userId,
-                environmentId: input.environmentId,
-                tunnelId: input.tunnelId,
-                cause,
-              }),
-          ),
-        );
     }),
     claimDeprovision: Effect.fn("relay.managed_endpoint_allocations.claim_deprovision")(function* (
       input: ClaimManagedEndpointDeprovisionInput,

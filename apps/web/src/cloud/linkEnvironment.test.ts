@@ -1,7 +1,6 @@
 import {
   type DesktopBridge,
   EnvironmentId,
-  type RelayClientInstallProgressEvent,
   type RelayClientStatus,
   WS_METHODS,
 } from "@spiritdevs/contracts";
@@ -65,10 +64,7 @@ function relayLayer() {
   );
 }
 
-function registryLayer(options?: {
-  readonly status?: RelayClientStatus;
-  readonly installEvents?: ReadonlyArray<RelayClientInstallProgressEvent>;
-}) {
+function registryLayer(options?: { readonly status?: RelayClientStatus }) {
   return Layer.effect(
     EnvironmentRegistry,
     Effect.gen(function* () {
@@ -82,8 +78,6 @@ function registryLayer(options?: {
               version: "2026.6.0",
             },
           ),
-        [WS_METHODS.cloudInstallRelayClient]: () =>
-          Stream.fromIterable(options?.installEvents ?? []),
       } as unknown as RpcSession["client"];
       const session: RpcSession = {
         client,
@@ -535,34 +529,21 @@ describe("web cloud link environment client", () => {
     }),
   );
 
-  it.effect("installs a missing relay client before linking", () =>
+  it.effect("refuses to link an environment without a relay client", () =>
     Effect.gen(function* () {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ malformed: true })));
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
 
       const error = yield* withServices(
         linkPrimaryEnvironmentToCloud({
           target: TARGET,
           clerkToken: "clerk-token",
         }),
-        {
-          status: { status: "missing", version: "2026.6.0" },
-          installEvents: [
-            { type: "progress", stage: "downloading" },
-            {
-              type: "complete",
-              status: {
-                status: "available",
-                executablePath: "/tmp/pathway-relay",
-                source: "managed",
-                version: "2026.6.0",
-              },
-            },
-          ],
-        },
+        { status: { status: "unsupported", platform: "freebsd", arch: "x64", version: "0.1.0" } },
       ).pipe(Effect.flip);
 
-      expect(error.message).toContain("environment-link-challenges failed");
-      expect(error.message).not.toContain("relay client install");
+      expect(error.message).toBe("This Pathway build has no relay client for freebsd-x64.");
+      expect(fetchMock).not.toHaveBeenCalled();
     }),
   );
 

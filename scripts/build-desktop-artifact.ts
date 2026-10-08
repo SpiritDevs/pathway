@@ -939,6 +939,9 @@ export const DESKTOP_FILE_EXCLUSIONS = [
 // The Windows primary backend reads the same files through the asar redirect,
 // so nothing is duplicated.
 export const WINDOWS_ASAR_UNPACK = ["apps/server/dist/**", "**/node_modules/**"] as const;
+// The server spawns the Pathway Connect connector by path, which Electron cannot do inside
+// app.asar, so it runs the copy beside the archive. Windows already unpacks node_modules.
+export const CONNECTOR_ASAR_UNPACK = ["**/node_modules/@cyndrbase/connect/bin/**"] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/resource-monitor",
@@ -2092,10 +2095,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     directories: {
       buildResources: "apps/desktop/resources",
     },
-    // Only the Windows WSL backend needs files outside the asar (see
-    // WINDOWS_ASAR_UNPACK); macOS and Linux stay packed — smart unpack
-    // extracts native libraries, which fff-node finds in app.asar.unpacked.
-    ...(platform === "win" ? { asarUnpack: [...WINDOWS_ASAR_UNPACK] } : {}),
+    // The Windows WSL backend needs files outside the asar (see
+    // WINDOWS_ASAR_UNPACK); macOS and Linux unpack only the connector — smart
+    // unpack extracts native libraries, which fff-node finds in app.asar.unpacked.
+    asarUnpack: [...(platform === "win" ? WINDOWS_ASAR_UNPACK : CONNECTOR_ASAR_UNPACK)],
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : DICTATION_EXTRA_RESOURCES),

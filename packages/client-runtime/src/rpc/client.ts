@@ -81,7 +81,6 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof RELEASE_WS_METHODS.subscribe;
 
 export type EnvironmentStreamCommandRpcTag =
-  | typeof WS_METHODS.cloudInstallRelayClient
   | typeof WS_METHODS.cloudIssueImportExecute
   | typeof WS_METHODS.serverUpdateServerWithProgress
   | typeof WS_METHODS.gitRunStackedAction;

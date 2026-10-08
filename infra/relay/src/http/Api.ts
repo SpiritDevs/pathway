@@ -546,7 +546,6 @@ export const clientApi = HttpApiBuilder.group(
     const relayTokens = yield* RelayTokens.RelayTokens;
     const linker = yield* EnvironmentLinker.EnvironmentLinker;
     const links = yield* EnvironmentLinks.EnvironmentLinks;
-    const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
     const devices = yield* Devices.Devices;
     return handlers
       .handle(
@@ -680,23 +679,6 @@ export const clientApi = HttpApiBuilder.group(
             }),
           );
           return { ok: unlinked };
-        }, mapRelayCommonApiErrors("not_authorized")),
-      )
-      .handle(
-        "releaseEnvironmentTunnel",
-        Effect.fn("relay.api.client.releaseEnvironmentTunnel")(function* (args) {
-          const { params } = args;
-          const { userId } = yield* requireUserClientPrincipal();
-          // ok mirrors whether the connector token is now dead: false means a
-          // concurrent provision kept the recorded tunnel alive, so the caller
-          // must not discard its runtime config.
-          const released = yield* managedEndpointProvider
-            .release({
-              userId,
-              environmentId: params.environmentId,
-            })
-            .pipe(Effect.catch(() => relayInternalErrorResponse("upstream_unavailable")));
-          return { ok: released };
         }, mapRelayCommonApiErrors("not_authorized")),
       );
   }),

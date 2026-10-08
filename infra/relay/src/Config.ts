@@ -2,6 +2,7 @@ import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
@@ -31,6 +32,31 @@ export const loadApnsCredentials = Effect.gen(function* () {
     bundleId: yield* Config.string("APNS_BUNDLE_ID"),
     privateKey: yield* Config.redacted("APNS_PRIVATE_KEY"),
   } satisfies ApnsCredentials;
+});
+
+/** Cyndrbase Connect's EndpointService, which provisions Pathway Connect endpoints. */
+export interface CyndrbaseConnectConfiguration {
+  readonly apiUrl: string;
+  /** The `/connect/v1` URL environments' connectors dial. */
+  readonly edgeUrl: string;
+  readonly adminKey: Redacted.Redacted<string>;
+}
+
+/**
+ * Optional so stages without a Connect edge still deploy; provisioning then fails as not
+ * configured.
+ */
+export const loadCyndrbaseConnect = Effect.gen(function* () {
+  const apiUrl = Option.filter(
+    yield* Config.option(Config.string("CYNDRBASE_CONNECT_API_URL")),
+    (value) => value.trim().length > 0,
+  );
+  if (Option.isNone(apiUrl)) return undefined;
+  return {
+    apiUrl: apiUrl.value.trim().replace(/\/+$/u, ""),
+    edgeUrl: yield* Config.nonEmptyString("CYNDRBASE_CONNECT_EDGE_URL"),
+    adminKey: yield* Config.redacted("CYNDRBASE_CONNECT_ADMIN_KEY"),
+  } satisfies CyndrbaseConnectConfiguration;
 });
 
 /**
@@ -69,6 +95,8 @@ export class RelayConfiguration extends Context.Service<
     readonly cloudMintPublicKey: string;
     readonly managedEndpointBaseDomain: string | undefined;
     readonly managedEndpointNamespace: string | undefined;
+    // Optional like cloudSync for focused tests; absence fails provisioning closed.
+    readonly cyndrbaseConnect?: CyndrbaseConnectConfiguration | undefined;
     // Optional for legacy embedding contexts and focused tests. The deployed
     // worker always provides it; omission fails all Convex token issuance closed.
     readonly cloudSync?: RelayCloudSyncConfiguration | undefined;

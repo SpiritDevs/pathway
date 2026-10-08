@@ -95,14 +95,16 @@ The relay deploys through Alchemy:
 vp run --filter pathway-relay deploy
 ```
 
-The stack provisions the Cloudflare Worker and queues, managed endpoint resources, and relay
-tracing resources. Relay records live in the Convex deployment named by `CONVEX_URL`; use its
+The stack provisions the Cloudflare Worker and queues and relay tracing resources. Relay records live in the Convex deployment named by `CONVEX_URL`; use its
 client URL ending in `.convex.cloud`, not its HTTP Actions URL. Copy
 [`infra/relay/.env.example`](./.env.example) to
 `infra/relay/.env` and fill in the deployment-specific values before deploying. Alchemy loads that
 file from the relay directory. Runtime secrets include Clerk credentials and, when enabled, APNs
 credentials. Set `APNS_ENABLED=false` to run the relay without mobile push notifications or Live
-Activities; web, desktop, Convex sync, and remote agent control remain available. Production adopts
+Activities; web, desktop, Convex sync, and remote agent control remain available. Pathway Connect
+endpoints and connector tokens come from Cyndrbase Connect's `EndpointService`: set
+`CYNDRBASE_CONNECT_API_URL`, `CYNDRBASE_CONNECT_EDGE_URL` (the `wss://…/connect/v1` URL environments
+dial), and `CYNDRBASE_CONNECT_ADMIN_KEY`. Without them managed tunnels fail as not configured. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 
@@ -124,8 +126,9 @@ vp run --filter pathway-relay deploy --env-file .env.local
 Alchemy defaults personal deployments to the `dev_$USER` stage. Relay custom domains apply the same
 DNS-safe sanitization as Alchemy physical resource names, so `prod` uses
 `relay.<RELAY_API_ZONE_NAME>` and `dev_julius` uses
-`relay-dev-julius.<RELAY_API_ZONE_NAME>`. Managed environment endpoints are provisioned below
-`RELAY_TUNNEL_ZONE_NAME`, which may be a different Cloudflare zone. Production tunnel hostnames use
+`relay-dev-julius.<RELAY_API_ZONE_NAME>`. Managed environment endpoint hostnames live below
+`RELAY_TUNNEL_ZONE_NAME`, which may be a different Cloudflare zone; the Cyndrbase Connect edge must
+serve that domain. Production endpoint hostnames use
 `prod-<digest>.<RELAY_TUNNEL_ZONE_NAME>`; personal stages use
 `<stage>-<digest>.<RELAY_TUNNEL_ZONE_NAME>`. `RELAY_DOMAIN` remains available as an explicit API
 domain override.
@@ -182,6 +185,7 @@ The `production` GitHub environment must define these Actions variables:
 
 - `RELAY_API_ZONE_NAME`
 - `RELAY_TUNNEL_ZONE_NAME`
+- `CYNDRBASE_CONNECT_API_URL` and `CYNDRBASE_CONNECT_EDGE_URL` to enable managed tunnels
 - `RELAY_DOMAIN` if overriding the derived production relay domain
 - `CONVEX_URL`
 - `CLERK_PUBLISHABLE_KEY`
@@ -199,6 +203,7 @@ When `APNS_ENABLED=true`, the environment must also define:
 The `production` GitHub environment must define this Actions secret:
 
 - `CLERK_SECRET_KEY`
+- `CYNDRBASE_CONNECT_ADMIN_KEY` when managed tunnels are enabled
 
 When `APNS_ENABLED=true`, it must also define:
 

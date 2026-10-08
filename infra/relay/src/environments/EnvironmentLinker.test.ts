@@ -142,7 +142,6 @@ function testLayer(input?: {
         Layer.succeed(ManagedEndpointProvider.ManagedEndpointProvider, {
           prepareDeprovision: () => Effect.succeed(null),
           deprovision: input?.deprovision ?? (() => Effect.void),
-          release: () => Effect.succeed(true),
           provision: () =>
             Effect.succeed({
               endpoint: {
@@ -152,8 +151,10 @@ function testLayer(input?: {
               },
               runtime: {
                 environmentId: EnvironmentId.make("env-link-test"),
-                providerKind: "cloudflare_tunnel",
+                edgeUrl: "wss://edge.example.test/connect/v1",
+                endpointId: "endpoint-1",
                 connectorToken: "connector-token",
+                origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
               },
             }),
         }),

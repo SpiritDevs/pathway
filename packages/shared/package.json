@@ -326,6 +326,7 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@cyndrbase/connect": "link:/Users/coreybaines/Github/cyndrbase-wt/pathway-dep/packages/connect",
     "@noble/curves": "catalog:",
     "@noble/hashes": "catalog:",
     "@spiritdevs/contracts": "workspace:*",

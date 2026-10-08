@@ -197,7 +197,6 @@ function makeAllocations(
     recordTunnel: () => Effect.die("unused"),
     recordDns: () => Effect.die("unused"),
     markReady: () => Effect.die("unused"),
-    claimRelease: () => Effect.die("unused"),
     claimDeprovision: () => Effect.die("unused"),
     remove: () => Effect.die("unused"),
     removeClaimed: () => Effect.die("unused"),

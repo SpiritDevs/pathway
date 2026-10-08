@@ -245,12 +245,7 @@ const ResourceDiagnosticsLayerLive = Layer.mergeAll(
   ProcessResourceMonitor.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
 );
 
-const RelayClientLive = Layer.unwrap(
-  Effect.gen(function* () {
-    const config = yield* ServerConfig.ServerConfig;
-    return RelayClient.layerCloudflared({ baseDir: config.baseDir });
-  }),
-);
+const RelayClientLive = RelayClient.layer;
 
 const HttpServerLive = Layer.unwrap(
   Effect.gen(function* () {
