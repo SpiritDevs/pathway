@@ -5,8 +5,9 @@
  * Its data lives in a Postgres cluster under `<checkout>/.pathway/cyndrbase`, never a shared
  * developer database, and survives restarts; delete that directory for a fresh database. A loopback
  * `cyndrd` engine serves it, and `cyndr deploy` pushes packages/backend on every start because the
- * local engine keeps code in memory. Cyndrbase is linked from a source checkout until it publishes,
- * so `cyndrd` comes from that checkout's cargo build.
+ * local engine keeps code in memory, then `cyndr dev` redeploys whenever backend sources change.
+ * Cyndrbase is linked from a source checkout until it publishes, so `cyndrd` comes from that
+ * checkout's cargo build.
  *
  * Each start writes `cyndr.env` beside the data, so `cyndr run`, `cyndr env` and `psql` can reach
  * the running backend: `node --env-file=.pathway/cyndrbase/cyndr.env <cyndr> run smoke:inspect`.
@@ -16,6 +17,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NetService from "@spiritdevs/shared/Net";
 import { clerkFrontendApiUrlFromPublishableKey } from "@spiritdevs/shared/relayAuth";
 import { normalizeRelayIssuer } from "@spiritdevs/shared/relayJwt";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -197,7 +199,7 @@ export const startLocalCyndrbase = Effect.fn("startLocalCyndrbase")(function* (i
   yield* start(
     ChildProcess.make(
       path.join(bin, "postgres"),
-      ["-D", data, "-h", "127.0.0.1", "-p", String(port), "-k", ""],
+      ["-D", data, "-h", "127.0.0.1", "-p", String(port), "-k", "", "-c", "log_checkpoints=off"],
       // Fast shutdown: smart shutdown would wait on clients that are exiting with us.
       { env: { LC_ALL: "C" }, extendEnv: true, killSignal: "SIGINT", forceKillAfter: "5 seconds" },
     ),
@@ -214,6 +216,8 @@ export const startLocalCyndrbase = Effect.fn("startLocalCyndrbase")(function* (i
     Effect.mapError((error) => failure(error.message)),
   );
   const databaseUrl = `postgres://postgres@127.0.0.1:${port}/postgres`;
+  // The engine's lease only passes to a higher epoch, so each start outranks the last one.
+  const epoch = yield* Clock.currentTimeMillis;
   let url: string | undefined;
   let siteUrl: string | undefined;
   yield* start(
@@ -229,6 +233,8 @@ export const startLocalCyndrbase = Effect.fn("startLocalCyndrbase")(function* (i
         "127.0.0.1:0",
         "--deployment",
         DEPLOYMENT,
+        "--epoch",
+        String(epoch),
         ...(input.env.CYNDRBASE_FILES_CONFIG
           ? ["--files-config", input.env.CYNDRBASE_FILES_CONFIG]
           : []),
@@ -255,25 +261,23 @@ export const startLocalCyndrbase = Effect.fn("startLocalCyndrbase")(function* (i
   }
 
   const cyndr = (args: ReadonlyArray<string>) =>
-    run(
-      ChildProcess.make(process.execPath, [path.join(cli, "dist/cyndr.js"), ...args], {
-        cwd: backend,
-        env: { CYNDRBASE_URL: url, CYNDRBASE_DEPLOYMENT: DEPLOYMENT, CYNDRBASE_DEPLOY_KEY: key },
-        extendEnv: true,
-      }),
-      `cyndr ${args.slice(0, 3).join(" ")}`,
-    );
+    ChildProcess.make(process.execPath, [path.join(cli, "dist/cyndr.js"), ...args], {
+      cwd: backend,
+      env: { CYNDRBASE_URL: url, CYNDRBASE_DEPLOYMENT: DEPLOYMENT, CYNDRBASE_DEPLOY_KEY: key },
+      extendEnv: true,
+    });
   // Convex sets CONVEX_SITE_URL itself; Cyndrbase leaves it to the deployment's environment.
   for (const [name, value] of Object.entries({
     ...input.deployment.values,
     CONVEX_SITE_URL: siteUrl,
   })) {
-    yield* cyndr(["env", "set", name, value]);
+    yield* run(cyndr(["env", "set", name, value]), `cyndr env set ${name}`);
   }
   for (const [name, value] of Object.entries(input.deployment.secrets)) {
-    yield* cyndr(["env", "set", name, value, "--secret"]);
+    yield* run(cyndr(["env", "set", name, value, "--secret"]), `cyndr env set ${name}`);
   }
-  yield* cyndr(["deploy", "--yes"]);
+  // Deploys, then keeps redeploying on backend changes for the life of the dev runner.
+  yield* start(cyndr(["dev"]), "cyndr", (line) => line === "Watching for changes.");
   yield* fs
     .writeFileString(
       path.join(root, "cyndr.env"),
