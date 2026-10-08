@@ -26,8 +26,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  cyndrbase:
+    name: Require Cyndrbase deployment
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
+    timeout-minutes: 5
+    environment:
+      name: production
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check for a Cyndrbase deployment
+        id: check
+        env:
+          CYNDRBASE_DEPLOYMENT_URL: ${{ vars.CYNDRBASE_DEPLOYMENT_URL }}
+        run: |
+          if [[ -n "$CYNDRBASE_DEPLOYMENT_URL" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Relay deploy skipped::The production environment has no CYNDRBASE_DEPLOYMENT_URL, so the relay deploy is skipped. It never falls back to Convex."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
   deploy_relay:
     name: Deploy production relay
+    needs: cyndrbase
+    if: needs.cyndrbase.outputs.configured == 'true'
     runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
     timeout-minutes: 15
     environment:
