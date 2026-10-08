@@ -50,8 +50,6 @@ const ManagedEndpointProvisioningStage = Schema.Literals([
   "finish-unlink",
   "ensure-endpoint",
   "record-endpoint",
-  "claim-connector-token",
-  "revoke-stray-tokens",
   "create-connector-token",
   "store-connector-token",
   "open-connector-token",
@@ -97,7 +95,7 @@ export class ManagedEndpointDeprovisioningFailed extends Schema.TaggedErrorClass
   }
 }
 
-/** Another provision holds the connector token slot; a retry returns the token it stores. */
+/** The token slot changed under this provision in a way it cannot settle; a retry rereads it. */
 export class ManagedEndpointTokenSlotBusy extends Schema.TaggedErrorClass<ManagedEndpointTokenSlotBusy>()(
   "ManagedEndpointTokenSlotBusy",
   {},
@@ -192,12 +190,10 @@ const requireSettings = Effect.fnUntraced(function* (
 });
 
 // The allocation's dnsRecordId column, named for cloudflared, is the endpoint's connector token
-// slot, written only by compare-and-set on its value. A provision marks it Minting before it
-// sweeps and mints, and stores a token only over its own mark, so a sweep never revokes a token
-// that can still be stored. Unlink marks it TearingDown for good. Anything that does not decode,
-// such as a cloudflared DNS record ID, is an empty slot.
+// slot, written only by compare-and-set on its value. It holds the endpoint's one stored token
+// until unlink marks it TearingDown for good. Anything that does not decode, such as a
+// cloudflared DNS record ID, is an empty slot.
 const TokenSlot = Schema.Union([
-  Schema.TaggedStruct("Minting", { attempt: Schema.String }),
   Schema.TaggedStruct("Stored", {
     endpointId: Schema.String,
     connectorTokenId: Schema.String,
@@ -214,6 +210,7 @@ const TEARING_DOWN = encodeTokenSlot({ _tag: "TearingDown" });
 const MAX_TEARDOWN_CLAIMS = 5;
 
 type AllocationKey = { readonly userId: string; readonly environmentId: string };
+type AllocationRef = AllocationKey & { readonly allocationId: string };
 
 // Tokens are sealed with AES-GCM and bound to the allocation and endpoint they were minted for.
 const tokenCipher = (connect: RelayConfiguration.CyndrbaseConnectConfiguration, usage: KeyUsage) =>
@@ -375,10 +372,15 @@ export const make = Effect.gen(function* () {
   const revokeEndpointTokens = (
     connect: RelayConfiguration.CyndrbaseConnectConfiguration,
     endpointId: string,
+    keep?: string,
   ) =>
     endpointTokenIds(connect, endpointId).pipe(
       Effect.flatMap((ids) =>
-        Effect.forEach(ids, (id) => revokeConnectorToken(connect, id), { discard: true }),
+        Effect.forEach(
+          ids.filter((id) => id !== keep),
+          (id) => revokeConnectorToken(connect, id),
+          { discard: true },
+        ),
       ),
     );
 
@@ -394,6 +396,8 @@ export const make = Effect.gen(function* () {
         });
     const read = yield* allocations.get(key).pipe(Effect.mapError(failed("load-allocation")));
     if (read === null) return;
+    // Every step names this allocation, so a stale teardown leaves a relink's newer one alone.
+    const allocation = { ...key, allocationId: read.allocationId };
     // Once the slot says TearingDown, no provision can store a token or take it back.
     let held = read.dnsRecordId;
     for (let claims = 0; held !== TEARING_DOWN; claims++) {
@@ -401,15 +405,15 @@ export const make = Effect.gen(function* () {
         return yield* failed("claim-teardown")(new ManagedEndpointTokenSlotBusy());
       }
       const swapped = yield* allocations
-        .swapTokenSlot({ ...key, expected: held, next: TEARING_DOWN })
+        .swapTokenSlot({ ...allocation, expected: held, next: TEARING_DOWN })
         .pipe(Effect.mapError(failed("claim-teardown")));
-      // Gone, or replaced by a fresh allocation that a relink owns.
       if (swapped === null) return;
       held = swapped;
     }
-    const allocation = yield* allocations.get(key).pipe(Effect.mapError(failed("load-allocation")));
-    if (allocation === null) return;
-    const endpointId = allocation.tunnelId;
+    // A provision may have recorded a new endpoint before the claim landed.
+    const claimed = yield* allocations.get(key).pipe(Effect.mapError(failed("load-allocation")));
+    if (claimed?.allocationId !== allocation.allocationId) return;
+    const endpointId = claimed.tunnelId;
     // Without Connect settings this relay cannot have issued anything to clean up.
     const connect = config.cyndrbaseConnect;
     if (connect && endpointId !== null) {
@@ -421,99 +425,89 @@ export const make = Effect.gen(function* () {
       );
     }
     yield* allocations
-      .removeWithTokenSlot({ ...key, tokenSlot: TEARING_DOWN })
+      .remove(allocation)
       .pipe(Effect.mapError(failed("remove-allocation", endpointId)));
   });
 
-  // Returns the endpoint's stored token, minting and storing one if the slot holds none.
+  // Returns the endpoint's stored token, minting and storing it if the slot holds none.
   const connectorToken = Effect.fnUntraced(function* (
     connect: RelayConfiguration.CyndrbaseConnectConfiguration,
-    key: AllocationKey,
+    allocation: AllocationRef,
     read: string | null,
     endpointId: string,
   ) {
     const failed = (stage: typeof ManagedEndpointProvisioningStage.Type) => (cause: unknown) =>
-      new ManagedEndpointProvisioningFailed({ ...key, stage, endpointId, cause });
-    // What a provision does with a slot it does not hold.
-    const settle = (held: string | null, stage: typeof ManagedEndpointProvisioningStage.Type) => {
-      const slot = decodeTokenSlot(held);
-      if (slot?._tag === "Stored" && slot.endpointId === endpointId) {
-        return openToken(
-          connect,
-          tokenAad(key, endpointId, slot.connectorTokenId),
-          slot.sealedToken,
-        ).pipe(Effect.mapError(failed("open-connector-token")));
-      }
-      return Effect.fail(
-        failed(stage)(
-          held === null || slot?._tag === "TearingDown"
-            ? new ManagedEndpointUnlinked()
-            : new ManagedEndpointTokenSlotBusy(),
-        ),
-      );
+      new ManagedEndpointProvisioningFailed({
+        userId: allocation.userId,
+        environmentId: allocation.environmentId,
+        stage,
+        endpointId,
+        cause,
+      });
+    const storedIn = (value: string | null) => {
+      const slot = decodeTokenSlot(value);
+      return slot?._tag === "Stored" && slot.endpointId === endpointId ? slot : undefined;
     };
-    const slot = decodeTokenSlot(read);
-    if (
-      slot?._tag === "TearingDown" ||
-      (slot?._tag === "Stored" && slot.endpointId === endpointId)
-    ) {
-      return yield* settle(read, "claim-connector-token");
-    }
+    // A swap returns null once the allocation is gone or replaced.
+    const unlinked = (held: string | null) =>
+      held === null || decodeTokenSlot(held)?._tag === "TearingDown";
 
-    // Empty, a token for an endpoint the edge lost, or an attempt that never finished.
-    const attempt = yield* crypto.randomUUIDv4.pipe(
-      Effect.mapError(failed("claim-connector-token")),
-    );
-    const mark = encodeTokenSlot({ _tag: "Minting", attempt });
-    const marked = yield* allocations
-      .swapTokenSlot({ ...key, expected: read, next: mark })
-      .pipe(Effect.mapError(failed("claim-connector-token")));
-    if (marked !== mark) return yield* settle(marked, "claim-connector-token");
-    // A token listed while this attempt still holds the slot was minted under an older mark,
-    // so it can never be stored. Revoking those first leaves at most one unstored token live.
-    const strays = yield* endpointTokenIds(connect, endpointId).pipe(
-      Effect.mapError(failed("revoke-stray-tokens")),
-    );
-    const holder = yield* allocations
-      .get(key)
-      .pipe(Effect.mapError(failed("claim-connector-token")));
-    const held = holder?.dnsRecordId ?? null;
-    if (held !== mark) return yield* settle(held, "claim-connector-token");
-    yield* Effect.forEach(strays, (id) => revokeConnectorToken(connect, id), {
-      discard: true,
-    }).pipe(Effect.mapError(failed("revoke-stray-tokens")));
-
-    const minted = yield* rpc(
-      connect,
-      "CreateConnectorToken",
-      { endpointIds: [endpointId], idempotencyKey: `connector-token:${attempt}` },
-      ConnectToken,
-    ).pipe(Effect.mapError(failed("create-connector-token")));
-    const connectorTokenId = minted.connectorToken.id;
-    const stored = encodeTokenSlot({
-      _tag: "Stored",
-      endpointId,
-      connectorTokenId,
-      sealedToken: yield* sealToken(
+    let stored = storedIn(read);
+    if (stored === undefined) {
+      if (decodeTokenSlot(read)?._tag === "TearingDown") {
+        return yield* failed("store-connector-token")(new ManagedEndpointUnlinked());
+      }
+      // One key per allocation and endpoint, so concurrent, retried and delayed mints all get
+      // the token the edge minted first for as long as it keeps the receipt.
+      const minted = yield* rpc(
         connect,
-        tokenAad(key, endpointId, connectorTokenId),
-        minted.token,
-      ).pipe(Effect.mapError(failed("store-connector-token"))),
-    });
-    const kept = yield* allocations
-      .swapTokenSlot({ ...key, expected: mark, next: stored })
-      .pipe(Effect.mapError(failed("store-connector-token")));
-    if (kept === stored) return minted.token;
-    // Another provision or an unlink took the slot, so this token can never be stored.
-    yield* revokeConnectorToken(connect, connectorTokenId).pipe(
+        "CreateConnectorToken",
+        {
+          endpointIds: [endpointId],
+          idempotencyKey: `connector-token:${allocation.allocationId}:${endpointId}`,
+        },
+        ConnectToken,
+      ).pipe(Effect.mapError(failed("create-connector-token")));
+      const sealed = {
+        _tag: "Stored",
+        endpointId,
+        connectorTokenId: minted.connectorToken.id,
+        sealedToken: yield* sealToken(
+          connect,
+          tokenAad(allocation, endpointId, minted.connectorToken.id),
+          minted.token,
+        ).pipe(Effect.mapError(failed("store-connector-token"))),
+      } as const;
+      const next = encodeTokenSlot(sealed);
+      const held = yield* allocations
+        .swapTokenSlot({ ...allocation, expected: read, next })
+        .pipe(Effect.mapError(failed("store-connector-token")));
+      stored = held === next ? sealed : storedIn(held);
+      if (stored === undefined) {
+        if (!unlinked(held)) {
+          return yield* failed("store-connector-token")(new ManagedEndpointTokenSlotBusy());
+        }
+        // The endpoint is going away, so nothing can store this token.
+        yield* revokeConnectorToken(connect, minted.connectorToken.id).pipe(Effect.ignore);
+        return yield* failed("store-connector-token")(new ManagedEndpointUnlinked());
+      }
+    }
+    // No other token can be stored for this endpoint now, so any other is a stray: one a racing
+    // provision lost, or one minted after the edge forgot the key's receipt.
+    const keep = stored.connectorTokenId;
+    yield* revokeEndpointTokens(connect, endpointId, keep).pipe(
       Effect.catch((error) =>
-        Effect.logWarning("Unstored connector token stays live until unlink", {
-          connectorTokenId,
+        Effect.logWarning("Stray connector tokens stay live until the next provision", {
+          endpointId,
           code: error.code,
         }),
       ),
     );
-    return yield* settle(kept, "store-connector-token");
+    return yield* openToken(
+      connect,
+      tokenAad(allocation, endpointId, keep),
+      stored.sealedToken,
+    ).pipe(Effect.mapError(failed("open-connector-token")));
   });
 
   return ManagedEndpointProvider.of({
@@ -589,6 +583,7 @@ export const make = Effect.gen(function* () {
         allocation = yield* reserve;
       }
       const { hostname } = allocation;
+      const ref = { ...key, allocationId: allocation.allocationId };
       const failed =
         (stage: typeof ManagedEndpointProvisioningStage.Type, endpointId?: string) =>
         (cause: unknown) =>
@@ -624,7 +619,7 @@ export const make = Effect.gen(function* () {
             hostname,
             policy: { access: "ACCESS_KIND_PUBLIC" },
             traffic: "TRAFFIC_KIND_HTTP",
-            idempotencyKey: `endpoint:${hostname}:${allocation.updatedAt}`,
+            idempotencyKey: `endpoint:${allocation.allocationId}:${allocation.updatedAt}`,
           },
           ConnectEndpoint,
         ).pipe(
@@ -633,13 +628,13 @@ export const make = Effect.gen(function* () {
         ));
       if (endpointId !== allocation.tunnelId) {
         yield* allocations
-          .recordTunnel({ ...key, tunnelId: endpointId })
+          .recordTunnel({ ...ref, tunnelId: endpointId })
           .pipe(Effect.mapError(failed("record-endpoint", endpointId)));
       }
 
       const token = yield* connectorToken(
         settings.connect,
-        key,
+        ref,
         allocation.dnsRecordId,
         endpointId,
       ).pipe(
@@ -651,7 +646,7 @@ export const make = Effect.gen(function* () {
         ),
       );
       yield* allocations
-        .markReady(key)
+        .markReady(ref)
         .pipe(Effect.mapError(failed("mark-allocation-ready", endpointId)));
 
       return {

@@ -112,8 +112,9 @@ connector config predates Connect fetch a new one at startup from
 `POST /v1/environments/:environmentId/managed-endpoint` with their environment credential.
 Each endpoint has one connector token, like a cloudflared tunnel: the first provision mints it and
 stores it sealed with `CYNDRBASE_CONNECT_TOKEN_KEY`, later provisions return it, and only unlink
-revokes it. Before minting, the relay revokes the endpoint's unstored tokens, so a lost mint
-response leaves at most one extra. Production adopts
+revokes it. Mints for an allocation share one idempotency key, so retried or delayed mints get the
+same token; each provision then revokes any other token on the endpoint. Every allocation write
+names the allocation it read, so a stale unlink never touches a relink's newer one. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 

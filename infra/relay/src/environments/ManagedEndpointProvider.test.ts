@@ -55,6 +55,8 @@ interface ConnectCall {
 
 /** An in-memory EndpointService with the edge's replay, paging, plan and not-found behavior. */
 function makeConnectEdge(options?: {
+  /** Runs before a call reaches the edge, as when the network delays it. */
+  readonly beforeCall?: (method: string) => Effect.Effect<void>;
   /** Runs after the edge applied a call, before the relay sees its response. */
   readonly afterCall?: (method: string) => Effect.Effect<void>;
   /** Mints a token but loses the response, as when the network drops it. */
@@ -137,6 +139,7 @@ function makeConnectEdge(options?: {
       const body = decodeRpcBody(
         request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
       );
+      if (options?.beforeCall) yield* options.beforeCall(method);
       calls.push({ method, body });
       authorizations.add(request.headers["authorization"] ?? "");
       const respond = ([status, json]: readonly [number, unknown]) =>
@@ -155,7 +158,7 @@ function makeConnectEdge(options?: {
       return respond(result);
     }),
   );
-  return { client, calls, authorizations, endpoints, tokens };
+  return { client, calls, authorizations, endpoints, tokens, receipts };
 }
 
 const secrets = (edge: ReturnType<typeof makeConnectEdge>) =>
@@ -166,11 +169,24 @@ function makeAllocations(options?: { readonly afterSwap?: (next: string) => Effe
   const keyOf = (input: { readonly userId: string; readonly environmentId: string }) =>
     `${input.userId}:${input.environmentId}`;
   let generation = 0;
+  // Like the Convex mutations, writes apply only to the allocation the caller names.
+  const named = (input: {
+    readonly userId: string;
+    readonly environmentId: string;
+    readonly allocationId: string;
+  }) => {
+    const allocation = allocations.get(keyOf(input));
+    return allocation?.allocationId === input.allocationId ? allocation : undefined;
+  };
   const mutate = (
-    input: { readonly userId: string; readonly environmentId: string },
+    input: {
+      readonly userId: string;
+      readonly environmentId: string;
+      readonly allocationId: string;
+    },
     change: Partial<ManagedEndpointAllocations.ManagedEndpointAllocation>,
   ) => {
-    const allocation = allocations.get(keyOf(input));
+    const allocation = named(input);
     if (allocation !== undefined) {
       allocations.set(keyOf(input), {
         ...allocation,
@@ -185,10 +201,11 @@ function makeAllocations(options?: { readonly afterSwap?: (next: string) => Effe
       Effect.sync(() => {
         const allocation = allocations.get(keyOf(input)) ?? {
           ...input,
+          allocationId: `allocation-${++generation}`,
           tunnelId: null,
           dnsRecordId: null,
           readyAt: null,
-          updatedAt: `generation-${++generation}`,
+          updatedAt: `generation-${generation}`,
         };
         allocations.set(keyOf(input), allocation);
         return allocation;
@@ -196,7 +213,7 @@ function makeAllocations(options?: { readonly afterSwap?: (next: string) => Effe
     recordTunnel: (input) => Effect.sync(() => mutate(input, { tunnelId: input.tunnelId })),
     swapTokenSlot: (input) =>
       Effect.gen(function* () {
-        const allocation = allocations.get(keyOf(input));
+        const allocation = named(input);
         if (allocation === undefined) return null;
         if (allocation.dnsRecordId !== input.expected) return allocation.dnsRecordId;
         mutate(input, { dnsRecordId: input.next });
@@ -204,12 +221,8 @@ function makeAllocations(options?: { readonly afterSwap?: (next: string) => Effe
         return input.next;
       }),
     markReady: (input) => Effect.sync(() => mutate(input, { readyAt: "2026-06-02T00:00:00.000Z" })),
-    remove: (input) => Effect.sync(() => void allocations.delete(keyOf(input))),
-    removeWithTokenSlot: (input) =>
-      Effect.sync(() => {
-        if (allocations.get(keyOf(input))?.dnsRecordId !== input.tokenSlot) return false;
-        return allocations.delete(keyOf(input));
-      }),
+    remove: (input) =>
+      Effect.sync(() => named(input) !== undefined && allocations.delete(keyOf(input))),
   });
   return { service, allocations };
 }
@@ -269,15 +282,18 @@ describe("ManagedEndpointProvider", () => {
         });
         expect(edge.calls.map((call) => call.method)).toEqual([
           "CreateEndpoint",
-          "ListConnectorTokens",
           "CreateConnectorToken",
+          "ListConnectorTokens",
         ]);
         expect(edge.calls[0]?.body).toMatchObject({
           hostname,
           policy: { access: "ACCESS_KIND_PUBLIC" },
           traffic: "TRAFFIC_KIND_HTTP",
         });
-        expect(edge.calls[2]?.body.endpointIds).toEqual(["endpoint-1"]);
+        expect(edge.calls[1]?.body).toMatchObject({
+          endpointIds: ["endpoint-1"],
+          idempotencyKey: "connector-token:allocation-1:endpoint-1",
+        });
         expect([...edge.authorizations]).toEqual(["Bearer admin-key"]);
         const allocation = allocations.allocations.get("user_ABC:env_ABC");
         expect(allocation).toMatchObject({
@@ -332,51 +348,48 @@ describe("ManagedEndpointProvider", () => {
     }),
   );
 
-  it.effect("never sweeps a token that a newer attempt may still store", () => {
-    const edge = makeConnectEdge();
-    let tookOver = false;
-    // Right after this provision marks the slot, a newer attempt takes it, mints, and dies.
-    const allocations = makeAllocations({
-      afterSwap: () =>
-        Effect.sync(() => {
-          if (tookOver) return;
-          tookOver = true;
-          const allocation = allocations.allocations.get("user_ABC:env_ABC")!;
-          allocations.allocations.set("user_ABC:env_ABC", {
-            ...allocation,
-            dnsRecordId: '{"_tag":"Minting","attempt":"newer"}',
-          });
-          edge.tokens.set("token-newer", "endpoint-1");
-        }),
+  it.effect("mints that reach the edge after the token was stored get that token back", () => {
+    let provider!: Provider;
+    // Seven attempts' mints are held up in the network while an eighth stores its token; then
+    // each lands, and its response is lost.
+    let delayed = 7;
+    let handled = 0;
+    const edge = makeConnectEdge({
+      beforeCall: (method) => {
+        if (method !== "CreateConnectorToken" || delayed === 0) return Effect.void;
+        delayed--;
+        return Effect.exit(provider.provision(request)).pipe(Effect.asVoid);
+      },
+      loseMintResponse: () => ++handled > 1,
     });
 
     return Effect.gen(function* () {
-      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
       expect(yield* Effect.flip(provider.provision(request))).toMatchObject({
-        stage: "claim-connector-token",
-        cause: { _tag: "ManagedEndpointTokenSlotBusy" },
+        stage: "create-connector-token",
       });
-      expect(edge.tokens.has("token-newer")).toBe(true);
-
-      // The retry takes over the abandoned attempt, sweeps its token, and stores its own.
+      expect(handled).toBe(8);
+      expect(edge.tokens.size).toBe(1);
       const { runtime } = yield* provider.provision(request);
       expect(secrets(edge)).toEqual([runtime.connectorToken]);
-    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
+    }).pipe(Effect.provide(providerLayer(edge)));
   });
 
-  it.effect("lost mint responses leave at most one unstored token live", () => {
+  it.effect("a lost mint is replayed, and one minted after the edge forgets it is swept", () => {
     let lose = true;
     const edge = makeConnectEdge({ loseMintResponse: () => lose });
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-      for (let attempt = 0; attempt < 5; attempt++) {
+      for (let attempt = 0; attempt < 3; attempt++) {
         expect(yield* Effect.flip(provider.provision(request))).toMatchObject({
           stage: "create-connector-token",
         });
         expect(edge.tokens.size).toBe(1);
       }
       lose = false;
+      // Past the edge's receipt retention the same key mints a new token.
+      edge.receipts.clear();
       const { runtime } = yield* provider.provision(request);
       expect(secrets(edge)).toEqual([runtime.connectorToken]);
     }).pipe(Effect.provide(providerLayer(edge)));
@@ -387,6 +400,7 @@ describe("ManagedEndpointProvider", () => {
     const allocations = makeAllocations();
     allocations.allocations.set("user_ABC:env_ABC", {
       ...key,
+      allocationId: "allocation-legacy",
       hostname: expectedManagedHostname("env_ABC"),
       tunnelName: "dev-julius-tunnel",
       tunnelId: "c1a3a8b2-5d2e-4f6a-9d5b-0e2f7b8c9d10",
@@ -414,6 +428,7 @@ describe("ManagedEndpointProvider", () => {
       // An edge restart loses its in-memory records.
       edge.endpoints.clear();
       edge.tokens.clear();
+      edge.receipts.clear();
       const result = yield* provider.provision(request);
 
       expect(result.runtime.endpointId).not.toBe("endpoint-1");
@@ -495,6 +510,59 @@ describe("ManagedEndpointProvider", () => {
 
         expect({ point, live: edge.endpoints.size + edge.tokens.size }).toEqual({ point, live: 0 });
         expect(allocations.allocations.size).toBe(0);
+      }
+    }),
+  );
+
+  it.effect("a stale unlink never touches the allocation a relink created", () =>
+    Effect.gen(function* () {
+      // Unlink A pauses after its claim or partway through revoking. Meanwhile a retry finishes
+      // the unlink, a relink provisions anew, and another unlink claims that allocation.
+      for (const pause of ["after-claim", "while-revoking"] as const) {
+        let provider!: Provider;
+        let armed = false;
+        const allocations = makeAllocations({
+          afterSwap: (next) =>
+            pause === "after-claim" && next.includes("TearingDown") ? meanwhile : Effect.void,
+        });
+        const edge = makeConnectEdge({
+          afterCall: (method) =>
+            pause === "while-revoking" && method === "ListConnectorTokens"
+              ? meanwhile
+              : Effect.void,
+        });
+        let relinked!: ManagedEndpointProvider.ManagedEndpointProvisioningResult;
+        const meanwhile = Effect.suspend(() => {
+          if (!armed) return Effect.void;
+          armed = false;
+          return Effect.gen(function* () {
+            yield* provider.deprovision(key);
+            relinked = yield* provider.provision(request);
+            const allocation = allocations.allocations.get("user_ABC:env_ABC")!;
+            allocations.allocations.set("user_ABC:env_ABC", {
+              ...allocation,
+              dnsRecordId: '{"_tag":"TearingDown"}',
+            });
+          }).pipe(Effect.orDie);
+        });
+
+        yield* Effect.gen(function* () {
+          provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+          yield* provider.provision(request);
+          armed = true;
+          yield* provider.deprovision(key);
+
+          // The relink's endpoint, token and allocation are intact for its own unlink to finish.
+          expect({ pause, endpoints: [...edge.endpoints.keys()] }).toEqual({
+            pause,
+            endpoints: [relinked.runtime.endpointId],
+          });
+          expect(secrets(edge)).toEqual([relinked.runtime.connectorToken]);
+          yield* provider.deprovision(key);
+          expect(edge.endpoints.size + edge.tokens.size).toBe(0);
+          expect(allocations.allocations.size).toBe(0);
+          yield* provider.provision(request);
+        }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
       }
     }),
   );

@@ -12,6 +12,8 @@ import { ManagedTunnelLimitExceeded } from "./ManagedTunnelLimits.ts";
 
 // The persisted column names predate Cyndrbase Connect.
 export interface ManagedEndpointAllocation {
+  /** Row identity: a relink after unlink gets a new one, which every write after reserve names. */
+  readonly allocationId: string;
   readonly userId: string;
   readonly environmentId: string;
   readonly hostname: string;
@@ -51,7 +53,6 @@ export class ManagedEndpointAllocationPersistenceError extends Schema.TaggedErro
       "swap-token-slot",
       "mark-ready",
       "remove",
-      "remove-with-token-slot",
     ]),
     stage: Schema.Literals(["database-request", "resolve-reservation"]),
     userId: Schema.String,
@@ -78,17 +79,18 @@ interface ReserveManagedEndpointAllocationInput extends ManagedEndpointAllocatio
   readonly tunnelName: string;
 }
 
-interface RecordManagedEndpointTunnelInput extends ManagedEndpointAllocationKey {
+// Writes do nothing unless the environment's allocation is still `allocationId`.
+interface ManagedEndpointAllocationRef extends ManagedEndpointAllocationKey {
+  readonly allocationId: string;
+}
+
+interface RecordManagedEndpointTunnelInput extends ManagedEndpointAllocationRef {
   readonly tunnelId: string;
 }
 
-interface SwapManagedEndpointTokenSlotInput extends ManagedEndpointAllocationKey {
+interface SwapManagedEndpointTokenSlotInput extends ManagedEndpointAllocationRef {
   readonly expected: string | null;
   readonly next: string;
-}
-
-interface RemoveManagedEndpointAllocationWithTokenSlotInput extends ManagedEndpointAllocationKey {
-  readonly tokenSlot: string;
 }
 
 export class ManagedEndpointAllocations extends Context.Service<
@@ -108,20 +110,17 @@ export class ManagedEndpointAllocations extends Context.Service<
     ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
     /**
      * Sets the token slot to `next` only while it still holds `expected`, in one transaction.
-     * Returns what the slot holds afterwards, or null when there is no allocation.
+     * Returns what the slot holds afterwards, or null when the allocation is gone or replaced.
      */
     readonly swapTokenSlot: (
       input: SwapManagedEndpointTokenSlotInput,
     ) => Effect.Effect<string | null, ManagedEndpointAllocationPersistenceError>;
     readonly markReady: (
-      input: ManagedEndpointAllocationKey,
+      input: ManagedEndpointAllocationRef,
     ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
+    /** Returns whether it deleted the allocation. */
     readonly remove: (
-      input: ManagedEndpointAllocationKey,
-    ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
-    /** Deletes the allocation only while its token slot still holds `tokenSlot`. */
-    readonly removeWithTokenSlot: (
-      input: RemoveManagedEndpointAllocationWithTokenSlotInput,
+      input: ManagedEndpointAllocationRef,
     ) => Effect.Effect<boolean, ManagedEndpointAllocationPersistenceError>;
   }
 >()("pathway-relay/environments/ManagedEndpointAllocations") {}
@@ -186,7 +185,9 @@ export const make = Effect.gen(function* () {
               new ManagedEndpointAllocationPersistenceError({
                 operation: "record-tunnel",
                 stage: "database-request",
-                ...input,
+                userId: input.userId,
+                environmentId: input.environmentId,
+                tunnelId: input.tunnelId,
                 cause,
               }),
           ),
@@ -214,7 +215,7 @@ export const make = Effect.gen(function* () {
         );
     }),
     markReady: Effect.fn("relay.managed_endpoint_allocations.mark_ready")(function* (
-      input: ManagedEndpointAllocationKey,
+      input: ManagedEndpointAllocationRef,
     ) {
       const now = DateTime.formatIso(yield* DateTime.now);
       yield* client.mutation(api.relayPersistence.markManagedEndpointReady, { ...input, now }).pipe(
@@ -223,45 +224,31 @@ export const make = Effect.gen(function* () {
             new ManagedEndpointAllocationPersistenceError({
               operation: "mark-ready",
               stage: "database-request",
-              ...input,
+              userId: input.userId,
+              environmentId: input.environmentId,
               cause,
             }),
         ),
       );
     }),
     remove: Effect.fn("relay.managed_endpoint_allocations.remove")(function* (
-      input: ManagedEndpointAllocationKey,
+      input: ManagedEndpointAllocationRef,
     ) {
-      yield* client.mutation(api.relayPersistence.removeManagedEndpointAllocation, input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ManagedEndpointAllocationPersistenceError({
-              operation: "remove",
-              stage: "database-request",
-              ...input,
-              cause,
-            }),
-        ),
-      );
+      return yield* client
+        .mutation(api.relayPersistence.removeManagedEndpointAllocation, input)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ManagedEndpointAllocationPersistenceError({
+                operation: "remove",
+                stage: "database-request",
+                userId: input.userId,
+                environmentId: input.environmentId,
+                cause,
+              }),
+          ),
+        );
     }),
-    removeWithTokenSlot: Effect.fn("relay.managed_endpoint_allocations.remove_with_token_slot")(
-      function* (input: RemoveManagedEndpointAllocationWithTokenSlotInput) {
-        return yield* client
-          .mutation(api.relayPersistence.removeManagedEndpointAllocationWithTokenSlot, input)
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new ManagedEndpointAllocationPersistenceError({
-                  operation: "remove-with-token-slot",
-                  stage: "database-request",
-                  userId: input.userId,
-                  environmentId: input.environmentId,
-                  cause,
-                }),
-            ),
-          );
-      },
-    ),
   });
 });
 

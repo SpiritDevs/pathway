@@ -181,6 +181,7 @@ function connectorTestLayer(
 
 function makeAllocations(
   allocation: ManagedEndpointAllocations.ManagedEndpointAllocation | null = {
+    allocationId: "allocation-1",
     userId: "user_123",
     environmentId: "env-connector-test",
     hostname: "env.example.test",
@@ -198,7 +199,6 @@ function makeAllocations(
     swapTokenSlot: () => Effect.die("unused"),
     markReady: () => Effect.die("unused"),
     remove: () => Effect.die("unused"),
-    removeWithTokenSlot: () => Effect.die("unused"),
   };
 }
 
@@ -462,6 +462,7 @@ describe("EnvironmentConnector", () => {
       Effect.provide(
         connectorTestLayer(execute, {
           allocations: makeAllocations({
+            allocationId: "allocation-1",
             userId: "user_123",
             environmentId: "env-connector-test",
             hostname: "env.example.test",

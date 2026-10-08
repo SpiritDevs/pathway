@@ -1058,6 +1058,7 @@ describe("Convex relay repositories", () => {
 
   it.effect("routes every managed endpoint allocation transition through Convex", () => {
     const allocation = {
+      allocationId: "allocation-one",
       userId: "user-one",
       environmentId: "env-one",
       hostname: "env-one.example.test",
@@ -1081,10 +1082,7 @@ describe("Convex relay repositories", () => {
         if (reference === functionName(api.relayPersistence.swapManagedEndpointTokenSlot)) {
           return Effect.succeed("slot-one");
         }
-        if (
-          reference ===
-          functionName(api.relayPersistence.removeManagedEndpointAllocationWithTokenSlot)
-        ) {
+        if (reference === functionName(api.relayPersistence.removeManagedEndpointAllocation)) {
           return Effect.succeed(true);
         }
         return Effect.succeed(null);
@@ -1103,28 +1101,13 @@ describe("Convex relay repositories", () => {
           tunnelName: "env-one",
         }),
       ).toEqual(allocation);
-      yield* allocations.recordTunnel({
-        userId: "user-one",
-        environmentId: "env-one",
-        tunnelId: "tunnel-one",
-      });
-      expect(
-        yield* allocations.swapTokenSlot({
-          userId: "user-one",
-          environmentId: "env-one",
-          expected: null,
-          next: "slot-one",
-        }),
-      ).toBe("slot-one");
-      yield* allocations.markReady({ userId: "user-one", environmentId: "env-one" });
-      yield* allocations.remove({ userId: "user-one", environmentId: "env-one" });
-      expect(
-        yield* allocations.removeWithTokenSlot({
-          userId: "user-one",
-          environmentId: "env-one",
-          tokenSlot: "slot-one",
-        }),
-      ).toBe(true);
+      const ref = { userId: "user-one", environmentId: "env-one", allocationId: "allocation-one" };
+      yield* allocations.recordTunnel({ ...ref, tunnelId: "tunnel-one" });
+      expect(yield* allocations.swapTokenSlot({ ...ref, expected: null, next: "slot-one" })).toBe(
+        "slot-one",
+      );
+      yield* allocations.markReady(ref);
+      expect(yield* allocations.remove(ref)).toBe(true);
 
       expect(calls.map(({ reference }) => reference)).toEqual([
         functionName(api.relayPersistence.getManagedEndpointAllocation),
@@ -1133,11 +1116,11 @@ describe("Convex relay repositories", () => {
         functionName(api.relayPersistence.swapManagedEndpointTokenSlot),
         functionName(api.relayPersistence.markManagedEndpointReady),
         functionName(api.relayPersistence.removeManagedEndpointAllocation),
-        functionName(api.relayPersistence.removeManagedEndpointAllocationWithTokenSlot),
       ]);
       expect(calls[3]?.args).toEqual({
         userId: "user-one",
         environmentId: "env-one",
+        allocationId: "allocation-one",
         expected: null,
         next: "slot-one",
         now: "1970-01-01T00:00:00.000Z",
@@ -1153,6 +1136,7 @@ describe("Convex relay repositories", () => {
         allocations.recordTunnel({
           userId: "user-one",
           environmentId: "env-one",
+          allocationId: "allocation-one",
           tunnelId: "tunnel-one",
         }),
       );

@@ -69,6 +69,7 @@ import {
   managedTunnelLocalPortFromRequest,
   readCloudLinkState,
   reconcileDesiredCloudLink,
+  recoverRejectedManagedEndpointWith,
   reprovisionStoredManagedEndpointWith,
 } from "./http.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
@@ -534,6 +535,7 @@ describe("reconcileDesiredCloudLink", () => {
       Effect.provideService(
         ManagedEndpointRuntime.CloudManagedEndpointRuntime,
         ManagedEndpointRuntime.CloudManagedEndpointRuntime.of({
+          rejected: Effect.never,
           applyConfig: unusedSecretStoreOperation,
         } satisfies ManagedEndpointRuntime.CloudManagedEndpointRuntime["Service"]),
       ),
@@ -658,6 +660,7 @@ describe("stored managed endpoint reprovisioning", () => {
         }),
       ),
       endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime.of({
+        rejected: Effect.never,
         applyConfig: (connection) =>
           Effect.sync(() => {
             applied.push(connection);
@@ -688,6 +691,27 @@ describe("stored managed endpoint reprovisioning", () => {
       expect(
         decodeRuntimeConfig(new TextDecoder().decode(values.get(CLOUD_ENDPOINT_RUNTIME_CONFIG))),
       ).toEqual(Option.some(connectConfig));
+    }),
+  );
+
+  it.effect("replaces a rejected token once, and stops if the relay still issues it", () =>
+    Effect.gen(function* () {
+      const { dependencies, values, applied } = setup(connectConfig);
+      const rejected = {
+        config: { ...connectConfig, connectorToken: "revoked" },
+        originPort: 3_800,
+      };
+
+      expect(yield* recoverRejectedManagedEndpointWith(dependencies, rejected)).toBe(true);
+      expect(applied).toEqual([{ config: connectConfig, originPort: 3_800 }]);
+      expect(
+        decodeRuntimeConfig(new TextDecoder().decode(values.get(CLOUD_ENDPOINT_RUNTIME_CONFIG))),
+      ).toEqual(Option.some(connectConfig));
+
+      // An unlink left nothing for the relay to reissue, so only a relink restores access.
+      const stillRejected = { config: connectConfig, originPort: 3_800 };
+      expect(yield* recoverRejectedManagedEndpointWith(dependencies, stillRejected)).toBe(false);
+      expect(applied).toHaveLength(1);
     }),
   );
 
@@ -735,6 +759,7 @@ describe("cloud relay config replacement", () => {
       const dependencies = {
         secrets,
         endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime.of({
+          rejected: Effect.never,
           applyConfig: () => Effect.succeed({ status: "disabled" }),
         }),
       } as CloudHttpDependencies;
@@ -786,6 +811,7 @@ describe("cloud relay config replacement", () => {
         secrets,
         currentLocalHttpPort: 3_800,
         endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime.of({
+          rejected: Effect.never,
           applyConfig: (connection) =>
             Effect.sync(() => {
               applied.push(connection);
