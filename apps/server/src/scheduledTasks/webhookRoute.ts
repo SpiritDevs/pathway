@@ -5,7 +5,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
 import * as HttpMiddleware from "effect/unstable/http/HttpMiddleware";
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
@@ -21,12 +22,30 @@ const WEBHOOK_OUTCOME_HEADER = "x-pathway-hook-outcome";
 const json = (status: number, body: Record<string, string>, outcome: string) =>
   HttpServerResponse.jsonUnsafe(body, { status, headers: { [WEBHOOK_OUTCOME_HEADER]: outcome } });
 
+const isWebhookRequest = (request: HttpServerRequest.HttpServerRequest) =>
+  request.url.startsWith(`${ScheduledTaskService.WEBHOOK_ROUTE_PREFIX}/`);
+
 /**
  * Webhook URLs carry their secret token in the path, so requests to them never
  * open an HTTP server span (which records the full URL).
  */
 export const untracedWebhookRequestsLayer = Layer.succeed(HttpMiddleware.TracerDisabledWhen)(
-  (request) => request.url.startsWith(`${ScheduledTaskService.WEBHOOK_ROUTE_PREFIX}/`),
+  isWebhookRequest,
+);
+
+/**
+ * Keeps webhook-shaped URLs out of the response log. Global so requests that
+ * never match the webhook routes (other methods, malformed paths) are covered.
+ */
+export const unloggedWebhookRequestsLayer = HttpRouter.middleware(
+  (httpApp) =>
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      return yield* isWebhookRequest(request)
+        ? HttpMiddleware.withLoggerDisabled(httpApp)
+        : httpApp;
+    }),
+  { global: true },
 );
 
 export const webhookHttpApiLayer = HttpApiBuilder.group(
@@ -113,10 +132,7 @@ export const webhookHttpApiLayer = HttpApiBuilder.group(
           case "error":
             return json(500, { error: "internal_error" }, "error");
         }
-      }).pipe(
-        // The request log line names the URL, which carries the token.
-        HttpMiddleware.withLoggerDisabled,
-      );
+      });
     return handlers
       .handleRaw("webhookPost", handler)
       .handleRaw("webhookPut", handler)

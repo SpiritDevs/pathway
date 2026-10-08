@@ -104,6 +104,7 @@ import {
   getOrCreateEnvironmentKeyPairFromSecretStore,
 } from "./environmentKeys.ts";
 import { traceRelayRequest } from "./traceRelayRequest.ts";
+import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
 
 const CLOUD_MINT_NONCE_PREFIX = "cloud-mint-nonce-";
 const CLOUD_MINT_JTI_PREFIX = "cloud-mint-jti-";
@@ -415,6 +416,8 @@ export interface CloudHttpDependencies {
   readonly cliTokenManager: CliTokenManager.CloudCliTokenManager["Service"];
   readonly httpClient: HttpClient.HttpClient;
   readonly currentLocalHttpPort?: number | undefined;
+  /** Runs after the managed endpoint URL is written or removed, so webhook URLs follow it. */
+  readonly managedEndpointUrlChanged?: Effect.Effect<void> | undefined;
   readonly authorizeConnectGrant: (input: {
     readonly environmentId: RelayCloudMintCredentialProofPayload["environmentId"];
     readonly connectGrant: RelayValidatedConnectGrantIdentity;
@@ -428,8 +431,12 @@ export interface CloudHttpDependencies {
 const cloudHttpDependencies = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const httpClient = yield* HttpClient.HttpClient;
+  const scheduledTasks = yield* Effect.serviceOption(ScheduledTaskService);
   return {
     secrets,
+    ...(Option.isSome(scheduledTasks)
+      ? { managedEndpointUrlChanged: scheduledTasks.value.refreshWebhookAddresses }
+      : {}),
     environment: yield* ServerEnvironment.ServerEnvironment,
     endpointRuntime: yield* ManagedEndpointRuntime.CloudManagedEndpointRuntime,
     environmentAuth: yield* EnvironmentAuth.EnvironmentAuth,
@@ -607,6 +614,7 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
     yield* dependencies.secrets.remove(CLOUD_MANAGED_TUNNEL_LOCAL_PORT);
     yield* dependencies.secrets.remove(CLOUD_MANAGED_ENDPOINT_URL);
   }
+  yield* dependencies.managedEndpointUrlChanged ?? Effect.void;
   return { ok, endpointRuntimeStatus } satisfies EnvironmentCloudRelayConfigResult;
 });
 
@@ -970,6 +978,7 @@ const cloudUnlinkHandler = Effect.fn("environment.cloud.unlink")(
       ],
       { concurrency: 9 },
     );
+    yield* dependencies.managedEndpointUrlChanged ?? Effect.void;
     yield* setCliDesiredCloudLink(false);
     return { ok: true, endpointRuntimeStatus } satisfies EnvironmentCloudRelayConfigResult;
   },

@@ -124,6 +124,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { connectHttpApiLayer, reconcileDesiredCloudLink } from "./cloud/http.ts";
 import {
+  unloggedWebhookRequestsLayer,
   untracedWebhookRequestsLayer,
   webhookHttpApiLayer,
 } from "./scheduledTasks/webhookRoute.ts";
@@ -734,6 +735,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
   Layer.provide(browserApiCorsLayer),
   Layer.provide(httpCompressionLayer),
+  Layer.provide(unloggedWebhookRequestsLayer),
 );
 
 export const makeServerLayer = Layer.unwrap(

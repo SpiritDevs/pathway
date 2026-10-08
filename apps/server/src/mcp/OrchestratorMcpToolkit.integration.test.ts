@@ -606,6 +606,7 @@ describe("orchestrator MCP toolkit", () => {
             ScheduledTaskService.of({
               list: () => Ref.get(scheduledStore).pipe(Effect.map((tasks) => ({ tasks }))),
               subscribeList: () => Stream.empty,
+              refreshWebhookAddresses: Effect.void,
               upsert: (input) =>
                 Effect.gen(function* () {
                   const task = scheduledTaskFromUpsert(input);

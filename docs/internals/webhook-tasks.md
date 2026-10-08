@@ -16,7 +16,8 @@ without the relay forwarding or offline hold.
    enabled flag, and the optional HMAC-SHA256 signature over the exact bytes.
 3. It renders the prompt (`webhookTemplate.ts`), refuses prompts over
    `PROVIDER_SEND_TURN_MAX_INPUT_CHARS`, takes one of 20 per-task queue slots,
-   logs the delivery and answers 202 before the run starts.
+   logs the delivery as `queued` with its whole rendered prompt, and answers
+   202 before the run starts.
 4. A forked fiber waits on the task's semaphore, so deliveries for one task
    dispatch in arrival order through the ordinary `runTask` path
    (`ThreadLaunchService.launch` or `ThreadManagementService.sendToThread`,
@@ -24,7 +25,11 @@ without the relay forwarding or offline hold.
    `taskId:webhook:deliveryId`, so a delivery cannot dispatch twice. A queued
    delivery is skipped if the task was paused, replaced, switched to another
    trigger, or waited past `maxDeliveryAgeMinutes` (measured from when this
-   environment received it; outcome `expired`).
+   environment received it; outcome `expired`). A delivery becomes `accepted`
+   once its run starts.
+5. On startup the service dispatches every delivery still `queued`, in arrival
+   order, from its stored prompt. The fire key keeps one that had already
+   started from starting twice.
 
 Every response carries `x-pathway-hook-outcome`. Metrics:
 `pathway_webhook_deliveries_total`, `pathway_webhook_delivery_duration`,
@@ -37,12 +42,21 @@ outside `schedule_json` so neither reaches the read model, and
 `scheduled_task_webhook_deliveries`. The upsert only sets a token when the row
 has none, so a save racing `rotateWebhookToken` cannot restore the old URL; a
 save without a secret keeps the stored one. Each task keeps its newest 50
-deliveries with bodies and rendered prompts cut at 64 KiB, and credential-named
-headers and query values redacted. Deleting the task deletes its log.
+deliveries with bodies and rendered prompts cut at 64 KiB (a queued delivery's
+prompt is kept whole until it runs), and credential-named headers and query
+values redacted. Deleting the task deletes its log. A save that keeps the
+stored secret of a signed task fails if a concurrent save cleared it, rather
+than leaving a signature check with no secret.
+
+Linking, relinking or unlinking Pathway Connect calls
+`ScheduledTaskService.refreshWebhookAddresses`, so open task lists pick up the
+new public URL. A save from a `mobile` client cannot change a webhook task's
+trigger: shipped iOS builds would otherwise save it back as a 09:00 daily task.
 
 Token paths never reach traces or request logs: `untracedWebhookRequestsLayer`
-disables the HTTP server span for `/api/hooks/*`, and the handler disables the
-request logger.
+disables the HTTP server span for `/api/hooks/*`, and the global
+`unloggedWebhookRequestsLayer` disables the request logger for the same prefix,
+including methods and paths no webhook route matches.
 
 ## Public URL
 

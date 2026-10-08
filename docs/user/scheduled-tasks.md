@@ -58,10 +58,14 @@ Choose **Deliveries** next to a webhook task to see its last 50 requests, what
 happened to each, and the prompt each one produced. Deleting the task deletes
 its deliveries.
 
+A request that is waiting its turn shows as **Waiting**. If Pathway stops
+before it runs, it runs when Pathway starts again.
+
 If the environment is offline, the sender gets an error and nothing runs;
 redeliver from the sender, such as GitHub's **Recent Deliveries**, once it is
 back. The sender's response includes an `x-pathway-hook-outcome` header naming
 what happened, such as `accepted`, `rejected_signature`, or `rate_limited`.
 
-Agents can create webhook tasks too, and report the URL back to you. Create and
-edit webhook tasks on desktop or web; the iOS app doesn't support them yet.
+Agents can create webhook tasks too, and report the URL back to you. Create
+webhook tasks and change their trigger on desktop or web. The iOS app can edit
+a webhook task's other settings.

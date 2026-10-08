@@ -247,6 +247,7 @@ export const ScheduledTaskWebhookDeliveryId = TrimmedNonEmptyString.pipe(
 export type ScheduledTaskWebhookDeliveryId = typeof ScheduledTaskWebhookDeliveryId.Type;
 
 export const ScheduledTaskWebhookDeliveryOutcome = Schema.Literals([
+  "queued",
   "accepted",
   "dispatch_failed",
   "rejected_signature",

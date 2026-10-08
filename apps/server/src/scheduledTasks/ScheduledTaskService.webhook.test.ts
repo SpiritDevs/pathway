@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ScheduledTaskUpsertInput } from "@spiritdevs/contracts";
+import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -10,7 +11,9 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { CLOUD_ENDPOINT_RUNTIME_CONFIG, CLOUD_MANAGED_ENDPOINT_URL } from "../cloud/config.ts";
@@ -68,7 +71,12 @@ const withService = <A, E>(
   body: (input: {
     readonly service: ScheduledTaskService.ScheduledTaskService["Service"];
     readonly launches: Queue.Queue<LaunchInput>;
-  }) => Effect.Effect<A, E, never>,
+    readonly restart: Effect.Effect<
+      ScheduledTaskService.ScheduledTaskService["Service"],
+      Layer.Error<typeof ScheduledTaskService.layer>,
+      Scope.Scope
+    >;
+  }) => Effect.Effect<A, E, SqlClient.SqlClient | Scope.Scope>,
   options: {
     readonly gate?: Deferred.Deferred<void>;
     readonly secrets?: ReadonlyMap<string, string>;
@@ -98,13 +106,18 @@ const withService = <A, E>(
               ),
           }),
     );
-    return yield* Effect.gen(function* () {
-      const service = yield* ScheduledTaskService.ScheduledTaskService;
-      return yield* body({ service, launches });
-    }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(dependencies))));
-  });
+    const context = yield* Layer.build(dependencies);
+    // Each start is a new instance over the same database, so a second one
+    // stands in for a restarted server.
+    const start = Layer.build(ScheduledTaskService.layer).pipe(
+      Effect.map(Context.get(ScheduledTaskService.ScheduledTaskService)),
+      Effect.provideContext(context),
+    );
+    const service = yield* start;
+    return yield* body({ service, launches, restart: start }).pipe(Effect.provideContext(context));
+  }).pipe(Effect.scoped);
 
-/** Waits until a queued delivery leaves the accepted state. */
+/** Waits until a delivery leaves the queued state. */
 const settledDelivery = (
   service: ScheduledTaskService.ScheduledTaskService["Service"],
   taskId: string,
@@ -115,7 +128,7 @@ const settledDelivery = (
       .getWebhookDelivery({ id: taskId as never, deliveryId: deliveryId as never })
       .pipe(Effect.map((result) => result.delivery));
     let delivery = yield* read;
-    while (delivery.outcome === "accepted") {
+    while (delivery.outcome === "queued") {
       yield* Effect.yieldNow;
       delivery = yield* read;
     }
@@ -148,7 +161,8 @@ it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
 
       const { deliveries } = yield* service.listWebhookDeliveries({ id: task.id });
       assert.equal(deliveries.length, 1);
-      assert.equal(deliveries[0]?.outcome, "accepted");
+      const settled = yield* settledDelivery(service, task.id, deliveries[0]!.id);
+      assert.equal(settled.outcome, "accepted");
       const { delivery } = yield* service.getWebhookDelivery({
         id: task.id,
         deliveryId: deliveries[0]!.id,
@@ -283,6 +297,7 @@ it.effect("checks the configured signature and keeps the secret write-only", () 
         }),
       );
       assert.equal(signed._tag, "accepted");
+      if (signed._tag === "accepted") yield* settledDelivery(service, task.id, signed.deliveryId);
 
       // Saving without a secret keeps the stored one.
       const resaved = yield* service.upsert(
@@ -685,6 +700,54 @@ it.effect("counts each handled request by what happened to it", () =>
       assert.equal((yield* deliveriesCounted("accepted")) - before.accepted, 1);
       assert.equal((yield* deliveriesCounted("rejected_signature")) - before.rejected, 1);
       assert.equal((yield* deliveriesCounted("not_found")) - before.notFound, 1);
+    }),
+  ),
+);
+
+it.effect("runs a delivery that was still queued when the server stopped", () =>
+  withService(({ service, launches, restart }) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { task } = yield* service.upsert(yield* webhookTaskInput());
+      // As left by a server that answered 202 and stopped before the run.
+      yield* sql`
+        INSERT INTO scheduled_task_webhook_deliveries (
+          delivery_id, task_id, received_at, method, query, headers_json, body, body_bytes,
+          body_truncated, outcome, signature_verified, missing_fields_json, rendered_prompt
+        )
+        VALUES (
+          'delivery:stranded', ${task.id}, ${task.updatedAt}, 'POST', '', '{}', '', 0,
+          0, 'queued', 0, '[]', 'Review this PR: https://github.com/org/repo/pull/7'
+        )
+      `;
+      const restarted = yield* restart;
+      const launched = yield* Queue.take(launches);
+      assert.equal(launched.commandId, `scheduled-task:${task.id}:webhook:delivery:stranded`);
+      assert.equal(
+        launched.initialMessage?.text,
+        `${PROMPT_PREFIX}Review this PR: https://github.com/org/repo/pull/7`,
+      );
+      const delivery = yield* settledDelivery(restarted, task.id, "delivery:stranded");
+      assert.equal(delivery.outcome, "accepted");
+    }),
+  ),
+);
+
+it.effect("a save from a mobile client cannot change a webhook task's trigger", () =>
+  withService(({ service }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* webhookTaskInput());
+      const error = yield* service
+        .upsert(
+          yield* webhookTaskInput({
+            schedule: { type: "fixed_time", timeOfDay: "09:00" },
+            creationSource: "mobile",
+          }),
+        )
+        .pipe(Effect.flip);
+      assert.equal(error.message, "Change a webhook task's trigger in Pathway on desktop or web.");
+      const { tasks } = yield* service.list();
+      assert.equal(tasks.find((candidate) => candidate.id === task.id)?.schedule.type, "webhook");
     }),
   ),
 );

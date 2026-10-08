@@ -186,6 +186,7 @@ export function relativeLabel(value: string | null): string {
 }
 
 const DELIVERY_OUTCOME_LABELS: Record<ScheduledTaskWebhookDeliveryOutcome, string> = {
+  queued: "Waiting",
   accepted: "Ran",
   dispatch_failed: "Run failed",
   rejected_signature: "Bad signature",
@@ -196,6 +197,7 @@ const DELIVERY_OUTCOME_LABELS: Record<ScheduledTaskWebhookDeliveryOutcome, strin
 
 function deliveryOutcomeVariant(outcome: ScheduledTaskWebhookDeliveryOutcome) {
   if (outcome === "accepted") return "success";
+  if (outcome === "queued") return "outline";
   if (outcome === "disabled" || outcome === "rate_limited" || outcome === "expired") {
     return "warning";
   }

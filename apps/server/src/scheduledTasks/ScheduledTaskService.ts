@@ -188,6 +188,8 @@ export class ScheduledTaskService extends Context.Service<
     readonly list: () => Effect.Effect<ScheduledTaskListResult, ScheduledTaskError>;
     /** Emits the full task list on subscribe and again after every change (CRUD, run transitions, reschedules). */
     readonly subscribeList: () => Stream.Stream<ScheduledTaskListResult, ScheduledTaskError>;
+    /** Re-emits the list after Pathway Connect changes the public base URL of webhook tasks. */
+    readonly refreshWebhookAddresses: Effect.Effect<void>;
     readonly upsert: (
       input: ScheduledTaskUpsertInput,
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
@@ -487,7 +489,7 @@ export const layer = Layer.effect(
         readonly secretChanged: boolean;
       },
     ) =>
-      sql`
+      sql<{ task_id: string }>`
         INSERT INTO scheduled_tasks (
           task_id,
           title,
@@ -564,9 +566,21 @@ export const layer = Layer.effect(
             WHEN ${webhook.secretChanged ? 1 : 0} = 1 THEN excluded.webhook_secret
             ELSE scheduled_tasks.webhook_secret
           END
+        -- A save that keeps the stored secret for a signed task must still
+        -- find one; a concurrent save may have cleared it.
+        WHERE ${webhook.secretChanged ? 1 : 0} = 1 OR scheduled_tasks.webhook_secret IS NOT NULL
+        RETURNING task_id
       `.pipe(
         Effect.mapError((cause) =>
           taskError("Could not save schedule task.", { taskId: task.id, cause }),
+        ),
+        Effect.flatMap((rows) =>
+          rows.length > 0
+            ? Effect.void
+            : taskError(
+                "The signing secret was removed while this task was being edited. Enter it and save again.",
+                { taskId: task.id },
+              ),
         ),
       );
 
@@ -1027,6 +1041,17 @@ export const layer = Layer.effect(
         // keep their run history, and so real load failures propagate instead
         // of silently resetting an existing row.
         const existingTask = yield* findTask(id);
+        // The mobile editor cannot show a webhook trigger, and builds that
+        // predate it save one back as a 09:00 daily task.
+        if (
+          existingTask?.schedule.type === "webhook" &&
+          input.schedule.type !== "webhook" &&
+          input.creationSource === "mobile"
+        ) {
+          return yield* taskError("Change a webhook task's trigger in Pathway on desktop or web.", {
+            taskId: id,
+          });
+        }
         const schedule: ScheduledTask["schedule"] =
           input.schedule.type === "webhook"
             ? {
@@ -1285,7 +1310,12 @@ export const layer = Layer.effect(
                 ${loggedBody},
                 ${input.request.body.byteLength}, ${truncated ? 1 : 0}, ${input.outcome},
                 ${input.signatureVerified ? 1 : 0}, ${encodeMissingFieldsJson(input.missing)},
-                ${input.renderedPrompt?.slice(0, WEBHOOK_DELIVERY_LOG_PROMPT_LIMIT) ?? null},
+                ${
+                  // A queued delivery replays from this after a restart, so it is kept whole.
+                  (input.outcome === "queued"
+                    ? input.renderedPrompt
+                    : input.renderedPrompt?.slice(0, WEBHOOK_DELIVERY_LOG_PROMPT_LIMIT)) ?? null
+                },
                 ${input.error ?? null}
               WHERE EXISTS (SELECT 1 FROM scheduled_tasks WHERE task_id = ${input.taskId})
             `;
@@ -1311,8 +1341,8 @@ export const layer = Layer.effect(
 
     const markDelivery = (
       deliveryId: string,
-      outcome: "dispatch_failed" | "expired",
-      message: string,
+      outcome: "accepted" | "dispatch_failed" | "expired",
+      message: string | null,
     ) =>
       sql`
         UPDATE scheduled_task_webhook_deliveries
@@ -1377,6 +1407,89 @@ export const layer = Layer.effect(
         Effect.annotateCurrentSpan({ "scheduled_task.webhook.run_outcome": outcome }),
         Metrics.increment(Metrics.webhookRunsTotal, { outcome }),
       ]);
+
+    /** Counts a delivery against its task's queue; `force` admits recovered deliveries regardless. */
+    const takeQueueSlot = (task: ScheduledTask, options: { readonly force: boolean }) =>
+      Effect.gen(function* () {
+        const queueKey = `${task.id}\u0000${task.createdAt}`;
+        const queued = yield* Ref.modify(webhookQueued, (counts) => {
+          const count = counts.get(queueKey) ?? 0;
+          return !options.force && count >= WEBHOOK_MAX_QUEUED_PER_TASK
+            ? ([false, counts] as const)
+            : ([true, new Map(counts).set(queueKey, count + 1)] as const);
+        });
+        if (!queued) return Option.none<Effect.Effect<void>>();
+        // Entries leave the map when their count reaches zero, so a deleted
+        // task's key does not linger once its last delivery finishes.
+        return Option.some(
+          Ref.update(webhookQueued, (counts) => {
+            const next = new Map(counts);
+            const count = (next.get(queueKey) ?? 1) - 1;
+            if (count <= 0) next.delete(queueKey);
+            else next.set(queueKey, count);
+            return next;
+          }),
+        );
+      });
+
+    /**
+     * Runs a queued delivery in its own fiber, one per task at a time, and
+     * records how it ended. The delivery is `queued` until its run starts.
+     */
+    const dispatchDelivery = (
+      task: ScheduledTask,
+      delivery: {
+        readonly deliveryId: string;
+        readonly prompt: string;
+        readonly receivedAt: DateTime.DateTime;
+      },
+      release: Effect.Effect<void>,
+    ) =>
+      Effect.gen(function* () {
+        const { deliveryId } = delivery;
+        const permit = yield* webhookPermit(task.id);
+        yield* runTask(task, "webhook", delivery).pipe(
+          Effect.flatMap((completed) =>
+            completed.lastRunStatus === "failed"
+              ? runOutcome("failed").pipe(
+                  Effect.andThen(
+                    markDelivery(deliveryId, "dispatch_failed", "The run failed to start."),
+                  ),
+                )
+              : runOutcome("started").pipe(
+                  Effect.andThen(markDelivery(deliveryId, "accepted", null)),
+                ),
+          ),
+          Effect.catchTag("WebhookDeliverySkipped", (skipped) =>
+            runOutcome(skipped.outcome === "expired" ? "expired" : "skipped").pipe(
+              Effect.andThen(markDelivery(deliveryId, skipped.outcome, skipped.reason)),
+            ),
+          ),
+          // The log is readable over RPC, so it gets a fixed reason; the
+          // cause, which can carry request data, stays in the server log.
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Webhook dispatch failed", { taskId: task.id, cause }).pipe(
+              Effect.andThen(runOutcome("failed")),
+              Effect.andThen(
+                markDelivery(deliveryId, "dispatch_failed", "The run failed to start."),
+              ),
+            ),
+          ),
+          permit.withPermits(1),
+          // Its own trace: the request that triggered it has already been answered.
+          Effect.withSpan("ScheduledTaskService.runWebhookDelivery", {
+            root: true,
+            attributes: {
+              "scheduled_task.id": task.id,
+              "scheduled_task.webhook.delivery_id": deliveryId,
+            },
+          }),
+          Effect.ensuring(release),
+          // Only the hand-off is uninterruptible; shutdown still stops the run.
+          Effect.interruptible,
+          Effect.forkIn(serviceScope),
+        );
+      });
 
     const triggerWebhookUnobserved = (request: WebhookTriggerRequest) =>
       Effect.gen(function* () {
@@ -1479,79 +1592,26 @@ export const layer = Layer.effect(
         // Bound the deliveries one task holds, so steady traffic to a stuck
         // task cannot pile up parked fibers. A refused request is not logged,
         // so it cannot push real deliveries out of the log.
-        const queueKey = `${task.id}\u0000${task.createdAt}`;
-        const queued = yield* Ref.modify(webhookQueued, (counts) => {
-          const count = counts.get(queueKey) ?? 0;
-          return count >= WEBHOOK_MAX_QUEUED_PER_TASK
-            ? ([false, counts] as const)
-            : ([true, new Map(counts).set(queueKey, count + 1)] as const);
-        });
-        if (!queued) {
+        const release = yield* takeQueueSlot(task, { force: false });
+        if (Option.isNone(release)) {
           yield* observeDelivery("queue_full");
           return { _tag: "rate_limited" as const, outcome: "queue_full" as const };
         }
-        // Entries leave the map when their count reaches zero, so a deleted
-        // task's key does not linger once its last delivery finishes.
-        const release = Ref.update(webhookQueued, (counts) => {
-          const next = new Map(counts);
-          const count = (next.get(queueKey) ?? 1) - 1;
-          if (count <= 0) next.delete(queueKey);
-          else next.set(queueKey, count);
-          return next;
-        });
         // From taking the queue slot until the run is forked nothing may
         // interrupt, or a sender hanging up would leak the slot.
         return yield* Effect.uninterruptible(
           Effect.gen(function* () {
-            yield* log("accepted", {
+            // Logged before the 202, so a restart can pick the delivery up again.
+            yield* log("queued", {
               signatureVerified: signature !== null,
               missing: rendered.missing,
               renderedPrompt: rendered.prompt,
-            }).pipe(Effect.onError(() => release));
+            }).pipe(Effect.onError(() => release.value));
             yield* observeDelivery("accepted");
-            const permit = yield* webhookPermit(task.id);
-            yield* runTask(task, "webhook", {
-              deliveryId,
-              prompt: rendered.prompt,
-              receivedAt,
-            }).pipe(
-              Effect.flatMap((completed) =>
-                completed.lastRunStatus === "failed"
-                  ? runOutcome("failed").pipe(
-                      Effect.andThen(
-                        markDelivery(deliveryId, "dispatch_failed", "The run failed to start."),
-                      ),
-                    )
-                  : runOutcome("started"),
-              ),
-              Effect.catchTag("WebhookDeliverySkipped", (skipped) =>
-                runOutcome(skipped.outcome === "expired" ? "expired" : "skipped").pipe(
-                  Effect.andThen(markDelivery(deliveryId, skipped.outcome, skipped.reason)),
-                ),
-              ),
-              // The log is readable over RPC, so it gets a fixed reason; the
-              // cause, which can carry request data, stays in the server log.
-              Effect.catchCause((cause) =>
-                Effect.logWarning("Webhook dispatch failed", { taskId: task.id, cause }).pipe(
-                  Effect.andThen(runOutcome("failed")),
-                  Effect.andThen(
-                    markDelivery(deliveryId, "dispatch_failed", "The run failed to start."),
-                  ),
-                ),
-              ),
-              permit.withPermits(1),
-              // Its own trace: the request that triggered it has already been answered.
-              Effect.withSpan("ScheduledTaskService.runWebhookDelivery", {
-                root: true,
-                attributes: {
-                  "scheduled_task.id": task.id,
-                  "scheduled_task.webhook.delivery_id": deliveryId,
-                },
-              }),
-              Effect.ensuring(release),
-              // Only the hand-off is uninterruptible; shutdown still stops the run.
-              Effect.interruptible,
-              Effect.forkIn(serviceScope),
+            yield* dispatchDelivery(
+              task,
+              { deliveryId, prompt: rendered.prompt, receivedAt },
+              release.value,
             );
             return { _tag: "accepted" as const, deliveryId, outcome: "accepted" as const };
           }),
@@ -1570,9 +1630,57 @@ export const layer = Layer.effect(
         }),
       );
 
+    // A delivery answered with 202 but still queued when the server stopped
+    // never ran, so it is dispatched again. Its run is keyed by the delivery,
+    // so one that had already started does not start twice.
+    yield* Effect.gen(function* () {
+      const pending = yield* sql<{
+        readonly delivery_id: string;
+        readonly task_id: string;
+        readonly received_at: string;
+        readonly rendered_prompt: string | null;
+      }>`
+        SELECT delivery_id, task_id, received_at, rendered_prompt
+        FROM scheduled_task_webhook_deliveries
+        WHERE outcome = 'queued'
+        ORDER BY received_at ASC, rowid ASC
+      `;
+      yield* Effect.forEach(
+        pending,
+        (delivery) =>
+          Effect.gen(function* () {
+            const task = yield* findTask(ScheduledTaskId.make(delivery.task_id));
+            if (task === null || delivery.rendered_prompt === null) {
+              return yield* markDelivery(
+                delivery.delivery_id,
+                "dispatch_failed",
+                "Pathway stopped before this delivery ran.",
+              );
+            }
+            const release = yield* takeQueueSlot(task, { force: true });
+            if (Option.isNone(release)) return;
+            yield* dispatchDelivery(
+              task,
+              {
+                deliveryId: delivery.delivery_id,
+                prompt: delivery.rendered_prompt,
+                receivedAt: DateTime.makeUnsafe(delivery.received_at),
+              },
+              release.value,
+            ).pipe(Effect.uninterruptible);
+          }),
+        { concurrency: 1, discard: true },
+      );
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not resume queued webhook deliveries", { cause }),
+      ),
+    );
+
     return ScheduledTaskService.of({
       list,
       subscribeList,
+      refreshWebhookAddresses: notifyChanged,
       upsert,
       setEnabled,
       delete: deleteTask,
