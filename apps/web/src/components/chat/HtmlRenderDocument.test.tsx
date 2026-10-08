@@ -167,4 +167,35 @@ describe("HtmlRenderDocument", () => {
       "*",
     );
   });
+  it("puts the page on the surface hosting the frame, not the palette canvas", async () => {
+    let surface = "#181818";
+    vi.stubGlobal("getComputedStyle", () => ({ getPropertyValue: () => ` ${surface}` }));
+    const onSurface = (background: string) => ({
+      ...activeTheme,
+      variables: { ...activeTheme.variables, "--background": background },
+    });
+    await mount();
+    expect(renderer!.root.findByType("iframe").props.src).toBe(
+      `https://environment.example/Chart.html${htmlRenderThemeFragment(onSurface("#181818"))}`,
+    );
+    expect(frame.contentWindow.postMessage).toHaveBeenLastCalledWith(
+      htmlRenderThemeMessage(onSurface("#181818")),
+      "*",
+    );
+
+    // A theme change repaints the host first, then reaches the frame.
+    surface = "#fdf7fd";
+    activeTheme = htmlRenderTheme(Pathway_CODE_LIGHT_THEME_COLORS, "light");
+    const src = renderer!.root.findByType("iframe").props.src;
+    await act(async () =>
+      renderer!.update(
+        <HtmlRenderDocument src="https://environment.example/Chart.html" title="Chart" />,
+      ),
+    );
+    expect(renderer!.root.findByType("iframe").props.src).toBe(src);
+    expect(frame.contentWindow.postMessage).toHaveBeenLastCalledWith(
+      htmlRenderThemeMessage(onSurface("#fdf7fd")),
+      "*",
+    );
+  });
 });

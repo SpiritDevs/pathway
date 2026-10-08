@@ -1,11 +1,12 @@
 import {
+  type HtmlRenderTheme,
   htmlRenderResult,
   htmlRenderThemeFragment,
   htmlRenderThemeMessage,
   readHtmlRenderContentHeight,
   readHtmlRenderLinkRequest,
 } from "@spiritdevs/shared/htmlRender";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
 import { cn } from "~/lib/utils";
@@ -35,6 +36,11 @@ export function openHtmlRenderUrl(url: string) {
     );
 }
 
+function withBackground(theme: HtmlRenderTheme, background: string | undefined): HtmlRenderTheme {
+  if (background === undefined || background === theme.variables["--background"]) return theme;
+  return { ...theme, variables: { ...theme.variables, "--background": background } };
+}
+
 /**
  * A sandboxed agent HTML render in the app theme. The page reads the theme from
  * its URL fragment before first paint, then follows changes posted to its
@@ -49,9 +55,33 @@ export function HtmlRenderDocument(props: {
   readonly onContentHeight?: (height: number) => void;
   readonly onLoad?: () => void;
 }) {
-  const theme = useHtmlRenderTheme();
+  const paletteTheme = useHtmlRenderTheme();
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const [src] = useState(() => `${props.src.split("#", 1)[0]}${htmlRenderThemeFragment(theme)}`);
+  const [baseSrc] = useState(() => props.src.split("#", 1)[0]);
+  const [src, setSrc] = useState(() => `${baseSrc}${htmlRenderThemeFragment(paletteTheme)}`);
+  const [hostBackground, setHostBackground] = useState<string>();
+  const theme = useMemo(
+    () => withBackground(paletteTheme, hostBackground),
+    [paletteTheme, hostBackground],
+  );
+  // The page should sit on the surface that hosts it, and app CSS repaints
+  // some surfaces past the palette's canvas (dark threads, for one). Theme
+  // changes apply to the DOM before they reach React, so this reads the new
+  // surface. The first read also corrects the URL before the page loads.
+  const checkedFirstSrc = useRef(false);
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    const background =
+      frame === null || typeof getComputedStyle !== "function"
+        ? ""
+        : getComputedStyle(frame).getPropertyValue("--background").trim();
+    setHostBackground(background || undefined);
+    if (checkedFirstSrc.current) return;
+    checkedFirstSrc.current = true;
+    if (background) {
+      setSrc(`${baseSrc}${htmlRenderThemeFragment(withBackground(paletteTheme, background))}`);
+    }
+  }, [paletteTheme, baseSrc]);
   const [loaded, setLoaded] = useState(false);
   const postTheme = () => {
     frameRef.current?.contentWindow?.postMessage(htmlRenderThemeMessage(theme), "*");
