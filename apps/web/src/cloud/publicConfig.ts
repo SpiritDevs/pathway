@@ -47,9 +47,14 @@ const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1
  * A Cyndrbase deployment URL, normalized to its origin.
  *
  * Hosted deployments are always HTTPS (`https://<deployment>.<region>.cyndrbase.cloud`); plain HTTP is accepted only
- * for a loopback host, which is a locally run backend and cannot be intercepted on the wire.
+ * for a loopback host, which is a locally run backend and cannot be intercepted on the wire. A path
+ * such as `/cyndrbase` is a local backend that single-origin dev serves under this page's origin.
  */
 export function normalizeConvexDeploymentUrl(value: string): string | null {
+  if (value.trim().startsWith("/")) {
+    const origin = globalThis.location?.origin;
+    return origin ? `${origin}${value.trim().replace(/\/+$/u, "")}` : null;
+  }
   try {
     const url = new URL(value.trim());
     if (url.username.length > 0 || url.password.length > 0) {

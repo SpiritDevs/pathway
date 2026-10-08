@@ -123,6 +123,16 @@ function resolveDevProxyTarget(
 
 const devProxyTarget = resolveDevProxyTarget(process.env.PATHWAY_PORT, configuredWsUrl);
 
+// Single-origin dev serves a local Cyndrbase engine through this server under /cyndrbase, so a
+// browser on another machine or behind a tunnel reaches it from the page origin, not its own loopback.
+const LOCAL_CYNDRBASE_PATH = "/cyndrbase";
+const localCyndrbaseTarget =
+  isSingleOriginDev &&
+  URL.canParse(configuredConvexUrl) &&
+  ["localhost", "127.0.0.1", "[::1]"].includes(new URL(configuredConvexUrl).hostname)
+    ? configuredConvexUrl
+    : undefined;
+
 // Vite's dev server sends JS uncompressed. On localhost that is free; over a
 // shared origin (tunnel, LAN) it is the whole cold-start: bundled dev serves
 // one ~25 MB chunk, and a typical uplink moves that in about a minute while
@@ -199,7 +209,9 @@ export default defineConfig(() => {
       "import.meta.env.VITE_CLERK_CLI_OAUTH_CLIENT_ID": JSON.stringify(
         configuredClerkCliOAuthClientId,
       ),
-      "import.meta.env.VITE_PATHWAY_CYNDRBASE_URL": JSON.stringify(configuredConvexUrl),
+      "import.meta.env.VITE_PATHWAY_CYNDRBASE_URL": JSON.stringify(
+        localCyndrbaseTarget ? LOCAL_CYNDRBASE_PATH : configuredConvexUrl,
+      ),
       "import.meta.env.VITE_RELAY_OTLP_TRACES_URL": JSON.stringify(configuredRelayTracingUrl),
       "import.meta.env.VITE_RELAY_OTLP_TRACES_DATASET": JSON.stringify(
         configuredRelayTracingDataset,
@@ -236,16 +248,28 @@ export default defineConfig(() => {
             // socket — Vite's HMR socket is matched separately and exactly
             // (path "/" plus a vite-hmr subprotocol), so the two upgrade
             // handlers don't collide.
-            proxy: Object.fromEntries(
-              DEV_PROXIED_PATH_PREFIXES.map((prefix) => [
-                prefix,
-                {
-                  target: devProxyTarget,
-                  changeOrigin: true,
-                  ...(prefix === "/ws" || prefix === "/api" ? { ws: true } : {}),
-                },
-              ]),
-            ),
+            proxy: {
+              ...(localCyndrbaseTarget
+                ? {
+                    [LOCAL_CYNDRBASE_PATH]: {
+                      target: localCyndrbaseTarget,
+                      changeOrigin: true,
+                      ws: true,
+                      rewrite: (path: string) => path.slice(LOCAL_CYNDRBASE_PATH.length),
+                    },
+                  }
+                : {}),
+              ...Object.fromEntries(
+                DEV_PROXIED_PATH_PREFIXES.map((prefix) => [
+                  prefix,
+                  {
+                    target: devProxyTarget,
+                    changeOrigin: true,
+                    ...(prefix === "/ws" || prefix === "/api" ? { ws: true } : {}),
+                  },
+                ]),
+              ),
+            },
           }
         : {}),
       // Electron's BrowserWindow needs the HMR socket pinned to an explicit

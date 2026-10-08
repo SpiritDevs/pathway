@@ -63,6 +63,13 @@ describe("normalizeConvexDeploymentUrl", () => {
     expect(normalizeConvexDeploymentUrl("http://example.convex.cloud")).toBeNull();
   });
 
+  it("resolves a dev-proxied path against the page origin, so remote browsers use the dev server", () => {
+    vi.stubGlobal("location", new URL("http://192.168.1.20:5733/threads"));
+    expect(normalizeConvexDeploymentUrl("/cyndrbase/")).toBe("http://192.168.1.20:5733/cyndrbase");
+    vi.unstubAllGlobals();
+    expect(normalizeConvexDeploymentUrl("/cyndrbase")).toBeNull();
+  });
+
   it("refuses anything that is not a plain deployment URL", () => {
     expect(normalizeConvexDeploymentUrl("")).toBeNull();
     expect(normalizeConvexDeploymentUrl("example.convex.cloud")).toBeNull();
