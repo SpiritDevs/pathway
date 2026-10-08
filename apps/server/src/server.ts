@@ -123,6 +123,10 @@ import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { connectHttpApiLayer, reconcileDesiredCloudLink } from "./cloud/http.ts";
+import {
+  untracedWebhookRequestsLayer,
+  webhookHttpApiLayer,
+} from "./scheduledTasks/webhookRoute.ts";
 import { serverRelayBrokerTracingLayer } from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as DesktopParentMonitor from "./background/DesktopParentMonitor.ts";
@@ -697,6 +701,7 @@ export const makeRoutesLayer = Layer.mergeAll(
         Layer.provide(pullRequestHttpApiLayer),
         Layer.provide(projectHttpApiLayer),
         Layer.provide(serverEnvironmentHttpApiLayer),
+        Layer.provide(webhookHttpApiLayer),
         Layer.provide(environmentAuthenticatedAuthLayer),
       ),
       otlpTracesProxyRouteLayer,
@@ -852,6 +857,7 @@ export const makeServerLayer = Layer.unwrap(
     const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
       disableLogger: !config.logWebSocketEvents,
     }).pipe(
+      Layer.provide(untracedWebhookRequestsLayer),
       Layer.tap(() =>
         Effect.sync(() => endServerStartupPhase("server.startup.layerConstruction")).pipe(
           Effect.andThen(Deferred.succeed(routesReady, undefined)),

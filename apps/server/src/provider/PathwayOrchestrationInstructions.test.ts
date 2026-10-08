@@ -23,6 +23,7 @@ describe("Pathway orchestration provider instructions", () => {
   it("documents structured schedules instead of JSON strings", () => {
     assert.include(PATHWAY_ORCHESTRATION_INSTRUCTIONS, "structured object, never as JSON text");
     assert.include(PATHWAY_ORCHESTRATION_INSTRUCTIONS, '"everyMs":3600000');
+    assert.include(PATHWAY_ORCHESTRATION_INSTRUCTIONS, '{"type":"webhook"}');
     assert.include(PATHWAY_ORCHESTRATION_INSTRUCTIONS, "bindToCurrentThread=false");
   });
 

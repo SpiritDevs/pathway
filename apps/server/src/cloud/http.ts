@@ -48,7 +48,7 @@ import {
   signRelayJwt,
   verifyRelayJwt,
 } from "@spiritdevs/shared/relayJwt";
-import { isSecureRelayUrl } from "@spiritdevs/shared/relayUrl";
+import { isSecureRelayUrl, normalizeSecureRelayUrl } from "@spiritdevs/shared/relayUrl";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
@@ -76,6 +76,7 @@ import {
 } from "./serviceProtocol.ts";
 import {
   CLOUD_ENDPOINT_RUNTIME_CONFIG,
+  CLOUD_MANAGED_ENDPOINT_URL,
   CLOUD_MANAGED_TUNNEL_LOCAL_PORT,
   CLOUD_LINKED_USER_ID,
   CLOUD_MINT_PUBLIC_KEY,
@@ -584,6 +585,17 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
       CLOUD_ENDPOINT_RUNTIME_CONFIG,
       stringToBytes(endpointRuntimeJson),
     );
+    // Webhook tasks name their public URL from this. A client that predates
+    // the field leaves it unset, and clients then show the bare path.
+    const publicUrl =
+      payload.endpoint?.providerKind === "cloudflare_tunnel"
+        ? normalizeSecureRelayUrl(payload.endpoint.httpBaseUrl)
+        : null;
+    if (publicUrl !== null) {
+      yield* dependencies.secrets.set(CLOUD_MANAGED_ENDPOINT_URL, stringToBytes(publicUrl));
+    } else {
+      yield* dependencies.secrets.remove(CLOUD_MANAGED_ENDPOINT_URL);
+    }
     if (managedTunnelLocalPort !== undefined) {
       const encodedPort = yield* encodeManagedTunnelLocalPort(managedTunnelLocalPort);
       yield* dependencies.secrets.set(CLOUD_MANAGED_TUNNEL_LOCAL_PORT, stringToBytes(encodedPort));
@@ -593,6 +605,7 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
   } else {
     yield* dependencies.secrets.remove(CLOUD_ENDPOINT_RUNTIME_CONFIG);
     yield* dependencies.secrets.remove(CLOUD_MANAGED_TUNNEL_LOCAL_PORT);
+    yield* dependencies.secrets.remove(CLOUD_MANAGED_ENDPOINT_URL);
   }
   return { ok, endpointRuntimeStatus } satisfies EnvironmentCloudRelayConfigResult;
 });
@@ -719,6 +732,7 @@ const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesi
         environmentCredential: link.environmentCredential,
         cloudMintPublicKey: link.cloudMintPublicKey,
         endpointRuntime: link.endpointRuntime,
+        endpoint: link.endpoint,
       },
       endpointRequestPort(localUrl),
     );
@@ -951,9 +965,10 @@ const cloudUnlinkHandler = Effect.fn("environment.cloud.unlink")(
         dependencies.secrets.remove(CLOUD_MINT_PUBLIC_KEY),
         dependencies.secrets.remove(CLOUD_ENDPOINT_RUNTIME_CONFIG),
         dependencies.secrets.remove(CLOUD_MANAGED_TUNNEL_LOCAL_PORT),
+        dependencies.secrets.remove(CLOUD_MANAGED_ENDPOINT_URL),
         dependencies.secrets.remove(PUBLISH_AGENT_ACTIVITY_SECRET),
       ],
-      { concurrency: 8 },
+      { concurrency: 9 },
     );
     yield* setCliDesiredCloudLink(false);
     return { ok: true, endpointRuntimeStatus } satisfies EnvironmentCloudRelayConfigResult;

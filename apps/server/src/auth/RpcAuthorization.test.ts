@@ -32,6 +32,16 @@ describe("RPC authorization scopes", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });
 
+  it("keeps webhook delivery logs, which hold request bodies, behind operate scope", () => {
+    for (const method of [
+      WS_METHODS.scheduledTasksListWebhookDeliveries,
+      WS_METHODS.scheduledTasksGetWebhookDelivery,
+      WS_METHODS.scheduledTasksRotateWebhookToken,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+  });
+
   it("requires operate scope for tool updates and read scope for SDK checks", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.deviceUpdateTools)).toBe(
       AuthOrchestrationOperateScope,
