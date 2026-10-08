@@ -10,6 +10,29 @@ type AutoUpdater = typeof autoUpdater;
 
 export type ElectronUpdaterFeedUrl = Parameters<AutoUpdater["setFeedURL"]>[0];
 
+/**
+ * A short, secret-free reason for an updater failure: electron-updater's error code, the HTTP
+ * status, or Chromium's net error. Raw causes stay out of messages because they can carry feed
+ * URLs and credentials.
+ */
+export function updaterFailureReason(cause: unknown): string | null {
+  if (typeof cause !== "object" || cause === null) return null;
+  const { code, statusCode, message } = cause as {
+    readonly code?: unknown;
+    readonly statusCode?: unknown;
+    readonly message?: unknown;
+  };
+  if (typeof statusCode === "number") return `HTTP ${statusCode}`;
+  if (typeof code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code)) return code;
+  const netError = typeof message === "string" ? /\bnet::(ERR_[A-Z_]{1,60})\b/.exec(message) : null;
+  return netError?.[1] ?? null;
+}
+
+const withReason = (message: string, cause: unknown) => {
+  const reason = updaterFailureReason(cause);
+  return reason === null ? `${message}.` : `${message} (${reason}).`;
+};
+
 export class ElectronUpdaterCheckForUpdatesError extends Schema.TaggedErrorClass<ElectronUpdaterCheckForUpdatesError>()(
   "ElectronUpdaterCheckForUpdatesError",
   {
@@ -18,7 +41,10 @@ export class ElectronUpdaterCheckForUpdatesError extends Schema.TaggedErrorClass
   },
 ) {
   override get message(): string {
-    return `Electron updater failed to check for updates on channel ${this.channel ?? "default"}.`;
+    return withReason(
+      `Electron updater failed to check for updates on channel ${this.channel ?? "default"}`,
+      this.cause,
+    );
   }
 }
 
@@ -30,7 +56,10 @@ export class ElectronUpdaterDownloadUpdateError extends Schema.TaggedErrorClass<
   },
 ) {
   override get message(): string {
-    return `Electron updater failed to download the update on channel ${this.channel ?? "default"}.`;
+    return withReason(
+      `Electron updater failed to download the update on channel ${this.channel ?? "default"}`,
+      this.cause,
+    );
   }
 }
 

@@ -79,6 +79,37 @@ describe("ElectronUpdater", () => {
     }).pipe(Effect.provide(ElectronUpdater.layer)),
   );
 
+  it.effect("names the updater's error code without exposing the cause", () =>
+    Effect.gen(function* () {
+      const cause = Object.assign(
+        new Error("Cannot find nightly-mac.yml at https://user:secret@example.com/?token=secret"),
+        { code: "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND" },
+      );
+      autoUpdaterMock.checkForUpdates.mockImplementationOnce(() => Promise.reject(cause));
+      const updater = yield* ElectronUpdater.ElectronUpdater;
+      autoUpdaterMock.channel = "nightly";
+
+      const error = yield* updater.checkForUpdates.pipe(Effect.flip);
+
+      assert.equal(
+        error.message,
+        "Electron updater failed to check for updates on channel nightly (ERR_UPDATER_CHANNEL_FILE_NOT_FOUND).",
+      );
+      assert.notInclude(error.message, "secret");
+    }).pipe(Effect.provide(ElectronUpdater.layer)),
+  );
+
+  it("reduces updater causes to a status, code, or net error", () => {
+    assert.equal(ElectronUpdater.updaterFailureReason({ statusCode: 429 }), "HTTP 429");
+    assert.equal(
+      ElectronUpdater.updaterFailureReason(new Error("net::ERR_NAME_NOT_RESOLVED at secret.host")),
+      "ERR_NAME_NOT_RESOLVED",
+    );
+    assert.isNull(ElectronUpdater.updaterFailureReason({ code: "token=secret value" }));
+    assert.isNull(ElectronUpdater.updaterFailureReason(new Error("network unavailable")));
+    assert.isNull(ElectronUpdater.updaterFailureReason("secret"));
+  });
+
   it.effect("preserves the execution-time channel on download failures", () =>
     Effect.gen(function* () {
       const cause = new Error("download unavailable");
