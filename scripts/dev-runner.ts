@@ -22,6 +22,7 @@ import * as Schema from "effect/Schema";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 
+import { resolveLocalCyndrbaseEnvironment, startLocalCyndrbase } from "./lib/local-cyndrbase.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 
 Object.assign(process.env, loadRepoEnv());
@@ -85,6 +86,8 @@ const MODE_ARGS = {
 } as const satisfies Record<string, ReadonlyArray<string>>;
 
 type DevMode = keyof typeof MODE_ARGS;
+/** Modes that run the server, which talks to Cyndrbase; dev:web alone reuses another runner's. */
+const MODES_WITH_SERVER: ReadonlySet<DevMode> = new Set(["dev", "dev:server", "dev:desktop"]);
 /**
  * `role` matters because only the backend honours `--host`/`PATHWAY_HOST`; the
  * web port is always loopback. Passed explicitly rather than inferred from the
@@ -702,13 +705,31 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
         ? ` selectedOffset(server=${serverOffset},web=${webOffset})`
         : "";
     const baseDir = env.PATHWAY_HOME ?? (yield* DEFAULT_PATHWAY_HOME);
+    // An explicit PATHWAY_CYNDRBASE_URL targets that deployment; otherwise the server gets a
+    // checkout-local backend whenever cloud sync is configured.
+    const localCyndrbase =
+      MODES_WITH_SERVER.has(input.mode) && !env.PATHWAY_CYNDRBASE_URL?.trim()
+        ? resolveLocalCyndrbaseEnvironment(env)
+        : undefined;
+    const cyndrbase = localCyndrbase ? "local" : env.PATHWAY_CYNDRBASE_URL?.trim() || "off";
 
     yield* Effect.logInfo(
-      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.PATHWAY_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}`,
+      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.PATHWAY_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir} cyndrbase=${cyndrbase}`,
     );
 
     if (input.dryRun) {
       return;
+    }
+
+    if (localCyndrbase) {
+      const path = yield* Path.Path;
+      const { url, siteUrl } = yield* startLocalCyndrbase({
+        repoRoot: path.resolve(import.meta.dirname, ".."),
+        env,
+        deployment: localCyndrbase,
+      });
+      env.PATHWAY_CYNDRBASE_URL = url;
+      yield* Effect.logInfo(`[dev-runner] cyndrbase=${url} httpActions=${siteUrl}`);
     }
 
     const spawnCommand = yield* resolveSpawnCommand(
