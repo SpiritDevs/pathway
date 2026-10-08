@@ -14,7 +14,37 @@ async function serve(config: InlineConfig) {
   const server = await createServer({ configFile: false, logLevel: "silent", ...config });
   await server.listen();
   const { port } = server.httpServer!.address() as NodeNet.AddressInfo;
-  return { origin: `http://127.0.0.1:${port}`, close: () => server.close() };
+  return { port, origin: `http://127.0.0.1:${port}`, close: () => server.close() };
+}
+
+// Sends `path` byte for byte (fetch would resolve dot segments first) and resolves with the status.
+function send(port: number, path: string, upgrade = false) {
+  return new Promise<number>((resolve, reject) => {
+    const request = NodeHttp.request({
+      host: "127.0.0.1",
+      port,
+      path,
+      agent: false,
+      method: upgrade ? "GET" : "POST",
+      headers: upgrade
+        ? {
+            Connection: "Upgrade",
+            Upgrade: "websocket",
+            "Sec-WebSocket-Version": "13",
+            "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+          }
+        : {},
+    });
+    request.on("upgrade", (response, socket) => {
+      socket.destroy();
+      resolve(response.statusCode!);
+    });
+    request.on("response", (response) => {
+      response.resume().on("end", () => resolve(response.statusCode!));
+    });
+    request.on("error", reject);
+    request.end();
+  });
 }
 
 it("proxies only the engine's client routes and never serves the local deploy key", async () => {
@@ -22,6 +52,12 @@ it("proxies only the engine's client routes and never serves the local deploy ke
   const engine = NodeHttp.createServer((request, response) => {
     seen.push(`${request.method} ${request.url}`);
     response.end("engine");
+  });
+  engine.on("upgrade", (request, socket) => {
+    seen.push(`UPGRADE ${request.url}`);
+    socket.end(
+      "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+    );
   });
   await new Promise<void>((resolve) => engine.listen(0, "127.0.0.1", resolve));
   const target = `http://127.0.0.1:${(engine.address() as NodeNet.AddressInfo).port}`;
@@ -40,34 +76,37 @@ it("proxies only the engine's client routes and never serves the local deploy ke
   });
   const unguarded = await serve({ root, server });
   try {
-    const request = (path: string, method = "POST") =>
-      fetch(`${guarded.origin}${path}`, { method, ...(method === "GET" ? {} : { body: "{}" }) });
-    for (const path of [
-      "/cyndrbase/api/1.43.0/sync",
-      "/cyndrbase/api/query",
-      "/cyndrbase/api/mutation",
-      "/cyndrbase/api/action",
-    ])
-      expect(await (await request(path)).text()).toBe("engine");
-    expect(await (await request("/cyndrbase/.files/download/id/signature", "GET")).text()).toBe(
-      "engine",
-    );
+    for (const path of ["/cyndrbase/api/query", "/cyndrbase/api/mutation", "/cyndrbase/api/action"])
+      expect(await send(guarded.port, path)).toBe(200);
+    expect(await send(guarded.port, "/cyndrbase/.files/download/kg2a7/q-9_Z")).toBe(200);
+    expect(await send(guarded.port, "/cyndrbase/api/1.43.0/sync", true)).toBe(101);
+    const admin = "cyndrbase.platform.v1.EnvironmentService/SetEnvVar";
     for (const path of [
       "/cyndrbase/cyndrbase.platform.v1.DeployService/ApplyDeploy",
-      "/cyndrbase/cyndrbase.platform.v1.EnvironmentService/SetEnvVar",
+      `/cyndrbase/${admin}`,
       "/cyndrbase/bundles/abc",
       "/cyndrbase/cyndrbase.console.v1.DataBrowserService/ListTables",
       "/cyndrbase/cyndrbase.files.v1.FilesIngestService/CommitUpload",
       "/cyndrbase/api/run/smoke/seed",
       "/cyndrbase/api/queryx",
-    ])
-      expect(await (await request(path)).text()).not.toBe("engine");
+      `/cyndrbase/.files/download/../../${admin}`,
+      `/cyndrbase/.files/download/%2e%2e/%2E%2E/${admin}`,
+      `/cyndrbase/.files/download/a%2f..%2f..%2f${admin.replace("/", "%2f")}`,
+      "/cyndrbase//api/run/smoke/seed",
+      "/cyndrbase/.files/download//kg2a7/q-9_Z",
+    ]) {
+      expect(await send(guarded.port, path)).toBe(404);
+      expect(await send(guarded.port, path, true)).toBe(404);
+    }
+    expect(await send(guarded.port, "/cyndrbase/api/1.43.0/sync/../../run/smoke/seed", true)).toBe(
+      404,
+    );
     expect(seen).toEqual([
-      "POST /api/1.43.0/sync",
       "POST /api/query",
       "POST /api/mutation",
       "POST /api/action",
-      "GET /.files/download/id/signature",
+      "POST /.files/download/kg2a7/q-9_Z",
+      "UPGRADE /api/1.43.0/sync",
     ]);
     expect((await fetch(`${guarded.origin}/@fs${key}`)).status).toBe(403);
     // Vite's own defaults would serve it: the deny list is what protects the key.
