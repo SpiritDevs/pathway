@@ -8,7 +8,7 @@ import type {
   RelayEnvironmentLinkRequest,
   RelayManagedEndpoint,
 } from "@spiritdevs/contracts/relay";
-import { getFunctionName, type FunctionReference } from "convex/server";
+import { getFunctionName, type FunctionReference } from "cyndrbase/server";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";

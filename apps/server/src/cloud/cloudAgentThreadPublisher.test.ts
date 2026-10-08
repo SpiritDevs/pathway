@@ -5,7 +5,7 @@ import {
   OrchestrationV2ThreadShell,
 } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import { type FunctionReference, getFunctionName } from "convex/server";
+import { type FunctionReference, getFunctionName } from "cyndrbase/server";
 import { ConvexError } from "convex/values";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";

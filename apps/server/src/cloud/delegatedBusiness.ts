@@ -1,5 +1,5 @@
 /** Cloud executes a bounded business action under the worker's immutable PA origin. */
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import type { OrchestratorAssignmentOrigin } from "@spiritdevs/contracts/aiOrchestrator";
 import { OrchestratorMcpFailure } from "@spiritdevs/contracts";
 import * as Business from "@spiritdevs/contracts/delegatedBusiness";

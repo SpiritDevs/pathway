@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import type { ConvexClient } from "convex/browser";
 import type { FocusNotification } from "@spiritdevs/contracts/focus";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/models";
 import {

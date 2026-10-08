@@ -1,5 +1,5 @@
 import type { ReleaseIntent, ReleaseTarget } from "@spiritdevs/contracts/releases";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 
 export interface ReleasePublishingSettings {
   readonly enabled: boolean;

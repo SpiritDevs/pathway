@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { getFunctionName } from "convex/server";
+import { getFunctionName } from "cyndrbase/server";
 import * as Effect from "effect/Effect";
 import { RelayConvexClient, type RelayConvexClientLike } from "../db.ts";
 import { makeMailRpc } from "./rpc.ts";

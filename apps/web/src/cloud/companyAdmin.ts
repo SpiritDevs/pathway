@@ -8,7 +8,7 @@ import type {
   TeamId,
 } from "@spiritdevs/contracts/company";
 import { ConvexClient } from "convex/browser";
-import { makeFunctionReference, type FunctionReference } from "convex/server";
+import { makeFunctionReference, type FunctionReference } from "cyndrbase/server";
 import { ConvexError } from "convex/values";
 
 import { randomUUID } from "../lib/utils";

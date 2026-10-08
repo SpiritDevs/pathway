@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import { useOrchestrators } from "./OrchestratorContext";
 
 /** Only advance the receipt for messages actually visible in the focused conversation. */

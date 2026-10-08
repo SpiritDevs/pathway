@@ -23,7 +23,7 @@ import {
   type FunctionArgs,
   type FunctionReference,
   type FunctionReturnType,
-} from "convex/server";
+} from "cyndrbase/server";
 import { useEffect, useState } from "react";
 import { useAuthenticatedConvexClient } from "./useAuthenticatedConvexClient";
 

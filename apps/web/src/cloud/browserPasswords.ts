@@ -1,5 +1,5 @@
 import type { ConvexClient } from "convex/browser";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import { useAuthenticatedConvexClient } from "./useAuthenticatedConvexClient";
 
 export interface BrowserPasswordMetadata {

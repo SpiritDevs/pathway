@@ -27,7 +27,7 @@ import { CommandReceiptStoreV2 } from "../orchestration-v2/CommandReceiptStore.t
 import { ProviderAllowanceRuntime } from "../providerUsage/AllowanceRuntime.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import type { ConvexServiceTokenProvider } from "./convexServiceToken.ts";
-import type { FunctionReturnType } from "convex/server";
+import type { FunctionReturnType } from "cyndrbase/server";
 
 class WorkerControlError extends Data.TaggedError("WorkerControlError")<{
   readonly cause: unknown;

@@ -2,7 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vite-plus/test";
 import type { ConvexClient } from "convex/browser";
-import { getFunctionName } from "convex/server";
+import { getFunctionName } from "cyndrbase/server";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import { installImageCodecs } from "../../lib/test/imageCodecs";
 import {

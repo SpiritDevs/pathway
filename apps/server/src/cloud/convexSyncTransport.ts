@@ -35,7 +35,7 @@ import type {
 import { SyncTransport, SyncTransportError } from "@spiritdevs/client-runtime/sync";
 import { ConvexClient, ConvexHttpClient } from "convex/browser";
 import { ConvexError } from "convex/values";
-import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex/server";
+import type { FunctionArgs, FunctionReference, FunctionReturnType } from "cyndrbase/server";
 import * as Cause from "effect/Cause";
 import * as Queue from "effect/Queue";
 import * as Duration from "effect/Duration";

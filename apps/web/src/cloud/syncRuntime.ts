@@ -44,7 +44,7 @@ import { SyncClientId, type SyncActor } from "@spiritdevs/contracts/cloudSync";
 import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
 import { EnvironmentId } from "@spiritdevs/contracts";
 import { ConvexClient } from "convex/browser";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";

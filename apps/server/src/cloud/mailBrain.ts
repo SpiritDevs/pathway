@@ -1,6 +1,6 @@
 import { makeWorkerWakeups } from "./workerWakeups.ts";
 /** Executes private mailbox analysis on the owner's selected environment. */
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import {
   MailAnalysisJob as MailBrainJob,
   MailAnalysisResult as MailBrainResult,

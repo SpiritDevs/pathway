@@ -30,7 +30,7 @@ import {
 } from "@spiritdevs/contracts/cloudSync";
 import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
 import { RelayAccessTokenType, RelayConvexAudience } from "@spiritdevs/contracts/relay";
-import { getFunctionName, type FunctionReference } from "convex/server";
+import { getFunctionName, type FunctionReference } from "cyndrbase/server";
 import { ConvexError } from "convex/values";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";

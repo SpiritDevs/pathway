@@ -42,6 +42,7 @@
     "class-variance-authority": "^0.7.1",
     "convex": "^1.16.0",
     "culori": "^4.0.2",
+    "cyndrbase": "link:/Users/coreybaines/Github/cyndrbase-wt/pathway-dep/packages/server",
     "effect": "catalog:",
     "heic-to": "1.5.2",
     "jose": "catalog:",

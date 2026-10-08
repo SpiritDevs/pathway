@@ -1,6 +1,6 @@
 import { executionOrigin } from "../cloud/orchestratorExecution.ts";
 /** Shared account guards are checked by the runtime independently of open clients. */
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import { ConvexError } from "convex/values";
 import {
   ThreadId,

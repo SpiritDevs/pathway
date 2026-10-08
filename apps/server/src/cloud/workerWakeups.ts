@@ -1,7 +1,7 @@
 /** Queue hints avoid idle claims; timed recovery still handles lease clocks and older deployments. */
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { ConvexClient } from "convex/browser";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";

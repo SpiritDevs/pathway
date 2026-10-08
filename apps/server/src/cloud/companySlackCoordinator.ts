@@ -13,7 +13,7 @@ import {
   type EnvironmentId,
 } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import type { FunctionReturnType } from "convex/server";
+import type { FunctionReturnType } from "cyndrbase/server";
 import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";

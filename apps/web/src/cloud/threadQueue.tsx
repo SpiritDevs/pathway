@@ -22,7 +22,7 @@ import type {
 } from "@spiritdevs/contracts/threadQueue";
 import { ConvexClient } from "convex/browser";
 import { ConvexError } from "convex/values";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";

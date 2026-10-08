@@ -2,7 +2,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import { DEFAULT_PERSONALITY } from "@spiritdevs/contracts/orchestratorAvatar";
 import { describe, expect, it } from "@effect/vitest";
-import { getFunctionName, type FunctionReference } from "convex/server";
+import { getFunctionName, type FunctionReference } from "cyndrbase/server";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import {
   ProviderDriverKind,

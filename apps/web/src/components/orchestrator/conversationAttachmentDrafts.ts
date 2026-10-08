@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConvexClient } from "convex/browser";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import * as Schema from "effect/Schema";
 import { OrchestratorAttachment } from "@spiritdevs/contracts/aiOrchestrator";
 import {

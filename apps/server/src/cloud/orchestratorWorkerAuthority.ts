@@ -1,7 +1,7 @@
 import { executionOrigin } from "./orchestratorExecution.ts";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 /** Live Pathway privileges for work delegated by an AI contact. */
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import type { OrchestratorAssignmentOrigin } from "@spiritdevs/contracts/aiOrchestrator";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";

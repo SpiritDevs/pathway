@@ -3,7 +3,7 @@ import type { EnvironmentId } from "@spiritdevs/contracts";
 import type { EmailMessageId, EmailTagId, TrustedEmailSenderId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { ConvexClient } from "convex/browser";
-import { makeFunctionReference, type FunctionReference } from "convex/server";
+import { makeFunctionReference, type FunctionReference } from "cyndrbase/server";
 import { useEffect, useMemo } from "react";
 
 import { newCompanyDomainId } from "./companyAdmin";

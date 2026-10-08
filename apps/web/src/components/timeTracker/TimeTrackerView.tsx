@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useBusinessToolsCloud, useBusinessToolsQuery } from "../contacts/businessToolsCloud";
 import type { Value } from "convex/values";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import type {
   TrackedSessionPage,
   ActiveTrackedActivities,

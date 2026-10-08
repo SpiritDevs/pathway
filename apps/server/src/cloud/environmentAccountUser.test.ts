@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { getFunctionName, type FunctionReference } from "convex/server";
+import { getFunctionName, type FunctionReference } from "cyndrbase/server";
 import { ConvexError } from "convex/values";
 import * as Effect from "effect/Effect";
 

@@ -62,6 +62,7 @@
     "@types/nodemailer": "^8.0.1",
     "@types/smtp-server": "^3.5.13",
     "convex": "^1.16.0",
+    "cyndrbase": "link:/Users/coreybaines/Github/cyndrbase-wt/pathway-dep/packages/server",
     "effect-acp": "workspace:*",
     "effect-codex-app-server": "workspace:*",
     "nodemailer": "^9.0.5",

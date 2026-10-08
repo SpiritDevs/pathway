@@ -29,7 +29,7 @@ import {
 } from "@spiritdevs/client-runtime/sync";
 import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
 import { ConvexHttpClient } from "convex/browser";
-import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex/server";
+import type { FunctionArgs, FunctionReference, FunctionReturnType } from "cyndrbase/server";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";

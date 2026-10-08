@@ -1,6 +1,6 @@
 import type { AccountKind } from "@spiritdevs/client-runtime/profile";
 import { ConvexHttpClient } from "convex/browser";
-import { makeFunctionReference, type FunctionReference } from "convex/server";
+import { makeFunctionReference, type FunctionReference } from "cyndrbase/server";
 
 type ConvexArgs = Record<string, unknown>;
 

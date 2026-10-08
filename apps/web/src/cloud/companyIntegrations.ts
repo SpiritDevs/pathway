@@ -3,7 +3,7 @@ import type { CompanyId } from "@spiritdevs/contracts/company";
 import type { CompanySlackRoutingRule } from "@spiritdevs/contracts";
 import type { IssueAutomationSettings } from "@spiritdevs/contracts/settings";
 import { ConvexClient } from "convex/browser";
-import { makeFunctionReference, type FunctionReference } from "convex/server";
+import { makeFunctionReference, type FunctionReference } from "cyndrbase/server";
 
 import type { ConvexAuthTokenFetcher } from "./syncTransport";
 

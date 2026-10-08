@@ -1,5 +1,5 @@
 import type { ConvexClient } from "convex/browser";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import { ConvexError, type Value } from "convex/values";
 import { useEffect, useState } from "react";
 import { useAuthenticatedConvexClient } from "../../cloud/useAuthenticatedConvexClient";

@@ -18,6 +18,7 @@
     "@spiritdevs/shared": "workspace:*",
     "alchemy": "2.0.0-beta.65",
     "convex": "^1.16.0",
+    "cyndrbase": "link:/Users/coreybaines/Github/cyndrbase-wt/pathway-dep/packages/server",
     "effect": "catalog:",
     "jose": "catalog:"
   },

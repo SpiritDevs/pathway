@@ -19,7 +19,7 @@ import * as Option from "effect/Option";
 import { HostResources } from "../resourceTelemetry/HostResources.ts";
 import type { HostResourcesSnapshot } from "@spiritdevs/contracts";
 /** Cloud conversations are reasoned about without coding tools; actions are checked by cloud mutations. */
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import {
   OrchestratorRun,
   OrchestratorDelegationCatalog,

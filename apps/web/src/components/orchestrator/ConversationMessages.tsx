@@ -18,7 +18,7 @@ import {
   useState,
   type RefObject,
 } from "react";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import { ListTodoIcon } from "lucide-react";
 import type {
   OrchestratorActivity,

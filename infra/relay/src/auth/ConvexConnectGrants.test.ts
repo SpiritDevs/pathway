@@ -1,7 +1,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import { describe, expect, it } from "@effect/vitest";
-import { getFunctionName, type FunctionReference } from "convex/server";
+import { getFunctionName, type FunctionReference } from "cyndrbase/server";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 

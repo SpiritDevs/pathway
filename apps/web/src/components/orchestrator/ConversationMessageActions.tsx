@@ -9,7 +9,7 @@ import {
   SendIcon,
   XIcon,
 } from "lucide-react";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import type {
   OrchestratorMessage,
   OrchestratorWorkerAction,

@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { AvatarContact } from "./OrchestratorAvatar";
 import { useLocation } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import type { AiOrchestrator, OrchestratorChat } from "@spiritdevs/contracts/aiOrchestrator";
 import { activeCompanyIdAtom } from "../../cloud/activeCompany";
 import { useBusinessToolsCloud, useBusinessToolsQuery } from "../contacts/businessToolsCloud";

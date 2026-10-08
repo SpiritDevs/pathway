@@ -23,7 +23,7 @@ import {
   type ThreadId,
 } from "@spiritdevs/contracts";
 import type { RpcSession } from "@spiritdevs/client-runtime/rpc";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";

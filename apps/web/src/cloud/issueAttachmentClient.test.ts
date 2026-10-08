@@ -1,6 +1,6 @@
 import type { ChatAttachmentId, IssueId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import { getFunctionName } from "convex/server";
+import { getFunctionName } from "cyndrbase/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {

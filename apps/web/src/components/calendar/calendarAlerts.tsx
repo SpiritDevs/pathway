@@ -1,7 +1,7 @@
 import type { CalendarEventId } from "@spiritdevs/contracts";
 import { CALENDAR_ALERT_WINDOW_MS } from "@spiritdevs/contracts/calendarAlerts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useCalendarAlertCompanyIds } from "~/cloud/calendarReadModel";

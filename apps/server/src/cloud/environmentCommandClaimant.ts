@@ -41,7 +41,7 @@ import {
 import type { SyncBootstrapResponse } from "@spiritdevs/contracts/cloudSync";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { makeSqliteSyncStore } from "@spiritdevs/client-runtime/sync";
-import type { FunctionReturnType } from "convex/server";
+import type { FunctionReturnType } from "cyndrbase/server";
 import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
 import * as Deferred from "effect/Deferred";

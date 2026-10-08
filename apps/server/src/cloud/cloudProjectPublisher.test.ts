@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { EnvironmentId, ProjectId, type Project } from "@spiritdevs/contracts";
 import { CompanyId } from "@spiritdevs/contracts/company";
-import { getFunctionName, type FunctionReference } from "convex/server";
+import { getFunctionName, type FunctionReference } from "cyndrbase/server";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 

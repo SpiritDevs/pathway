@@ -2,7 +2,7 @@
 import { api } from "@spiritdevs/backend/convexApi";
 import type { EnvironmentId, Project } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import type { FunctionArgs } from "convex/server";
+import type { FunctionArgs } from "cyndrbase/server";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";

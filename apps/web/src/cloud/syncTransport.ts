@@ -32,7 +32,7 @@ import {
   type SyncReserveIssueKeysResponse,
 } from "@spiritdevs/contracts/cloudSync";
 import { ConvexClient } from "convex/browser";
-import { makeFunctionReference, type FunctionReference } from "convex/server";
+import { makeFunctionReference, type FunctionReference } from "cyndrbase/server";
 import { ConvexError } from "convex/values";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";

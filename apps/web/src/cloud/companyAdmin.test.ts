@@ -1,5 +1,5 @@
 import type { CompanyId, MembershipId, TeamId } from "@spiritdevs/contracts/company";
-import { getFunctionName, type FunctionReference } from "convex/server";
+import { getFunctionName, type FunctionReference } from "cyndrbase/server";
 import { ConvexError } from "convex/values";
 import { describe, expect, it, vi } from "vite-plus/test";
 

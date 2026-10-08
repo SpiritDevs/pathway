@@ -16,7 +16,7 @@ import {
   type SyncListChangesResponse,
   type SyncReserveIssueKeysResponse,
 } from "@spiritdevs/contracts/cloudSync";
-import { getFunctionName } from "convex/server";
+import { getFunctionName } from "cyndrbase/server";
 import { ConvexError } from "convex/values";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

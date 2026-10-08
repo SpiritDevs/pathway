@@ -2,7 +2,7 @@ import { useAuth } from "@clerk/react";
 import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { ConvexHttpClient } from "convex/browser";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import { useMemo } from "react";
 
 import { resolveCloudSyncConvexUrl } from "./publicConfig";

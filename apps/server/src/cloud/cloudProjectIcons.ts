@@ -10,7 +10,7 @@
 import { api } from "@spiritdevs/backend/convexApi";
 import type { ProjectIcon } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import type { FunctionArgs } from "convex/server";
+import type { FunctionArgs } from "cyndrbase/server";
 import { ConvexError } from "convex/values";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";

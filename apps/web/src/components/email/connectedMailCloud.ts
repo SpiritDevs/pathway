@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ConvexClient } from "convex/browser";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import { subscribeMailWithDeadline, mailQueryErrorMessage } from "./connectedMailSubscription";
 import { readMailRelayResponse } from "./connectedMail.logic";
 import { useAuth } from "@clerk/react";

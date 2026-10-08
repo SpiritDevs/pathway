@@ -275,6 +275,9 @@ importers:
       convex:
         specifier: ^1.16.0
         version: 1.43.0(@clerk/react@6.12.10(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(bufferutil@4.1.0)(react@19.2.6)(utf-8-validate@6.0.6)
+      cyndrbase:
+        specifier: link:/Users/coreybaines/Github/cyndrbase-wt/pathway-dep/packages/server
+        version: link:../../../cyndrbase-wt/pathway-dep/packages/server
       effect-acp:
         specifier: workspace:*
         version: link:../../packages/effect-acp
@@ -380,6 +383,9 @@ importers:
       culori:
         specifier: ^4.0.2
         version: 4.0.2
+      cyndrbase:
+        specifier: link:/Users/coreybaines/Github/cyndrbase-wt/pathway-dep/packages/server
+        version: link:../../../cyndrbase-wt/pathway-dep/packages/server
       effect:
         specifier: 4.0.0-beta.103
         version: 4.0.0-beta.103(patch_hash=af36b7948b6f9c56623074662b51dade5699880c1a7c71245de73e13c3185fb6)
@@ -540,6 +546,9 @@ importers:
       convex:
         specifier: ^1.16.0
         version: 1.43.0(@clerk/react@6.12.10(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(bufferutil@4.1.0)(react@19.2.6)(utf-8-validate@6.0.6)
+      cyndrbase:
+        specifier: link:/Users/coreybaines/Github/cyndrbase-wt/pathway-dep/packages/server
+        version: link:../../../cyndrbase-wt/pathway-dep/packages/server
       effect:
         specifier: 4.0.0-beta.103
         version: 4.0.0-beta.103(patch_hash=af36b7948b6f9c56623074662b51dade5699880c1a7c71245de73e13c3185fb6)
@@ -593,16 +602,22 @@ importers:
       '@spiritdevs/contracts':
         specifier: workspace:*
         version: link:../contracts
-      convex:
-        specifier: ^1.16.0
-        version: 1.43.0(@clerk/react@6.12.10(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(bufferutil@4.1.0)(react@19.2.6)(utf-8-validate@6.0.6)
+      cyndrbase:
+        specifier: link:/Users/coreybaines/Github/cyndrbase-wt/pathway-dep/packages/server
+        version: link:../../../cyndrbase-wt/pathway-dep/packages/server
       effect:
         specifier: 4.0.0-beta.103
         version: 4.0.0-beta.103(patch_hash=af36b7948b6f9c56623074662b51dade5699880c1a7c71245de73e13c3185fb6)
     devDependencies:
+      '@cyndrbase/cli':
+        specifier: link:/Users/coreybaines/Github/cyndrbase-wt/pathway-dep/packages/cli
+        version: link:../../../cyndrbase-wt/pathway-dep/packages/cli
       '@types/node':
         specifier: 24.12.4
         version: 24.12.4
+      convex:
+        specifier: ^1.16.0
+        version: 1.43.0(@clerk/react@6.12.10(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(bufferutil@4.1.0)(react@19.2.6)(utf-8-validate@6.0.6)
       convex-test:
         specifier: 0.0.55
         version: 0.0.55(convex@1.43.0(@clerk/react@6.12.10(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(bufferutil@4.1.0)(react@19.2.6)(utf-8-validate@6.0.6))
@@ -8896,10 +8911,6 @@ packages:
     resolution: {integrity: sha512-kXuRi1mtaKMrsLUxz3sQYvVl37B0Ns6MzfrtV5DvJceE9bPyspOqk9xxv7XbZWcfLWbFmm997vl83qUWVJA64w==}
     engines: {node: '>=16'}
 
-  tough-cookie@6.0.1:
-    resolution: {integrity: sha512-LktZQb3IeoUWB9lqR5EWTHgW/VTITCXg4D21M+lvybRVdylLrRMnqaIONLVb5mav8vM19m44HIcGq4qASeu2Qw==}
-    engines: {node: '>=16'}
-
   tr46@0.0.3:
     resolution: {integrity: sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw==}
 
@@ -16844,7 +16855,7 @@ snapshots:
       rettime: 0.10.1
       statuses: 2.0.2
       strict-event-emitter: 0.5.1
-      tough-cookie: 6.0.1
+      tough-cookie: 6.0.0
       type-fest: 5.7.0
       until-async: 3.0.2
       yargs: 17.7.2
@@ -18507,10 +18518,6 @@ snapshots:
   totalist@3.0.1: {}
 
   tough-cookie@6.0.0:
-    dependencies:
-      tldts: 7.4.2
-
-  tough-cookie@6.0.1:
     dependencies:
       tldts: 7.4.2
 

@@ -14,7 +14,7 @@ import {
   type ProjectIcon,
 } from "@spiritdevs/contracts/cloudProject";
 import { ConvexClient, ConvexHttpClient } from "convex/browser";
-import { makeFunctionReference, type FunctionReference } from "convex/server";
+import { makeFunctionReference, type FunctionReference } from "cyndrbase/server";
 import { ConvexError } from "convex/values";
 
 import { newCompanyDomainId } from "./companyAdmin";

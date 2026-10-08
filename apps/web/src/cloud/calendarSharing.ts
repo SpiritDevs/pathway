@@ -7,7 +7,7 @@
 import type { Calendar, CalendarGrantId, CalendarId, CalendarSharing } from "@spiritdevs/contracts";
 import type { CompanyId, MembershipId, TeamId } from "@spiritdevs/contracts/company";
 import { ConvexClient } from "convex/browser";
-import { makeFunctionReference, type FunctionReference } from "convex/server";
+import { makeFunctionReference, type FunctionReference } from "cyndrbase/server";
 import { useEffect, useMemo } from "react";
 
 import { mapCompanyAdminError, newCompanyDomainId } from "./companyAdmin";

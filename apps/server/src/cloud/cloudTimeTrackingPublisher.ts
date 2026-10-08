@@ -3,7 +3,7 @@ import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { agentTimeSummaryPrompt, parseAgentTimeSummary } from "./agentTimeSummary.ts";
 /** Sends durable agent work intervals while clients are closed or disconnected. */
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import * as Cause from "effect/Cause";

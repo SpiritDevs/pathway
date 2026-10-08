@@ -1,6 +1,6 @@
 import { useAuth } from "@clerk/react";
 import { ConvexClient } from "convex/browser";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import { useEffect, useRef } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";

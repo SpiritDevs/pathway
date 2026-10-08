@@ -19,7 +19,7 @@ import {
   type FocusThreadSortOrder,
 } from "@spiritdevs/contracts/focus";
 import { ConvexClient } from "convex/browser";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";

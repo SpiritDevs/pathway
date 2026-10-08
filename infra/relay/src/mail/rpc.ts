@@ -1,4 +1,4 @@
-import { makeFunctionReference, type DefaultFunctionArgs } from "convex/server";
+import { makeFunctionReference, type DefaultFunctionArgs } from "cyndrbase/server";
 import * as Effect from "effect/Effect";
 import { RelayConvexClient } from "../db.ts";
 import type { MailRpc } from "./runtime.ts";
