@@ -13,6 +13,7 @@ const PATHWAY_MCP_TOOL_DISPLAY_NAMES: Record<string, string> = {
   pathway_environments_list: "List Pathway environments",
   delegate_task: "Delegate a child task",
   task_status: "Get delegated task status",
+  task_answer: "Answer delegated task",
   task_cancel: "Cancel delegated task",
   schedule_task: "Schedule a recurring task",
   list_scheduled_tasks: "List scheduled tasks",

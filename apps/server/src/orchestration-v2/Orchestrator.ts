@@ -487,8 +487,8 @@ function browserTakeoverTransitionIsLegal(
 function delegatedCompletionWakeDetail(taskIds: ReadonlyArray<string>): string {
   const taskList = taskIds.join(", ");
   return taskIds.length === 1
-    ? `Delegated task ${taskList} reached a terminal state. Use task_status with taskId ${taskList} to read the result.`
-    : `Delegated tasks ${taskList} reached terminal states. Use task_status with each taskId to read the results.`;
+    ? `Delegated task ${taskList} reached a terminal state. Use task_status with taskId ${taskList} to read the result and any question it is waiting on.`
+    : `Delegated tasks ${taskList} reached terminal states. Use task_status with each taskId to read the results and any questions they are waiting on.`;
 }
 
 function isTerminalDelegatedTaskStatus(status: OrchestrationV2Subagent["status"]): boolean {
