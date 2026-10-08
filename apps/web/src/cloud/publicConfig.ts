@@ -2,6 +2,8 @@ import { relayClerkTokenOptions } from "@spiritdevs/shared/relayAuth";
 import { normalizeSecureRelayUrl } from "@spiritdevs/shared/relayUrl";
 import * as Schema from "effect/Schema";
 
+import { LOCAL_CYNDRBASE_PATH } from "../devServer";
+
 export class CloudPublicConfigMissingError extends Schema.TaggedErrorClass<CloudPublicConfigMissingError>()(
   "CloudPublicConfigMissingError",
   {
@@ -75,8 +77,8 @@ export function normalizeConvexDeploymentUrl(value: string): string | null {
  * loopback origin; those are sent through the same path. Every other URL is returned unchanged.
  */
 export function resolveCloudFileUrl(url: string): string {
-  const base = (import.meta.env.VITE_PATHWAY_CYNDRBASE_URL as string | undefined)?.trim() ?? "";
-  if (!base.startsWith("/") || !URL.canParse(url)) return url;
+  const base = (import.meta.env.VITE_PATHWAY_CYNDRBASE_URL as string | undefined)?.trim();
+  if (!import.meta.env.DEV || base !== LOCAL_CYNDRBASE_PATH || !URL.canParse(url)) return url;
   const file = new URL(url);
   return file.protocol === "http:" &&
     LOOPBACK_HOSTNAMES.has(file.hostname) &&

@@ -151,8 +151,14 @@ describe("resolveCloudFileUrl", () => {
     );
   });
 
-  it("leaves file URLs alone when the deployment is not served through the page", () => {
+  it("leaves file URLs alone unless dev serves the deployment at /cyndrbase", () => {
+    vi.stubGlobal("location", new URL("https://dev.example.test/threads"));
     vi.stubEnv("VITE_PATHWAY_CYNDRBASE_URL", "https://pathway.syd.cyndrbase.cloud");
+    expect(resolveCloudFileUrl(file)).toBe(file);
+    vi.stubEnv("VITE_PATHWAY_CYNDRBASE_URL", "/backend");
+    expect(resolveCloudFileUrl(file)).toBe(file);
+    vi.stubEnv("VITE_PATHWAY_CYNDRBASE_URL", "/cyndrbase");
+    vi.stubEnv("DEV", false);
     expect(resolveCloudFileUrl(file)).toBe(file);
   });
 });
