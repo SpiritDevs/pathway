@@ -3,9 +3,9 @@
     "apps/pathway-ios/device-stream/entry.ts": "414e035747f320ab8d70b4954c13ed2206731fc44028ae71f48dbdd38c283a0f",
     "packages/client-runtime/src/device/duoControl.ts": "22c4eb6d76375d344d4ed52c444ca35f6e73b104221fc4968aff08fd925cfd81",
     "packages/client-runtime/src/device/frame.ts": "609191b358e7e6051b18912904ded4414107a832bebd718264fbbb6bc8de2d91",
-    "packages/client-runtime/src/device/hubAccess.ts": "afc38225ca8f7304eb23f1e3d124bc0fd4a10fb69f97167603b649e06b0ffe43",
+    "packages/client-runtime/src/device/hubAccess.ts": "4a7e5a89ecb937497e6c3692d8f71b73b41be85de2f4e57f9d62c5df3495210d",
     "packages/client-runtime/src/device/stream.ts": "bedfc18dc59eb4206b0089a823b1ad256342414364145359b0d078e060e02c92",
-    "pnpm-lock.yaml": "00947f1d480e0ce577b0d5e2a8e019130b75615ff74672b321cef93b92a85161",
+    "pnpm-lock.yaml": "d282f5a7d67f824cd1061e57b51193e5f8eb0cbf1f5e4e5e77f399bb4585c3a1",
     "scripts/ios/build-device-stream.mjs": "14039d7d33c1ea5ce3a805616f0e426ab68eac7a09875b9ab6c71557430451db"
   },
   "outputs": {
