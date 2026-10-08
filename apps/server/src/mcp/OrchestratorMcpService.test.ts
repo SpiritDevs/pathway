@@ -236,6 +236,8 @@ describe("OrchestratorMcpService", () => {
       } as unknown as OrchestrationV2ThreadProjection;
       const childProjection = {
         thread: { id: childThreadId },
+        runtimeRequests: [],
+        turnItems: [],
         runs: [{ id: childRunId, ordinal: 1, status: "completed" }],
         contextTransfers: [],
       } as unknown as OrchestrationV2ThreadProjection;
@@ -310,6 +312,8 @@ describe("OrchestratorMcpService", () => {
       } as unknown as OrchestrationV2ThreadProjection;
       const childProjection = {
         thread: { id: childThreadId },
+        runtimeRequests: [],
+        turnItems: [],
         runs: [],
         contextTransfers: [],
       } as unknown as OrchestrationV2ThreadProjection;
@@ -373,6 +377,8 @@ describe("OrchestratorMcpService", () => {
       } as unknown as OrchestrationV2ThreadProjection;
       const childProjection = {
         thread: { id: childThreadId },
+        runtimeRequests: [],
+        turnItems: [],
         runs: [{ id: childRunId, status: "running" }],
         contextTransfers: [],
       } as unknown as OrchestrationV2ThreadProjection;
@@ -439,6 +445,8 @@ describe("OrchestratorMcpService", () => {
       } as unknown as OrchestrationV2ThreadProjection;
       const childProjection = {
         thread: { id: childThreadId },
+        runtimeRequests: [],
+        turnItems: [],
         runs: [{ id: childRunId, status: "running" }],
         contextTransfers: [],
       } as unknown as OrchestrationV2ThreadProjection;

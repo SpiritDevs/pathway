@@ -4,7 +4,6 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
-  AuthRelayWriteScope,
   AuthStandardClientScopes,
   COMPUTER_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
@@ -89,7 +88,6 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.cloudGetRelayClientStatus)).toBe(
       AuthRelayReadScope,
     );
-    expect(requiredScopeForRpcMethod(WS_METHODS.cloudInstallRelayClient)).toBe(AuthRelayWriteScope);
   });
 
   it("reads the reviewer menu under the same scope as the pull request it belongs to", () => {

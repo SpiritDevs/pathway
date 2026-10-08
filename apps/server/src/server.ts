@@ -122,7 +122,11 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { connectHttpApiLayer, reconcileDesiredCloudLink } from "./cloud/http.ts";
+import {
+  connectHttpApiLayer,
+  reconcileDesiredCloudLink,
+  reprovisionStoredManagedEndpoint,
+} from "./cloud/http.ts";
 import { serverRelayBrokerTracingLayer } from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as DesktopParentMonitor from "./background/DesktopParentMonitor.ts";
@@ -245,12 +249,7 @@ const ResourceDiagnosticsLayerLive = Layer.mergeAll(
   ProcessResourceMonitor.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
 );
 
-const RelayClientLive = Layer.unwrap(
-  Effect.gen(function* () {
-    const config = yield* ServerConfig.ServerConfig;
-    return RelayClient.layerCloudflared({ baseDir: config.baseDir });
-  }),
-);
+const RelayClientLive = RelayClient.layer;
 
 const HttpServerLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -792,17 +791,34 @@ export const makeServerLayer = Layer.unwrap(
           yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
           return;
         }
-        // Keep the managed tunnel allocation and connector token durable across
-        // shutdowns. The process naturally disconnects while this environment is
-        // offline, then the next launch can reattach immediately without waiting
-        // for Cloudflare resource recreation and DNS propagation. Explicit unlink
-        // remains responsible for deprovisioning the allocation.
+        // Keep the managed endpoint and connector token durable across shutdowns:
+        // the next launch reattaches with the stored token. CLI links relink here;
+        // other links reprovision only a stored config that predates Cyndrbase
+        // Connect. Explicit unlink remains responsible for deprovisioning.
         yield* forkParked(
           Effect.gen(function* () {
-            if (!(yield* CloudCliState.readCliDesiredCloudLink)) return;
             const server = yield* HttpServer.HttpServer;
             const address = server.address;
             if (typeof address === "string" || !("port" in address)) return;
+            if (!(yield* CloudCliState.readCliDesiredCloudLink)) {
+              yield* reprovisionStoredManagedEndpoint(address.port).pipe(
+                Effect.retry({
+                  times: CloudManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS - 1,
+                  schedule: Schedule.exponential("1 second"),
+                }),
+                Effect.tap((reprovisioned) =>
+                  reprovisioned
+                    ? Effect.logInfo("Pathway Connect managed endpoint reprovisioned on startup")
+                    : Effect.void,
+                ),
+                Effect.catch((cause) =>
+                  Effect.logWarning("Failed to reprovision Pathway Connect endpoint on startup", {
+                    cause,
+                  }),
+                ),
+              );
+              return;
+            }
             // No settling delay before the first attempt: routes are already
             // serving by the time activation opens this gate (the startup
             // sequence awaits routesReady), and the retry schedule below

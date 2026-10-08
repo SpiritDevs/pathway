@@ -134,6 +134,7 @@ const linkedEnvironmentResult = v.object({
   linkedAt: v.string(),
 });
 const allocationResult = v.object({
+  allocationId: v.string(),
   userId: v.string(),
   environmentId: v.string(),
   hostname: v.string(),
@@ -169,6 +170,7 @@ const deliveryAttemptInput = {
 
 function toAllocation(row: Doc<"relayManagedEndpointAllocations">) {
   return {
+    allocationId: row._id,
     userId: row.userId,
     environmentId: row.environmentId,
     hostname: row.hostname,
@@ -1095,88 +1097,65 @@ export const reserveManagedEndpointAllocation = mutation({
   },
 });
 
-async function allocationByKey(ctx: MutationCtx, userId: string, environmentId: string) {
-  return await ctx.db
+// Writes after reserve name the allocation they read, so a stale provision or teardown never
+// touches the newer allocation a relink creates for the same environment.
+const allocationArgs = { ...allocationKeyArgs, allocationId: v.string() };
+async function allocationById(
+  ctx: MutationCtx,
+  args: { userId: string; environmentId: string; allocationId: string },
+) {
+  const row = await ctx.db
     .query("relayManagedEndpointAllocations")
     .withIndex("by_user_and_environment", (q) =>
-      q.eq("userId", userId).eq("environmentId", environmentId),
+      q.eq("userId", args.userId).eq("environmentId", args.environmentId),
     )
     .unique();
+  return row?._id === args.allocationId ? row : null;
 }
 export const recordManagedEndpointTunnel = mutation({
-  args: { ...allocationKeyArgs, tunnelId: v.string(), now: v.string() },
-  returns: v.null(),
+  args: { ...allocationArgs, tunnelId: v.string(), now: v.string() },
+  returns: v.boolean(),
   handler: async (ctx, args) => {
     await requireRelayControlPlane(ctx);
-    const row = await allocationByKey(ctx, args.userId, args.environmentId);
-    if (row) await ctx.db.patch(row._id, { tunnelId: args.tunnelId, updatedAt: args.now });
-    return null;
+    const row = await allocationById(ctx, args);
+    if (!row) return false;
+    await ctx.db.patch(row._id, { tunnelId: args.tunnelId, updatedAt: args.now });
+    return true;
   },
 });
-export const recordManagedEndpointDns = mutation({
-  args: { ...allocationKeyArgs, dnsRecordId: v.string(), now: v.string() },
-  returns: v.null(),
+/**
+ * Sets the connector token slot (dnsRecordId) to `next` if it still holds `expected`, and
+ * returns what it holds afterwards; null when the allocation is gone or replaced.
+ */
+export const swapManagedEndpointTokenSlot = mutation({
+  args: { ...allocationArgs, expected: nullableString, next: v.string(), now: v.string() },
+  returns: nullableString,
   handler: async (ctx, args) => {
     await requireRelayControlPlane(ctx);
-    const row = await allocationByKey(ctx, args.userId, args.environmentId);
-    if (row) await ctx.db.patch(row._id, { dnsRecordId: args.dnsRecordId, updatedAt: args.now });
-    return null;
+    const row = await allocationById(ctx, args);
+    if (!row) return null;
+    if (row.dnsRecordId !== args.expected) return row.dnsRecordId;
+    await ctx.db.patch(row._id, { dnsRecordId: args.next, updatedAt: args.now });
+    return args.next;
   },
 });
 export const markManagedEndpointReady = mutation({
-  args: { ...allocationKeyArgs, now: v.string() },
+  args: { ...allocationArgs, now: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
     await requireRelayControlPlane(ctx);
-    const row = await allocationByKey(ctx, args.userId, args.environmentId);
+    const row = await allocationById(ctx, args);
     if (row) await ctx.db.patch(row._id, { readyAt: args.now, updatedAt: args.now });
     return null;
   },
 });
-export const claimManagedEndpointRelease = mutation({
-  args: {
-    ...allocationKeyArgs,
-    tunnelId: v.string(),
-    updatedAt: v.string(),
-    claimedAt: v.string(),
-  },
-  returns: v.boolean(),
-  handler: async (ctx, args) => {
-    await requireRelayControlPlane(ctx);
-    const row = await allocationByKey(ctx, args.userId, args.environmentId);
-    if (!row || row.tunnelId !== args.tunnelId || row.updatedAt !== args.updatedAt) return false;
-    await ctx.db.patch(row._id, { updatedAt: args.claimedAt });
-    return true;
-  },
-});
-export const claimManagedEndpointDeprovision = mutation({
-  args: { ...allocationKeyArgs, updatedAt: v.string(), claimedAt: v.string() },
-  returns: nullableString,
-  handler: async (ctx, args) => {
-    await requireRelayControlPlane(ctx);
-    const row = await allocationByKey(ctx, args.userId, args.environmentId);
-    if (!row || row.updatedAt !== args.updatedAt) return null;
-    await ctx.db.patch(row._id, { updatedAt: args.claimedAt });
-    return args.claimedAt;
-  },
-});
 export const removeManagedEndpointAllocation = mutation({
-  args: allocationKeyArgs,
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    await requireRelayControlPlane(ctx);
-    const row = await allocationByKey(ctx, args.userId, args.environmentId);
-    if (row) await ctx.db.delete(row._id);
-    return null;
-  },
-});
-export const removeClaimedManagedEndpointAllocation = mutation({
-  args: { ...allocationKeyArgs, updatedAt: v.string() },
+  args: allocationArgs,
   returns: v.boolean(),
   handler: async (ctx, args) => {
     await requireRelayControlPlane(ctx);
-    const row = await allocationByKey(ctx, args.userId, args.environmentId);
-    if (!row || row.updatedAt !== args.updatedAt) return false;
+    const row = await allocationById(ctx, args);
+    if (!row) return false;
     await ctx.db.delete(row._id);
     return true;
   },

@@ -319,6 +319,58 @@ describe("relayPersistence", () => {
     expect(overLimit).toEqual({ status: "limit_exceeded", maxTunnels: 1, activeTunnels: 1 });
   });
 
+  it("writes a managed endpoint allocation only for callers that name the one they read", async () => {
+    const { relay } = testRelay();
+    const key = { userId: "user-1", environmentId: "environment-1" };
+    const reserved = async () =>
+      (
+        await relay.mutation(
+          api.relayPersistence.reserveManagedEndpointAllocation,
+          reserve("environment-1"),
+        )
+      ).allocation!;
+    // The same timestamp on every write: the slot's value and the allocation decide, not time.
+    const swap = (allocationId: string, expected: string | null, next: string) =>
+      relay.mutation(api.relayPersistence.swapManagedEndpointTokenSlot, {
+        ...key,
+        allocationId,
+        expected,
+        next,
+        now: "2026-08-14T00:02:00.000Z",
+      });
+    const remove = (allocationId: string) =>
+      relay.mutation(api.relayPersistence.removeManagedEndpointAllocation, {
+        ...key,
+        allocationId,
+      });
+
+    const old = await reserved();
+    expect(await swap(old.allocationId, null, "slot-a")).toBe("slot-a");
+    expect(await swap(old.allocationId, null, "slot-b")).toBe("slot-a");
+    expect(await remove(old.allocationId)).toBe(true);
+
+    // A relink's allocation is out of reach of anything still holding the old one.
+    const fresh = await reserved();
+    const record = (allocationId: string) =>
+      relay.mutation(api.relayPersistence.recordManagedEndpointTunnel, {
+        ...key,
+        allocationId,
+        tunnelId: "endpoint-1",
+        now: "2026-08-14T00:02:00.000Z",
+      });
+    expect(await record(old.allocationId)).toBe(false);
+    expect(await record(fresh.allocationId)).toBe(true);
+    expect(await swap(old.allocationId, null, "slot-c")).toBeNull();
+    expect(await remove(old.allocationId)).toBe(false);
+    expect(await relay.query(api.relayPersistence.getManagedEndpointAllocation, key)).toMatchObject(
+      {
+        allocationId: fresh.allocationId,
+        tunnelId: "endpoint-1",
+        dnsRecordId: null,
+      },
+    );
+  });
+
   it("keeps only the newest credential active without scanning revoked history", async () => {
     const { t, relay } = testRelay();
     await relay.mutation(api.relayPersistence.upsertEnvironmentLink, {

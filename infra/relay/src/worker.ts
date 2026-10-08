@@ -171,10 +171,9 @@ export const ApiLive = Api.make(
     const convexRelayPrivateKey = yield* convexRelaySigningKey.privateKey;
     const convexRelayPublicKey = yield* convexRelaySigningKey.publicKey;
 
-    const managedEndpointTunnelBinding = yield* Cloudflare.Tunnel.ReadWriteTunnel();
     // Keep Worker custom-domain reconciliation ordered after API zone provisioning.
     yield* yield* relayApiZone.zoneId;
-    const managedEndpointDnsBinding = yield* Cloudflare.DNS.ReadWriteDns(managedEndpointZone);
+    // Endpoint hostnames live under this zone; Cyndrbase Connect serves them.
     const managedEndpointZoneName = yield* managedEndpointZone.name;
 
     //
@@ -193,6 +192,7 @@ export const ApiLive = Api.make(
       cloudMintPublicKey: yield* cloudMintPublicKey,
       managedEndpointBaseDomain: yield* managedEndpointZoneName,
       managedEndpointNamespace: stage,
+      cyndrbaseConnect: yield* RelayConfiguration.loadCyndrbaseConnect,
       cloudSync: {
         serviceTokensEnabled: true,
         convexUrl,
@@ -275,13 +275,7 @@ export const ApiLive = Api.make(
       Layer.provideMerge(EnvironmentConnector.layer),
       Layer.provideMerge(EnvironmentLinker.layer),
       Layer.provideMerge(EnvironmentPublishSignatures.layer),
-      Layer.provideMerge(
-        ManagedEndpointProvider.layerCloudflareBindings(
-          managedEndpointTunnelBinding,
-          managedEndpointDnsBinding,
-          alchemyRuntimeContext,
-        ),
-      ),
+      Layer.provideMerge(ManagedEndpointProvider.layer),
       Layer.provideMerge(DpopProofs.layer),
       Layer.provideMerge(ConvexConnectGrants.layer),
       Layer.provideMerge(ApnsDeliveries.layer),
@@ -442,8 +436,6 @@ export const ApiLive = Api.make(
         Layer.provideMerge(Cloudflare.Workers.CronEventSourceLive),
         Layer.provideMerge(Cloudflare.Queues.WriteQueueBinding),
         Layer.provideMerge(Cloudflare.Queues.EventSourceLive),
-        Layer.provideMerge(Cloudflare.Tunnel.ReadWriteTunnelBinding),
-        Layer.provideMerge(Cloudflare.DNS.ReadWriteDnsHttp),
       ),
     ),
   ),

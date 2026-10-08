@@ -370,7 +370,7 @@ export const EnvironmentCloudLinkStateResult = Schema.Struct({
   cloudUserId: Schema.NullOr(Schema.String),
   relayUrl: Schema.NullOr(Schema.String),
   relayIssuer: Schema.NullOr(Schema.String),
-  // A managed Cloudflare tunnel is provisioned for this link. False for a
+  // A Pathway Connect endpoint is provisioned for this link. False for a
   // publish-only link (activity publishing without a relay-managed tunnel), so
   // clients can present the two capabilities as independent settings.
   // Optional so newer clients tolerate older environment servers.

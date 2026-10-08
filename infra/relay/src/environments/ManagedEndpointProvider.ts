@@ -1,18 +1,17 @@
-import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
-import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { EnvironmentId } from "@spiritdevs/contracts";
 import type {
   RelayManagedEndpoint,
-  RelayManagedEndpointOrigin,
   RelayManagedEndpointRuntimeConfig,
 } from "@spiritdevs/contracts/relay";
 
@@ -32,7 +31,11 @@ export class ManagedEndpointProvisioningNotConfigured extends Schema.TaggedError
     userId: Schema.String,
     environmentId: Schema.String,
     missingSettings: Schema.Array(
-      Schema.Literals(["managedEndpointBaseDomain", "managedEndpointNamespace"]),
+      Schema.Literals([
+        "managedEndpointBaseDomain",
+        "managedEndpointNamespace",
+        "cyndrbaseConnect",
+      ]),
     ),
   },
 ) {
@@ -43,15 +46,13 @@ export class ManagedEndpointProvisioningNotConfigured extends Schema.TaggedError
 
 const ManagedEndpointProvisioningStage = Schema.Literals([
   "derive-environment-hash",
-  "check-tunnel-limit",
   "reserve-allocation",
-  "ensure-tunnel",
-  "validate-tunnel-response",
-  "record-tunnel",
-  "configure-tunnel",
-  "ensure-dns-record",
-  "record-dns",
-  "get-tunnel-token",
+  "finish-unlink",
+  "ensure-endpoint",
+  "record-endpoint",
+  "create-connector-token",
+  "store-connector-token",
+  "open-connector-token",
   "mark-allocation-ready",
 ]);
 
@@ -62,11 +63,7 @@ export class ManagedEndpointProvisioningFailed extends Schema.TaggedErrorClass<M
     userId: Schema.String,
     environmentId: Schema.String,
     hostname: Schema.optionalKey(Schema.String),
-    tunnelName: Schema.optionalKey(Schema.String),
-    tunnelId: Schema.optionalKey(Schema.String),
-    dnsRecordId: Schema.optionalKey(Schema.String),
-    returnedTunnelName: Schema.optionalKey(Schema.String),
-    returnedTunnelId: Schema.optionalKey(Schema.String),
+    endpointId: Schema.optionalKey(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -77,10 +74,9 @@ export class ManagedEndpointProvisioningFailed extends Schema.TaggedErrorClass<M
 
 const ManagedEndpointDeprovisioningStage = Schema.Literals([
   "load-allocation",
-  "claim-release",
-  "claim-deprovision",
-  "delete-dns-record",
-  "delete-tunnel",
+  "claim-teardown",
+  "revoke-connector-tokens",
+  "remove-endpoint",
   "remove-allocation",
 ]);
 
@@ -90,8 +86,7 @@ export class ManagedEndpointDeprovisioningFailed extends Schema.TaggedErrorClass
     stage: ManagedEndpointDeprovisioningStage,
     userId: Schema.String,
     environmentId: Schema.String,
-    tunnelId: Schema.optionalKey(Schema.String),
-    dnsRecordId: Schema.optionalKey(Schema.String),
+    endpointId: Schema.optionalKey(Schema.String),
     cause: Schema.Defect(),
   },
 ) {
@@ -100,24 +95,21 @@ export class ManagedEndpointDeprovisioningFailed extends Schema.TaggedErrorClass
   }
 }
 
-export class ManagedEndpointOriginNotAllowed extends Schema.TaggedErrorClass<ManagedEndpointOriginNotAllowed>()(
-  "ManagedEndpointOriginNotAllowed",
-  {
-    userId: Schema.String,
-    environmentId: Schema.String,
-    host: Schema.String,
-    port: Schema.Number,
-  },
-) {
-  override get message(): string {
-    return `Managed endpoint origin '${this.host}:${this.port}' is not allowed for user '${this.userId}', environment '${this.environmentId}'`;
-  }
-}
+/** The token slot changed under this provision in a way it cannot settle; a retry rereads it. */
+export class ManagedEndpointTokenSlotBusy extends Schema.TaggedErrorClass<ManagedEndpointTokenSlotBusy>()(
+  "ManagedEndpointTokenSlotBusy",
+  {},
+) {}
+
+/** An unlink claimed the allocation while this provision ran. */
+export class ManagedEndpointUnlinked extends Schema.TaggedErrorClass<ManagedEndpointUnlinked>()(
+  "ManagedEndpointUnlinked",
+  {},
+) {}
 
 export type ManagedEndpointProviderError =
   | ManagedEndpointProvisioningNotConfigured
   | ManagedEndpointProvisioningFailed
-  | ManagedEndpointOriginNotAllowed
   | ManagedTunnelLimits.ManagedTunnelLimitExceeded;
 
 export interface ManagedEndpointProvisioningResult {
@@ -125,503 +117,439 @@ export interface ManagedEndpointProvisioningResult {
   readonly runtime: RelayManagedEndpointRuntimeConfig;
 }
 
-export type ManagedEndpointDeprovisionTarget = ManagedEndpointAllocations.ManagedEndpointAllocation;
-
 export class ManagedEndpointProvider extends Context.Service<
   ManagedEndpointProvider,
   {
+    /** Returns the endpoint and its one connector token, minting the token only once. */
     readonly provision: (input: {
       readonly userId: string;
       readonly environmentId: string;
-      readonly origin: RelayManagedEndpointOrigin;
     }) => Effect.Effect<ManagedEndpointProvisioningResult, ManagedEndpointProviderError>;
     /**
-     * Captures the allocation generation owned by an unlink before its link
-     * revocation commits. Passing this target to `deprovision` prevents a
-     * concurrent relink from having its newer allocation torn down.
+     * Revokes the endpoint's tokens, removes the endpoint, then deletes the allocation. Once
+     * claimed, nothing stops the teardown; a retry, or the next provision, finishes it.
      */
-    readonly prepareDeprovision: (input: {
-      readonly userId: string;
-      readonly environmentId: string;
-    }) => Effect.Effect<
-      ManagedEndpointDeprovisionTarget | null,
-      ManagedEndpointDeprovisioningFailed
-    >;
     readonly deprovision: (input: {
       readonly userId: string;
       readonly environmentId: string;
-      readonly target?: ManagedEndpointDeprovisionTarget | null;
     }) => Effect.Effect<void, ManagedEndpointDeprovisioningFailed>;
-    /**
-     * Deletes the provisioned Cloudflare tunnel while keeping the allocation
-     * (hostname + tunnel name reservation) and DNS record. Cloudflare bills per
-     * provisioned tunnel, so environments release the tunnel when they shut
-     * down; the next `provision` recreates it under the same name and repoints
-     * the CNAME, preserving the endpoint URL.
-     *
-     * Resolves to whether the caller's connector token is now dead: true when
-     * the tunnel was deleted (or none was recorded to begin with), false when
-     * a concurrent provision outbid the release claim and the recorded tunnel
-     * — and any token issued for it — stays live.
-     */
-    readonly release: (input: {
-      readonly userId: string;
-      readonly environmentId: string;
-    }) => Effect.Effect<boolean, ManagedEndpointDeprovisioningFailed>;
   }
 >()("pathway-relay/environments/ManagedEndpointProvider") {}
 
-interface ManagedEndpointTunnel {
-  readonly id?: string | null;
-  readonly name?: string | null;
-}
-
-const ManagedEndpointTunnelClientOperation = Schema.Literals([
-  "list",
-  "create",
-  "put-configuration",
-  "get-token",
-  "delete",
-]);
-
-export class ManagedEndpointTunnelClientError extends Schema.TaggedErrorClass<ManagedEndpointTunnelClientError>()(
-  "ManagedEndpointTunnelClientError",
+/** A failed Cyndrbase Connect `EndpointService` call; `code` is the Connect error code. */
+export class CyndrbaseConnectRpcError extends Schema.TaggedErrorClass<CyndrbaseConnectRpcError>()(
+  "CyndrbaseConnectRpcError",
   {
-    operation: ManagedEndpointTunnelClientOperation,
-    tunnelName: Schema.optionalKey(Schema.String),
-    tunnelId: Schema.optionalKey(Schema.String),
-    cause: Schema.Defect(),
+    method: Schema.String,
+    code: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    const target = this.tunnelId ?? this.tunnelName;
-    return `Managed endpoint tunnel provider '${this.operation}' request failed${target === undefined ? "" : ` for '${target}'`}`;
+    return `Cyndrbase Connect ${this.method} failed: ${this.code}`;
   }
 }
 
-export class ManagedEndpointTunnelClient extends Context.Service<
-  ManagedEndpointTunnelClient,
-  {
-    readonly list: (request: {
-      readonly name: string;
-      readonly isDeleted: false;
-    }) => Effect.Effect<
-      { readonly result: ReadonlyArray<ManagedEndpointTunnel> },
-      ManagedEndpointTunnelClientError
-    >;
-    readonly create: (request: {
-      readonly name: string;
-      readonly configSrc: "cloudflare";
-    }) => Effect.Effect<ManagedEndpointTunnel, ManagedEndpointTunnelClientError>;
-    readonly putConfiguration: (
-      tunnelId: string,
-      config: {
-        readonly ingress: Array<{
-          readonly hostname?: string;
-          readonly service: string;
-        }>;
-      },
-    ) => Effect.Effect<unknown, ManagedEndpointTunnelClientError>;
-    readonly getToken: (
-      tunnelId: string,
-    ) => Effect.Effect<string, ManagedEndpointTunnelClientError>;
-    readonly delete: (tunnelId: string) => Effect.Effect<unknown, ManagedEndpointTunnelClientError>;
-  }
->()("pathway-relay/environments/ManagedEndpointProvider/ManagedEndpointTunnelClient") {}
+const ConnectEndpoint = Schema.Struct({ endpoint: Schema.Struct({ id: Schema.String }) });
+const ConnectToken = Schema.Struct({
+  connectorToken: Schema.Struct({ id: Schema.String }),
+  token: Schema.String,
+});
+const ConnectTokenPage = Schema.Struct({
+  connectorTokens: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        endpointIds: Schema.optional(Schema.Array(Schema.String)),
+      }),
+    ),
+  ),
+  page: Schema.optional(Schema.Struct({ nextPageToken: Schema.optional(Schema.String) })),
+});
+const ConnectEndpointPage = Schema.Struct({
+  endpoints: Schema.optional(
+    Schema.Array(Schema.Struct({ id: Schema.String, hostname: Schema.String })),
+  ),
+  page: Schema.optional(Schema.Struct({ nextPageToken: Schema.optional(Schema.String) })),
+});
+const ConnectPlan = Schema.Struct({ plan: Schema.Struct({ id: Schema.String }) });
+const ConnectErrorBody = Schema.Struct({ code: Schema.String });
+const ConnectEmpty = Schema.Struct({});
 
-export const layerTunnelClient = (client: ManagedEndpointTunnelClient["Service"]) =>
-  Layer.succeed(ManagedEndpointTunnelClient, client);
-
-interface ManagedEndpointCnameRecordInput {
-  readonly type: "CNAME";
-  readonly name: string;
-  readonly content: string;
-  readonly ttl: 1;
-  readonly proxied: true;
-}
-
-const ManagedEndpointDnsClientOperation = Schema.Literals([
-  "list-records",
-  "create-record",
-  "update-record",
-  "delete-record",
-]);
-
-export class ManagedEndpointDnsClientError extends Schema.TaggedErrorClass<ManagedEndpointDnsClientError>()(
-  "ManagedEndpointDnsClientError",
-  {
-    operation: ManagedEndpointDnsClientOperation,
-    hostname: Schema.optionalKey(Schema.String),
-    dnsRecordId: Schema.optionalKey(Schema.String),
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    const target = this.dnsRecordId ?? this.hostname;
-    return `Managed endpoint DNS provider '${this.operation}' request failed${target === undefined ? "" : ` for '${target}'`}`;
-  }
-}
-
-export class ManagedEndpointDnsClient extends Context.Service<
-  ManagedEndpointDnsClient,
-  {
-    readonly listRecords: (
-      hostname: string,
-    ) => Effect.Effect<ReadonlyArray<{ readonly id: string }>, ManagedEndpointDnsClientError>;
-    readonly createRecord: (
-      request: ManagedEndpointCnameRecordInput,
-    ) => Effect.Effect<{ readonly id: string }, ManagedEndpointDnsClientError>;
-    readonly updateRecord: (
-      dnsRecordId: string,
-      request: ManagedEndpointCnameRecordInput,
-    ) => Effect.Effect<unknown, ManagedEndpointDnsClientError>;
-    readonly deleteRecord: (
-      dnsRecordId: string,
-    ) => Effect.Effect<unknown, ManagedEndpointDnsClientError>;
-  }
->()("pathway-relay/environments/ManagedEndpointProvider/ManagedEndpointDnsClient") {}
-
-export const layerDnsClient = (client: ManagedEndpointDnsClient["Service"]) =>
-  Layer.succeed(ManagedEndpointDnsClient, client);
-
-const requireCloudflareSettings = Effect.fnUntraced(function* (
+const requireSettings = Effect.fnUntraced(function* (
   settings: RelayConfiguration.RelayConfiguration["Service"],
   input: { readonly userId: string; readonly environmentId: string },
 ) {
-  const baseDomain = settings.managedEndpointBaseDomain;
-  const namespace = settings.managedEndpointNamespace;
-  const missingSettings: Array<"managedEndpointBaseDomain" | "managedEndpointNamespace"> = [];
-  if (!baseDomain) {
-    missingSettings.push("managedEndpointBaseDomain");
-  }
-  if (!namespace) {
-    missingSettings.push("managedEndpointNamespace");
-  }
-  if (!baseDomain || !namespace) {
+  const { managedEndpointBaseDomain: baseDomain, managedEndpointNamespace: namespace } = settings;
+  const connect = settings.cyndrbaseConnect;
+  if (!baseDomain || !namespace || !connect) {
     return yield* new ManagedEndpointProvisioningNotConfigured({
       ...input,
-      missingSettings,
+      missingSettings: [
+        ...(baseDomain ? [] : (["managedEndpointBaseDomain"] as const)),
+        ...(namespace ? [] : (["managedEndpointNamespace"] as const)),
+        ...(connect ? [] : (["cyndrbaseConnect"] as const)),
+      ],
     });
   }
-  return {
-    baseDomain,
-    namespace,
-  };
+  return { baseDomain, namespace, connect };
 });
 
-function formatOriginService(origin: RelayManagedEndpointOrigin): string {
-  const host = origin.localHttpHost.includes(":")
-    ? `[${origin.localHttpHost.replace(/^\[(.*)\]$/u, "$1")}]`
-    : origin.localHttpHost;
-  return `http://${host}:${origin.localHttpPort}`;
-}
+// The allocation's dnsRecordId column, named for cloudflared, is the endpoint's connector token
+// slot, written only by compare-and-set on its value. It holds the endpoint's one stored token
+// until unlink marks it TearingDown for good. Anything that does not decode, such as a
+// cloudflared DNS record ID, is an empty slot.
+const TokenSlot = Schema.Union([
+  Schema.TaggedStruct("Stored", {
+    endpointId: Schema.String,
+    connectorTokenId: Schema.String,
+    sealedToken: Schema.String,
+  }),
+  Schema.TaggedStruct("TearingDown", {}),
+]);
+type TokenSlot = typeof TokenSlot.Type;
+const decodeTokenSlotJson = Schema.decodeUnknownOption(Schema.fromJsonString(TokenSlot));
+const decodeTokenSlot = (value: string | null): TokenSlot | undefined =>
+  value === null ? undefined : Option.getOrUndefined(decodeTokenSlotJson(value));
+const encodeTokenSlot = Schema.encodeSync(Schema.fromJsonString(TokenSlot));
+const TEARING_DOWN = encodeTokenSlot({ _tag: "TearingDown" });
+const MAX_TEARDOWN_CLAIMS = 5;
 
-function normalizeHostname(hostname: string): string {
-  return hostname
-    .trim()
-    .toLowerCase()
-    .replace(/\.$/u, "")
-    .replace(/^\[(.*)\]$/u, "$1");
-}
+type AllocationKey = { readonly userId: string; readonly environmentId: string };
+type AllocationRef = AllocationKey & { readonly allocationId: string };
 
-function isLoopbackOrigin(origin: RelayManagedEndpointOrigin): boolean {
-  const hostname = normalizeHostname(origin.localHttpHost);
-  return (
-    (hostname === "127.0.0.1" || hostname === "::1" || hostname === "localhost") &&
-    Number.isInteger(origin.localHttpPort) &&
-    origin.localHttpPort > 0 &&
-    origin.localHttpPort <= 65_535
+// Tokens are sealed with AES-GCM and bound to the allocation and endpoint they were minted for.
+const tokenCipher = (connect: RelayConfiguration.CyndrbaseConnectConfiguration, usage: KeyUsage) =>
+  Effect.tryPromise(() => {
+    const raw = Result.getOrUndefined(Encoding.decodeBase64Url(Redacted.value(connect.tokenKey)));
+    if (raw?.length !== 32) {
+      throw new Error("CYNDRBASE_CONNECT_TOKEN_KEY must encode 32 random bytes");
+    }
+    return globalThis.crypto.subtle.importKey("raw", new Uint8Array(raw), "AES-GCM", false, [
+      usage,
+    ]);
+  });
+const tokenAad = (key: AllocationKey, endpointId: string, connectorTokenId: string) =>
+  new TextEncoder().encode(
+    JSON.stringify([
+      "connector-token/v1",
+      key.userId,
+      key.environmentId,
+      endpointId,
+      connectorTokenId,
+    ]),
   );
-}
-
-function isNotFoundCause(cause: unknown): boolean {
-  if (typeof cause !== "object" || cause === null) {
-    return false;
-  }
-  if ("_tag" in cause && cause._tag === "NotFound") {
-    return true;
-  }
-  if ("status" in cause && cause.status === 404) {
-    return true;
-  }
-  return "cause" in cause && isNotFoundCause(cause.cause);
-}
-
-type ManagedEndpointClientError = ManagedEndpointTunnelClientError | ManagedEndpointDnsClientError;
-
-const ignoreNotFound = <A>(
-  effect: Effect.Effect<A, ManagedEndpointClientError>,
-): Effect.Effect<void, ManagedEndpointClientError> =>
-  effect.pipe(
-    Effect.asVoid,
-    Effect.catchTags({
-      ManagedEndpointTunnelClientError: (error) =>
-        isNotFoundCause(error.cause) ? Effect.void : Effect.fail(error),
-      ManagedEndpointDnsClientError: (error) =>
-        isNotFoundCause(error.cause) ? Effect.void : Effect.fail(error),
+const sealToken = (
+  connect: RelayConfiguration.CyndrbaseConnectConfiguration,
+  additionalData: Uint8Array<ArrayBuffer>,
+  token: string,
+) =>
+  Effect.flatMap(tokenCipher(connect, "encrypt"), (cipher) =>
+    Effect.tryPromise(async () => {
+      const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+      const sealed = await globalThis.crypto.subtle.encrypt(
+        { name: "AES-GCM", iv, additionalData },
+        cipher,
+        new TextEncoder().encode(token),
+      );
+      return Encoding.encodeBase64Url(new Uint8Array([...iv, ...new Uint8Array(sealed)]));
     }),
   );
+const openToken = (
+  connect: RelayConfiguration.CyndrbaseConnectConfiguration,
+  additionalData: Uint8Array<ArrayBuffer>,
+  sealedToken: string,
+) =>
+  Effect.flatMap(tokenCipher(connect, "decrypt"), (cipher) =>
+    Effect.tryPromise(async () => {
+      const bytes = Result.getOrThrow(Encoding.decodeBase64Url(sealedToken));
+      const clear = await globalThis.crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: bytes.slice(0, 12), additionalData },
+        cipher,
+        bytes.slice(12),
+      );
+      return new TextDecoder().decode(clear);
+    }),
+  );
+
+const isNotFound = (error: CyndrbaseConnectRpcError) => error.code === "not_found";
+const isAlreadyExists = (error: CyndrbaseConnectRpcError) => error.code === "already_exists";
+const isConnectRpcError = Schema.is(CyndrbaseConnectRpcError);
 
 export const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration.RelayConfiguration;
   const crypto = yield* Crypto.Crypto;
-  const tunnels = yield* ManagedEndpointTunnelClient;
-  const dns = yield* ManagedEndpointDnsClient;
+  const httpClient = yield* HttpClient.HttpClient;
   const allocations = yield* ManagedEndpointAllocations.ManagedEndpointAllocations;
 
-  const updateExistingDnsRecords = Effect.fnUntraced(function* (
-    records: ReadonlyArray<{ readonly id: string }>,
-    preferredDnsRecordId: string | null,
-    dnsRecord: ManagedEndpointCnameRecordInput,
-  ) {
-    const keptRecord = records.find((record) => record.id === preferredDnsRecordId) ?? records[0];
-    if (keptRecord === undefined) {
-      return null;
-    }
-    yield* Effect.forEach(
-      records,
-      (record) => (record.id === keptRecord.id ? Effect.void : dns.deleteRecord(record.id)),
-      { discard: true },
-    );
-    yield* dns.updateRecord(keptRecord.id, dnsRecord);
-    return keptRecord.id;
-  });
-
-  const ensureDnsRecord = Effect.fnUntraced(function* (
-    hostname: string,
-    preferredDnsRecordId: string | null,
-    dnsRecord: ManagedEndpointCnameRecordInput,
-  ) {
-    if (preferredDnsRecordId !== null) {
-      const checkpointedRecordUpdated = yield* dns
-        .updateRecord(preferredDnsRecordId, dnsRecord)
-        .pipe(
-          Effect.as(true),
-          Effect.catchTags({
-            ManagedEndpointDnsClientError: (error) =>
-              isNotFoundCause(error.cause) ? Effect.succeed(false) : Effect.fail(error),
-          }),
-        );
-      if (checkpointedRecordUpdated) {
-        return preferredDnsRecordId;
-      }
-    }
-    const existingDnsRecords = yield* dns.listRecords(hostname);
-    const existingDnsRecordId = yield* updateExistingDnsRecords(
-      existingDnsRecords,
-      preferredDnsRecordId,
-      dnsRecord,
-    );
-    if (existingDnsRecordId !== null) {
-      return existingDnsRecordId;
-    }
-    return yield* dns.createRecord(dnsRecord).pipe(
-      Effect.map((record) => record.id),
-      Effect.catchTags({
-        ManagedEndpointDnsClientError: (createError) =>
-          Effect.gen(function* () {
-            let records = yield* dns.listRecords(hostname);
-            for (let attempt = 0; records.length === 0 && attempt < 4; attempt++) {
-              yield* Effect.sleep("200 millis");
-              records = yield* dns.listRecords(hostname);
-            }
-            return records;
-          }).pipe(
-            Effect.flatMap((records) =>
-              records.length > 0
-                ? updateExistingDnsRecords(records, preferredDnsRecordId, dnsRecord)
-                : Effect.fail(createError),
+  const rpc = <A>(
+    connect: RelayConfiguration.CyndrbaseConnectConfiguration,
+    method: string,
+    body: Record<string, unknown>,
+    schema: Schema.Decoder<A>,
+  ) =>
+    HttpClientRequest.post(`${connect.apiUrl}/cyndrbase.connect.v1.EndpointService/${method}`).pipe(
+      HttpClientRequest.bearerToken(Redacted.value(connect.adminKey)),
+      HttpClientRequest.bodyJson(body),
+      Effect.flatMap(httpClient.execute),
+      Effect.flatMap((response) =>
+        response.status === 200
+          ? HttpClientResponse.schemaBodyJson(schema)(response)
+          : HttpClientResponse.schemaBodyJson(ConnectErrorBody)(response).pipe(
+              Effect.flatMap(({ code }) =>
+                Effect.fail(new CyndrbaseConnectRpcError({ method, code })),
+              ),
             ),
-            Effect.flatMap((dnsRecordId) =>
-              dnsRecordId === null ? Effect.fail(createError) : Effect.succeed(dnsRecordId),
-            ),
-          ),
-      }),
+      ),
+      Effect.catchIf(
+        (cause) => !isConnectRpcError(cause),
+        (cause) =>
+          Effect.fail(new CyndrbaseConnectRpcError({ method, code: "unavailable", cause })),
+      ),
     );
-  });
 
-  const prepareDeprovision = Effect.fn("relay.managed_endpoint_provider.prepare_deprovision")(
-    function* (input: { readonly userId: string; readonly environmentId: string }) {
-      return yield* allocations.get(input).pipe(
+  // Each call plans afresh. Once the change has landed a retry gets NotFound, and a plan that
+  // went stale, such as a removal whose endpoint gained a token, is re-planned, not replayed.
+  const planThenApply = (
+    connect: RelayConfiguration.CyndrbaseConnectConfiguration,
+    plan: { readonly method: string; readonly body: Record<string, unknown> },
+    applyMethod: string,
+  ) =>
+    Effect.gen(function* () {
+      const key = yield* crypto.randomUUIDv4.pipe(
         Effect.mapError(
           (cause) =>
-            new ManagedEndpointDeprovisioningFailed({
-              ...input,
-              stage: "load-allocation",
-              cause,
-            }),
+            new CyndrbaseConnectRpcError({ method: plan.method, code: "unavailable", cause }),
         ),
       );
-    },
-  );
+      const planned = yield* rpc(
+        connect,
+        plan.method,
+        { ...plan.body, idempotencyKey: `plan:${key}` },
+        ConnectPlan,
+      );
+      yield* rpc(
+        connect,
+        applyMethod,
+        { planId: planned.plan.id, idempotencyKey: `apply:${key}` },
+        ConnectEmpty,
+      );
+    }).pipe(Effect.catchIf(isNotFound, () => Effect.void));
+  const revokeConnectorToken = (
+    connect: RelayConfiguration.CyndrbaseConnectConfiguration,
+    tokenId: string,
+  ) =>
+    planThenApply(
+      connect,
+      { method: "PlanRevokeConnectorToken", body: { tokenId } },
+      "ApplyRevokeConnectorToken",
+    );
+  const removeEndpoint = (
+    connect: RelayConfiguration.CyndrbaseConnectConfiguration,
+    endpointId: string,
+  ) =>
+    planThenApply(
+      connect,
+      { method: "PlanEndpointChange", body: { endpoint: { id: endpointId }, remove: true } },
+      "ApplyEndpointChange",
+    );
+
+  // Every page of a list. The relay creates everything its listener holds, so lists are complete.
+  const listAll = <
+    P extends { readonly page?: { readonly nextPageToken?: string | undefined } | undefined },
+  >(
+    connect: RelayConfiguration.CyndrbaseConnectConfiguration,
+    method: string,
+    schema: Schema.Decoder<P>,
+  ) =>
+    Effect.gen(function* () {
+      const pages: Array<P> = [];
+      let pageToken = "";
+      do {
+        const page = yield* rpc(connect, method, { page: { pageToken } }, schema);
+        pages.push(page);
+        pageToken = page.page?.nextPageToken ?? "";
+      } while (pageToken !== "");
+      return pages;
+    });
+
+  const endpointTokenIds = (
+    connect: RelayConfiguration.CyndrbaseConnectConfiguration,
+    endpointId: string,
+  ) =>
+    listAll(connect, "ListConnectorTokens", ConnectTokenPage).pipe(
+      Effect.map((pages) =>
+        pages
+          .flatMap((page) => page.connectorTokens ?? [])
+          .filter((token) => token.endpointIds?.includes(endpointId))
+          .map((token) => token.id),
+      ),
+    );
+
+  const revokeEndpointTokens = (
+    connect: RelayConfiguration.CyndrbaseConnectConfiguration,
+    endpointId: string,
+    keep?: string,
+  ) =>
+    endpointTokenIds(connect, endpointId).pipe(
+      Effect.flatMap((ids) =>
+        Effect.forEach(
+          ids.filter((id) => id !== keep),
+          (id) => revokeConnectorToken(connect, id),
+          { discard: true },
+        ),
+      ),
+    );
+
+  // Tears down the environment's allocation, or only `observed` when given.
+  const teardown = Effect.fnUntraced(function* (key: AllocationKey, observed?: string) {
+    const failed =
+      (stage: typeof ManagedEndpointDeprovisioningStage.Type, endpointId?: string | null) =>
+      (cause: unknown) =>
+        new ManagedEndpointDeprovisioningFailed({
+          ...key,
+          stage,
+          ...(endpointId ? { endpointId } : {}),
+          cause,
+        });
+    const read = yield* allocations.get(key).pipe(Effect.mapError(failed("load-allocation")));
+    if (read === null || (observed !== undefined && read.allocationId !== observed)) return;
+    // Every step names this allocation, so a stale teardown leaves a relink's newer one alone.
+    const allocation = { ...key, allocationId: read.allocationId };
+    // Once the slot says TearingDown, no provision can store a token or take it back.
+    let held = read.dnsRecordId;
+    for (let claims = 0; held !== TEARING_DOWN; claims++) {
+      if (claims === MAX_TEARDOWN_CLAIMS) {
+        return yield* failed("claim-teardown")(new ManagedEndpointTokenSlotBusy());
+      }
+      const swapped = yield* allocations
+        .swapTokenSlot({ ...allocation, expected: held, next: TEARING_DOWN })
+        .pipe(Effect.mapError(failed("claim-teardown")));
+      if (swapped === null) return;
+      held = swapped;
+    }
+    // A provision may have recorded a new endpoint before the claim landed.
+    const claimed = yield* allocations.get(key).pipe(Effect.mapError(failed("load-allocation")));
+    if (claimed?.allocationId !== allocation.allocationId) return;
+    const endpointId = claimed.tunnelId;
+    // Without Connect settings this relay cannot have issued anything to clean up.
+    const connect = config.cyndrbaseConnect;
+    if (connect && endpointId !== null) {
+      yield* revokeEndpointTokens(connect, endpointId).pipe(
+        Effect.mapError(failed("revoke-connector-tokens", endpointId)),
+      );
+      yield* removeEndpoint(connect, endpointId).pipe(
+        Effect.mapError(failed("remove-endpoint", endpointId)),
+      );
+    }
+    yield* allocations
+      .remove(allocation)
+      .pipe(Effect.mapError(failed("remove-allocation", endpointId)));
+  });
+
+  // Returns the endpoint's stored token, minting and storing it if the slot holds none.
+  const connectorToken = Effect.fnUntraced(function* (
+    connect: RelayConfiguration.CyndrbaseConnectConfiguration,
+    allocation: AllocationRef,
+    read: string | null,
+    endpointId: string,
+  ) {
+    const failed = (stage: typeof ManagedEndpointProvisioningStage.Type) => (cause: unknown) =>
+      new ManagedEndpointProvisioningFailed({
+        userId: allocation.userId,
+        environmentId: allocation.environmentId,
+        stage,
+        endpointId,
+        cause,
+      });
+    const storedIn = (value: string | null) => {
+      const slot = decodeTokenSlot(value);
+      return slot?._tag === "Stored" && slot.endpointId === endpointId ? slot : undefined;
+    };
+    // A swap returns null once the allocation is gone or replaced.
+    const unlinked = (held: string | null) =>
+      held === null || decodeTokenSlot(held)?._tag === "TearingDown";
+
+    let stored = storedIn(read);
+    if (stored === undefined) {
+      if (decodeTokenSlot(read)?._tag === "TearingDown") {
+        return yield* failed("store-connector-token")(new ManagedEndpointUnlinked());
+      }
+      // One key per allocation and endpoint, so concurrent, retried and delayed mints all get
+      // the token the edge minted first for as long as it keeps the receipt.
+      const minted = yield* rpc(
+        connect,
+        "CreateConnectorToken",
+        {
+          endpointIds: [endpointId],
+          idempotencyKey: `connector-token:${allocation.allocationId}:${endpointId}`,
+        },
+        ConnectToken,
+      ).pipe(Effect.mapError(failed("create-connector-token")));
+      const sealed = {
+        _tag: "Stored",
+        endpointId,
+        connectorTokenId: minted.connectorToken.id,
+        sealedToken: yield* sealToken(
+          connect,
+          tokenAad(allocation, endpointId, minted.connectorToken.id),
+          minted.token,
+        ).pipe(Effect.mapError(failed("store-connector-token"))),
+      } as const;
+      const next = encodeTokenSlot(sealed);
+      const held = yield* allocations
+        .swapTokenSlot({ ...allocation, expected: read, next })
+        .pipe(Effect.mapError(failed("store-connector-token")));
+      if (held === next) {
+        // This provision stored the endpoint's token, so any other token on it is a stray from an
+        // earlier attempt. A mint delayed past the edge's idempotency receipt lands after this
+        // and is only revoked at unlink; the hosted edge's durable receipts close that gap.
+        yield* revokeEndpointTokens(connect, endpointId, sealed.connectorTokenId).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Stray connector tokens stay live until unlink", {
+              endpointId,
+              code: error.code,
+            }),
+          ),
+        );
+      }
+      stored = held === next ? sealed : storedIn(held);
+      if (stored === undefined) {
+        if (!unlinked(held)) {
+          return yield* failed("store-connector-token")(new ManagedEndpointTokenSlotBusy());
+        }
+        // The endpoint is going away, so nothing can store this token.
+        yield* revokeConnectorToken(connect, minted.connectorToken.id).pipe(Effect.ignore);
+        return yield* failed("store-connector-token")(new ManagedEndpointUnlinked());
+      }
+    }
+    return yield* openToken(
+      connect,
+      tokenAad(allocation, endpointId, stored.connectorTokenId),
+      stored.sealedToken,
+    ).pipe(Effect.mapError(failed("open-connector-token")));
+  });
 
   return ManagedEndpointProvider.of({
-    prepareDeprovision,
     deprovision: Effect.fn("relay.managed_endpoint_provider.deprovision")(function* (input) {
       yield* Effect.annotateCurrentSpan({
         "relay.user_id": input.userId,
         "relay.environment_id": input.environmentId,
       });
-      const allocation =
-        input.target === undefined ? yield* prepareDeprovision(input) : input.target;
-      if (allocation === null) {
-        return;
-      }
-      const claimedAt = yield* allocations
-        .claimDeprovision({
-          userId: input.userId,
-          environmentId: input.environmentId,
-          updatedAt: allocation.updatedAt,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointDeprovisioningFailed({
-                ...input,
-                stage: "claim-deprovision",
-                ...(allocation.tunnelId === null ? {} : { tunnelId: allocation.tunnelId }),
-                ...(allocation.dnsRecordId === null ? {} : { dnsRecordId: allocation.dnsRecordId }),
-                cause,
-              }),
-          ),
-        );
-      if (claimedAt === null) {
-        return;
-      }
-      const dnsRecordId = allocation.dnsRecordId;
-      if (dnsRecordId !== null) {
-        yield* ignoreNotFound(dns.deleteRecord(dnsRecordId)).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointDeprovisioningFailed({
-                ...input,
-                stage: "delete-dns-record",
-                dnsRecordId,
-                cause,
-              }),
-          ),
-        );
-      }
-      const tunnelId = allocation.tunnelId;
-      if (tunnelId !== null) {
-        yield* ignoreNotFound(tunnels.delete(tunnelId)).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointDeprovisioningFailed({
-                ...input,
-                stage: "delete-tunnel",
-                tunnelId,
-                cause,
-              }),
-          ),
-        );
-      }
-      yield* allocations
-        .removeClaimed({
-          userId: input.userId,
-          environmentId: input.environmentId,
-          updatedAt: claimedAt,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointDeprovisioningFailed({
-                ...input,
-                stage: "remove-allocation",
-                ...(allocation.tunnelId === null ? {} : { tunnelId: allocation.tunnelId }),
-                ...(allocation.dnsRecordId === null ? {} : { dnsRecordId: allocation.dnsRecordId }),
-                cause,
-              }),
-          ),
-        );
-    }),
-    release: Effect.fn("relay.managed_endpoint_provider.release")(function* (input) {
-      yield* Effect.annotateCurrentSpan({
-        "relay.user_id": input.userId,
-        "relay.environment_id": input.environmentId,
-      });
-      const allocation = yield* allocations.get(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ManagedEndpointDeprovisioningFailed({
-              ...input,
-              stage: "load-allocation",
-              cause,
-            }),
-        ),
-      );
-      const tunnelId = allocation?.tunnelId ?? null;
-      if (allocation === null || tunnelId === null) {
-        return true;
-      }
-      // Claim the release against the allocation's current generation before
-      // touching Cloudflare. A provision racing this release (fast environment
-      // restart) rewrites updatedAt when it records its tunnel, so a stale
-      // claim means the recorded tunnel may already back a fresh connector and
-      // must be left alive. A provision that starts after the claim instead
-      // fails loudly on the deleted tunnel and the client-side retry
-      // provisions a replacement.
-      const claimed = yield* allocations
-        .claimRelease({
-          userId: input.userId,
-          environmentId: input.environmentId,
-          tunnelId,
-          updatedAt: allocation.updatedAt,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointDeprovisioningFailed({
-                ...input,
-                stage: "claim-release",
-                tunnelId,
-                cause,
-              }),
-          ),
-        );
-      if (!claimed) {
-        return false;
-      }
-      yield* ignoreNotFound(tunnels.delete(tunnelId)).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ManagedEndpointDeprovisioningFailed({
-              ...input,
-              stage: "delete-tunnel",
-              tunnelId,
-              cause,
-            }),
-        ),
-      );
-      // The recorded tunnelId is now stale, but the allocation row is left
-      // untouched deliberately: connect/status authorization requires a fully
-      // recorded allocation, and an offline environment must keep reporting
-      // "offline" (health probe fails) rather than "not authorized". The next
-      // provision lists tunnels by name, finds none, creates a replacement and
-      // re-records the fresh id.
-      return true;
+      yield* teardown({ userId: input.userId, environmentId: input.environmentId });
     }),
     provision: Effect.fn("relay.managed_endpoint_provider.provision")(function* (input) {
       yield* Effect.annotateCurrentSpan({
         "relay.user_id": input.userId,
         "relay.environment_id": input.environmentId,
-        "relay.managed_endpoint.origin_host": input.origin.localHttpHost,
-        "relay.managed_endpoint.origin_port": input.origin.localHttpPort,
       });
-      if (!isLoopbackOrigin(input.origin)) {
-        return yield* new ManagedEndpointOriginNotAllowed({
-          userId: input.userId,
-          environmentId: input.environmentId,
-          host: input.origin.localHttpHost,
-          port: input.origin.localHttpPort,
-        });
-      }
-      const cf = yield* requireCloudflareSettings(config, input);
+      const settings = yield* requireSettings(config, input);
+      const key = { userId: input.userId, environmentId: input.environmentId };
       const environmentHash = yield* crypto
         .digest(
           "SHA-256",
           new TextEncoder().encode(
-            managedEndpointDigestInput(cf.namespace, input.userId, input.environmentId),
+            managedEndpointDigestInput(settings.namespace, input.userId, input.environmentId),
           ),
         )
         .pipe(
@@ -629,210 +557,135 @@ export const make = Effect.gen(function* () {
           Effect.mapError(
             (cause) =>
               new ManagedEndpointProvisioningFailed({
-                userId: input.userId,
-                environmentId: input.environmentId,
+                ...key,
                 stage: "derive-environment-hash",
                 cause,
               }),
           ),
         );
       const requestedHostname = managedEndpointHostname(
-        cf.namespace,
-        cf.baseDomain,
+        settings.namespace,
+        settings.baseDomain,
         environmentHash,
       );
-      const requestedTunnelName = managedEndpointTunnelName(cf.namespace, environmentHash);
-      const allocation = yield* allocations
+      const reserve = allocations
         .reserve({
-          userId: input.userId,
-          environmentId: input.environmentId,
+          ...key,
           hostname: requestedHostname,
-          tunnelName: requestedTunnelName,
+          tunnelName: managedEndpointTunnelName(settings.namespace, environmentHash),
         })
         .pipe(
           Effect.catchTag("ManagedEndpointAllocationPersistenceError", (cause) =>
             Effect.fail(
               new ManagedEndpointProvisioningFailed({
-                userId: input.userId,
-                environmentId: input.environmentId,
+                ...key,
                 stage: "reserve-allocation",
                 hostname: requestedHostname,
-                tunnelName: requestedTunnelName,
                 cause,
               }),
             ),
           ),
         );
-      const { hostname, tunnelName } = allocation;
-
-      const tunnelResponse = yield* tunnels.list({ name: tunnelName, isDeleted: false }).pipe(
-        Effect.map((tunnels) => tunnels.result),
-        Effect.map(Arr.findFirst((tunnel) => tunnel.name === tunnelName)),
-        Effect.flatMap(
-          Option.match({
-            onSome: (tunnel) => Effect.succeed(tunnel),
-            onNone: () => tunnels.create({ name: tunnelName, configSrc: "cloudflare" }),
-          }),
-        ),
-        Effect.mapError(
-          (cause) =>
-            new ManagedEndpointProvisioningFailed({
-              userId: input.userId,
-              environmentId: input.environmentId,
-              stage: "ensure-tunnel",
-              hostname,
-              tunnelName,
-              cause,
-            }),
-        ),
-      );
-      if (!tunnelResponse.id || tunnelResponse.name !== tunnelName) {
-        return yield* new ManagedEndpointProvisioningFailed({
-          userId: input.userId,
-          environmentId: input.environmentId,
-          stage: "validate-tunnel-response",
-          hostname,
-          tunnelName,
-          ...(tunnelResponse.id ? { returnedTunnelId: tunnelResponse.id } : {}),
-          ...(tunnelResponse.name ? { returnedTunnelName: tunnelResponse.name } : {}),
-        });
+      let allocation = yield* reserve;
+      // An unlink that stopped partway still holds the allocation: finish it and start over.
+      if (allocation.dnsRecordId === TEARING_DOWN) {
+        yield* teardown(key, allocation.allocationId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ManagedEndpointProvisioningFailed({
+                ...key,
+                stage: "finish-unlink",
+                hostname: requestedHostname,
+                cause,
+              }),
+          ),
+        );
+        allocation = yield* reserve;
       }
-      const tunnel = { id: tunnelResponse.id, name: tunnelResponse.name };
-      yield* allocations
-        .recordTunnel({
-          userId: input.userId,
-          environmentId: input.environmentId,
-          tunnelId: tunnel.id,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointProvisioningFailed({
-                userId: input.userId,
-                environmentId: input.environmentId,
-                stage: "record-tunnel",
-                hostname,
-                tunnelName,
-                tunnelId: tunnel.id,
-                cause,
-              }),
-          ),
+      const { hostname } = allocation;
+      const ref = { ...key, allocationId: allocation.allocationId };
+      const failed =
+        (stage: typeof ManagedEndpointProvisioningStage.Type, endpointId?: string) =>
+        (cause: unknown) =>
+          new ManagedEndpointProvisioningFailed({
+            ...key,
+            stage,
+            hostname,
+            ...(endpointId === undefined ? {} : { endpointId }),
+            cause,
+          });
+
+      // The endpoint record outlives connectors. It is created once per allocation and
+      // recreated only when the edge no longer knows it.
+      const recorded =
+        allocation.tunnelId === null
+          ? null
+          : yield* rpc(
+              settings.connect,
+              "GetEndpoint",
+              { endpointId: allocation.tunnelId },
+              ConnectEndpoint,
+            ).pipe(
+              Effect.map(({ endpoint }) => endpoint.id),
+              Effect.catchIf(isNotFound, () => Effect.succeed(null)),
+              Effect.mapError(failed("ensure-endpoint", allocation.tunnelId)),
+            );
+      const createEndpoint = (idempotencyKey: string) =>
+        rpc(
+          settings.connect,
+          "CreateEndpoint",
+          {
+            hostname,
+            policy: { access: "ACCESS_KIND_PUBLIC" },
+            traffic: "TRAFFIC_KIND_HTTP",
+            idempotencyKey,
+          },
+          ConnectEndpoint,
+        ).pipe(Effect.map(({ endpoint }) => endpoint.id));
+      // The relay owns this hostname, so an endpoint already holding it was made for this
+      // environment by an earlier provision, perhaps one that lost to an unlink: adopt it. Only
+      // unlink removes endpoints; a stale provision stops at the fenced record below.
+      const adopt = (conflict: CyndrbaseConnectRpcError) =>
+        listAll(settings.connect, "ListEndpoints", ConnectEndpointPage).pipe(
+          Effect.flatMap((pages) => {
+            const held = pages
+              .flatMap((page) => page.endpoints ?? [])
+              .find((endpoint) => endpoint.hostname === hostname);
+            return held === undefined ? Effect.fail(conflict) : Effect.succeed(held.id);
+          }),
         );
+      const endpointId =
+        recorded ??
+        (yield* createEndpoint(`endpoint:${allocation.allocationId}:${allocation.updatedAt}`).pipe(
+          Effect.catchIf(isAlreadyExists, adopt),
+          Effect.mapError(failed("ensure-endpoint")),
+        ));
+      if (endpointId !== allocation.tunnelId) {
+        const kept = yield* allocations
+          .recordTunnel({ ...ref, tunnelId: endpointId })
+          .pipe(Effect.mapError(failed("record-endpoint", endpointId)));
+        if (!kept)
+          return yield* failed("record-endpoint", endpointId)(new ManagedEndpointUnlinked());
+      }
 
-      yield* tunnels
-        .putConfiguration(tunnel.id, {
-          ingress: [
-            {
-              hostname,
-              service: formatOriginService(input.origin),
-            },
-            { service: "http_status:404" },
-          ],
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointProvisioningFailed({
-                userId: input.userId,
-                environmentId: input.environmentId,
-                stage: "configure-tunnel",
-                hostname,
-                tunnelName,
-                tunnelId: tunnel.id,
-                cause,
-              }),
-          ),
-        );
-
-      const dnsRecord = {
-        type: "CNAME",
-        name: hostname,
-        content: `${tunnel.id}.cfargotunnel.com`,
-        ttl: 1,
-        proxied: true,
-      } as const;
-
-      const dnsRecordId = yield* ensureDnsRecord(hostname, allocation.dnsRecordId, dnsRecord).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ManagedEndpointProvisioningFailed({
-              userId: input.userId,
-              environmentId: input.environmentId,
-              stage: "ensure-dns-record",
-              hostname,
-              tunnelName,
-              tunnelId: tunnel.id,
-              ...(allocation.dnsRecordId === null ? {} : { dnsRecordId: allocation.dnsRecordId }),
-              cause,
-            }),
-        ),
+      const token = yield* connectorToken(
+        settings.connect,
+        ref,
+        allocation.dnsRecordId,
+        endpointId,
       );
       yield* allocations
-        .recordDns({
-          userId: input.userId,
-          environmentId: input.environmentId,
-          dnsRecordId,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointProvisioningFailed({
-                userId: input.userId,
-                environmentId: input.environmentId,
-                stage: "record-dns",
-                hostname,
-                tunnelName,
-                tunnelId: tunnel.id,
-                dnsRecordId,
-                cause,
-              }),
-          ),
-        );
-
-      const connectorToken = yield* tunnels.getToken(tunnel.id).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ManagedEndpointProvisioningFailed({
-              userId: input.userId,
-              environmentId: input.environmentId,
-              stage: "get-tunnel-token",
-              hostname,
-              tunnelName,
-              tunnelId: tunnel.id,
-              dnsRecordId,
-              cause,
-            }),
-        ),
-      );
-      yield* allocations
-        .markReady({
-          userId: input.userId,
-          environmentId: input.environmentId,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointProvisioningFailed({
-                userId: input.userId,
-                environmentId: input.environmentId,
-                stage: "mark-allocation-ready",
-                hostname,
-                tunnelName,
-                tunnelId: tunnel.id,
-                dnsRecordId,
-                cause,
-              }),
-          ),
-        );
+        .markReady(ref)
+        .pipe(Effect.mapError(failed("mark-allocation-ready", endpointId)));
 
       return {
         endpoint: managedEndpointForHostname(hostname),
         runtime: {
           environmentId: EnvironmentId.make(input.environmentId),
-          providerKind: "cloudflare_tunnel",
-          connectorToken,
-          tunnelId: tunnel.id,
-          tunnelName: tunnel.name,
+          providerKind: "pathway_relay",
+          connectorToken: token,
+          edgeUrl: settings.connect.edgeUrl,
+          endpointId,
         },
       } satisfies ManagedEndpointProvisioningResult;
     }),
@@ -840,136 +693,3 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ManagedEndpointProvider, make);
-
-export const layerCloudflareBindings = (
-  tunnelClient: Cloudflare.Tunnel.ReadWriteTunnelClient,
-  dnsClient: Cloudflare.DNS.ReadWriteDnsClient,
-  alchemyRuntimeContext: Alchemy.BaseRuntimeContext,
-) =>
-  layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        layerTunnelClient({
-          list: (request) =>
-            tunnelClient.list(request).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ManagedEndpointTunnelClientError({
-                    operation: "list",
-                    tunnelName: request.name,
-                    cause,
-                  }),
-              ),
-              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            ),
-          create: (request) =>
-            tunnelClient.create(request).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ManagedEndpointTunnelClientError({
-                    operation: "create",
-                    tunnelName: request.name,
-                    cause,
-                  }),
-              ),
-              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            ),
-          putConfiguration: (tunnelId, config) =>
-            tunnelClient.putConfiguration(tunnelId, config).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ManagedEndpointTunnelClientError({
-                    operation: "put-configuration",
-                    tunnelId,
-                    cause,
-                  }),
-              ),
-              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            ),
-          getToken: (tunnelId) =>
-            tunnelClient.getToken(tunnelId).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ManagedEndpointTunnelClientError({
-                    operation: "get-token",
-                    tunnelId,
-                    cause,
-                  }),
-              ),
-              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            ),
-          delete: (tunnelId) =>
-            tunnelClient.delete(tunnelId).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ManagedEndpointTunnelClientError({
-                    operation: "delete",
-                    tunnelId,
-                    cause,
-                  }),
-              ),
-              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            ),
-        }),
-        layerDnsClient({
-          listRecords: (hostname) =>
-            dnsClient.listDnsRecords({ search: hostname }).pipe(
-              Effect.map((response) =>
-                response.result.filter(
-                  (record): record is typeof record & { readonly id: string } =>
-                    typeof record.id === "string" &&
-                    normalizeHostname(record.name) === normalizeHostname(hostname),
-                ),
-              ),
-              Effect.mapError(
-                (cause) =>
-                  new ManagedEndpointDnsClientError({
-                    operation: "list-records",
-                    hostname,
-                    cause,
-                  }),
-              ),
-              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            ),
-          createRecord: (request) =>
-            dnsClient.createDnsRecord(request).pipe(
-              Effect.map((response) => ({ id: response.id })),
-              Effect.mapError(
-                (cause) =>
-                  new ManagedEndpointDnsClientError({
-                    operation: "create-record",
-                    hostname: request.name,
-                    cause,
-                  }),
-              ),
-              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            ),
-          updateRecord: (dnsRecordId, request) =>
-            dnsClient.updateDnsRecord(dnsRecordId, request).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ManagedEndpointDnsClientError({
-                    operation: "update-record",
-                    hostname: request.name,
-                    dnsRecordId,
-                    cause,
-                  }),
-              ),
-              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            ),
-          deleteRecord: (dnsRecordId) =>
-            dnsClient.deleteDnsRecord(dnsRecordId).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ManagedEndpointDnsClientError({
-                    operation: "delete-record",
-                    dnsRecordId,
-                    cause,
-                  }),
-              ),
-              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            ),
-        }),
-      ),
-    ),
-  );

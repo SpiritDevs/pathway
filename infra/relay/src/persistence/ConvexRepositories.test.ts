@@ -1058,6 +1058,7 @@ describe("Convex relay repositories", () => {
 
   it.effect("routes every managed endpoint allocation transition through Convex", () => {
     const allocation = {
+      allocationId: "allocation-one",
       userId: "user-one",
       environmentId: "env-one",
       hostname: "env-one.example.test",
@@ -1078,15 +1079,13 @@ describe("Convex relay repositories", () => {
         if (reference === functionName(api.relayPersistence.reserveManagedEndpointAllocation)) {
           return Effect.succeed({ status: "reserved", allocation });
         }
-        if (reference === functionName(api.relayPersistence.claimManagedEndpointRelease)) {
+        if (reference === functionName(api.relayPersistence.recordManagedEndpointTunnel)) {
           return Effect.succeed(true);
         }
-        if (reference === functionName(api.relayPersistence.claimManagedEndpointDeprovision)) {
-          return Effect.succeed("claim-generation");
+        if (reference === functionName(api.relayPersistence.swapManagedEndpointTokenSlot)) {
+          return Effect.succeed("slot-one");
         }
-        if (
-          reference === functionName(api.relayPersistence.removeClaimedManagedEndpointAllocation)
-        ) {
+        if (reference === functionName(api.relayPersistence.removeManagedEndpointAllocation)) {
           return Effect.succeed(true);
         }
         return Effect.succeed(null);
@@ -1105,64 +1104,29 @@ describe("Convex relay repositories", () => {
           tunnelName: "env-one",
         }),
       ).toEqual(allocation);
-      yield* allocations.recordTunnel({
-        userId: "user-one",
-        environmentId: "env-one",
-        tunnelId: "tunnel-one",
-      });
-      yield* allocations.recordDns({
-        userId: "user-one",
-        environmentId: "env-one",
-        dnsRecordId: "dns-one",
-      });
-      yield* allocations.markReady({ userId: "user-one", environmentId: "env-one" });
-      expect(
-        yield* allocations.claimRelease({
-          userId: "user-one",
-          environmentId: "env-one",
-          tunnelId: "tunnel-one",
-          updatedAt: "generation-one",
-        }),
-      ).toBe(true);
-      expect(
-        yield* allocations.claimDeprovision({
-          userId: "user-one",
-          environmentId: "env-one",
-          updatedAt: "generation-one",
-        }),
-      ).toBe("claim-generation");
-      yield* allocations.remove({ userId: "user-one", environmentId: "env-one" });
-      expect(
-        yield* allocations.removeClaimed({
-          userId: "user-one",
-          environmentId: "env-one",
-          updatedAt: "claim-generation",
-        }),
-      ).toBe(true);
+      const ref = { userId: "user-one", environmentId: "env-one", allocationId: "allocation-one" };
+      expect(yield* allocations.recordTunnel({ ...ref, tunnelId: "tunnel-one" })).toBe(true);
+      expect(yield* allocations.swapTokenSlot({ ...ref, expected: null, next: "slot-one" })).toBe(
+        "slot-one",
+      );
+      yield* allocations.markReady(ref);
+      expect(yield* allocations.remove(ref)).toBe(true);
 
       expect(calls.map(({ reference }) => reference)).toEqual([
         functionName(api.relayPersistence.getManagedEndpointAllocation),
         functionName(api.relayPersistence.reserveManagedEndpointAllocation),
         functionName(api.relayPersistence.recordManagedEndpointTunnel),
-        functionName(api.relayPersistence.recordManagedEndpointDns),
+        functionName(api.relayPersistence.swapManagedEndpointTokenSlot),
         functionName(api.relayPersistence.markManagedEndpointReady),
-        functionName(api.relayPersistence.claimManagedEndpointRelease),
-        functionName(api.relayPersistence.claimManagedEndpointDeprovision),
         functionName(api.relayPersistence.removeManagedEndpointAllocation),
-        functionName(api.relayPersistence.removeClaimedManagedEndpointAllocation),
       ]);
-      expect(calls[5]?.args).toEqual({
+      expect(calls[3]?.args).toEqual({
         userId: "user-one",
         environmentId: "env-one",
-        tunnelId: "tunnel-one",
-        updatedAt: "generation-one",
-        claimedAt: "1970-01-01T00:00:00.000Z",
-      });
-      expect(calls[6]?.args).toEqual({
-        userId: "user-one",
-        environmentId: "env-one",
-        updatedAt: "generation-one",
-        claimedAt: "1970-01-01T00:00:00.000Z",
+        allocationId: "allocation-one",
+        expected: null,
+        next: "slot-one",
+        now: "1970-01-01T00:00:00.000Z",
       });
     }).pipe(Effect.provide(ManagedEndpointAllocations.layer.pipe(Layer.provide(convex))));
   });
@@ -1175,6 +1139,7 @@ describe("Convex relay repositories", () => {
         allocations.recordTunnel({
           userId: "user-one",
           environmentId: "env-one",
+          allocationId: "allocation-one",
           tunnelId: "tunnel-one",
         }),
       );

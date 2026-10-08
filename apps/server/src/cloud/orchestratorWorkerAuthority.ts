@@ -66,6 +66,7 @@ export function workerToolCapability(name: string): string | null {
     return "threads.delegate";
   if (
     [
+      "task_answer",
       "task_cancel",
       "pathway_thread_send",
       "pathway_thread_set_parent",

@@ -71,6 +71,7 @@ import {
   stageLinuxIconSize,
   stageLinuxCaptureHelper,
   STAGE_INSTALL_ARGS,
+  CONNECTOR_ASAR_UNPACK,
   WINDOWS_ASAR_UNPACK,
   withMacMinimumSystemVersion,
 } from "./build-desktop-artifact.ts";
@@ -927,10 +928,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         undefined,
       );
 
-      assert.notProperty(mac, "asarUnpack");
+      assert.deepStrictEqual(mac.asarUnpack, CONNECTOR_ASAR_UNPACK);
       assert.propertyVal(mac.mac, "forceCodeSigning", false);
       assert.notProperty(mac.mac, "type");
-      assert.notProperty(linux, "asarUnpack");
+      assert.deepStrictEqual(linux.asarUnpack, CONNECTOR_ASAR_UNPACK);
       assert.deepStrictEqual(win.asarUnpack, WINDOWS_ASAR_UNPACK);
       assert.deepStrictEqual(mac.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,

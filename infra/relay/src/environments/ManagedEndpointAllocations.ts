@@ -10,18 +10,20 @@ import { RelayConvexClient } from "../db.ts";
 import { isManagedEndpointHostname, managedEndpointForHostname } from "../deploymentConfig.ts";
 import { ManagedTunnelLimitExceeded } from "./ManagedTunnelLimits.ts";
 
+// The persisted column names predate Cyndrbase Connect.
 export interface ManagedEndpointAllocation {
+  /** Row identity: a relink after unlink gets a new one, which every write after reserve names. */
+  readonly allocationId: string;
   readonly userId: string;
   readonly environmentId: string;
   readonly hostname: string;
+  /** The Connect endpoint ID. */
   readonly tunnelId: string | null;
+  /** Reserved per environment so hostnames stay unique. */
   readonly tunnelName: string;
+  /** The connector token slot, written only with `swapTokenSlot`. */
   readonly dnsRecordId: string | null;
   readonly readyAt: string | null;
-  /**
-   * Doubles as the allocation's generation marker: every mutation rewrites it,
-   * so `claimRelease` can detect a provision that raced a release.
-   */
   readonly updatedAt: string;
 }
 
@@ -48,12 +50,9 @@ export class ManagedEndpointAllocationPersistenceError extends Schema.TaggedErro
       "get",
       "reserve",
       "record-tunnel",
-      "record-dns",
+      "swap-token-slot",
       "mark-ready",
-      "claim-release",
-      "claim-deprovision",
       "remove",
-      "remove-claimed",
     ]),
     stage: Schema.Literals(["database-request", "resolve-reservation"]),
     userId: Schema.String,
@@ -80,25 +79,18 @@ interface ReserveManagedEndpointAllocationInput extends ManagedEndpointAllocatio
   readonly tunnelName: string;
 }
 
-interface RecordManagedEndpointTunnelInput extends ManagedEndpointAllocationKey {
+// Writes do nothing unless the environment's allocation is still `allocationId`.
+interface ManagedEndpointAllocationRef extends ManagedEndpointAllocationKey {
+  readonly allocationId: string;
+}
+
+interface RecordManagedEndpointTunnelInput extends ManagedEndpointAllocationRef {
   readonly tunnelId: string;
 }
 
-interface RecordManagedEndpointDnsInput extends ManagedEndpointAllocationKey {
-  readonly dnsRecordId: string;
-}
-
-interface ClaimManagedEndpointReleaseInput extends ManagedEndpointAllocationKey {
-  readonly tunnelId: string;
-  readonly updatedAt: string;
-}
-
-interface ClaimManagedEndpointDeprovisionInput extends ManagedEndpointAllocationKey {
-  readonly updatedAt: string;
-}
-
-interface RemoveClaimedManagedEndpointAllocationInput extends ManagedEndpointAllocationKey {
-  readonly updatedAt: string;
+interface SwapManagedEndpointTokenSlotInput extends ManagedEndpointAllocationRef {
+  readonly expected: string | null;
+  readonly next: string;
 }
 
 export class ManagedEndpointAllocations extends Context.Service<
@@ -113,40 +105,23 @@ export class ManagedEndpointAllocations extends Context.Service<
       ManagedEndpointAllocation,
       ManagedEndpointAllocationPersistenceError | ManagedTunnelLimitExceeded
     >;
+    /** Returns whether it recorded the endpoint: false once the allocation is gone or replaced. */
     readonly recordTunnel: (
       input: RecordManagedEndpointTunnelInput,
-    ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
-    readonly recordDns: (
-      input: RecordManagedEndpointDnsInput,
-    ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
-    readonly markReady: (
-      input: ManagedEndpointAllocationKey,
-    ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
-    /**
-     * Atomically claims the right to delete the allocation's tunnel: succeeds
-     * only while the recorded tunnel and generation still match what the
-     * caller loaded. A concurrent provision rewrites `updatedAt` when it
-     * records its tunnel, which makes a stale claim fail and keeps the freshly
-     * issued tunnel alive.
-     */
-    readonly claimRelease: (
-      input: ClaimManagedEndpointReleaseInput,
     ) => Effect.Effect<boolean, ManagedEndpointAllocationPersistenceError>;
     /**
-     * Claims the complete allocation for teardown only if its generation still
-     * matches the snapshot captured by the unlink operation.
-     *
-     * Returns the claim generation used by `removeClaimed`, or null when a
-     * concurrent provision has already superseded the snapshot.
+     * Sets the token slot to `next` only while it still holds `expected`, in one transaction.
+     * Returns what the slot holds afterwards, or null when the allocation is gone or replaced.
      */
-    readonly claimDeprovision: (
-      input: ClaimManagedEndpointDeprovisionInput,
+    readonly swapTokenSlot: (
+      input: SwapManagedEndpointTokenSlotInput,
     ) => Effect.Effect<string | null, ManagedEndpointAllocationPersistenceError>;
-    readonly remove: (
-      input: ManagedEndpointAllocationKey,
+    readonly markReady: (
+      input: ManagedEndpointAllocationRef,
     ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
-    readonly removeClaimed: (
-      input: RemoveClaimedManagedEndpointAllocationInput,
+    /** Returns whether it deleted the allocation. */
+    readonly remove: (
+      input: ManagedEndpointAllocationRef,
     ) => Effect.Effect<boolean, ManagedEndpointAllocationPersistenceError>;
   }
 >()("pathway-relay/environments/ManagedEndpointAllocations") {}
@@ -200,7 +175,7 @@ export const make = Effect.gen(function* () {
     recordTunnel: Effect.fn("relay.managed_endpoint_allocations.record_tunnel")(function* (
       input: RecordManagedEndpointTunnelInput,
     ) {
-      yield* client
+      return yield* client
         .mutation(api.relayPersistence.recordManagedEndpointTunnel, {
           ...input,
           now: DateTime.formatIso(yield* DateTime.now),
@@ -211,62 +186,6 @@ export const make = Effect.gen(function* () {
               new ManagedEndpointAllocationPersistenceError({
                 operation: "record-tunnel",
                 stage: "database-request",
-                ...input,
-                cause,
-              }),
-          ),
-        );
-    }),
-    recordDns: Effect.fn("relay.managed_endpoint_allocations.record_dns")(function* (
-      input: RecordManagedEndpointDnsInput,
-    ) {
-      yield* client
-        .mutation(api.relayPersistence.recordManagedEndpointDns, {
-          ...input,
-          now: DateTime.formatIso(yield* DateTime.now),
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointAllocationPersistenceError({
-                operation: "record-dns",
-                stage: "database-request",
-                ...input,
-                cause,
-              }),
-          ),
-        );
-    }),
-    markReady: Effect.fn("relay.managed_endpoint_allocations.mark_ready")(function* (
-      input: ManagedEndpointAllocationKey,
-    ) {
-      const now = DateTime.formatIso(yield* DateTime.now);
-      yield* client.mutation(api.relayPersistence.markManagedEndpointReady, { ...input, now }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ManagedEndpointAllocationPersistenceError({
-              operation: "mark-ready",
-              stage: "database-request",
-              ...input,
-              cause,
-            }),
-        ),
-      );
-    }),
-    claimRelease: Effect.fn("relay.managed_endpoint_allocations.claim_release")(function* (
-      input: ClaimManagedEndpointReleaseInput,
-    ) {
-      return yield* client
-        .mutation(api.relayPersistence.claimManagedEndpointRelease, {
-          ...input,
-          claimedAt: DateTime.formatIso(yield* DateTime.now),
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointAllocationPersistenceError({
-                operation: "claim-release",
-                stage: "database-request",
                 userId: input.userId,
                 environmentId: input.environmentId,
                 tunnelId: input.tunnelId,
@@ -275,19 +194,19 @@ export const make = Effect.gen(function* () {
           ),
         );
     }),
-    claimDeprovision: Effect.fn("relay.managed_endpoint_allocations.claim_deprovision")(function* (
-      input: ClaimManagedEndpointDeprovisionInput,
+    swapTokenSlot: Effect.fn("relay.managed_endpoint_allocations.swap_token_slot")(function* (
+      input: SwapManagedEndpointTokenSlotInput,
     ) {
       return yield* client
-        .mutation(api.relayPersistence.claimManagedEndpointDeprovision, {
+        .mutation(api.relayPersistence.swapManagedEndpointTokenSlot, {
           ...input,
-          claimedAt: DateTime.formatIso(yield* DateTime.now),
+          now: DateTime.formatIso(yield* DateTime.now),
         })
         .pipe(
           Effect.mapError(
             (cause) =>
               new ManagedEndpointAllocationPersistenceError({
-                operation: "claim-deprovision",
+                operation: "swap-token-slot",
                 stage: "database-request",
                 userId: input.userId,
                 environmentId: input.environmentId,
@@ -296,31 +215,33 @@ export const make = Effect.gen(function* () {
           ),
         );
     }),
-    remove: Effect.fn("relay.managed_endpoint_allocations.remove")(function* (
-      input: ManagedEndpointAllocationKey,
+    markReady: Effect.fn("relay.managed_endpoint_allocations.mark_ready")(function* (
+      input: ManagedEndpointAllocationRef,
     ) {
-      yield* client.mutation(api.relayPersistence.removeManagedEndpointAllocation, input).pipe(
+      const now = DateTime.formatIso(yield* DateTime.now);
+      yield* client.mutation(api.relayPersistence.markManagedEndpointReady, { ...input, now }).pipe(
         Effect.mapError(
           (cause) =>
             new ManagedEndpointAllocationPersistenceError({
-              operation: "remove",
+              operation: "mark-ready",
               stage: "database-request",
-              ...input,
+              userId: input.userId,
+              environmentId: input.environmentId,
               cause,
             }),
         ),
       );
     }),
-    removeClaimed: Effect.fn("relay.managed_endpoint_allocations.remove_claimed")(function* (
-      input: RemoveClaimedManagedEndpointAllocationInput,
+    remove: Effect.fn("relay.managed_endpoint_allocations.remove")(function* (
+      input: ManagedEndpointAllocationRef,
     ) {
       return yield* client
-        .mutation(api.relayPersistence.removeClaimedManagedEndpointAllocation, input)
+        .mutation(api.relayPersistence.removeManagedEndpointAllocation, input)
         .pipe(
           Effect.mapError(
             (cause) =>
               new ManagedEndpointAllocationPersistenceError({
-                operation: "remove-claimed",
+                operation: "remove",
                 stage: "database-request",
                 userId: input.userId,
                 environmentId: input.environmentId,

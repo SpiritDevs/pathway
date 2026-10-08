@@ -62,6 +62,8 @@ jobs:
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
       RELAY_API_ZONE_NAME: ${{ vars.RELAY_API_ZONE_NAME }}
       RELAY_TUNNEL_ZONE_NAME: ${{ vars.RELAY_TUNNEL_ZONE_NAME }}
+      CYNDRBASE_CONNECT_API_URL: ${{ vars.CYNDRBASE_CONNECT_API_URL }}
+      CYNDRBASE_CONNECT_EDGE_URL: ${{ vars.CYNDRBASE_CONNECT_EDGE_URL }}
       CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
       CLERK_JWT_AUDIENCE: ${{ vars.CLERK_JWT_AUDIENCE }}
       APNS_ENABLED: ${{ vars.APNS_ENABLED || 'true' }}
@@ -75,6 +77,20 @@ jobs:
       MAIL_GOOGLE_CLIENT_ID: ${{ vars.MAIL_GOOGLE_CLIENT_ID }}
       ALCHEMY_TELEMETRY_DISABLED: "1"
     steps:
+      - name: Require Pathway Connect settings
+        env:
+          CYNDRBASE_CONNECT_ADMIN_KEY: ${{ secrets.CYNDRBASE_CONNECT_ADMIN_KEY }}
+          CYNDRBASE_CONNECT_TOKEN_KEY: ${{ secrets.CYNDRBASE_CONNECT_TOKEN_KEY }}
+        run: |
+          missing=()
+          for name in CYNDRBASE_CONNECT_API_URL CYNDRBASE_CONNECT_EDGE_URL CYNDRBASE_CONNECT_ADMIN_KEY CYNDRBASE_CONNECT_TOKEN_KEY; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error title=Pathway Connect not configured::The production environment is missing ${missing[*]}, so managed tunnels would fail."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -99,6 +115,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          CYNDRBASE_CONNECT_ADMIN_KEY: ${{ secrets.CYNDRBASE_CONNECT_ADMIN_KEY }}
+          CYNDRBASE_CONNECT_TOKEN_KEY: ${{ secrets.CYNDRBASE_CONNECT_TOKEN_KEY }}
           APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
           MAIL_ENCRYPTION_KEY: ${{ secrets.MAIL_ENCRYPTION_KEY }}
           MAIL_UPLOADTHING_API_KEY: ${{ secrets.MAIL_UPLOADTHING_API_KEY }}

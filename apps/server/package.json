@@ -29,6 +29,7 @@
     "@connectrpc/connect": "1.7.0",
     "@connectrpc/connect-node": "1.7.0",
     "@cursor/sdk": "1.0.22",
+    "@cyndrbase/connect": "link:/Users/coreybaines/Github/cyndrbase-wt/pathway-dep/packages/connect",
     "@effect/platform-bun": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/platform-node-shared": "catalog:",

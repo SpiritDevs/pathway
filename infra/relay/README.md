@@ -95,15 +95,31 @@ The relay deploys through Alchemy:
 vp run --filter pathway-relay deploy
 ```
 
-The stack provisions the Cloudflare Worker and queues, managed endpoint resources, and relay
-tracing resources. Relay records live in the Cyndrbase deployment named by
-`CYNDRBASE_DEPLOYMENT_URL`; use its client URL (`https://<deployment>.<region>.cyndrbase.cloud`),
-not its HTTP Actions URL. Copy
+The stack provisions the Cloudflare Worker and queues and relay tracing resources. Relay records
+live in the Cyndrbase deployment named by `CYNDRBASE_DEPLOYMENT_URL`; use its client URL
+(`https://<deployment>.<region>.cyndrbase.cloud`), not its HTTP Actions URL. Copy
 [`infra/relay/.env.example`](./.env.example) to
 `infra/relay/.env` and fill in the deployment-specific values before deploying. Alchemy loads that
 file from the relay directory. Runtime secrets include Clerk credentials and, when enabled, APNs
 credentials. Set `APNS_ENABLED=false` to run the relay without mobile push notifications or Live
-Activities; web, desktop, cloud sync, and remote agent control remain available. Production adopts
+Activities; web, desktop, cloud sync, and remote agent control remain available. Pathway Connect
+endpoints and connector tokens come from Cyndrbase Connect's `EndpointService`: set
+`CYNDRBASE_CONNECT_API_URL`, `CYNDRBASE_CONNECT_EDGE_URL` (the `wss://…/connect/v1` URL environments
+dial), `CYNDRBASE_CONNECT_ADMIN_KEY`, and `CYNDRBASE_CONNECT_TOKEN_KEY`; remote URLs must use
+https/wss. Without them managed
+tunnels fail as not configured. The edge must forward its public scheme (`--public-scheme https`
+behind TLS), or DPoP-signed requests to environments fail URL checks. Environments whose stored
+connector config predates Connect fetch a new one at startup from
+`POST /v1/environments/:environmentId/managed-endpoint` with their environment credential.
+Each endpoint has one connector token, like a cloudflared tunnel: the first provision mints it and
+stores it sealed with `CYNDRBASE_CONNECT_TOKEN_KEY`, later provisions return it, and only unlink
+revokes it. Mints for an allocation share one idempotency key, so retried or delayed mints get the
+same token, and the provision that stores it revokes any other token on the endpoint. A mint
+delayed past the edge's idempotency receipt is only revoked at unlink; the hosted edge's durable
+receipts close that gap. Every allocation write names the allocation it read, so a stale provision
+or unlink never touches a relink's newer one. Only unlink removes endpoints: a provision that finds
+its hostname taken adopts that endpoint, such as one orphaned by a provision that lost to an
+unlink. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 
@@ -125,8 +141,9 @@ vp run --filter pathway-relay deploy --env-file .env.local
 Alchemy defaults personal deployments to the `dev_$USER` stage. Relay custom domains apply the same
 DNS-safe sanitization as Alchemy physical resource names, so `prod` uses
 `relay.<RELAY_API_ZONE_NAME>` and `dev_julius` uses
-`relay-dev-julius.<RELAY_API_ZONE_NAME>`. Managed environment endpoints are provisioned below
-`RELAY_TUNNEL_ZONE_NAME`, which may be a different Cloudflare zone. Production tunnel hostnames use
+`relay-dev-julius.<RELAY_API_ZONE_NAME>`. Managed environment endpoint hostnames live below
+`RELAY_TUNNEL_ZONE_NAME`, which may be a different Cloudflare zone; the Cyndrbase Connect edge must
+serve that domain. Production endpoint hostnames use
 `prod-<digest>.<RELAY_TUNNEL_ZONE_NAME>`; personal stages use
 `<stage>-<digest>.<RELAY_TUNNEL_ZONE_NAME>`. `RELAY_DOMAIN` remains available as an explicit API
 domain override.
@@ -206,6 +223,7 @@ The `production` GitHub environment must define these Actions variables:
 
 - `RELAY_API_ZONE_NAME`
 - `RELAY_TUNNEL_ZONE_NAME`
+- `CYNDRBASE_CONNECT_API_URL` and `CYNDRBASE_CONNECT_EDGE_URL` (the deploy fails without them)
 - `RELAY_DOMAIN` if overriding the derived production relay domain
 - `RELAY_CYNDRBASE_DEPLOYMENT_URL` (the relay's `CYNDRBASE_DEPLOYMENT_URL`; while unset, relay deploys
   are skipped, see the cutover above)
@@ -224,6 +242,7 @@ When `APNS_ENABLED=true`, the environment must also define:
 The `production` GitHub environment must define this Actions secret:
 
 - `CLERK_SECRET_KEY`
+- `CYNDRBASE_CONNECT_ADMIN_KEY` and `CYNDRBASE_CONNECT_TOKEN_KEY` (the deploy fails without them)
 
 When `APNS_ENABLED=true`, it must also define:
 

@@ -15,6 +15,8 @@ import {
   OrchestratorMcpListScheduledTasksResult,
   OrchestratorMcpScheduleTaskInput,
   OrchestratorMcpScheduleTaskResult,
+  OrchestratorMcpTaskAnswerInput,
+  OrchestratorMcpTaskAnswerResult,
   OrchestratorMcpTaskCancelInput,
   OrchestratorMcpTaskCancelResult,
   OrchestratorMcpUpdateScheduledTaskInput,
@@ -124,7 +126,7 @@ export const EnvironmentsListTool = Tool.make("pathway_environments_list", {
 
 export const TaskStatusTool = Tool.make("task_status", {
   description:
-    "Read the latest durable state and final summary for a Pathway-owned delegated task created by this parent thread. Reading a terminal result acknowledges its automatic parent delivery.",
+    "Read the latest durable state and final summary for a Pathway-owned delegated task created by this parent thread. pendingQuestions lists questions the task asked and is still waiting on; answer each with task_answer. Reading a terminal result acknowledges its automatic parent delivery.",
   parameters: OrchestratorMcpTaskStatusInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,
@@ -135,6 +137,18 @@ export const TaskStatusTool = Tool.make("task_status", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
+
+export const TaskAnswerTool = Tool.make("task_answer", {
+  description:
+    "Answer a question a delegated task is waiting on, listed in task_status pendingQuestions. Answer yourself when the decision is within the work you delegated, such as widening its allowed paths or approving a retry. When it needs the user's judgement, ask the user first and relay their answer here. The child resumes with the answer; follow it with pathway_thread_wait on childThreadId to read its reply.",
+  parameters: OrchestratorMcpTaskAnswerInput,
+  success: OrchestratorMcpTaskAnswerResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Answer delegated task")
+  .annotate(Tool.Destructive, false);
 
 export const TaskCancelTool = Tool.make("task_cancel", {
   description:
@@ -364,6 +378,7 @@ export const OrchestratorToolkit = Toolkit.make(
   EnvironmentsListTool,
   DelegateTaskTool,
   TaskStatusTool,
+  TaskAnswerTool,
   TaskCancelTool,
   ScheduleTaskTool,
   ListScheduledTasksTool,

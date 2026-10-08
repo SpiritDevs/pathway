@@ -67,8 +67,6 @@ import {
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   ProjectMutationError,
-  RelayClientInstallFailedError,
-  type RelayClientInstallProgressEvent,
   type ServerSelfUpdateError,
   type ServerSelfUpdateProgressEvent,
   type ServerSettingsPatch,
@@ -2092,35 +2090,6 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.cloudGetRelayClientStatus, relayClient.resolve, {
             "rpc.aggregate": "cloud",
           }),
-        [WS_METHODS.cloudInstallRelayClient]: (_input) =>
-          observeRpcStream(
-            WS_METHODS.cloudInstallRelayClient,
-            Stream.callback<RelayClientInstallProgressEvent, RelayClientInstallFailedError>(
-              (queue) =>
-                relayClient
-                  .installWithProgress((event) => Queue.offer(queue, event).pipe(Effect.asVoid))
-                  .pipe(
-                    Effect.flatMap((status) =>
-                      Queue.offer(queue, {
-                        type: "complete",
-                        status,
-                      }),
-                    ),
-                    Effect.catchTag("RelayClientInstallError", (error) =>
-                      Queue.fail(
-                        queue,
-                        new RelayClientInstallFailedError({
-                          reason: error.reason,
-                          message: error.message,
-                        }),
-                      ),
-                    ),
-                    Effect.andThen(Queue.end(queue)),
-                    Effect.forkScoped,
-                  ),
-            ),
-            { "rpc.aggregate": "cloud" },
-          ),
         [WS_METHODS.cloudIssueImportPreview]: (input) =>
           observeRpcEffect(WS_METHODS.cloudIssueImportPreview, issueImportRpc.preview(input), {
             "rpc.aggregate": "cloudIssueImport",

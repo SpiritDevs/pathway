@@ -315,7 +315,6 @@ const make = Effect.gen(function* () {
         ? yield* managedEndpointProvider.provision({
             userId: input.userId,
             environmentId: verified.environmentId,
-            origin: verified.origin,
           })
         : null;
       const endpoint = provisioned?.endpoint ?? verified.endpoint;

@@ -28,13 +28,13 @@ import {
   RelayEnvironmentConnectSendScope,
   RelayEnvironmentLinkChallengeResponse,
   RelayEnvironmentLinkResponse,
+  RelayManagedEndpointReprovisionResponse,
   RelayEnvironmentMintResponseProofPayload,
   type RelayEnvironmentMintResponse as RelayEnvironmentMintResponseShape,
   RelayEnvironmentLinkProof,
   RelayEnvironmentLinkProofPayload,
   RelayLinkProofRequest,
   RelayManagedEndpointOrigin,
-  RelayOkResponse,
   type RelayValidatedConnectGrantIdentity,
 } from "@spiritdevs/contracts/relay";
 import { withRelayClientTracing } from "@spiritdevs/shared/relayTracing";
@@ -53,9 +53,7 @@ import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -70,16 +68,12 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
 import {
-  SERVICE_STATE_FILE,
-  SERVICE_STOP_MARKER_FILE,
-  serviceStateHasPendingUpdate,
-} from "./serviceProtocol.ts";
-import {
   CLOUD_ENDPOINT_RUNTIME_CONFIG,
   CLOUD_MANAGED_TUNNEL_LOCAL_PORT,
   CLOUD_LINKED_USER_ID,
   CLOUD_MINT_PUBLIC_KEY,
   decodeManagedTunnelLocalPort,
+  decodeRuntimeConfig,
   encodeEndpointRuntimeConfigJson,
   encodeManagedTunnelLocalPort,
   PUBLISH_AGENT_ACTIVITY_SECRET,
@@ -88,11 +82,7 @@ import {
   RELAY_URL_SECRET,
 } from "./config.ts";
 import { relayUrlConfig } from "./publicConfig.ts";
-import {
-  readCliDesiredCloudLink,
-  readCliDesiredLinkMode,
-  setCliDesiredCloudLink,
-} from "./CliState.ts";
+import { readCliDesiredLinkMode, setCliDesiredCloudLink } from "./CliState.ts";
 import * as CliTokenManager from "./CliTokenManager.ts";
 import {
   authorizeConnectGrantFromLocalReplica,
@@ -365,8 +355,8 @@ function isAllowedEndpointOrigin(input: {
   return input.origin.localHttpPort === endpointRequestPort(url);
 }
 
-// A managed (Cloudflare tunnel) endpoint is provisioned by the relay and must
-// point at a loopback origin. A manual endpoint is reached out of band (e.g.
+// A managed (Pathway Connect) endpoint is provisioned by the relay and must
+// point at a loopback origin. "cloudflare_tunnel" is its historical wire name. A manual endpoint is reached out of band (e.g.
 // another direct endpoint) or not advertised at all for publish-only links, so it is not
 // tied to the managed-tunnel scope.
 export function isSupportedLinkProviderKind(request: RelayLinkProofRequest): boolean {
@@ -555,8 +545,15 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
 ) {
   yield* validateRelayConfigPayload(payload);
   yield* validateCloudMintPublicKey(payload.cloudMintPublicKey);
+  if (payload.endpointRuntime && managedTunnelLocalPort === undefined) {
+    return yield* new EnvironmentHttpBadRequestError({
+      message: "A managed endpoint needs an authorized local listener.",
+    });
+  }
   const endpointRuntimeStatus = yield* dependencies.endpointRuntime.applyConfig(
-    payload.endpointRuntime,
+    payload.endpointRuntime && managedTunnelLocalPort !== undefined
+      ? { config: payload.endpointRuntime, originPort: managedTunnelLocalPort }
+      : null,
   );
   const ok =
     endpointRuntimeStatus.status === "disabled" || endpointRuntimeStatus.status === "running";
@@ -587,8 +584,6 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
     if (managedTunnelLocalPort !== undefined) {
       const encodedPort = yield* encodeManagedTunnelLocalPort(managedTunnelLocalPort);
       yield* dependencies.secrets.set(CLOUD_MANAGED_TUNNEL_LOCAL_PORT, stringToBytes(encodedPort));
-    } else {
-      yield* dependencies.secrets.remove(CLOUD_MANAGED_TUNNEL_LOCAL_PORT);
     }
   } else {
     yield* dependencies.secrets.remove(CLOUD_ENDPOINT_RUNTIME_CONFIG);
@@ -742,115 +737,69 @@ export const reconcileDesiredCloudLink = Effect.fn("environment.cloud.reconcileD
   },
 );
 
-// The launcher owns this durable state, so read it directly both when a trial
-// decides whether it owns pre-activation cleanup and while a server tears down.
-export const pendingServiceUpdateExists = Effect.gen(function* () {
-  const config = yield* ServerConfig.ServerConfig;
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const runtimeDir = path.join(config.baseDir, "runtime");
-  const stateText = yield* fs
-    .readFileString(path.join(runtimeDir, SERVICE_STATE_FILE))
-    .pipe(Effect.option);
-  return Option.isSome(stateText) && serviceStateHasPendingUpdate(stateText.value);
-});
-
-// A pending update alone is not proof a replacement server is coming: an
-// explicit launcher stop (`pathway service uninstall`, `systemctl stop`) during
-// the pending window also tears this server down. The launcher marks that case
-// just before it signals the child, so pending + no marker is the handoff.
-const pendingUpdateHandoffExists = Effect.gen(function* () {
-  if (!(yield* pendingServiceUpdateExists)) {
+/**
+ * Restores the tunnel of a link whose stored connector config predates Cyndrbase Connect,
+ * using this environment's own relay credential. CLI links relink on startup instead.
+ */
+export const reprovisionStoredManagedEndpointWith = Effect.fn(
+  "environment.cloud.reprovisionStoredManagedEndpoint",
+)(function* (dependencies: CloudHttpDependencies, listenerPort: number) {
+  const read = (name: string) =>
+    dependencies.secrets.get(name).pipe(Effect.map(Option.map(bytesToString)));
+  const config = Option.flatMap(yield* read(CLOUD_ENDPOINT_RUNTIME_CONFIG), decodeRuntimeConfig);
+  const storedPort = Option.flatMap(
+    yield* read(CLOUD_MANAGED_TUNNEL_LOCAL_PORT),
+    decodeManagedTunnelLocalPort,
+  );
+  if (
+    Option.isNone(config) ||
+    (ManagedEndpointRuntime.connectorTarget(config.value) !== null && Option.isSome(storedPort))
+  ) {
     return false;
   }
-  const config = yield* ServerConfig.ServerConfig;
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const runtimeDir = path.join(config.baseDir, "runtime");
-  const stopping = yield* fs
-    .exists(path.join(runtimeDir, SERVICE_STOP_MARKER_FILE))
-    .pipe(Effect.orElseSucceed(() => false));
-  return !stopping;
-});
-
-// Cloudflare bills per provisioned tunnel, so an environment that goes offline
-// must not leave its tunnel behind. Releasing deletes only the tunnel — the
-// relay keeps the link and its hostname reservation, and the next startup's
-// link reconcile provisions a replacement tunnel under the same URL.
-export const releaseManagedTunnelOnShutdown = Effect.fn(
-  "environment.cloud.releaseManagedTunnelOnShutdown",
-)(function* () {
-  const dependencies = yield* cloudHttpDependencies;
-  // Only a managed link stores a runtime config; publish-only links have no
-  // tunnel to release.
-  const runtimeConfig = yield* dependencies.secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG);
-  if (Option.isNone(runtimeConfig)) {
-    return false;
-  }
-  // Only CLI-desired managed links release on shutdown, because the startup
-  // reconcile that provisions the replacement tunnel only runs for them. A
-  // link installed by a web/mobile client comes back after a restart by
-  // reapplying the stored connector token — it has no boot-time re-provision
-  // path — so its tunnel must survive the restart. (Unlink still deletes it.)
-  if (!(yield* readCliDesiredCloudLink) || (yield* readCliDesiredLinkMode) !== "managed") {
-    return false;
-  }
-  // A shutdown that hands off to a pending remote update is not the
-  // environment going offline: the launcher immediately brings a server back
-  // (the new version, or the old one after a rollback). Deleting the tunnel
-  // here forces that server to provision a replacement UUID, and the public
-  // hostname's route to the new tunnel takes 1-2 minutes to propagate — the
-  // dominant cost of an update restart. Keep the tunnel instead: the next
-  // boot respawns the connector from the stored config and is reachable as
-  // soon as it connects, and the reconcile confirms the still-live tunnel
-  // without replacing it.
-  if (yield* pendingUpdateHandoffExists) {
-    yield* Effect.logInfo("Keeping the managed tunnel across the update restart");
-    return false;
-  }
-  const token = yield* dependencies.cliTokenManager.getExisting;
-  if (Option.isNone(token)) {
-    return false;
-  }
-  // The link belongs to the relay it was installed against, so target the
-  // persisted URL: PATHWAY_RELAY_URL may have changed since the link was made.
-  const relayUrl = yield* dependencies.secrets.get(RELAY_URL_SECRET);
-  if (Option.isNone(relayUrl)) {
+  const [relayUrl, credential, cloudUserId] = yield* Effect.all([
+    read(RELAY_URL_SECRET),
+    read(RELAY_ENVIRONMENT_CREDENTIAL_SECRET),
+    read(CLOUD_LINKED_USER_ID),
+  ]);
+  if (Option.isNone(relayUrl) || Option.isNone(credential) || Option.isNone(cloudUserId)) {
     return false;
   }
   const environmentId = yield* dependencies.environment.getEnvironmentId;
-  // Stop the local connector before the relay deletes the tunnel it serves.
-  yield* dependencies.endpointRuntime.applyConfig(null);
-  const response = yield* HttpClientRequest.delete(
-    `${bytesToString(relayUrl.value)}/v1/client/environment-links/${encodeURIComponent(environmentId)}/tunnel`,
-  ).pipe(
-    HttpClientRequest.bearerToken(token.value.accessToken),
-    dependencies.httpClient.execute,
-    Effect.flatMap(HttpClientResponse.filterStatusOk),
-    Effect.flatMap(HttpClientResponse.schemaBodyJson(RelayOkResponse)),
-    withRelayClientTracing,
+  const { endpointRuntime } = yield* relayClientRequest(dependencies, {
+    url: `${relayUrl.value}/v1/environments/${encodeURIComponent(environmentId)}/managed-endpoint`,
+    token: credential.value,
+    payload: { cloudUserId: cloudUserId.value },
+    schema: RelayManagedEndpointReprovisionResponse,
+  });
+  const originPort = Option.getOrElse(storedPort, () => listenerPort);
+  const endpointRuntimeStatus = yield* dependencies.endpointRuntime.applyConfig({
+    config: endpointRuntime,
+    originPort,
+  });
+  if (endpointRuntimeStatus.status !== "running") {
+    return yield* new EnvironmentCloudEndpointUnavailableError({
+      message: "Managed endpoint runtime could not be started.",
+      endpointRuntimeStatus,
+    });
+  }
+  yield* dependencies.secrets.set(
+    CLOUD_ENDPOINT_RUNTIME_CONFIG,
+    stringToBytes(yield* encodeEndpointRuntimeConfigJson(endpointRuntime)),
   );
-  // ok:false means the relay skipped deletion because a concurrent provision
-  // owns the recorded tunnel now — leave the stored config alone.
-  if (!response.ok) {
-    return false;
-  }
-  // The connector token died with the tunnel. Drop the stored config so the
-  // next start waits for the link reconcile instead of respawning the relay
-  // client with a dead token. Kept when the release request fails: the tunnel
-  // still exists, so the stored token keeps working across the restart.
-  // Only dropped while it is still the config this shutdown released — a fast
-  // restart may already have reconciled and stored a fresh config for its
-  // replacement tunnel, and that one must survive this finalizer.
-  const storedConfig = yield* dependencies.secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG);
-  if (
-    Option.isSome(storedConfig) &&
-    bytesToString(storedConfig.value) === bytesToString(runtimeConfig.value)
-  ) {
-    yield* dependencies.secrets.remove(CLOUD_ENDPOINT_RUNTIME_CONFIG);
-  }
+  yield* dependencies.secrets.set(
+    CLOUD_MANAGED_TUNNEL_LOCAL_PORT,
+    stringToBytes(yield* encodeManagedTunnelLocalPort(originPort)),
+  );
   return true;
 });
+
+export const reprovisionStoredManagedEndpoint = (listenerPort: number) =>
+  cloudHttpDependencies.pipe(
+    Effect.flatMap((dependencies) =>
+      reprovisionStoredManagedEndpointWith(dependencies, listenerPort),
+    ),
+  );
 
 export const readCloudLinkState = Effect.fn("environment.cloud.readLinkState")(function* (
   dependencies: CloudHttpDependencies,

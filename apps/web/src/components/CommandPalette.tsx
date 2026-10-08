@@ -222,7 +222,11 @@ import { Button } from "./ui/button";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
-import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
+import {
+  ComposerHandleContext,
+  focusComposerOnDialogClose,
+  useComposerHandleContext,
+} from "../composerHandleContext";
 import { useFocusedPaneRouter } from "../panes/usePaneFocus";
 import { usePaneKeybindings } from "../panes/usePaneKeybindings";
 import {
@@ -911,10 +915,7 @@ function CommandPaletteDialog(props: {
       data-command-palette="true"
       data-palette-mode={props.mode}
       data-testid="command-palette"
-      finalFocus={() => {
-        composerHandleRef?.current?.focusAtEnd();
-        return false;
-      }}
+      finalFocus={() => focusComposerOnDialogClose(composerHandleRef?.current ?? null)}
       onBackdropPointerDown={() => {
         props.setOpen(false);
       }}

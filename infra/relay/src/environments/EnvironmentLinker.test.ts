@@ -140,9 +140,7 @@ function testLayer(input?: {
           revokeForEnvironmentPublicKey: () => Effect.succeed(false),
         }),
         Layer.succeed(ManagedEndpointProvider.ManagedEndpointProvider, {
-          prepareDeprovision: () => Effect.succeed(null),
           deprovision: input?.deprovision ?? (() => Effect.void),
-          release: () => Effect.succeed(true),
           provision: () =>
             Effect.succeed({
               endpoint: {
@@ -152,8 +150,10 @@ function testLayer(input?: {
               },
               runtime: {
                 environmentId: EnvironmentId.make("env-link-test"),
-                providerKind: "cloudflare_tunnel",
+                providerKind: "pathway_relay",
                 connectorToken: "connector-token",
+                edgeUrl: "wss://edge.example.test/connect/v1",
+                endpointId: "endpoint-1",
               },
             }),
         }),

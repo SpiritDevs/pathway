@@ -1,8 +1,6 @@
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/unstable/http";
 import {
   EnvironmentCloudEndpointUnavailableError,
@@ -24,7 +22,7 @@ import {
 } from "@spiritdevs/contracts/relay";
 import { EnvironmentRegistry } from "@spiritdevs/client-runtime/connection";
 import { findErrorTraceId } from "@spiritdevs/client-runtime/errors";
-import { request, runStream } from "@spiritdevs/client-runtime/rpc";
+import { request } from "@spiritdevs/client-runtime/rpc";
 import { makeEnvironmentHttpApiClient } from "@spiritdevs/client-runtime/rpc";
 import { ManagedRelay } from "@spiritdevs/client-runtime/relay";
 
@@ -97,32 +95,12 @@ function ensureRelayClientAvailable(
       .run(environmentId, request(WS_METHODS.cloudGetRelayClientStatus, {}))
       .pipe(Effect.mapError(relayClientRpcError("Could not check relay client availability.")));
     if (status.status === "available") return;
-    if (status.status === "unsupported") {
-      return yield* new CloudEnvironmentLinkError({
-        message: `Pathway cannot install the relay client automatically on ${status.platform}-${status.arch}.`,
-      });
-    }
-
-    const installed = yield* registry
-      .runStream(environmentId, runStream(WS_METHODS.cloudInstallRelayClient, {}))
-      .pipe(
-        Stream.runLast,
-        Effect.mapError(relayClientRpcError("Could not install the relay client.")),
-      );
-    if (Option.isNone(installed) || installed.value.type !== "complete") {
-      return yield* new CloudEnvironmentLinkError({
-        message: "The relay client install completed without a final status.",
-      });
-    }
-    const installedStatus = installed.value.status;
-    if (installedStatus.status !== "available") {
-      return yield* new CloudEnvironmentLinkError({
-        message:
-          installedStatus.status === "unsupported"
-            ? `Pathway cannot install the relay client automatically on ${installedStatus.platform}-${installedStatus.arch}.`
-            : "The relay client is still unavailable after installation.",
-      });
-    }
+    return yield* new CloudEnvironmentLinkError({
+      message:
+        status.status === "unsupported"
+          ? `This Pathway build has no relay client for ${status.platform}-${status.arch}.`
+          : "Update Pathway on this environment to use Pathway Connect.",
+    });
   });
 }
 

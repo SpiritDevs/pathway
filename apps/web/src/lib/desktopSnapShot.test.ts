@@ -1,4 +1,5 @@
-import type { DesktopBridge } from "@spiritdevs/contracts";
+import { EnvironmentId, ThreadId, type DesktopBridge } from "@spiritdevs/contracts";
+import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -44,6 +45,14 @@ describe("getDesktopSnapShotBridge", () => {
 });
 
 describe("window capture composer focus", () => {
+  it("includes the destination so unrelated panes stay collapsed", () => {
+    const target = scopeThreadRef(EnvironmentId.make("remote"), ThreadId.make("child"));
+    const listener = vi.fn();
+    const unsubscribe = subscribeSnapShotComposerFocus(listener);
+    dispatchSnapShotComposerFocus(target);
+    expect(listener).toHaveBeenCalledExactlyOnceWith(target);
+    unsubscribe();
+  });
   it("notifies active subscribers", () => {
     const listener = vi.fn();
     const unsubscribe = subscribeSnapShotComposerFocus(listener);
