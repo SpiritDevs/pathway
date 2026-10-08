@@ -351,11 +351,21 @@ describe("relayPersistence", () => {
 
     // A relink's allocation is out of reach of anything still holding the old one.
     const fresh = await reserved();
+    const record = (allocationId: string) =>
+      relay.mutation(api.relayPersistence.recordManagedEndpointTunnel, {
+        ...key,
+        allocationId,
+        tunnelId: "endpoint-1",
+        now: "2026-08-14T00:02:00.000Z",
+      });
+    expect(await record(old.allocationId)).toBe(false);
+    expect(await record(fresh.allocationId)).toBe(true);
     expect(await swap(old.allocationId, null, "slot-c")).toBeNull();
     expect(await remove(old.allocationId)).toBe(false);
     expect(await relay.query(api.relayPersistence.getManagedEndpointAllocation, key)).toMatchObject(
       {
         allocationId: fresh.allocationId,
+        tunnelId: "endpoint-1",
         dnsRecordId: null,
       },
     );

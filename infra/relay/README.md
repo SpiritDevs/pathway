@@ -115,9 +115,10 @@ stores it sealed with `CYNDRBASE_CONNECT_TOKEN_KEY`, later provisions return it,
 revokes it. Mints for an allocation share one idempotency key, so retried or delayed mints get the
 same token, and the provision that stores it revokes any other token on the endpoint. A mint
 delayed past the edge's idempotency receipt is only revoked at unlink; the hosted edge's durable
-receipts close that gap. Every allocation write names the allocation it read, so a stale unlink
-never touches a relink's newer one, and a relink replaces an endpoint that a provision orphaned
-when it lost to an unlink. Production adopts
+receipts close that gap. Every allocation write names the allocation it read, so a stale provision
+or unlink never touches a relink's newer one. Only unlink removes endpoints: a provision that finds
+its hostname taken adopts that endpoint, such as one orphaned by a provision that lost to an
+unlink. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 

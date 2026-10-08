@@ -105,9 +105,10 @@ export class ManagedEndpointAllocations extends Context.Service<
       ManagedEndpointAllocation,
       ManagedEndpointAllocationPersistenceError | ManagedTunnelLimitExceeded
     >;
+    /** Returns whether it recorded the endpoint: false once the allocation is gone or replaced. */
     readonly recordTunnel: (
       input: RecordManagedEndpointTunnelInput,
-    ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
+    ) => Effect.Effect<boolean, ManagedEndpointAllocationPersistenceError>;
     /**
      * Sets the token slot to `next` only while it still holds `expected`, in one transaction.
      * Returns what the slot holds afterwards, or null when the allocation is gone or replaced.
@@ -174,7 +175,7 @@ export const make = Effect.gen(function* () {
     recordTunnel: Effect.fn("relay.managed_endpoint_allocations.record_tunnel")(function* (
       input: RecordManagedEndpointTunnelInput,
     ) {
-      yield* client
+      return yield* client
         .mutation(api.relayPersistence.recordManagedEndpointTunnel, {
           ...input,
           now: DateTime.formatIso(yield* DateTime.now),

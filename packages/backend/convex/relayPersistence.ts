@@ -1114,12 +1114,13 @@ async function allocationById(
 }
 export const recordManagedEndpointTunnel = mutation({
   args: { ...allocationArgs, tunnelId: v.string(), now: v.string() },
-  returns: v.null(),
+  returns: v.boolean(),
   handler: async (ctx, args) => {
     await requireRelayControlPlane(ctx);
     const row = await allocationById(ctx, args);
-    if (row) await ctx.db.patch(row._id, { tunnelId: args.tunnelId, updatedAt: args.now });
-    return null;
+    if (!row) return false;
+    await ctx.db.patch(row._id, { tunnelId: args.tunnelId, updatedAt: args.now });
+    return true;
   },
 });
 /**

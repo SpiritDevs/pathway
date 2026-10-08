@@ -275,7 +275,6 @@ const openToken = (
 const isNotFound = (error: CyndrbaseConnectRpcError) => error.code === "not_found";
 const isAlreadyExists = (error: CyndrbaseConnectRpcError) => error.code === "already_exists";
 const isConnectRpcError = Schema.is(CyndrbaseConnectRpcError);
-const isUnlinked = Schema.is(ManagedEndpointUnlinked);
 
 export const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration.RelayConfiguration;
@@ -309,49 +308,50 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  // Plan/Apply keys derive from the target, so a retried call replays the original outcome.
+  // Each call plans afresh. Once the change has landed a retry gets NotFound, and a plan that
+  // went stale, such as a removal whose endpoint gained a token, is re-planned, not replayed.
+  const planThenApply = (
+    connect: RelayConfiguration.CyndrbaseConnectConfiguration,
+    plan: { readonly method: string; readonly body: Record<string, unknown> },
+    applyMethod: string,
+  ) =>
+    Effect.gen(function* () {
+      const key = yield* crypto.randomUUIDv4.pipe(
+        Effect.mapError(
+          (cause) =>
+            new CyndrbaseConnectRpcError({ method: plan.method, code: "unavailable", cause }),
+        ),
+      );
+      const planned = yield* rpc(
+        connect,
+        plan.method,
+        { ...plan.body, idempotencyKey: `plan:${key}` },
+        ConnectPlan,
+      );
+      yield* rpc(
+        connect,
+        applyMethod,
+        { planId: planned.plan.id, idempotencyKey: `apply:${key}` },
+        ConnectEmpty,
+      );
+    }).pipe(Effect.catchIf(isNotFound, () => Effect.void));
   const revokeConnectorToken = (
     connect: RelayConfiguration.CyndrbaseConnectConfiguration,
     tokenId: string,
   ) =>
-    rpc(
+    planThenApply(
       connect,
-      "PlanRevokeConnectorToken",
-      { tokenId, idempotencyKey: `plan-revoke:${tokenId}` },
-      ConnectPlan,
-    ).pipe(
-      Effect.flatMap(({ plan }) =>
-        rpc(
-          connect,
-          "ApplyRevokeConnectorToken",
-          { planId: plan.id, idempotencyKey: `apply-revoke:${tokenId}` },
-          ConnectEmpty,
-        ),
-      ),
-      Effect.asVoid,
-      Effect.catchIf(isNotFound, () => Effect.void),
+      { method: "PlanRevokeConnectorToken", body: { tokenId } },
+      "ApplyRevokeConnectorToken",
     );
-
   const removeEndpoint = (
     connect: RelayConfiguration.CyndrbaseConnectConfiguration,
     endpointId: string,
   ) =>
-    rpc(
+    planThenApply(
       connect,
-      "PlanEndpointChange",
-      { endpoint: { id: endpointId }, remove: true, idempotencyKey: `plan-remove:${endpointId}` },
-      ConnectPlan,
-    ).pipe(
-      Effect.flatMap(({ plan }) =>
-        rpc(
-          connect,
-          "ApplyEndpointChange",
-          { planId: plan.id, idempotencyKey: `apply-remove:${endpointId}` },
-          ConnectEmpty,
-        ),
-      ),
-      Effect.asVoid,
-      Effect.catchIf(isNotFound, () => Effect.void),
+      { method: "PlanEndpointChange", body: { endpoint: { id: endpointId }, remove: true } },
+      "ApplyEndpointChange",
     );
 
   // Every page of a list. The relay creates everything its listener holds, so lists are complete.
@@ -642,32 +642,30 @@ export const make = Effect.gen(function* () {
           },
           ConnectEndpoint,
         ).pipe(Effect.map(({ endpoint }) => endpoint.id));
-      // The relay owns this hostname, so an endpoint holding it that the allocation does not
-      // record was orphaned by a provision that lost to an unlink. Removing it revokes its
-      // tokens; then a fresh one is created.
-      const replaceOrphan = (conflict: CyndrbaseConnectRpcError) =>
-        Effect.gen(function* () {
-          const orphan = (yield* listAll(settings.connect, "ListEndpoints", ConnectEndpointPage))
-            .flatMap((page) => page.endpoints ?? [])
-            .find((endpoint) => endpoint.hostname === hostname)?.id;
-          if (orphan === undefined) return yield* conflict;
-          const current = yield* allocations.get(key);
-          if (current?.allocationId === allocation.allocationId && current.tunnelId === orphan) {
-            return orphan;
-          }
-          yield* removeEndpoint(settings.connect, orphan);
-          return yield* createEndpoint(`endpoint:${allocation.allocationId}:${orphan}`);
-        });
+      // The relay owns this hostname, so an endpoint already holding it was made for this
+      // environment by an earlier provision, perhaps one that lost to an unlink: adopt it. Only
+      // unlink removes endpoints; a stale provision stops at the fenced record below.
+      const adopt = (conflict: CyndrbaseConnectRpcError) =>
+        listAll(settings.connect, "ListEndpoints", ConnectEndpointPage).pipe(
+          Effect.flatMap((pages) => {
+            const held = pages
+              .flatMap((page) => page.endpoints ?? [])
+              .find((endpoint) => endpoint.hostname === hostname);
+            return held === undefined ? Effect.fail(conflict) : Effect.succeed(held.id);
+          }),
+        );
       const endpointId =
         recorded ??
         (yield* createEndpoint(`endpoint:${allocation.allocationId}:${allocation.updatedAt}`).pipe(
-          Effect.catchIf(isAlreadyExists, replaceOrphan),
+          Effect.catchIf(isAlreadyExists, adopt),
           Effect.mapError(failed("ensure-endpoint")),
         ));
       if (endpointId !== allocation.tunnelId) {
-        yield* allocations
+        const kept = yield* allocations
           .recordTunnel({ ...ref, tunnelId: endpointId })
           .pipe(Effect.mapError(failed("record-endpoint", endpointId)));
+        if (!kept)
+          return yield* failed("record-endpoint", endpointId)(new ManagedEndpointUnlinked());
       }
 
       const token = yield* connectorToken(
@@ -675,13 +673,6 @@ export const make = Effect.gen(function* () {
         ref,
         allocation.dnsRecordId,
         endpointId,
-      ).pipe(
-        // An unlink may not have seen the endpoint this provision just made.
-        Effect.tapError((error) =>
-          recorded === null && isUnlinked(error.cause)
-            ? removeEndpoint(settings.connect, endpointId).pipe(Effect.ignore)
-            : Effect.void,
-        ),
       );
       yield* allocations
         .markReady(ref)

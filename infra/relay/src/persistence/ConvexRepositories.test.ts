@@ -1079,6 +1079,9 @@ describe("Convex relay repositories", () => {
         if (reference === functionName(api.relayPersistence.reserveManagedEndpointAllocation)) {
           return Effect.succeed({ status: "reserved", allocation });
         }
+        if (reference === functionName(api.relayPersistence.recordManagedEndpointTunnel)) {
+          return Effect.succeed(true);
+        }
         if (reference === functionName(api.relayPersistence.swapManagedEndpointTokenSlot)) {
           return Effect.succeed("slot-one");
         }
@@ -1102,7 +1105,7 @@ describe("Convex relay repositories", () => {
         }),
       ).toEqual(allocation);
       const ref = { userId: "user-one", environmentId: "env-one", allocationId: "allocation-one" };
-      yield* allocations.recordTunnel({ ...ref, tunnelId: "tunnel-one" });
+      expect(yield* allocations.recordTunnel({ ...ref, tunnelId: "tunnel-one" })).toBe(true);
       expect(yield* allocations.swapTokenSlot({ ...ref, expected: null, next: "slot-one" })).toBe(
         "slot-one",
       );
