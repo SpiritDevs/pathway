@@ -87,7 +87,7 @@ import {
   subagentResultForRun,
   subagentThreadTitle,
 } from "./SubagentProjection.ts";
-import { ThreadForkServiceV2 } from "./ThreadForkService.ts";
+import { forkTargetThread, ThreadForkServiceV2 } from "./ThreadForkService.ts";
 import { computerActivationMetadata } from "../computer/computerActivation.ts";
 
 /**
@@ -3152,6 +3152,35 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
     const sourceRun = runForSourcePoint(sourceProjection, command.sourcePoint);
 
+    if (
+      sourceRun === null &&
+      command.forkKind === "side_chat" &&
+      command.sourcePoint.type === "latest_stable"
+    ) {
+      // Nothing has completed to carry over yet, so the side chat starts fresh.
+      const now = command.createdAt ?? (yield* DateTime.now);
+      const targetThread = forkTargetThread({
+        sourceProjection,
+        sourceRun: null,
+        targetThreadId: command.targetThreadId,
+        forkKind: "side_chat",
+        ...(command.title === undefined ? {} : { title: command.title }),
+        createdBy: command.createdBy,
+        creationSource: command.creationSource,
+        createdAt: now,
+      });
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.created",
+        threadId: command.targetThreadId,
+        providerInstanceId: targetThread.providerInstanceId,
+        occurredAt: now,
+        payload: targetThread,
+      });
+      return;
+    }
     if (sourceRun === null) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
@@ -3277,7 +3306,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         transfer.sourceThreadId === command.targetThreadId &&
         transfer.targetThreadId === command.sourceThreadId,
     );
-    if (forkTransfer === undefined) {
+    // A side chat started before its parent had a completed run has no fork transfer; its whole
+    // history merges back.
+    if (forkTransfer === undefined && sourceProjection.thread.forkedFrom !== null) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
         commandType: command.type,
@@ -3308,7 +3339,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       sourceThreadId: command.sourceThreadId,
       targetThreadId: command.targetThreadId,
       sourcePoint: contextSourcePointForRun(sourceProjection, sourceRun),
-      basePoint: forkTransfer.sourcePoint,
+      basePoint: forkTransfer?.sourcePoint ?? null,
       sourceProviderInstanceId: sourceRun.providerInstanceId,
       targetProviderInstanceId: targetProjection.thread.modelSelection.instanceId,
       targetRunId: null,

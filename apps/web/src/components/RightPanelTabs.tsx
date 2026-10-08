@@ -199,7 +199,7 @@ const SURFACE_DISABLED_REASONS = {
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
   agents: "Agents are only available from a thread.",
-  sideChat: "Side chats need a connected thread with at least one completed response.",
+  sideChat: "Side chats need a connected thread.",
 } as const;
 
 type TabContextMenuAction =

@@ -47,6 +47,50 @@ export interface ThreadForkServiceV2Shape {
   }) => Effect.Effect<ThreadForkPlanV2, ThreadForkPlanError>;
 }
 
+/**
+ * The thread a fork starts as. A side chat opened before the source has a completed run has no
+ * `sourceRun`, so it starts fresh under its parent with nothing carried over.
+ */
+export function forkTargetThread(input: {
+  readonly sourceProjection: OrchestrationV2ThreadProjection;
+  readonly sourceRun: OrchestrationV2Run | null;
+  readonly targetThreadId: ThreadId;
+  readonly forkKind?: "manual" | "side_chat";
+  readonly title?: string;
+  readonly createdBy: OrchestrationV2Actor;
+  readonly creationSource: OrchestrationV2CreationSource;
+  readonly createdAt: DateTime.Utc;
+}): OrchestrationV2AppThread {
+  return {
+    ...input.sourceProjection.thread,
+    createdBy: input.createdBy,
+    creationSource: input.creationSource,
+    id: input.targetThreadId,
+    title: input.title ?? `${input.sourceProjection.thread.title} fork`,
+    activeProviderThreadId: null,
+    lineage: {
+      parentThreadId: input.sourceProjection.thread.id,
+      relationshipToParent: "fork",
+      rootThreadId: input.sourceProjection.thread.lineage.rootThreadId,
+    },
+    forkKind: input.forkKind ?? "manual",
+    forkedFrom:
+      input.sourceRun === null
+        ? null
+        : { type: "run", threadId: input.sourceProjection.thread.id, runId: input.sourceRun.id },
+    createdAt: input.createdAt,
+    updatedAt: input.createdAt,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    settleAfterCompletion: false,
+    snoozedUntil: null,
+    snoozedAt: null,
+    lastVisitedAt: null,
+    deletedAt: null,
+  };
+}
+
 export class ThreadForkServiceV2 extends Context.Service<
   ThreadForkServiceV2,
   ThreadForkServiceV2Shape
@@ -64,35 +108,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
             cause: `Fork source run ${input.sourceRun.id} is ${input.sourceRun.status}.`,
           });
         }
-        const targetThread: OrchestrationV2AppThread = {
-          ...input.sourceProjection.thread,
-          createdBy: input.createdBy,
-          creationSource: input.creationSource,
-          id: input.targetThreadId,
-          title: input.title ?? `${input.sourceProjection.thread.title} fork`,
-          activeProviderThreadId: null,
-          lineage: {
-            parentThreadId: input.sourceProjection.thread.id,
-            relationshipToParent: "fork",
-            rootThreadId: input.sourceProjection.thread.lineage.rootThreadId,
-          },
-          forkKind: input.forkKind ?? "manual",
-          forkedFrom: {
-            type: "run",
-            threadId: input.sourceProjection.thread.id,
-            runId: input.sourceRun.id,
-          },
-          createdAt: input.createdAt,
-          updatedAt: input.createdAt,
-          archivedAt: null,
-          settledOverride: null,
-          settledAt: null,
-          settleAfterCompletion: false,
-          snoozedUntil: null,
-          snoozedAt: null,
-          lastVisitedAt: null,
-          deletedAt: null,
-        };
+        const targetThread = forkTargetThread({ ...input, sourceRun: input.sourceRun });
         const transfer: OrchestrationV2ContextTransfer = {
           id: input.transferId,
           type: "fork",

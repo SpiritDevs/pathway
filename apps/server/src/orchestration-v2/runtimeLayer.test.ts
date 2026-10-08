@@ -3025,6 +3025,83 @@ it.layer(ConversationTestLayer)("Conversations and temporary retention", (it) =>
       assert.equal(fork.cause, "Keep conversation before creating a fork or side chat.");
     }),
   );
+
+  it.effect("starts a side chat fresh before the source has a completed run", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = yield* create("conversation-early-side-chat");
+      const forkFrom = (suffix: string, forkKind?: "side_chat") =>
+        orchestrator.dispatch({
+          type: "thread.fork",
+          commandId: CommandId.make(`conversation-early-side-chat:${suffix}`),
+          sourceThreadId: threadId,
+          targetThreadId: ThreadId.make(`conversation-early-side-chat:${suffix}`),
+          sourcePoint: { type: "latest_stable" },
+          ...(forkKind ? { forkKind } : {}),
+          title: "early side chat",
+          createdBy: "user",
+          creationSource: "web",
+        });
+
+      assert.instanceOf(yield* forkFrom("manual").pipe(Effect.flip), OrchestratorDispatchError);
+
+      yield* forkFrom("side-chat", "side_chat");
+      const sideChat = yield* orchestrator.getThreadProjection(
+        ThreadId.make("conversation-early-side-chat:side-chat"),
+      );
+      assert.equal(sideChat.thread.forkKind, "side_chat");
+      assert.equal(sideChat.thread.lineage.parentThreadId, threadId);
+      assert.equal(sideChat.thread.lineage.relationshipToParent, "fork");
+      assert.isNull(sideChat.thread.forkedFrom);
+      assert.lengthOf(sideChat.contextTransfers, 0);
+
+      // With nothing inherited, merging back carries the whole side chat.
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("conversation-early-side-chat:side-chat:message"),
+        threadId: sideChat.thread.id,
+        messageId: MessageId.make("conversation-early-side-chat:side-chat:message"),
+        text: "Look into this",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const sideChatRun = (yield* orchestrator.getThreadProjection(sideChat.thread.id)).runs[0];
+      assert.isDefined(sideChatRun);
+      const completedAt = yield* DateTime.now;
+      yield* (yield* EventSinkV2).write({
+        events: [
+          {
+            id: EventId.make("conversation-early-side-chat:side-chat:completed"),
+            type: "run.updated",
+            threadId: sideChat.thread.id,
+            runId: sideChatRun.id,
+            ...(sideChatRun.rootNodeId === null ? {} : { nodeId: sideChatRun.rootNodeId }),
+            providerInstanceId: sideChatRun.providerInstanceId,
+            occurredAt: completedAt,
+            payload: { ...sideChatRun, status: "completed", completedAt },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.merge_back",
+        commandId: CommandId.make("conversation-early-side-chat:merge-back"),
+        sourceThreadId: sideChat.thread.id,
+        targetThreadId: threadId,
+        sourcePoint: { type: "run", runId: sideChatRun.id },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const mergeBack = (yield* orchestrator.getThreadProjection(threadId)).contextTransfers.find(
+        (transfer) => transfer.type === "merge_back",
+      );
+      assert.isDefined(mergeBack);
+      assert.equal(mergeBack.sourceThreadId, sideChat.thread.id);
+      assert.isNull(mergeBack.basePoint);
+    }),
+  );
   it.effect(
     "reconciles merged temporary projects without clients and keeps open or unfinished work",
     () =>

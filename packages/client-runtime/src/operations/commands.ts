@@ -268,7 +268,8 @@ export type StopThreadSessionInput = ThreadCommandInput;
 export interface ForkThreadFromRunInput extends CommandMetadata {
   readonly sourceThreadId: ThreadId;
   readonly targetThreadId: ThreadId;
-  readonly runId: RunId;
+  /** Omitted for a side chat whose source has no completed run; it starts fresh. */
+  readonly runId?: RunId;
   readonly forkKind?: "manual" | "side_chat";
   readonly title?: string;
 }
@@ -1116,7 +1117,8 @@ export const forkThreadFromRun = Effect.fn("EnvironmentCommands.forkThreadFromRu
     creationSource: input.creationSource ?? "web",
     sourceThreadId: input.sourceThreadId,
     targetThreadId: input.targetThreadId,
-    sourcePoint: { type: "run", runId: input.runId },
+    sourcePoint:
+      input.runId === undefined ? { type: "latest_stable" } : { type: "run", runId: input.runId },
     ...(input.forkKind === undefined ? {} : { forkKind: input.forkKind }),
     ...(input.title === undefined ? {} : { title: input.title }),
   });

@@ -37,3 +37,5 @@ Choose **Keep conversation** before settlement to make the thread permanent. Its
 Deleting a kept conversation waits for active subagents to finish, then removes their app-owned thread history and owned resources with the parent. Keeping the parent does not leave hidden subagents holding its folders after deletion.
 
 After the first message, a permanent thread cannot be made temporary. A thread made permanent through **Keep conversation** cannot become temporary again. Keep a temporary thread before creating a fork or side chat.
+
+A side chat opened before the agent has finished its first response starts fresh, without the conversation so far.

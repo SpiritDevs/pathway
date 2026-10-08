@@ -7474,12 +7474,7 @@ function ChatViewContent(props: ChatViewProps) {
         setThreadError(activeThread.id, "Choose Keep conversation before creating a side chat.");
         return;
       }
-      if (
-        sideChatCreateInFlightRef.current ||
-        !activeThread ||
-        !latestSideChatSourceRun ||
-        activeEnvironmentUnavailable
-      ) {
+      if (sideChatCreateInFlightRef.current || !activeThread || activeEnvironmentUnavailable) {
         return;
       }
 
@@ -7496,7 +7491,7 @@ function ChatViewContent(props: ChatViewProps) {
           input: {
             sourceThreadId: activeThread.id,
             targetThreadId,
-            runId: latestSideChatSourceRun.id,
+            ...(latestSideChatSourceRun ? { runId: latestSideChatSourceRun.id } : {}),
             forkKind: "side_chat",
             title: `${activeThread.title} side chat`,
           },
@@ -7838,7 +7833,7 @@ function ChatViewContent(props: ChatViewProps) {
       isSendBusy ||
       isContextCompacting ||
       sendInFlightRef.current ||
-      (target === "side-chat" && (!isServerThread || latestSideChatSourceRun === null))
+      (target === "side-chat" && !isServerThread)
     ) {
       notifyDirectAnnotationAttached();
       if (isContextCompacting) {
@@ -8270,18 +8265,13 @@ function ChatViewContent(props: ChatViewProps) {
     }
 
     let forkedSideChat = false;
-    if (
-      failure === null &&
-      target === "side-chat" &&
-      latestSideChatSourceRun !== null &&
-      turnAttachmentsResult._tag === "Success"
-    ) {
+    if (failure === null && target === "side-chat" && turnAttachmentsResult._tag === "Success") {
       const forkResult = await forkThreadFromRun({
         environmentId,
         input: {
           sourceThreadId: activeThread.id,
           targetThreadId: threadIdForSend,
-          runId: latestSideChatSourceRun.id,
+          ...(latestSideChatSourceRun ? { runId: latestSideChatSourceRun.id } : {}),
           forkKind: "side_chat",
           title: `${activeThread.title} side chat`,
         },
@@ -10263,11 +10253,7 @@ function ChatViewContent(props: ChatViewProps) {
     filesAvailable: activeWorkspaceRoot !== undefined,
     pullRequestAvailable: pullRequestSurfaceAvailable,
     agentsAvailable: true,
-    sideChatAvailable:
-      isServerThread &&
-      !activeThread.temporary &&
-      latestSideChatSourceRun !== null &&
-      !activeEnvironmentUnavailable,
+    sideChatAvailable: isServerThread && !activeThread.temporary && !activeEnvironmentUnavailable,
     pullRequestStatuses: pullRequestTabStatuses,
     liveAgentCount: agentPanelModel.liveCount,
   };
@@ -10786,7 +10772,6 @@ function ChatViewContent(props: ChatViewProps) {
                               sideChatAvailable={
                                 isServerThread &&
                                 !activeThread.temporary &&
-                                latestSideChatSourceRun !== null &&
                                 !activeEnvironmentUnavailable
                               }
                               onStartInNewChat={onStartInNewChat}
