@@ -1,29 +1,28 @@
 /**
- * Env-gated relay-flow smoke run against a REAL deployed relay and Convex
- * deployment. Entirely skipped unless `PATHWAY_CONVEX_SMOKE=1`.
+ * Env-gated relay-flow smoke run against a REAL deployed relay and Cyndrbase
+ * deployment. Entirely skipped unless `PATHWAY_CYNDRBASE_SMOKE=1`.
  *
  * Required environment for a live run:
- * - `PATHWAY_CONVEX_SMOKE=1` — enables the suite.
- * - `CONVEX_URL` — Convex deployment URL (the one the relay mints
+ * - `PATHWAY_CYNDRBASE_SMOKE=1` — enables the suite.
+ * - `PATHWAY_CYNDRBASE_URL` — the deployment URL (the one the relay mints
  *   `pathway-convex` tokens for).
- * - `PATHWAY_CONVEX_SMOKE_DEPLOYMENT` — the Convex deployment identifier the
- *   admin hooks are pinned to, e.g. `dev:chatty-ermine-52`. Passed to every
- *   `npx convex run` subprocess as `CONVEX_DEPLOYMENT` (overriding anything
- *   inherited or in `.env.local`) and cross-checked against `CONVEX_URL`'s
+ * - `PATHWAY_CYNDRBASE_SMOKE_DEPLOYMENT` — the deployment the admin hooks are
+ *   pinned to, e.g. `pathway-dev`. Passed to every `cyndr run` subprocess as
+ *   `CYNDRBASE_DEPLOYMENT` and cross-checked against `PATHWAY_CYNDRBASE_URL`'s
  *   hostname before any mutation.
- * - `PATHWAY_CONVEX_SMOKE_ALLOW_URL_MISMATCH=1` — optional; only for custom
- *   domains whose hostname can never match the deployment slug.
+ * - `CYNDRBASE_URL` and `CYNDRBASE_DEPLOY_KEY` — what `cyndr run` authenticates with.
+ * - `PATHWAY_CYNDRBASE_SMOKE_ALLOW_URL_MISMATCH=1` — optional; only for custom
+ *   domains and local engines whose hostname can never match the deployment.
  * - `PATHWAY_RELAY_URL` — optional, defaults to `https://relay.spiritdevs.com`.
- * - `PATHWAY_CONVEX_SMOKE_COMPANY_ID` — optional, defaults to the reserved
+ * - `PATHWAY_CYNDRBASE_SMOKE_COMPANY_ID` — optional, defaults to the reserved
  *   smoke company id that `smoke:seed` always creates.
- * - `PATHWAY_CONVEX_SMOKE_BACKEND_DIR` — optional, defaults to the repo's
+ * - `PATHWAY_CYNDRBASE_SMOKE_BACKEND_DIR` — optional, defaults to the repo's
  *   `packages/backend` resolved relative to this file.
  *
  * A stored Pathway Connect CLI credential must exist on this machine
- * (`pathway connect login`), and `npx convex run` must be authenticated for the
- * target deployment when executed from `packages/backend`. The registration
- * hooks shell out to the internal-only `smoke:*` functions in
- * `packages/backend/convex/smoke.ts`; see `./convexSmokeHooks.ts`.
+ * (`pathway connect login`). The registration hooks shell out to the
+ * internal-only `smoke:*` functions in `packages/backend/convex/smoke.ts`; see
+ * `./convexSmokeHooks.ts`.
  *
  * Runs that die before their own cleanup leave a recovery state file under
  * `defaultSmokeStateDir()`; the next run recovers those leftovers (relay
@@ -52,7 +51,7 @@ import {
   runConvexSyncSmoke,
 } from "./convexSyncSmoke.ts";
 
-const SMOKE_ENABLED = process.env.PATHWAY_CONVEX_SMOKE === "1";
+const SMOKE_ENABLED = process.env.PATHWAY_CYNDRBASE_SMOKE === "1";
 
 describe.skipIf(!SMOKE_ENABLED)("convex sync relay-flow smoke (live)", () => {
   it.live(
@@ -60,16 +59,16 @@ describe.skipIf(!SMOKE_ENABLED)("convex sync relay-flow smoke (live)", () => {
     () =>
       Effect.gen(function* () {
         const relayBaseUrl = process.env.PATHWAY_RELAY_URL ?? "https://relay.spiritdevs.com";
-        const convexUrl = process.env.CONVEX_URL;
-        const deployment = process.env.PATHWAY_CONVEX_SMOKE_DEPLOYMENT;
-        const allowUrlMismatch = process.env.PATHWAY_CONVEX_SMOKE_ALLOW_URL_MISMATCH === "1";
-        const companyId = process.env.PATHWAY_CONVEX_SMOKE_COMPANY_ID ?? SMOKE_COMPANY_DOMAIN_ID;
+        const convexUrl = process.env.PATHWAY_CYNDRBASE_URL;
+        const deployment = process.env.PATHWAY_CYNDRBASE_SMOKE_DEPLOYMENT;
+        const allowUrlMismatch = process.env.PATHWAY_CYNDRBASE_SMOKE_ALLOW_URL_MISMATCH === "1";
+        const companyId = process.env.PATHWAY_CYNDRBASE_SMOKE_COMPANY_ID ?? SMOKE_COMPANY_DOMAIN_ID;
         const backendDir =
-          process.env.PATHWAY_CONVEX_SMOKE_BACKEND_DIR ?? defaultConvexSmokeBackendDir();
-        assert.isDefined(convexUrl, "CONVEX_URL must be set for the Convex sync smoke run");
+          process.env.PATHWAY_CYNDRBASE_SMOKE_BACKEND_DIR ?? defaultConvexSmokeBackendDir();
+        assert.isDefined(convexUrl, "PATHWAY_CYNDRBASE_URL must be set for the sync smoke run");
         assert.isDefined(
           deployment,
-          'PATHWAY_CONVEX_SMOKE_DEPLOYMENT must name the deployment the admin hooks may mutate (e.g. "dev:chatty-ermine-52")',
+          'PATHWAY_CYNDRBASE_SMOKE_DEPLOYMENT must name the deployment the admin hooks may mutate (e.g. "pathway-dev")',
         );
         if (convexUrl === undefined || deployment === undefined) {
           return;

@@ -20,7 +20,7 @@
  *
  * Registration state inside Convex (`environmentRegistrations` rows) cannot be
  * managed through any public API, so the harness takes injected hooks; the
- * integrator wires them to `npx convex run` against the target deployment.
+ * integrator wires them to `cyndr run` against the target deployment.
  */
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -133,7 +133,7 @@ export class ConvexSyncSmokeConvexCallError extends Schema.TaggedErrorClass<Conv
 /**
  * Registration state lives in Convex's `environmentRegistrations` table and has
  * no public management API, so the harness delegates to the integrator, who
- * wires these to `npx convex run` (or an admin client) against the target
+ * wires these to `cyndr run` (or an admin client) against the target
  * deployment. The harness only decides *when* each transition happens.
  */
 export interface ConvexSyncSmokeHooks {
@@ -693,7 +693,7 @@ export function manualCleanupInstructions(
 } {
   const args = JSON.stringify({ environmentId: input.environmentId });
   return {
-    convex: `cd packages/backend && CONVEX_DEPLOYMENT=${input.deployment} npx convex run smoke:cleanup '${args}'`,
+    convex: `cd packages/backend && CYNDRBASE_DEPLOYMENT=${input.deployment} node_modules/.bin/cyndr run smoke:cleanup '${args}'`,
     relay: `curl -X DELETE ${input.relayBaseUrl}/v1/client/environment-links/${input.environmentId} -H 'Authorization: Bearer <pathway connect CLI access token>'`,
     stateFile: smokeStateFilePath(input.stateDir, input.environmentId),
   };

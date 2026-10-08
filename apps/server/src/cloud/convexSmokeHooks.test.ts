@@ -1,5 +1,5 @@
 /**
- * CI unit tests for the `npx convex run`-backed smoke hooks: stdout parsing
+ * CI unit tests for the `cyndr run`-backed smoke hooks: stdout parsing
  * (the CLI may prefix the JSON return value with log lines) and the exact
  * command each hook issues, using a stub `ProcessRunner` so nothing spawns.
  */
@@ -13,7 +13,6 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 import * as ProcessRunner from "../processRunner.ts";
 import {
   checkConvexSmokeDeploymentTarget,
-  convexDeploymentSlug,
   makeConvexRunSmokeHooks,
   parseConvexRunOutput,
   type ConvexRunSmokeHooksConfig,
@@ -54,8 +53,8 @@ const CONFIG: ConvexRunSmokeHooksConfig = {
   environmentId: "env-smoke-test",
   companyId: "00000000-0000-7000-8000-736d6f6b6501",
   backendDir: "/repo/packages/backend",
-  deployment: "dev:chatty-ermine-52",
-  convexUrl: "https://chatty-ermine-52.convex.cloud",
+  deployment: "pathway-dev",
+  convexUrl: "https://pathway-dev.syd.cyndrbase.cloud",
 };
 
 function okOutput(stdout: string): ProcessRunner.ProcessRunOutput {
@@ -121,101 +120,84 @@ function makeHooksWith(
   );
 }
 
-describe("convexDeploymentSlug", () => {
-  it("extracts the slug after the kind prefix", () => {
-    assert.equal(convexDeploymentSlug("dev:chatty-ermine-52"), "chatty-ermine-52");
-    assert.equal(convexDeploymentSlug("prod:brave-otter-11"), "brave-otter-11");
-  });
-
-  it("rejects identifiers without a '<kind>:<slug>' shape", () => {
-    assert.isNull(convexDeploymentSlug("chatty-ermine-52"));
-    assert.isNull(convexDeploymentSlug("dev:"));
-    assert.isNull(convexDeploymentSlug(":chatty-ermine-52"));
-    assert.isNull(convexDeploymentSlug(""));
-  });
-});
-
 describe("checkConvexSmokeDeploymentTarget", () => {
-  it("accepts a deployment whose slug is the first hostname label of CONVEX_URL", () => {
+  it("accepts a deployment that is the first hostname label of the deployment URL", () => {
     assert.isNull(
       checkConvexSmokeDeploymentTarget({
-        deployment: "dev:chatty-ermine-52",
-        convexUrl: "https://chatty-ermine-52.convex.cloud",
+        deployment: "pathway-dev",
+        convexUrl: "https://pathway-dev.syd.cyndrbase.cloud",
         allowUrlMismatch: false,
       }),
     );
   });
 
-  it("refuses a slug/hostname mismatch with an actionable message", () => {
+  it("refuses a deployment/hostname mismatch with an actionable message", () => {
     const refusal = checkConvexSmokeDeploymentTarget({
-      deployment: "dev:chatty-ermine-52",
-      convexUrl: "https://other-deployment-99.convex.cloud",
+      deployment: "pathway-dev",
+      convexUrl: "https://pathway.syd.cyndrbase.cloud",
       allowUrlMismatch: false,
     });
     assert.isNotNull(refusal);
-    assert.include(refusal, "chatty-ermine-52");
-    assert.include(refusal, "other-deployment-99.convex.cloud");
-    assert.include(refusal, "PATHWAY_CONVEX_SMOKE_ALLOW_URL_MISMATCH=1");
+    assert.include(refusal, "pathway-dev");
+    assert.include(refusal, "pathway.syd.cyndrbase.cloud");
+    assert.include(refusal, "PATHWAY_CYNDRBASE_SMOKE_ALLOW_URL_MISMATCH=1");
   });
 
-  it("lets the operator opt out for custom domains that can never match", () => {
+  it("lets the operator opt out for custom domains and local engines", () => {
     assert.isNull(
       checkConvexSmokeDeploymentTarget({
-        deployment: "dev:chatty-ermine-52",
-        convexUrl: "https://convex.example.com",
+        deployment: "pathway-dev",
+        convexUrl: "http://127.0.0.1:3210",
         allowUrlMismatch: true,
       }),
     );
   });
 
-  it("refuses malformed deployment identifiers and unparseable URLs even with the opt-out", () => {
+  it("refuses a missing deployment and unparseable URLs even with the opt-out", () => {
     assert.include(
       checkConvexSmokeDeploymentTarget({
-        deployment: "chatty-ermine-52",
-        convexUrl: "https://chatty-ermine-52.convex.cloud",
+        deployment: " ",
+        convexUrl: "https://pathway-dev.syd.cyndrbase.cloud",
         allowUrlMismatch: true,
       }),
-      "PATHWAY_CONVEX_SMOKE_DEPLOYMENT",
+      "PATHWAY_CYNDRBASE_SMOKE_DEPLOYMENT",
     );
     assert.include(
       checkConvexSmokeDeploymentTarget({
-        deployment: "dev:chatty-ermine-52",
+        deployment: "pathway-dev",
         convexUrl: "not a url",
         allowUrlMismatch: true,
       }),
-      "CONVEX_URL",
+      "PATHWAY_CYNDRBASE_URL",
     );
   });
 });
 
 describe("makeConvexRunSmokeHooks", () => {
-  it.effect("seedRegistration runs `npx convex run smoke:seed` in the backend dir", () =>
+  it.effect("seedRegistration runs the backend's `cyndr run smoke:seed`", () =>
     Effect.gen(function* () {
       const { hooks, calls } = yield* makeHooksWith(() => okOutput(SEED_OK_STDOUT));
       yield* hooks.seedRegistration("jkt-1");
       assert.lengthOf(calls, 1);
       const call = calls[0];
       assert.isDefined(call);
-      assert.equal(call?.command, "npx");
-      assert.deepEqual(
-        [...(call?.args ?? [])],
-        ["convex", "run", "smoke:seed", SEED_EXPECTED_ARGS],
-      );
+      assert.equal(call?.command, "/repo/packages/backend/node_modules/.bin/cyndr");
+      assert.deepEqual([...(call?.args ?? [])], ["run", "smoke:seed", SEED_EXPECTED_ARGS]);
       assert.equal(call?.cwd, "/repo/packages/backend");
     }),
   );
 
-  it.effect("pins every subprocess to the configured deployment via CONVEX_DEPLOYMENT", () =>
+  it.effect("pins every subprocess to the configured deployment via CYNDRBASE_DEPLOYMENT", () =>
     Effect.gen(function* () {
       const { hooks, calls } = yield* makeHooksWith(() => okOutput(SEED_OK_STDOUT));
       yield* hooks.seedRegistration("jkt-1");
       const call = calls[0];
       assert.isDefined(call?.env);
-      assert.equal(call?.env?.CONVEX_DEPLOYMENT, "dev:chatty-ermine-52");
+      assert.equal(call?.env?.CYNDRBASE_DEPLOYMENT, "pathway-dev");
     }),
   );
 
-  it.effect("refuses to build hooks when the deployment and CONVEX_URL disagree", () =>
+  it.effect("refuses to build hooks when the deployment and its URL disagree", () =>
     Effect.gen(function* () {
       const runnerLayer = Layer.succeed(
         ProcessRunner.ProcessRunner,
@@ -226,7 +208,7 @@ describe("makeConvexRunSmokeHooks", () => {
       const exit = yield* Effect.exit(
         makeConvexRunSmokeHooks({
           ...CONFIG,
-          convexUrl: "https://other-deployment-99.convex.cloud",
+          convexUrl: "https://pathway.syd.cyndrbase.cloud",
         }).pipe(Effect.provide(runnerLayer)),
       );
       assert.isTrue(Exit.isFailure(exit));
@@ -235,7 +217,7 @@ describe("makeConvexRunSmokeHooks", () => {
         assert.instanceOf(error, ConvexSyncSmokeHookError);
         assert.include(
           String((error as ConvexSyncSmokeHookError).cause),
-          "PATHWAY_CONVEX_SMOKE_ALLOW_URL_MISMATCH=1",
+          "PATHWAY_CYNDRBASE_SMOKE_ALLOW_URL_MISMATCH=1",
         );
       }
     }),
@@ -261,8 +243,8 @@ describe("makeConvexRunSmokeHooks", () => {
       const { hooks, calls } = yield* makeHooksWith(() => okOutput(UPDATED_FALSE_STDOUT));
       const exit = yield* Effect.exit(hooks.setRegistrationThumbprint("jkt-2"));
       assert.isTrue(Exit.isFailure(exit));
-      assert.equal(calls[0]?.args[2], "smoke:setThumbprint");
-      assert.equal(calls[0]?.args[3], SET_THUMBPRINT_EXPECTED_ARGS);
+      assert.equal(calls[0]?.args[1], "smoke:setThumbprint");
+      assert.equal(calls[0]?.args[2], SET_THUMBPRINT_EXPECTED_ARGS);
     }),
   );
 
@@ -270,8 +252,8 @@ describe("makeConvexRunSmokeHooks", () => {
     Effect.gen(function* () {
       const { hooks, calls } = yield* makeHooksWith(() => okOutput(REVOKED_TRUE_STDOUT));
       yield* hooks.revokeRegistration();
-      assert.equal(calls[0]?.args[2], "smoke:revokeRegistration");
-      assert.equal(calls[0]?.args[3], ENVIRONMENT_ONLY_EXPECTED_ARGS);
+      assert.equal(calls[0]?.args[1], "smoke:revokeRegistration");
+      assert.equal(calls[0]?.args[2], ENVIRONMENT_ONLY_EXPECTED_ARGS);
     }),
   );
 
@@ -279,7 +261,7 @@ describe("makeConvexRunSmokeHooks", () => {
     Effect.gen(function* () {
       const { hooks, calls } = yield* makeHooksWith(() => okOutput(CLEANUP_COUNTS_STDOUT));
       yield* hooks.cleanupRegistration();
-      assert.equal(calls[0]?.args[2], "smoke:cleanup");
+      assert.equal(calls[0]?.args[1], "smoke:cleanup");
     }),
   );
 

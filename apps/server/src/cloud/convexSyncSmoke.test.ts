@@ -473,7 +473,7 @@ describe("smoke run state files", () => {
     const commands = manualCleanupInstructions({ ...state("env-smoke-fff"), stateDir: "/tmp/x" });
     assert.equal(
       commands.convex,
-      `cd packages/backend && CONVEX_DEPLOYMENT=dev:chatty-ermine-52 npx convex run smoke:cleanup '{"environmentId":"env-smoke-fff"}'`,
+      `cd packages/backend && CYNDRBASE_DEPLOYMENT=dev:chatty-ermine-52 node_modules/.bin/cyndr run smoke:cleanup '{"environmentId":"env-smoke-fff"}'`,
     );
     assert.equal(
       commands.relay,

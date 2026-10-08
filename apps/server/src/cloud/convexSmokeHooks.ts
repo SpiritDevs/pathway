@@ -1,23 +1,21 @@
 /**
- * Real registration hooks for the Convex sync smoke harness.
+ * Real registration hooks for the Cyndrbase sync smoke harness.
  *
  * `environmentRegistrations` rows have no public management API, so each hook
- * shells out to `npx convex run smoke:<fn> '<json-args>'` with the working
- * directory set to `packages/backend` — the internal-only seed/teardown module
- * built for this smoke test (`packages/backend/convex/smoke.ts`).
+ * shells out to `cyndr run smoke:<fn> '<json-args>'` with the working directory
+ * set to `packages/backend` — the internal-only seed/teardown module built for
+ * this smoke test (`packages/backend/convex/smoke.ts`). `cyndr` authenticates
+ * with the inherited `CYNDRBASE_URL` and `CYNDRBASE_DEPLOY_KEY`.
  *
- * The deployment is pinned, never inferred: left to itself the convex CLI
- * resolves its target from `packages/backend/.env.local` or an inherited
- * `CONVEX_DEPLOYMENT`, independent of the `CONVEX_URL` the harness's
- * authenticated client calls use — a mismatch would mutate a different (even
- * production) deployment. So the config names the deployment explicitly
- * (`PATHWAY_CONVEX_SMOKE_DEPLOYMENT`), every subprocess runs with
- * `CONVEX_DEPLOYMENT` overridden to it, and before ANY mutation
- * {@link checkConvexSmokeDeploymentTarget} cross-checks the deployment slug
- * against the first hostname label of `CONVEX_URL`, failing fast otherwise
- * (custom domains opt out via `PATHWAY_CONVEX_SMOKE_ALLOW_URL_MISMATCH=1`).
+ * The deployment is pinned, never inferred: the config names it explicitly
+ * (`PATHWAY_CYNDRBASE_SMOKE_DEPLOYMENT`), every subprocess runs with
+ * `CYNDRBASE_DEPLOYMENT` overridden to it, and before ANY mutation
+ * {@link checkConvexSmokeDeploymentTarget} cross-checks it against the first
+ * hostname label of the deployment URL the harness's authenticated client calls
+ * use, failing fast otherwise (custom domains and local engines opt out via
+ * `PATHWAY_CYNDRBASE_SMOKE_ALLOW_URL_MISMATCH=1`).
  *
- * `convex run` prints the function's return value as JSON on stdout;
+ * `cyndr run` prints the function's return value as JSON on stdout;
  * {@link parseConvexRunOutput} strips any leading non-JSON log lines
  * defensively before parsing. Each hook then asserts the shape the smoke
  * functions promise (`seed` reports the reserved smoke company id,
@@ -42,7 +40,7 @@ export type ParsedConvexRunOutput =
   | { readonly ok: false; readonly reason: string };
 
 /**
- * Extracts the JSON value `convex run` printed. The return value is the last
+ * Extracts the JSON value `cyndr run` printed. The return value is the last
  * thing on stdout (possibly pretty-printed over multiple lines), but the CLI
  * may precede it with progress/log lines — so on a whole-stdout parse failure,
  * leading lines are dropped one at a time until a suffix parses.
@@ -50,7 +48,7 @@ export type ParsedConvexRunOutput =
 export function parseConvexRunOutput(stdout: string): ParsedConvexRunOutput {
   const trimmed = stdout.trim();
   if (trimmed.length === 0) {
-    return { ok: false, reason: "convex run printed nothing on stdout" };
+    return { ok: false, reason: "cyndr run printed nothing on stdout" };
   }
   const lines = trimmed.split("\n");
   for (let index = 0; index < lines.length; index += 1) {
@@ -66,7 +64,7 @@ export function parseConvexRunOutput(stdout: string): ParsedConvexRunOutput {
   }
   return {
     ok: false,
-    reason: `convex run stdout did not end in a JSON value: ${trimmed}`,
+    reason: `cyndr run stdout did not end in a JSON value: ${trimmed}`,
   };
 }
 
@@ -76,32 +74,21 @@ function fieldOf(value: unknown, key: string): unknown {
     : undefined;
 }
 
-/** The `<slug>` of a `dev:<slug>` / `prod:<slug>` deployment identifier, or `null`. */
-export function convexDeploymentSlug(deployment: string): string | null {
-  const trimmed = deployment.trim();
-  const colon = trimmed.indexOf(":");
-  if (colon <= 0) {
-    return null;
-  }
-  const slug = trimmed.slice(colon + 1);
-  return slug.length > 0 ? slug : null;
-}
-
 /**
- * The mutation-safety cross-check: the pinned deployment's slug must be the
- * first hostname label of the `CONVEX_URL` the authenticated client calls use
- * (e.g. `dev:chatty-ermine-52` ↔ `chatty-ermine-52.convex.cloud`), so the
- * admin hooks and the client provably target the same deployment. Returns
- * `null` when the pairing is safe, otherwise an actionable refusal.
+ * The mutation-safety cross-check: the pinned deployment must be the first
+ * hostname label of the deployment URL the authenticated client calls use
+ * (`pathway-dev` ↔ `pathway-dev.syd.cyndrbase.cloud`), so the admin hooks and
+ * the client provably target the same deployment. Returns `null` when the
+ * pairing is safe, otherwise an actionable refusal.
  */
 export function checkConvexSmokeDeploymentTarget(input: {
   readonly deployment: string;
   readonly convexUrl: string;
   readonly allowUrlMismatch: boolean;
 }): string | null {
-  const slug = convexDeploymentSlug(input.deployment);
-  if (slug === null) {
-    return `PATHWAY_CONVEX_SMOKE_DEPLOYMENT must name the target deployment as '<kind>:<slug>' (e.g. "dev:chatty-ermine-52"), got ${JSON.stringify(
+  const deployment = input.deployment.trim();
+  if (deployment.length === 0) {
+    return `PATHWAY_CYNDRBASE_SMOKE_DEPLOYMENT must name the target deployment (e.g. "pathway-dev"), got ${JSON.stringify(
       input.deployment,
     )}`;
   }
@@ -109,15 +96,12 @@ export function checkConvexSmokeDeploymentTarget(input: {
   try {
     hostname = new URL(input.convexUrl).hostname;
   } catch {
-    return `CONVEX_URL is not a parseable URL: ${JSON.stringify(input.convexUrl)}`;
+    return `PATHWAY_CYNDRBASE_URL is not a parseable URL: ${JSON.stringify(input.convexUrl)}`;
   }
-  if (hostname.split(".")[0] === slug) {
+  if (hostname.split(".")[0] === deployment || input.allowUrlMismatch) {
     return null;
   }
-  if (input.allowUrlMismatch) {
-    return null;
-  }
-  return `deployment '${input.deployment}' does not match CONVEX_URL host '${hostname}' (expected its first label to be '${slug}') — the admin hooks would mutate a different deployment than the authenticated client calls. If CONVEX_URL is a custom domain that can never match, set PATHWAY_CONVEX_SMOKE_ALLOW_URL_MISMATCH=1 to proceed.`;
+  return `deployment '${deployment}' does not match the deployment URL host '${hostname}' (expected its first label to be '${deployment}') — the admin hooks would mutate a different deployment than the authenticated client calls. If the URL is a custom domain or a local engine that can never match, set PATHWAY_CYNDRBASE_SMOKE_ALLOW_URL_MISMATCH=1 to proceed.`;
 }
 
 export interface ConvexRunSmokeHooksConfig {
@@ -129,27 +113,26 @@ export interface ConvexRunSmokeHooksConfig {
    * run stops before any Convex step can fail for the wrong reason.
    */
   readonly companyId: string;
-  /** Directory `npx convex run` executes in; see {@link defaultConvexSmokeBackendDir}. */
+  /** Directory `cyndr run` executes in; see {@link defaultConvexSmokeBackendDir}. */
   readonly backendDir: string;
   /**
-   * Convex deployment identifier every hook is pinned to, e.g.
-   * `dev:chatty-ermine-52` (`PATHWAY_CONVEX_SMOKE_DEPLOYMENT`). Passed as
-   * `CONVEX_DEPLOYMENT` in each subprocess's environment, overriding anything
-   * inherited or read from `.env.local`.
+   * Cyndrbase deployment every hook is pinned to, e.g. `pathway-dev`
+   * (`PATHWAY_CYNDRBASE_SMOKE_DEPLOYMENT`). Passed as `CYNDRBASE_DEPLOYMENT` in
+   * each subprocess's environment, overriding anything inherited.
    */
   readonly deployment: string;
-  /** The `CONVEX_URL` the harness's client calls use; cross-checked against `deployment`. */
+  /** The deployment URL the harness's client calls use; cross-checked against `deployment`. */
   readonly convexUrl: string;
-  /** `PATHWAY_CONVEX_SMOKE_ALLOW_URL_MISMATCH=1` — required for custom domains. */
+  /** `PATHWAY_CYNDRBASE_SMOKE_ALLOW_URL_MISMATCH=1` — required for custom domains and local engines. */
   readonly allowUrlMismatch?: boolean;
 }
 
-/** `npx` resolution plus a network round-trip to the deployment can be slow on first run. */
+/** A network round-trip to the deployment can be slow on first run. */
 const CONVEX_RUN_TIMEOUT = "120 seconds";
 
 /**
- * Builds {@link ConvexSyncSmokeHooks} backed by `npx convex run smoke:<fn>`
- * against whatever deployment the convex CLI resolves from `backendDir`.
+ * Builds {@link ConvexSyncSmokeHooks} backed by `cyndr run smoke:<fn>` against
+ * the pinned deployment.
  */
 export const makeConvexRunSmokeHooks = Effect.fn("cloud.convex_sync_smoke.make_hooks")(function* (
   config: ConvexRunSmokeHooksConfig,
@@ -159,7 +142,7 @@ export const makeConvexRunSmokeHooks = Effect.fn("cloud.convex_sync_smoke.make_h
   const hookError = (hook: string, cause: unknown) => new ConvexSyncSmokeHookError({ hook, cause });
 
   // Refuse to build mutating hooks at all when the pinned deployment and the
-  // client-facing CONVEX_URL disagree — fail fast, before ANY mutation.
+  // client-facing deployment URL disagree — fail fast, before ANY mutation.
   const targetMismatch = checkConvexSmokeDeploymentTarget({
     deployment: config.deployment,
     convexUrl: config.convexUrl,
@@ -170,13 +153,15 @@ export const makeConvexRunSmokeHooks = Effect.fn("cloud.convex_sync_smoke.make_h
   }
 
   // Explicitly constructed subprocess environment: the inherited env rides
-  // along (npx needs PATH, the convex CLI its auth), but CONVEX_DEPLOYMENT is
-  // always ours, so the CLI can never resolve a different deployment from
-  // `.env.local` or an inherited variable.
+  // along (PATH, CYNDRBASE_URL and CYNDRBASE_DEPLOY_KEY), but
+  // CYNDRBASE_DEPLOYMENT is always ours, so the CLI can never target a
+  // different deployment from an inherited variable.
   const subprocessEnv: NodeJS.ProcessEnv = {
     ...globalThis.process.env,
-    CONVEX_DEPLOYMENT: config.deployment,
+    CYNDRBASE_DEPLOYMENT: config.deployment,
   };
+  // The backend's own devDependency, never an `npx` registry lookup.
+  const cyndr = `${config.backendDir}/node_modules/.bin/cyndr`;
 
   const runSmokeFunction = (
     hook: string,
@@ -185,8 +170,8 @@ export const makeConvexRunSmokeHooks = Effect.fn("cloud.convex_sync_smoke.make_h
   ): Effect.Effect<unknown, ConvexSyncSmokeHookError> =>
     runner
       .run({
-        command: "npx",
-        args: ["convex", "run", `smoke:${fn}`, JSON.stringify(args)],
+        command: cyndr,
+        args: ["run", `smoke:${fn}`, JSON.stringify(args)],
         cwd: config.backendDir,
         env: subprocessEnv,
         timeout: CONVEX_RUN_TIMEOUT,
@@ -198,7 +183,7 @@ export const makeConvexRunSmokeHooks = Effect.fn("cloud.convex_sync_smoke.make_h
             return Effect.fail(
               hookError(
                 hook,
-                `\`npx convex run smoke:${fn}\` in ${config.backendDir} exited with code ${String(
+                `\`cyndr run smoke:${fn}\` in ${config.backendDir} exited with code ${String(
                   output.code,
                 )}: ${output.stderr.trim() || output.stdout.trim() || "(no output)"}`,
               ),
@@ -207,7 +192,7 @@ export const makeConvexRunSmokeHooks = Effect.fn("cloud.convex_sync_smoke.make_h
           const parsed = parseConvexRunOutput(output.stdout);
           return parsed.ok
             ? Effect.succeed(parsed.value)
-            : Effect.fail(hookError(hook, `\`npx convex run smoke:${fn}\`: ${parsed.reason}`));
+            : Effect.fail(hookError(hook, `\`cyndr run smoke:${fn}\`: ${parsed.reason}`));
         }),
       );
 
