@@ -18,7 +18,16 @@ import {
   useNavigate,
   useRouter,
 } from "@tanstack/react-router";
-import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import {
+  lazy,
+  type ReactNode,
+  Suspense,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+} from "react";
 
 import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL } from "../branding";
 import { resolveServerBackedAppDisplayName } from "../branding.logic";
@@ -436,12 +445,12 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
           <EnvironmentConnectionNotice />
         ) : null}
         {serverError ? (
-          <div role="alert" className="px-4 py-2 text-sm">
+          <FloatingConnectionNotice role="alert">
             {serverError}{" "}
             <Button size="sm" onClick={() => retryAuth((attempt) => attempt + 1)}>
               Retry connection
             </Button>
-          </div>
+          </FloatingConnectionNotice>
         ) : null}
         {appShell}
         {/* Above the router: a theme draft is judged by walking the app, so the
@@ -456,9 +465,31 @@ function EnvironmentConnectionNotice() {
   const environment = usePrimaryEnvironment();
   if (environment?.connection.phase === "connected") return null;
   return (
-    <div role="status" className="px-4 py-2 text-sm text-muted-foreground">
-      {environment?.connection.error ?? "Connecting to the environment."} Server actions will be
-      available when it is ready.
+    <FloatingConnectionNotice role="status">
+      <span className="text-muted-foreground">
+        {environment?.connection.error ?? "Connecting to the environment."} Server actions will be
+        available when it is ready.
+      </span>
+    </FloatingConnectionNotice>
+  );
+}
+
+/** Floats over the shell so connecting never shifts the layout or crowds the window controls. */
+function FloatingConnectionNotice({
+  role,
+  children,
+}: {
+  readonly role: "status" | "alert";
+  readonly children: ReactNode;
+}) {
+  return (
+    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
+      <div
+        role={role}
+        className="pointer-events-auto max-w-xl rounded-lg border border-border bg-popover px-3 py-2 text-sm shadow-lg"
+      >
+        {children}
+      </div>
     </div>
   );
 }
