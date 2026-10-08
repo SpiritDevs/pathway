@@ -168,15 +168,21 @@ the URL manually.
 
 ### Cutover from Convex
 
-The relay validates connect grants, registrations and other relay state in the deployment named by
-`CYNDRBASE_DEPLOYMENT_URL`, but installed clients create them in whichever backend their build
-baked in. Pointing the relay at Cyndrbase while clients still write to Convex refuses every grant
-those clients issue. Cut over in this order:
+Client releases and the relay switch separately. The production `CYNDRBASE_DEPLOYMENT_URL` variable
+(with `CYNDRBASE_URL`, `CYNDRBASE_DEPLOYMENT` and the `CYNDRBASE_DEPLOY_KEY` secret) lets desktop,
+web and TestFlight releases build against Cyndrbase. The relay deploys only once
+`RELAY_CYNDRBASE_DEPLOYMENT_URL` is set; until then main-branch relay deploys are skipped and the
+running relay stays on Convex.
 
-1. Import the Convex data into Cyndrbase (IDs preserved) and keep it in sync until cutover.
-2. Ship desktop, web and iOS builds that use the Cyndrbase deployment, and wait for adoption.
-3. Pause Convex writes, drain the last changes, then set `CYNDRBASE_DEPLOYMENT_URL` and deploy the
-   relay. Clients still on Convex builds lose cloud sync and connect until they update.
+The relay validates connect grants and registrations in its own backend, while clients create them
+in whichever backend their build baked in. Cut over in this order:
+
+1. Import the Convex data into Cyndrbase (IDs preserved) and keep it in sync.
+2. Set `CYNDRBASE_DEPLOYMENT_URL` and the deploy settings, then release clients built against
+   Cyndrbase. Until step 3, connect grants those builds issue are refused.
+3. Pause Convex writes and drain the last changes, set `RELAY_CYNDRBASE_DEPLOYMENT_URL` to the same
+   URL, and re-run the latest Deploy Pathway Connect relay workflow. Clients still on Convex builds
+   then lose cloud sync and connect until they update, so pick the switch point by adoption.
 
 ### Deployment CI
 
@@ -201,7 +207,8 @@ The `production` GitHub environment must define these Actions variables:
 - `RELAY_API_ZONE_NAME`
 - `RELAY_TUNNEL_ZONE_NAME`
 - `RELAY_DOMAIN` if overriding the derived production relay domain
-- `CYNDRBASE_DEPLOYMENT_URL`
+- `RELAY_CYNDRBASE_DEPLOYMENT_URL` (the relay's `CYNDRBASE_DEPLOYMENT_URL`; while unset, relay deploys
+  are skipped, see the cutover above)
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
