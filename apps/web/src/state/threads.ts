@@ -30,6 +30,7 @@ const companyScopedThreadSnapshotAtom = Atom.family((environmentId: EnvironmentI
       get(activeCompanyIdAtom),
       get(scopedCompanyRegistryReplicasAtom),
       environmentId,
+      snapshot.projects,
     );
     return threads === snapshot.threads ? snapshot : { ...snapshot, threads };
   }).pipe(Atom.withLabel(`company-scoped-thread-snapshot:${environmentId}`)),
