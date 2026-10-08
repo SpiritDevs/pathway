@@ -309,25 +309,16 @@ describe("DesktopApplicationMenu", () => {
       assert.isUndefined(
         viewMenu.submenu.find((item) => item.role === "reload" || item.role === "forceReload"),
       );
-
-      const fileMenu = template.find((item) => item.label === "File");
-      assert.isDefined(fileMenu);
-      if (!Array.isArray(fileMenu.submenu)) {
-        throw new Error("Expected File menu submenu to be an array.");
-      }
-      assert.isUndefined(fileMenu.submenu.find((item) => item.label === "Reload App"));
     }),
   );
 
-  it.effect("offers a click-only app reload in development", () =>
+  it.effect("offers a click-only app reload in every build", () =>
     Effect.gen(function* () {
       const selectedActions: Array<string> = [];
       const applicationMenuTemplate =
         yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
 
-      yield* configureMenu(selectedActions, applicationMenuTemplate, {
-        devServerUrl: "http://127.0.0.1:5733",
-      });
+      yield* configureMenu(selectedActions, applicationMenuTemplate);
 
       const template = yield* Deferred.await(applicationMenuTemplate);
       const fileMenu = template.find((item) => item.label === "File");

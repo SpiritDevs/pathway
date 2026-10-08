@@ -227,15 +227,9 @@ export const make = Effect.gen(function* () {
                 },
                 { type: "separator" as const },
               ]),
-          ...(environment.isDevelopment
-            ? [
-                {
-                  label: "Reload App",
-                  click: reloadClick,
-                },
-                { type: "separator" as const },
-              ]
-            : []),
+          // Click-only: Cmd+R belongs to focused browser previews.
+          { label: "Reload App", click: reloadClick },
+          { type: "separator" as const },
           environment.platform === "darwin" ? closeWindowItem : { role: "quit" },
         ],
       },
