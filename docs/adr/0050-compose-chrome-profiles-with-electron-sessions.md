@@ -24,6 +24,7 @@
 - Each environment's preview partition ([`BrowserSession.ts`](../../apps/desktop/src/preview/BrowserSession.ts)) is a full regular Profile. Profiles load through the synchronous `ProfileManager::GetProfile` on the UI thread, and a load failure crashes the app.
 - **`clearSiteData` scope is an open decision before the runtime ships.** Today it clears storage and cache for the exact origin, but cookies for the whole registrable domain, sibling subdomains included. Only `127.0.0.1` was exercised, where the registrable domain falls back to the host. [#279](https://github.com/SpiritDevs/pathway/pull/279) already calls it, and the `cookieCount` the site panel shows (host and parent-domain cookies) doesn't match what Clear deletes.
 - Users' existing Electron browsing data doesn't carry over until a reviewed migration exists.
+- Libraries that open their own in-memory partition fail. electron-updater's `electron-updater` partition broke every update check, so [`ElectronUpdater.ts`](../../apps/desktop/src/electron/ElectronUpdater.ts) routes its requests through the default session.
 
 **Not yet proven.**
 
@@ -59,5 +60,4 @@
 [gate3]: https://github.com/SpiritDevs/pathway-runtime/blob/9469952f58f034273471e273804b738fc458f79f/evidence/gate3-macos.md
 [gate4]: https://github.com/SpiritDevs/pathway-runtime/blob/9469952f58f034273471e273804b738fc458f79f/evidence/gate4-macos.md
 [patches]: https://github.com/SpiritDevs/pathway-runtime/blob/9469952f58f034273471e273804b738fc458f79f/patches/README.md
-
 [cor288]: https://github.com/SpiritDevs/pathway-runtime/blob/518e642489bbe8cf842606e17da800d3f81b7819/evidence/cor-288-macos.md
