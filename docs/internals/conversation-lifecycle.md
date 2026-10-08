@@ -1,6 +1,6 @@
 # Conversation archive and deletion
 
-A conversation lifecycle fence and its work stop requests commit in the same Convex mutation. Pending environment commands and worker messages are cancelled. A claimed command is uncertain: a dispatch acknowledgment is never treated as termination.
+A conversation lifecycle fence and its work stop requests commit in the same Cyndrbase mutation. Pending environment commands and worker messages are cancelled. A claimed command is uncertain: a dispatch acknowledgment is never treated as termination.
 
 The owning environment interrupts the exact assignment run, follows its app-owned subagent edges and completion wakes, and reports again after terminal projections arrive. Completed parents also have their completion-wake cohort stopped. Retained controls are retried on environment reconnect, thread events, and the existing control recovery timer. Late accepted delivery receipts create stopped follow-up assignments rather than reopening work. Missing dispatch receipts and unobservable native subagent termination remain pending.
 

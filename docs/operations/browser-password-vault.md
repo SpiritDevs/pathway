@@ -4,12 +4,12 @@ The password vault belongs to the signed-in Pathway account. It is separate from
 
 ## Deployment setup
 
-Set these variables in the Convex deployment before saving passwords:
+Set these variables in the Cyndrbase deployment with `cyndr env set NAME VALUE --secret` before saving passwords:
 
 - `PATHWAY_BROWSER_PASSWORD_ACTIVE_KEY_ID`: the active key's identifier, such as `v1`.
 - `PATHWAY_BROWSER_PASSWORD_KEYS`: a JSON object mapping key identifiers to base64-encoded 32-byte keys.
 
-Generate a key using `openssl rand -base64 32`. Store the value in the deployment's secret configuration. Do not commit it. The JSON shape is `{"v1":"<base64 key>"}`. When using a dotenv file, wrap that JSON in single quotes; do not double-escape its inner quotes. Verify the deployed value parses as a JSON object before testing a save. Deploy the updated Convex schema and `browserPasswords` functions. An unset or invalid keyring prevents password writes; there is no plaintext fallback.
+Generate a key using `openssl rand -base64 32`. Store the value in the deployment's secret configuration. Do not commit it. The JSON shape is `{"v1":"<base64 key>"}`. When using a dotenv file, wrap that JSON in single quotes; do not double-escape its inner quotes. Verify the deployed value parses as a JSON object before testing a save. Deploy the updated Cyndrbase schema and `browserPasswords` functions. An unset or invalid keyring prevents password writes; there is no plaintext fallback.
 
 ## Storage and access
 

@@ -1,8 +1,8 @@
 # Shared Contacts and Time Tracker
 
-Contacts are company-owned Convex records. Active human members may read a company's contact directory. The existing `projects.manage` permission controls contact creation, editing, import and deletion, consistent with the shared email-tag catalog. Contact revisions reject stale edits; a request ID makes a lost-response retry safe. Deleted rows remain tombstones so retrying an old import cannot resurrect them.
+Contacts are company-owned Cyndrbase records. Active human members may read a company's contact directory. The existing `projects.manage` permission controls contact creation, editing, import and deletion, consistent with the shared email-tag catalog. Contact revisions reject stale edits; a request ID makes a lost-response retry safe. Deleted rows remain tombstones so retrying an old import cannot resurrect them.
 
-Time sessions belong to the authenticated user across their companies and devices. An indexed read of that user's running manual sessions and the insertion occur in one Convex mutation, so two devices cannot independently start manual timers. Automatic agent sessions may run concurrently. Start IDs are immutable retry identities. Stop targets an exact manual session ID, so a delayed stop cannot stop a newer session. Repeating a start after its original session stopped returns the original session without starting it again. Manual duration is computed by the server clock.
+Time sessions belong to the authenticated user across their companies and devices. An indexed read of that user's running manual sessions and the insertion occur in one Cyndrbase mutation, so two devices cannot independently start manual timers. Automatic agent sessions may run concurrently. Start IDs are immutable retry identities. Stop targets an exact manual session ID, so a delayed stop cannot stop a newer session. Repeating a start after its original session stopped returns the original session without starting it again. Manual duration is computed by the server clock.
 
 ## Automatic activity and analytics
 
@@ -10,7 +10,7 @@ Time sessions belong to the authenticated user across their companies and device
 
 `cloudTimeTrackingPublisher.ts` publishes lifecycle updates and 15-second active heartbeats through the environment's existing cloud service identity. Revisions make retries safe. Recovery preserves committed provider completions, caps startup reconciliation events at the last observation, and closes any remaining unobserved active interval at its last heartbeat. Clients cap extrapolation after 90 seconds without observation and show a connection wait. No client needs to stay open for capture or publication.
 
-Convex `timeTracking:syncAgentSession` resolves the environment registration owner and the active local-project binding. Records remain private to that user. The current run contract lacks an initiating company member, so shared-environment reports must not be represented as personal attribution for every initiator. Project keys use canonical cloud project IDs. Unbound projects cannot create automatic time records until they are linked. An authenticated environment can finalize its existing session after the project is removed; the original owner and project attribution are preserved.
+Cyndrbase `timeTracking:syncAgentSession` resolves the environment registration owner and the active local-project binding. Records remain private to that user. The current run contract lacks an initiating company member, so shared-environment reports must not be represented as personal attribution for every initiator. Project keys use canonical cloud project IDs. Unbound projects cannot create automatic time records until they are linked. An authenticated environment can finalize its existing session after the project is removed; the original owner and project attribution are preserved.
 
 The accepted `issue.create` transaction records a human issue session through `lib/trackedTime.ts`. Composer intervals travel through the existing issue sync operation, so refusal or retry cannot create phantom/duplicate time records. Credit is the greater of 60 seconds or measured active duration. The minimum's excess contributes to work on the creation day but never creates an elapsed interval. Web and Apple composers pause when backgrounded and use a 30-second idle allowance. Other automation/import paths, issue edits, and comments do not create synthetic human time.
 
@@ -18,7 +18,7 @@ The accepted `issue.create` transaction records a human issue session through `l
 
 Focused regressions cover real startup recovery ordering, finalization after project removal, canonical native manual project keys, and native analytics refresh cutoffs. The rebased feature passes 308 JavaScript/TypeScript tests and 10 isolated Swift tests; the native tests use transport stubs.
 
-Deploy the Convex schema/functions before releasing the new clients/server. The server upgrade applies migration 067 in the environment's own state. Source checks do not constitute deployment or live remote/browser/device validation. See [the time tracking decision](../adr/0032-concurrent-agent-time-adds-to-project-totals.md).
+Deploy the Cyndrbase schema/functions before releasing the new clients/server. The server upgrade applies migration 067 in the environment's own state. Source checks do not constitute deployment or live remote/browser/device validation. See [the time tracking decision](../adr/0032-concurrent-agent-time-adds-to-project-totals.md).
 
 ## Native integration
 

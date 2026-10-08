@@ -20,14 +20,14 @@ Mobile push preferences continue to use their existing relay path.
 - Electron owns native notifications, system sound, window reveal, and queued notification clicks.
   The renderer owns navigation and acknowledges the selected event after navigation succeeds.
 
-The cloud snapshot uses the policy at the first Convex insertion. A delayed first relay delivery
+The cloud snapshot uses the policy at the first Cyndrbase insertion. A delayed first relay delivery
 therefore uses policy at insertion, not a historical policy reconstructed for server occurrence time.
 Duplicate event inserts preserve the original snapshot. Existing stored rows without an eligibility
 snapshot decode as ineligible.
 
 ## Deployment order
 
-Deploy the Convex schema and functions before the updated clients. Deploy the relay before updated
+Deploy the Cyndrbase schema and functions before the updated clients. Deploy the relay before updated
 environments send the extended Attention Event payload. Then publish the server, web, and desktop
 builds. The relay and cloud accept older events without the stable project key and use their
 environment/project identity for those events.

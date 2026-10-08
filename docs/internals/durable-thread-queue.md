@@ -1,6 +1,6 @@
 # Durable thread submission
 
-Convex owns pending thread intent and ordered user submissions. The environment owns execution and
+Cyndrbase owns pending thread intent and ordered user submissions. The environment owns execution and
 full conversation history. Cloud queue identity is a stable `queueId`. Initial lookup includes company, environment, and
 thread ID; reassignment preserves `queueId`, so equal thread IDs on different environments remain
 distinct. Existing environment-published `agentThreads` shells remain the discovery
@@ -13,7 +13,7 @@ same thread retain queue delivery to preserve order. Cross-provider follow-ups b
 also retain cloud delivery because the environment's run queue does not support them.
 
 For cloud delivery, clients persist an account-scoped outbox entry and attachment bytes before making network requests.
-They upload attachments to Convex storage, register validated metadata, then enqueue the submission
+They upload attachments to Cyndrbase storage, register validated metadata, then enqueue the submission
 with stable command and message IDs. A failed or uncertain enqueue keeps the local entry. An
 acknowledged cloud write is distinguishable from local persistence in the UI.
 
@@ -32,12 +32,12 @@ dispatch permission.
 The queue worker discovers companies through the environment's registered proof key. A desktop
 registration refresh must accept every field in `ExecutionEnvironmentCapabilities`: rejecting a
 new capability preserves stale queue-support metadata and can prevent discovery after a proof-key
-change. The Convex registration validator checks its capability keys against that shared contract.
+change. The Cyndrbase registration validator checks its capability keys against that shared contract.
 
 The worker runs once per registered company under the shared company supervisor. A run that
 fails is retried within a small budget, and the next successful registration listing (every 15
 seconds) starts a fresh run after that budget is spent. A failed service-token exchange never
-rejects Convex's token fetcher; Convex reports the lost authentication instead, which fails the
+rejects the `ConvexClient` token fetcher; the client reports the lost authentication instead, which fails the
 heads subscription so the supervisor replaces the client. A rejected fetcher would otherwise crash
 the process or leave the socket paused with the worker silently idle. The worker logs when each
 run starts, when it accepts or blocks a message, and when a delivery retries. Each
@@ -93,7 +93,7 @@ summaries for seven days after their published shell is available. Delivered ent
 replacement shell remain discoverable. Older delivered records and receipts remain available for
 direct reconciliation without subscribing every client to the entire delivery history.
 
-Roll out the Convex schema/functions, then environment workers, then clients. Cloud submissions
+Roll out the Cyndrbase schema/functions, then environment workers, then clients. Cloud submissions
 are ordered within their queue. Direct submissions do not wait for cloud queue discovery, so
 pending messages not yet observed on another client cannot establish ordering for a direct send.
 Local, relay and tunnel connections use the same delivery decision based on environment connectivity.
@@ -101,8 +101,9 @@ Local, relay and tunnel connections use the same delivery decision based on envi
 ## Preview data migration
 
 Deploy the backend before updated clients. For a preview deployment containing queue rows from
-before the listing-expiration index, run `vp exec convex run threadQueue:migrateListing '{}'`
-from `packages/backend` against that deployment. The internal migration backfills 128 rows per
+before the listing-expiration index, run `vp exec cyndr run threadQueue:migrateListing '{}'`
+from `packages/backend` with `CYNDRBASE_URL`, `CYNDRBASE_DEPLOYMENT` and `CYNDRBASE_DEPLOY_KEY` set
+for that deployment. The internal migration backfills 128 rows per
 batch and schedules the remaining batches. Existing message ownership and receipt identities are
 preserved; ambiguous legacy lookups require a destination or stable queue ID.
 

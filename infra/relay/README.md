@@ -22,7 +22,7 @@ The relay currently owns:
 - Listing linked environments and registered mobile devices for an account.
 - Registering mobile notification preferences and APNs tokens.
 - Receiving published agent activity and delivering notifications or Live Activity updates.
-- Persisting relay state in Convex and exposing relay-specific traces for diagnostics.
+- Persisting relay state in Cyndrbase and exposing relay-specific traces for diagnostics.
 
 The environment server and relay have separate credentials and trust boundaries. Read
 [Environment Authentication Profile](../../docs/internals/environment-auth.md) before changing token,
@@ -33,7 +33,7 @@ DPoP relay tokens have three client identities with separate allowlists: `pathwa
 `mobile:registration`; and `pathway-env` may request only `environment:connect`. The `pathway-env` exchange
 authenticates an assertion signed by an active environment-link Ed25519 key and binds the resulting
 environment-subject token to the request's DPoP key. An environment-subject connect always requires
-a validated Convex connect grant and cannot target itself.
+a validated Cyndrbase connect grant and cannot target itself.
 
 Environment-initiated connects reuse a target's existing managed endpoint allocation. The allocation
 remains owned by, and counted against, the cloud user who provisioned the target link; the connect
@@ -53,7 +53,7 @@ path cannot create an uncounted tunnel or use a target without a managed allocat
   APNs delivery, and queue processing.
 - [`src/auth`](./src/auth) contains relay token and DPoP proof handling.
 - [`../../packages/backend/convex/relayPersistence.ts`](../../packages/backend/convex/relayPersistence.ts)
-  defines the authenticated Convex functions used for relay state.
+  defines the authenticated Cyndrbase functions used for relay state.
 
 Shared request and response schemas live in
 [`packages/contracts/src/relay.ts`](../../packages/contracts/src/relay.ts). Shared client-side relay
@@ -96,13 +96,14 @@ vp run --filter pathway-relay deploy
 ```
 
 The stack provisions the Cloudflare Worker and queues, managed endpoint resources, and relay
-tracing resources. Relay records live in the Convex deployment named by `CONVEX_URL`; use its
-client URL ending in `.convex.cloud`, not its HTTP Actions URL. Copy
+tracing resources. Relay records live in the Cyndrbase deployment named by
+`CYNDRBASE_DEPLOYMENT_URL`; use its client URL (`https://<deployment>.<region>.cyndrbase.cloud`),
+not its HTTP Actions URL. Copy
 [`infra/relay/.env.example`](./.env.example) to
 `infra/relay/.env` and fill in the deployment-specific values before deploying. Alchemy loads that
 file from the relay directory. Runtime secrets include Clerk credentials and, when enabled, APNs
 credentials. Set `APNS_ENABLED=false` to run the relay without mobile push notifications or Live
-Activities; web, desktop, Convex sync, and remote agent control remain available. Production adopts
+Activities; web, desktop, cloud sync, and remote agent control remain available. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 
@@ -114,7 +115,7 @@ limit instead of the paid plan's larger default.
 
 The `prod` Alchemy stage is the shared hosted relay for stable and nightly clients and owns the
 retained Cloudflare zones. Deploy it before a personal stage, which references those zone resources.
-Each stage can still use the Convex deployment named by its own `CONVEX_URL`:
+Each stage can still use the Cyndrbase deployment named by its own `CYNDRBASE_DEPLOYMENT_URL`:
 
 ```sh
 vp run --filter pathway-relay deploy --stage prod
@@ -136,25 +137,30 @@ For the Pathway deployment, both Cloudflare zones are `spiritdevs.com`. That yie
 
 ### First deployment bootstrap
 
-A new Convex deployment cannot trust the relay until the relay publishes its key. Bootstrap the
-pair in this order:
+A new Cyndrbase deployment cannot trust the relay until the relay publishes its key. Bootstrap the
+pair in this order. Run the `cyndr` commands from `packages/backend`
+(`vp exec --filter @spiritdevs/backend -- cyndr ...` from the root) with `CYNDRBASE_URL` (the deploy
+API), `CYNDRBASE_DEPLOYMENT` and `CYNDRBASE_DEPLOY_KEY` set for the target deployment.
 
-1. Create the Convex deployment, set `CLERK_JWT_ISSUER_DOMAIN`, and record its client URL.
-2. Deploy the relay with `CONVEX_URL` set to that deployment. The JWKS route has no persistence
-   dependency, so `https://<relay-origin>/.well-known/jwks.json` is available before the normal
-   relay APIs are healthy. Verify that it returns the public P-256 key.
-3. In Convex, set `PATHWAY_RELAY_JWT_ISSUER=https://<relay-origin>` and
-   `PATHWAY_RELAY_JWKS_URL=https://<relay-origin>/.well-known/jwks.json`, then run
-   `pnpm --filter @spiritdevs/backend exec convex dev --once`.
+1. Create the Cyndrbase deployment and record its client URL and HTTP Actions URL. Run
+   `cyndr env set CLERK_JWT_ISSUER_DOMAIN <clerk-issuer>` and
+   `cyndr env set CONVEX_SITE_URL <http-actions-url>`. Cyndrbase does not set `CONVEX_SITE_URL`
+   for you.
+2. Deploy the relay with `CYNDRBASE_DEPLOYMENT_URL` set to that deployment's client URL. The JWKS
+   route has no persistence dependency, so `https://<relay-origin>/.well-known/jwks.json` is
+   available before the normal relay APIs are healthy. Verify that it returns the public P-256 key.
+3. Run `cyndr env set PATHWAY_RELAY_JWT_ISSUER https://<relay-origin>` and
+   `cyndr env set PATHWAY_RELAY_JWKS_URL https://<relay-origin>/.well-known/jwks.json`, then
+   `cyndr deploy --yes`.
 
-If a Convex deployment is intentionally shared by more than one relay stage, keep the production
+If a Cyndrbase deployment is intentionally shared by more than one relay stage, keep the production
 relay as the primary issuer and set `PATHWAY_RELAY_JWT_ADDITIONAL_ISSUERS` to a comma-separated list
-of the other relay origins. Convex derives each additional JWKS URL from its origin. Only configure
-stages that are allowed to access the same persisted relay data.
+of the other relay origins. The backend derives each additional JWKS URL from its origin. Only
+configure stages that are allowed to access the same persisted relay data.
 
-Convex statically requires every environment variable referenced by `auth.config.ts`, so both relay
-variables must be present before codegen or deployment. Relay service calls then use short-lived
-ES256 JWTs; the Worker never receives a Convex deploy key.
+`auth.config.ts` throws unless both relay variables are set, so set them before deploying. Changes
+to them take effect on the next `cyndr deploy`. Relay service calls then use short-lived ES256 JWTs;
+the Worker never receives a Cyndrbase deploy key.
 
 After a successful deploy, the wrapper updates the repository-root `.env` file with the derived relay
 URL. That makes subsequent source builds point at the relay that was just deployed without copying
@@ -183,7 +189,7 @@ The `production` GitHub environment must define these Actions variables:
 - `RELAY_API_ZONE_NAME`
 - `RELAY_TUNNEL_ZONE_NAME`
 - `RELAY_DOMAIN` if overriding the derived production relay domain
-- `CONVEX_URL`
+- `CYNDRBASE_DEPLOYMENT_URL`
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
@@ -206,7 +212,7 @@ When `APNS_ENABLED=true`, it must also define:
 
 The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages;
 they are not bound into the relay Worker. The relay uses short-lived ES256 service JWTs rather than
-a Convex deploy key. The production deployment uses an Axiom personal access token,
+a Cyndrbase deploy key. The production deployment uses an Axiom personal access token,
 so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The release workflow reads the production relay's
 derived public URL and Clerk publishable key from the same environment for downstream desktop, CLI,
 and hosted web builds.

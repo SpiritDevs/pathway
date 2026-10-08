@@ -254,7 +254,7 @@ The optional attachment from an Event to exactly one project, task, or thread. S
 _Avoid_: Association, Tag, Reference
 
 **Mirror Window**:
-The rolling range of Google history copied into Convex — 90 days back, 365 days forward. Events outside it are not replicated and not rendered.
+The rolling range of Google history copied into Cyndrbase — 90 days back, 365 days forward. Events outside it are not replicated and not rendered.
 _Avoid_: Sync range, Horizon
 
 ## Thread alerts
@@ -415,3 +415,9 @@ _Avoid_: Visualization (that is a `visualize{}` card linking a live workspace fi
 
 **HTML render bridge**:
 The JSON-RPC messages, a subset of MCP Apps over `postMessage`, between a render and its client: `ui/notifications/host-context-changed` (theme), `ui/open-link`, and `ui/notifications/size-changed`.
+
+## Cloud backend
+
+**Cyndrbase**:
+The backend platform Pathway Cloud runs on. `packages/backend/convex/` keeps Pathway's schema and functions in Convex's source format, imports `cyndrbase/server` and `cyndrbase/values`, and deploys with `cyndr deploy`. Server, web and relay clients still use the Apache-2.0 `convex/browser` client, which talks to Cyndrbase's Convex-compatible endpoint. A deployment has a client URL (`PATHWAY_CYNDRBASE_URL`, or `CYNDRBASE_DEPLOYMENT_URL` for the relay and Actions) and a separate deploy API (`CYNDRBASE_URL`) that `cyndr` calls with `CYNDRBASE_DEPLOYMENT` and `CYNDRBASE_DEPLOY_KEY`. Wire identifiers from before the move keep their names: the relay token audience `pathway-convex`, the Clerk JWT template `convex`, token `typ` values and the relay route `/v1/environment/convex-token`.
+_Avoid_: Convex, when naming the backend, a deployment or its settings. "Convex" stays correct for the `convex/` directory, the `convex/browser` client, Convex-compatible APIs and those wire identifiers.

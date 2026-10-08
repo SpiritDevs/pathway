@@ -227,7 +227,7 @@ leaves. Each worker retains its own company scopes and bounded restart policy.
 Failed listings preserve current workers; successful empty listings revoke them.
 The token provider reads current link credentials on each discovery call, and a
 new source starts fresh after the last consumer stops. Direct authorization
-checks outside the background supervisors still call Convex immediately.
+checks outside the background supervisors still call Cyndrbase immediately.
 
 For ten enabled worker groups, shared discovery reduces the steady recurring
 calls from approximately 57,600 to 5,760 per day per environment (90%), without
@@ -423,7 +423,7 @@ against the previous commit); the new index and its tests pass lint.
 ## Server sync-head subscriptions (item 1 follow-up)
 
 Server replicas now receive `sync.latestVersion` through a scoped, authenticated
-Convex subscription. An immediate HTTP read starts recovery even if the socket is
+Cyndrbase subscription. An immediate HTTP read starts recovery even if the socket is
 silent; subsequent recovery reads run every 60 seconds instead of every 15.
 Duplicate or older heads from either path are ignored, while authorization epoch
 changes still propagate at the same version. Permission errors end the stream so
@@ -472,7 +472,7 @@ remaining cost was growth-proportional reads and writes that changed nothing.
   change or approach half the 90-second freshness window. Backup Slack
   controllers no longer rewrite the shared lease when the failback count is
   unchanged. Agent-thread upserts compare shells independent of key order,
-  since Convex does not promise to preserve it.
+  since Cyndrbase does not promise to preserve it.
 
 The command, feed and automation changes add one index and two crons and need
 no migration. Agent-time savings require updated environment servers; the rest
@@ -485,7 +485,7 @@ take effect on backend deploy.
   `latestUserMessageAt` or `lastVisitedAt` changed. Those cosmetic fields move
   with nearly every transcript item; the 15-second tick publishes them
   without deferral, so cross-client lists lag by at most one tick. Every
-  publish is a Convex write, a company sync-head bump and a feed drain on every
+  publish is a Cyndrbase write, a company sync-head bump and a feed drain on every
   connected replica.
 - **Agent-thread local reads.** The 15-second tick re-reads only threads that
   saw a domain event (or a failed publish, or an expired unbound park) since the

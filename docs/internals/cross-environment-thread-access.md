@@ -3,7 +3,7 @@
 `pathway_thread_read` and `pathway_thread_send` resolve a thread ID in two steps. `pathway_thread_wait`, `pathway_thread_interrupt`, and `pathway_thread_list` keep their project or company scope.
 
 1. **This environment.** Any non-deleted thread, whatever its project or company (`findLocalThread` in `apps/server/src/mcp/OrchestratorMcpService.ts`). Invocations with an `orchestratorOrigin` (AI contact assignments) keep the old project or company scope, because other company members can direct them.
-2. **The account's other environments.** On a local miss, `RemoteThreads` (`apps/server/src/cloud/remoteThreads.ts`) calls the Convex action `connectGrants:issueThreadAccess` with the environment's own service token and `access: "read" | "send"`.
+2. **The account's other environments.** On a local miss, `RemoteThreads` (`apps/server/src/cloud/remoteThreads.ts`) calls the Cyndrbase action `connectGrants:issueThreadAccess` with the environment's own service token and `access: "read" | "send"`.
 
 `issueThreadAccess` authorizes and routes the request:
 
@@ -16,11 +16,11 @@ The server then connects with `PeerEnvironments.connect` over the relay. The tar
 - **Read grants** get read-only scopes (`orchestration:read`, `relay:read`), and the caller requests only those. The server fetches the thread and only the fork sources that the requested page shows.
 - **Send grants** get `AuthPeerSendScopes` (orchestration read and operate only). The server loads the target projection. `planRemoteSend` treats a deleted thread as not found. If the message ID is already on the thread (an earlier attempt landed but its reply was lost), the retry reports that outcome without dispatching again. Otherwise the server applies the caller's runtime and interaction mode ceiling, derives the dispatch mode with `sendDispatchMode`, dispatches `message.dispatch`, and reads the result with `sendOutcome`. These are the same helpers `ThreadManagementService.sendToThread` uses locally. The target's `dispatchCommand` handler attributes commands from peer environment sessions to `agent` (`dispatchActor` in `apps/server/src/ws.ts`), so remote MCP messages keep agent provenance.
 
-Transcripts and messages move between environments and never enter Convex.
+Transcripts and messages move between environments and never enter Cyndrbase.
 
 ## Starting threads elsewhere
 
-`delegate_task` with `targetEnvironmentId` and `targetProjectId` starts a thread on another environment. Agents find both IDs with `pathway_environments_list`, backed by the Convex query `connectGrants:launchTargets`. Before dispatching, `OrchestratorMcpService` asks `RemoteThreads.launchGrant` for a grant. That calls `connectGrants:issueProjectLaunch(environmentId, localProjectId)`.
+`delegate_task` with `targetEnvironmentId` and `targetProjectId` starts a thread on another environment. Agents find both IDs with `pathway_environments_list`, backed by the Cyndrbase query `connectGrants:launchTargets`. Before dispatching, `OrchestratorMcpService` asks `RemoteThreads.launchGrant` for a grant. That calls `connectGrants:issueProjectLaunch(environmentId, localProjectId)`.
 
 - The caller and account are resolved exactly as for thread access.
 - It needs an active `environmentBindings` row for that environment and local project, on another environment, whose cloud project is neither archived nor deleted. The account needs an active membership in that company holding both `remoteAgents.dispatch` and `remoteAgents.control`.
@@ -54,7 +54,7 @@ A caller older than this change never requests thread grants. `connectGrants:iss
 
 Safety does not depend on ordering, because each step fails closed. Ordering only decides when remote thread access starts working.
 
-1. **Deploy the Convex backend (`packages/backend`).** Launch grants need `connectGrants:launchTargets` and `connectGrants:issueProjectLaunch`, which newer servers call; older backends answer with a generic failure. It adds `agentThreads.by_thread`, `connectGrants.threadAccess`, `connectGrants:issueThreadAccess`, the redeem checks, the optional `signsThreadAccessMintScopes` argument and `threadAccess` result, and the `peerThreadGrants` descriptor validator. Until the relay is updated, thread grants are issued but refused at redeem.
+1. **Deploy the Cyndrbase backend (`packages/backend`).** Launch grants need `connectGrants:launchTargets` and `connectGrants:issueProjectLaunch`, which newer servers call; older backends answer with a generic failure. It adds `agentThreads.by_thread`, `connectGrants.threadAccess`, `connectGrants:issueThreadAccess`, the redeem checks, the optional `signsThreadAccessMintScopes` argument and `threadAccess` result, and the `peerThreadGrants` descriptor validator. Until the relay is updated, thread grants are issued but refused at redeem.
 2. **Then deploy the relay (`infra/relay`).** It sends `signsThreadAccessMintScopes: true` (an older backend would reject that unknown argument and break every grant connect), and it signs thread-access mints.
 3. **Then release servers (desktop, `npx`).** The registration validator is strict, so a server advertising `peerThreadGrants` cannot update its registration against an older backend. Remote thread access works once the target is updated and has re-registered; until then it fails closed with the update message.
 

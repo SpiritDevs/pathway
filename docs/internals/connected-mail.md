@@ -1,6 +1,6 @@
 # Connected mail
 
-Connected Gmail is separate from SMTP capture. The relay owns OAuth credentials, Gmail synchronization and outbound delivery. Convex owns private mailbox records and leased work. Web, desktop and native Apple clients use authenticated owner queries. Selected environments perform model analysis through their provider instances.
+Connected Gmail is separate from SMTP capture. The relay owns OAuth credentials, Gmail synchronization and outbound delivery. Cyndrbase owns private mailbox records and leased work. Web, desktop and native Apple clients use authenticated owner queries. Selected environments perform model analysis through their provider instances.
 
 Mailbox rows carry a company ID and owner membership. General company feeds contain no mail bodies, credentials or sender knowledge. Company membership is necessary but insufficient to read a mailbox. The current owner's membership must match. Shared contacts retain their existing directory permissions; saving a sender copies only the explicit contact fields.
 
@@ -18,7 +18,7 @@ Gmail JSON responses are bounded to 8 MiB and individual copied attachments to 5
 
 `apps/server/src/cloud/mailBrain.ts` follows the linked environment company supervisor and existing service-token authentication. It runs one model invocation at a time across the environment's workspaces. A job carries an explicit model selection, selected from the primary or backup environment's local provider instances.
 
-Claims are renewable and generation-fenced. The environment checks its claim before inference and renews while the provider runs. Losing renewal interrupts the invocation. Convex rejects stale completions and checks the message classification revision, so a late result cannot undo a manual correction. A backup completing its current claim is not displaced merely because the primary returns.
+Claims are renewable and generation-fenced. The environment checks its claim before inference and renews while the provider runs. Losing renewal interrupts the invocation. Cyndrbase rejects stale completions and checks the message classification revision, so a late result cannot undo a manual correction. A backup completing its current claim is not displaced merely because the primary returns.
 
 Mail uses a temporary working directory and content-only generation. Codex disables configured MCP servers, shell tools, apps, plugins, hooks, browsing and subagents for this invocation. Claude disables tools and MCP configuration. OpenCode uses its existing deny-all session permissions. Cursor and Grok reject content-only work because their current adapters cannot enforce that restriction. Ordinary provider operations retain their existing behavior.
 
@@ -32,6 +32,6 @@ An uncertain Gmail send is recorded as unknown and is not automatically retried.
 
 ## Validation boundaries
 
-Use focused Convex tests for ownership, intake identity, claim fencing, corrections, cleanup and outbox transitions; relay fixtures for OAuth, history recovery, storage and MIME; environment tests for inference cancellation and result validation; and client tests for navigation and safe rendering.
+Use focused backend tests for ownership, intake identity, claim fencing, corrections, cleanup and outbox transitions; relay fixtures for OAuth, history recovery, storage and MIME; environment tests for inference cancellation and result validation; and client tests for navigation and safe rendering.
 
 Fixture tests do not prove Google consent, Pub/Sub IAM, storage credentials or deployed delivery. Configure and deploy the services using `docs/operations/connected-mail.md` before testing a real mailbox. Browser and simulator checks are separate evidence and must be reported separately.
