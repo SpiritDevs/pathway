@@ -164,7 +164,10 @@ function makeConnectEdge(options?: {
 const secrets = (edge: ReturnType<typeof makeConnectEdge>) =>
   [...edge.tokens.keys()].map((id) => `secret-${id}`);
 
-function makeAllocations(options?: { readonly afterSwap?: (next: string) => Effect.Effect<void> }) {
+function makeAllocations(options?: {
+  readonly afterReserve?: () => Effect.Effect<void>;
+  readonly afterSwap?: (next: string) => Effect.Effect<void>;
+}) {
   const allocations = new Map<string, ManagedEndpointAllocations.ManagedEndpointAllocation>();
   const keyOf = (input: { readonly userId: string; readonly environmentId: string }) =>
     `${input.userId}:${input.environmentId}`;
@@ -198,7 +201,7 @@ function makeAllocations(options?: { readonly afterSwap?: (next: string) => Effe
   const service = ManagedEndpointAllocations.ManagedEndpointAllocations.of({
     get: (input) => Effect.sync(() => allocations.get(keyOf(input)) ?? null),
     reserve: (input) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         const allocation = allocations.get(keyOf(input)) ?? {
           ...input,
           allocationId: `allocation-${++generation}`,
@@ -208,6 +211,7 @@ function makeAllocations(options?: { readonly afterSwap?: (next: string) => Effe
           updatedAt: `generation-${generation}`,
         };
         allocations.set(keyOf(input), allocation);
+        if (options?.afterReserve) yield* options.afterReserve();
         return allocation;
       }),
     recordTunnel: (input) => Effect.sync(() => mutate(input, { tunnelId: input.tunnelId })),
@@ -306,17 +310,19 @@ describe("ManagedEndpointProvider", () => {
     },
   );
 
-  it.effect("returns the same token on every later provision", () => {
+  it.effect("returns the same token on every later provision, without listing tokens", () => {
     const edge = makeConnectEdge();
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
       const first = yield* provider.provision(request);
+      const firstCalls = edge.calls.length;
       for (let attempt = 0; attempt < 3; attempt++) {
         expect(yield* provider.provision(request)).toEqual(first);
       }
-      expect(edge.calls.filter((call) => call.method === "CreateConnectorToken")).toHaveLength(1);
-      expect(edge.calls.some((call) => call.method.includes("Revoke"))).toBe(false);
+      expect(edge.calls.slice(firstCalls).map((call) => call.method)).toEqual(
+        Array(3).fill("GetEndpoint"),
+      );
     }).pipe(Effect.provide(providerLayer(edge)));
   });
 
@@ -566,6 +572,40 @@ describe("ManagedEndpointProvider", () => {
       }
     }),
   );
+
+  it.effect("a provision finishing a stale unlink leaves the relink's allocation alone", () => {
+    let provider!: Provider;
+    let relinked!: ManagedEndpointProvider.ManagedEndpointProvisioningResult;
+    let failRemoval = false;
+    let armed = false;
+    const edge = makeConnectEdge({ failApplyEndpointChange: () => failRemoval });
+    // Right after this provision reads the half-unlinked allocation, a retried unlink finishes
+    // it and a relink creates a new one.
+    const allocations = makeAllocations({
+      afterReserve: () =>
+        Effect.suspend(() => {
+          if (!armed) return Effect.void;
+          armed = false;
+          return Effect.gen(function* () {
+            yield* provider.deprovision(key);
+            relinked = yield* provider.provision(request);
+          }).pipe(Effect.orDie);
+        }),
+    });
+
+    return Effect.gen(function* () {
+      provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      yield* provider.provision(request);
+      failRemoval = true;
+      yield* Effect.flip(provider.deprovision(key));
+      failRemoval = false;
+      armed = true;
+
+      expect(yield* provider.provision(request)).toEqual(relinked);
+      expect([...edge.endpoints.keys()]).toEqual([relinked.runtime.endpointId]);
+      expect(secrets(edge)).toEqual([relinked.runtime.connectorToken]);
+    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
+  });
 
   it.effect("an interrupted unlink is finished by the next provision or a retry", () => {
     let failRemoval = true;

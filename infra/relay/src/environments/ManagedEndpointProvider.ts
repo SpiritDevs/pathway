@@ -384,7 +384,8 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const teardown = Effect.fnUntraced(function* (key: AllocationKey) {
+  // Tears down the environment's allocation, or only `observed` when given.
+  const teardown = Effect.fnUntraced(function* (key: AllocationKey, observed?: string) {
     const failed =
       (stage: typeof ManagedEndpointDeprovisioningStage.Type, endpointId?: string | null) =>
       (cause: unknown) =>
@@ -395,7 +396,7 @@ export const make = Effect.gen(function* () {
           cause,
         });
     const read = yield* allocations.get(key).pipe(Effect.mapError(failed("load-allocation")));
-    if (read === null) return;
+    if (read === null || (observed !== undefined && read.allocationId !== observed)) return;
     // Every step names this allocation, so a stale teardown leaves a relink's newer one alone.
     const allocation = { ...key, allocationId: read.allocationId };
     // Once the slot says TearingDown, no provision can store a token or take it back.
@@ -482,6 +483,19 @@ export const make = Effect.gen(function* () {
       const held = yield* allocations
         .swapTokenSlot({ ...allocation, expected: read, next })
         .pipe(Effect.mapError(failed("store-connector-token")));
+      if (held === next) {
+        // This provision stored the endpoint's token, so any other token on it is a stray from an
+        // earlier attempt. A mint delayed past the edge's idempotency receipt lands after this
+        // and is only revoked at unlink; the hosted edge's durable receipts close that gap.
+        yield* revokeEndpointTokens(connect, endpointId, sealed.connectorTokenId).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Stray connector tokens stay live until unlink", {
+              endpointId,
+              code: error.code,
+            }),
+          ),
+        );
+      }
       stored = held === next ? sealed : storedIn(held);
       if (stored === undefined) {
         if (!unlinked(held)) {
@@ -492,20 +506,9 @@ export const make = Effect.gen(function* () {
         return yield* failed("store-connector-token")(new ManagedEndpointUnlinked());
       }
     }
-    // No other token can be stored for this endpoint now, so any other is a stray: one a racing
-    // provision lost, or one minted after the edge forgot the key's receipt.
-    const keep = stored.connectorTokenId;
-    yield* revokeEndpointTokens(connect, endpointId, keep).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Stray connector tokens stay live until the next provision", {
-          endpointId,
-          code: error.code,
-        }),
-      ),
-    );
     return yield* openToken(
       connect,
-      tokenAad(allocation, endpointId, keep),
+      tokenAad(allocation, endpointId, stored.connectorTokenId),
       stored.sealedToken,
     ).pipe(Effect.mapError(failed("open-connector-token")));
   });
@@ -569,7 +572,7 @@ export const make = Effect.gen(function* () {
       let allocation = yield* reserve;
       // An unlink that stopped partway still holds the allocation: finish it and start over.
       if (allocation.dnsRecordId === TEARING_DOWN) {
-        yield* teardown(key).pipe(
+        yield* teardown(key, allocation.allocationId).pipe(
           Effect.mapError(
             (cause) =>
               new ManagedEndpointProvisioningFailed({

@@ -54,7 +54,6 @@ import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -738,16 +737,26 @@ export const reconcileDesiredCloudLink = Effect.fn("environment.cloud.reconcileD
   },
 );
 
-// Asks the relay for this link's connector config, using this environment's own relay
-// credential, then runs and stores it. False when no link is stored, or when the relay returns
-// the token the edge just rejected.
-const fetchManagedEndpointWith = Effect.fnUntraced(function* (
-  dependencies: CloudHttpDependencies,
-  originPort: number,
-  rejectedToken?: string,
-) {
+/**
+ * Restores the tunnel of a link whose stored connector config predates Cyndrbase Connect,
+ * using this environment's own relay credential. CLI links relink on startup instead.
+ */
+export const reprovisionStoredManagedEndpointWith = Effect.fn(
+  "environment.cloud.reprovisionStoredManagedEndpoint",
+)(function* (dependencies: CloudHttpDependencies, listenerPort: number) {
   const read = (name: string) =>
     dependencies.secrets.get(name).pipe(Effect.map(Option.map(bytesToString)));
+  const config = Option.flatMap(yield* read(CLOUD_ENDPOINT_RUNTIME_CONFIG), decodeRuntimeConfig);
+  const storedPort = Option.flatMap(
+    yield* read(CLOUD_MANAGED_TUNNEL_LOCAL_PORT),
+    decodeManagedTunnelLocalPort,
+  );
+  if (
+    Option.isNone(config) ||
+    (ManagedEndpointRuntime.connectorTarget(config.value) !== null && Option.isSome(storedPort))
+  ) {
+    return false;
+  }
   const [relayUrl, credential, cloudUserId] = yield* Effect.all([
     read(RELAY_URL_SECRET),
     read(RELAY_ENVIRONMENT_CREDENTIAL_SECRET),
@@ -763,12 +772,7 @@ const fetchManagedEndpointWith = Effect.fnUntraced(function* (
     payload: { cloudUserId: cloudUserId.value },
     schema: RelayManagedEndpointReprovisionResponse,
   });
-  if (endpointRuntime.connectorToken === rejectedToken) {
-    yield* Effect.logError(
-      "Pathway Connect still rejects this environment's connector token; relink to restore remote access",
-    );
-    return false;
-  }
+  const originPort = Option.getOrElse(storedPort, () => listenerPort);
   const endpointRuntimeStatus = yield* dependencies.endpointRuntime.applyConfig({
     config: endpointRuntime,
     originPort,
@@ -790,78 +794,12 @@ const fetchManagedEndpointWith = Effect.fnUntraced(function* (
   return true;
 });
 
-/**
- * Restores the tunnel of a link whose stored connector config predates Cyndrbase Connect.
- * CLI links relink on startup instead.
- */
-export const reprovisionStoredManagedEndpointWith = Effect.fn(
-  "environment.cloud.reprovisionStoredManagedEndpoint",
-)(function* (dependencies: CloudHttpDependencies, listenerPort: number) {
-  const read = (name: string) =>
-    dependencies.secrets.get(name).pipe(Effect.map(Option.map(bytesToString)));
-  const config = Option.flatMap(yield* read(CLOUD_ENDPOINT_RUNTIME_CONFIG), decodeRuntimeConfig);
-  const storedPort = Option.flatMap(
-    yield* read(CLOUD_MANAGED_TUNNEL_LOCAL_PORT),
-    decodeManagedTunnelLocalPort,
-  );
-  if (
-    Option.isNone(config) ||
-    (ManagedEndpointRuntime.connectorTarget(config.value) !== null && Option.isSome(storedPort))
-  ) {
-    return false;
-  }
-  return yield* fetchManagedEndpointWith(
-    dependencies,
-    Option.getOrElse(storedPort, () => listenerPort),
-  );
-});
-
 export const reprovisionStoredManagedEndpoint = (listenerPort: number) =>
   cloudHttpDependencies.pipe(
     Effect.flatMap((dependencies) =>
       reprovisionStoredManagedEndpointWith(dependencies, listenerPort),
     ),
   );
-
-/**
- * Asks the relay for this link's config after the edge rejected the running token, as when an
- * unlink raced a relink. A different token replaces it; the same one means only a relink helps.
- */
-export const recoverRejectedManagedEndpointWith = Effect.fn(
-  "environment.cloud.recoverRejectedManagedEndpoint",
-)(
-  (
-    dependencies: CloudHttpDependencies,
-    rejected: ManagedEndpointRuntime.ManagedEndpointConnection,
-  ) => fetchManagedEndpointWith(dependencies, rejected.originPort, rejected.config.connectorToken),
-);
-
-/** Waits for each rejected token and recovers from it once. */
-export const recoverRejectedManagedEndpoints = Effect.gen(function* () {
-  const dependencies = yield* cloudHttpDependencies;
-  return yield* Effect.forever(
-    dependencies.endpointRuntime.rejected.pipe(
-      Effect.flatMap((rejected) =>
-        recoverRejectedManagedEndpointWith(dependencies, rejected).pipe(
-          Effect.retry({
-            times: ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS - 1,
-            schedule: Schedule.exponential("1 second"),
-          }),
-          Effect.tap((recovered) =>
-            recovered
-              ? Effect.logInfo("Pathway Connect connector token replaced after a rejection")
-              : Effect.void,
-          ),
-          Effect.catch((cause) =>
-            Effect.logWarning("Failed to recover a rejected Pathway Connect connector token", {
-              cause,
-            }),
-          ),
-        ),
-      ),
-    ),
-  );
-});
 
 export const readCloudLinkState = Effect.fn("environment.cloud.readLinkState")(function* (
   dependencies: CloudHttpDependencies,

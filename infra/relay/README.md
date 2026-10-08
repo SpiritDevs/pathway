@@ -113,8 +113,10 @@ connector config predates Connect fetch a new one at startup from
 Each endpoint has one connector token, like a cloudflared tunnel: the first provision mints it and
 stores it sealed with `CYNDRBASE_CONNECT_TOKEN_KEY`, later provisions return it, and only unlink
 revokes it. Mints for an allocation share one idempotency key, so retried or delayed mints get the
-same token; each provision then revokes any other token on the endpoint. Every allocation write
-names the allocation it read, so a stale unlink never touches a relink's newer one. Production adopts
+same token, and the provision that stores it revokes any other token on the endpoint. A mint
+delayed past the edge's idempotency receipt is only revoked at unlink; the hosted edge's durable
+receipts close that gap. Every allocation write names the allocation it read, so a stale unlink
+never touches a relink's newer one. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 

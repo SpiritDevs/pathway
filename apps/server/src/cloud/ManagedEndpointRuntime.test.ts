@@ -4,6 +4,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import * as RelayClient from "@spiritdevs/shared/relayClient";
@@ -296,18 +297,25 @@ describe("CloudManagedEndpointRuntime", () => {
     }),
   );
 
-  it.effect("hands a later credential rejection to recovery instead of restarting", () =>
-    Effect.gen(function* () {
+  it.effect("treats a later credential rejection as terminal", () => {
+    let logged!: () => void;
+    const rejectionLogged = new Promise<void>((resolve) => {
+      logged = resolve;
+    });
+    const logger = Logger.make(({ message }) => {
+      if (String(message).includes("rejected this environment's connector token")) logged();
+    });
+    return Effect.gen(function* () {
       const started: Array<FakeConnector> = [];
       const runtime = yield* buildRuntime(fakeRelayClient(started));
 
       yield* runtime.applyConfig(connection());
       started[0]!.exit(1);
+      yield* Effect.promise(() => rejectionLogged);
 
-      expect(yield* runtime.rejected).toEqual(connection());
       expect(started).toHaveLength(1);
-    }),
-  );
+    }).pipe(Effect.provide(Logger.layer([logger])));
+  });
 
   it.effect("restarts a crashed connector, backing off once crashes repeat", () =>
     Effect.gen(function* () {

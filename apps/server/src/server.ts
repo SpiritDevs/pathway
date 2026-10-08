@@ -125,7 +125,6 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
   connectHttpApiLayer,
   reconcileDesiredCloudLink,
-  recoverRejectedManagedEndpoints,
   reprovisionStoredManagedEndpoint,
 } from "./cloud/http.ts";
 import { serverRelayBrokerTracingLayer } from "./cloud/relayTracing.ts";
@@ -849,8 +848,6 @@ export const makeServerLayer = Layer.unwrap(
             );
           }),
         );
-        // A token the edge rejects later, as when an unlink raced a relink, is recovered once.
-        yield* forkParked(recoverRejectedManagedEndpoints);
         yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
       }),
     );

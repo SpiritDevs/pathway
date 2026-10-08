@@ -5,7 +5,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
@@ -75,8 +74,6 @@ export class CloudManagedEndpointRuntime extends Context.Service<
     readonly applyConfig: (
       connection: ManagedEndpointConnection | null,
     ) => Effect.Effect<CloudManagedEndpointRuntimeStatus>;
-    /** Waits for the edge to reject the token of a connection that was running. */
-    readonly rejected: Effect.Effect<ManagedEndpointConnection>;
   }
 >()("@spiritdevs/pathway/cloud/ManagedEndpointRuntime/CloudManagedEndpointRuntime") {}
 
@@ -163,8 +160,6 @@ export const make = Effect.gen(function* () {
   const desiredRef = yield* Ref.make<ManagedEndpointConnection | null>(null);
   const restartAttemptsRef = yield* Ref.make(0);
   const reconcileSemaphore = yield* Semaphore.make(1);
-  // Only the latest rejection matters to whoever recovers from it.
-  const rejections = yield* Queue.sliding<ManagedEndpointConnection>(1);
   let reconcile: (
     connection: ManagedEndpointConnection | null,
     gated: boolean,
@@ -209,12 +204,10 @@ export const make = Effect.gen(function* () {
             return null;
           }
           if (exit.code === CONNECTOR_CREDENTIAL_REJECTED) {
-            yield* Effect.logError("Pathway Connect rejected this environment's connector token", {
-              pid: connector.handle.pid,
-              endpointId: connector.endpointId,
-            });
-            const desired = yield* Ref.get(desiredRef);
-            if (desired) yield* Queue.offer(rejections, desired);
+            yield* Effect.logError(
+              "Pathway Connect rejected this environment's connector token; relink to restore remote access",
+              { pid: connector.handle.pid, endpointId: connector.endpointId },
+            );
             return null;
           }
           const restartAttempt = yield* Ref.updateAndGet(
@@ -380,7 +373,6 @@ export const make = Effect.gen(function* () {
     applyConfig: Effect.fn("CloudManagedEndpointRuntime.applyConfig")((connection) =>
       apply(connection, true),
     ),
-    rejected: Queue.take(rejections),
   });
 
   // Boot does not wait for the edge: the stored connector keeps reconnecting until it can.
