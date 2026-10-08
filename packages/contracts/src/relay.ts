@@ -188,8 +188,6 @@ export const RelayManagedEndpointRuntimeConfig = Schema.Struct({
   connectorToken: TrimmedNonEmptyString,
   edgeUrl: Schema.optional(TrimmedNonEmptyString),
   endpointId: Schema.optional(TrimmedNonEmptyString),
-  // Confirmed back to the relay once the connector registers, which retires older tokens.
-  connectorTokenId: Schema.optional(TrimmedNonEmptyString),
 });
 export type RelayManagedEndpointRuntimeConfig = typeof RelayManagedEndpointRuntimeConfig.Type;
 
@@ -1328,10 +1326,6 @@ export const RelayManagedEndpointReprovisionRequest = Schema.Struct({
 export const RelayManagedEndpointReprovisionResponse = Schema.Struct({
   endpointRuntime: RelayManagedEndpointRuntimeConfig,
 });
-export const RelayManagedEndpointConfirmRequest = Schema.Struct({
-  cloudUserId: TrimmedNonEmptyString,
-  connectorTokenId: TrimmedNonEmptyString,
-});
 
 export const RelayServerGroup = HttpApiGroup.make("server")
   .add(
@@ -1348,24 +1342,7 @@ export const RelayServerGroup = HttpApiGroup.make("server")
       .annotate(OpenApi.Summary, "Reprovision a managed endpoint")
       .annotate(
         OpenApi.Description,
-        "Issues a fresh connector configuration for the calling environment's managed link, so an environment whose stored configuration predates Cyndrbase Connect can restore its tunnel without a client relinking it.",
-      ),
-  )
-  .add(
-    HttpApiEndpoint.post(
-      "confirmManagedEndpoint",
-      "/v1/environments/:environmentId/managed-endpoint/confirm",
-      {
-        params: Schema.Struct({ environmentId: EnvironmentId }),
-        payload: RelayManagedEndpointConfirmRequest,
-        success: RelayOkResponse,
-        error: RelayAuthAndInternalErrors,
-      },
-    )
-      .annotate(OpenApi.Summary, "Confirm a managed endpoint connector token")
-      .annotate(
-        OpenApi.Description,
-        "Called after the environment's connector registered with this token. Only then are the tokens it replaced revoked, so a lost or uncommitted rotation never strands the environment.",
+        "Returns the connector configuration for the calling environment's managed link, so an environment whose stored configuration predates Cyndrbase Connect can restore its tunnel without a client relinking it.",
       ),
   )
   .add(

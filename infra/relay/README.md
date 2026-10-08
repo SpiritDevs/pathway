@@ -104,13 +104,16 @@ credentials. Set `APNS_ENABLED=false` to run the relay without mobile push notif
 Activities; web, desktop, Convex sync, and remote agent control remain available. Pathway Connect
 endpoints and connector tokens come from Cyndrbase Connect's `EndpointService`: set
 `CYNDRBASE_CONNECT_API_URL`, `CYNDRBASE_CONNECT_EDGE_URL` (the `wss://…/connect/v1` URL environments
-dial), and `CYNDRBASE_CONNECT_ADMIN_KEY`; remote URLs must use https/wss. Without them managed
+dial), `CYNDRBASE_CONNECT_ADMIN_KEY`, and `CYNDRBASE_CONNECT_TOKEN_KEY`; remote URLs must use
+https/wss. Without them managed
 tunnels fail as not configured. The edge must forward its public scheme (`--public-scheme https`
 behind TLS), or DPoP-signed requests to environments fail URL checks. Environments whose stored
 connector config predates Connect fetch a new one at startup from
 `POST /v1/environments/:environmentId/managed-endpoint` with their environment credential.
-Provisioning only issues tokens. An environment confirms a token at `…/managed-endpoint/confirm`
-once its connector registered with it, and only then does the relay revoke the tokens it replaced. Production adopts
+Each endpoint has one connector token, like a cloudflared tunnel: the first provision mints it and
+stores it sealed with `CYNDRBASE_CONNECT_TOKEN_KEY`, later provisions return it, and only unlink
+revokes it. Before minting, the relay revokes the endpoint's unstored tokens, so a lost mint
+response leaves at most one extra. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 
@@ -209,7 +212,7 @@ When `APNS_ENABLED=true`, the environment must also define:
 The `production` GitHub environment must define this Actions secret:
 
 - `CLERK_SECRET_KEY`
-- `CYNDRBASE_CONNECT_ADMIN_KEY` when managed tunnels are enabled
+- `CYNDRBASE_CONNECT_ADMIN_KEY` and `CYNDRBASE_CONNECT_TOKEN_KEY` when managed tunnels are enabled
 
 When `APNS_ENABLED=true`, it must also define:
 

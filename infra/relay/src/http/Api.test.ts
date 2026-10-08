@@ -44,7 +44,6 @@ import {
   relayCorsPreflightResponse,
   relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
-  confirmManagedEndpoint,
   relayNotFoundRoute,
   reprovisionManagedEndpoint,
   revokeEnvironmentLinkRecord,
@@ -361,10 +360,8 @@ function relayUnlinkTestLayer(input?: {
     RelayDb.RelayConvexClientError
   >;
   readonly getForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["getForUser"];
-  readonly prepareDeprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["prepareDeprovision"];
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
   readonly provision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["provision"];
-  readonly confirm?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["confirm"];
 }) {
   return Layer.mergeAll(
     Layer.succeed(
@@ -394,9 +391,7 @@ function relayUnlinkTestLayer(input?: {
       ManagedEndpointProvider.ManagedEndpointProvider,
       ManagedEndpointProvider.ManagedEndpointProvider.of({
         provision: input?.provision ?? (() => Effect.die("unused provision")),
-        prepareDeprovision: input?.prepareDeprovision ?? (() => Effect.succeed(null)),
         deprovision: input?.deprovision ?? (() => Effect.void),
-        confirm: input?.confirm ?? (() => Effect.die("unused confirm")),
       }),
     ),
   );
@@ -466,51 +461,6 @@ describe("relay managed endpoint reprovisioning", () => {
   });
 });
 
-describe("relay managed endpoint confirmation", () => {
-  const confirm = (environmentPublicKey: string) => {
-    const confirmed: Array<unknown> = [];
-    const effect = confirmManagedEndpoint({
-      environmentId: "environment-1",
-      cloudUserId: "user-1",
-      connectorTokenId: "token-2",
-    }).pipe(
-      Effect.provideService(RelayEnvironmentPrincipal, {
-        environmentId: "environment-1",
-        environmentPublicKey,
-      }),
-      Effect.provide(
-        relayUnlinkTestLayer({
-          getForUser: () => Effect.succeed(linkedEnvironmentRecord),
-          confirm: (input) =>
-            Effect.sync(() => {
-              confirmed.push(input);
-              return true;
-            }),
-        }),
-      ),
-    );
-    return { effect, confirmed };
-  };
-
-  it.effect("confirms the token for the calling environment's own link", () => {
-    const { effect, confirmed } = confirm("public-key");
-    return Effect.gen(function* () {
-      expect(yield* effect).toBe(true);
-      expect(confirmed).toEqual([
-        { userId: "user-1", environmentId: "environment-1", connectorTokenId: "token-2" },
-      ]);
-    });
-  });
-
-  it.effect("refuses a credential that does not belong to that link", () => {
-    const { effect, confirmed } = confirm("another-link-key");
-    return Effect.gen(function* () {
-      expect((yield* Effect.flip(effect))._tag).toBe("Unauthorized");
-      expect(confirmed).toEqual([]);
-    });
-  });
-});
-
 describe("relay environment unlink", () => {
   it.effect("revokes the link and its credentials with one atomic Convex mutation", () => {
     let mutationArgs: unknown = null;
@@ -542,16 +492,6 @@ describe("relay environment unlink", () => {
 
   it.effect("commits database revocation before deprovisioning the managed endpoint", () => {
     const calls: Array<string> = [];
-    const deprovisionTarget = {
-      userId: "user-1",
-      environmentId: "environment-1",
-      hostname: "environment-1.example.test",
-      tunnelId: "tunnel-1",
-      tunnelName: "environment-1-tunnel",
-      dnsRecordId: "dns-1",
-      readyAt: "2026-07-28T00:00:00.000Z",
-      updatedAt: "generation-before-unlink",
-    } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 
     return Effect.gen(function* () {
       expect(
@@ -560,7 +500,7 @@ describe("relay environment unlink", () => {
           environmentId: "environment-1",
         }),
       ).toBe(true);
-      expect(calls).toEqual(["prepare", "lookup", "mutation", "deprovision"]);
+      expect(calls).toEqual(["lookup", "mutation", "deprovision"]);
     }).pipe(
       Effect.provide(
         relayUnlinkTestLayer({
@@ -574,14 +514,8 @@ describe("relay environment unlink", () => {
               calls.push("mutation");
               return { linkRevoked: true, credentialsRevoked: true };
             }),
-          prepareDeprovision: () =>
+          deprovision: () =>
             Effect.sync(() => {
-              calls.push("prepare");
-              return deprovisionTarget;
-            }),
-          deprovision: (request) =>
-            Effect.sync(() => {
-              expect(request.target).toBe(deprovisionTarget);
               calls.push("deprovision");
             }),
         }),
@@ -610,7 +544,7 @@ describe("relay environment unlink", () => {
         environmentId: "environment-1",
         cause: failure,
       });
-      expect(calls).toEqual(["prepare", "mutation"]);
+      expect(calls).toEqual(["mutation"]);
     }).pipe(
       Effect.provide(
         relayUnlinkTestLayer({
@@ -619,11 +553,6 @@ describe("relay environment unlink", () => {
             Effect.sync(() => {
               calls.push("mutation");
             }).pipe(Effect.andThen(Effect.fail(failure))),
-          prepareDeprovision: () =>
-            Effect.sync(() => {
-              calls.push("prepare");
-              return null;
-            }),
           deprovision: () =>
             Effect.sync(() => {
               calls.push("deprovision");
@@ -642,15 +571,10 @@ describe("relay environment unlink", () => {
           environmentId: "environment-1",
         }),
       ).toBe(false);
-      expect(calls).toEqual(["prepare", "deprovision"]);
+      expect(calls).toEqual(["deprovision"]);
     }).pipe(
       Effect.provide(
         relayUnlinkTestLayer({
-          prepareDeprovision: () =>
-            Effect.sync(() => {
-              calls.push("prepare");
-              return null;
-            }),
           deprovision: () =>
             Effect.sync(() => {
               calls.push("deprovision");

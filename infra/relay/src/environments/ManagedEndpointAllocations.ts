@@ -19,13 +19,9 @@ export interface ManagedEndpointAllocation {
   readonly tunnelId: string | null;
   /** Reserved per environment so hostnames stay unique. */
   readonly tunnelName: string;
-  /** The connector token state for the endpoint, written only with `recordDnsIfUnchanged`. */
+  /** The connector token slot, written only with `swapTokenSlot`. */
   readonly dnsRecordId: string | null;
   readonly readyAt: string | null;
-  /**
-   * Doubles as the allocation's generation marker: every mutation rewrites it,
-   * so `claimDeprovision` can detect a provision that raced an unlink.
-   */
   readonly updatedAt: string;
 }
 
@@ -52,11 +48,10 @@ export class ManagedEndpointAllocationPersistenceError extends Schema.TaggedErro
       "get",
       "reserve",
       "record-tunnel",
-      "record-dns-if-unchanged",
+      "swap-token-slot",
       "mark-ready",
-      "claim-deprovision",
       "remove",
-      "remove-claimed",
+      "remove-with-token-slot",
     ]),
     stage: Schema.Literals(["database-request", "resolve-reservation"]),
     userId: Schema.String,
@@ -87,18 +82,13 @@ interface RecordManagedEndpointTunnelInput extends ManagedEndpointAllocationKey 
   readonly tunnelId: string;
 }
 
-interface RecordManagedEndpointDnsInput extends ManagedEndpointAllocationKey {
-  readonly dnsRecordId: string;
-  /** The generation the caller read; the write is skipped if another landed since. */
-  readonly updatedAt: string;
+interface SwapManagedEndpointTokenSlotInput extends ManagedEndpointAllocationKey {
+  readonly expected: string | null;
+  readonly next: string;
 }
 
-interface ClaimManagedEndpointDeprovisionInput extends ManagedEndpointAllocationKey {
-  readonly updatedAt: string;
-}
-
-interface RemoveClaimedManagedEndpointAllocationInput extends ManagedEndpointAllocationKey {
-  readonly updatedAt: string;
+interface RemoveManagedEndpointAllocationWithTokenSlotInput extends ManagedEndpointAllocationKey {
+  readonly tokenSlot: string;
 }
 
 export class ManagedEndpointAllocations extends Context.Service<
@@ -116,28 +106,22 @@ export class ManagedEndpointAllocations extends Context.Service<
     readonly recordTunnel: (
       input: RecordManagedEndpointTunnelInput,
     ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
-    /** Returns the new generation, or null when the allocation changed since `updatedAt`. */
-    readonly recordDnsIfUnchanged: (
-      input: RecordManagedEndpointDnsInput,
+    /**
+     * Sets the token slot to `next` only while it still holds `expected`, in one transaction.
+     * Returns what the slot holds afterwards, or null when there is no allocation.
+     */
+    readonly swapTokenSlot: (
+      input: SwapManagedEndpointTokenSlotInput,
     ) => Effect.Effect<string | null, ManagedEndpointAllocationPersistenceError>;
     readonly markReady: (
       input: ManagedEndpointAllocationKey,
     ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
-    /**
-     * Claims the complete allocation for teardown only if its generation still
-     * matches the snapshot captured by the unlink operation.
-     *
-     * Returns the claim generation used by `removeClaimed`, or null when a
-     * concurrent provision has already superseded the snapshot.
-     */
-    readonly claimDeprovision: (
-      input: ClaimManagedEndpointDeprovisionInput,
-    ) => Effect.Effect<string | null, ManagedEndpointAllocationPersistenceError>;
     readonly remove: (
       input: ManagedEndpointAllocationKey,
     ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
-    readonly removeClaimed: (
-      input: RemoveClaimedManagedEndpointAllocationInput,
+    /** Deletes the allocation only while its token slot still holds `tokenSlot`. */
+    readonly removeWithTokenSlot: (
+      input: RemoveManagedEndpointAllocationWithTokenSlotInput,
     ) => Effect.Effect<boolean, ManagedEndpointAllocationPersistenceError>;
   }
 >()("pathway-relay/environments/ManagedEndpointAllocations") {}
@@ -208,28 +192,27 @@ export const make = Effect.gen(function* () {
           ),
         );
     }),
-    recordDnsIfUnchanged: Effect.fn("relay.managed_endpoint_allocations.record_dns_if_unchanged")(
-      function* (input: RecordManagedEndpointDnsInput) {
-        return yield* client
-          .mutation(api.relayPersistence.recordManagedEndpointDnsIfUnchanged, {
-            ...input,
-            now: DateTime.formatIso(yield* DateTime.now),
-          })
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new ManagedEndpointAllocationPersistenceError({
-                  operation: "record-dns-if-unchanged",
-                  stage: "database-request",
-                  userId: input.userId,
-                  environmentId: input.environmentId,
-                  dnsRecordId: input.dnsRecordId,
-                  cause,
-                }),
-            ),
-          );
-      },
-    ),
+    swapTokenSlot: Effect.fn("relay.managed_endpoint_allocations.swap_token_slot")(function* (
+      input: SwapManagedEndpointTokenSlotInput,
+    ) {
+      return yield* client
+        .mutation(api.relayPersistence.swapManagedEndpointTokenSlot, {
+          ...input,
+          now: DateTime.formatIso(yield* DateTime.now),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ManagedEndpointAllocationPersistenceError({
+                operation: "swap-token-slot",
+                stage: "database-request",
+                userId: input.userId,
+                environmentId: input.environmentId,
+                cause,
+              }),
+          ),
+        );
+    }),
     markReady: Effect.fn("relay.managed_endpoint_allocations.mark_ready")(function* (
       input: ManagedEndpointAllocationKey,
     ) {
@@ -246,27 +229,6 @@ export const make = Effect.gen(function* () {
         ),
       );
     }),
-    claimDeprovision: Effect.fn("relay.managed_endpoint_allocations.claim_deprovision")(function* (
-      input: ClaimManagedEndpointDeprovisionInput,
-    ) {
-      return yield* client
-        .mutation(api.relayPersistence.claimManagedEndpointDeprovision, {
-          ...input,
-          claimedAt: DateTime.formatIso(yield* DateTime.now),
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointAllocationPersistenceError({
-                operation: "claim-deprovision",
-                stage: "database-request",
-                userId: input.userId,
-                environmentId: input.environmentId,
-                cause,
-              }),
-          ),
-        );
-    }),
     remove: Effect.fn("relay.managed_endpoint_allocations.remove")(function* (
       input: ManagedEndpointAllocationKey,
     ) {
@@ -282,24 +244,24 @@ export const make = Effect.gen(function* () {
         ),
       );
     }),
-    removeClaimed: Effect.fn("relay.managed_endpoint_allocations.remove_claimed")(function* (
-      input: RemoveClaimedManagedEndpointAllocationInput,
-    ) {
-      return yield* client
-        .mutation(api.relayPersistence.removeClaimedManagedEndpointAllocation, input)
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointAllocationPersistenceError({
-                operation: "remove-claimed",
-                stage: "database-request",
-                userId: input.userId,
-                environmentId: input.environmentId,
-                cause,
-              }),
-          ),
-        );
-    }),
+    removeWithTokenSlot: Effect.fn("relay.managed_endpoint_allocations.remove_with_token_slot")(
+      function* (input: RemoveManagedEndpointAllocationWithTokenSlotInput) {
+        return yield* client
+          .mutation(api.relayPersistence.removeManagedEndpointAllocationWithTokenSlot, input)
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ManagedEndpointAllocationPersistenceError({
+                  operation: "remove-with-token-slot",
+                  stage: "database-request",
+                  userId: input.userId,
+                  environmentId: input.environmentId,
+                  cause,
+                }),
+            ),
+          );
+      },
+    ),
   });
 });
 

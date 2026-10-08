@@ -319,27 +319,33 @@ describe("relayPersistence", () => {
     expect(overLimit).toEqual({ status: "limit_exceeded", maxTunnels: 1, activeTunnels: 1 });
   });
 
-  it("records managed endpoint token state only against the generation that was read", async () => {
+  it("writes the managed endpoint token slot only over the value the caller read", async () => {
     const { relay } = testRelay();
-    const { allocation } = await relay.mutation(
+    await relay.mutation(
       api.relayPersistence.reserveManagedEndpointAllocation,
       reserve("environment-1"),
     );
     const key = { userId: "user-1", environmentId: "environment-1" };
-    const record = (updatedAt: string, dnsRecordId: string, now: string) =>
-      relay.mutation(api.relayPersistence.recordManagedEndpointDnsIfUnchanged, {
+    // The same timestamp on both writes: the slot's value, not time, decides.
+    const swap = (expected: string | null, next: string) =>
+      relay.mutation(api.relayPersistence.swapManagedEndpointTokenSlot, {
         ...key,
-        dnsRecordId,
-        updatedAt,
-        now,
+        expected,
+        next,
+        now: "2026-08-14T00:02:00.000Z",
+      });
+    const remove = (tokenSlot: string) =>
+      relay.mutation(api.relayPersistence.removeManagedEndpointAllocationWithTokenSlot, {
+        ...key,
+        tokenSlot,
       });
 
-    const next = await record(allocation!.updatedAt, "tokens-a", "2026-08-14T00:02:00.000Z");
-    expect(next).toBe("2026-08-14T00:02:00.000Z");
-    expect(await record(allocation!.updatedAt, "tokens-b", "2026-08-14T00:03:00.000Z")).toBeNull();
-    expect(await relay.query(api.relayPersistence.getManagedEndpointAllocation, key)).toMatchObject(
-      { dnsRecordId: "tokens-a", updatedAt: next },
-    );
+    expect(await swap(null, "slot-a")).toBe("slot-a");
+    expect(await swap(null, "slot-b")).toBe("slot-a");
+    expect(await remove("slot-b")).toBe(false);
+    expect(await remove("slot-a")).toBe(true);
+    expect(await relay.query(api.relayPersistence.getManagedEndpointAllocation, key)).toBeNull();
+    expect(await swap(null, "slot-c")).toBeNull();
   });
 
   it("keeps only the newest credential active without scanning revoked history", async () => {

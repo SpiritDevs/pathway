@@ -297,32 +297,6 @@ describe("CloudManagedEndpointRuntime", () => {
     }),
   );
 
-  it.effect("a replacement that is rejected gives way to the connector that worked", () =>
-    Effect.gen(function* () {
-      const started: Array<FakeConnector> = [];
-      const runtime = yield* buildRuntime(
-        fakeRelayClient(started, {
-          registerOnStart: false,
-          onStart: (connector) =>
-            Effect.sync(() =>
-              connector.options.token === "rejected" ? connector.exit(1) : connector.register(),
-            ),
-        }),
-      );
-
-      yield* runtime.applyConfig(connection("token-1"));
-      const replaced = yield* runtime.applyConfig(connection("rejected"));
-
-      expect(replaced).toMatchObject({ status: "failed" });
-      expect(started.map((connector) => connector.options.token)).toEqual([
-        "token-1",
-        "rejected",
-        "token-1",
-      ]);
-      expect(started[2]?.stopped).toBe(false);
-    }),
-  );
-
   it.effect("treats a later credential rejection as terminal", () => {
     let logged!: () => void;
     const rejectionLogged = new Promise<void>((resolve) => {

@@ -620,7 +620,6 @@ describe("stored managed endpoint reprovisioning", () => {
     connectorToken: "connect-token",
     edgeUrl: "wss://edge.example.test/connect/v1",
     endpointId: "endpoint-1",
-    connectorTokenId: "token-1",
   };
   const setup = (storedConfig: unknown) => {
     const values = new Map<string, Uint8Array>(
@@ -654,9 +653,7 @@ describe("stored managed endpoint reprovisioning", () => {
           requests.push(request);
           return HttpClientResponse.fromWeb(
             request,
-            Response.json(
-              request.url.endsWith("/confirm") ? { ok: true } : { endpointRuntime: connectConfig },
-            ),
+            Response.json({ endpointRuntime: connectConfig }),
           );
         }),
       ),
@@ -682,49 +679,15 @@ describe("stored managed endpoint reprovisioning", () => {
 
       expect(yield* reprovisionStoredManagedEndpointWith(dependencies, 3_900)).toBe(true);
 
-      // The replaced token is retired only after the new connector registered.
       expect(requests.map((request) => request.url)).toEqual([
         "https://relay.example.test/v1/environments/environment-1/managed-endpoint",
-        "https://relay.example.test/v1/environments/environment-1/managed-endpoint/confirm",
       ]);
-      expect(
-        requests.every((r) => r.headers.authorization === "Bearer environment-credential"),
-      ).toBe(true);
-      expect(
-        requests[1]?.body._tag === "Uint8Array" && new TextDecoder().decode(requests[1].body.body),
-      ).toBe('{"cloudUserId":"user-1","connectorTokenId":"token-1"}');
+      expect(requests[0]?.headers.authorization).toBe("Bearer environment-credential");
       // The stored port is the listener the user authorized when linking.
       expect(applied).toEqual([{ config: connectConfig, originPort: 3_800 }]);
       expect(
         decodeRuntimeConfig(new TextDecoder().decode(values.get(CLOUD_ENDPOINT_RUNTIME_CONFIG))),
       ).toEqual(Option.some(connectConfig));
-    }),
-  );
-
-  it.effect("does not confirm a token whose connector never registered", () =>
-    Effect.gen(function* () {
-      const { dependencies, values, requests } = setup({
-        environmentId: "environment-1",
-        providerKind: "cloudflare_tunnel",
-        connectorToken: "cloudflared-token",
-      });
-      const unreachable = {
-        ...dependencies,
-        endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime.of({
-          applyConfig: () =>
-            Effect.succeed({
-              status: "failed" as const,
-              endpointId: "endpoint-1",
-              reason: "The Pathway Connect edge could not be reached.",
-            }),
-        }),
-      };
-
-      yield* Effect.flip(reprovisionStoredManagedEndpointWith(unreachable, 3_900));
-      expect(requests.map((request) => request.url.endsWith("/confirm"))).toEqual([false]);
-      expect(
-        decodeRuntimeConfig(new TextDecoder().decode(values.get(CLOUD_ENDPOINT_RUNTIME_CONFIG))),
-      ).toMatchObject(Option.some({ providerKind: "cloudflare_tunnel" }));
     }),
   );
 
@@ -817,23 +780,10 @@ describe("cloud relay config replacement", () => {
         connectorToken: "connector-token",
         edgeUrl: "wss://edge.example.test/connect/v1",
         endpointId: "endpoint-1",
-        connectorTokenId: "token-1",
       };
       const applied: Array<ManagedEndpointRuntime.ManagedEndpointConnection | null> = [];
-      const confirmations: Array<string> = [];
-      const environment: ServerEnvironment.ServerEnvironment["Service"] = {
-        getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-1")),
-        getDescriptor: Effect.die("unused"),
-      };
       const dependencies = {
         secrets,
-        environment,
-        httpClient: HttpClient.make((request) =>
-          Effect.sync(() => {
-            confirmations.push(`${request.url} ${request.headers.authorization}`);
-            return HttpClientResponse.fromWeb(request, Response.json({ ok: true }));
-          }),
-        ),
         currentLocalHttpPort: 3_800,
         endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime.of({
           applyConfig: (connection) =>
@@ -859,9 +809,6 @@ describe("cloud relay config replacement", () => {
 
       // The connector exposes only the authorized listener, never a payload-chosen origin.
       expect(applied).toEqual([{ config: runtimeConfig, originPort: 3_800 }]);
-      expect(confirmations).toEqual([
-        "https://relay.example.test/v1/environments/environment-1/managed-endpoint/confirm Bearer current-credential",
-      ]);
       expect(new TextDecoder().decode(values.get(CLOUD_MANAGED_TUNNEL_LOCAL_PORT))).toBe("3800");
       expect(yield* readCloudLinkState(dependencies)).toMatchObject({
         linked: true,

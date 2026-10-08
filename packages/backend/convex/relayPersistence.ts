@@ -1123,16 +1123,29 @@ export const recordManagedEndpointDns = mutation({
     return null;
   },
 });
-/** Records connector token state only if no other write landed since `updatedAt` was read. */
-export const recordManagedEndpointDnsIfUnchanged = mutation({
-  args: { ...allocationKeyArgs, dnsRecordId: v.string(), updatedAt: v.string(), now: v.string() },
+// dnsRecordId holds the relay's connector token slot. Both writes compare the slot's value.
+/** Sets the slot to `next` if it still holds `expected`; returns what it holds afterwards. */
+export const swapManagedEndpointTokenSlot = mutation({
+  args: { ...allocationKeyArgs, expected: nullableString, next: v.string(), now: v.string() },
   returns: nullableString,
   handler: async (ctx, args) => {
     await requireRelayControlPlane(ctx);
     const row = await allocationByKey(ctx, args.userId, args.environmentId);
-    if (!row || row.updatedAt !== args.updatedAt) return null;
-    await ctx.db.patch(row._id, { dnsRecordId: args.dnsRecordId, updatedAt: args.now });
-    return args.now;
+    if (!row) return null;
+    if (row.dnsRecordId !== args.expected) return row.dnsRecordId;
+    await ctx.db.patch(row._id, { dnsRecordId: args.next, updatedAt: args.now });
+    return args.next;
+  },
+});
+export const removeManagedEndpointAllocationWithTokenSlot = mutation({
+  args: { ...allocationKeyArgs, tokenSlot: v.string() },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    await requireRelayControlPlane(ctx);
+    const row = await allocationByKey(ctx, args.userId, args.environmentId);
+    if (!row || row.dnsRecordId !== args.tokenSlot) return false;
+    await ctx.db.delete(row._id);
+    return true;
   },
 });
 export const markManagedEndpointReady = mutation({

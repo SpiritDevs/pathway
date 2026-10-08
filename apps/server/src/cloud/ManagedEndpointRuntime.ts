@@ -204,7 +204,6 @@ export const make = Effect.gen(function* () {
             return null;
           }
           if (exit.code === CONNECTOR_CREDENTIAL_REJECTED) {
-            yield* Ref.set(desiredRef, null);
             yield* Effect.logError(
               "Pathway Connect rejected this environment's connector token; relink to restore remote access",
               { pid: connector.handle.pid, endpointId: connector.endpointId },
@@ -359,25 +358,12 @@ export const make = Effect.gen(function* () {
   const apply = (connection: ManagedEndpointConnection | null, gated: boolean) =>
     reconcileSemaphore.withPermits(1)(
       Effect.gen(function* () {
-        const previous = yield* Ref.get(desiredRef);
-        // A replacement that never registered gives way to the connection that was working.
-        const restorePrevious = Effect.gen(function* () {
-          yield* Ref.set(desiredRef, previous);
-          if (
-            gated &&
-            previous !== null &&
-            (connection === null || connectionKey(previous) !== connectionKey(connection))
-          ) {
-            yield* reconcile(previous, false);
-          }
-        });
         yield* Ref.set(desiredRef, connection);
         yield* Ref.set(restartAttemptsRef, 0);
-        const status = yield* reconcile(connection, gated).pipe(
-          Effect.onInterrupt(() => restorePrevious),
-        );
+        const status = yield* reconcile(connection, gated);
+        // A connection that never registered must not be restarted behind the caller's back.
         if (status.status !== "running" && status.status !== "disabled") {
-          yield* restorePrevious;
+          yield* Ref.set(desiredRef, null);
         }
         return status;
       }),

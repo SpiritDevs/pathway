@@ -1078,14 +1078,12 @@ describe("Convex relay repositories", () => {
         if (reference === functionName(api.relayPersistence.reserveManagedEndpointAllocation)) {
           return Effect.succeed({ status: "reserved", allocation });
         }
-        if (reference === functionName(api.relayPersistence.recordManagedEndpointDnsIfUnchanged)) {
-          return Effect.succeed("generation-two");
-        }
-        if (reference === functionName(api.relayPersistence.claimManagedEndpointDeprovision)) {
-          return Effect.succeed("claim-generation");
+        if (reference === functionName(api.relayPersistence.swapManagedEndpointTokenSlot)) {
+          return Effect.succeed("slot-one");
         }
         if (
-          reference === functionName(api.relayPersistence.removeClaimedManagedEndpointAllocation)
+          reference ===
+          functionName(api.relayPersistence.removeManagedEndpointAllocationWithTokenSlot)
         ) {
           return Effect.succeed(true);
         }
@@ -1111,27 +1109,20 @@ describe("Convex relay repositories", () => {
         tunnelId: "tunnel-one",
       });
       expect(
-        yield* allocations.recordDnsIfUnchanged({
+        yield* allocations.swapTokenSlot({
           userId: "user-one",
           environmentId: "env-one",
-          dnsRecordId: "dns-one",
-          updatedAt: "generation-one",
+          expected: null,
+          next: "slot-one",
         }),
-      ).toBe("generation-two");
+      ).toBe("slot-one");
       yield* allocations.markReady({ userId: "user-one", environmentId: "env-one" });
-      expect(
-        yield* allocations.claimDeprovision({
-          userId: "user-one",
-          environmentId: "env-one",
-          updatedAt: "generation-one",
-        }),
-      ).toBe("claim-generation");
       yield* allocations.remove({ userId: "user-one", environmentId: "env-one" });
       expect(
-        yield* allocations.removeClaimed({
+        yield* allocations.removeWithTokenSlot({
           userId: "user-one",
           environmentId: "env-one",
-          updatedAt: "claim-generation",
+          tokenSlot: "slot-one",
         }),
       ).toBe(true);
 
@@ -1139,17 +1130,17 @@ describe("Convex relay repositories", () => {
         functionName(api.relayPersistence.getManagedEndpointAllocation),
         functionName(api.relayPersistence.reserveManagedEndpointAllocation),
         functionName(api.relayPersistence.recordManagedEndpointTunnel),
-        functionName(api.relayPersistence.recordManagedEndpointDnsIfUnchanged),
+        functionName(api.relayPersistence.swapManagedEndpointTokenSlot),
         functionName(api.relayPersistence.markManagedEndpointReady),
-        functionName(api.relayPersistence.claimManagedEndpointDeprovision),
         functionName(api.relayPersistence.removeManagedEndpointAllocation),
-        functionName(api.relayPersistence.removeClaimedManagedEndpointAllocation),
+        functionName(api.relayPersistence.removeManagedEndpointAllocationWithTokenSlot),
       ]);
-      expect(calls[5]?.args).toEqual({
+      expect(calls[3]?.args).toEqual({
         userId: "user-one",
         environmentId: "env-one",
-        updatedAt: "generation-one",
-        claimedAt: "1970-01-01T00:00:00.000Z",
+        expected: null,
+        next: "slot-one",
+        now: "1970-01-01T00:00:00.000Z",
       });
     }).pipe(Effect.provide(ManagedEndpointAllocations.layer.pipe(Layer.provide(convex))));
   });

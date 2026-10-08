@@ -51,6 +51,7 @@ describe("relay Cyndrbase Connect configuration", () => {
     CYNDRBASE_CONNECT_API_URL: "https://connect.example.com/",
     CYNDRBASE_CONNECT_EDGE_URL: "wss://edge.example.com/connect/v1",
     CYNDRBASE_CONNECT_ADMIN_KEY: "admin-key",
+    CYNDRBASE_CONNECT_TOKEN_KEY: "token-key",
   };
 
   it.effect("is optional", () =>
@@ -64,6 +65,7 @@ describe("relay Cyndrbase Connect configuration", () => {
       const remote = yield* loadCyndrbaseConnect.pipe(Effect.provide(withConfig(secure)));
       expect(remote?.apiUrl).toBe("https://connect.example.com");
       expect(Redacted.value(remote!.adminKey)).toBe("admin-key");
+      expect(Redacted.value(remote!.tokenKey)).toBe("token-key");
       const local = yield* loadCyndrbaseConnect.pipe(
         Effect.provide(
           withConfig({

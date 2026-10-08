@@ -446,30 +446,23 @@ export const revokeEnvironmentLinkRecord = Effect.fn(
   return result.linkRevoked;
 });
 
-// The environment credential must belong to this user's link, and the link must be managed.
-const authorizeManagedLink = Effect.fnUntraced(function* (input: {
-  readonly environmentId: string;
-  readonly cloudUserId: string;
-}) {
-  const principal = yield* RelayEnvironmentPrincipal;
-  const links = yield* EnvironmentLinks.EnvironmentLinks;
-  const link =
-    principal.environmentId === input.environmentId
-      ? yield* links.getForUser({ userId: input.cloudUserId, environmentId: input.environmentId })
-      : null;
-  if (
-    link === null ||
-    link.environmentPublicKey !== principal.environmentPublicKey ||
-    link.endpoint.providerKind !== "cloudflare_tunnel"
-  ) {
-    return yield* new HttpApiError.Unauthorized({});
-  }
-});
-
-/** Issues a connector config for the calling environment's own managed link. */
+/** Returns the connector config of the calling environment's own managed link. */
 export const reprovisionManagedEndpoint = Effect.fn("relay.api.server.reprovisionManagedEndpoint")(
   function* (input: { readonly environmentId: string; readonly cloudUserId: string }) {
-    yield* authorizeManagedLink(input);
+    const principal = yield* RelayEnvironmentPrincipal;
+    const links = yield* EnvironmentLinks.EnvironmentLinks;
+    const link =
+      principal.environmentId === input.environmentId
+        ? yield* links.getForUser({ userId: input.cloudUserId, environmentId: input.environmentId })
+        : null;
+    // The credential must belong to this user's link, and the link must be managed.
+    if (
+      link === null ||
+      link.environmentPublicKey !== principal.environmentPublicKey ||
+      link.endpoint.providerKind !== "cloudflare_tunnel"
+    ) {
+      return yield* new HttpApiError.Unauthorized({});
+    }
     const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
     const provisioned = yield* managedEndpointProvider.provision({
       userId: input.cloudUserId,
@@ -479,31 +472,10 @@ export const reprovisionManagedEndpoint = Effect.fn("relay.api.server.reprovisio
   },
 );
 
-/** Retires the tokens replaced by the one the calling environment registered with. */
-export const confirmManagedEndpoint = Effect.fn("relay.api.server.confirmManagedEndpoint")(
-  function* (input: {
-    readonly environmentId: string;
-    readonly cloudUserId: string;
-    readonly connectorTokenId: string;
-  }) {
-    yield* authorizeManagedLink(input);
-    const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-    return yield* managedEndpointProvider.confirm({
-      userId: input.cloudUserId,
-      environmentId: input.environmentId,
-      connectorTokenId: input.connectorTokenId,
-    });
-  },
-);
-
 export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnvironmentRecord")(
   function* (input: { readonly userId: string; readonly environmentId: string }) {
     const links = yield* EnvironmentLinks.EnvironmentLinks;
     const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-    const deprovisionTarget = yield* managedEndpointProvider.prepareDeprovision({
-      userId: input.userId,
-      environmentId: input.environmentId,
-    });
     const link = yield* links.getForUser({
       userId: input.userId,
       environmentId: input.environmentId,
@@ -520,11 +492,10 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
     // External teardown cannot share the Convex mutation. Run it only after
     // revocation commits so a database failure leaves a fully usable active
     // link. Still run teardown when the link is already revoked, allowing a
-    // retry to finish cleanup after an earlier Cloudflare failure.
+    // retry to finish cleanup after an earlier Connect failure.
     yield* managedEndpointProvider.deprovision({
       userId: input.userId,
       environmentId: input.environmentId,
-      target: deprovisionTarget,
     });
     return unlinked;
   },
@@ -1222,25 +1193,6 @@ export const serverApi = HttpApiBuilder.group(
             }),
           );
           return { endpointRuntime };
-        }, mapRelayCommonApiErrors("not_authorized")),
-      )
-      .handle(
-        "confirmManagedEndpoint",
-        Effect.fn("relay.api.server.confirmManagedEndpoint")(function* ({ params, payload }) {
-          const ok = yield* confirmManagedEndpoint({
-            environmentId: params.environmentId,
-            cloudUserId: payload.cloudUserId,
-            connectorTokenId: payload.connectorTokenId,
-          }).pipe(
-            Effect.catchTags({
-              ManagedEndpointProvisioningNotConfigured: () =>
-                relayInternalErrorResponse("upstream_unavailable"),
-              ManagedEndpointProvisioningFailed: () =>
-                relayInternalErrorResponse("upstream_unavailable"),
-              ManagedTunnelLimitExceeded: () => relayInternalErrorResponse("upstream_unavailable"),
-            }),
-          );
-          return { ok };
         }, mapRelayCommonApiErrors("not_authorized")),
       )
       .handle(

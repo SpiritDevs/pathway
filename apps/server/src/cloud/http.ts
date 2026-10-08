@@ -29,7 +29,6 @@ import {
   RelayEnvironmentLinkChallengeResponse,
   RelayEnvironmentLinkResponse,
   RelayManagedEndpointReprovisionResponse,
-  RelayOkResponse,
   RelayEnvironmentMintResponseProofPayload,
   type RelayEnvironmentMintResponse as RelayEnvironmentMintResponseShape,
   RelayEnvironmentLinkProof,
@@ -539,33 +538,6 @@ const cloudLinkProofHandler = Effect.fn("environment.cloud.linkProof")(
   ),
 );
 
-/**
- * Tells the relay the connector registered with this token, so it can revoke the tokens it
- * replaced. Best effort: until a confirmation lands, the relay keeps the older token live.
- */
-const confirmConnectorToken = Effect.fn("environment.cloud.confirmConnectorToken")(function* (
-  dependencies: CloudHttpDependencies,
-  input: {
-    readonly relayUrl: string;
-    readonly environmentCredential: string;
-    readonly cloudUserId: string;
-    readonly connectorTokenId: string | undefined;
-  },
-) {
-  if (input.connectorTokenId === undefined) return;
-  const environmentId = yield* dependencies.environment.getEnvironmentId;
-  yield* relayClientRequest(dependencies, {
-    url: `${input.relayUrl}/v1/environments/${encodeURIComponent(environmentId)}/managed-endpoint/confirm`,
-    token: input.environmentCredential,
-    payload: { cloudUserId: input.cloudUserId, connectorTokenId: input.connectorTokenId },
-    schema: RelayOkResponse,
-  }).pipe(
-    Effect.catch((cause) =>
-      Effect.logWarning("Could not confirm the connector token with the relay", { cause }),
-    ),
-  );
-});
-
 export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConfig")(function* (
   dependencies: CloudHttpDependencies,
   payload: RelayEnvironmentConfigRequest,
@@ -613,12 +585,6 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
       const encodedPort = yield* encodeManagedTunnelLocalPort(managedTunnelLocalPort);
       yield* dependencies.secrets.set(CLOUD_MANAGED_TUNNEL_LOCAL_PORT, stringToBytes(encodedPort));
     }
-    yield* confirmConnectorToken(dependencies, {
-      relayUrl: payload.relayUrl,
-      environmentCredential: payload.environmentCredential,
-      cloudUserId: payload.cloudUserId,
-      connectorTokenId: payload.endpointRuntime.connectorTokenId,
-    });
   } else {
     yield* dependencies.secrets.remove(CLOUD_ENDPOINT_RUNTIME_CONFIG);
     yield* dependencies.secrets.remove(CLOUD_MANAGED_TUNNEL_LOCAL_PORT);
@@ -825,12 +791,6 @@ export const reprovisionStoredManagedEndpointWith = Effect.fn(
     CLOUD_MANAGED_TUNNEL_LOCAL_PORT,
     stringToBytes(yield* encodeManagedTunnelLocalPort(originPort)),
   );
-  yield* confirmConnectorToken(dependencies, {
-    relayUrl: relayUrl.value,
-    environmentCredential: credential.value,
-    cloudUserId: cloudUserId.value,
-    connectorTokenId: endpointRuntime.connectorTokenId,
-  });
   return true;
 });
 

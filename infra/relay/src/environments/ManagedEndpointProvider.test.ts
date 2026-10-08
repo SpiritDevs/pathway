@@ -16,6 +16,7 @@ const cyndrbaseConnect = {
   apiUrl: "https://connect.example.test",
   edgeUrl: "wss://edge.example.test/connect/v1",
   adminKey: Redacted.make("admin-key"),
+  tokenKey: Redacted.make(Buffer.alloc(32, 7).toString("base64url")),
 };
 
 const config = RelayConfiguration.RelayConfiguration.of({
@@ -42,36 +43,34 @@ const RpcBody = Schema.Struct({
   remove: Schema.optional(Schema.Boolean),
   tokenId: Schema.optional(Schema.String),
   planId: Schema.optional(Schema.String),
+  page: Schema.optional(Schema.Struct({ pageToken: Schema.optional(Schema.String) })),
   idempotencyKey: Schema.optional(Schema.String),
 });
 const decodeRpcBody = Schema.decodeUnknownSync(Schema.fromJsonString(RpcBody));
-const decodeTokenState = Schema.decodeUnknownSync(
-  Schema.fromJsonString(
-    Schema.NullOr(
-      Schema.Struct({
-        current: Schema.NullOr(Schema.String),
-        pending: Schema.NullOr(Schema.String),
-        retired: Schema.Array(Schema.String),
-      }),
-    ),
-  ),
-);
 
 interface ConnectCall {
   readonly method: string;
   readonly body: typeof RpcBody.Type;
 }
 
-/** An in-memory EndpointService with the edge's replay, plan and not-found behavior. */
-function makeConnectEdge(options?: { readonly failApplyRevoke?: () => boolean }) {
+/** An in-memory EndpointService with the edge's replay, paging, plan and not-found behavior. */
+function makeConnectEdge(options?: {
+  /** Runs after the edge applied a call, before the relay sees its response. */
+  readonly afterCall?: (method: string) => Effect.Effect<void>;
+  /** Mints a token but loses the response, as when the network drops it. */
+  readonly loseMintResponse?: () => boolean;
+  readonly failApplyEndpointChange?: () => boolean;
+}) {
   const calls: Array<ConnectCall> = [];
   const authorizations = new Set<string>();
   const endpoints = new Map<string, string>();
+  // Token ID to the endpoint it serves; each token's secret is `secret-<id>`.
   const tokens = new Map<string, string>();
   const plans = new Map<string, () => void>();
   const receipts = new Map<string, readonly [number, unknown]>();
   let next = 0;
   const notFound = [404, { code: "not_found" }] as const;
+  const unavailable = [503, { code: "unavailable" }] as const;
   const plan = (apply: () => void) => {
     const id = `plan-${++next}`;
     plans.set(id, apply);
@@ -99,6 +98,19 @@ function makeConnectEdge(options?: { readonly failApplyRevoke?: () => boolean })
           { connectorToken: { id, endpointIds: body.endpointIds }, token: `secret-${id}` },
         ];
       }
+      case "ListConnectorTokens": {
+        // Two per page, so callers must follow the page token.
+        const start = Number(body.page?.pageToken || 0);
+        const page = [...tokens].slice(start, start + 2);
+        const more = start + 2 < tokens.size;
+        return [
+          200,
+          {
+            connectorTokens: page.map(([id, endpointId]) => ({ id, endpointIds: [endpointId] })),
+            page: more ? { nextPageToken: String(start + 2) } : {},
+          },
+        ];
+      }
       case "PlanRevokeConnectorToken":
         return tokens.has(body.tokenId ?? "")
           ? plan(() => tokens.delete(body.tokenId ?? ""))
@@ -117,7 +129,7 @@ function makeConnectEdge(options?: { readonly failApplyRevoke?: () => boolean })
     }
   };
   const client = HttpClient.make((request) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       const method = request.url.replace(
         "https://connect.example.test/cyndrbase.connect.v1.EndpointService/",
         "",
@@ -127,29 +139,33 @@ function makeConnectEdge(options?: { readonly failApplyRevoke?: () => boolean })
       );
       calls.push({ method, body });
       authorizations.add(request.headers["authorization"] ?? "");
+      const respond = ([status, json]: readonly [number, unknown]) =>
+        HttpClientResponse.fromWeb(request, Response.json(json, { status }));
       // A transient failure leaves no receipt, so the retry runs again.
-      if (method === "ApplyRevokeConnectorToken" && options?.failApplyRevoke?.()) {
-        return HttpClientResponse.fromWeb(
-          request,
-          Response.json({ code: "unavailable" }, { status: 503 }),
-        );
+      if (method === "ApplyEndpointChange" && options?.failApplyEndpointChange?.()) {
+        return respond(unavailable);
       }
       const receiptKey = `${method}:${body.idempotencyKey ?? ""}`;
-      const [status, json] =
-        (body.idempotencyKey && receipts.get(receiptKey)) || handle(method, body);
-      if (body.idempotencyKey) receipts.set(receiptKey, [status, json]);
-      return HttpClientResponse.fromWeb(request, Response.json(json, { status }));
+      const result = (body.idempotencyKey && receipts.get(receiptKey)) || handle(method, body);
+      if (body.idempotencyKey) receipts.set(receiptKey, result);
+      if (options?.afterCall) yield* options.afterCall(method);
+      if (method === "CreateConnectorToken" && options?.loseMintResponse?.()) {
+        return respond(unavailable);
+      }
+      return respond(result);
     }),
   );
   return { client, calls, authorizations, endpoints, tokens };
 }
 
-function makeAllocations(options?: { readonly beforeFirstCommit?: () => Effect.Effect<void> }) {
+const secrets = (edge: ReturnType<typeof makeConnectEdge>) =>
+  [...edge.tokens.keys()].map((id) => `secret-${id}`);
+
+function makeAllocations(options?: { readonly afterSwap?: (next: string) => Effect.Effect<void> }) {
   const allocations = new Map<string, ManagedEndpointAllocations.ManagedEndpointAllocation>();
   const keyOf = (input: { readonly userId: string; readonly environmentId: string }) =>
     `${input.userId}:${input.environmentId}`;
   let generation = 0;
-  let beforeFirstCommit = options?.beforeFirstCommit;
   const mutate = (
     input: { readonly userId: string; readonly environmentId: string },
     change: Partial<ManagedEndpointAllocations.ManagedEndpointAllocation>,
@@ -178,32 +194,24 @@ function makeAllocations(options?: { readonly beforeFirstCommit?: () => Effect.E
         return allocation;
       }),
     recordTunnel: (input) => Effect.sync(() => mutate(input, { tunnelId: input.tunnelId })),
-    // A test can run another rotation inside the first writer's read-to-commit window.
-    recordDnsIfUnchanged: (input) =>
+    swapTokenSlot: (input) =>
       Effect.gen(function* () {
-        const pause = beforeFirstCommit;
-        beforeFirstCommit = undefined;
-        if (pause) yield* pause();
-        if (allocations.get(keyOf(input))?.updatedAt !== input.updatedAt) return null;
-        mutate(input, { dnsRecordId: input.dnsRecordId });
-        return allocations.get(keyOf(input))?.updatedAt ?? null;
+        const allocation = allocations.get(keyOf(input));
+        if (allocation === undefined) return null;
+        if (allocation.dnsRecordId !== input.expected) return allocation.dnsRecordId;
+        mutate(input, { dnsRecordId: input.next });
+        if (options?.afterSwap) yield* options.afterSwap(input.next);
+        return input.next;
       }),
     markReady: (input) => Effect.sync(() => mutate(input, { readyAt: "2026-06-02T00:00:00.000Z" })),
-    claimDeprovision: (input) =>
-      Effect.sync(() => {
-        if (allocations.get(keyOf(input))?.updatedAt !== input.updatedAt) return null;
-        mutate(input, {});
-        return allocations.get(keyOf(input))?.updatedAt ?? null;
-      }),
     remove: (input) => Effect.sync(() => void allocations.delete(keyOf(input))),
-    removeClaimed: (input) =>
+    removeWithTokenSlot: (input) =>
       Effect.sync(() => {
-        if (allocations.get(keyOf(input))?.updatedAt !== input.updatedAt) return false;
+        if (allocations.get(keyOf(input))?.dnsRecordId !== input.tokenSlot) return false;
         return allocations.delete(keyOf(input));
       }),
   });
-  const tokens = () => decodeTokenState(allocations.get("user_ABC:env_ABC")?.dnsRecordId ?? "null");
-  return { service, allocations, tokens };
+  return { service, allocations };
 }
 
 function providerLayer(
@@ -231,152 +239,169 @@ function expectedManagedHostname(environmentId: string, userId = "user_ABC"): st
 
 const key = { userId: "user_ABC", environmentId: "env_ABC" } as const;
 const request = key;
+type Provider = ManagedEndpointProvider.ManagedEndpointProvider["Service"];
 
 describe("ManagedEndpointProvider", () => {
-  it.effect("provisions a public Connect endpoint and an endpoint-scoped connector token", () => {
-    const edge = makeConnectEdge();
-    const allocations = makeAllocations();
-    const hostname = expectedManagedHostname("env_ABC");
-
-    return Effect.gen(function* () {
-      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-      const result = yield* provider.provision(request);
-
-      expect(result).toEqual({
-        endpoint: {
-          httpBaseUrl: `https://${hostname}/`,
-          wsBaseUrl: `wss://${hostname}/ws`,
-          providerKind: "cloudflare_tunnel",
-        },
-        runtime: {
-          environmentId: "env_ABC",
-          providerKind: "pathway_relay",
-          connectorToken: "secret-token-2",
-          edgeUrl: "wss://edge.example.test/connect/v1",
-          endpointId: "endpoint-1",
-          connectorTokenId: "token-2",
-        },
-      });
-      expect(edge.calls.map((call) => call.method)).toEqual([
-        "CreateEndpoint",
-        "CreateConnectorToken",
-      ]);
-      expect(edge.calls[0]?.body).toMatchObject({
-        hostname,
-        policy: { access: "ACCESS_KIND_PUBLIC" },
-        traffic: "TRAFFIC_KIND_HTTP",
-      });
-      expect(edge.calls[1]?.body.endpointIds).toEqual(["endpoint-1"]);
-      expect([...edge.authorizations]).toEqual(["Bearer admin-key"]);
-      expect(allocations.allocations.get("user_ABC:env_ABC")).toMatchObject({
-        hostname,
-        tunnelId: "endpoint-1",
-        readyAt: expect.any(String),
-      });
-      expect(allocations.tokens()).toEqual({ current: null, pending: "token-2", retired: [] });
-    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
-  });
-
   it.effect(
-    "provisioning never revokes, so a lost response or failed commit strands nothing",
+    "provisions a public Connect endpoint and stores its one connector token sealed",
     () => {
       const edge = makeConnectEdge();
       const allocations = makeAllocations();
+      const hostname = expectedManagedHostname("env_ABC");
 
       return Effect.gen(function* () {
         const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-        const first = yield* provider.provision(request);
-        const firstId = first.runtime.connectorTokenId!;
-        expect(yield* provider.confirm({ ...key, connectorTokenId: firstId })).toBe(true);
+        const result = yield* provider.provision(request);
 
-        // The environment never receives these: the response is lost or the link commit fails.
-        const lost = yield* provider.provision(request);
-        for (let attempt = 0; attempt < 11; attempt++) {
-          expect((yield* provider.provision(request)).runtime.connectorTokenId).toBe(
-            lost.runtime.connectorTokenId,
-          );
-        }
-        expect(edge.calls.some((call) => call.method.includes("Revoke"))).toBe(false);
-        expect([...edge.tokens.keys()].sort()).toEqual(
-          [firstId, lost.runtime.connectorTokenId!].sort(),
-        );
-        expect(allocations.tokens()?.current).toBe(firstId);
-        expect(first.runtime.endpointId).toBe(lost.runtime.endpointId);
+        expect(result).toEqual({
+          endpoint: {
+            httpBaseUrl: `https://${hostname}/`,
+            wsBaseUrl: `wss://${hostname}/ws`,
+            providerKind: "cloudflare_tunnel",
+          },
+          runtime: {
+            environmentId: "env_ABC",
+            providerKind: "pathway_relay",
+            connectorToken: "secret-token-2",
+            edgeUrl: "wss://edge.example.test/connect/v1",
+            endpointId: "endpoint-1",
+          },
+        });
+        expect(edge.calls.map((call) => call.method)).toEqual([
+          "CreateEndpoint",
+          "ListConnectorTokens",
+          "CreateConnectorToken",
+        ]);
+        expect(edge.calls[0]?.body).toMatchObject({
+          hostname,
+          policy: { access: "ACCESS_KIND_PUBLIC" },
+          traffic: "TRAFFIC_KIND_HTTP",
+        });
+        expect(edge.calls[2]?.body.endpointIds).toEqual(["endpoint-1"]);
+        expect([...edge.authorizations]).toEqual(["Bearer admin-key"]);
+        const allocation = allocations.allocations.get("user_ABC:env_ABC");
+        expect(allocation).toMatchObject({
+          hostname,
+          tunnelId: "endpoint-1",
+          readyAt: expect.any(String),
+        });
+        expect(allocation?.dnsRecordId).not.toContain("secret-token-2");
       }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
     },
   );
 
-  it.effect("confirming a token retires only the tokens it replaced", () => {
+  it.effect("returns the same token on every later provision", () => {
     const edge = makeConnectEdge();
-    const allocations = makeAllocations();
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-      const first = (yield* provider.provision(request)).runtime.connectorTokenId!;
-      yield* provider.confirm({ ...key, connectorTokenId: first });
-      const second = (yield* provider.provision(request)).runtime.connectorTokenId!;
-
-      expect(yield* provider.confirm({ ...key, connectorTokenId: second })).toBe(true);
-      expect([...edge.tokens.keys()]).toEqual([second]);
-      expect(allocations.tokens()).toEqual({ current: second, pending: null, retired: [] });
-      // A late or repeated confirm changes nothing.
-      expect(yield* provider.confirm({ ...key, connectorTokenId: first })).toBe(false);
-      expect(yield* provider.confirm({ ...key, connectorTokenId: second })).toBe(true);
-      expect([...edge.tokens.keys()]).toEqual([second]);
-    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
-  });
-
-  it.effect("an overlapping rotation never makes a revoked token current or returns one", () => {
-    const edge = makeConnectEdge();
-    let provider!: ManagedEndpointProvider.ManagedEndpointProvider["Service"];
-    // Rotation B completes twice while rotation A sits between its read and its commit.
-    const rotateB = Effect.gen(function* () {
-      for (let round = 0; round < 2; round++) {
-        const { connectorTokenId } = (yield* provider.provision(request)).runtime;
-        yield* provider.confirm({ ...key, connectorTokenId: connectorTokenId! });
+      const first = yield* provider.provision(request);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        expect(yield* provider.provision(request)).toEqual(first);
       }
-    }).pipe(Effect.orDie);
-    const allocations = makeAllocations({ beforeFirstCommit: () => rotateB });
-
-    return Effect.gen(function* () {
-      provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-      const a = (yield* provider.provision(request)).runtime.connectorTokenId!;
-      const { current, pending } = allocations.tokens()!;
-
-      expect(edge.tokens.has(a)).toBe(true);
-      expect(pending).toBe(a);
-      expect(edge.tokens.has(current!)).toBe(true);
-      expect(edge.tokens.size).toBe(2);
-    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
+      expect(edge.calls.filter((call) => call.method === "CreateConnectorToken")).toHaveLength(1);
+      expect(edge.calls.some((call) => call.method.includes("Revoke"))).toBe(false);
+    }).pipe(Effect.provide(providerLayer(edge)));
   });
 
-  it.effect("a revoke outage keeps live tokens bounded, then catches up", () => {
-    let outage = true;
-    const edge = makeConnectEdge({ failApplyRevoke: () => outage });
-    const allocations = makeAllocations();
+  it.effect("racing first provisions agree on one live token, wherever the second lands", () =>
+    Effect.gen(function* () {
+      for (const point of ["CreateEndpoint", "ListConnectorTokens", "CreateConnectorToken"]) {
+        let provider!: Provider;
+        let second: ManagedEndpointProvider.ManagedEndpointProvisioningResult | undefined;
+        let armed = true;
+        const edge = makeConnectEdge({
+          afterCall: (method) => {
+            if (!armed || method !== point) return Effect.void;
+            armed = false;
+            return provider.provision(request).pipe(
+              Effect.tap((result) => Effect.sync(() => (second = result))),
+              Effect.orDie,
+              Effect.asVoid,
+            );
+          },
+        });
+        const first = yield* Effect.gen(function* () {
+          provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+          return yield* provider.provision(request);
+        }).pipe(Effect.provide(providerLayer(edge)));
+
+        expect(second?.runtime.connectorToken).toBe(first.runtime.connectorToken);
+        expect(secrets(edge)).toEqual([first.runtime.connectorToken]);
+      }
+    }),
+  );
+
+  it.effect("never sweeps a token that a newer attempt may still store", () => {
+    const edge = makeConnectEdge();
+    let tookOver = false;
+    // Right after this provision marks the slot, a newer attempt takes it, mints, and dies.
+    const allocations = makeAllocations({
+      afterSwap: () =>
+        Effect.sync(() => {
+          if (tookOver) return;
+          tookOver = true;
+          const allocation = allocations.allocations.get("user_ABC:env_ABC")!;
+          allocations.allocations.set("user_ABC:env_ABC", {
+            ...allocation,
+            dnsRecordId: '{"_tag":"Minting","attempt":"newer"}',
+          });
+          edge.tokens.set("token-newer", "endpoint-1");
+        }),
+    });
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-      let refused = 0;
-      for (let round = 0; round < 12; round++) {
-        const provisioned = yield* Effect.result(provider.provision(request));
-        if (provisioned._tag === "Failure") {
-          expect(provisioned.failure).toMatchObject({ stage: "revoke-retired-tokens" });
-          refused++;
-          continue;
-        }
-        const connectorTokenId = provisioned.success.runtime.connectorTokenId!;
-        yield* provider.confirm({ ...key, connectorTokenId });
-      }
-      // Current plus at most two replaced tokens awaiting revocation.
-      expect(refused).toBeGreaterThan(0);
-      expect(edge.tokens.size).toBe(3);
+      expect(yield* Effect.flip(provider.provision(request))).toMatchObject({
+        stage: "claim-connector-token",
+        cause: { _tag: "ManagedEndpointTokenSlotBusy" },
+      });
+      expect(edge.tokens.has("token-newer")).toBe(true);
 
-      outage = false;
-      const recovered = (yield* provider.provision(request)).runtime.connectorTokenId!;
-      expect(allocations.tokens()?.retired).toEqual([]);
-      yield* provider.confirm({ ...key, connectorTokenId: recovered });
-      expect([...edge.tokens.keys()]).toEqual([recovered]);
+      // The retry takes over the abandoned attempt, sweeps its token, and stores its own.
+      const { runtime } = yield* provider.provision(request);
+      expect(secrets(edge)).toEqual([runtime.connectorToken]);
+    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
+  });
+
+  it.effect("lost mint responses leave at most one unstored token live", () => {
+    let lose = true;
+    const edge = makeConnectEdge({ loseMintResponse: () => lose });
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        expect(yield* Effect.flip(provider.provision(request))).toMatchObject({
+          stage: "create-connector-token",
+        });
+        expect(edge.tokens.size).toBe(1);
+      }
+      lose = false;
+      const { runtime } = yield* provider.provision(request);
+      expect(secrets(edge)).toEqual([runtime.connectorToken]);
+    }).pipe(Effect.provide(providerLayer(edge)));
+  });
+
+  it.effect("provisions over an allocation that cloudflared left behind", () => {
+    const edge = makeConnectEdge();
+    const allocations = makeAllocations();
+    allocations.allocations.set("user_ABC:env_ABC", {
+      ...key,
+      hostname: expectedManagedHostname("env_ABC"),
+      tunnelName: "dev-julius-tunnel",
+      tunnelId: "c1a3a8b2-5d2e-4f6a-9d5b-0e2f7b8c9d10",
+      dnsRecordId: "023e105f4ecef8ad9ca31a8372d0c353",
+      readyAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      const { runtime } = yield* provider.provision(request);
+
+      expect(runtime.endpointId).toBe("endpoint-1");
+      expect(secrets(edge)).toEqual([runtime.connectorToken]);
+      expect((yield* provider.provision(request)).runtime).toEqual(runtime);
     }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
   });
 
@@ -393,7 +418,7 @@ describe("ManagedEndpointProvider", () => {
 
       expect(result.runtime.endpointId).not.toBe("endpoint-1");
       expect([...edge.endpoints.values()]).toEqual([expectedManagedHostname("env_ABC")]);
-      expect(edge.tokens.has(result.runtime.connectorTokenId!)).toBe(true);
+      expect(secrets(edge)).toEqual([result.runtime.connectorToken]);
     }).pipe(Effect.provide(providerLayer(edge)));
   });
 
@@ -425,7 +450,8 @@ describe("ManagedEndpointProvider", () => {
       yield* provider.provision(request);
       yield* provider.deprovision(key);
 
-      expect(edge.calls.slice(2).map((call) => call.method)).toEqual([
+      expect(edge.calls.slice(3).map((call) => call.method)).toEqual([
+        "ListConnectorTokens",
         "PlanRevokeConnectorToken",
         "ApplyRevokeConnectorToken",
         "PlanEndpointChange",
@@ -441,21 +467,63 @@ describe("ManagedEndpointProvider", () => {
     }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
   });
 
-  it.effect("does not deprovision an allocation superseded by a concurrent relink", () => {
-    const edge = makeConnectEdge();
+  it.effect("an unlink racing a provision always finishes and leaves nothing behind", () =>
+    Effect.gen(function* () {
+      const races = [
+        { linked: false, point: "CreateEndpoint" },
+        { linked: false, point: "ListConnectorTokens" },
+        { linked: false, point: "CreateConnectorToken" },
+        { linked: true, point: "GetEndpoint" },
+      ];
+      for (const { linked, point } of races) {
+        let provider!: Provider;
+        let armed = false;
+        const edge = makeConnectEdge({
+          afterCall: (method) => {
+            if (!armed || method !== point) return Effect.void;
+            armed = false;
+            return provider.deprovision(key).pipe(Effect.orDie);
+          },
+        });
+        const allocations = makeAllocations();
+        yield* Effect.gen(function* () {
+          provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+          if (linked) yield* provider.provision(request);
+          armed = true;
+          yield* Effect.exit(provider.provision(request));
+        }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
+
+        expect({ point, live: edge.endpoints.size + edge.tokens.size }).toEqual({ point, live: 0 });
+        expect(allocations.allocations.size).toBe(0);
+      }
+    }),
+  );
+
+  it.effect("an interrupted unlink is finished by the next provision or a retry", () => {
+    let failRemoval = true;
+    const edge = makeConnectEdge({ failApplyEndpointChange: () => failRemoval });
+    const allocations = makeAllocations();
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
       yield* provider.provision(request);
-      const unlinkTarget = yield* provider.prepareDeprovision(key);
-      yield* provider.provision(request);
-      const callCount = edge.calls.length;
+      expect(yield* Effect.flip(provider.deprovision(key))).toMatchObject({
+        stage: "remove-endpoint",
+      });
+      failRemoval = false;
 
-      yield* provider.deprovision({ ...key, target: unlinkTarget });
+      const relinked = yield* provider.provision(request);
+      expect([...edge.endpoints.keys()]).toEqual([relinked.runtime.endpointId]);
+      expect(relinked.runtime.endpointId).not.toBe("endpoint-1");
+      expect(secrets(edge)).toEqual([relinked.runtime.connectorToken]);
 
-      expect(edge.calls).toHaveLength(callCount);
-      expect(edge.endpoints.size).toBe(1);
-    }).pipe(Effect.provide(providerLayer(edge)));
+      failRemoval = true;
+      yield* Effect.flip(provider.deprovision(key));
+      failRemoval = false;
+      yield* provider.deprovision(key);
+      expect(edge.endpoints.size + edge.tokens.size).toBe(0);
+      expect(allocations.allocations.size).toBe(0);
+    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
   });
 
   it.effect("scopes hostnames by user", () => {

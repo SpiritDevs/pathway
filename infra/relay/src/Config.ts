@@ -40,6 +40,8 @@ export interface CyndrbaseConnectConfiguration {
   /** The `/connect/v1` URL environments' connectors dial. */
   readonly edgeUrl: string;
   readonly adminKey: Redacted.Redacted<string>;
+  /** Base64url of 32 random bytes; seals stored connector tokens, so keep it across deploys. */
+  readonly tokenKey: Redacted.Redacted<string>;
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -78,6 +80,7 @@ export const loadCyndrbaseConnect = Effect.gen(function* () {
     apiUrl: apiUrl.trim().replace(/\/+$/u, ""),
     edgeUrl: edgeUrl.trim(),
     adminKey: yield* Config.redacted("CYNDRBASE_CONNECT_ADMIN_KEY"),
+    tokenKey: yield* Config.redacted("CYNDRBASE_CONNECT_TOKEN_KEY"),
   } satisfies CyndrbaseConnectConfiguration;
 });
 

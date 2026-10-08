@@ -195,11 +195,10 @@ function makeAllocations(
     get: () => Effect.succeed(allocation),
     reserve: () => Effect.die("unused"),
     recordTunnel: () => Effect.die("unused"),
-    recordDnsIfUnchanged: () => Effect.die("unused"),
+    swapTokenSlot: () => Effect.die("unused"),
     markReady: () => Effect.die("unused"),
-    claimDeprovision: () => Effect.die("unused"),
     remove: () => Effect.die("unused"),
-    removeClaimed: () => Effect.die("unused"),
+    removeWithTokenSlot: () => Effect.die("unused"),
   };
 }
 
