@@ -23,7 +23,7 @@ import type { CompanyId } from "@spiritdevs/contracts/company";
 import * as Option from "effect/Option";
 import { Atom } from "effect/unstable/reactivity";
 
-import { scopedCompanyRegistryReplicasAtom } from "./activeCompany";
+import { activeCompanyIdAtom, companyReplicasForSelection } from "./activeCompany";
 import { companyRegistryReplicasAtom } from "./companyRegistryReplica";
 
 export {
@@ -109,10 +109,7 @@ const scopedIssueDomainsByCompanyAtom = Atom.make((get) => {
   const previous = Option.getOrUndefined(
     get.self<ReadonlyMap<CompanyId, SyncedIssueDomainReadModel>>(),
   );
-  return retainCompanyMap(
-    previous,
-    new Map([...get(scopedCompanyRegistryReplicasAtom).keys()].map((id) => [id, domains.get(id)!])),
-  );
+  return retainCompanyMap(previous, companyReplicasForSelection(domains, get(activeCompanyIdAtom)));
 }).pipe(Atom.withLabel("cloud-sync:issue-domains-by-company"));
 
 export const syncedIssueDomainForCompanyAtomFamily = Atom.family((companyId: CompanyId) =>
@@ -145,7 +142,10 @@ export const issueProjectProjectionsByCompanyAtom = Atom.make((get) => {
   );
   const projects = new Map<CompanyId, IssueProjectReplicaProjection>();
   for (const [companyId, replica] of get(companyRegistryReplicasAtom)) {
-    const domain = domains.get(companyId)!;
+    // Sibling derivations of the replica map recompute one at a time, so a newly published
+    // company can be missing here for a moment. The domains map re-runs this when it lands.
+    const domain = domains.get(companyId);
+    if (domain === undefined) continue;
     const caseInsensitiveEnvironmentIds = new Set<EnvironmentId>();
     for (const entity of replica.view.values() as Iterable<CloudSyncEntity>) {
       if (
@@ -185,9 +185,7 @@ export const scopedIssueProjectProjectionsByCompanyAtom = Atom.make((get) => {
   );
   return retainCompanyMap(
     previous,
-    new Map(
-      [...get(scopedCompanyRegistryReplicasAtom).keys()].map((id) => [id, projects.get(id)!]),
-    ),
+    companyReplicasForSelection(projects, get(activeCompanyIdAtom)),
   );
 });
 

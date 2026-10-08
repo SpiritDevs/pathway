@@ -17,8 +17,11 @@ import {
   syncedIssueDomainFromReplicas,
   syncedIssueDomainForCompanyAtomFamily,
   issueProjectProjectionsByCompanyAtom,
+  scopedIssueProjectProjectionsByCompanyAtom,
+  syncedIssueDomainAtom,
 } from "./issueDomainReadModel";
 
+import { scopedCompanyRegistryReplicasAtom } from "./activeCompany";
 import { companyRegistryReplicasAtom } from "./companyRegistryReplica";
 
 function decoded(entityKind: SyncEntityKind, payload: Record<string, unknown>): CloudSyncEntity {
@@ -130,6 +133,35 @@ describe("syncedIssueDomainFromReplica", () => {
     } finally {
       stopDomain();
       stopProjects();
+      registry.dispose();
+    }
+  });
+
+  it("never exposes a scoped company without its projection while a replica is published", () => {
+    const companyId = CompanyId.make("late-company");
+    const registry = AtomRegistry.make();
+    // Read first so it recomputes ahead of the projections derived from the same replicas.
+    const stopScoped = registry.subscribe(scopedCompanyRegistryReplicasAtom, () => {}, {
+      immediate: true,
+    });
+    const seen: Array<unknown> = [];
+    const stopProjects = registry.subscribe(
+      scopedIssueProjectProjectionsByCompanyAtom,
+      (map) => seen.push(...map.values()),
+      { immediate: true },
+    );
+    const stopDomain = registry.subscribe(syncedIssueDomainAtom, (domain) => seen.push(domain), {
+      immediate: true,
+    });
+    try {
+      registry.set(companyRegistryReplicasAtom, new Map([[companyId, replica(issue("i", 1))]]));
+      expect(registry.get(scopedIssueProjectProjectionsByCompanyAtom).get(companyId)).toBeDefined();
+      expect(registry.get(syncedIssueDomainAtom).issues).toHaveLength(1);
+      expect(seen).not.toContain(undefined);
+    } finally {
+      stopScoped();
+      stopProjects();
+      stopDomain();
       registry.dispose();
     }
   });

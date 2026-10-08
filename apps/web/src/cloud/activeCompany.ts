@@ -178,15 +178,14 @@ export const activeCompanyIdAtom = Atom.writable(
   },
 ).pipe(Atom.withLabel("cloud-sync:active-company-id"));
 
-export function companyReplicasForSelection(
-  replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
+/** Narrows any per-company map (replicas or values derived from them) to the selection. */
+export function companyReplicasForSelection<A>(
+  replicas: ReadonlyMap<CompanyId, A>,
   companyId: CompanyId | null,
-): ReadonlyMap<CompanyId, CompanyRegistryReplicaState> {
+): ReadonlyMap<CompanyId, A> {
   if (companyId === null) return replicas;
   const replica = replicas.get(companyId);
-  return replica === undefined
-    ? new Map<CompanyId, CompanyRegistryReplicaState>()
-    : new Map([[companyId, replica]]);
+  return replica === undefined ? new Map<CompanyId, A>() : new Map([[companyId, replica]]);
 }
 
 /** The replicas visible through the account-level All companies/company selection. */
