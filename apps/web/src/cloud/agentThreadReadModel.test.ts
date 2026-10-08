@@ -624,6 +624,35 @@ describe("cloud Agent Thread read model", () => {
     );
   });
 
+  it("shows a new thread in a bound project before the company indexes it", () => {
+    const replicas = new Map([
+      [COMPANY_ID, replica(cloudProject, binding, agentThread)],
+      [OTHER_COMPANY_ID, replica(otherCloudProject, otherBinding, otherAgentThread)],
+    ]);
+    const projects = cloudEnvironmentProjectsFromReplicas(replicas, ENVIRONMENT_ID);
+    const [indexed, other] = cloudEnvironmentThreadsFromReplicas(replicas, ENVIRONMENT_ID);
+    if (indexed === undefined || other === undefined) throw new Error("missing shell fixture");
+    const started = { ...indexed, id: ThreadId.make("thread-just-started") };
+    // Indexed by the other company, so it stays there even in this project.
+    const claimed = { ...indexed, id: other.id };
+    const threads = [indexed, started, claimed];
+
+    expect(
+      companyScopedEnvironmentThreads(threads, COMPANY_ID, replicas, ENVIRONMENT_ID, projects).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual([THREAD_ID, "thread-just-started"]);
+    expect(
+      companyScopedEnvironmentThreads(
+        threads,
+        OTHER_COMPANY_ID,
+        replicas,
+        ENVIRONMENT_ID,
+        projects,
+      ).map((thread) => thread.id),
+    ).toEqual([]);
+  });
+
   it("shows unpublished subagent threads through their visible parent", () => {
     const replicas = new Map([
       [COMPANY_ID, replica(cloudProject, binding, agentThread)],

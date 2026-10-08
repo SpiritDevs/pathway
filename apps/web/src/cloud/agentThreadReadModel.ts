@@ -168,11 +168,18 @@ export function unboundEnvironmentProjects<
   return projects.filter((project) => !shown.has(`${project.environmentId}:${project.id}`));
 }
 
+/**
+ * `projects`, the environment's local projects, admits threads no company has
+ * indexed yet when their project is bound to `companyId`. A thread reaches the
+ * company index only after the environment publishes it, so without this a
+ * thread the user just started stays hidden, and its draft cannot open it.
+ */
 export function companyScopedEnvironmentThreads(
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
   companyId: CompanyId | null,
   replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
   environmentId: EnvironmentId,
+  projects?: ReadonlyArray<OrchestrationProjectShell>,
 ): ReadonlyArray<OrchestrationV2ThreadShell> {
   if (companyId === null) {
     const filtered = threads.filter((thread) => {
@@ -192,12 +199,23 @@ export function companyScopedEnvironmentThreads(
       threadProjects.set(value.shell.id, value.shell.projectId);
     }
   }
+  const boundProjectIds = new Set<string>(
+    projects === undefined
+      ? []
+      : companyScopedEnvironmentProjects(projects, companyId, replicas, environmentId).map(
+          (project) => project.id,
+        ),
+  );
+  const indexedElsewhere =
+    boundProjectIds.size === 0 ? new Set<string>() : indexedThreadIds(replicas, environmentId);
   const admitted = new Set<OrchestrationV2ThreadShell["id"]>();
   for (const thread of threads) {
     if (
       thread.projectId === null
         ? thread.conversationCompanyId === companyId
-        : threadProjects.get(thread.id) === thread.projectId
+        : threadProjects.has(thread.id)
+          ? threadProjects.get(thread.id) === thread.projectId
+          : boundProjectIds.has(thread.projectId) && !indexedElsewhere.has(thread.id)
     ) {
       admitted.add(thread.id);
     }
@@ -205,6 +223,20 @@ export function companyScopedEnvironmentThreads(
   admitLineageChildren(threads, admitted);
   if (admitted.size === threads.length) return threads;
   return threads.filter((thread) => admitted.has(thread.id));
+}
+
+/** Threads of `environmentId` that any company has indexed. */
+function indexedThreadIds(
+  replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
+  environmentId: EnvironmentId,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const replica of replicas.values()) {
+    for (const value of replica.view.values()) {
+      if (isAgentThread(value) && value.environmentId === environmentId) ids.add(value.shell.id);
+    }
+  }
+  return ids;
 }
 
 /**
@@ -260,6 +292,7 @@ export function companyScopedEnvironmentSnapshot<
     companyId,
     replicas,
     environmentId,
+    snapshot.projects,
   );
   return projects === snapshot.projects && threads === snapshot.threads
     ? snapshot
