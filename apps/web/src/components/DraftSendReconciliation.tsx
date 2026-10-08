@@ -21,8 +21,9 @@ function EnvironmentDraftSendReconciliation(props: {
   const shell = useAtomValue(environmentShell.stateValueAtom(props.environmentId));
   const drafts = useComposerDraftStore((state) => state.draftThreadsByThreadKey);
   useEffect(() => {
-    // Cached or company-filtered lists cannot establish that a send was lost.
-    if (shell.status !== "live" || Option.isNone(shell.snapshot)) return;
+    // Any snapshot showing the accepted thread completes a handoff; only a live one may
+    // declare a send lost, which reconcilePendingDraftSends checks itself.
+    if (Option.isNone(shell.snapshot)) return;
     const threads = [...shell.snapshot.value.threads, ...shell.snapshot.value.archivedThreads];
     reconcilePendingDraftSends({
       status: shell.status,

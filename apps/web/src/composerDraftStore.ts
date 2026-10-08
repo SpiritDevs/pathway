@@ -4270,7 +4270,6 @@ export function reconcilePendingDraftSends(input: {
   queueHydrated?: boolean;
   activeDraftId: string | null;
 }) {
-  if (input.status !== "live") return;
   useComposerDraftStore.setState((initial) => {
     let state = initial;
     const edit = () => {
@@ -4315,6 +4314,9 @@ export function reconcilePendingDraftSends(input: {
             delete next.logicalProjectDraftThreadKeyByLogicalProjectKey[key];
         }
       } else if (
+        // A thread missing from a cached or resyncing list may still exist, so only a
+        // live list can establish that the send was lost.
+        input.status === "live" &&
         session.pendingSendNeedsReconciliation &&
         input.queueHydrated !== false &&
         !input.queuedThreadIds?.has(session.threadId) &&

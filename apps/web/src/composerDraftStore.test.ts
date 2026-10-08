@@ -1620,6 +1620,40 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(store.getDraftSession(draftId)).toBeNull();
   });
 
+  it("hands an accepted send off while the shell is still resynchronizing", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setDraftPendingSend(draftId, {
+      messageId: MessageId.make("accepted-during-resync"),
+      text: "Hand me off",
+      title: "Hand me off",
+      createdAt: "2026-10-08T00:00:00.000Z",
+    });
+    store.clearComposerContent(draftId);
+    const merge = useComposerDraftStore.persist.getOptions().merge!;
+    useComposerDraftStore.setState(
+      merge(flushComposerDraftStorage(), useComposerDraftStore.getState()),
+    );
+    const input = {
+      environmentId: TEST_ENVIRONMENT_ID,
+      activeDraftId: otherDraftId,
+    };
+    // A resyncing list without the thread cannot prove the send was lost.
+    reconcilePendingDraftSends({
+      ...input,
+      status: "synchronizing",
+      acceptedThreadIds: new Set(),
+    });
+    expect(store.getDraftSession(draftId)?.pendingSend?.text).toBe("Hand me off");
+    reconcilePendingDraftSends({
+      ...input,
+      status: "synchronizing",
+      acceptedThreadIds: new Set([threadId]),
+      visibleThreadIds: new Set([threadId]),
+    });
+    expect(store.getDraftSession(draftId)).toBeNull();
+  });
+
   it("restores a send waiting on an offline environment back into its draft", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
