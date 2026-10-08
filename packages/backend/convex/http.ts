@@ -46,7 +46,7 @@ http.route({
         | null;
       if (!blob) return new Response("Attachment unavailable", { status: 404, headers });
       const range = request.headers.get("Range");
-      let body = blob;
+      let body: Blob = blob;
       let partialHeaders = {};
       if (range !== null) {
         const match = /^bytes=0-(\d+)$/.exec(range);
