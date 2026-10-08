@@ -12,7 +12,7 @@ import { Button } from "~/components/ui/button";
 import { InputGroup, InputGroupInput } from "~/components/ui/input-group";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { useComposerHandleContext } from "~/composerHandleContext";
+import { resolveComposerHandle, useComposerHandleContext } from "~/composerHandleContext";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
@@ -174,7 +174,7 @@ export default function FileBrowserPanel({
         return;
       }
       if (clicked === "add-to-chat") {
-        const composer = composerRef?.current;
+        const composer = composerRef ? resolveComposerHandle(composerRef) : null;
         if (!composer) {
           toastManager.add({
             type: "error",

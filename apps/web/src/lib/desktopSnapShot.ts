@@ -1,16 +1,21 @@
-import type { DesktopBridge } from "@spiritdevs/contracts";
+import type { DesktopBridge, ScopedThreadRef } from "@spiritdevs/contracts";
+import type { DraftId } from "../composerDraftStore";
 
 const SNAP_SHOT_FOCUS_EVENT = "pathway:focus-composer";
 
-export function dispatchSnapShotComposerFocus(): void {
+export function dispatchSnapShotComposerFocus(target?: ScopedThreadRef | DraftId): void {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(new Event(SNAP_SHOT_FOCUS_EVENT));
+  window.dispatchEvent(new CustomEvent(SNAP_SHOT_FOCUS_EVENT, { detail: target }));
 }
 
-export function subscribeSnapShotComposerFocus(listener: () => void): () => void {
+export function subscribeSnapShotComposerFocus(
+  listener: (target?: ScopedThreadRef | DraftId) => void,
+): () => void {
   if (typeof window === "undefined") return () => {};
-  window.addEventListener(SNAP_SHOT_FOCUS_EVENT, listener);
-  return () => window.removeEventListener(SNAP_SHOT_FOCUS_EVENT, listener);
+  const handler = (event: Event) =>
+    listener((event as CustomEvent<ScopedThreadRef | DraftId>).detail);
+  window.addEventListener(SNAP_SHOT_FOCUS_EVENT, handler);
+  return () => window.removeEventListener(SNAP_SHOT_FOCUS_EVENT, handler);
 }
 
 type SnapShotMethods =

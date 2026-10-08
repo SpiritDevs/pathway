@@ -15,10 +15,36 @@ import {
   deriveSubagentBarStatus,
   describeSubagentModel,
   formatSubagentBarStatus,
+  subagentComposerVisitForThread,
+  subagentMessagingAvailability,
 } from "./SubagentComposerBar.logic";
 
 const STARTED = "2026-10-08T10:00:00.000Z";
 const COMPLETED = "2026-10-08T10:08:01.000Z";
+
+describe("subagent composer visits", () => {
+  it("keeps expansion during a visit and resets it after navigating away and back", () => {
+    const expandedChild = { threadKey: "environment:child", expanded: true };
+    expect(subagentComposerVisitForThread(expandedChild, expandedChild.threadKey)).toBe(
+      expandedChild,
+    );
+    const parentVisit = subagentComposerVisitForThread(expandedChild, "environment:parent");
+    expect(subagentComposerVisitForThread(parentVisit, expandedChild.threadKey)).toEqual({
+      threadKey: expandedChild.threadKey,
+      expanded: false,
+    });
+    expect(subagentComposerVisitForThread(expandedChild, "other-environment:child").expanded).toBe(
+      false,
+    );
+  });
+
+  it("does not allow Message while the parent roster is loading or for native children", () => {
+    expect(subagentMessagingAvailability(undefined)).toBeNull();
+    expect(subagentMessagingAvailability(null)).toBeNull();
+    expect(subagentMessagingAvailability("provider_native")).toBe(false);
+    expect(subagentMessagingAvailability("app_owned")).toBe(true);
+  });
+});
 
 function rootTurn(
   overrides: Partial<Pick<OrchestrationV2ExecutionNode, "status" | "runId" | "completedAt">>,
@@ -45,6 +71,26 @@ function rootTurn(
 }
 
 describe("deriveSubagentBarStatus", () => {
+  it.each([
+    ["preparing", "starting"],
+    ["queued", "starting"],
+    ["starting", "starting"],
+    ["running", "working"],
+    ["waiting", "waiting"],
+    ["completed", "completed"],
+    ["failed", "failed"],
+    ["interrupted", "interrupted"],
+    ["cancelled", "cancelled"],
+    ["rolled_back", "cancelled"],
+  ] as const)("maps a child run's %s status to %s", (status, phase) => {
+    expect(
+      deriveSubagentBarStatus({
+        run: { status, startedAt: STARTED, completedAt: COMPLETED },
+        nodes: [],
+      }),
+    ).toEqual({ phase, startedAt: STARTED, completedAt: COMPLETED });
+  });
+
   it("prefers the child's own run", () => {
     expect(
       deriveSubagentBarStatus({

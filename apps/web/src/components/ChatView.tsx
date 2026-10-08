@@ -389,7 +389,12 @@ import {
 import { useEnvironmentShellBootstrapped } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { SubagentComposerBar } from "./chat/SubagentComposerBar";
-import { deriveSubagentBarStatus, describeSubagentModel } from "./chat/SubagentComposerBar.logic";
+import {
+  deriveSubagentBarStatus,
+  describeSubagentModel,
+  subagentComposerVisitForThread,
+  subagentMessagingAvailability,
+} from "./chat/SubagentComposerBar.logic";
 import { applyComposerGoalIntent } from "./chat/composerAddMenu.logic";
 import { IssueDetailSheet } from "./issues/IssueDetailSheet";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
@@ -521,7 +526,11 @@ import {
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
-import { useComposerHandleContext } from "../composerHandleContext";
+import {
+  resolveComposerHandle,
+  useComposerHandleContext,
+  type ComposerHandleRef,
+} from "../composerHandleContext";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { previewEnvironment } from "../state/preview";
@@ -1771,18 +1780,32 @@ function ChatViewContent(props: ChatViewProps) {
   const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
   const sharedComposerRef = useComposerHandleContext();
-  const composerRef = isPanelPresentation
+  const composerRef: ComposerHandleRef = isPanelPresentation
     ? localComposerRef
     : (sharedComposerRef ?? localComposerRef);
   const focusComposer = useCallback(() => {
     composerRef.current?.focusAtEnd();
   }, [composerRef]);
-  useEffect(() => subscribeSnapShotComposerFocus(focusComposer), [focusComposer]);
   const scheduleComposerFocus = useCallback(() => {
+    resolveComposerHandle(composerRef);
     window.requestAnimationFrame(() => {
       focusComposer();
     });
-  }, [focusComposer]);
+  }, [composerRef, focusComposer]);
+  useEffect(
+    () =>
+      subscribeSnapShotComposerFocus((target) => {
+        if (
+          target !== undefined &&
+          (typeof target === "string"
+            ? target !== draftId
+            : scopedThreadKey(target) !== routeThreadKey)
+        )
+          return;
+        scheduleComposerFocus();
+      }),
+    [draftId, routeThreadKey, scheduleComposerFocus],
+  );
   const resetComposerRefsAfterMove = useCallback(() => {
     promptRef.current = "";
     composerImagesRef.current = [];
@@ -4036,15 +4059,36 @@ function ChatViewContent(props: ChatViewProps) {
   // A subagent thread rests on a one-line bar instead of the composer. An
   // app-owned subagent still takes messages, so its bar expands the composer
   // for this visit. Requests waiting on the user always get the composer.
-  const [expandedSubagentComposerKey, setExpandedSubagentComposerKey] = useState<string | null>(
-    null,
+  const [subagentComposerVisit, setSubagentComposerVisit] = useState({
+    threadKey: routeThreadKey,
+    expanded: false,
+  });
+  const currentSubagentComposerVisit = subagentComposerVisitForThread(
+    subagentComposerVisit,
+    routeThreadKey,
   );
+  if (currentSubagentComposerVisit !== subagentComposerVisit) {
+    setSubagentComposerVisit(currentSubagentComposerVisit);
+  }
+  const subagentMessagingAvailable = subagentMessagingAvailability(matchedParentSubagent?.origin);
   const showSubagentComposerBar =
     isServerThread &&
     activeThread?.lineage.relationshipToParent === "subagent" &&
-    expandedSubagentComposerKey !== routeThreadKey &&
+    !(currentSubagentComposerVisit.expanded && subagentMessagingAvailable === true) &&
     activePendingApproval === null &&
     pendingUserInputs.length === 0;
+  // External insertions and shortcuts need a real handle synchronously. Mount
+  // only on an explicit request; automatic route focus keeps the bar collapsed.
+  useLayoutEffect(() => {
+    if (!showSubagentComposerBar || subagentMessagingAvailable !== true) return;
+    const reveal = () => {
+      flushSync(() => setSubagentComposerVisit({ threadKey: routeThreadKey, expanded: true }));
+    };
+    composerRef.reveal = reveal;
+    return () => {
+      if (composerRef.reveal === reveal) delete composerRef.reveal;
+    };
+  }, [composerRef, routeThreadKey, showSubagentComposerBar, subagentMessagingAvailable]);
   const subagentBarModelSelection =
     activeSubagentModelSelection ?? activeThread?.modelSelection ?? null;
   const subagentBarProviderEntry =
@@ -4236,7 +4280,7 @@ function ChatViewContent(props: ChatViewProps) {
 
   const addTerminalContextToDraft = useCallback(
     (selection: TerminalContextSelection) => {
-      composerRef.current?.addTerminalContext(selection);
+      resolveComposerHandle(composerRef)?.addTerminalContext(selection);
     },
     [composerRef],
   );
@@ -6637,7 +6681,7 @@ function ChatViewContent(props: ChatViewProps) {
         variant="outline"
         disabled={compactDisabled}
         onClick={() => {
-          if (!compactDisabled) composerRef.current?.compactContext();
+          if (!compactDisabled) resolveComposerHandle(composerRef)?.compactContext();
         }}
       >
         Compact
@@ -6873,7 +6917,7 @@ function ChatViewContent(props: ChatViewProps) {
         !shortcutContext.modelPickerOpen &&
         shouldTypeToFocusComposer(event)
       ) {
-        if (composerRef.current?.insertTextAtEnd(event.key)) {
+        if (resolveComposerHandle(composerRef)?.insertTextAtEnd(event.key)) {
           event.preventDefault();
           event.stopPropagation();
           return;
@@ -6982,7 +7026,7 @@ function ChatViewContent(props: ChatViewProps) {
       if (command === "modelPicker.toggle") {
         event.preventDefault();
         event.stopPropagation();
-        composerRef.current?.toggleModelPicker();
+        resolveComposerHandle(composerRef)?.toggleModelPicker();
         return;
       }
 
@@ -10229,7 +10273,7 @@ function ChatViewContent(props: ChatViewProps) {
 
   const workspaceFileDropHandlers = makeWorkspaceFileDropHandlers({
     setDragActive: setIsWorkspaceFileDragActive,
-    addFiles: (files) => composerRef.current?.addDroppedFiles(files),
+    addFiles: (files) => resolveComposerHandle(composerRef)?.addDroppedFiles(files),
   });
 
   return (
@@ -10598,11 +10642,15 @@ function ChatViewContent(props: ChatViewProps) {
                               modelLabel={subagentBarModel?.modelLabel ?? "Subagent"}
                               effortLabel={subagentBarModel?.effortLabel ?? null}
                               status={subagentBarStatus}
+                              messagingAvailable={subagentMessagingAvailable}
                               onMessage={
-                                composerControlsLocked
+                                subagentMessagingAvailable !== true
                                   ? null
                                   : () => {
-                                      setExpandedSubagentComposerKey(routeThreadKey);
+                                      setSubagentComposerVisit({
+                                        threadKey: routeThreadKey,
+                                        expanded: true,
+                                      });
                                       scheduleComposerFocus();
                                     }
                               }
@@ -10975,7 +11023,9 @@ function ChatViewContent(props: ChatViewProps) {
           key={`${expandedImage.images[expandedImage.index]?.src ?? "image"}:${expandedImage.index}`}
           images={expandedImage.images}
           initialIndex={expandedImage.index}
-          onAttachEditedImage={(file) => composerRef.current?.addDroppedFiles([file])}
+          onAttachEditedImage={(file) =>
+            resolveComposerHandle(composerRef)?.addDroppedFiles([file])
+          }
           onClose={closeExpandedImage}
         />
       )}

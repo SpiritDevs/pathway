@@ -10,6 +10,7 @@ import {
 } from "@spiritdevs/contracts";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import { useActiveEnvironmentId } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { shouldResumeSnapShotSetupOnStartup } from "../../lib/snapShotSetupResume";
@@ -21,7 +22,7 @@ import {
 } from "../../composerDraftStore";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useClientSettings } from "../../hooks/useSettings";
-import { readThreadShell } from "../../state/entities";
+import { readThreadProjection, readThreadShell } from "../../state/entities";
 import {
   MAX_STASH_IMAGE_DATA_URL_CHARS,
   compressImageToByteLimit,
@@ -51,6 +52,26 @@ const SnapShotEditor = lazy(() => import("../snapShot/SnapShotEditor"));
 
 type CaptureTarget = DraftId | ScopedThreadRef;
 
+function snapShotMessagingAvailable(target: CaptureTarget): boolean {
+  if (typeof target === "string") return true;
+  const thread = readThreadShell(target);
+  if (thread?.lineage.relationshipToParent !== "subagent") return true;
+  const parentId = thread.lineage.parentThreadId;
+  const parentRef = parentId === null ? null : scopeThreadRef(target.environmentId, parentId);
+  const subagents = parentRef
+    ? (readThreadShell(parentRef)?.subagentComposerStates ??
+      readThreadProjection(parentRef)?.projection.subagents)
+    : undefined;
+  const origin = subagents?.find((child) => child.childThreadId === target.threadId)?.origin;
+  return origin === "app_owned";
+}
+
+function assertSnapShotMessagingAvailable(target: CaptureTarget): void {
+  if (!snapShotMessagingAvailable(target)) {
+    throw new Error("Open a conversation that can take messages, then retry the saved capture.");
+  }
+}
+
 export function resolveExistingSnapShotTarget(
   target: CaptureTarget,
   routeThreadRef: ScopedThreadRef | null,
@@ -61,6 +82,7 @@ export function resolveExistingSnapShotTarget(
     if (draftSession?.promotedTo) return draftSession.promotedTo;
     return draftSession ? target : null;
   }
+  if (!snapShotMessagingAvailable(target)) return null;
   const targetIsCurrentRoute =
     routeThreadRef !== null &&
     routeThreadRef.environmentId === target.environmentId &&
@@ -175,6 +197,7 @@ export async function deliverSnapShot(
       throw new Error("Capture delivery cancelled because the account changed.");
   };
   assertAccountCurrent();
+  assertSnapShotMessagingAvailable(target);
   const store = useComposerDraftStore.getState();
   updateSnapShotAnimationSource(item.id, item.source);
   const capture = editedCapture ?? (await bridge.readSnapShot(item.id));
@@ -200,6 +223,7 @@ export async function deliverSnapShot(
       );
     target = resolvedTarget;
   }
+  assertSnapShotMessagingAvailable(target);
   const attached = store.getComposerDraft(target)?.images.find(({ id }) => id === capture.id);
   // A failed draft write leaves the editor open, so a retry may contain newer marks.
   if (editedCapture && attached && attached.previewUrl !== dataUrl) {
@@ -239,6 +263,9 @@ export async function deliverSnapShot(
     throw new Error("The snapshot could not be saved to the draft.");
   }
 
+  // Mount a collapsed subagent composer before looking for the animation's landing tile.
+  dispatchSnapShotComposerFocus(target);
+
   // Reveal the attachment under the flying capture before the desktop tears the overlay down,
   // otherwise the tile is missing for the frames between the landing and its first paint.
   if (getPendingSnapShotAnimations().some((animation) => animation.id === capture.id)) {
@@ -249,7 +276,7 @@ export async function deliverSnapShot(
   }
   assertAccountCurrent();
   await bridge.acknowledgeSnapShot(capture.id);
-  if (isAccountCurrent()) dispatchSnapShotComposerFocus();
+  if (isAccountCurrent()) dispatchSnapShotComposerFocus(target);
 }
 
 /** Retire the pending capture only once the edited image has actually been exported. */

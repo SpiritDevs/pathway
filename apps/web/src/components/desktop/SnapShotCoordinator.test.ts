@@ -4,12 +4,15 @@ import {
   type DesktopPendingSnapShot,
   EnvironmentId,
   ProjectId,
+  ProviderDriverKind,
   ThreadId,
 } from "@spiritdevs/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { captureComposerDraft, DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import type { DesktopSnapShotBridge } from "../../lib/desktopSnapShot";
+import * as entities from "../../state/entities";
+import { makeThreadFixture } from "../../test-fixtures";
 import {
   beginSnapShotAnimationWhenReady,
   deliverSnapShot,
@@ -75,6 +78,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   dismissAllSnapShotAnimations();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -359,6 +363,92 @@ describe("window capture delivery", () => {
 });
 
 describe("window capture target resolution", () => {
+  it.each(["provider_native", undefined] as const)(
+    "does not pin captures to a child that cannot receive messages (origin: %s)",
+    async (origin) => {
+      const target = scopeThreadRef(environmentId, ThreadId.make("native-child"));
+      const parentId = ThreadId.make("parent");
+      const child = makeThreadFixture({
+        id: target.threadId,
+        environmentId,
+        lineage: {
+          rootThreadId: parentId,
+          parentThreadId: parentId,
+          relationshipToParent: "subagent",
+        },
+      });
+      const parent = makeThreadFixture({ id: parentId, environmentId });
+      vi.spyOn(entities, "readThreadShell").mockImplementation((ref) =>
+        ref.threadId === target.threadId
+          ? child
+          : {
+              ...parent,
+              subagentComposerStates:
+                origin === undefined
+                  ? undefined
+                  : [
+                      {
+                        childThreadId: target.threadId,
+                        origin,
+                        driver: ProviderDriverKind.make("codex"),
+                        model: null,
+                        options: null,
+                      },
+                    ],
+            },
+      );
+      vi.spyOn(entities, "readThreadProjection").mockReturnValue(null);
+      expect(resolveExistingSnapShotTarget(target, target)).toBeNull();
+      const targets = new Map([["capture", Promise.resolve(target)]]);
+      expect(
+        await resolvePendingSnapShotTarget(targets, "capture", async () => target, target),
+      ).toBeNull();
+      expect(targets.has("capture")).toBe(false);
+      const bridge = {
+        readSnapShot: vi.fn(),
+        acknowledgeSnapShot: vi.fn(),
+      } as unknown as DesktopSnapShotBridge;
+      await expect(deliverSnapShot(bridge, editorCapture, target, () => true)).rejects.toThrow(
+        "can take messages",
+      );
+      expect(bridge.readSnapShot).not.toHaveBeenCalled();
+      expect(bridge.acknowledgeSnapShot).not.toHaveBeenCalled();
+      expect(useComposerDraftStore.getState().getComposerDraft(target)).toBeNull();
+    },
+  );
+
+  it("keeps app-owned subagents as valid capture destinations", () => {
+    const target = scopeThreadRef(environmentId, ThreadId.make("delegated-child"));
+    const parentId = ThreadId.make("parent");
+    const child = makeThreadFixture({
+      id: target.threadId,
+      environmentId,
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+    const parent = makeThreadFixture({ id: parentId, environmentId });
+    vi.spyOn(entities, "readThreadShell").mockImplementation((ref) =>
+      ref.threadId === target.threadId
+        ? child
+        : {
+            ...parent,
+            subagentComposerStates: [
+              {
+                childThreadId: target.threadId,
+                origin: "app_owned",
+                driver: ProviderDriverKind.make("codex"),
+                model: null,
+                options: null,
+              },
+            ],
+          },
+    );
+    expect(resolveExistingSnapShotTarget(target, target)).toEqual(target);
+  });
+
   it("shares bare-route draft creation between animation start and capture drain", async () => {
     const draftId = DraftId.make("snap-shot-draft");
     let finishResolution: ((target: DraftId) => void) | undefined;

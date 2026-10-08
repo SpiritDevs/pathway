@@ -21,6 +21,7 @@ export function SubagentComposerBar(props: {
   /** Null until the subagent's first run or roster record arrives. */
   readonly status: SubagentBarStatus | null;
   readonly onMessage: (() => void) | null;
+  readonly messagingAvailable: boolean | null;
   readonly onOpenParent: (() => void) | null;
 }) {
   const statusRef = useRef<HTMLSpanElement>(null);
@@ -50,7 +51,10 @@ export function SubagentComposerBar(props: {
 
   return (
     <div className="rounded-[22px] p-px">
-      <div className="flex min-h-12 items-center gap-3 rounded-[28px] border border-border/60 py-2 ps-5 pe-2 text-sm shadow-sm">
+      <div
+        data-chat-composer-content-sized="true"
+        className="flex min-h-12 items-center gap-3 rounded-[28px] border border-border/60 py-2 ps-5 pe-2 text-sm shadow-sm"
+      >
         <span className="flex min-w-0 items-center gap-2">
           {props.provider ? (
             <ProviderInstanceIcon
@@ -82,7 +86,9 @@ export function SubagentComposerBar(props: {
               Message
             </Button>
           ) : (
-            <span className="pe-2 text-muted-foreground max-sm:hidden">Runs on its own</span>
+            <span className="pe-2 text-muted-foreground max-sm:hidden">
+              {props.messagingAvailable === null ? "Loading subagent" : "Runs on its own"}
+            </span>
           )}
           {props.onOpenParent ? (
             <Button size="sm" variant="ghost" onClick={props.onOpenParent}>

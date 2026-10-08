@@ -4,6 +4,7 @@ import type {
   OrchestrationV2ExecutionNode,
   OrchestrationV2RunStatus,
   ProviderDriverKind,
+  OrchestrationV2Subagent,
   ServerProviderModel,
 } from "@spiritdevs/contracts";
 import {
@@ -13,6 +14,19 @@ import {
 } from "@spiritdevs/shared/model";
 
 import { getTriggerDisplayModelName } from "./providerIconUtils";
+
+export function subagentMessagingAvailability(
+  origin: OrchestrationV2Subagent["origin"] | null | undefined,
+) {
+  return origin == null ? null : origin === "app_owned";
+}
+
+export function subagentComposerVisitForThread(
+  visit: { readonly threadKey: string; readonly expanded: boolean },
+  threadKey: string,
+) {
+  return visit.threadKey === threadKey ? visit : { threadKey, expanded: false };
+}
 
 export type SubagentBarPhase =
   | "starting"
