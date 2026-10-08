@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "cyndrbase/server": ["./node_modules/convex/dist/esm-types/server/index.d.ts"],
+      "cyndrbase/values": ["./node_modules/convex/dist/esm-types/values/index.d.ts"]
+    }
+  },
+  "include": ["src", "convex"],
+  "exclude": []
+}

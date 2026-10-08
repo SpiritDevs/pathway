@@ -15,7 +15,7 @@
  *
  * @module lib/validators
  */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 /**
  * Client-generated UUIDv7 domain id. The contract brands these as trimmed non-empty strings, which

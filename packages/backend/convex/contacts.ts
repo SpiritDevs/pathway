@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Company contacts. Human members read; projects.manage administers the company directory. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import type { Doc } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server.js";
 import { backendError } from "./lib/errors.ts";

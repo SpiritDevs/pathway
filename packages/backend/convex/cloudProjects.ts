@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Online administration for company-owned projects and their environment-local bindings. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";

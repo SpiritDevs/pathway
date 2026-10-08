@@ -1,5 +1,5 @@
 /** Atomic Convex persistence operations used exclusively by the hosted relay Worker. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import * as DateTime from "effect/DateTime";
 
 import { canonicalJson } from "../src/canonicalJson.ts";

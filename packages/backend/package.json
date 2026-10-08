@@ -77,19 +77,20 @@
     }
   },
   "scripts": {
-    "codegen": "convex codegen --typecheck disable",
-    "dev": "convex dev",
-    "typecheck": "tsgo --noEmit",
+    "codegen": "cyndr codegen",
+    "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.test.json",
     "test": "vp test run"
   },
   "dependencies": {
     "@spiritdevs/client-runtime": "workspace:*",
     "@spiritdevs/contracts": "workspace:*",
-    "convex": "^1.16.0",
+    "cyndrbase": "link:/Users/coreybaines/Github/cyndrbase-wt/pathway-dep/packages/server",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@cyndrbase/cli": "link:/Users/coreybaines/Github/cyndrbase-wt/pathway-dep/packages/cli",
     "@types/node": "catalog:",
+    "convex": "^1.16.0",
     "convex-test": "0.0.55",
     "vite-plus": "catalog:"
   }

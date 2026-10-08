@@ -1,7 +1,7 @@
 import { readEnvironmentRuntime, patchEnvironmentRuntime } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Environment-published parsed SMTP captures for cross-environment reading. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import type { Doc } from "./_generated/dataModel.js";
 import { mutation, type MutationCtx } from "./_generated/server.js";

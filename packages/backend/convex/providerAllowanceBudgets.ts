@@ -1,6 +1,6 @@
 import { assignmentForExecution } from "./lib/aiOrchestratorAuthority.ts";
 // @effect-diagnostics globalDate:off -- Convex's transaction clock fences quota observations.
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import * as Schema from "effect/Schema";
 import { ServerProviderUsageSnapshot } from "@spiritdevs/contracts";
 import {

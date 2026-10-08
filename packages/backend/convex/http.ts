@@ -1,4 +1,4 @@
-import { httpRouter, makeFunctionReference } from "convex/server";
+import { httpRouter, makeFunctionReference } from "cyndrbase/server";
 import { httpAction } from "./_generated/server.js";
 import type { Id } from "./_generated/dataModel.js";
 import type { OrchestratorAttachment } from "@spiritdevs/contracts/aiOrchestrator";
@@ -40,7 +40,10 @@ http.route({
             : {}),
         },
       );
-      const blob = await ctx.storage.get(row.storageId);
+      // apps/server typechecks this module without DOM types, where Blob has no slice().
+      const blob = (await ctx.storage.get(row.storageId)) as
+        | (Blob & { slice(start: number, end: number): Blob })
+        | null;
       if (!blob) return new Response("Attachment unavailable", { status: 404, headers });
       const range = request.headers.get("Range");
       let body = blob;

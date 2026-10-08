@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Online CRUD and sharing for Pathway-owned calendars and events. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import {
   CALENDAR_ALERT_WINDOW_MS,
   MAX_CALENDAR_REMINDER_MINUTES,

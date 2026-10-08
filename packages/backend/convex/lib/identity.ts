@@ -7,7 +7,7 @@
  *
  * @module lib/identity
  */
-import type { UserIdentity } from "convex/server";
+import type { UserIdentity } from "cyndrbase/server";
 import type { SyncActor } from "../../src/sync/protocol.ts";
 
 import {

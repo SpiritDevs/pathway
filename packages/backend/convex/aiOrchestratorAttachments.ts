@@ -1,5 +1,5 @@
 // @effect-diagnostics globalDate:off -- Convex supplies transaction time.
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import * as Schema from "effect/Schema";
 import { OrchestratorAttachment } from "@spiritdevs/contracts/aiOrchestrator";
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@spiritdevs/contracts";

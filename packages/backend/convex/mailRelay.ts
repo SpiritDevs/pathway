@@ -6,7 +6,7 @@ import {
 } from "./lib/mailAccountRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex provides deterministic transaction time without an Effect runtime.
 /** Gmail ingestion and delivery persistence, callable only by the hosted relay. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import { internal } from "./_generated/api.js";
 import { mutation, query } from "./_generated/server.js";
 import type { Doc } from "./_generated/dataModel.js";

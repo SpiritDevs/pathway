@@ -20,7 +20,7 @@ import { ensurePersonalAssistant } from "./lib/personalAssistant.ts";
  *
  * @module invitations
  */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import {
   checkInvitationAcceptable,

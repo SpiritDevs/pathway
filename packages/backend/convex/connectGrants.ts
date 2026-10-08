@@ -18,7 +18,7 @@ import {
   AuthPeerThreadAccessUnsupportedCode,
   AuthPeerSendGrantPermission,
 } from "@spiritdevs/contracts";
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import {
   checkConnectGrantValidity,

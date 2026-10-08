@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import type {
   BusinessContactPage,
   BusinessContactSearchField,

@@ -24,7 +24,7 @@
  *
  * @module teams
  */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import { SYNC_MAX_ID_CHARS } from "../src/sync/operations.ts";
 import type { Doc, Id } from "./_generated/dataModel.js";

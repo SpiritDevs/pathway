@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import schema from "../convex/schema.ts";
 import { decryptBrowserPassword, encryptBrowserPassword } from "./browserPasswordCrypto.ts";

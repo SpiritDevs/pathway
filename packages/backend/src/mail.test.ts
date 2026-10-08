@@ -1,8 +1,8 @@
 import { patchMailAccount, withMailAccountRuntime } from "../convex/lib/mailAccountRuntime.ts";
 // @effect-diagnostics globalDate:off -- Test fixtures exercise deterministic Convex lease time.
 import { convexTest } from "convex-test";
-import { makeFunctionReference } from "convex/server";
-import type { DefaultFunctionArgs } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
+import type { DefaultFunctionArgs } from "cyndrbase/server";
 import * as Redacted from "effect/Redacted";
 import { makeMailRuntime, type MailRpc } from "../../../infra/relay/src/mail/runtime.ts";
 import { describe, expect, it, vi, afterEach } from "vite-plus/test";

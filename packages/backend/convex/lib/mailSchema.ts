@@ -1,7 +1,7 @@
 import { delegatedBusinessOrigin } from "./delegatedBusinessOwner.ts";
 /** Private connected mail storage. Kept outside company change feeds. */
-import { defineTable } from "convex/server";
-import { v } from "convex/values";
+import { defineTable } from "cyndrbase/server";
+import { v } from "cyndrbase/values";
 
 export const mailBucket = v.union(v.literal("priority"), v.literal("noise"));
 export const mailSelection = v.object({

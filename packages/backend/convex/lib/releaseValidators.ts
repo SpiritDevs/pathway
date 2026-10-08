@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 export const releaseTarget = {
   companyId: v.string(),
   accountId: v.string(),

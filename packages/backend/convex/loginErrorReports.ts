@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 // @effect-diagnostics globalFetch:off -- Convex actions call the email provider directly.
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import { internal } from "./_generated/api.js";
 import { internalAction, internalMutation, internalQuery, mutation } from "./_generated/server.js";

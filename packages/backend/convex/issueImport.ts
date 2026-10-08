@@ -15,7 +15,7 @@ import { readCompanySyncVersion } from "./lib/companySyncHead.ts";
  *
  * @module issueImport
  */
-import { v, type Infer } from "convex/values";
+import { v, type Infer } from "cyndrbase/values";
 import { isDefaultIssueStatusSet } from "@spiritdevs/contracts";
 
 import { normalizeIssueKeyPrefix } from "../src/companies.ts";

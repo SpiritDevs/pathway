@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Convex functions use the transaction clock directly.
 /** Shared Slack watches, cursors, origin dedupe, and fenced intake/delivery mutations. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import {
   SLACK_ROUTING_MAX_NODES_PER_RULE,

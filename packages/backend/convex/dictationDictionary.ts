@@ -1,5 +1,5 @@
 import { dictationDictionaryError } from "@spiritdevs/contracts/dictation";
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import { mutation, query } from "./_generated/server.js";
 import { requireUser } from "./lib/identity.ts";
 import { backendError } from "./lib/errors.ts";

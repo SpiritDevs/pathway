@@ -11,7 +11,7 @@ import { readCompanySyncVersion } from "./lib/companySyncHead.ts";
  *
  * @module companies
  */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import {
   clampOfflineAccessDays,

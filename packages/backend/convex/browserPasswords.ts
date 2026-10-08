@@ -1,7 +1,7 @@
 // @effect-diagnostics globalDate:off -- Convex writes use the transaction clock.
 /** Personal password storage. Company sync, environment tokens, and agent tools cannot read it. */
-import { makeFunctionReference } from "convex/server";
-import { v } from "convex/values";
+import { makeFunctionReference } from "cyndrbase/server";
+import { v } from "cyndrbase/values";
 import {
   browserPasswordKeyringFromEnv,
   decryptBrowserPassword,

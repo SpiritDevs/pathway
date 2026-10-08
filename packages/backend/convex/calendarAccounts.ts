@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Google calendar-account lifecycle. OAuth and mirror synchronization intentionally remain stubbed. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import { hasCompanyPermission } from "../src/permissions.ts";
 import { mutation } from "./_generated/server.js";

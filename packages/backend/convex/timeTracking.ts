@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Timer transitions use the Convex transaction clock.
 /** Personal time sessions. The indexed running-session read serializes starts across devices. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import type { Doc } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server.js";
 import { backendError } from "./lib/errors.ts";

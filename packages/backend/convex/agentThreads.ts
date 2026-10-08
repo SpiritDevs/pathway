@@ -3,7 +3,7 @@ import { notifyOrchestratorThreadUpdate } from "./lib/aiOrchestratorSignals.ts";
 import { scheduleThreadWorkRefresh } from "./lib/aiOrchestratorWorkRefresh.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Environment-published, cloud-safe Agent Thread discovery metadata. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import { canonicalJson } from "../src/canonicalJson.ts";
 import type { Doc } from "./_generated/dataModel.js";

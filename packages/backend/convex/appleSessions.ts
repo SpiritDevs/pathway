@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Convex transaction time and bounded credential leases.
-import { v } from "convex/values";
-import { makeFunctionReference } from "convex/server";
+import { v } from "cyndrbase/values";
+import { makeFunctionReference } from "cyndrbase/server";
 import * as Schema from "effect/Schema";
 import {
   action,

@@ -11,7 +11,7 @@
  *
  * @module memberships
  */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import { checkOwnershipChange } from "../src/ownership.ts";
 import type { Doc, Id } from "./_generated/dataModel.js";

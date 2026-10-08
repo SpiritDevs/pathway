@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Online administration for the company-wide captured-email tag catalog. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import { mutation } from "./_generated/server.js";
 import { appendCompanyChanges, encodeEmailTag } from "./lib/companyApply.ts";

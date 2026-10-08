@@ -1,7 +1,7 @@
 // @effect-diagnostics globalDate:off -- Fixtures use the Convex transaction clock and wire ISO dates.
 import type { TrackedSessionPage } from "@spiritdevs/contracts/businessTools";
 import { convexTest } from "convex-test";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import { describe, expect, it } from "vite-plus/test";
 import schema from "../convex/schema.ts";
 const modules = {

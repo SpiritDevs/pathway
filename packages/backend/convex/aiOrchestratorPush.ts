@@ -1,7 +1,7 @@
 import { conversationAttention } from "@spiritdevs/contracts/aiOrchestrator";
 // @effect-diagnostics globalDate:off -- Convex supplies transaction time for delivery leases.
 /** The relay delivers only the latest unread, currently authorized conversation update. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import { mutation, query, type QueryCtx } from "./_generated/server.js";
 import { requireRelayControlPlane } from "./lib/relayIdentity.ts";
 import { hasChatAccess, messageAttention } from "./aiOrchestrators.ts";

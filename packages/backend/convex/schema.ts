@@ -30,9 +30,9 @@ import {
  *
  * @module schema
  */
-import { defineSchema, defineTable } from "convex/server";
+import { defineSchema, defineTable } from "cyndrbase/server";
 import { dictationDictionaryLists } from "./lib/dictationDictionary.ts";
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import { mailTables } from "./lib/mailSchema.ts";
 import { aiOrchestratorTables } from "./lib/aiOrchestratorSchema.ts";

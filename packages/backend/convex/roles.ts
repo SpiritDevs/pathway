@@ -18,7 +18,7 @@
  *
  * @module roles
  */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import { isPermissionKey, PERMISSIONS, SEED_ROLES } from "../src/permissions.ts";
 import { SYNC_MAX_ID_CHARS } from "../src/sync/operations.ts";

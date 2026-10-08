@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { makeFunctionReference } from "convex/server";
+import { makeFunctionReference } from "cyndrbase/server";
 import { describe, expect, it } from "vite-plus/test";
 import schema from "../convex/schema.ts";
 import type { DictationDictionaryList } from "@spiritdevs/contracts/dictation";

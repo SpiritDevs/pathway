@@ -9,8 +9,8 @@
  *
  * @module issueAttachments
  */
-import { v } from "convex/values";
-import { makeFunctionReference } from "convex/server";
+import { v } from "cyndrbase/values";
+import { makeFunctionReference } from "cyndrbase/server";
 import { issueAttachmentMaxBytes } from "@spiritdevs/contracts";
 
 import type { Doc, Id } from "./_generated/dataModel.js";

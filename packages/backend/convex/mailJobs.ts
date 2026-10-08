@@ -2,7 +2,7 @@ import { patchMailAccount, mailWorkerAccounts } from "./lib/mailAccountRuntime.t
 import { readEnvironmentPresence } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex provides deterministic transaction time without an Effect runtime.
 /** Fenced, renewable analysis work on the mailbox owner's selected environments. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import { notifyOrchestratorPriorityMail } from "./lib/aiOrchestratorSignals.ts";
 import { mutation } from "./_generated/server.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";

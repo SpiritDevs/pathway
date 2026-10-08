@@ -1,4 +1,4 @@
-import type { Infer } from "convex/values";
+import type { Infer } from "cyndrbase/values";
 import { appleCaller } from "./appleValidators.ts";
 import type { Doc } from "../_generated/dataModel.js";
 import type { QueryCtx } from "../_generated/server.js";

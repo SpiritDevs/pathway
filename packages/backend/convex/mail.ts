@@ -1,7 +1,7 @@
 import { patchMailAccount } from "./lib/mailAccountRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex provides deterministic transaction time without an Effect runtime.
 /** Owner-only mailbox subscriptions and explicit user actions. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import { mutation, query, internalMutation } from "./_generated/server.js";
 import { internal } from "./_generated/api.js";
 import { mailBrain, mailBucket } from "./lib/mailSchema.ts";

@@ -1,5 +1,5 @@
-import { defineTable } from "convex/server";
-import { v } from "convex/values";
+import { defineTable } from "cyndrbase/server";
+import { v } from "cyndrbase/values";
 
 export const allowanceScope = v.union(
   v.object({ kind: v.literal("chat"), chatId: v.string() }),

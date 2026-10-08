@@ -6,7 +6,7 @@ import {
   FOCUS_THREAD_SORT_ORDERS,
   focusThreadSortOrder,
 } from "@spiritdevs/contracts/focus";
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import type { Doc, Id } from "./_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";

@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Online administration for exact email senders allowed to load remote assets. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import { mutation } from "./_generated/server.js";
 import { appendCompanyChanges, encodeTrustedEmailSender } from "./lib/companyApply.ts";

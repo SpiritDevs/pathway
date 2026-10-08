@@ -1,4 +1,4 @@
-import type { RegisteredMutation, RegisteredQuery } from "convex/server";
+import type { RegisteredMutation, RegisteredQuery } from "cyndrbase/server";
 import type { MutationCtx } from "../convex/_generated/server.js";
 
 /** Invoke the registered function with an instrumented real database inside convex-test's transaction. */

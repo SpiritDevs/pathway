@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import { domainIdArg } from "./validators.ts";
 export const appleScope = v.union(
   v.object({ kind: v.literal("user") }),

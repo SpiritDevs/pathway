@@ -1,4 +1,4 @@
-import { cronJobs } from "convex/server";
+import { cronJobs } from "cyndrbase/server";
 
 import { internal } from "./_generated/api.js";
 

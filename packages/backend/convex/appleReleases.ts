@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Convex transactions supply the authoritative lease clock.
-import { v, type Infer } from "convex/values";
-import { makeFunctionReference } from "convex/server";
+import { v, type Infer } from "cyndrbase/values";
+import { makeFunctionReference } from "cyndrbase/server";
 import {
   action,
   internalMutation,

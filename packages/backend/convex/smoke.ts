@@ -19,7 +19,7 @@ import { deleteEnvironmentRuntime } from "./lib/environmentRuntime.ts";
  *
  * @module smoke
  */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import {
   isSmokeCompanyDomainId,

@@ -1,8 +1,8 @@
 import { readEnvironmentPresence } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off globalFetch:off -- Convex actions use platform fetch and mutations use the transaction clock.
 /** Company-owned Slack configuration, encrypted credentials, and controller coordination. */
-import { v } from "convex/values";
-import { makeFunctionReference } from "convex/server";
+import { v } from "cyndrbase/values";
+import { makeFunctionReference } from "cyndrbase/server";
 
 import { canonicalJson } from "../src/canonicalJson.ts";
 import {

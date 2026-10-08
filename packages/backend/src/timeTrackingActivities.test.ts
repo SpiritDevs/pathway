@@ -1,7 +1,7 @@
 // @effect-diagnostics globalDate:off -- Test clock defines activity boundaries.
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vite-plus/test";
-import { anyApi, type ApiFromModules } from "convex/server";
+import { anyApi, type ApiFromModules } from "cyndrbase/server";
 import type * as timeTracking from "../convex/timeTracking.ts";
 const api = anyApi as unknown as ApiFromModules<{ timeTracking: typeof timeTracking }>;
 import schema from "../convex/schema.ts";

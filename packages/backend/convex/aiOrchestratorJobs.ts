@@ -20,7 +20,7 @@ import { readableOrchestratorIssue } from "./lib/aiOrchestratorIssueSignals.ts";
 import { canReviewResponsibilities } from "./aiOrchestratorReviews.ts";
 // @effect-diagnostics globalDate:off -- Convex supplies the transaction clock.
 /** Renewable reasoning claims. All effects commit here, after checking the live identity and grants. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import { budgetAdmission } from "@spiritdevs/contracts/providerAllowanceBudget";
 import { budgetsForScopes, allocateFromInstruction } from "./providerAllowanceBudgets.ts";
 import {

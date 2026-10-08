@@ -1,6 +1,6 @@
 /** Cloud-owned coordinator state; private data stays out of company change feeds. */
-import { defineTable } from "convex/server";
-import { v } from "convex/values";
+import { defineTable } from "cyndrbase/server";
+import { v } from "cyndrbase/values";
 import { mailSelection } from "./mailSchema.ts";
 
 export const orchestratorAttachment = v.object({

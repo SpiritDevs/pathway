@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Reasoning readiness uses the Convex query clock.
 /** Read-only hints: claims still own authorization, readiness, and lease fencing. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import { query } from "./_generated/server.js";
 import { requireCompanyActor } from "./lib/identity.ts";
 import { backendError } from "./lib/errors.ts";

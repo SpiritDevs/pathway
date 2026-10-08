@@ -1,7 +1,7 @@
 // @effect-diagnostics globalDate:off -- Convex transaction clock and action verification timestamps.
 /** Apple accounts, team credentials, concurrent environment leases, and project app links. */
-import { v, ConvexError } from "convex/values";
-import { makeFunctionReference } from "convex/server";
+import { v, ConvexError } from "cyndrbase/values";
+import { makeFunctionReference } from "cyndrbase/server";
 import * as Schema from "effect/Schema";
 import { AppleError, type AppleFailure } from "@spiritdevs/contracts/apple";
 import { AppStoreConnectClient, AscCredential } from "../src/appStoreConnectApi.ts";

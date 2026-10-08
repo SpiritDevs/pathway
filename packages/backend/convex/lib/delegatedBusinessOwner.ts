@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import type { QueryCtx } from "../_generated/server.js";
 import type { OrchestratorAssignmentOrigin } from "@spiritdevs/contracts/aiOrchestrator";
 import { requireCompanyActor } from "./identity.ts";

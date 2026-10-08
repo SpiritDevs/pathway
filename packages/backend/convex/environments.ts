@@ -12,7 +12,7 @@ import { patchEnvironmentPresence, readEnvironmentPresence } from "./lib/environ
  *
  * @module environments
  */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import type { ExecutionEnvironmentCapabilities } from "@spiritdevs/contracts";
 
 import {

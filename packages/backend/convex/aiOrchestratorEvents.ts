@@ -2,7 +2,7 @@ import { patchEnvironmentPresence } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- The presence sweep uses Convex transaction time.
 import { notifyOrchestratorEnvironmentChange } from "./lib/aiOrchestratorEnvironmentSignals.ts";
 /** Event fan-out runs after the originating domain transaction commits. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import { internalMutation } from "./_generated/server.js";
 import { notifyOrchestratorIssueChanges } from "./lib/aiOrchestratorIssueSignals.ts";
 import { scheduleEnvironmentWorkRefresh } from "./lib/aiOrchestratorWorkRefresh.ts";

@@ -16,7 +16,7 @@ import { internal } from "./_generated/api.js";
  *
  * @module sync
  */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import { reserveIssueKeyBlock, ISSUE_KEY_BLOCK_SIZE, formatIssueKey } from "../src/issueKeys.ts";
 import {

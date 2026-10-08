@@ -10,7 +10,7 @@ import { readEnvironmentPresence, patchEnvironmentPresence } from "./lib/environ
  *
  * @module environmentCommands
  */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import {
   decodeEnvironmentCommandArgs,

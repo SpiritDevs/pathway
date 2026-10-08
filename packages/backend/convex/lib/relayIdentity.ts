@@ -1,4 +1,4 @@
-import type { UserIdentity } from "convex/server";
+import type { UserIdentity } from "cyndrbase/server";
 
 import type { QueryCtx } from "../_generated/server.js";
 import { backendError } from "./errors.ts";

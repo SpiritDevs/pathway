@@ -1,7 +1,7 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Cloud-owned thread intent. Acceptance is a permanent fence, never an expiring execution lease. */
-import { v } from "convex/values";
-import { paginationOptsValidator } from "convex/server";
+import { v } from "cyndrbase/values";
+import { paginationOptsValidator } from "cyndrbase/server";
 import type {
   ChatAttachment,
   ModelSelection,

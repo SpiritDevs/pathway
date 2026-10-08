@@ -20,7 +20,7 @@ import type {
 import { nextResponsibilityReview } from "./aiOrchestratorReviews.ts";
 // @effect-diagnostics globalDate:off -- Convex supplies deterministic transaction time.
 /** Authenticated orchestration contacts and continuing conversations. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import * as Schema from "effect/Schema";
 import { OrchestratorConfig } from "@spiritdevs/contracts/aiOrchestrator";
 import {

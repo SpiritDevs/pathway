@@ -1,6 +1,6 @@
 /** Convex storage mirror of contracts/businessTools; ownership and tombstones stay storage-only. */
-import { defineTable } from "convex/server";
-import { v } from "convex/values";
+import { defineTable } from "cyndrbase/server";
+import { v } from "cyndrbase/values";
 
 export const contactFields = {
   name: v.string(),

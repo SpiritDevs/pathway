@@ -4,7 +4,7 @@ import { reconcileConversationLifecycle } from "./lib/conversationLifecycle.ts";
 import { canonicalQueueJson } from "../src/threadQueue.ts";
 import { budgetsForScopes } from "./providerAllowanceBudgets.ts";
 import * as Schema from "effect/Schema";
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 import { OrchestratorWorkerAction } from "@spiritdevs/contracts/aiOrchestrator";
 import type { Doc } from "./_generated/dataModel.js";
 import { mutation, query, type QueryCtx, type MutationCtx } from "./_generated/server.js";

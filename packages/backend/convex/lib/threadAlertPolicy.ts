@@ -1,5 +1,5 @@
 import { alertThreadScopeKey } from "@spiritdevs/contracts/threadAlerts";
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import type { MutationCtx, QueryCtx } from "../_generated/server.js";
 

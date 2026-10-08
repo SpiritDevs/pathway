@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 import { ALERT_EVENT_KEYS } from "@spiritdevs/contracts/threadAlerts";
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import { mutation, query } from "./_generated/server.js";
 import { backendError } from "./lib/errors.ts";

@@ -1,7 +1,7 @@
 // @effect-diagnostics globalDate:off -- Fixtures use explicit Convex epoch milliseconds.
 /** End-to-end coverage for the full-fidelity empty-company issue import surface. */
 import { convexTest } from "convex-test";
-import type { FunctionArgs } from "convex/server";
+import type { FunctionArgs } from "cyndrbase/server";
 import { describe, expect, it } from "vite-plus/test";
 import { DEFAULT_ISSUE_STATUSES } from "@spiritdevs/contracts";
 

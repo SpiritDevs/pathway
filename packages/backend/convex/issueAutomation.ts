@@ -1,7 +1,7 @@
 import { readEnvironmentPresence } from "./lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Convex functions use the transaction clock directly.
 /** Company automation settings and durable, generation-fenced execution jobs. */
-import { v } from "convex/values";
+import { v } from "cyndrbase/values";
 
 import { ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS } from "../src/environmentRegistrations.ts";
 import { internal } from "./_generated/api.js";

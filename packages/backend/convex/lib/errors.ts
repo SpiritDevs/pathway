@@ -5,7 +5,7 @@
  *
  * @module lib/errors
  */
-import { ConvexError } from "convex/values";
+import { ConvexError } from "cyndrbase/values";
 
 /** A type alias, not an interface: `ConvexError` payloads must satisfy Convex's `Value` shape. */
 export type BackendErrorData = {
