@@ -26,7 +26,10 @@ import { ThreadManagementService } from "../orchestration-v2/ThreadManagementSer
 import { CommandReceiptStoreV2 } from "../orchestration-v2/CommandReceiptStore.ts";
 import { ProviderAllowanceRuntime } from "../providerUsage/AllowanceRuntime.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
-import type { ConvexServiceTokenProvider } from "./convexServiceToken.ts";
+import {
+  makeConvexServiceTokenFetcher,
+  type ConvexServiceTokenProvider,
+} from "./convexServiceToken.ts";
 import type { FunctionReturnType } from "cyndrbase/server";
 
 class WorkerControlError extends Data.TaggedError("WorkerControlError")<{
@@ -261,14 +264,7 @@ export const runOrchestratorControls = Effect.fn("cloud.orchestrator.controls")(
     Effect.sync(() => new ConvexClient(input.convexUrl)),
     (c) => Effect.promise(() => c.close()),
   );
-  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-  client.setAuth(({ forceRefreshToken }) =>
-    runPromise(
-      (forceRefreshToken ? input.tokens.invalidate() : Effect.void).pipe(
-        Effect.andThen(input.tokens.token),
-      ),
-    ),
-  );
+  client.setAuth(yield* makeConvexServiceTokenFetcher(input.tokens));
   const call = <A>(fn: () => Promise<A>) =>
     Effect.tryPromise({ try: fn, catch: (cause) => new WorkerControlError({ cause }) });
   const latest = yield* Ref.make<Inbox>([]);

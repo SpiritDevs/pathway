@@ -47,6 +47,7 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
 import {
   generateDpopKeyPair,
+  makeConvexServiceTokenFetcher,
   makeConvexServiceTokenProvider,
   nowEpochSeconds,
   type ConvexServiceTokenProvider,
@@ -374,6 +375,24 @@ describe("convex service token provider", () => {
       const error = yield* Effect.flip(provider.token);
       assert.equal(error.reason, "unauthorized");
       assert.include(error.message, "credential_revoked");
+    }),
+  );
+
+  it.effect("answers a realtime client null, never a rejection, once the relay refuses", () =>
+    Effect.gen(function* () {
+      const relay = makeRelayEndpoint({
+        refuse: {
+          status: 401,
+          body: encodeRelayAuthError({ code: "auth_invalid", reason: "credential_revoked" }),
+        },
+      });
+      const provider = yield* Effect.provide(makeConvexServiceTokenProvider(identity), relay.layer);
+      const fetchToken = yield* makeConvexServiceTokenFetcher(provider);
+
+      // The client's refetch after the server confirms a token forces a refresh, from a detached
+      // promise; a rejection there would be unhandled.
+      assert.isNull(yield* Effect.promise(() => fetchToken({ forceRefreshToken: true })));
+      assert.isNull(yield* Effect.promise(() => fetchToken({ forceRefreshToken: false })));
     }),
   );
 

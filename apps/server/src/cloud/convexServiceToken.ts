@@ -596,3 +596,24 @@ export const makeConvexServiceTokenProvider = Effect.fn("cloud.convex_service_to
     return { token, invalidate } satisfies ConvexServiceTokenProvider;
   },
 );
+
+/**
+ * The `setAuth` fetcher for a realtime client authenticated by `tokens`. The client calls it from
+ * a detached promise, so a rejection is unhandled and ends the process; that is what happens once
+ * `pathway connect logout` unlinks the environment and the provider fails `unauthorized`. A failure
+ * answers null instead, which the client reports as lost authentication.
+ */
+export const makeConvexServiceTokenFetcher = Effect.fn("cloud.convex_service_token.fetcher")(
+  function* (tokens: ConvexServiceTokenProvider) {
+    const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+    return ({ forceRefreshToken }: { readonly forceRefreshToken: boolean }) =>
+      runPromise(
+        (forceRefreshToken ? tokens.invalidate() : Effect.void).pipe(
+          Effect.andThen(tokens.token),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Cloud service token unavailable", { cause }).pipe(Effect.as(null)),
+          ),
+        ),
+      );
+  },
+);

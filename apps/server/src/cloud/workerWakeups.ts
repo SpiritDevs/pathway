@@ -7,7 +7,10 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
-import type { ConvexServiceTokenProvider } from "./convexServiceToken.ts";
+import {
+  makeConvexServiceTokenFetcher,
+  type ConvexServiceTokenProvider,
+} from "./convexServiceToken.ts";
 
 export type WorkerQueue = "commands" | "mail" | "reasoning" | "inspections" | "results";
 const pendingRef = makeFunctionReference<
@@ -49,14 +52,7 @@ export const makeWorkerWakeups = Effect.fn("cloud.worker_wakeup.subscribe")(func
     Effect.sync(() => input.client ?? new ConvexClient(input.convexUrl)),
     (convex) => Effect.promise(() => convex.close()),
   );
-  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-  client.setAuth(({ forceRefreshToken }) =>
-    runPromise(
-      (forceRefreshToken ? input.tokens.invalidate() : Effect.void).pipe(
-        Effect.andThen(input.tokens.token),
-      ),
-    ),
-  );
+  client.setAuth(yield* makeConvexServiceTokenFetcher(input.tokens));
   const gates = new Map<K, Effect.Effect<void>>();
   for (const kind of input.kinds) {
     const gate = yield* makeWorkerWakeupGate(kind === "commands" ? 5_000 : 10_000);

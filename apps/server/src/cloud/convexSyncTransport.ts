@@ -50,7 +50,11 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
-import { convexErrorCode, type ConvexServiceTokenProvider } from "./convexServiceToken.ts";
+import {
+  convexErrorCode,
+  makeConvexServiceTokenFetcher,
+  type ConvexServiceTokenProvider,
+} from "./convexServiceToken.ts";
 
 // --------------------------------------------------------------------------
 // Convex client seam
@@ -419,16 +423,9 @@ export const makeConvexSyncTransport = Effect.fn("cloud.convex_sync_transport.ma
               }),
               (convex) => Effect.promise(() => convex.close()),
             );
-            const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+            const fetchToken = yield* makeConvexServiceTokenFetcher(tokens);
             yield* Effect.try({
-              try: () =>
-                realtime.setAuth(({ forceRefreshToken }) =>
-                  runPromise(
-                    (forceRefreshToken ? tokens.invalidate() : Effect.void).pipe(
-                      Effect.andThen(tokens.token),
-                    ),
-                  ),
-                ),
+              try: () => realtime.setAuth(fetchToken),
               catch: toTransportError,
             });
             const subscription = Stream.callback<SyncLatestVersionResponse, SyncTransportError>(
