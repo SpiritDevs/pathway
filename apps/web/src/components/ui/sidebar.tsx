@@ -895,10 +895,20 @@ function SidebarContent({
   fixedHeader?: React.ReactNode;
   scrollAreaRef?: React.Ref<HTMLDivElement>;
 }) {
+  // The header's stage artwork bleeds below the titlebar and inherits its
+  // Electron drag region, which ignores pointer-events. Explicit no-drag,
+  // positioned so it paints after the header, keeps content under it clickable.
   return (
     <>
-      {fixedHeader ? <div className="w-full shrink-0">{fixedHeader}</div> : null}
-      <ScrollArea ref={scrollAreaRef} hideScrollbars scrollFade className="h-auto min-h-0 flex-1">
+      {fixedHeader ? (
+        <div className="relative w-full shrink-0 [-webkit-app-region:no-drag]">{fixedHeader}</div>
+      ) : null}
+      <ScrollArea
+        ref={scrollAreaRef}
+        hideScrollbars
+        scrollFade
+        className="h-auto min-h-0 flex-1 [-webkit-app-region:no-drag]"
+      >
         <ScrollAreaContent
           className={cn(
             "flex w-full min-w-0 flex-col gap-2 group-data-[collapsible=icon]:overflow-hidden",
