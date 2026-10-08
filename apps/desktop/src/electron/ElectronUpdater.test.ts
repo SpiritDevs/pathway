@@ -2,8 +2,10 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { autoUpdaterMock } = vi.hoisted(() => ({
+const { autoUpdaterMock, defaultSession } = vi.hoisted(() => ({
+  defaultSession: { name: "default" },
   autoUpdaterMock: {
+    httpExecutor: { cachedSession: null as unknown },
     allowDowngrade: false,
     allowPrerelease: false,
     autoDownload: true,
@@ -18,6 +20,10 @@ const { autoUpdaterMock } = vi.hoisted(() => ({
     removeListener: vi.fn(),
     setFeedURL: vi.fn(),
   },
+}));
+
+vi.mock("electron", () => ({
+  session: { defaultSession },
 }));
 
 vi.mock("electron-updater", () => ({
@@ -35,6 +41,7 @@ describe("ElectronUpdater", () => {
     autoUpdaterMock.channel = "latest";
     autoUpdaterMock.disableDifferentialDownload = false;
     autoUpdaterMock.fullChangelog = false;
+    autoUpdaterMock.httpExecutor.cachedSession = null;
     autoUpdaterMock.checkForUpdates.mockClear();
     autoUpdaterMock.checkForUpdates.mockImplementation(() => Promise.resolve(null));
     autoUpdaterMock.downloadUpdate.mockClear();
@@ -58,6 +65,16 @@ describe("ElectronUpdater", () => {
 
       assert.deepEqual(autoUpdaterMock.on.mock.calls, [["update-available", listener]]);
       assert.deepEqual(autoUpdaterMock.removeListener.mock.calls, [["update-available", listener]]);
+    }).pipe(Effect.provide(ElectronUpdater.layer)),
+  );
+
+  it.effect("routes update requests through the default session", () =>
+    Effect.gen(function* () {
+      const updater = yield* ElectronUpdater.ElectronUpdater;
+
+      yield* updater.checkForUpdates;
+
+      assert.strictEqual(autoUpdaterMock.httpExecutor.cachedSession, defaultSession);
     }).pipe(Effect.provide(ElectronUpdater.layer)),
   );
 

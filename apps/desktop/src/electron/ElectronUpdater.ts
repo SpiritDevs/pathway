@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
+import * as Electron from "electron";
 import { autoUpdater } from "electron-updater";
 
 type AutoUpdater = typeof autoUpdater;
@@ -110,6 +111,20 @@ export class ElectronUpdater extends Context.Service<
   }
 >()("@spiritdevs/desktop/electron/ElectronUpdater") {}
 
+/**
+ * Points electron-updater's requests at the default session. Its own session is the named
+ * in-memory partition "electron-updater", which the Pathway runtime rejects (ADR 0050), so every
+ * check and download would throw before reaching the network. Call after the app is ready.
+ */
+const useDefaultNetSession = () => {
+  const { httpExecutor } = autoUpdater as unknown as {
+    readonly httpExecutor: { cachedSession: Electron.Session | null } | null;
+  };
+  if (httpExecutor !== null && httpExecutor.cachedSession === null) {
+    httpExecutor.cachedSession = Electron.session.defaultSession;
+  }
+};
+
 export const make = ElectronUpdater.of({
   setFeedURL: (options) =>
     Effect.suspend(() => {
@@ -155,14 +170,20 @@ export const make = ElectronUpdater.of({
   checkForUpdates: Effect.suspend(() => {
     const channel = autoUpdater.channel;
     return Effect.tryPromise({
-      try: () => autoUpdater.checkForUpdates(),
+      try: () => {
+        useDefaultNetSession();
+        return autoUpdater.checkForUpdates();
+      },
       catch: (cause) => new ElectronUpdaterCheckForUpdatesError({ channel, cause }),
     }).pipe(Effect.asVoid);
   }),
   downloadUpdate: Effect.suspend(() => {
     const channel = autoUpdater.channel;
     return Effect.tryPromise({
-      try: () => autoUpdater.downloadUpdate(),
+      try: () => {
+        useDefaultNetSession();
+        return autoUpdater.downloadUpdate();
+      },
       catch: (cause) => new ElectronUpdaterDownloadUpdateError({ channel, cause }),
     }).pipe(Effect.asVoid);
   }),
