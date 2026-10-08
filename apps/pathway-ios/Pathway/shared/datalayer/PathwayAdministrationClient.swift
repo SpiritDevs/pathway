@@ -116,6 +116,8 @@ struct PathwayAdministrationScheduleDraft {
     var interactionMode = "default"
     var originalSelection: JSONValue?
     var originalWorkspace: JSONValue?
+    /// A webhook trigger is edited on desktop or web, so it is sent back unchanged.
+    var originalWebhookSchedule: JSONValue?
     var commandID = UUID().uuidString
 
     init(task: PathwayAdministrationSchedule? = nil) {
@@ -123,6 +125,7 @@ struct PathwayAdministrationScheduleDraft {
         id = task.id; title = task.title; prompt = task.prompt; enabled = task.enabled
         projectID = task.projectId; threadID = task.threadId ?? ""
         scheduleType = task.schedule.objectValue?["type"]?.stringValue ?? "interval"
+        if scheduleType == "webhook" { originalWebhookSchedule = task.schedule }
         intervalMinutes = max(1, Double(task.schedule.objectValue?["everyMs"]?.intValue ?? 3_600_000) / 60_000)
         timeOfDay = task.schedule.objectValue?["timeOfDay"]?.stringValue ?? "09:00"
         weekdays = Set(task.schedule.objectValue?["weekdays"]?.arrayValue?.compactMap(\.intValue) ?? [])
@@ -144,7 +147,8 @@ struct PathwayAdministrationScheduleDraft {
     func payload() throws -> [String: JSONValue] {
         guard isValid, intervalMinutes >= 1, intervalMinutes <= 525_600 else { throw PathwayRPCError.remote("Complete the task, model, workspace and schedule fields.") }
         let schedule: JSONValue
-        if scheduleType == "interval" { schedule = .object(["type": .string("interval"), "everyMs": .number(Double(intervalMinutes) * 60_000)]) }
+        if let originalWebhookSchedule { schedule = originalWebhookSchedule }
+        else if scheduleType == "interval" { schedule = .object(["type": .string("interval"), "everyMs": .number(Double(intervalMinutes) * 60_000)]) }
         else {
             var value: [String: JSONValue] = ["type": .string("fixed_time"), "timeOfDay": .string(timeOfDay)]
             if !weekdays.isEmpty { value["weekdays"] = .array(weekdays.sorted().map { .number(Double($0)) }) }

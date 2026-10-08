@@ -199,6 +199,9 @@ export const RelayEnvironmentConfigRequest = Schema.Struct({
   environmentCredential: Schema.String,
   cloudMintPublicKey: Schema.String,
   endpointRuntime: Schema.NullOr(RelayManagedEndpointRuntimeConfig),
+  // The link's public endpoint, so the environment can name its own public
+  // URL (webhook tasks). Optional so older clients still link.
+  endpoint: Schema.optional(RelayManagedEndpoint),
 });
 export type RelayEnvironmentConfigRequest = typeof RelayEnvironmentConfigRequest.Type;
 

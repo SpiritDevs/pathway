@@ -18,6 +18,14 @@ struct PathwayAdministrationTests {
         #expect(payload["commandId"] == (try draft.payload())["commandId"])
     }
 
+    @Test func scheduleDraftSendsWebhookTriggerBackUnchanged() throws {
+        let data = Data(#"{"id":"hook","title":"Deploy","prompt":"Deploy {{body.ref}}","enabled":true,"schedule":{"type":"webhook","signature":{"header":"x-hub-signature-256","encoding":"hex","prefix":"sha256="},"maxDeliveryAgeMinutes":30},"projectId":"project","threadId":null,"workspaceStrategy":{"type":"root"},"modelSelection":{"instanceId":"codex","model":"m"},"runtimeMode":"full-access","interactionMode":"default","nextRunAt":null,"lastRunAt":null,"lastRunStatus":"never","lastRunError":null,"runCount":0}"#.utf8)
+        let task = try JSONDecoder().decode(PathwayAdministrationSchedule.self, from: data)
+        var draft = PathwayAdministrationScheduleDraft(task: task)
+        draft.title = "Deploy main"
+        #expect(try draft.payload()["schedule"] == task.schedule)
+    }
+
     @Test func scheduleValidationRejectsInvalidTimeAndIncompleteModel() throws {
         var draft = PathwayAdministrationScheduleDraft()
         draft.title = "Daily"; draft.prompt = "Check"; draft.projectID = "p"

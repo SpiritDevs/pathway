@@ -89,6 +89,24 @@ export const terminalRestartsTotal = Metric.counter("pathway_terminal_restarts_t
   description: "Total terminal restart requests handled.",
 });
 
+/**
+ * One per webhook request, by `outcome` (accepted, not_found,
+ * rejected_signature, disabled, rate_limited, queue_full, prompt_too_long,
+ * body_too_large, error).
+ */
+export const webhookDeliveriesTotal = Metric.counter("pathway_webhook_deliveries_total", {
+  description: "Webhook requests handled, by outcome.",
+});
+
+export const webhookDeliveryDuration = Metric.timer("pathway_webhook_delivery_duration", {
+  description: "Time to verify, log, and enqueue one webhook request.",
+});
+
+/** Runs started by webhook deliveries, by `outcome` (started, skipped, expired, failed). */
+export const webhookRunsTotal = Metric.counter("pathway_webhook_runs_total", {
+  description: "Runs started from webhook deliveries, by outcome.",
+});
+
 export const metricAttributes = (
   attributes: Readonly<Record<string, unknown>>,
 ): ReadonlyArray<[string, string]> => Object.entries(compactMetricAttributes(attributes));

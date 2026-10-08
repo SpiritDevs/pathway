@@ -33,7 +33,9 @@ import {
   type AuthAccessStreamEvent,
   type ApplicationStoredEvent,
   type AuthEnvironmentScope,
+  AuthOrchestrationOperateScope,
   AuthSessionId,
+  type ScheduledTaskListResult,
   CommandId,
   type DiscoveredLocalServerList,
   type IssueActor,
@@ -94,6 +96,9 @@ import {
   WsUsageRecoveryScheduleRpc,
   WsUsageRecoveryCancelRpc,
   WsUsageRecoveryPauseRpc,
+  WsScheduledTasksRotateWebhookTokenRpc,
+  WsScheduledTasksListWebhookDeliveriesRpc,
+  WsScheduledTasksGetWebhookDeliveryRpc,
   WsComputerRpcGroup,
   WsDeviceRpcGroup,
 } from "@spiritdevs/contracts";
@@ -541,6 +546,54 @@ const usageRecoveryRpcLayer = UsageRecoveryRpcGroup.toLayer(
   }),
 );
 
+// Webhook RPCs get their own handler layer, like the groups below: one more
+// handler on the core group pushes its inferred requirements past what the
+// type checker resolves, and `runServer` silently gains `any` requirements.
+const ScheduledTaskWebhookRpcGroup = RpcGroup.make(
+  WsScheduledTasksRotateWebhookTokenRpc,
+  WsScheduledTasksListWebhookDeliveriesRpc,
+  WsScheduledTasksGetWebhookDeliveryRpc,
+);
+
+const makeScheduledTaskWebhookRpcLayer = (scopes: readonly AuthEnvironmentScope[]) =>
+  ScheduledTaskWebhookRpcGroup.toLayer(
+    Effect.gen(function* () {
+      const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const observe = <A, E, R>(method: string, id: string, effect: Effect.Effect<A, E, R>) => {
+        const requiredScope = requiredScopeForRpcMethod(method);
+        const authorized: Effect.Effect<A, E | EnvironmentAuthorizationError, R> = scopes.includes(
+          requiredScope,
+        )
+          ? effect
+          : Effect.fail(environmentAuthorizationError(requiredScope));
+        return instrumentRpcEffect(method, authorized, {
+          "rpc.aggregate": "scheduledTasks",
+          "scheduled_task.id": id,
+        });
+      };
+      return ScheduledTaskWebhookRpcGroup.of({
+        [WS_METHODS.scheduledTasksRotateWebhookToken]: (input) =>
+          observe(
+            WS_METHODS.scheduledTasksRotateWebhookToken,
+            input.id,
+            scheduledTasks.rotateWebhookToken(input),
+          ),
+        [WS_METHODS.scheduledTasksListWebhookDeliveries]: (input) =>
+          observe(
+            WS_METHODS.scheduledTasksListWebhookDeliveries,
+            input.id,
+            scheduledTasks.listWebhookDeliveries(input),
+          ),
+        [WS_METHODS.scheduledTasksGetWebhookDelivery]: (input) =>
+          observe(
+            WS_METHODS.scheduledTasksGetWebhookDelivery,
+            input.id,
+            scheduledTasks.getWebhookDelivery(input),
+          ),
+      });
+    }),
+  );
+
 // Computer RPCs are served by their own handler layer (see makeWsComputerRpcLayer).
 const CoreWsRpcGroup = WsRpcGroup.omit(
   ...([...SimBuildRpcs.requests.keys()] as ReadonlyArray<
@@ -554,6 +607,9 @@ const CoreWsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.usageRecoverySchedule,
   WS_METHODS.usageRecoveryCancel,
   WS_METHODS.usageRecoveryPause,
+  ...([...ScheduledTaskWebhookRpcGroup.requests.keys()] as ReadonlyArray<
+    RpcGroup.Rpcs<typeof ScheduledTaskWebhookRpcGroup>["_tag"]
+  >),
   ...([...WsComputerRpcGroup.requests.keys()] as ReadonlyArray<
     RpcGroup.Rpcs<typeof WsComputerRpcGroup>["_tag"]
   >),
@@ -875,6 +931,12 @@ const makeWsRpcLayer = (
           ),
         ),
       };
+      // A webhook URL starts agent runs, so only sessions that may operate see
+      // it; read-only sessions still see the task itself.
+      const withVisibleWebhookUrls = (result: ScheduledTaskListResult): ScheduledTaskListResult =>
+        currentSession.scopes.includes(AuthOrchestrationOperateScope)
+          ? result
+          : { tasks: result.tasks.map(({ webhook: _webhook, ...task }) => task) };
       const authorizeStream = <A, E, R>(
         requiredScope: AuthEnvironmentScope,
         stream: Stream.Stream<A, E, R>,
@@ -1781,13 +1843,17 @@ const makeWsRpcLayer = (
             },
           ),
         [WS_METHODS.scheduledTasksList]: (_input) =>
-          observeRpcEffect(WS_METHODS.scheduledTasksList, scheduledTasks.list(), {
-            "rpc.aggregate": "scheduledTasks",
-          }),
+          observeRpcEffect(
+            WS_METHODS.scheduledTasksList,
+            scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
+            { "rpc.aggregate": "scheduledTasks" },
+          ),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
-          observeRpcStream(WS_METHODS.scheduledTasksSubscribe, scheduledTasks.subscribeList(), {
-            "rpc.aggregate": "scheduledTasks",
-          }),
+          observeRpcStream(
+            WS_METHODS.scheduledTasksSubscribe,
+            scheduledTasks.subscribeList().pipe(Stream.map(withVisibleWebhookUrls)),
+            { "rpc.aggregate": "scheduledTasks" },
+          ),
         [WS_METHODS.scheduledTasksUpsert]: (input) =>
           observeRpcEffect(WS_METHODS.scheduledTasksUpsert, scheduledTasks.upsert(input), {
             "rpc.aggregate": "scheduledTasks",
@@ -3426,6 +3492,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             makeSimBuildRpcLayer(simBuild, session.scopes),
             makeReleaseRpcLayer(appleServices.releases, appleServices.runtime, session.scopes),
             usageRecoveryRpcLayer,
+            makeScheduledTaskWebhookRpcLayer(session.scopes),
           ).pipe(
             Layer.provideMerge(RpcSerialization.layerJson),
             Layer.provide(

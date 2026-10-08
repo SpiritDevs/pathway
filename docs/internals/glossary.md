@@ -76,6 +76,10 @@ In the [report-a-bug design](../plans/report-a-bug.md), a task describing unexpe
 **Bug investigation**:
 Optional agent research into a bug report that adds findings to the task. It may inspect code and attempt reproduction; implementing a fix is a separate action.
 
+**Webhook task**:
+A scheduled task whose trigger is a request to its secret URL (`/api/hooks/:taskId/:token`) instead of a clock. The request fills the prompt's `{{…}}` placeholders; each request is a **delivery**, logged per task. See [webhook tasks](webhook-tasks.md).
+_Avoid_: Hook, trigger URL
+
 ## Connected mail
 
 **Mail account**:

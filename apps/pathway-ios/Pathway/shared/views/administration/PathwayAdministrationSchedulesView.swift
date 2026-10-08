@@ -85,7 +85,9 @@ struct PathwayAdministrationScheduleEditor: View {
                 }
                 TextField("Existing thread ID (optional)", text: $draft.threadID).autocorrectionDisabled().textInputAutocapitalization(.never)
             }
-            Section {
+            if draft.originalWebhookSchedule != nil {
+                Section { LabeledContent("Trigger", value: "Webhook") } footer: { Text("Change a webhook trigger, its URL or its signature check in Pathway on desktop or web.") }
+            } else { Section {
                 Picker("Schedule", selection: $draft.scheduleType) { Text("Interval").tag("interval"); Text("Time of day").tag("fixed_time") }
                 if draft.scheduleType == "interval" { Stepper("Every \(draft.intervalMinutes.formatted()) minutes", value: $draft.intervalMinutes, in: 1...525_600) }
                 else {
@@ -94,7 +96,7 @@ struct PathwayAdministrationScheduleEditor: View {
                         Toggle(Calendar.current.weekdaySymbols[day], isOn: Binding(get: { draft.weekdays.contains(day) }, set: { if $0 { draft.weekdays.insert(day) } else { draft.weekdays.remove(day) } }))
                     }
                 }
-            } footer: { Text("Time-of-day schedules use the environment's local time zone. No selected weekdays means every day.") }
+            } footer: { Text("Time-of-day schedules use the environment's local time zone. No selected weekdays means every day.") } }
             Section("Execution") {
                 Picker("Provider", selection: Binding(get: { draft.instanceID }, set: { value in
                     if value != draft.instanceID { draft.instanceID = value; draft.model = "" }

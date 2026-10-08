@@ -152,30 +152,35 @@ export function ThreadAutomationsPanel(props: {
               </div>
               <p className="truncate text-[11px] text-muted-foreground">
                 {scheduleLabel(task.schedule)}
-                {task.enabled && task.nextRunAt !== null
-                  ? ` · next ${relativeLabel(task.nextRunAt)}`
-                  : task.enabled
-                    ? ""
-                    : " · paused"}
+                {!task.enabled
+                  ? " · paused"
+                  : task.schedule.type === "webhook"
+                    ? " · listening"
+                    : task.nextRunAt !== null
+                      ? ` · next ${relativeLabel(task.nextRunAt)}`
+                      : ""}
               </p>
             </div>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    className={THREAD_DETAILS_PANEL_ICON_ACTION_CLASS}
-                    aria-label={`Run ${task.title} now`}
-                    disabled={busyTaskId !== null || task.lastRunStatus === "running"}
-                    onClick={() => void runNow(task)}
-                  >
-                    <PlayIcon className="size-3.5" />
-                  </Button>
-                }
-              />
-              <TooltipPopup>Run now</TooltipPopup>
-            </Tooltip>
+            {/* A webhook task runs from its URL; there is no request to run it with. */}
+            {task.schedule.type === "webhook" ? null : (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      className={THREAD_DETAILS_PANEL_ICON_ACTION_CLASS}
+                      aria-label={`Run ${task.title} now`}
+                      disabled={busyTaskId !== null || task.lastRunStatus === "running"}
+                      onClick={() => void runNow(task)}
+                    >
+                      <PlayIcon className="size-3.5" />
+                    </Button>
+                  }
+                />
+                <TooltipPopup>Run now</TooltipPopup>
+              </Tooltip>
+            )}
             <Switch
               checked={task.enabled}
               disabled={busyTaskId !== null}

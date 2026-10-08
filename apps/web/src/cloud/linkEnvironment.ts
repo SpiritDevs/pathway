@@ -565,6 +565,7 @@ export function linkPrimaryEnvironmentToCloud(input: {
           environmentCredential: link.environmentCredential,
           cloudMintPublicKey: link.cloudMintPublicKey,
           endpointRuntime: link.endpointRuntime,
+          endpoint: link.endpoint,
         },
       }),
     );
