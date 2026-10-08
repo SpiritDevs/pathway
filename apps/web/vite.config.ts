@@ -11,6 +11,7 @@ import { defineConfig, type Connect, type Plugin } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
 import { DEV_PROXIED_PATH_PREFIXES } from "@spiritdevs/shared/devProxy";
+import { DEV_FS_DENY, LOCAL_CYNDRBASE_PATH, localCyndrbaseProxy } from "./src/devServer";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
 
@@ -125,7 +126,6 @@ const devProxyTarget = resolveDevProxyTarget(process.env.PATHWAY_PORT, configure
 
 // Single-origin dev serves a local Cyndrbase engine through this server under /cyndrbase, so a
 // browser on another machine or behind a tunnel reaches it from the page origin, not its own loopback.
-const LOCAL_CYNDRBASE_PATH = "/cyndrbase";
 const localCyndrbaseTarget =
   isSingleOriginDev &&
   URL.canParse(configuredConvexUrl) &&
@@ -234,6 +234,7 @@ export default defineConfig(() => {
       port,
       strictPort: true,
       allowedHosts,
+      fs: { deny: DEV_FS_DENY },
       // Transform the whole module graph at server start instead of on the
       // first request. Without this, a cold worktree discovers and transforms
       // modules one import-level at a time while the browser waits — which
@@ -249,16 +250,7 @@ export default defineConfig(() => {
             // (path "/" plus a vite-hmr subprotocol), so the two upgrade
             // handlers don't collide.
             proxy: {
-              ...(localCyndrbaseTarget
-                ? {
-                    [LOCAL_CYNDRBASE_PATH]: {
-                      target: localCyndrbaseTarget,
-                      changeOrigin: true,
-                      ws: true,
-                      rewrite: (path: string) => path.slice(LOCAL_CYNDRBASE_PATH.length),
-                    },
-                  }
-                : {}),
+              ...(localCyndrbaseTarget ? localCyndrbaseProxy(localCyndrbaseTarget) : {}),
               ...Object.fromEntries(
                 DEV_PROXIED_PATH_PREFIXES.map((prefix) => [
                   prefix,
