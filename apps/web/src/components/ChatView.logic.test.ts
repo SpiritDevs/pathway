@@ -1293,6 +1293,13 @@ describe("deriveCommittedServerUserMessageIds", () => {
       new Set([turnStartId, steerId]),
     );
   });
+
+  it("counts sends outside the loaded history window as committed", () => {
+    const pagedOutId = MessageId.make("message-paged-out");
+    expect(deriveCommittedServerUserMessageIds([], [{ messageId: pagedOutId }])).toEqual(
+      new Set([pagedOutId]),
+    );
+  });
 });
 
 describe("deriveAcknowledgedOptimisticUserMessageIds", () => {
