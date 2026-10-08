@@ -319,6 +319,29 @@ describe("relayPersistence", () => {
     expect(overLimit).toEqual({ status: "limit_exceeded", maxTunnels: 1, activeTunnels: 1 });
   });
 
+  it("records managed endpoint token state only against the generation that was read", async () => {
+    const { relay } = testRelay();
+    const { allocation } = await relay.mutation(
+      api.relayPersistence.reserveManagedEndpointAllocation,
+      reserve("environment-1"),
+    );
+    const key = { userId: "user-1", environmentId: "environment-1" };
+    const record = (updatedAt: string, dnsRecordId: string, now: string) =>
+      relay.mutation(api.relayPersistence.recordManagedEndpointDnsIfUnchanged, {
+        ...key,
+        dnsRecordId,
+        updatedAt,
+        now,
+      });
+
+    const next = await record(allocation!.updatedAt, "tokens-a", "2026-08-14T00:02:00.000Z");
+    expect(next).toBe("2026-08-14T00:02:00.000Z");
+    expect(await record(allocation!.updatedAt, "tokens-b", "2026-08-14T00:03:00.000Z")).toBeNull();
+    expect(await relay.query(api.relayPersistence.getManagedEndpointAllocation, key)).toMatchObject(
+      { dnsRecordId: "tokens-a", updatedAt: next },
+    );
+  });
+
   it("keeps only the newest credential active without scanning revoked history", async () => {
     const { t, relay } = testRelay();
     await relay.mutation(api.relayPersistence.upsertEnvironmentLink, {

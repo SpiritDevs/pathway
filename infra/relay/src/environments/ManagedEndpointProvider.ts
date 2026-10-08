@@ -3,6 +3,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
@@ -47,6 +48,7 @@ const ManagedEndpointProvisioningStage = Schema.Literals([
   "reserve-allocation",
   "ensure-endpoint",
   "record-endpoint",
+  "revoke-retired-tokens",
   "create-connector-token",
   "record-connector-token",
   "mark-allocation-ready",
@@ -129,6 +131,15 @@ export class ManagedEndpointProvider extends Context.Service<
       readonly environmentId: string;
       readonly target?: ManagedEndpointDeprovisionTarget | null;
     }) => Effect.Effect<void, ManagedEndpointDeprovisioningFailed>;
+    /**
+     * Records that the environment's connector registered with `connectorTokenId`, which
+     * retires the tokens it replaced. False when the token is neither current nor pending.
+     */
+    readonly confirm: (input: {
+      readonly userId: string;
+      readonly environmentId: string;
+      readonly connectorTokenId: string;
+    }) => Effect.Effect<boolean, ManagedEndpointProviderError>;
   }
 >()("pathway-relay/environments/ManagedEndpointProvider") {}
 
@@ -174,10 +185,39 @@ const requireSettings = Effect.fnUntraced(function* (
   return { baseDomain, namespace, connect };
 });
 
-// The allocation's dnsRecordId column (named before Connect) holds the current connector
-// token ID followed by replaced token IDs still awaiting revocation, space-separated.
-const recordedTokenIds = (dnsRecordId: string | null) =>
-  dnsRecordId?.split(" ").filter((id) => id.length > 0) ?? [];
+// Connector token state, kept as JSON in the allocation's dnsRecordId column (named before
+// Connect) and written only with compare-and-set. `current` is the token the environment
+// confirmed it registered with; `pending` was issued but not yet confirmed; `retired` tokens
+// were replaced and still need revoking. A token is revoked only after a committed write
+// retired it, so a revoked token can never become current or pending again.
+const TokenState = Schema.Struct({
+  current: Schema.NullOr(Schema.String),
+  pending: Schema.NullOr(Schema.String),
+  retired: Schema.Array(Schema.String),
+});
+type TokenState = typeof TokenState.Type;
+const decodeTokenState = Schema.decodeUnknownOption(Schema.fromJsonString(TokenState));
+const encodeTokenState = Schema.encodeSync(Schema.fromJsonString(TokenState));
+// A value written before this format (a cloudflared DNS record ID) can only be retired.
+const readTokenState = (dnsRecordId: string | null): TokenState =>
+  dnsRecordId === null
+    ? { current: null, pending: null, retired: [] }
+    : Option.getOrElse(decodeTokenState(dnsRecordId), () => ({
+        current: null,
+        pending: null,
+        retired: [dnsRecordId],
+      }));
+const MAX_RETIRED_TOKENS = 2;
+const MAX_WRITE_ATTEMPTS = 5;
+
+export class ManagedEndpointTokenStateConflict extends Schema.TaggedErrorClass<ManagedEndpointTokenStateConflict>()(
+  "ManagedEndpointTokenStateConflict",
+  {},
+) {}
+export class ManagedEndpointRetiredTokensOutstanding extends Schema.TaggedErrorClass<ManagedEndpointRetiredTokensOutstanding>()(
+  "ManagedEndpointRetiredTokensOutstanding",
+  { connectorTokenIds: Schema.Array(Schema.String) },
+) {}
 
 const isNotFound = (error: CyndrbaseConnectRpcError) => error.code === "not_found";
 const isConnectRpcError = Schema.is(CyndrbaseConnectRpcError);
@@ -259,6 +299,42 @@ export const make = Effect.gen(function* () {
       Effect.catchIf(isNotFound, () => Effect.void),
     );
 
+  type AllocationKey = { readonly userId: string; readonly environmentId: string };
+  const readTokens = Effect.fnUntraced(function* (key: AllocationKey) {
+    const allocation = yield* allocations.get(key);
+    return allocation === null
+      ? null
+      : { generation: allocation.updatedAt, state: readTokenState(allocation.dnsRecordId) };
+  });
+  const commitTokens = (key: AllocationKey, generation: string, state: TokenState) =>
+    allocations
+      .recordDnsIfUnchanged({ ...key, dnsRecordId: encodeTokenState(state), updatedAt: generation })
+      .pipe(Effect.map((written) => written !== null));
+
+  // Revokes retired tokens and forgets the revoked ones; failures stay retired for a retry.
+  const settleRetired = Effect.fnUntraced(function* (
+    connect: RelayConfiguration.CyndrbaseConnectConfiguration,
+    key: AllocationKey,
+  ) {
+    for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt++) {
+      const read = yield* readTokens(key);
+      if (read === null || read.state.retired.length === 0) return;
+      const remaining = (yield* Effect.forEach(read.state.retired, (id) =>
+        revokeConnectorToken(connect, id).pipe(
+          Effect.as(null),
+          Effect.catch((error) =>
+            Effect.logWarning("Replaced connector token is still live; will retry revocation", {
+              connectorTokenId: id,
+              code: error.code,
+            }).pipe(Effect.as(id)),
+          ),
+        ),
+      )).filter((id) => id !== null);
+      if (remaining.length === read.state.retired.length) return;
+      if (yield* commitTokens(key, read.generation, { ...read.state, retired: remaining })) return;
+    }
+  });
+
   const prepareDeprovision = Effect.fn("relay.managed_endpoint_provider.prepare_deprovision")(
     function* (input: { readonly userId: string; readonly environmentId: string }) {
       return yield* allocations.get(input).pipe(
@@ -288,7 +364,10 @@ export const make = Effect.gen(function* () {
       }
       const key = { userId: input.userId, environmentId: input.environmentId };
       const endpointId = allocation.tunnelId;
-      const connectorTokenIds = recordedTokenIds(allocation.dnsRecordId);
+      const tokens = readTokenState(allocation.dnsRecordId);
+      const connectorTokenIds = [tokens.current, tokens.pending, ...tokens.retired].filter(
+        (id) => id !== null,
+      );
       const failed = (stage: typeof ManagedEndpointDeprovisioningStage.Type) => (cause: unknown) =>
         new ManagedEndpointDeprovisioningFailed({
           ...key,
@@ -316,6 +395,36 @@ export const make = Effect.gen(function* () {
       yield* allocations
         .removeClaimed({ ...key, updatedAt: claimedAt })
         .pipe(Effect.mapError(failed("remove-allocation")));
+    }),
+    confirm: Effect.fn("relay.managed_endpoint_provider.confirm")(function* (input) {
+      const settings = yield* requireSettings(config, input);
+      const key = { userId: input.userId, environmentId: input.environmentId };
+      const failed = (cause: unknown) =>
+        new ManagedEndpointProvisioningFailed({
+          ...key,
+          stage: "record-connector-token",
+          connectorTokenId: input.connectorTokenId,
+          cause,
+        });
+      for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt++) {
+        const read = yield* readTokens(key).pipe(Effect.mapError(failed));
+        if (read === null) return false;
+        const { current, pending, retired } = read.state;
+        if (current !== input.connectorTokenId) {
+          if (pending !== input.connectorTokenId) return false;
+          const next = {
+            current: pending,
+            pending: null,
+            retired: current === null ? retired : [...retired, current],
+          };
+          if (!(yield* commitTokens(key, read.generation, next).pipe(Effect.mapError(failed)))) {
+            continue;
+          }
+        }
+        yield* settleRetired(settings.connect, key).pipe(Effect.ignore);
+        return true;
+      }
+      return yield* failed(new ManagedEndpointTokenStateConflict());
     }),
     provision: Effect.fn("relay.managed_endpoint_provider.provision")(function* (input) {
       yield* Effect.annotateCurrentSpan({
@@ -411,57 +520,73 @@ export const make = Effect.gen(function* () {
           .pipe(Effect.mapError(failed("record-endpoint", { endpointId })));
       }
 
-      // Every provision rotates the connector token: issue, record, then revoke what it
-      // replaced. The key names the replaced token, so a retry after a failed record reuses
-      // the same new token while the old one stays tracked. A failed revocation also stays
-      // recorded, for the next provision or unlink to retry.
-      const replacedTokenIds = recordedTokenIds(allocation.dnsRecordId);
-      const token = yield* rpc(
-        settings.connect,
-        "CreateConnectorToken",
-        {
-          endpointIds: [endpointId],
-          idempotencyKey: `token:${endpointId}:${replacedTokenIds[0] ?? "none"}`,
-        },
-        ConnectToken,
-      ).pipe(Effect.mapError(failed("create-connector-token", { endpointId })));
-      const connectorTokenId = token.connectorToken.id;
-      const replaced = replacedTokenIds.filter((id) => id !== connectorTokenId);
-      yield* allocations
-        .recordDns({ ...key, dnsRecordId: [connectorTokenId, ...replaced].join(" ") })
-        .pipe(Effect.mapError(failed("record-connector-token", { endpointId, connectorTokenId })));
+      // Provisioning never revokes a token the environment might still use: it only issues
+      // and records a pending one. The key names the current token, so repeated or
+      // overlapping provisions get the same pending token, and a revoke outage cannot
+      // multiply live tokens. Tokens are retired once the environment confirms a newer one.
+      yield* settleRetired(settings.connect, key).pipe(
+        Effect.mapError(failed("revoke-retired-tokens", { endpointId })),
+      );
+      let issued: typeof ConnectToken.Type | null = null;
+      for (let attempt = 0; issued === null && attempt < MAX_WRITE_ATTEMPTS; attempt++) {
+        const read = yield* readTokens(key).pipe(
+          Effect.mapError(failed("record-connector-token", { endpointId })),
+        );
+        const tokens = read?.state ?? readTokenState(null);
+        if (tokens.retired.length >= MAX_RETIRED_TOKENS) {
+          return yield* failed("revoke-retired-tokens", { endpointId })(
+            new ManagedEndpointRetiredTokensOutstanding({ connectorTokenIds: tokens.retired }),
+          );
+        }
+        const token = yield* rpc(
+          settings.connect,
+          "CreateConnectorToken",
+          {
+            endpointIds: [endpointId],
+            idempotencyKey: `token:${endpointId}:${tokens.current ?? "none"}`,
+          },
+          ConnectToken,
+        ).pipe(Effect.mapError(failed("create-connector-token", { endpointId })));
+        const connectorTokenId = token.connectorToken.id;
+        if (connectorTokenId === tokens.pending) {
+          issued = token;
+          break;
+        }
+        // A different token for the same key means the edge forgot the earlier one.
+        const next = {
+          current: tokens.current,
+          pending: connectorTokenId,
+          retired: tokens.pending === null ? tokens.retired : [...tokens.retired, tokens.pending],
+        };
+        const written =
+          read !== null &&
+          (yield* commitTokens(key, read.generation, next).pipe(
+            Effect.mapError(failed("record-connector-token", { endpointId, connectorTokenId })),
+          ));
+        if (written) issued = token;
+      }
+      if (issued === null) {
+        return yield* failed("record-connector-token", { endpointId })(
+          new ManagedEndpointTokenStateConflict(),
+        );
+      }
+      const connectorTokenId = issued.connectorToken.id;
+      // Every provision moves the generation, so an unlink that read the allocation
+      // before this relink leaves it in place.
       yield* allocations
         .markReady(key)
         .pipe(Effect.mapError(failed("mark-allocation-ready", { endpointId, connectorTokenId })));
-      const unrevoked = yield* Effect.forEach(replaced, (id) =>
-        revokeConnectorToken(settings.connect, id).pipe(
-          Effect.as(null),
-          Effect.catch((error) =>
-            Effect.logWarning("Replaced connector token is still live; will retry revocation", {
-              connectorTokenId: id,
-              code: error.code,
-            }).pipe(Effect.as(id)),
-          ),
-        ),
-      ).pipe(Effect.map((ids) => ids.filter((id) => id !== null)));
-      if (unrevoked.length < replaced.length) {
-        yield* allocations
-          .recordDns({ ...key, dnsRecordId: [connectorTokenId, ...unrevoked].join(" ") })
-          .pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("Could not forget revoked connector tokens; will retry", { error }),
-            ),
-          );
-      }
+      yield* settleRetired(settings.connect, key).pipe(Effect.ignore);
 
       return {
         endpoint: managedEndpointForHostname(hostname),
         runtime: {
           environmentId: EnvironmentId.make(input.environmentId),
           providerKind: "pathway_relay",
-          connectorToken: token.token,
+          connectorToken: issued.token,
           edgeUrl: settings.connect.edgeUrl,
           endpointId,
+          connectorTokenId,
         },
       } satisfies ManagedEndpointProvisioningResult;
     }),

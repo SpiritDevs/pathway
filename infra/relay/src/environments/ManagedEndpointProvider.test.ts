@@ -45,6 +45,17 @@ const RpcBody = Schema.Struct({
   idempotencyKey: Schema.optional(Schema.String),
 });
 const decodeRpcBody = Schema.decodeUnknownSync(Schema.fromJsonString(RpcBody));
+const decodeTokenState = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.NullOr(
+      Schema.Struct({
+        current: Schema.NullOr(Schema.String),
+        pending: Schema.NullOr(Schema.String),
+        retired: Schema.Array(Schema.String),
+      }),
+    ),
+  ),
+);
 
 interface ConnectCall {
   readonly method: string;
@@ -133,11 +144,12 @@ function makeConnectEdge(options?: { readonly failApplyRevoke?: () => boolean })
   return { client, calls, authorizations, endpoints, tokens };
 }
 
-function makeAllocations(options?: { readonly failRecordDns?: () => boolean }) {
+function makeAllocations(options?: { readonly beforeFirstCommit?: () => Effect.Effect<void> }) {
   const allocations = new Map<string, ManagedEndpointAllocations.ManagedEndpointAllocation>();
   const keyOf = (input: { readonly userId: string; readonly environmentId: string }) =>
     `${input.userId}:${input.environmentId}`;
   let generation = 0;
+  let beforeFirstCommit = options?.beforeFirstCommit;
   const mutate = (
     input: { readonly userId: string; readonly environmentId: string },
     change: Partial<ManagedEndpointAllocations.ManagedEndpointAllocation>,
@@ -166,17 +178,16 @@ function makeAllocations(options?: { readonly failRecordDns?: () => boolean }) {
         return allocation;
       }),
     recordTunnel: (input) => Effect.sync(() => mutate(input, { tunnelId: input.tunnelId })),
-    recordDns: (input) =>
-      options?.failRecordDns?.()
-        ? Effect.fail(
-            new ManagedEndpointAllocations.ManagedEndpointAllocationPersistenceError({
-              operation: "record-dns",
-              stage: "database-request",
-              userId: input.userId,
-              environmentId: input.environmentId,
-            }),
-          )
-        : Effect.sync(() => mutate(input, { dnsRecordId: input.dnsRecordId })),
+    // A test can run another rotation inside the first writer's read-to-commit window.
+    recordDnsIfUnchanged: (input) =>
+      Effect.gen(function* () {
+        const pause = beforeFirstCommit;
+        beforeFirstCommit = undefined;
+        if (pause) yield* pause();
+        if (allocations.get(keyOf(input))?.updatedAt !== input.updatedAt) return null;
+        mutate(input, { dnsRecordId: input.dnsRecordId });
+        return allocations.get(keyOf(input))?.updatedAt ?? null;
+      }),
     markReady: (input) => Effect.sync(() => mutate(input, { readyAt: "2026-06-02T00:00:00.000Z" })),
     claimDeprovision: (input) =>
       Effect.sync(() => {
@@ -191,7 +202,8 @@ function makeAllocations(options?: { readonly failRecordDns?: () => boolean }) {
         return allocations.delete(keyOf(input));
       }),
   });
-  return { service, allocations };
+  const tokens = () => decodeTokenState(allocations.get("user_ABC:env_ABC")?.dnsRecordId ?? "null");
+  return { service, allocations, tokens };
 }
 
 function providerLayer(
@@ -219,7 +231,6 @@ function expectedManagedHostname(environmentId: string, userId = "user_ABC"): st
 
 const key = { userId: "user_ABC", environmentId: "env_ABC" } as const;
 const request = key;
-const tokenIdOf = (connectorToken: string) => connectorToken.replace("secret-", "");
 
 describe("ManagedEndpointProvider", () => {
   it.effect("provisions a public Connect endpoint and an endpoint-scoped connector token", () => {
@@ -243,6 +254,7 @@ describe("ManagedEndpointProvider", () => {
           connectorToken: "secret-token-2",
           edgeUrl: "wss://edge.example.test/connect/v1",
           endpointId: "endpoint-1",
+          connectorTokenId: "token-2",
         },
       });
       expect(edge.calls.map((call) => call.method)).toEqual([
@@ -259,30 +271,113 @@ describe("ManagedEndpointProvider", () => {
       expect(allocations.allocations.get("user_ABC:env_ABC")).toMatchObject({
         hostname,
         tunnelId: "endpoint-1",
-        dnsRecordId: "token-2",
         readyAt: expect.any(String),
       });
+      expect(allocations.tokens()).toEqual({ current: null, pending: "token-2", retired: [] });
     }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
   });
 
-  it.effect("keeps the endpoint and rotates the connector token on every provision", () => {
+  it.effect(
+    "provisioning never revokes, so a lost response or failed commit strands nothing",
+    () => {
+      const edge = makeConnectEdge();
+      const allocations = makeAllocations();
+
+      return Effect.gen(function* () {
+        const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+        const first = yield* provider.provision(request);
+        const firstId = first.runtime.connectorTokenId!;
+        expect(yield* provider.confirm({ ...key, connectorTokenId: firstId })).toBe(true);
+
+        // The environment never receives these: the response is lost or the link commit fails.
+        const lost = yield* provider.provision(request);
+        for (let attempt = 0; attempt < 11; attempt++) {
+          expect((yield* provider.provision(request)).runtime.connectorTokenId).toBe(
+            lost.runtime.connectorTokenId,
+          );
+        }
+        expect(edge.calls.some((call) => call.method.includes("Revoke"))).toBe(false);
+        expect([...edge.tokens.keys()].sort()).toEqual(
+          [firstId, lost.runtime.connectorTokenId!].sort(),
+        );
+        expect(allocations.tokens()?.current).toBe(firstId);
+        expect(first.runtime.endpointId).toBe(lost.runtime.endpointId);
+      }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
+    },
+  );
+
+  it.effect("confirming a token retires only the tokens it replaced", () => {
     const edge = makeConnectEdge();
+    const allocations = makeAllocations();
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-      const first = yield* provider.provision(request);
-      const second = yield* provider.provision(request);
+      const first = (yield* provider.provision(request)).runtime.connectorTokenId!;
+      yield* provider.confirm({ ...key, connectorTokenId: first });
+      const second = (yield* provider.provision(request)).runtime.connectorTokenId!;
 
-      expect(second.runtime.endpointId).toBe(first.runtime.endpointId);
-      expect(second.runtime.connectorToken).not.toBe(first.runtime.connectorToken);
-      expect(edge.calls.slice(2).map((call) => call.method)).toEqual([
-        "GetEndpoint",
-        "CreateConnectorToken",
-        "PlanRevokeConnectorToken",
-        "ApplyRevokeConnectorToken",
-      ]);
-      expect([...edge.tokens.keys()]).toEqual(["token-3"]);
-    }).pipe(Effect.provide(providerLayer(edge)));
+      expect(yield* provider.confirm({ ...key, connectorTokenId: second })).toBe(true);
+      expect([...edge.tokens.keys()]).toEqual([second]);
+      expect(allocations.tokens()).toEqual({ current: second, pending: null, retired: [] });
+      // A late or repeated confirm changes nothing.
+      expect(yield* provider.confirm({ ...key, connectorTokenId: first })).toBe(false);
+      expect(yield* provider.confirm({ ...key, connectorTokenId: second })).toBe(true);
+      expect([...edge.tokens.keys()]).toEqual([second]);
+    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
+  });
+
+  it.effect("an overlapping rotation never makes a revoked token current or returns one", () => {
+    const edge = makeConnectEdge();
+    let provider!: ManagedEndpointProvider.ManagedEndpointProvider["Service"];
+    // Rotation B completes twice while rotation A sits between its read and its commit.
+    const rotateB = Effect.gen(function* () {
+      for (let round = 0; round < 2; round++) {
+        const { connectorTokenId } = (yield* provider.provision(request)).runtime;
+        yield* provider.confirm({ ...key, connectorTokenId: connectorTokenId! });
+      }
+    }).pipe(Effect.orDie);
+    const allocations = makeAllocations({ beforeFirstCommit: () => rotateB });
+
+    return Effect.gen(function* () {
+      provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      const a = (yield* provider.provision(request)).runtime.connectorTokenId!;
+      const { current, pending } = allocations.tokens()!;
+
+      expect(edge.tokens.has(a)).toBe(true);
+      expect(pending).toBe(a);
+      expect(edge.tokens.has(current!)).toBe(true);
+      expect(edge.tokens.size).toBe(2);
+    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
+  });
+
+  it.effect("a revoke outage keeps live tokens bounded, then catches up", () => {
+    let outage = true;
+    const edge = makeConnectEdge({ failApplyRevoke: () => outage });
+    const allocations = makeAllocations();
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      let refused = 0;
+      for (let round = 0; round < 12; round++) {
+        const provisioned = yield* Effect.result(provider.provision(request));
+        if (provisioned._tag === "Failure") {
+          expect(provisioned.failure).toMatchObject({ stage: "revoke-retired-tokens" });
+          refused++;
+          continue;
+        }
+        const connectorTokenId = provisioned.success.runtime.connectorTokenId!;
+        yield* provider.confirm({ ...key, connectorTokenId });
+      }
+      // Current plus at most two replaced tokens awaiting revocation.
+      expect(refused).toBeGreaterThan(0);
+      expect(edge.tokens.size).toBe(3);
+
+      outage = false;
+      const recovered = (yield* provider.provision(request)).runtime.connectorTokenId!;
+      expect(allocations.tokens()?.retired).toEqual([]);
+      yield* provider.confirm({ ...key, connectorTokenId: recovered });
+      expect([...edge.tokens.keys()]).toEqual([recovered]);
+    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
   });
 
   it.effect("recreates an endpoint the edge no longer knows", () => {
@@ -296,77 +391,10 @@ describe("ManagedEndpointProvider", () => {
       edge.tokens.clear();
       const result = yield* provider.provision(request);
 
-      expect(result.runtime.endpointId).toBe("endpoint-3");
+      expect(result.runtime.endpointId).not.toBe("endpoint-1");
       expect([...edge.endpoints.values()]).toEqual([expectedManagedHostname("env_ABC")]);
+      expect(edge.tokens.has(result.runtime.connectorTokenId!)).toBe(true);
     }).pipe(Effect.provide(providerLayer(edge)));
-  });
-
-  it.effect("a retried provision reuses its token instead of leaving an untracked one", () => {
-    const edge = makeConnectEdge();
-    let failures = 1;
-    const allocations = makeAllocations({ failRecordDns: () => failures-- > 0 });
-
-    return Effect.gen(function* () {
-      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-      const error = yield* Effect.flip(provider.provision(request));
-      expect(error).toMatchObject({
-        _tag: "ManagedEndpointProvisioningFailed",
-        stage: "record-connector-token",
-      });
-      const retried = yield* provider.provision(request);
-
-      expect(retried.runtime.connectorToken).toBe("secret-token-2");
-      expect([...edge.tokens.keys()]).toEqual(["token-2"]);
-      expect(allocations.allocations.get("user_ABC:env_ABC")?.dnsRecordId).toBe("token-2");
-    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
-  });
-
-  it.effect("a failed token record keeps the old token live and tracked", () => {
-    const edge = makeConnectEdge();
-    let failures = 0;
-    const allocations = makeAllocations({ failRecordDns: () => failures-- > 0 });
-
-    return Effect.gen(function* () {
-      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-      const first = yield* provider.provision(request);
-      failures = 1;
-      const error = yield* Effect.flip(provider.provision(request));
-      expect(error).toMatchObject({ stage: "record-connector-token" });
-      const oldTokenId = tokenIdOf(first.runtime.connectorToken);
-      expect(allocations.allocations.get("user_ABC:env_ABC")?.dnsRecordId).toBe(oldTokenId);
-      expect(edge.tokens.has(oldTokenId)).toBe(true);
-
-      // The retry reuses the token the failed attempt issued, then revokes the old one.
-      const retried = yield* provider.provision(request);
-      const newTokenId = tokenIdOf(retried.runtime.connectorToken);
-      expect(edge.calls.filter((call) => call.method === "CreateConnectorToken")).toHaveLength(3);
-      expect([...edge.tokens.keys()]).toEqual([newTokenId]);
-      expect(allocations.allocations.get("user_ABC:env_ABC")?.dnsRecordId).toBe(newTokenId);
-    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
-  });
-
-  it.effect("a failed revocation still returns the new token and retries later", () => {
-    let failures = 0;
-    const edge = makeConnectEdge({ failApplyRevoke: () => failures-- > 0 });
-    const allocations = makeAllocations();
-
-    return Effect.gen(function* () {
-      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-      const first = yield* provider.provision(request);
-      failures = 1;
-      const second = yield* provider.provision(request);
-      const oldTokenId = tokenIdOf(first.runtime.connectorToken);
-      const newTokenId = tokenIdOf(second.runtime.connectorToken);
-      expect(edge.tokens.has(oldTokenId)).toBe(true);
-      expect(allocations.allocations.get("user_ABC:env_ABC")?.dnsRecordId).toBe(
-        `${newTokenId} ${oldTokenId}`,
-      );
-
-      const third = yield* provider.provision(request);
-      const currentTokenId = tokenIdOf(third.runtime.connectorToken);
-      expect([...edge.tokens.keys()]).toEqual([currentTokenId]);
-      expect(allocations.allocations.get("user_ABC:env_ABC")?.dnsRecordId).toBe(currentTokenId);
-    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
   });
 
   it.effect("fails closed when Cyndrbase Connect is not configured", () =>

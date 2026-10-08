@@ -1078,6 +1078,9 @@ describe("Convex relay repositories", () => {
         if (reference === functionName(api.relayPersistence.reserveManagedEndpointAllocation)) {
           return Effect.succeed({ status: "reserved", allocation });
         }
+        if (reference === functionName(api.relayPersistence.recordManagedEndpointDnsIfUnchanged)) {
+          return Effect.succeed("generation-two");
+        }
         if (reference === functionName(api.relayPersistence.claimManagedEndpointDeprovision)) {
           return Effect.succeed("claim-generation");
         }
@@ -1107,11 +1110,14 @@ describe("Convex relay repositories", () => {
         environmentId: "env-one",
         tunnelId: "tunnel-one",
       });
-      yield* allocations.recordDns({
-        userId: "user-one",
-        environmentId: "env-one",
-        dnsRecordId: "dns-one",
-      });
+      expect(
+        yield* allocations.recordDnsIfUnchanged({
+          userId: "user-one",
+          environmentId: "env-one",
+          dnsRecordId: "dns-one",
+          updatedAt: "generation-one",
+        }),
+      ).toBe("generation-two");
       yield* allocations.markReady({ userId: "user-one", environmentId: "env-one" });
       expect(
         yield* allocations.claimDeprovision({
@@ -1133,7 +1139,7 @@ describe("Convex relay repositories", () => {
         functionName(api.relayPersistence.getManagedEndpointAllocation),
         functionName(api.relayPersistence.reserveManagedEndpointAllocation),
         functionName(api.relayPersistence.recordManagedEndpointTunnel),
-        functionName(api.relayPersistence.recordManagedEndpointDns),
+        functionName(api.relayPersistence.recordManagedEndpointDnsIfUnchanged),
         functionName(api.relayPersistence.markManagedEndpointReady),
         functionName(api.relayPersistence.claimManagedEndpointDeprovision),
         functionName(api.relayPersistence.removeManagedEndpointAllocation),

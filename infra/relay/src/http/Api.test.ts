@@ -44,6 +44,7 @@ import {
   relayCorsPreflightResponse,
   relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
+  confirmManagedEndpoint,
   relayNotFoundRoute,
   reprovisionManagedEndpoint,
   revokeEnvironmentLinkRecord,
@@ -363,6 +364,7 @@ function relayUnlinkTestLayer(input?: {
   readonly prepareDeprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["prepareDeprovision"];
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
   readonly provision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["provision"];
+  readonly confirm?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["confirm"];
 }) {
   return Layer.mergeAll(
     Layer.succeed(
@@ -394,6 +396,7 @@ function relayUnlinkTestLayer(input?: {
         provision: input?.provision ?? (() => Effect.die("unused provision")),
         prepareDeprovision: input?.prepareDeprovision ?? (() => Effect.succeed(null)),
         deprovision: input?.deprovision ?? (() => Effect.void),
+        confirm: input?.confirm ?? (() => Effect.die("unused confirm")),
       }),
     ),
   );
@@ -459,6 +462,51 @@ describe("relay managed endpoint reprovisioning", () => {
     return Effect.gen(function* () {
       expect((yield* Effect.flip(effect))._tag).toBe("Unauthorized");
       expect(provisioned).toEqual([]);
+    });
+  });
+});
+
+describe("relay managed endpoint confirmation", () => {
+  const confirm = (environmentPublicKey: string) => {
+    const confirmed: Array<unknown> = [];
+    const effect = confirmManagedEndpoint({
+      environmentId: "environment-1",
+      cloudUserId: "user-1",
+      connectorTokenId: "token-2",
+    }).pipe(
+      Effect.provideService(RelayEnvironmentPrincipal, {
+        environmentId: "environment-1",
+        environmentPublicKey,
+      }),
+      Effect.provide(
+        relayUnlinkTestLayer({
+          getForUser: () => Effect.succeed(linkedEnvironmentRecord),
+          confirm: (input) =>
+            Effect.sync(() => {
+              confirmed.push(input);
+              return true;
+            }),
+        }),
+      ),
+    );
+    return { effect, confirmed };
+  };
+
+  it.effect("confirms the token for the calling environment's own link", () => {
+    const { effect, confirmed } = confirm("public-key");
+    return Effect.gen(function* () {
+      expect(yield* effect).toBe(true);
+      expect(confirmed).toEqual([
+        { userId: "user-1", environmentId: "environment-1", connectorTokenId: "token-2" },
+      ]);
+    });
+  });
+
+  it.effect("refuses a credential that does not belong to that link", () => {
+    const { effect, confirmed } = confirm("another-link-key");
+    return Effect.gen(function* () {
+      expect((yield* Effect.flip(effect))._tag).toBe("Unauthorized");
+      expect(confirmed).toEqual([]);
     });
   });
 });

@@ -19,7 +19,7 @@ export interface ManagedEndpointAllocation {
   readonly tunnelId: string | null;
   /** Reserved per environment so hostnames stay unique. */
   readonly tunnelName: string;
-  /** The ID of the connector token most recently issued for the endpoint. */
+  /** The connector token state for the endpoint, written only with `recordDnsIfUnchanged`. */
   readonly dnsRecordId: string | null;
   readonly readyAt: string | null;
   /**
@@ -52,7 +52,7 @@ export class ManagedEndpointAllocationPersistenceError extends Schema.TaggedErro
       "get",
       "reserve",
       "record-tunnel",
-      "record-dns",
+      "record-dns-if-unchanged",
       "mark-ready",
       "claim-deprovision",
       "remove",
@@ -89,6 +89,8 @@ interface RecordManagedEndpointTunnelInput extends ManagedEndpointAllocationKey 
 
 interface RecordManagedEndpointDnsInput extends ManagedEndpointAllocationKey {
   readonly dnsRecordId: string;
+  /** The generation the caller read; the write is skipped if another landed since. */
+  readonly updatedAt: string;
 }
 
 interface ClaimManagedEndpointDeprovisionInput extends ManagedEndpointAllocationKey {
@@ -114,9 +116,10 @@ export class ManagedEndpointAllocations extends Context.Service<
     readonly recordTunnel: (
       input: RecordManagedEndpointTunnelInput,
     ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
-    readonly recordDns: (
+    /** Returns the new generation, or null when the allocation changed since `updatedAt`. */
+    readonly recordDnsIfUnchanged: (
       input: RecordManagedEndpointDnsInput,
-    ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
+    ) => Effect.Effect<string | null, ManagedEndpointAllocationPersistenceError>;
     readonly markReady: (
       input: ManagedEndpointAllocationKey,
     ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
@@ -205,26 +208,28 @@ export const make = Effect.gen(function* () {
           ),
         );
     }),
-    recordDns: Effect.fn("relay.managed_endpoint_allocations.record_dns")(function* (
-      input: RecordManagedEndpointDnsInput,
-    ) {
-      yield* client
-        .mutation(api.relayPersistence.recordManagedEndpointDns, {
-          ...input,
-          now: DateTime.formatIso(yield* DateTime.now),
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointAllocationPersistenceError({
-                operation: "record-dns",
-                stage: "database-request",
-                ...input,
-                cause,
-              }),
-          ),
-        );
-    }),
+    recordDnsIfUnchanged: Effect.fn("relay.managed_endpoint_allocations.record_dns_if_unchanged")(
+      function* (input: RecordManagedEndpointDnsInput) {
+        return yield* client
+          .mutation(api.relayPersistence.recordManagedEndpointDnsIfUnchanged, {
+            ...input,
+            now: DateTime.formatIso(yield* DateTime.now),
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ManagedEndpointAllocationPersistenceError({
+                  operation: "record-dns-if-unchanged",
+                  stage: "database-request",
+                  userId: input.userId,
+                  environmentId: input.environmentId,
+                  dnsRecordId: input.dnsRecordId,
+                  cause,
+                }),
+            ),
+          );
+      },
+    ),
     markReady: Effect.fn("relay.managed_endpoint_allocations.mark_ready")(function* (
       input: ManagedEndpointAllocationKey,
     ) {

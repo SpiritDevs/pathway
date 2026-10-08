@@ -446,29 +446,53 @@ export const revokeEnvironmentLinkRecord = Effect.fn(
   return result.linkRevoked;
 });
 
-/** Refreshes the connector config of the calling environment's own managed link. */
+// The environment credential must belong to this user's link, and the link must be managed.
+const authorizeManagedLink = Effect.fnUntraced(function* (input: {
+  readonly environmentId: string;
+  readonly cloudUserId: string;
+}) {
+  const principal = yield* RelayEnvironmentPrincipal;
+  const links = yield* EnvironmentLinks.EnvironmentLinks;
+  const link =
+    principal.environmentId === input.environmentId
+      ? yield* links.getForUser({ userId: input.cloudUserId, environmentId: input.environmentId })
+      : null;
+  if (
+    link === null ||
+    link.environmentPublicKey !== principal.environmentPublicKey ||
+    link.endpoint.providerKind !== "cloudflare_tunnel"
+  ) {
+    return yield* new HttpApiError.Unauthorized({});
+  }
+});
+
+/** Issues a connector config for the calling environment's own managed link. */
 export const reprovisionManagedEndpoint = Effect.fn("relay.api.server.reprovisionManagedEndpoint")(
   function* (input: { readonly environmentId: string; readonly cloudUserId: string }) {
-    const principal = yield* RelayEnvironmentPrincipal;
-    const links = yield* EnvironmentLinks.EnvironmentLinks;
-    const link =
-      principal.environmentId === input.environmentId
-        ? yield* links.getForUser({ userId: input.cloudUserId, environmentId: input.environmentId })
-        : null;
-    // The credential must belong to this user's link, and the link must be managed.
-    if (
-      link === null ||
-      link.environmentPublicKey !== principal.environmentPublicKey ||
-      link.endpoint.providerKind !== "cloudflare_tunnel"
-    ) {
-      return yield* new HttpApiError.Unauthorized({});
-    }
+    yield* authorizeManagedLink(input);
     const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
     const provisioned = yield* managedEndpointProvider.provision({
       userId: input.cloudUserId,
       environmentId: input.environmentId,
     });
     return provisioned.runtime;
+  },
+);
+
+/** Retires the tokens replaced by the one the calling environment registered with. */
+export const confirmManagedEndpoint = Effect.fn("relay.api.server.confirmManagedEndpoint")(
+  function* (input: {
+    readonly environmentId: string;
+    readonly cloudUserId: string;
+    readonly connectorTokenId: string;
+  }) {
+    yield* authorizeManagedLink(input);
+    const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+    return yield* managedEndpointProvider.confirm({
+      userId: input.cloudUserId,
+      environmentId: input.environmentId,
+      connectorTokenId: input.connectorTokenId,
+    });
   },
 );
 
@@ -1198,6 +1222,25 @@ export const serverApi = HttpApiBuilder.group(
             }),
           );
           return { endpointRuntime };
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "confirmManagedEndpoint",
+        Effect.fn("relay.api.server.confirmManagedEndpoint")(function* ({ params, payload }) {
+          const ok = yield* confirmManagedEndpoint({
+            environmentId: params.environmentId,
+            cloudUserId: payload.cloudUserId,
+            connectorTokenId: payload.connectorTokenId,
+          }).pipe(
+            Effect.catchTags({
+              ManagedEndpointProvisioningNotConfigured: () =>
+                relayInternalErrorResponse("upstream_unavailable"),
+              ManagedEndpointProvisioningFailed: () =>
+                relayInternalErrorResponse("upstream_unavailable"),
+              ManagedTunnelLimitExceeded: () => relayInternalErrorResponse("upstream_unavailable"),
+            }),
+          );
+          return { ok };
         }, mapRelayCommonApiErrors("not_authorized")),
       )
       .handle(

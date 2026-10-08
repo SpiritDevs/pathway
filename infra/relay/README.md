@@ -108,7 +108,9 @@ dial), and `CYNDRBASE_CONNECT_ADMIN_KEY`; remote URLs must use https/wss. Withou
 tunnels fail as not configured. The edge must forward its public scheme (`--public-scheme https`
 behind TLS), or DPoP-signed requests to environments fail URL checks. Environments whose stored
 connector config predates Connect fetch a new one at startup from
-`POST /v1/environments/:environmentId/managed-endpoint` with their environment credential. Production adopts
+`POST /v1/environments/:environmentId/managed-endpoint` with their environment credential.
+Provisioning only issues tokens. An environment confirms a token at `…/managed-endpoint/confirm`
+once its connector registered with it, and only then does the relay revoke the tokens it replaced. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 

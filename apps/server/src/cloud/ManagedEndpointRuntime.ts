@@ -204,6 +204,7 @@ export const make = Effect.gen(function* () {
             return null;
           }
           if (exit.code === CONNECTOR_CREDENTIAL_REJECTED) {
+            yield* Ref.set(desiredRef, null);
             yield* Effect.logError(
               "Pathway Connect rejected this environment's connector token; relink to restore remote access",
               { pid: connector.handle.pid, endpointId: connector.endpointId },
@@ -280,11 +281,15 @@ export const make = Effect.gen(function* () {
     const configKey = connectionKey(connection);
     const active = yield* Ref.get(activeRef);
     if (active?.configKey === configKey) {
-      return {
-        status: "running",
-        endpointId: target.endpointId,
-        pid: active.handle.pid ?? 0,
-      } satisfies CloudManagedEndpointRuntimeStatus;
+      // The same connector may still be waiting for the edge; it keeps trying either way.
+      const failure = gated ? yield* awaitRegistration(active.handle) : null;
+      return failure === null
+        ? ({
+            status: "running",
+            endpointId: target.endpointId,
+            pid: active.handle.pid ?? 0,
+          } satisfies CloudManagedEndpointRuntimeStatus)
+        : failed(failure);
     }
     yield* stopActive;
 
@@ -297,43 +302,51 @@ export const make = Effect.gen(function* () {
       );
     }
     // Only the authorized listener is exposed, whatever host a relay-config payload names.
-    const handle = yield* relayClient
-      .start({
-        edgeUrl: target.edgeUrl,
-        endpointId: target.endpointId,
-        token: config.connectorToken,
-        originHost: "127.0.0.1",
-        originPort,
-      })
-      .pipe(
-        Effect.tapError((error) =>
-          Effect.logWarning("Failed to start relay client", {
-            cause: error.cause,
+    // Starting and recording the handle cannot be split by an interruption, and an
+    // interruption at any later point stops the connector.
+    const outcome = yield* Effect.gen(function* () {
+      const started = yield* Effect.uninterruptible(
+        relayClient
+          .start({
+            edgeUrl: target.edgeUrl,
             endpointId: target.endpointId,
-          }),
-        ),
-        Effect.option,
+            token: config.connectorToken,
+            originHost: "127.0.0.1",
+            originPort,
+          })
+          .pipe(
+            Effect.map(
+              (handle) =>
+                ({ handle, configKey, endpointId: target.endpointId }) satisfies ActiveConnector,
+            ),
+            Effect.tap((connector) => Ref.set(activeRef, connector)),
+            Effect.tapError((error) =>
+              Effect.logWarning("Failed to start relay client", {
+                cause: error.cause,
+                endpointId: target.endpointId,
+              }),
+            ),
+            Effect.option,
+          ),
       );
-    if (Option.isNone(handle)) {
-      return failed("The relay client could not start.");
-    }
-    const connector = {
-      handle: handle.value,
-      configKey,
-      endpointId: target.endpointId,
-    } satisfies ActiveConnector;
-    yield* Effect.logInfo("Relay client process started; waiting for tunnel connection", {
-      pid: connector.handle.pid,
-      endpointId: target.endpointId,
-    });
-    if (gated) {
-      const failure = yield* awaitRegistration(connector.handle);
-      if (failure !== null) {
-        yield* stopConnector(connector);
-        return failed(failure);
+      if (Option.isNone(started)) {
+        return { failure: "The relay client could not start." } as const;
       }
+      yield* Effect.logInfo("Relay client process started; waiting for tunnel connection", {
+        pid: started.value.handle.pid,
+        endpointId: target.endpointId,
+      });
+      const failure = gated ? yield* awaitRegistration(started.value.handle) : null;
+      return { connector: started.value, failure } as const;
+    }).pipe(Effect.onInterrupt(() => stopActive));
+    if (!("connector" in outcome)) {
+      return failed(outcome.failure);
     }
-    yield* Ref.set(activeRef, connector);
+    if (outcome.failure !== null) {
+      yield* stopActive;
+      return failed(outcome.failure);
+    }
+    const connector = outcome.connector;
     yield* Effect.forkIn(observeRegistration(connector), runtimeScope);
     yield* Effect.forkIn(superviseConnector(connector), runtimeScope);
     return {
@@ -346,12 +359,25 @@ export const make = Effect.gen(function* () {
   const apply = (connection: ManagedEndpointConnection | null, gated: boolean) =>
     reconcileSemaphore.withPermits(1)(
       Effect.gen(function* () {
+        const previous = yield* Ref.get(desiredRef);
+        // A replacement that never registered gives way to the connection that was working.
+        const restorePrevious = Effect.gen(function* () {
+          yield* Ref.set(desiredRef, previous);
+          if (
+            gated &&
+            previous !== null &&
+            (connection === null || connectionKey(previous) !== connectionKey(connection))
+          ) {
+            yield* reconcile(previous, false);
+          }
+        });
         yield* Ref.set(desiredRef, connection);
         yield* Ref.set(restartAttemptsRef, 0);
-        const status = yield* reconcile(connection, gated);
-        // A connection that never registered must not be restarted behind the caller's back.
+        const status = yield* reconcile(connection, gated).pipe(
+          Effect.onInterrupt(() => restorePrevious),
+        );
         if (status.status !== "running" && status.status !== "disabled") {
-          yield* Ref.set(desiredRef, null);
+          yield* restorePrevious;
         }
         return status;
       }),

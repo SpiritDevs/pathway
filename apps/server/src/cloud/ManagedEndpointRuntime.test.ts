@@ -9,11 +9,13 @@ import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import * as RelayClient from "@spiritdevs/shared/relayClient";
 import { EnvironmentId } from "@spiritdevs/contracts";
-import type { RelayManagedEndpointRuntimeConfig } from "@spiritdevs/contracts/relay";
+import { RelayManagedEndpointRuntimeConfig } from "@spiritdevs/contracts/relay";
+import * as Schema from "effect/Schema";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
+import { CLOUD_ENDPOINT_RUNTIME_CONFIG, CLOUD_MANAGED_TUNNEL_LOCAL_PORT } from "./config.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-test");
 
@@ -92,7 +94,19 @@ const fakeRelayClient = (
       }),
   });
 
-const buildRuntime = (relayClient: RelayClient.RelayClient["Service"]) =>
+const encodeRuntimeConfig = Schema.encodeSync(
+  Schema.fromJsonString(RelayManagedEndpointRuntimeConfig),
+);
+const stored = (connectorToken: string) =>
+  new Map([
+    [CLOUD_ENDPOINT_RUNTIME_CONFIG, encodeRuntimeConfig(config(connectorToken))],
+    [CLOUD_MANAGED_TUNNEL_LOCAL_PORT, "3773"],
+  ]);
+
+const buildRuntime = (
+  relayClient: RelayClient.RelayClient["Service"],
+  secrets: ReadonlyMap<string, string> = new Map(),
+) =>
   Effect.gen(function* () {
     const context = yield* Layer.build(
       ManagedEndpointRuntime.layer.pipe(
@@ -100,7 +114,12 @@ const buildRuntime = (relayClient: RelayClient.RelayClient["Service"]) =>
           Layer.mergeAll(
             Layer.succeed(RelayClient.RelayClient, relayClient),
             Layer.mock(ServerSecretStore.ServerSecretStore)({
-              get: () => Effect.succeed(Option.none()),
+              get: (name) =>
+                Effect.succeed(
+                  Option.map(Option.fromNullishOr(secrets.get(name)), (value) =>
+                    new TextEncoder().encode(value),
+                  ),
+                ),
             }),
             Layer.succeed(ServerEnvironment.ServerEnvironment, {
               getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
@@ -231,6 +250,76 @@ describe("CloudManagedEndpointRuntime", () => {
         reason: "The Pathway Connect edge could not be reached.",
       });
       expect(started[0]?.stopped).toBe(true);
+    }),
+  );
+
+  it.effect("reapplying a connector that never registered waits for it to register", () =>
+    Effect.gen(function* () {
+      const started: Array<FakeConnector> = [];
+      // Boot starts the stored connector without waiting; the edge is unreachable.
+      const runtime = yield* buildRuntime(
+        fakeRelayClient(started, { registerOnStart: false }),
+        stored("token-1"),
+      );
+
+      const applying = yield* runtime.applyConfig(connection("token-1")).pipe(Effect.forkChild);
+      yield* TestClock.adjust(ManagedEndpointRuntime.CONNECTOR_REGISTRATION_TIMEOUT);
+
+      expect(yield* Fiber.join(applying)).toMatchObject({ status: "failed" });
+      // The same connector keeps trying; nothing was started or stopped.
+      expect(started).toHaveLength(1);
+      expect(started[0]?.stopped).toBe(false);
+      started[0]!.register();
+      expect(yield* runtime.applyConfig(connection("token-1"))).toMatchObject({
+        status: "running",
+      });
+    }),
+  );
+
+  it.effect("an interrupted apply stops the connector it started", () =>
+    Effect.gen(function* () {
+      const started: Array<FakeConnector> = [];
+      const startedSignal = yield* Deferred.make<void>();
+      const runtime = yield* buildRuntime(
+        fakeRelayClient(started, {
+          registerOnStart: false,
+          onStart: () => Deferred.succeed(startedSignal, undefined).pipe(Effect.asVoid),
+        }),
+      );
+
+      const applying = yield* runtime.applyConfig(connection()).pipe(Effect.forkChild);
+      yield* Deferred.await(startedSignal);
+      yield* Fiber.interrupt(applying);
+
+      expect(started[0]?.stopped).toBe(true);
+      expect(yield* runtime.applyConfig(null)).toEqual({ status: "disabled" });
+      expect(started).toHaveLength(1);
+    }),
+  );
+
+  it.effect("a replacement that is rejected gives way to the connector that worked", () =>
+    Effect.gen(function* () {
+      const started: Array<FakeConnector> = [];
+      const runtime = yield* buildRuntime(
+        fakeRelayClient(started, {
+          registerOnStart: false,
+          onStart: (connector) =>
+            Effect.sync(() =>
+              connector.options.token === "rejected" ? connector.exit(1) : connector.register(),
+            ),
+        }),
+      );
+
+      yield* runtime.applyConfig(connection("token-1"));
+      const replaced = yield* runtime.applyConfig(connection("rejected"));
+
+      expect(replaced).toMatchObject({ status: "failed" });
+      expect(started.map((connector) => connector.options.token)).toEqual([
+        "token-1",
+        "rejected",
+        "token-1",
+      ]);
+      expect(started[2]?.stopped).toBe(false);
     }),
   );
 

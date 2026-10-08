@@ -195,7 +195,7 @@ function makeAllocations(
     get: () => Effect.succeed(allocation),
     reserve: () => Effect.die("unused"),
     recordTunnel: () => Effect.die("unused"),
-    recordDns: () => Effect.die("unused"),
+    recordDnsIfUnchanged: () => Effect.die("unused"),
     markReady: () => Effect.die("unused"),
     claimDeprovision: () => Effect.die("unused"),
     remove: () => Effect.die("unused"),
