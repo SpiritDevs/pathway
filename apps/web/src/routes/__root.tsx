@@ -441,9 +441,6 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         {primaryEnvironmentAuthenticated && !isChildWindow ? <EmailCaptureToastHost /> : null}
         {primaryEnvironmentAuthenticated && !isChildWindow ? <CalendarAlertHost /> : null}
         {primaryEnvironmentAuthenticated && !isChildWindow ? <ThreadAlertRuntime /> : null}
-        {authGateState.status === "pending" && !serverError ? (
-          <EnvironmentConnectionNotice />
-        ) : null}
         {serverError ? (
           <FloatingConnectionNotice role="alert">
             {serverError}{" "}
@@ -458,19 +455,6 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         <ThemeEditorHost />
       </AnchoredToastProvider>
     </ToastProvider>
-  );
-}
-
-function EnvironmentConnectionNotice() {
-  const environment = usePrimaryEnvironment();
-  if (environment?.connection.phase === "connected") return null;
-  return (
-    <FloatingConnectionNotice role="status">
-      <span className="text-muted-foreground">
-        {environment?.connection.error ?? "Connecting to the environment."} Server actions will be
-        available when it is ready.
-      </span>
-    </FloatingConnectionNotice>
   );
 }
 
