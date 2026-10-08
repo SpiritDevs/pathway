@@ -6,6 +6,7 @@ import {
   hasCloudPublicConfig,
   hasCloudSyncPublicConfig,
   normalizeConvexDeploymentUrl,
+  resolveCloudFileUrl,
   resolveCloudSyncConvexUrl,
   resolveRelayClerkTokenOptions,
 } from "./publicConfig.ts";
@@ -126,5 +127,32 @@ describe("hasClerkPublicConfig", () => {
     vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "pk_test_example");
     expect(hasClerkPublicConfig()).toBe(true);
     expect(hasCloudPublicConfig()).toBe(false);
+  });
+});
+
+describe("resolveCloudFileUrl", () => {
+  const file = "http://127.0.0.1:3212/.files/download/id/signature?expires=1";
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("sends a local engine's file URLs through the page origin in single-origin dev", () => {
+    vi.stubEnv("VITE_PATHWAY_CYNDRBASE_URL", "/cyndrbase");
+    vi.stubGlobal("location", new URL("https://dev.example.test/threads"));
+    expect(resolveCloudFileUrl(file)).toBe(
+      "https://dev.example.test/cyndrbase/.files/download/id/signature?expires=1",
+    );
+    expect(resolveCloudFileUrl("https://files.example.test/a.png")).toBe(
+      "https://files.example.test/a.png",
+    );
+    expect(resolveCloudFileUrl("blob:https://dev.example.test/1")).toBe(
+      "blob:https://dev.example.test/1",
+    );
+  });
+
+  it("leaves file URLs alone when the deployment is not served through the page", () => {
+    vi.stubEnv("VITE_PATHWAY_CYNDRBASE_URL", "https://pathway.syd.cyndrbase.cloud");
+    expect(resolveCloudFileUrl(file)).toBe(file);
   });
 });

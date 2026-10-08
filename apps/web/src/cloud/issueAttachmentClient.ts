@@ -6,6 +6,7 @@ import { makeFunctionReference, type FunctionReference } from "cyndrbase/server"
 import { ConvexError } from "convex/values";
 import { useEffect, useMemo, useState } from "react";
 
+import { resolveCloudFileUrl } from "./publicConfig";
 import { useAuthenticatedConvexClient } from "./useAuthenticatedConvexClient";
 import type { ConvexArgs, ConvexAuthTokenFetcher } from "./syncTransport";
 
@@ -174,7 +175,12 @@ export function makeIssueAttachmentClient(options: {
       }
       return prepared.attachmentId;
     },
-    urls: (input) => call(() => client.query(ISSUE_ATTACHMENT_FUNCTION_REFERENCES.urls, input)),
+    urls: async (input) =>
+      (
+        await call<ReadonlyArray<ReplicaIssueAttachment>>(() =>
+          client.query(ISSUE_ATTACHMENT_FUNCTION_REFERENCES.urls, input),
+        )
+      ).map((attachment) => ({ ...attachment, url: resolveCloudFileUrl(attachment.url) })),
     close: () => (ownsClient ? client.close() : Promise.resolve()),
   };
 }

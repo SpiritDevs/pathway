@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
 import { cloudProjectsAtom } from "~/cloud/issueDomainReadModel";
+import { resolveCloudFileUrl } from "~/cloud/publicConfig";
 import type { SyncedProjectIcon } from "~/state/projectIcons";
 import { IconColorPicker, LIBRARY_ICON_COLORS } from "../focus/IconColorPicker";
 import { Button } from "../ui/button";
@@ -16,7 +17,8 @@ export function useCompanyProjectIcon(cloudProjectId: string | null): SyncedProj
   const cloudProjects = useAtomValue(cloudProjectsAtom) ?? [];
   const project =
     cloudProjectId === null ? undefined : cloudProjects.find(({ id }) => id === cloudProjectId);
-  if (project?.iconImageUrl) return { _tag: "Image", url: project.iconImageUrl };
+  if (project?.iconImageUrl)
+    return { _tag: "Image", url: resolveCloudFileUrl(project.iconImageUrl) };
   return project?.icon ? { _tag: "Library", icon: project.icon } : null;
 }
 

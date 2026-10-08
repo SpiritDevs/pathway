@@ -69,6 +69,22 @@ export function normalizeConvexDeploymentUrl(value: string): string | null {
   }
 }
 
+/**
+ * A file URL from the deployment (`ctx.storage.getUrl`), as this page should load it. Single-origin
+ * dev serves a local engine under a path of this page's origin, but its file URLs name the engine's
+ * loopback origin; those are sent through the same path. Every other URL is returned unchanged.
+ */
+export function resolveCloudFileUrl(url: string): string {
+  const base = (import.meta.env.VITE_PATHWAY_CYNDRBASE_URL as string | undefined)?.trim() ?? "";
+  if (!base.startsWith("/") || !URL.canParse(url)) return url;
+  const file = new URL(url);
+  return file.protocol === "http:" &&
+    LOOPBACK_HOSTNAMES.has(file.hostname) &&
+    file.pathname.startsWith("/.files/")
+    ? `${normalizeConvexDeploymentUrl(base)}${file.pathname}${file.search}`
+    : url;
+}
+
 export function resolveCloudPublicConfig(): CloudPublicConfig {
   return {
     clerkPublishableKey: trimNonEmpty(

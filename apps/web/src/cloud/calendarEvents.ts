@@ -25,6 +25,7 @@ import { ConvexClient } from "convex/browser";
 import { makeFunctionReference, type FunctionReference } from "cyndrbase/server";
 import { ConvexError } from "convex/values";
 
+import { resolveCloudFileUrl } from "./publicConfig";
 import type { ConvexAuthTokenFetcher } from "./syncTransport";
 
 type ConvexArgs = Record<string, unknown>;
@@ -302,7 +303,8 @@ export function makeCalendarEventsClient(options: {
       mutation(CALENDAR_EVENT_FUNCTION_REFERENCES.removeEventAttachment, args),
     attachmentUrl: async (args) => {
       try {
-        return (await client.query(eventAttachmentUrlReference, args)) as string | null;
+        const url = (await client.query(eventAttachmentUrlReference, args)) as string | null;
+        return url === null ? null : resolveCloudFileUrl(url);
       } catch (error) {
         throw mapCalendarWriteError(error);
       }

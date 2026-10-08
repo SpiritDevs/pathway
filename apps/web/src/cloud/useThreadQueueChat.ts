@@ -4,6 +4,7 @@ import type { MessageId } from "@spiritdevs/contracts";
 import type { ThreadQueueOutboxRecord } from "@spiritdevs/client-runtime/sync/thread-queue-outbox";
 import type { ThreadQueueSubmission } from "@spiritdevs/contracts/threadQueue";
 import type { ThreadQueueDetail } from "@spiritdevs/contracts/threadQueue";
+import { resolveCloudFileUrl } from "./publicConfig";
 import {
   localThreadQueueAtom,
   threadQueueAccountAtom,
@@ -184,7 +185,9 @@ export function useThreadQueueChat(environmentId: string, threadId: string) {
     () =>
       new Map([
         ...(localUrlState.key === key ? localUrlState.urls : []),
-        ...Object.entries(detail?.attachmentUrls ?? {}),
+        ...Object.entries(detail?.attachmentUrls ?? {}).map(
+          ([id, url]) => [id, resolveCloudFileUrl(url)] as const,
+        ),
       ]),
     [detail?.attachmentUrls, localUrlState, key],
   );

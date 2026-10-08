@@ -2,6 +2,7 @@ import type { ProjectIcon } from "@spiritdevs/contracts/cloudProject";
 import { Atom } from "effect/unstable/reactivity";
 
 import { cloudProjectsAtom, environmentBindingsAtom } from "../cloud/issueDomainReadModel";
+import { resolveCloudFileUrl } from "../cloud/publicConfig";
 
 /** The icon a company project shows on every device, chosen once and synced through the cloud. */
 export type SyncedProjectIcon =
@@ -19,7 +20,10 @@ const projectIconsByCheckoutAtom = Atom.make((get): ReadonlyMap<string, SyncedPr
   const iconByProjectId = new Map<string, SyncedProjectIcon>();
   for (const project of get(cloudProjectsAtom)) {
     if (project.iconImageUrl) {
-      iconByProjectId.set(project.id, { _tag: "Image", url: project.iconImageUrl });
+      iconByProjectId.set(project.id, {
+        _tag: "Image",
+        url: resolveCloudFileUrl(project.iconImageUrl),
+      });
     } else if (project.icon) {
       iconByProjectId.set(project.id, { _tag: "Library", icon: project.icon });
     }
