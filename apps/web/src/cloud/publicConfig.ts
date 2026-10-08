@@ -40,13 +40,13 @@ function normalizeSecureUrl(value: string): string | null {
   }
 }
 
-/** Loopback is the one place a Convex deployment is reachable without TLS: a self-hosted backend. */
+/** Loopback is the one place a Cyndrbase deployment is reachable without TLS: a local backend. */
 const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
 /**
- * A Convex deployment URL, normalized to its origin.
+ * A Cyndrbase deployment URL, normalized to its origin.
  *
- * Cloud deployments are always `https://<deployment>.convex.cloud`; plain HTTP is accepted only
+ * Hosted deployments are always HTTPS (`https://<deployment>.<region>.cyndrbase.cloud`); plain HTTP is accepted only
  * for a loopback host, which is a locally run backend and cannot be intercepted on the wire.
  */
 export function normalizeConvexDeploymentUrl(value: string): string | null {
@@ -84,7 +84,7 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
     },
     cloudSync: {
       convexUrl: normalizeConvexDeploymentUrl(
-        (import.meta.env.VITE_PATHWAY_CONVEX_URL as string | undefined) ?? "",
+        (import.meta.env.VITE_PATHWAY_CYNDRBASE_URL as string | undefined) ?? "",
       ),
     },
   };
@@ -119,7 +119,7 @@ export function hasCloudSyncPublicConfig(): boolean {
   return hasCloudPublicConfig() && cloudSync.convexUrl !== null;
 }
 
-/** The Convex deployment origin, or `null` when cloud sync is not configured. */
+/** The Cyndrbase deployment origin, or `null` when cloud sync is not configured. */
 export function resolveCloudSyncConvexUrl(): string | null {
   return hasCloudSyncPublicConfig() ? resolveCloudPublicConfig().cloudSync.convexUrl : null;
 }

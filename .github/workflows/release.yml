@@ -231,7 +231,7 @@ jobs:
       clerk_jwt_template: ${{ steps.public_config.outputs.clerk_jwt_template }}
       clerk_cli_oauth_client_id: ${{ steps.public_config.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ steps.public_config.outputs.relay_url }}
-      convex_url: ${{ steps.public_config.outputs.convex_url }}
+      cyndrbase_url: ${{ steps.public_config.outputs.cyndrbase_url }}
       hosted_app_url: ${{ steps.public_config.outputs.hosted_app_url }}
       hosted_app_domain: ${{ steps.public_config.outputs.hosted_app_domain }}
     env:
@@ -239,7 +239,7 @@ jobs:
       CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
       CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
       CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.CLERK_CLI_OAUTH_CLIENT_ID }}
-      PATHWAY_CONVEX_URL: ${{ vars.CONVEX_URL }}
+      PATHWAY_CYNDRBASE_URL: ${{ vars.CYNDRBASE_DEPLOYMENT_URL }}
       RELEASE_CHANNEL: ${{ (github.event_name == 'schedule' || inputs.channel == 'nightly') && 'nightly' || 'stable' }}
       PATHWAY_WEB_NIGHTLY_DOMAIN: ${{ vars.PATHWAY_WEB_NIGHTLY_DOMAIN }}
       PATHWAY_WEB_LATEST_DOMAIN: ${{ vars.PATHWAY_WEB_LATEST_DOMAIN }}
@@ -256,7 +256,7 @@ jobs:
             CLERK_PUBLISHABLE_KEY
             CLERK_JWT_TEMPLATE
             CLERK_CLI_OAUTH_CLIENT_ID
-            PATHWAY_CONVEX_URL
+            PATHWAY_CYNDRBASE_URL
           )
           missing=()
           for name in "${required[@]}"; do
@@ -273,7 +273,7 @@ jobs:
           echo "clerk_jwt_template=$CLERK_JWT_TEMPLATE" >> "$GITHUB_OUTPUT"
           echo "clerk_cli_oauth_client_id=$CLERK_CLI_OAUTH_CLIENT_ID" >> "$GITHUB_OUTPUT"
           echo "relay_url=https://$relay_domain" >> "$GITHUB_OUTPUT"
-          echo "convex_url=$PATHWAY_CONVEX_URL" >> "$GITHUB_OUTPUT"
+          echo "cyndrbase_url=$PATHWAY_CYNDRBASE_URL" >> "$GITHUB_OUTPUT"
 
           if [[ "$RELEASE_CHANNEL" == "stable" ]]; then
             channel_domain="${PATHWAY_WEB_LATEST_DOMAIN:-}"
@@ -301,8 +301,10 @@ jobs:
       PATHWAY_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
       PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       PATHWAY_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
-      PATHWAY_CONVEX_URL: ${{ needs.relay_public_config.outputs.convex_url }}
-      CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+      PATHWAY_CYNDRBASE_URL: ${{ needs.relay_public_config.outputs.cyndrbase_url }}
+      CYNDRBASE_URL: ${{ vars.CYNDRBASE_URL }}
+      CYNDRBASE_DEPLOYMENT: ${{ vars.CYNDRBASE_DEPLOYMENT }}
+      CYNDRBASE_DEPLOY_KEY: ${{ secrets.CYNDRBASE_DEPLOY_KEY }}
       PATHWAY_HOSTED_APP_URL: ${{ needs.relay_public_config.outputs.hosted_app_url }}
     strategy:
       fail-fast: false
@@ -721,7 +723,7 @@ jobs:
       PATHWAY_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
       PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       PATHWAY_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
-      PATHWAY_CONVEX_URL: ${{ needs.relay_public_config.outputs.convex_url }}
+      PATHWAY_CYNDRBASE_URL: ${{ needs.relay_public_config.outputs.cyndrbase_url }}
       PATHWAY_HOSTED_APP_URL: ${{ needs.relay_public_config.outputs.hosted_app_url }}
     steps:
       - name: Checkout
@@ -886,7 +888,7 @@ jobs:
       PATHWAY_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
       PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       PATHWAY_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
-      PATHWAY_CONVEX_URL: ${{ needs.relay_public_config.outputs.convex_url }}
+      PATHWAY_CYNDRBASE_URL: ${{ needs.relay_public_config.outputs.cyndrbase_url }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -957,7 +959,7 @@ jobs:
             --build-env "PATHWAY_CLERK_JWT_TEMPLATE=${PATHWAY_CLERK_JWT_TEMPLATE:-}" \
             --build-env "PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID=${PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID:-}" \
             --build-env "PATHWAY_RELAY_URL=${PATHWAY_RELAY_URL:-}" \
-            --build-env "PATHWAY_CONVEX_URL=${PATHWAY_CONVEX_URL:-}" \
+            --build-env "PATHWAY_CYNDRBASE_URL=${PATHWAY_CYNDRBASE_URL:-}" \
             --build-env "VITE_HOSTED_APP_URL=https://$channel_domain" \
             --build-env "VITE_HOSTED_APP_CHANNEL=$channel_name"
 

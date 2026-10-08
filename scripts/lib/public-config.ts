@@ -10,7 +10,7 @@ export interface PathwayPublicConfig {
   readonly clerkJwtTemplate: string | undefined;
   readonly clerkCliOAuthClientId: string | undefined;
   readonly relayUrl: string | undefined;
-  /** Convex deployment the always-on cloud-sync engine talks to. */
+  /** Cyndrbase deployment the always-on cloud-sync engine talks to. */
   readonly convexUrl: string | undefined;
   readonly relayClientOtlpTracesUrl: string | undefined;
   readonly relayClientOtlpTracesDataset: string | undefined;
@@ -98,8 +98,8 @@ export function loadRepoEnv({
       : {}),
     ...(config.convexUrl
       ? {
-          PATHWAY_CONVEX_URL: config.convexUrl,
-          VITE_PATHWAY_CONVEX_URL: config.convexUrl,
+          PATHWAY_CYNDRBASE_URL: config.convexUrl,
+          VITE_PATHWAY_CYNDRBASE_URL: config.convexUrl,
         }
       : {}),
     ...(config.relayClientOtlpTracesUrl
@@ -142,7 +142,7 @@ export function resolvePublicConfig(...sources: readonly Environment[]): Pathway
       "VITE_CLERK_CLI_OAUTH_CLIENT_ID",
     ),
     relayUrl: firstNonEmpty(sources, "PATHWAY_RELAY_URL", "VITE_PATHWAY_RELAY_URL"),
-    convexUrl: firstNonEmpty(sources, "PATHWAY_CONVEX_URL", "VITE_PATHWAY_CONVEX_URL"),
+    convexUrl: firstNonEmpty(sources, "PATHWAY_CYNDRBASE_URL", "VITE_PATHWAY_CYNDRBASE_URL"),
     relayClientOtlpTracesUrl: firstNonEmpty(
       sources,
       "PATHWAY_RELAY_CLIENT_OTLP_TRACES_URL",

@@ -164,7 +164,7 @@ export const ApiLive = Api.make(
     const clerkSecretKey = yield* Config.redacted("CLERK_SECRET_KEY");
     const clerkPublishableKey = yield* Config.string("CLERK_PUBLISHABLE_KEY");
     const clerkJwtAudience = yield* Config.string("CLERK_JWT_AUDIENCE");
-    const convexUrl = yield* Config.nonEmptyString("CONVEX_URL");
+    const convexUrl = yield* Config.nonEmptyString("CYNDRBASE_DEPLOYMENT_URL");
 
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;

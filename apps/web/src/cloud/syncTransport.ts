@@ -115,7 +115,7 @@ export interface ConvexClientLike {
 }
 
 export interface ConvexSyncTransportOptions {
-  /** The deployment URL, e.g. `https://<deployment>.convex.cloud`. */
+  /** The deployment URL, e.g. `https://<deployment>.<region>.cyndrbase.cloud`. */
   readonly convexUrl: string;
   /** Clerk (or any) token source, handed straight to `client.setAuth`. */
   readonly fetchToken: ConvexAuthTokenFetcher;

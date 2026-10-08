@@ -606,7 +606,7 @@ describe("environment command claimant", () => {
       Effect.provide(
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
-            env: { PATHWAY_CONVEX_URL: "https://claimant.convex.cloud" },
+            env: { PATHWAY_CYNDRBASE_URL: "https://claimant.convex.cloud" },
           }),
         ),
       ),

@@ -9,7 +9,7 @@ import * as SchemaIssue from "effect/SchemaIssue";
 
 declare const __PATHWAY_BUILD_RELAY_URL__: string | undefined;
 declare const __PATHWAY_BUILD_HOSTED_APP_URL__: string | undefined;
-declare const __PATHWAY_BUILD_CONVEX_URL__: string | undefined;
+declare const __PATHWAY_BUILD_CYNDRBASE_URL__: string | undefined;
 declare const __PATHWAY_BUILD_CLERK_PUBLISHABLE_KEY__: string | undefined;
 declare const __PATHWAY_BUILD_CLERK_CLI_OAUTH_CLIENT_ID__: string | undefined;
 declare const __PATHWAY_BUILD_RELAY_CLIENT_OTLP_TRACES_URL__: string | undefined;
@@ -35,11 +35,11 @@ function validateRelayUrl(value: string) {
 }
 
 /**
- * Normalizes a Convex deployment URL to a bare origin.
+ * Normalizes a Cyndrbase deployment URL to a bare origin.
  *
- * Unlike the relay URL this accepts an HTTP loopback origin, because `npx convex dev` serves a
- * local deployment on `http://127.0.0.1:3210` and a developer pointing a server at it is the
- * expected way to exercise cloud sync before a deployment exists. Everything else is the same
+ * Unlike the relay URL this accepts an HTTP loopback origin, because `vp run dev` serves a local
+ * Cyndrbase deployment on loopback and a developer pointing a server at it is the expected way to
+ * exercise cloud sync before a deployment exists. Everything else is the same
  * shape the relay demands — HTTPS, no credentials, no path, query, or fragment — so a value with a
  * function path baked into it is refused here rather than producing 404s from every call.
  */
@@ -73,7 +73,7 @@ function validateConvexUrl(value: string) {
           new Schema.SchemaError(
             new SchemaIssue.InvalidValue({
               message:
-                "Convex URL must be an absolute HTTPS origin (or an HTTP loopback origin for a local deployment).",
+                "Cyndrbase URL must be an absolute HTTPS origin (or an HTTP loopback origin for a local deployment).",
             }),
           ),
         ),
@@ -99,14 +99,14 @@ export const buildTimeRelayUrl =
     ? ""
     : (normalizeSecureRelayUrl(__PATHWAY_BUILD_RELAY_URL__) ?? "");
 /**
- * Convex deployment baked in at build time. Empty in a source checkout and in any build that did
- * not set `PATHWAY_CONVEX_URL`, which is what keeps cloud sync off by default: with no fallback
+ * Cyndrbase deployment baked in at build time. Empty in a source checkout and in any build that did
+ * not set `PATHWAY_CYNDRBASE_URL`, which is what keeps cloud sync off by default: with no fallback
  * the runtime config below simply fails to resolve and the sync daemon stays a no-op.
  */
 export const buildTimeConvexUrl =
-  typeof __PATHWAY_BUILD_CONVEX_URL__ === "undefined"
+  typeof __PATHWAY_BUILD_CYNDRBASE_URL__ === "undefined"
     ? ""
-    : (normalizeConvexUrl(__PATHWAY_BUILD_CONVEX_URL__) ?? "");
+    : (normalizeConvexUrl(__PATHWAY_BUILD_CYNDRBASE_URL__) ?? "");
 export const buildTimeClerkPublishableKey = readBuildTimeValue(
   typeof __PATHWAY_BUILD_CLERK_PUBLISHABLE_KEY__ === "undefined"
     ? undefined
@@ -164,14 +164,14 @@ export function makeRelayUrlConfig(fallback = buildTimeRelayUrl) {
 export const relayUrlConfig = makeRelayUrlConfig();
 
 /**
- * Convex deployment the cloud-sync daemon talks to.
+ * Cyndrbase deployment the cloud-sync daemon talks to.
  *
- * Mirrors {@link makeRelayUrlConfig}: a runtime `PATHWAY_CONVEX_URL` wins, otherwise the value the
+ * Mirrors {@link makeRelayUrlConfig}: a runtime `PATHWAY_CYNDRBASE_URL` wins, otherwise the value the
  * build embedded, and an absent value is a *failure* rather than a default — cloud sync is opt-in,
  * so the daemon treats an unresolvable config as "not configured" and does nothing.
  */
 export function makeConvexUrlConfig(fallback = buildTimeConvexUrl) {
-  const runtimeConfig = Config.nonEmptyString("PATHWAY_CONVEX_URL");
+  const runtimeConfig = Config.nonEmptyString("PATHWAY_CYNDRBASE_URL");
   return (fallback ? runtimeConfig.pipe(Config.withDefault(fallback)) : runtimeConfig).pipe(
     Config.mapOrFail(validateConvexUrl),
   );

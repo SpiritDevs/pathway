@@ -6,7 +6,7 @@
  * relay-minted service token (`./convexSyncTransport.ts`), and the issue domain adapter — and it is
  * also the single place that decides whether its required configuration is available:
  *
- * 1. `PATHWAY_CONVEX_URL` (or the build-time value) resolves to a deployment origin.
+ * 1. `PATHWAY_CYNDRBASE_URL` (or the build-time value) resolves to a deployment origin.
  * 2. The environment is linked: a relay URL, an environment credential, and the environment's link
  *    key pair are all in the secret store.
  * 3. Convex discovers every active company registration for the environment and its proof key.
@@ -251,7 +251,7 @@ const disabled = (
 /**
  * Reads the environment-variable gates, cheapest first.
  *
- * A `PATHWAY_CONVEX_URL` that is present but not an origin is not the same thing as an absent one,
+ * A `PATHWAY_CYNDRBASE_URL` that is present but not an origin is not the same thing as an absent one,
  * so the config error's own message rides along as `detail`: an operator who typo'd a path onto
  * their deployment URL gets told that, instead of a server that boots as if the flag was never set.
  */

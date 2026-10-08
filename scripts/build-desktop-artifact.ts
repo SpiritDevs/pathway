@@ -651,89 +651,71 @@ export class WslNodePtyManifestReadError extends Schema.TaggedErrorClass<WslNode
 export class BackendDeployKeyMissingError extends Schema.TaggedErrorClass<BackendDeployKeyMissingError>()(
   "BackendDeployKeyMissingError",
   {
-    convexUrl: Schema.String,
+    deploymentUrl: Schema.String,
   },
 ) {
   override get message(): string {
-    return `This build talks to the Convex deployment at ${this.convexUrl}, but CONVEX_DEPLOY_KEY is not set, so the backend cannot be deployed with it. Put that deployment's deploy key in the build environment (for example .env.prod), or pass --skip-backend-deploy to package without deploying.`;
-  }
-}
-
-export class BackendDeployKeyUnrecognizedError extends Schema.TaggedErrorClass<BackendDeployKeyUnrecognizedError>()(
-  "BackendDeployKeyUnrecognizedError",
-  {
-    reason: Schema.Literal("unrecognized-format"),
-  },
-) {
-  override get message(): string {
-    return "CONVEX_DEPLOY_KEY is not a prod or dev deploy key (expected `prod:<deployment>|...`).";
+    return `This build talks to the Cyndrbase deployment at ${this.deploymentUrl}, but CYNDRBASE_DEPLOYMENT or CYNDRBASE_DEPLOY_KEY is not set, so the backend cannot be deployed with it. Put that deployment's id and deploy key (and CYNDRBASE_URL) in the build environment (for example .env.prod), or pass --skip-backend-deploy to package without deploying.`;
   }
 }
 
 export class BackendDeployTargetMismatchError extends Schema.TaggedErrorClass<BackendDeployTargetMismatchError>()(
   "BackendDeployTargetMismatchError",
   {
-    convexUrl: Schema.String,
+    deploymentUrl: Schema.String,
     deploymentName: Schema.String,
   },
 ) {
   override get message(): string {
-    return `CONVEX_DEPLOY_KEY deploys to ${this.deploymentName}, but this build talks to ${this.convexUrl}. Use the deploy key for that deployment so the app and its backend ship together.`;
+    return `CYNDRBASE_DEPLOYMENT is ${this.deploymentName}, but this build talks to ${this.deploymentUrl}. Deploy to that deployment so the app and its backend ship together.`;
   }
 }
 
 export type BackendDeployPlan =
-  | { readonly kind: "deploy"; readonly deploymentName: string; readonly convexUrl: string }
+  | { readonly kind: "deploy"; readonly deploymentName: string; readonly deploymentUrl: string }
   | { readonly kind: "skip"; readonly reason: "skipped-by-flag" | "cloud-sync-disabled" };
 
-// Convex deploy keys name their deployment: `prod:sleek-lion-657|<secret>`.
-const CONVEX_DEPLOY_KEY_PATTERN = /^(?:prod|dev):([a-z0-9-]+)\|/u;
-
 /**
- * Decides whether the artifact build deploys the Convex backend, and where.
+ * Decides whether the artifact build deploys the Cyndrbase backend, and where.
  *
- * The app bakes PATHWAY_CONVEX_URL in and publishes thread shells to it, and the
+ * The app bakes PATHWAY_CYNDRBASE_URL in and publishes thread shells to it, and the
  * deployed backend rejects any shell field it does not know. Shipping an app
  * against a backend from an older commit therefore breaks thread publication
  * outright, so a build that targets a deployment must deploy to that same
- * deployment: a missing key is an error rather than a silent skip, and a key
- * for another deployment is a misconfiguration rather than a different target.
+ * deployment: missing deploy credentials are an error rather than a silent skip,
+ * and a deployment whose endpoint (`<deployment>.<region>.cyndrbase.cloud`) is not
+ * the baked-in URL is a misconfiguration rather than a different target.
  */
 export function resolveBackendDeployPlan(input: {
-  readonly convexUrl: string | undefined;
+  readonly deploymentUrl: string | undefined;
+  readonly deployment: string | undefined;
   readonly deployKey: string | undefined;
   readonly skip: boolean;
 }): Effect.Effect<
   BackendDeployPlan,
-  | BackendDeployKeyMissingError
-  | BackendDeployKeyUnrecognizedError
-  | BackendDeployTargetMismatchError
+  BackendDeployKeyMissingError | BackendDeployTargetMismatchError
 > {
   if (input.skip) {
     return Effect.succeed({ kind: "skip", reason: "skipped-by-flag" });
   }
-  const convexUrl = input.convexUrl?.trim();
-  if (!convexUrl) {
+  const deploymentUrl = input.deploymentUrl?.trim();
+  if (!deploymentUrl) {
     return Effect.succeed({ kind: "skip", reason: "cloud-sync-disabled" });
   }
-  const deployKey = input.deployKey?.trim();
-  if (!deployKey) {
-    return Effect.fail(new BackendDeployKeyMissingError({ convexUrl }));
-  }
-  const deploymentName = CONVEX_DEPLOY_KEY_PATTERN.exec(deployKey)?.[1];
-  if (deploymentName === undefined) {
-    return Effect.fail(new BackendDeployKeyUnrecognizedError({ reason: "unrecognized-format" }));
+  const deploymentName = input.deployment?.trim();
+  if (!deploymentName || !input.deployKey?.trim()) {
+    return Effect.fail(new BackendDeployKeyMissingError({ deploymentUrl }));
   }
   let hostname: string | undefined;
   try {
-    hostname = new URL(convexUrl).hostname;
+    hostname = new URL(deploymentUrl).hostname;
   } catch {
     hostname = undefined;
   }
-  if (hostname !== `${deploymentName}.convex.cloud`) {
-    return Effect.fail(new BackendDeployTargetMismatchError({ convexUrl, deploymentName }));
+  if (hostname?.split(".")[0] !== deploymentName) {
+    return Effect.fail(new BackendDeployTargetMismatchError({ deploymentUrl, deploymentName }));
   }
-  return Effect.succeed({ kind: "deploy", deploymentName, convexUrl });
+  return Effect.succeed({ kind: "deploy", deploymentName, deploymentUrl });
 }
 
 export class LinuxIconResizeError extends Schema.TaggedErrorClass<LinuxIconResizeError>()(
@@ -2301,14 +2283,12 @@ const stageWslNodePtyPrebuild = Effect.fn("stageWslNodePtyPrebuild")(function* (
 });
 
 /**
- * Deploys packages/backend to the Convex deployment this artifact is built
+ * Deploys packages/backend to the Cyndrbase deployment this artifact is built
  * against, before packaging, so the app never ships ahead of its backend. See
  * resolveBackendDeployPlan for why a configured deployment must be deployed to.
  */
-const deployConvexBackend = Effect.fn("deployConvexBackend")(function* (input: {
+const deployCyndrbaseBackend = Effect.fn("deployCyndrbaseBackend")(function* (input: {
   readonly repoRoot: string;
-  readonly appVersion: string;
-  readonly commitHash: string;
   readonly skip: boolean;
   readonly verbose: boolean;
 }) {
@@ -2316,40 +2296,28 @@ const deployConvexBackend = Effect.fn("deployConvexBackend")(function* (input: {
   // the URL the app actually bakes in.
   const repoEnv = loadRepoEnv({ repoRoot: input.repoRoot });
   const plan = yield* resolveBackendDeployPlan({
-    convexUrl: repoEnv.PATHWAY_CONVEX_URL,
-    deployKey: repoEnv.CONVEX_DEPLOY_KEY,
+    deploymentUrl: repoEnv.PATHWAY_CYNDRBASE_URL,
+    deployment: repoEnv.CYNDRBASE_DEPLOYMENT,
+    deployKey: repoEnv.CYNDRBASE_DEPLOY_KEY,
     skip: input.skip,
   });
   if (plan.kind === "skip") {
     yield* Effect.log(
       plan.reason === "skipped-by-flag"
-        ? "[desktop-artifact] Skipping Convex backend deploy (--skip-backend-deploy)."
-        : "[desktop-artifact] PATHWAY_CONVEX_URL is not set; cloud sync is off for this build, so there is no backend to deploy.",
+        ? "[desktop-artifact] Skipping Cyndrbase backend deploy (--skip-backend-deploy)."
+        : "[desktop-artifact] PATHWAY_CYNDRBASE_URL is not set; cloud sync is off for this build, so there is no backend to deploy.",
     );
     return;
   }
 
-  yield* Effect.log(`[desktop-artifact] Deploying Convex backend to ${plan.convexUrl}...`);
-  // The Convex CLI also reads packages/backend/.env.local, whose CONVEX_DEPLOYMENT
-  // points at a developer's dev deployment. CONVEX_DEPLOY_KEY takes precedence and
-  // pins the push to the deployment the app is built against; drop the other so
-  // the target is unambiguous in the CLI's own output too.
-  const { CONVEX_DEPLOYMENT: _developerDeployment, ...hostEnv } = process.env;
-  const deployEnv: NodeJS.ProcessEnv = { ...hostEnv, CONVEX_DEPLOY_KEY: repoEnv.CONVEX_DEPLOY_KEY };
-  const deployArgs = [
-    "exec",
-    "--filter",
-    "@spiritdevs/backend",
-    "--",
-    "convex",
-    "deploy",
-    "--typecheck",
-    "disable",
-    "--codegen",
-    "disable",
-    "--message",
-    `desktop ${input.appVersion} (${input.commitHash})`,
-  ];
+  yield* Effect.log(`[desktop-artifact] Deploying Cyndrbase backend to ${plan.deploymentUrl}...`);
+  const deployEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    CYNDRBASE_URL: repoEnv.CYNDRBASE_URL,
+    CYNDRBASE_DEPLOYMENT: plan.deploymentName,
+    CYNDRBASE_DEPLOY_KEY: repoEnv.CYNDRBASE_DEPLOY_KEY,
+  };
+  const deployArgs = ["exec", "--filter", "@spiritdevs/backend", "--", "cyndr", "deploy", "--yes"];
   const spawnCommand = yield* resolveSpawnCommand("vp", deployArgs, { env: deployEnv });
   yield* runCommand(
     ChildProcess.make(spawnCommand.command, spawnCommand.args, {
@@ -2358,11 +2326,11 @@ const deployConvexBackend = Effect.fn("deployConvexBackend")(function* (input: {
       shell: spawnCommand.shell,
     }),
     {
-      label: `vp exec --filter @spiritdevs/backend -- convex deploy (${plan.deploymentName})`,
+      label: `vp exec --filter @spiritdevs/backend -- cyndr deploy (${plan.deploymentName})`,
       verbose: input.verbose,
     },
   );
-  yield* Effect.log(`[desktop-artifact] Convex backend deployed to ${plan.deploymentName}.`);
+  yield* Effect.log(`[desktop-artifact] Cyndrbase backend deployed to ${plan.deploymentName}.`);
 });
 
 // Electron 44 requires macOS 13. electron-updater compares this against os.release(), which is the
@@ -2479,10 +2447,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // Deploy once the code builds and before anything is packaged: a broken app
   // build must not move the backend ahead, and no artifact is ever produced
   // against a backend that is behind it.
-  yield* deployConvexBackend({
+  yield* deployCyndrbaseBackend({
     repoRoot,
-    appVersion,
-    commitHash,
     skip: options.skipBackendDeploy,
     verbose: options.verbose,
   });
@@ -2865,7 +2831,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   skipBackendDeploy: Flag.boolean("skip-backend-deploy").pipe(
     Flag.withDescription(
-      "Skip deploying packages/backend to PATHWAY_CONVEX_URL before packaging (env: PATHWAY_DESKTOP_SKIP_BACKEND_DEPLOY).",
+      "Skip deploying packages/backend to PATHWAY_CYNDRBASE_URL before packaging (env: PATHWAY_DESKTOP_SKIP_BACKEND_DEPLOY).",
     ),
     Flag.optional,
   ),

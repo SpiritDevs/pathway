@@ -20,7 +20,6 @@ import serverPackageJson from "../apps/server/package.json" with { type: "json" 
 
 import {
   BackendDeployKeyMissingError,
-  BackendDeployKeyUnrecognizedError,
   BackendDeployTargetMismatchError,
   BuildCommandFailedError,
   createStageWorkspaceConfig,
@@ -1512,14 +1511,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it.effect("deploys the backend to the deployment the build targets", () =>
     Effect.gen(function* () {
       const plan = yield* resolveBackendDeployPlan({
-        convexUrl: "https://sleek-lion-657.convex.cloud",
-        deployKey: "prod:sleek-lion-657|secret",
+        deploymentUrl: "https://pathway.syd.cyndrbase.cloud",
+        deployment: "pathway",
+        deployKey: "secret",
         skip: false,
       });
       assert.deepEqual(plan, {
         kind: "deploy",
-        deploymentName: "sleek-lion-657",
-        convexUrl: "https://sleek-lion-657.convex.cloud",
+        deploymentName: "pathway",
+        deploymentUrl: "https://pathway.syd.cyndrbase.cloud",
       });
     }),
   );
@@ -1528,14 +1528,20 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     Effect.gen(function* () {
       assert.deepEqual(
         yield* resolveBackendDeployPlan({
-          convexUrl: "https://sleek-lion-657.convex.cloud",
-          deployKey: "prod:sleek-lion-657|secret",
+          deploymentUrl: "https://pathway.syd.cyndrbase.cloud",
+          deployment: "pathway",
+          deployKey: "secret",
           skip: true,
         }),
         { kind: "skip", reason: "skipped-by-flag" },
       );
       assert.deepEqual(
-        yield* resolveBackendDeployPlan({ convexUrl: "  ", deployKey: undefined, skip: false }),
+        yield* resolveBackendDeployPlan({
+          deploymentUrl: "  ",
+          deployment: undefined,
+          deployKey: undefined,
+          skip: false,
+        }),
         { kind: "skip", reason: "cloud-sync-disabled" },
       );
     }),
@@ -1543,11 +1549,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it.effect("refuses to build against a deployment it cannot deploy to", () =>
     Effect.gen(function* () {
-      // A configured deployment without a key is the forgotten-deploy case, so it
+      // A configured deployment without credentials is the forgotten-deploy case, so it
       // fails the build instead of quietly packaging an app ahead of its backend.
       const missing = yield* Effect.flip(
         resolveBackendDeployPlan({
-          convexUrl: "https://sleek-lion-657.convex.cloud",
+          deploymentUrl: "https://pathway.syd.cyndrbase.cloud",
+          deployment: "pathway",
           deployKey: "",
           skip: false,
         }),
@@ -1556,22 +1563,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       const mismatch = yield* Effect.flip(
         resolveBackendDeployPlan({
-          convexUrl: "https://sleek-lion-657.convex.cloud",
-          deployKey: "dev:chatty-ermine-52|secret",
+          deploymentUrl: "https://pathway.syd.cyndrbase.cloud",
+          deployment: "pathway-dev",
+          deployKey: "secret",
           skip: false,
         }),
       );
       assert.instanceOf(mismatch, BackendDeployTargetMismatchError);
-      assert.equal(mismatch.deploymentName, "chatty-ermine-52");
-
-      const unrecognized = yield* Effect.flip(
-        resolveBackendDeployPlan({
-          convexUrl: "https://sleek-lion-657.convex.cloud",
-          deployKey: "preview:team:project|secret",
-          skip: false,
-        }),
-      );
-      assert.instanceOf(unrecognized, BackendDeployKeyUnrecognizedError);
+      assert.equal(mismatch.deploymentName, "pathway-dev");
     }),
   );
 

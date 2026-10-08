@@ -76,7 +76,7 @@ const DPOP_KEYS = generateDpopKeyPair();
 
 /** Every gate satisfied. Individual tests drop one key to exercise a refusal. */
 const ENABLED_ENV = {
-  PATHWAY_CONVEX_URL: CONVEX_URL,
+  PATHWAY_CYNDRBASE_URL: CONVEX_URL,
 } as const;
 
 const discoverCompany = () => Effect.succeed([COMPANY_ID]);
@@ -398,7 +398,7 @@ describe("cloud sync daemon gates", () => {
       // A deployment that is not an origin is the same *answer* as no deployment, but it is not
       // the same refusal: the operator typo'd something and the detail has to say so.
       const invalid = yield* resolveWith({
-        env: { ...ENABLED_ENV, PATHWAY_CONVEX_URL: "https://daemon.convex.cloud/api" },
+        env: { ...ENABLED_ENV, PATHWAY_CYNDRBASE_URL: "https://daemon.convex.cloud/api" },
       });
       expect(invalid).toMatchObject({ reason: "convex-url-unavailable" });
       expect(invalid._tag === "Disabled" ? invalid.detail : "").toContain("absolute HTTPS origin");
@@ -581,7 +581,7 @@ layer("cloud sync daemon layer", (it) => {
         Layer.build(cloudSyncDaemonLayer({ transport: forbiddenTransport })).pipe(
           provideDaemon({
             // The company is named, but the deployment URL has a path typo'd onto it.
-            env: { ...ENABLED_ENV, PATHWAY_CONVEX_URL: "https://daemon.convex.cloud/api" },
+            env: { ...ENABLED_ENV, PATHWAY_CYNDRBASE_URL: "https://daemon.convex.cloud/api" },
             secrets: store,
             logger: logs.layer,
           }),

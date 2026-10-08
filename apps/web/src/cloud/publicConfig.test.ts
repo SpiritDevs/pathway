@@ -80,21 +80,21 @@ describe("hasCloudSyncPublicConfig", () => {
   };
 
   it("stays off until the Convex URL and the rest of the cloud config are all present", () => {
-    vi.stubEnv("VITE_PATHWAY_CONVEX_URL", "");
+    vi.stubEnv("VITE_PATHWAY_CYNDRBASE_URL", "");
     expect(hasCloudSyncPublicConfig()).toBe(false);
     expect(resolveCloudSyncConvexUrl()).toBeNull();
 
     stubCloud();
     expect(hasCloudSyncPublicConfig()).toBe(false);
 
-    vi.stubEnv("VITE_PATHWAY_CONVEX_URL", "https://example.convex.cloud");
+    vi.stubEnv("VITE_PATHWAY_CYNDRBASE_URL", "https://example.convex.cloud");
     expect(hasCloudSyncPublicConfig()).toBe(true);
     expect(resolveCloudSyncConvexUrl()).toBe("https://example.convex.cloud");
   });
 
   it("turns on without a separate feature flag", () => {
     stubCloud();
-    vi.stubEnv("VITE_PATHWAY_CONVEX_URL", "https://example.convex.cloud");
+    vi.stubEnv("VITE_PATHWAY_CYNDRBASE_URL", "https://example.convex.cloud");
     expect(hasCloudSyncPublicConfig()).toBe(true);
     expect(resolveCloudSyncConvexUrl()).toBe("https://example.convex.cloud");
   });
@@ -103,7 +103,7 @@ describe("hasCloudSyncPublicConfig", () => {
     vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "");
     vi.stubEnv("VITE_CLERK_JWT_TEMPLATE", "");
     vi.stubEnv("VITE_PATHWAY_RELAY_URL", "");
-    vi.stubEnv("VITE_PATHWAY_CONVEX_URL", "https://example.convex.cloud");
+    vi.stubEnv("VITE_PATHWAY_CYNDRBASE_URL", "https://example.convex.cloud");
 
     expect(hasCloudSyncPublicConfig()).toBe(false);
   });

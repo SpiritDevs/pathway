@@ -54,7 +54,7 @@ describe("loadRepoEnv", () => {
     );
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env.prod"),
-      "PATHWAY_CLERK_PUBLISHABLE_KEY=pk_prod\nPATHWAY_CLERK_JWT_TEMPLATE=template_prod\nPATHWAY_CLERK_CLI_OAUTH_CLIENT_ID=oauth_prod\nPATHWAY_RELAY_URL=https://prod.example.test\nPATHWAY_CONVEX_URL=https://prod.convex.test\n",
+      "PATHWAY_CLERK_PUBLISHABLE_KEY=pk_prod\nPATHWAY_CLERK_JWT_TEMPLATE=template_prod\nPATHWAY_CLERK_CLI_OAUTH_CLIENT_ID=oauth_prod\nPATHWAY_RELAY_URL=https://prod.example.test\nPATHWAY_CYNDRBASE_URL=https://prod.convex.test\n",
     );
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env.local"),
@@ -64,9 +64,9 @@ describe("loadRepoEnv", () => {
     expect(loadRepoEnv({ baseEnv: {}, repoRoot }).PATHWAY_RELAY_URL).toBe(
       "https://local.example.test",
     );
-    expect(loadRepoEnv({ baseEnv: {}, repoRoot }).PATHWAY_CONVEX_URL).toBeUndefined();
+    expect(loadRepoEnv({ baseEnv: {}, repoRoot }).PATHWAY_CYNDRBASE_URL).toBeUndefined();
     expect(
-      loadRepoEnv({ baseEnv: {}, includeProductionEnv: true, repoRoot }).PATHWAY_CONVEX_URL,
+      loadRepoEnv({ baseEnv: {}, includeProductionEnv: true, repoRoot }).PATHWAY_CYNDRBASE_URL,
     ).toBe("https://prod.convex.test");
     expect(
       loadRepoEnv({
@@ -94,7 +94,7 @@ describe("loadRepoEnv", () => {
     const worktreeRoot = makeTemporaryDirectory();
     NodeFS.writeFileSync(
       NodePath.join(primaryRepoRoot, ".env.prod"),
-      "PATHWAY_CLERK_PUBLISHABLE_KEY=pk_primary\nPATHWAY_CLERK_JWT_TEMPLATE=template_primary\nPATHWAY_CONVEX_URL=https://primary.convex.test\nPATHWAY_RELAY_URL=https://primary.example.test\n",
+      "PATHWAY_CLERK_PUBLISHABLE_KEY=pk_primary\nPATHWAY_CLERK_JWT_TEMPLATE=template_primary\nPATHWAY_CYNDRBASE_URL=https://primary.convex.test\nPATHWAY_RELAY_URL=https://primary.example.test\n",
     );
     NodeFS.writeFileSync(
       NodePath.join(worktreeRoot, ".env.prod"),
@@ -111,7 +111,7 @@ describe("loadRepoEnv", () => {
     ).toMatchObject({
       PATHWAY_CLERK_PUBLISHABLE_KEY: "pk_primary",
       PATHWAY_CLERK_JWT_TEMPLATE: "template_primary",
-      PATHWAY_CONVEX_URL: "https://primary.convex.test",
+      PATHWAY_CYNDRBASE_URL: "https://primary.convex.test",
       PATHWAY_RELAY_URL: "https://worktree.example.test",
     });
   });
