@@ -4,13 +4,13 @@
  *
  * Its data lives in a Postgres cluster under `<checkout>/.pathway/cyndrbase`, never a shared
  * developer database, and survives restarts; delete that directory for a fresh database. A loopback
- * `cyndrd` engine serves it, and `cyndr deploy` pushes packages/backend on every start because the
- * local engine keeps code in memory, then `cyndr dev` redeploys whenever backend sources change.
- * Cyndrbase is linked from a source checkout until it publishes, so `cyndrd` comes from that
- * checkout's cargo build.
+ * `cyndrd` engine serves it, and `cyndr dev` deploys packages/backend on every start (the engine
+ * keeps code in memory) and again whenever backend sources change. Cyndrbase is linked from a
+ * source checkout until it publishes, so `cyndrd` comes from that checkout's cargo build.
  *
  * Each start writes `cyndr.env` beside the data, so `cyndr run`, `cyndr env` and `psql` can reach
- * the running backend: `node --env-file=.pathway/cyndrbase/cyndr.env <cyndr> run smoke:inspect`.
+ * the running backend, e.g. from packages/backend:
+ * `node --env-file=../../.pathway/cyndrbase/cyndr.env node_modules/@cyndrbase/cli/dist/cyndr.js run roles:availablePermissions`.
  */
 import * as NodeCrypto from "node:crypto";
 
@@ -152,7 +152,7 @@ const postgresBin = (env: Readonly<Record<string, string | undefined>>) =>
     return bindir.trim() || "/opt/homebrew/opt/postgresql@17/bin";
   });
 
-/** Starts Postgres and `cyndrd` for the scope, configures and deploys the backend, and returns its URLs. */
+/** Starts Postgres, `cyndrd` and `cyndr dev` for the scope, and returns the deployment's URLs. */
 export const startLocalCyndrbase = Effect.fn("startLocalCyndrbase")(function* (input: {
   readonly repoRoot: string;
   readonly env: Readonly<Record<string, string | undefined>>;
