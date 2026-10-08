@@ -939,9 +939,8 @@ export function ThreadLineagePanel() {
     );
   };
 
-  // With nothing related yet, the section still offers to file the open thread under another.
-  const offersSetParent = currentThreadMenuItems.some(({ id }) => id === "set-parent");
-  return lineageRows.length > 0 || offersSetParent ? (
+  // Hidden until the thread has relatives; "Set parent…" stays in the thread action menu.
+  return lineageRows.length > 0 ? (
     <section
       aria-labelledby="thread-details-lineage-heading"
       className="border-t border-border/65 px-2 pb-2.5 pt-2"
@@ -988,43 +987,29 @@ export function ThreadLineagePanel() {
         </div>
       </div>
 
-      {lineageRows.length === 0 ? (
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => runParentMenuAction(currentThreadId, "set-parent")}
-          className={THREAD_DETAILS_PANEL_LINK_ROW_CLASS}
-        >
-          <CornerDownRightIcon className={THREAD_RELATIONSHIP_ICON_CLASS} />
-          <span className="truncate text-muted-foreground">Set parent…</span>
-        </Button>
-      ) : (
-        <>
-          {visibleRows.length > 0 ? (
-            <ThreadLineageRowList hiddenCount={hiddenCount} onShowMore={showMore}>
-              {visibleRows.map(renderRow)}
+      {visibleRows.length > 0 ? (
+        <ThreadLineageRowList hiddenCount={hiddenCount} onShowMore={showMore}>
+          {visibleRows.map(renderRow)}
+        </ThreadLineageRowList>
+      ) : null}
+      {previousAgentRows.length > 0 ? (
+        <Collapsible key={currentThreadId} defaultOpen={false}>
+          <CollapsibleTrigger className="group/previous flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[11px] font-medium text-muted-foreground hover:text-foreground/80">
+            <span className="shrink-0">Previous agents ({previousAgentRows.length})</span>
+            <span aria-hidden="true" className="h-px flex-1 bg-border/65" />
+            <ChevronDownIcon className="size-3.5 shrink-0 transition-transform group-data-[panel-open]/previous:rotate-180" />
+          </CollapsibleTrigger>
+          <CollapsiblePanel>
+            <ThreadLineageRowList
+              ariaLabel="Previous agents"
+              hiddenCount={hiddenPreviousCount}
+              onShowMore={showMorePrevious}
+            >
+              {visiblePreviousRows.map(renderRow)}
             </ThreadLineageRowList>
-          ) : null}
-          {previousAgentRows.length > 0 ? (
-            <Collapsible key={currentThreadId} defaultOpen={false}>
-              <CollapsibleTrigger className="group/previous flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[11px] font-medium text-muted-foreground hover:text-foreground/80">
-                <span className="shrink-0">Previous agents ({previousAgentRows.length})</span>
-                <span aria-hidden="true" className="h-px flex-1 bg-border/65" />
-                <ChevronDownIcon className="size-3.5 shrink-0 transition-transform group-data-[panel-open]/previous:rotate-180" />
-              </CollapsibleTrigger>
-              <CollapsiblePanel>
-                <ThreadLineageRowList
-                  ariaLabel="Previous agents"
-                  hiddenCount={hiddenPreviousCount}
-                  onShowMore={showMorePrevious}
-                >
-                  {visiblePreviousRows.map(renderRow)}
-                </ThreadLineageRowList>
-              </CollapsiblePanel>
-            </Collapsible>
-          ) : null}
-        </>
-      )}
+          </CollapsiblePanel>
+        </Collapsible>
+      ) : null}
     </section>
   ) : null;
 }
