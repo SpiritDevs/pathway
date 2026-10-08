@@ -5,7 +5,7 @@ import { deleteEnvironmentRuntime } from "./lib/environmentRuntime.ts";
  * Internal-only seed and teardown for the relay → Convex trust-chain smoke test.
  *
  * Every function here is an `internalMutation`/`internalQuery`, so nothing in this module is
- * reachable from a client bundle — the only way in is `npx convex run smoke:<fn>` with admin
+ * reachable from a client bundle — the only way in is `cyndr run smoke:<fn>` with admin
  * credentials. Seeding and cleanup stay internal so they never become part of the client surface.
  *
  * All of them operate exclusively on the reserved smoke company
