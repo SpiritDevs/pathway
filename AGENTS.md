@@ -87,7 +87,8 @@ The most common defect in this repo is a change that works on the path you teste
   - It runs a Postgres cluster under `.pathway/cyndrbase` and a loopback `cyndrd --local-deploy`, then runs `cyndr dev`, which deploys `packages/backend` and redeploys whenever its sources change. Data persists; delete that directory for a fresh database.
   - Build `cyndrd` first: `cargo build -p cyndrd -p cyndrbase-isolate --bins` in the Cyndrbase checkout that `packages/backend` links (Cyndrbase packages are `link:` paths until they publish to npm). Postgres comes from `PG_BIN`, then `pg_config --bindir`, then Homebrew's Postgres 17.
   - Each start writes `.pathway/cyndrbase/cyndr.env` (`CYNDRBASE_URL`, `CYNDRBASE_DEPLOYMENT`, `CYNDRBASE_DEPLOY_KEY`, `CYNDRBASE_DATABASE_URL`) for `cyndr run`, `cyndr env` and `psql`.
-  - An explicit `PATHWAY_CYNDRBASE_URL` targets that deployment instead. `CYNDRBASE_FILES_CONFIG` is passed to the engine as `--files-config`; until Cyndrbase PR #46 merges, `ctx.storage` returns `ServiceDisabled`.
+  - An explicit `PATHWAY_CYNDRBASE_URL` targets that deployment instead.
+  - Storage (`ctx.storage`) needs an uploadfile binding: point `CYNDRBASE_FILES_CONFIG` at its JSON (Cyndrbase `docs/design/06-files.md`) and the engine gets `--files-config` and listens on the binding's `content_origin`. Without one, every storage call returns `ServiceDisabled`, so attachment uploads and project icon images fail.
 - To share a development environment remotely, use Pathway Connect rather than exposing the development server directly.
 - The web app requires pairing. Hand over the pairing URL, not the bare origin. A URL without its token is useless to whoever you gave it to. If the token got consumed, mint a fresh one with `node apps/server/src/bin.ts pair` — note it carries standard scopes, while the startup URL carries admin scopes (needed for Settings → Connections management).
 - Stop what you started, by the PID you tracked. See rule 1.

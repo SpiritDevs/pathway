@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { resolveLocalCyndrbaseEnvironment } from "./local-cyndrbase.ts";
+import { engineListenAddress, resolveLocalCyndrbaseEnvironment } from "./local-cyndrbase.ts";
 
 const clerkKey = `pk_test_${btoa("witty-mole-42.clerk.accounts.dev$")}`;
 
@@ -51,5 +51,16 @@ describe("resolveLocalCyndrbaseEnvironment", () => {
         PATHWAY_RELAY_URL: "https://r.test",
       }),
     );
+  });
+});
+
+describe("engineListenAddress", () => {
+  it("serves a storage binding's content origin, or any free port without one", () => {
+    assert.equal(engineListenAddress(undefined), "127.0.0.1:0");
+    const binding = (contentOrigin: string) => JSON.stringify({ content_origin: contentOrigin });
+    assert.equal(engineListenAddress(binding("http://127.0.0.1:3212")), "127.0.0.1:3212");
+    assert.isUndefined(engineListenAddress(binding("http://127.0.0.1")));
+    assert.isUndefined(engineListenAddress(binding("not a url")));
+    assert.isUndefined(engineListenAddress("{}"));
   });
 });

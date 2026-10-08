@@ -21,6 +21,7 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -84,6 +85,26 @@ export function resolveLocalCyndrbaseEnvironment(
 
 const failure = (reason: string) => new LocalCyndrbaseError({ reason });
 const isLocalCyndrbaseError = Schema.is(LocalCyndrbaseError);
+const decodeFilesBinding = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ content_origin: Schema.String })),
+);
+
+/**
+ * Where the engine must listen. With an uploadfile binding (`CYNDRBASE_FILES_CONFIG`), uploads
+ * commit to, and `getUrl` links point at, the binding's `content_origin`, which the engine serves on
+ * its own listener; so it listens exactly there. Without one, storage is off and any port will do.
+ */
+export function engineListenAddress(binding: string | undefined): string | undefined {
+  if (binding === undefined) {
+    return "127.0.0.1:0";
+  }
+  const origin = Option.getOrUndefined(decodeFilesBinding(binding))?.content_origin;
+  if (origin === undefined || !URL.canParse(origin)) {
+    return undefined;
+  }
+  const url = new URL(origin);
+  return url.port ? `${url.hostname}:${url.port}` : undefined;
+}
 
 /** Runs a command to completion, failing with its output when it exits non-zero. */
 const run = (command: ChildProcess.Command, label: string) =>
@@ -174,6 +195,20 @@ export const startLocalCyndrbase = Effect.fn("startLocalCyndrbase")(function* (i
     );
   }
 
+  const filesConfig = input.env.CYNDRBASE_FILES_CONFIG?.trim() || undefined;
+  const listen = engineListenAddress(
+    filesConfig === undefined
+      ? undefined
+      : yield* fs
+          .readFileString(filesConfig)
+          .pipe(Effect.mapError((error) => failure(error.message))),
+  );
+  if (listen === undefined) {
+    return yield* failure(
+      `${filesConfig} must set content_origin to a loopback origin with a port, e.g. http://127.0.0.1:3212.`,
+    );
+  }
+
   const bin = yield* postgresBin(input.env);
   const root = path.join(input.repoRoot, ".pathway/cyndrbase");
   const data = path.join(root, "postgres");
@@ -228,16 +263,14 @@ export const startLocalCyndrbase = Effect.fn("startLocalCyndrbase")(function* (i
         "engine",
         "--local-deploy",
         "--listen",
-        "127.0.0.1:0",
+        listen,
         "--http-actions-listen",
         "127.0.0.1:0",
         "--deployment",
         DEPLOYMENT,
         "--epoch",
         String(epoch),
-        ...(input.env.CYNDRBASE_FILES_CONFIG
-          ? ["--files-config", input.env.CYNDRBASE_FILES_CONFIG]
-          : []),
+        ...(filesConfig === undefined ? [] : ["--files-config", filesConfig]),
       ],
       {
         env: {
