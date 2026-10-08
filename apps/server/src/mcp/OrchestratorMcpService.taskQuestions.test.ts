@@ -1,15 +1,30 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  CommandId,
+  EnvironmentId,
   NodeId,
+  ProviderDriverKind,
+  ProviderInstanceId,
   ProviderThreadId,
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
+  type OrchestrationV2Command,
+  type OrchestrationV2ThreadProjection,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2TurnItem,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+
+import { OrchestratorDispatchError } from "../orchestration-v2/Orchestrator.ts";
+import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
+import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
 import { openTaskQuestions, resolveDelegatedRuntimeMode } from "./OrchestratorMcpService.ts";
 
@@ -137,3 +152,222 @@ describe("resolveDelegatedRuntimeMode", () => {
     }),
   );
 });
+
+const parentThreadId = ThreadId.make("thread-parent");
+const taskId = NodeId.make("task-question");
+const scope: McpInvocationScope = {
+  environmentId: EnvironmentId.make("environment-questions"),
+  threadId: parentThreadId,
+  providerSessionId: "session-parent",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  providerDriverKind: ProviderDriverKind.make("codex"),
+  capabilities: new Set(["orchestration"]),
+  issuedAt: 1,
+};
+const answerInput = {
+  taskId,
+  requestId: RuntimeRequestId.make("ask-1"),
+  answers: { "question-1": ["Keep it", "Restore it"] },
+  clientRequestId: "answer-1",
+};
+
+function answerTestLayer(input: {
+  readonly request?: OrchestrationV2RuntimeRequest;
+  readonly secret?: boolean;
+  readonly origin?: "app_owned" | "provider_native";
+  readonly dispatch: ThreadManagementService["Service"]["dispatch"];
+}) {
+  const parent = {
+    thread: { id: parentThreadId },
+    runs: [],
+    contextTransfers: [],
+    subagents: [
+      {
+        id: taskId,
+        threadId: parentThreadId,
+        origin: input.origin ?? "app_owned",
+        childThreadId: threadId,
+        result: "Child asked a question.",
+        completionDelivery: { state: "acknowledged" },
+      },
+    ],
+  } as unknown as OrchestrationV2ThreadProjection;
+  const entry = question({
+    id: "ask-1",
+    ...(input.secret === undefined ? {} : { isSecret: input.secret }),
+  });
+  const child = {
+    thread: { id: threadId },
+    contextTransfers: [],
+    runs: [],
+    runtimeRequests: [input.request ?? entry.request],
+    turnItems: [entry.item],
+  } as unknown as OrchestrationV2ThreadProjection;
+  return OrchestratorMcpService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        Layer.mock(ThreadManagementService)({
+          getThreadProjection: (id) =>
+            Effect.succeed(
+              id === parentThreadId
+                ? parent
+                : id === threadId
+                  ? child
+                  : { ...parent, subagents: [] },
+            ),
+          dispatch: input.dispatch,
+        }),
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ScheduledTaskService)({}),
+      ),
+    ),
+  );
+}
+
+describe("answerTask", () => {
+  it.effect("replays its resolved answer with the same command id", () => {
+    const commandId = CommandId.make("command:mcp:session-parent:answer-task:answer-1");
+    const commands: Array<OrchestrationV2Command> = [];
+    const layer = answerTestLayer({
+      request: {
+        ...question({ id: "ask-1" }).request,
+        status: "resolved",
+        responseCommandId: commandId,
+      },
+      dispatch: (command) =>
+        Effect.sync(() => {
+          commands.push(command);
+          return {} as never;
+        }),
+    });
+    return Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const first = yield* service.answerTask(scope, answerInput);
+      expect(yield* service.answerTask(scope, answerInput)).toEqual(first);
+      expect(commands).toHaveLength(2);
+      expect(commands.every((command) => command.commandId === commandId)).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps acknowledged tasks answerable and sends multi-select answers as agent", () => {
+    const commands: Array<OrchestrationV2Command> = [];
+    return Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      yield* service.answerTask(scope, answerInput);
+      expect(commands).toEqual([
+        expect.objectContaining({
+          type: "runtime-request.respond",
+          threadId,
+          answeredBy: "agent",
+          answers: answerInput.answers,
+        }),
+      ]);
+    }).pipe(
+      Effect.provide(
+        answerTestLayer({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return {} as never;
+            }),
+        }),
+      ),
+    );
+  });
+
+  for (const answers of [undefined, " ", [], ["Keep it", " "], [" "]]) {
+    it.effect(`rejects incomplete answers before dispatch: ${JSON.stringify(answers)}`, () =>
+      Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const error = yield* service
+          .answerTask(scope, {
+            ...answerInput,
+            answers: answers === undefined ? {} : { "question-1": answers },
+          })
+          .pipe(Effect.flip);
+        expect(error.code).toBe("invalid_request");
+      }).pipe(
+        Effect.provide(answerTestLayer({ dispatch: () => Effect.die("Must not dispatch.") })),
+      ),
+    );
+  }
+
+  it.effect("preserves the reason a response cannot resume its conversation", () =>
+    Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const error = yield* service.answerTask(scope, answerInput).pipe(Effect.flip);
+      expect(error.code).toBe("question_not_answerable");
+      expect(error.message).toContain("Restore that conversation before answering.");
+    }).pipe(
+      Effect.provide(
+        answerTestLayer({
+          dispatch: (command) =>
+            Effect.fail(
+              new OrchestratorDispatchError({
+                commandId: command.commandId,
+                commandType: command.type,
+                cause:
+                  "This question belongs to a previous provider conversation. Restore that conversation before answering.",
+              }),
+            ),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("denies foreign tasks and missing capabilities before dispatch", () =>
+    Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const foreign = yield* service
+        .answerTask({ ...scope, threadId: ThreadId.make("stranger") }, answerInput)
+        .pipe(Effect.flip);
+      expect(foreign.code).toBe("task_not_found");
+      const denied = yield* service
+        .answerTask({ ...scope, capabilities: new Set() }, answerInput)
+        .pipe(Effect.flip);
+      expect(denied.code).toBe("capability_denied");
+    }).pipe(Effect.provide(answerTestLayer({ dispatch: () => Effect.die("Must not dispatch.") }))),
+  );
+
+  it.effect("does not replay a question resolved by another command", () =>
+    Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const error = yield* service.answerTask(scope, answerInput).pipe(Effect.flip);
+      expect(error.code).toBe("question_not_answerable");
+    }).pipe(
+      Effect.provide(
+        answerTestLayer({
+          request: {
+            ...question({ id: "ask-1" }).request,
+            status: "resolved",
+            responseCommandId: CommandId.make("someone-else"),
+          },
+          dispatch: () => Effect.die("Must not dispatch."),
+        }),
+      ),
+    ),
+  );
+});
+
+for (const [name, options, code] of [
+  ["secret questions", { secret: true }, "question_not_answerable"],
+  ["provider-native tasks", { origin: "provider_native" }, "task_not_found"],
+  [
+    "unresumable questions",
+    { request: question({ id: "ask-1", notResumable: true }).request },
+    "question_not_answerable",
+  ],
+] as const) {
+  it.effect(`answerTask refuses ${name}`, () =>
+    Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const error = yield* service.answerTask(scope, answerInput).pipe(Effect.flip);
+      expect(error.code).toBe(code);
+    }).pipe(
+      Effect.provide(
+        answerTestLayer({ ...options, dispatch: () => Effect.die("Must not dispatch.") }),
+      ),
+    ),
+  );
+}

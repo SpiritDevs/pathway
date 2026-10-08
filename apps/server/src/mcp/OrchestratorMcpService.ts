@@ -1744,37 +1744,43 @@ const make = Effect.gen(function* () {
     answerTask: (scope, input) =>
       Effect.gen(function* () {
         const current = yield* readTask(scope, input.taskId);
+        const key = yield* requestKey(input.clientRequestId);
+        const commandId = stableCommandId({ scope, requestKey: key, operation: "answer-task" });
         const question = current.pendingQuestions?.find(
           (candidate) => candidate.requestId === input.requestId,
         );
         if (question === undefined) {
-          return yield* failure(
-            "question_not_answerable",
-            `Delegated task ${input.taskId} is not waiting on question ${input.requestId}.`,
-          );
+          const child = yield* loadProjection(current.childThreadId);
+          const answered = child.runtimeRequests.find((request) => request.id === input.requestId);
+          // Let the command receipt replay our successful response after the
+          // pending question has disappeared, without accepting others' answers.
+          if (answered?.status !== "resolved" || answered.responseCommandId !== commandId) {
+            return yield* failure(
+              "question_not_answerable",
+              `Delegated task ${input.taskId} is not waiting on question ${input.requestId}.`,
+            );
+          }
         }
-        const unanswered = question.questions.filter((field) => {
-          const answer = input.answers[field.id];
-          return typeof answer === "string"
-            ? answer.trim().length === 0
-            : answer === undefined || answer.every((value) => value.trim().length === 0);
-        });
+        const unanswered =
+          question?.questions.filter((field) => {
+            const answer = input.answers[field.id];
+            return typeof answer === "string"
+              ? answer.trim().length === 0
+              : answer === undefined ||
+                  answer.length === 0 ||
+                  answer.some((value) => value.trim().length === 0);
+          }) ?? [];
         if (unanswered.length > 0) {
           return yield* failure(
             "invalid_request",
             `Answer every question before submitting. Missing: ${unanswered.map((field) => field.id).join(", ")}.`,
           );
         }
-        const key = yield* requestKey(input.clientRequestId);
         yield* threadManagement
           .dispatch({
             type: "runtime-request.respond",
             answeredBy: "agent",
-            commandId: stableCommandId({
-              scope,
-              requestKey: key,
-              operation: "answer-task",
-            }),
+            commandId,
             threadId: current.childThreadId,
             requestId: input.requestId,
             answers: input.answers,
@@ -1783,7 +1789,11 @@ const make = Effect.gen(function* () {
             Effect.mapError((error) =>
               failure(
                 "question_not_answerable",
-                `Unable to answer delegated task ${input.taskId}: ${errorMessage(error)}`,
+                `Unable to answer delegated task ${input.taskId}: ${
+                  error._tag === "OrchestratorDispatchError" && typeof error.cause === "string"
+                    ? error.cause
+                    : errorMessage(error)
+                }`,
               ),
             ),
           );
