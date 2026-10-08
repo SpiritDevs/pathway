@@ -57,6 +57,15 @@ describe("resolvePathwayMcpToolPresentation", () => {
     });
   });
 
+  it("labels delegated answers across provider spellings", () => {
+    for (const name of ["task_answer", "pathway.task_answer", "mcp__pathway__task_answer"]) {
+      expect(resolvePathwayMcpToolPresentation(name)).toEqual({
+        displayName: "Answer delegated task",
+        logo: "pathway",
+      });
+    }
+  });
+
   it("pretty prints bare Pathway MCP toolkit names", () => {
     expect(resolvePathwayMcpToolPresentation("list_scheduled_tasks")).toEqual({
       displayName: "List scheduled tasks",

@@ -34,8 +34,11 @@ import {
   type OrchestratorMcpScheduleTaskInput,
   type OrchestratorMcpScheduleTaskResult,
   type OrchestratorMcpTarget,
+  type OrchestratorMcpTaskAnswerInput,
+  type OrchestratorMcpTaskAnswerResult,
   type OrchestratorMcpTaskCancelInput,
   type OrchestratorMcpTaskCancelResult,
+  type OrchestratorMcpTaskQuestion,
   type OrchestratorMcpUpdateScheduledTaskInput,
   type OrchestratorMcpThreadDetail,
   type OrchestratorMcpThreadInterruptInput,
@@ -127,6 +130,10 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpTaskCancelInput,
   ) => Effect.Effect<OrchestratorMcpTaskCancelResult, OrchestratorMcpFailure>;
+  readonly answerTask: (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpTaskAnswerInput,
+  ) => Effect.Effect<OrchestratorMcpTaskAnswerResult, OrchestratorMcpFailure>;
   readonly createThreads: (
     scope: McpInvocationScope,
     input: OrchestratorMcpCreateThreadsInput,
@@ -422,6 +429,53 @@ function resolveRuntimeMode(
         ),
       )
     : Effect.succeed(resolved);
+}
+
+/**
+ * A delegated child never runs with less access than a full-access parent:
+ * a narrower child only stalls on approvals the parent was trusted to skip.
+ */
+export function resolveDelegatedRuntimeMode(
+  parentMode: RuntimeMode,
+  requested: OrchestratorMcpRuntimeMode | undefined,
+): Effect.Effect<RuntimeMode, OrchestratorMcpFailure> {
+  return parentMode === "full-access"
+    ? Effect.succeed(parentMode)
+    : resolveRuntimeMode(parentMode, requested);
+}
+
+/**
+ * Questions a delegated child is still waiting on. Secret questions stay with
+ * the user, so they are left out rather than offered to the parent agent.
+ */
+export function openTaskQuestions(
+  projection: Pick<OrchestrationV2ThreadProjection, "runtimeRequests" | "turnItems">,
+): ReadonlyArray<OrchestratorMcpTaskQuestion> {
+  return projection.runtimeRequests.flatMap((request) => {
+    if (
+      request.kind !== "user_input" ||
+      request.status !== "pending" ||
+      request.responseCapability.type === "not_resumable"
+    ) {
+      return [];
+    }
+    const item = projection.turnItems.find(
+      (candidate) => candidate.type === "user_input_request" && candidate.requestId === request.id,
+    );
+    if (item?.type !== "user_input_request" || item.questions.some((q) => q.isSecret)) {
+      return [];
+    }
+    return [
+      {
+        requestId: request.id,
+        questions: item.questions.map((question) => ({
+          id: question.id,
+          question: question.question,
+          options: question.options.map((option) => option.label),
+        })),
+      },
+    ];
+  });
 }
 
 function resolveInteractionMode(
@@ -993,6 +1047,7 @@ const make = Effect.gen(function* () {
       const childProjection = yield* loadProjection(task.childThreadId);
       const childRun = delegatedTaskRun(childProjection, task);
       const status = taskStatusForRun(childRun);
+      const pendingQuestions = openTaskQuestions(childProjection);
       const derivedResult =
         task.result !== null
           ? task.result
@@ -1017,6 +1072,7 @@ const make = Effect.gen(function* () {
         summary: derivedResult,
         resultContextTransferId: resultTransfer?.id ?? null,
         waitTimedOut,
+        ...(pendingQuestions.length === 0 ? {} : { pendingQuestions }),
       } satisfies OrchestratorMcpDelegateTaskResult;
       if (
         acknowledgeTerminal &&
@@ -1491,7 +1547,7 @@ const make = Effect.gen(function* () {
                 target: input.target,
                 providers,
               });
-              const runtimeMode = yield* resolveRuntimeMode(
+              const runtimeMode = yield* resolveDelegatedRuntimeMode(
                 parent.thread.runtimeMode,
                 input.runtimeMode,
               );
@@ -1684,6 +1740,68 @@ const make = Effect.gen(function* () {
           taskId: input.taskId,
           status: "cancel_requested",
         };
+      }),
+    answerTask: (scope, input) =>
+      Effect.gen(function* () {
+        const current = yield* readTask(scope, input.taskId);
+        const key = yield* requestKey(input.clientRequestId);
+        const commandId = stableCommandId({ scope, requestKey: key, operation: "answer-task" });
+        const question = current.pendingQuestions?.find(
+          (candidate) => candidate.requestId === input.requestId,
+        );
+        if (question === undefined) {
+          const child = yield* loadProjection(current.childThreadId);
+          const answered = child.runtimeRequests.find((request) => request.id === input.requestId);
+          // Let the command receipt replay our successful response after the
+          // pending question has disappeared, without accepting others' answers.
+          if (answered?.status !== "resolved" || answered.responseCommandId !== commandId) {
+            return yield* failure(
+              "question_not_answerable",
+              `Delegated task ${input.taskId} is not waiting on question ${input.requestId}.`,
+            );
+          }
+        }
+        const unanswered =
+          question?.questions.filter((field) => {
+            const answer = input.answers[field.id];
+            return typeof answer === "string"
+              ? answer.trim().length === 0
+              : answer === undefined ||
+                  answer.length === 0 ||
+                  answer.some((value) => value.trim().length === 0);
+          }) ?? [];
+        if (unanswered.length > 0) {
+          return yield* failure(
+            "invalid_request",
+            `Answer every question before submitting. Missing: ${unanswered.map((field) => field.id).join(", ")}.`,
+          );
+        }
+        yield* threadManagement
+          .dispatch({
+            type: "runtime-request.respond",
+            answeredBy: "agent",
+            commandId,
+            threadId: current.childThreadId,
+            requestId: input.requestId,
+            answers: input.answers,
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              failure(
+                "question_not_answerable",
+                `Unable to answer delegated task ${input.taskId}: ${
+                  error._tag === "OrchestratorDispatchError" && typeof error.cause === "string"
+                    ? error.cause
+                    : errorMessage(error)
+                }`,
+              ),
+            ),
+          );
+        return {
+          taskId: input.taskId,
+          childThreadId: current.childThreadId,
+          requestId: input.requestId,
+        } satisfies OrchestratorMcpTaskAnswerResult;
       }),
     createThreads: (scope, input) =>
       Effect.gen(function* () {

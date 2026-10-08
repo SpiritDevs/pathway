@@ -12,6 +12,7 @@ import {
   PositiveInt,
   ProjectId,
   RunId,
+  RuntimeRequestId,
   ScheduledTaskId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -184,6 +185,19 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
 });
 export type OrchestratorMcpDelegateTaskInput = typeof OrchestratorMcpDelegateTaskInput.Type;
 
+/** A question a delegated task asked and is still waiting on; answer it with task_answer. */
+export const OrchestratorMcpTaskQuestion = Schema.Struct({
+  requestId: RuntimeRequestId,
+  questions: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      question: Schema.String,
+      options: Schema.Array(Schema.String),
+    }),
+  ),
+});
+export type OrchestratorMcpTaskQuestion = typeof OrchestratorMcpTaskQuestion.Type;
+
 export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   taskId: NodeId,
   childThreadId: ThreadId,
@@ -195,6 +209,8 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   summary: Schema.NullOr(Schema.String),
   resultContextTransferId: Schema.NullOr(ContextTransferId),
   waitTimedOut: Schema.Boolean,
+  /** Omitted when the task is not waiting on any question. */
+  pendingQuestions: Schema.optional(Schema.Array(OrchestratorMcpTaskQuestion)),
 });
 export type OrchestratorMcpDelegateTaskResult = typeof OrchestratorMcpDelegateTaskResult.Type;
 
@@ -280,6 +296,28 @@ export const OrchestratorMcpTaskCancelResult = Schema.Struct({
   status: Schema.Literals(["cancel_requested", "completed", "failed", "cancelled", "interrupted"]),
 });
 export type OrchestratorMcpTaskCancelResult = typeof OrchestratorMcpTaskCancelResult.Type;
+
+export const OrchestratorMcpTaskAnswerInput = Schema.Struct({
+  taskId: NodeId,
+  requestId: RuntimeRequestId,
+  /** Keyed by question id; a string, or several strings for a multi-select question. */
+  answers: Schema.Record(
+    Schema.String,
+    Schema.Union([
+      Schema.String.check(Schema.isMaxLength(20_000)),
+      Schema.Array(Schema.String.check(Schema.isMaxLength(20_000))),
+    ]),
+  ),
+  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
+});
+export type OrchestratorMcpTaskAnswerInput = typeof OrchestratorMcpTaskAnswerInput.Type;
+
+export const OrchestratorMcpTaskAnswerResult = Schema.Struct({
+  taskId: NodeId,
+  childThreadId: ThreadId,
+  requestId: RuntimeRequestId,
+});
+export type OrchestratorMcpTaskAnswerResult = typeof OrchestratorMcpTaskAnswerResult.Type;
 
 export const OrchestratorMcpCreateThreadRequest = Schema.Struct({
   prompt: Schema.optional(OrchestratorMcpPrompt),
@@ -627,6 +665,7 @@ export class OrchestratorMcpFailure extends Schema.TaggedErrorClass<Orchestrator
       "interaction_mode_escalation_denied",
       "task_not_found",
       "task_not_cancellable",
+      "question_not_answerable",
       "thread_not_found",
       "run_not_found",
       "thread_not_sendable",

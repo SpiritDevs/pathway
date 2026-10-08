@@ -40,6 +40,12 @@ const handlers = {
       const service = yield* OrchestratorMcpService;
       return yield* service.taskStatus(scope, taskId);
     }),
+  task_answer: (input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext;
+      const service = yield* OrchestratorMcpService;
+      return yield* service.answerTask(scope, input);
+    }),
   task_cancel: (input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;

@@ -26,6 +26,8 @@ import {
   type ProviderOptionDescriptor,
   ProviderThreadId,
   ProviderTurnId,
+  RuntimeRequestId,
+  OrchestratorMcpTaskAnswerResult,
   type ScheduledTask,
   ScheduledTaskId,
   type ScheduledTaskUpsertInput,
@@ -73,6 +75,7 @@ const claudeModel = "claude-sonnet-4-6";
 const parentPrompt = "Keep this parent turn active while orchestration tools are tested.";
 const delegatedPrompt = "Inspect the delegated API boundary and return the result.";
 const delegatedResult = "Delegated API boundary inspected.";
+const questionPrompt = "Ask which generated updates to keep.";
 const cancellationPrompt = "Remain active until the parent cancels this delegated task.";
 const createdThreadPrompt = "Complete the newly created ordinary thread.";
 
@@ -80,6 +83,8 @@ const decodeCreateThreadsResult = Schema.decodeUnknownEffect(OrchestratorMcpCrea
 const decodeCreatedThread = Schema.decodeUnknownEffect(OrchestratorMcpCreatedThread);
 const decodeDelegateTaskResult = Schema.decodeUnknownEffect(OrchestratorMcpDelegateTaskResult);
 const decodeTaskCancelResult = Schema.decodeUnknownEffect(OrchestratorMcpTaskCancelResult);
+const decodeTaskAnswerResult = Schema.decodeUnknownEffect(OrchestratorMcpTaskAnswerResult);
+const decodeQuestionReply = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeThreadInterruptResult = Schema.decodeUnknownEffect(
   OrchestratorMcpThreadInterruptResult,
 );
@@ -247,6 +252,65 @@ function makeDeterministicAdapter(input: {
                   },
                 },
               ]);
+              if (turnInput.message.text === questionPrompt) {
+                const requestId = RuntimeRequestId.make(`question:${turnInput.threadId}`);
+                yield* publish([
+                  {
+                    type: "runtime_request.updated",
+                    driver: input.driver,
+                    threadId: turnInput.threadId,
+                    runtimeRequest: {
+                      id: requestId,
+                      nodeId: turnInput.rootNodeId,
+                      providerTurnId,
+                      nativeRequestRef: null,
+                      kind: "user_input",
+                      status: "pending",
+                      isBlocking: false,
+                      responseCapability: {
+                        type: "message",
+                        providerThreadId: turnInput.providerThread.id,
+                      },
+                      createdAt: eventTime,
+                      resolvedAt: null,
+                    },
+                  },
+                  {
+                    type: "turn_item.updated",
+                    driver: input.driver,
+                    turnItem: {
+                      id: TurnItemId.make(`item:${requestId}`),
+                      threadId: turnInput.threadId,
+                      runId: turnInput.runId,
+                      nodeId: turnInput.rootNodeId,
+                      providerThreadId: turnInput.providerThread.id,
+                      providerTurnId,
+                      nativeItemRef: null,
+                      parentItemId: null,
+                      ordinal: 2,
+                      status: "waiting",
+                      title: null,
+                      startedAt: eventTime,
+                      completedAt: null,
+                      updatedAt: eventTime,
+                      type: "user_input_request",
+                      requestId,
+                      questions: [
+                        {
+                          id: "question-1",
+                          header: "Updates",
+                          question: "Which updates?",
+                          isOther: true,
+                          options: [
+                            { label: "Lockfile", description: "Dependencies" },
+                            { label: "Sources", description: "Implementation" },
+                          ],
+                        },
+                      ],
+                    },
+                  },
+                ]);
+              }
               const terminalGate = input.terminalGate?.(turnInput);
               if (terminalGate !== undefined) {
                 yield* Deferred.await(terminalGate);
@@ -1471,6 +1535,108 @@ describe("orchestrator MCP toolkit", () => {
                 (task) => task.id === delegated.taskId,
               ),
             ).toHaveLength(1);
+
+            // Async questions survive a child's terminal state. Acknowledging
+            // that terminal must not prevent the parent from answering them.
+            const questionCall = yield* invoke("delegate_task", {
+              task: questionPrompt,
+              mode: "wait",
+              runtimeMode: "approval-required",
+              timeoutMs: 10_000,
+              clientRequestId: "delegate-question-1",
+            });
+            const questionTask = yield* decodeDelegateTaskResult(
+              questionCall.structuredContent,
+            ).pipe(Effect.orDie);
+            const requestId = RuntimeRequestId.make(`question:${questionTask.childThreadId}`);
+            expect(questionTask.status).toBe("completed");
+            expect(questionTask.pendingQuestions).toEqual([
+              {
+                requestId,
+                questions: [
+                  {
+                    id: "question-1",
+                    question: "Which updates?",
+                    options: ["Lockfile", "Sources"],
+                  },
+                ],
+              },
+            ]);
+            expect(
+              (yield* orchestrator.getThreadProjection(questionTask.childThreadId)).thread
+                .runtimeMode,
+            ).toBe("full-access");
+            expect(
+              (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
+                (task) => task.id === questionTask.taskId,
+              )?.completionDelivery?.state,
+            ).toBe("acknowledged");
+            const answerArgs = {
+              taskId: questionTask.taskId,
+              requestId,
+              answers: { "question-1": ["Lockfile", "Sources"] },
+              clientRequestId: "answer-question-1",
+            };
+            const answerCall = yield* invoke("task_answer", answerArgs);
+            expect(answerCall.isError).toBe(false);
+            expect(yield* decodeTaskAnswerResult(answerCall.structuredContent)).toEqual({
+              taskId: questionTask.taskId,
+              childThreadId: questionTask.childThreadId,
+              requestId,
+            });
+            const answerProjection = yield* orchestrator.getThreadProjection(
+              questionTask.childThreadId,
+            );
+            expect(
+              answerProjection.runtimeRequests.find((request) => request.id === requestId)?.status,
+            ).toBe("resolved");
+            const answerMessage = answerProjection.messages.find(
+              (message) => message.id === `message:question-answer:${requestId}`,
+            );
+            expect(answerMessage?.createdBy).toBe("agent");
+            expect(yield* decodeQuestionReply(answerMessage?.text ?? "null")).toEqual({
+              request_user_input_async: requestId,
+              answers: [{ question: "Which updates?", answer: ["Lockfile", "Sources"] }],
+            });
+            const answerRun = answerProjection.runs.find(
+              (run) => run.userMessageId === answerMessage?.id,
+            );
+            expect(answerRun?.providerThreadId).toBe(
+              answerProjection.thread.activeProviderThreadId,
+            );
+            expect(answerRun).toBeDefined();
+            const answerRetry = yield* invoke("task_answer", answerArgs);
+            expect(answerRetry.isError).toBe(false);
+            expect(answerRetry.structuredContent).toEqual(answerCall.structuredContent);
+            expect(
+              (yield* orchestrator.getThreadProjection(questionTask.childThreadId)).messages.filter(
+                (message) => message.id === answerMessage?.id,
+              ),
+            ).toHaveLength(1);
+            // Await the persisted terminal receipt, including one already
+            // committed before subscribing, without polling or sleeping.
+            yield* orchestrator
+              .streamStoredEventsFrom({ threadId: questionTask.childThreadId })
+              .pipe(
+                Stream.filter(
+                  ({ event }) =>
+                    event.type === "run.updated" &&
+                    event.payload.id === answerRun?.id &&
+                    event.payload.status === "completed",
+                ),
+                Stream.take(1),
+                Stream.runDrain,
+              );
+            expect(
+              (yield* Ref.get(capturedTurns))
+                .filter((turn) => turn.threadId === questionTask.childThreadId)
+                .map((turn) => turn.text),
+            ).toEqual([questionPrompt, answerMessage?.text]);
+            expect(
+              (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
+                (task) => task.id === questionTask.taskId,
+              )?.completionDelivery?.state,
+            ).toBe("acknowledged");
 
             // Options outside the model's advertised descriptors are rejected
             // before any child thread is created.

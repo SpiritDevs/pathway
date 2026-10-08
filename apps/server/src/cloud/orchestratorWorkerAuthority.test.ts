@@ -11,6 +11,20 @@ describe("delegated worker privileges", () => {
       "permissions",
     );
   });
+  it("requires thread control to answer a delegated question", () => {
+    expect(
+      checkWorkerToolAccess(
+        { allowed: true, capabilities: ["threads.control"] },
+        "task_answer",
+        {},
+      ),
+    ).toBeNull();
+    for (const capability of ["threads.read", "threads.delegate"]) {
+      expect(
+        checkWorkerToolAccess({ allowed: true, capabilities: [capability] }, "task_answer", {}),
+      ).toContain("permissions");
+    }
+  });
   it("does not allow an unknown tool or a detached launch to lose assignment limits", () => {
     const access = { allowed: true, capabilities: ["threads.delegate", "schedules.manage"] };
     expect(checkWorkerToolAccess(access, "delegate_task", {})).toBeNull();
