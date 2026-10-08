@@ -166,6 +166,12 @@ const ConnectTokenPage = Schema.Struct({
   ),
   page: Schema.optional(Schema.Struct({ nextPageToken: Schema.optional(Schema.String) })),
 });
+const ConnectEndpointPage = Schema.Struct({
+  endpoints: Schema.optional(
+    Schema.Array(Schema.Struct({ id: Schema.String, hostname: Schema.String })),
+  ),
+  page: Schema.optional(Schema.Struct({ nextPageToken: Schema.optional(Schema.String) })),
+});
 const ConnectPlan = Schema.Struct({ plan: Schema.Struct({ id: Schema.String }) });
 const ConnectErrorBody = Schema.Struct({ code: Schema.String });
 const ConnectEmpty = Schema.Struct({});
@@ -267,6 +273,7 @@ const openToken = (
   );
 
 const isNotFound = (error: CyndrbaseConnectRpcError) => error.code === "not_found";
+const isAlreadyExists = (error: CyndrbaseConnectRpcError) => error.code === "already_exists";
 const isConnectRpcError = Schema.is(CyndrbaseConnectRpcError);
 const isUnlinked = Schema.is(ManagedEndpointUnlinked);
 
@@ -347,27 +354,37 @@ export const make = Effect.gen(function* () {
       Effect.catchIf(isNotFound, () => Effect.void),
     );
 
-  // The relay mints every token for its endpoints, so the edge's list is the full set.
-  const endpointTokenIds = Effect.fnUntraced(function* (
+  // Every page of a list. The relay creates everything its listener holds, so lists are complete.
+  const listAll = <
+    P extends { readonly page?: { readonly nextPageToken?: string | undefined } | undefined },
+  >(
+    connect: RelayConfiguration.CyndrbaseConnectConfiguration,
+    method: string,
+    schema: Schema.Decoder<P>,
+  ) =>
+    Effect.gen(function* () {
+      const pages: Array<P> = [];
+      let pageToken = "";
+      do {
+        const page = yield* rpc(connect, method, { page: { pageToken } }, schema);
+        pages.push(page);
+        pageToken = page.page?.nextPageToken ?? "";
+      } while (pageToken !== "");
+      return pages;
+    });
+
+  const endpointTokenIds = (
     connect: RelayConfiguration.CyndrbaseConnectConfiguration,
     endpointId: string,
-  ) {
-    const ids: Array<string> = [];
-    let pageToken = "";
-    do {
-      const { connectorTokens = [], page } = yield* rpc(
-        connect,
-        "ListConnectorTokens",
-        { page: { pageToken } },
-        ConnectTokenPage,
-      );
-      for (const token of connectorTokens) {
-        if (token.endpointIds?.includes(endpointId)) ids.push(token.id);
-      }
-      pageToken = page?.nextPageToken ?? "";
-    } while (pageToken !== "");
-    return ids;
-  });
+  ) =>
+    listAll(connect, "ListConnectorTokens", ConnectTokenPage).pipe(
+      Effect.map((pages) =>
+        pages
+          .flatMap((page) => page.connectorTokens ?? [])
+          .filter((token) => token.endpointIds?.includes(endpointId))
+          .map((token) => token.id),
+      ),
+    );
 
   const revokeEndpointTokens = (
     connect: RelayConfiguration.CyndrbaseConnectConfiguration,
@@ -613,20 +630,38 @@ export const make = Effect.gen(function* () {
               Effect.catchIf(isNotFound, () => Effect.succeed(null)),
               Effect.mapError(failed("ensure-endpoint", allocation.tunnelId)),
             );
-      const endpointId =
-        recorded ??
-        (yield* rpc(
+      const createEndpoint = (idempotencyKey: string) =>
+        rpc(
           settings.connect,
           "CreateEndpoint",
           {
             hostname,
             policy: { access: "ACCESS_KIND_PUBLIC" },
             traffic: "TRAFFIC_KIND_HTTP",
-            idempotencyKey: `endpoint:${allocation.allocationId}:${allocation.updatedAt}`,
+            idempotencyKey,
           },
           ConnectEndpoint,
-        ).pipe(
-          Effect.map(({ endpoint }) => endpoint.id),
+        ).pipe(Effect.map(({ endpoint }) => endpoint.id));
+      // The relay owns this hostname, so an endpoint holding it that the allocation does not
+      // record was orphaned by a provision that lost to an unlink. Removing it revokes its
+      // tokens; then a fresh one is created.
+      const replaceOrphan = (conflict: CyndrbaseConnectRpcError) =>
+        Effect.gen(function* () {
+          const orphan = (yield* listAll(settings.connect, "ListEndpoints", ConnectEndpointPage))
+            .flatMap((page) => page.endpoints ?? [])
+            .find((endpoint) => endpoint.hostname === hostname)?.id;
+          if (orphan === undefined) return yield* conflict;
+          const current = yield* allocations.get(key);
+          if (current?.allocationId === allocation.allocationId && current.tunnelId === orphan) {
+            return orphan;
+          }
+          yield* removeEndpoint(settings.connect, orphan);
+          return yield* createEndpoint(`endpoint:${allocation.allocationId}:${orphan}`);
+        });
+      const endpointId =
+        recorded ??
+        (yield* createEndpoint(`endpoint:${allocation.allocationId}:${allocation.updatedAt}`).pipe(
+          Effect.catchIf(isAlreadyExists, replaceOrphan),
           Effect.mapError(failed("ensure-endpoint")),
         ));
       if (endpointId !== allocation.tunnelId) {

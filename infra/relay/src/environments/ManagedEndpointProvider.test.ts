@@ -73,6 +73,19 @@ function makeConnectEdge(options?: {
   let next = 0;
   const notFound = [404, { code: "not_found" }] as const;
   const unavailable = [503, { code: "unavailable" }] as const;
+  const paged = (
+    body: typeof RpcBody.Type,
+    field: string,
+    records: Map<string, string>,
+    item: (id: string, value: string) => unknown,
+  ) => {
+    const start = Number(body.page?.pageToken || 0);
+    const more = start + 2 < records.size;
+    return {
+      [field]: [...records].slice(start, start + 2).map(([id, value]) => item(id, value)),
+      page: more ? { nextPageToken: String(start + 2) } : {},
+    };
+  };
   const plan = (apply: () => void) => {
     const id = `plan-${++next}`;
     plans.set(id, apply);
@@ -100,27 +113,33 @@ function makeConnectEdge(options?: {
           { connectorToken: { id, endpointIds: body.endpointIds }, token: `secret-${id}` },
         ];
       }
-      case "ListConnectorTokens": {
-        // Two per page, so callers must follow the page token.
-        const start = Number(body.page?.pageToken || 0);
-        const page = [...tokens].slice(start, start + 2);
-        const more = start + 2 < tokens.size;
+      // Two per page, so callers must follow the page token.
+      case "ListConnectorTokens":
         return [
           200,
-          {
-            connectorTokens: page.map(([id, endpointId]) => ({ id, endpointIds: [endpointId] })),
-            page: more ? { nextPageToken: String(start + 2) } : {},
-          },
+          paged(body, "connectorTokens", tokens, (id, endpointId) => ({
+            id,
+            endpointIds: [endpointId],
+          })),
         ];
-      }
+      case "ListEndpoints":
+        return [200, paged(body, "endpoints", endpoints, (id, hostname) => ({ id, hostname }))];
       case "PlanRevokeConnectorToken":
         return tokens.has(body.tokenId ?? "")
           ? plan(() => tokens.delete(body.tokenId ?? ""))
           : notFound;
-      case "PlanEndpointChange":
-        return endpoints.has(body.endpoint?.id ?? "")
-          ? plan(() => endpoints.delete(body.endpoint?.id ?? ""))
+      // Like the edge, removing an endpoint revokes the tokens scoped to it.
+      case "PlanEndpointChange": {
+        const id = body.endpoint?.id ?? "";
+        return endpoints.has(id)
+          ? plan(() => {
+              endpoints.delete(id);
+              for (const [token, endpointId] of tokens) {
+                if (endpointId === id) tokens.delete(token);
+              }
+            })
           : notFound;
+      }
       default: {
         const apply = plans.get(body.planId ?? "");
         if (!apply) return notFound;
@@ -604,6 +623,58 @@ describe("ManagedEndpointProvider", () => {
       expect(yield* provider.provision(request)).toEqual(relinked);
       expect([...edge.endpoints.keys()]).toEqual([relinked.runtime.endpointId]);
       expect(secrets(edge)).toEqual([relinked.runtime.connectorToken]);
+    }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
+  });
+
+  it.effect("a relink replaces an endpoint orphaned by a provision that lost to an unlink", () => {
+    let provider!: Provider;
+    let armed = true;
+    let failRemoval = false;
+    // The unlink lands between creating the endpoint and recording it, and the losing
+    // provision's own removal of that endpoint fails.
+    const edge = makeConnectEdge({
+      afterCall: (method) => {
+        if (!armed || method !== "CreateEndpoint") return Effect.void;
+        armed = false;
+        failRemoval = true;
+        return provider.deprovision(key).pipe(Effect.orDie);
+      },
+      failApplyEndpointChange: () => failRemoval,
+    });
+
+    return Effect.gen(function* () {
+      provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      yield* Effect.flip(provider.provision(request));
+      expect([...edge.endpoints.keys()]).toEqual(["endpoint-1"]);
+      failRemoval = false;
+
+      const { runtime } = yield* provider.provision(request);
+      expect([...edge.endpoints.keys()]).toEqual([runtime.endpointId]);
+      expect(secrets(edge)).toEqual([runtime.connectorToken]);
+    }).pipe(Effect.provide(providerLayer(edge)));
+  });
+
+  it.effect("keeps an endpoint holding the hostname that the allocation records", () => {
+    const edge = makeConnectEdge();
+    // A concurrent provision creates and records the endpoint after this one read the allocation.
+    const allocations = makeAllocations({
+      afterReserve: () =>
+        Effect.sync(() => {
+          const allocation = allocations.allocations.get("user_ABC:env_ABC")!;
+          edge.endpoints.set("endpoint-concurrent", allocation.hostname);
+          allocations.allocations.set("user_ABC:env_ABC", {
+            ...allocation,
+            tunnelId: "endpoint-concurrent",
+            updatedAt: "generation-concurrent",
+          });
+        }),
+    });
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      const { runtime } = yield* provider.provision(request);
+      expect(runtime.endpointId).toBe("endpoint-concurrent");
+      expect([...edge.endpoints.keys()]).toEqual(["endpoint-concurrent"]);
     }).pipe(Effect.provide(providerLayer(edge, allocations.service)));
   });
 

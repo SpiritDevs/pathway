@@ -116,7 +116,8 @@ revokes it. Mints for an allocation share one idempotency key, so retried or del
 same token, and the provision that stores it revokes any other token on the endpoint. A mint
 delayed past the edge's idempotency receipt is only revoked at unlink; the hosted edge's durable
 receipts close that gap. Every allocation write names the allocation it read, so a stale unlink
-never touches a relink's newer one. Production adopts
+never touches a relink's newer one, and a relink replaces an endpoint that a provision orphaned
+when it lost to an unlink. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 
