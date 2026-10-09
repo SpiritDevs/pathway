@@ -106,6 +106,12 @@ export interface ThreadQueueDestination {
     readonly driver: string;
     readonly displayName: string;
     readonly modelIds: readonly string[];
+    /** Absent from environments that predate it; option descriptors are undecoded. */
+    readonly models?: readonly {
+      readonly slug: string;
+      readonly name: string;
+      readonly optionDescriptors?: readonly unknown[];
+    }[];
     readonly enabled: boolean;
     readonly available: boolean;
   }[];

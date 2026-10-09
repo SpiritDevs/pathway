@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   MessageId,
+  ModelCapabilities,
   ProjectId,
   ProviderInstanceId,
   ProviderDriverKind,
@@ -8,6 +9,8 @@ import {
   type ServerProvider,
 } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import type {
   ThreadQueueDestination,
   ThreadQueueSubmission,
@@ -136,6 +139,10 @@ export function queuedLocalChatMessage(
 }
 
 /** Registered capabilities populate the normal picker when an environment has no local snapshot. */
+// Published option descriptors are stored loose in the cloud; one this client cannot read drops
+// that model's options rather than the model.
+const decodeModelCapabilities = Schema.decodeUnknownOption(ModelCapabilities);
+
 export function queueDestinationProviders(
   destination: ThreadQueueDestination | undefined,
 ): readonly ServerProvider[] {
@@ -151,12 +158,24 @@ export function queueDestinationProviders(
       status: provider.enabled ? ("ready" as const) : ("disabled" as const),
       auth: { status: "unknown" as const },
       checkedAt: new Date(0).toISOString(),
-      models: provider.modelIds.map((model) => ({
-        slug: model,
-        name: model,
-        isCustom: false,
-        capabilities: null,
-      })),
+      models:
+        provider.models?.map((model) => ({
+          slug: model.slug,
+          name: model.name,
+          isCustom: false,
+          capabilities:
+            model.optionDescriptors === undefined
+              ? null
+              : Option.getOrNull(
+                  decodeModelCapabilities({ optionDescriptors: model.optionDescriptors }),
+                ),
+        })) ??
+        provider.modelIds.map((model) => ({
+          slug: model,
+          name: model,
+          isCustom: false,
+          capabilities: null,
+        })),
       slashCommands: [],
       skills: [],
     })) ?? []

@@ -1340,6 +1340,7 @@ export const destinations = query({
           driver: provider.driverKind,
           displayName: provider.instanceId,
           modelIds: provider.modelIds,
+          ...(provider.models ? { models: provider.models } : {}),
           enabled: provider.enabled,
           available: provider.available,
         })),

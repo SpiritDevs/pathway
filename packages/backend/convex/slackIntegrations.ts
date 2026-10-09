@@ -29,7 +29,7 @@ import {
   type CompanyActor,
   type EnvironmentActor,
 } from "./lib/identity.ts";
-import { domainIdArg } from "./lib/validators.ts";
+import { domainIdArg, publishedProviderModel } from "./lib/validators.ts";
 
 const MAX_BACKUPS = 10;
 const LEASE_TTL_MS = 90_000;
@@ -41,6 +41,8 @@ const MAX_TOKEN_CHARS = 4_096;
 const MAX_ERROR_CHARS = 500;
 const MAX_PROVIDER_INSTANCES = 50;
 const MAX_PROVIDER_MODELS = 500;
+/** Keeps a capability row well under Convex's 1 MiB document limit across every provider. */
+const MAX_PUBLISHED_MODELS_BYTES = 16_384;
 const MAX_DISCOVERED_CHANNELS = 1_000;
 const SLACK_REQUEST_TIMEOUT_MS = 10_000;
 
@@ -1545,6 +1547,7 @@ export const publishCapabilities = mutation({
         enabled: v.boolean(),
         available: v.boolean(),
         modelIds: v.array(v.string()),
+        models: v.optional(v.array(publishedProviderModel)),
       }),
     ),
   },
@@ -1558,7 +1561,9 @@ export const publishCapabilities = mutation({
           provider.instanceId.length > 256 ||
           provider.driverKind.length > 128 ||
           provider.modelIds.length > MAX_PROVIDER_MODELS ||
-          provider.modelIds.some((model) => model.length === 0 || model.length > 256),
+          provider.modelIds.some((model) => model.length === 0 || model.length > 256) ||
+          (provider.models?.length ?? 0) > MAX_PROVIDER_MODELS ||
+          JSON.stringify(provider.models ?? []).length > MAX_PUBLISHED_MODELS_BYTES,
       ) ||
       new Set(args.providers.map((provider) => provider.instanceId)).size !== args.providers.length
     ) {

@@ -252,6 +252,20 @@ async function capabilities(t: Harness) {
           enabled: true,
           available: true,
           modelIds: ["gpt-5"],
+          models: [
+            {
+              slug: "gpt-5",
+              name: "GPT-5",
+              optionDescriptors: [
+                {
+                  id: "reasoningEffort",
+                  label: "Reasoning",
+                  type: "select",
+                  options: [{ id: "high", label: "High", isDefault: true }],
+                },
+              ],
+            },
+          ],
         },
       ],
       publishedAt: Date.now(),
@@ -318,7 +332,13 @@ describe("durable thread queue", () => {
     expect(measured.result).toHaveLength(2);
     expect(measured.result.find((row) => row.environmentId === ENVIRONMENT_TWO)).toMatchObject({
       projects: [{ localProjectId: "local-0", title: "Project 0", cloudProjectId: "project-0" }],
-      providers: [{ instanceId: "codex", modelIds: ["gpt-5"] }],
+      providers: [
+        {
+          instanceId: "codex",
+          modelIds: ["gpt-5"],
+          models: [{ slug: "gpt-5", optionDescriptors: [{ id: "reasoningEffort" }] }],
+        },
+      ],
     });
     expect(measured.bindingReads).toBe(1);
     expect(measured.capabilityReads).toBe(1);

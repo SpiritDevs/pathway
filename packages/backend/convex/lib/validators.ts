@@ -126,3 +126,35 @@ export const roleAssignmentArg = v.object({
   roleId: domainIdArg,
   scope: roleAssignmentScopeArg,
 });
+
+/**
+ * A model an environment publishes with its provider capabilities: `ServerProviderModel` from
+ * `contracts/server`, reduced to what a remote composer shows. Option descriptors are stored loose;
+ * readers decode them against `ModelCapabilities` and drop what they do not understand.
+ */
+export const publishedProviderModel = v.object({
+  slug: v.string(),
+  name: v.string(),
+  optionDescriptors: v.optional(
+    v.array(
+      v.object({
+        id: v.string(),
+        label: v.string(),
+        description: v.optional(v.string()),
+        type: v.string(),
+        options: v.optional(
+          v.array(
+            v.object({
+              id: v.string(),
+              label: v.string(),
+              description: v.optional(v.string()),
+              isDefault: v.optional(v.boolean()),
+            }),
+          ),
+        ),
+        currentValue: v.optional(v.union(v.string(), v.boolean())),
+        promptInjectedValues: v.optional(v.array(v.string())),
+      }),
+    ),
+  ),
+});

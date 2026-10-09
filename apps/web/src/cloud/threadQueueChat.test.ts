@@ -136,6 +136,33 @@ describe("queue records in ordinary chat", () => {
       workspaceRoot: "/workspace/project",
     });
   });
+  it("offers a published model's reasoning options, dropping only ones it cannot read", () => {
+    const effort = {
+      id: "reasoningEffort",
+      label: "Reasoning",
+      type: "select",
+      options: [{ id: "high", label: "High", isDefault: true }],
+    };
+    const [provider] = queueDestinationProviders({
+      ...destination,
+      providers: destination.providers.map((entry) => ({
+        ...entry,
+        models: [
+          { slug: "gpt-5", name: "GPT-5", optionDescriptors: [effort] },
+          { slug: "gpt-6", name: "GPT-6", optionDescriptors: [{ id: "x", type: "slider" }] },
+        ],
+      })),
+    });
+    expect(provider?.models).toEqual([
+      {
+        slug: "gpt-5",
+        name: "GPT-5",
+        isCustom: false,
+        capabilities: { optionDescriptors: [effort] },
+      },
+      { slug: "gpt-6", name: "GPT-6", isCustom: false, capabilities: null },
+    ]);
+  });
   it("uses a display-only ordinary thread shell for a canceled conversation", () => {
     if (submission.kind !== "launch") throw new Error("Expected launch fixture");
     const shell = queuedThreadShell(

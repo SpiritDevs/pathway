@@ -40,7 +40,7 @@ import { providerAllowanceTables } from "./lib/providerAllowanceSchema.ts";
 
 import { businessToolsTables } from "./lib/businessToolsSchema.ts";
 
-import { repositoryIdentityArg } from "./lib/validators.ts";
+import { publishedProviderModel, repositoryIdentityArg } from "./lib/validators.ts";
 
 /** Client-generated domain id (UUIDv7). Distinct from a Convex `_id`. */
 const domainId = v.string();
@@ -1375,6 +1375,8 @@ export default defineSchema({
         enabled: v.boolean(),
         available: v.boolean(),
         modelIds: v.array(v.string()),
+        /** Display names and option descriptors, so remote composers offer reasoning and speed. */
+        models: v.optional(v.array(publishedProviderModel)),
       }),
     ),
     publishedAt: v.number(),

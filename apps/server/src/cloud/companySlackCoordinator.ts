@@ -11,6 +11,7 @@ import {
   ModelSelection,
   ThreadId,
   type EnvironmentId,
+  type ServerProviderModel,
 } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import type { FunctionReturnType } from "convex/server";
@@ -117,6 +118,7 @@ export interface CompanySlackBackend {
       readonly enabled: boolean;
       readonly available: boolean;
       readonly modelIds: ReadonlyArray<string>;
+      readonly models?: ReadonlyArray<PublishedProviderModel>;
     }>;
   }) => Effect.Effect<void, unknown>;
   readonly claimJobs: (companyId: string) => Effect.Effect<ReadonlyArray<AutomationJob>, unknown>;
@@ -335,9 +337,10 @@ export const makeCompanySlackBackend = Effect.fn("cloud.company_slack.backend")(
       authorized((convex) =>
         convex.mutation(api.slackIntegrations.publishCapabilities, {
           ...args,
-          providers: args.providers.map((provider) => ({
+          providers: args.providers.map(({ models, ...provider }) => ({
             ...provider,
             modelIds: [...provider.modelIds],
+            ...(models ? { models: [...models] } : {}),
           })),
         }),
       ),
@@ -677,7 +680,44 @@ type PublishedProviderCapability = {
   readonly enabled: boolean;
   readonly available: boolean;
   readonly modelIds: ReadonlyArray<string>;
+  readonly models?: ReadonlyArray<PublishedProviderModel>;
 };
+
+/**
+ * What a remote composer needs to offer a model's reasoning and speed options. Fields are picked
+ * explicitly because Convex refuses the whole publish over a field it does not know.
+ */
+const toPublishedModel = (model: ServerProviderModel) => ({
+  slug: model.slug,
+  name: model.name,
+  ...(model.capabilities?.optionDescriptors
+    ? {
+        optionDescriptors: model.capabilities.optionDescriptors.map((descriptor) => ({
+          id: descriptor.id,
+          label: descriptor.label,
+          ...(descriptor.description ? { description: descriptor.description } : {}),
+          type: descriptor.type,
+          ...(descriptor.currentValue !== undefined
+            ? { currentValue: descriptor.currentValue }
+            : {}),
+          ...(descriptor.type === "select"
+            ? {
+                options: descriptor.options.map((option) => ({
+                  id: option.id,
+                  label: option.label,
+                  ...(option.description ? { description: option.description } : {}),
+                  ...(option.isDefault !== undefined ? { isDefault: option.isDefault } : {}),
+                })),
+                ...(descriptor.promptInjectedValues
+                  ? { promptInjectedValues: [...descriptor.promptInjectedValues] }
+                  : {}),
+              }
+            : {}),
+        })),
+      }
+    : {}),
+});
+type PublishedProviderModel = ReturnType<typeof toPublishedModel>;
 
 export interface CompanySlackRuntime {
   readonly companyId: CompanyId;
@@ -1527,6 +1567,7 @@ export const startCompanySlackCoordinator = Effect.fn("cloud.company_slack.start
               enabled: instance.enabled,
               available: snapshot.installed && snapshot.status !== "error",
               modelIds: snapshot.models.map((model) => model.slug),
+              models: snapshot.models.map(toPublishedModel),
             })),
           ),
         ),
