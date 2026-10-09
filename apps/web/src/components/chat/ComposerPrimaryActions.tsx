@@ -12,12 +12,14 @@ import {
   ChevronDownIcon,
   ChevronLeftIcon,
   CornerDownRightIcon,
+  HistoryIcon,
   ListEndIcon,
   MessageSquarePlusIcon,
   PanelRightOpenIcon,
 } from "lucide-react";
 import type { ActiveTurnSendMode } from "@spiritdevs/contracts/settings";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
+import { formatContextWindowTokens } from "~/lib/contextWindow";
 import { cn } from "~/lib/utils";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
 import { Button } from "../ui/button";
@@ -51,6 +53,9 @@ interface ComposerPrimaryActionsProps {
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
   onSendWithMode?: (mode: "queue" | "steer") => void;
+  /** Tokens a stale session would re-read. When set, the send button compacts first and says so. */
+  compactBeforeSendTokens?: number | null;
+  onSendWithFullHistory?: () => void;
   onStartInNewChat?: () => void;
   onStartInSideChat?: () => void;
 }
@@ -113,6 +118,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onInterrupt,
   onImplementPlanInNewThread,
   onSendWithMode,
+  compactBeforeSendTokens = null,
+  onSendWithFullHistory,
   onStartInNewChat,
   onStartInSideChat,
 }: ComposerPrimaryActionsProps) {
@@ -319,12 +326,15 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
+  const compactTokens =
+    compactBeforeSendTokens === null ? null : formatContextWindowTokens(compactBeforeSendTokens);
   const sendButton = (
     <button
       ref={sendButtonRef}
       type="submit"
       className={cn(
-        "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8",
+        "relative isolate flex h-9 items-center justify-center overflow-hidden rounded-full shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8",
+        compactTokens === null ? "w-9 sm:w-8" : "gap-1.5 px-3 font-medium text-xs",
         stageBackdropVariant
           ? "bg-transparent text-white enabled:shadow-black/24 enabled:hover:brightness-110"
           : "bg-message-action text-message-action-foreground enabled:shadow-message-action/24 hover:bg-message-action-hover",
@@ -352,7 +362,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
                   ? activeTurnSendMode === "queue"
                     ? "Queue message behind active turn"
                     : "Send message to steer active turn"
-                  : "Send message"
+                  : compactTokens !== null
+                    ? "Compact and send"
+                    : "Send message"
       }
     >
       {stageBackdropVariant ? (
@@ -362,6 +374,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       ) : null}
       {isConnecting || isSendBusy ? (
         <Spinner className="size-3.5" aria-hidden="true" />
+      ) : compactTokens !== null ? (
+        "Compact and send"
       ) : (
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
           <path
@@ -381,7 +395,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     ? activeTurnSendMode === "queue"
       ? "Queue behind the active turn. Hold for message options"
       : "Send now to steer the active turn. Hold for message options"
-    : "Send message. Hold for message options";
+    : compactTokens !== null
+      ? `Summarize ${compactTokens} tokens of history, then send. Hold to send with full history`
+      : "Send message. Hold for message options";
 
   return (
     <Menu
@@ -404,6 +420,12 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         <TooltipPopup side="top">{sendButtonTooltip}</TooltipPopup>
       </Tooltip>
       <MenuPopup align="end" anchor={sendButtonRef} className="min-w-48" side="top">
+        {compactTokens !== null ? (
+          <MenuItem onClick={() => onSendWithFullHistory?.()}>
+            <HistoryIcon />
+            Send with full history ({compactTokens} tokens)
+          </MenuItem>
+        ) : null}
         {sendMenuActions.map(({ action, disabled }) => {
           if (action === "queue") {
             return (

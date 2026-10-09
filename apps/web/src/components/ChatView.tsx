@@ -276,7 +276,6 @@ import {
   CheckCircle2Icon,
   GitBranchIcon,
   MessagesSquareIcon,
-  Minimize2Icon,
   PaperclipIcon,
   TriangleAlertIcon,
   WifiOffIcon,
@@ -455,7 +454,6 @@ import {
 import {
   contextWindowSnapshotFromUsage,
   deriveLatestContextWindowSnapshot,
-  formatContextWindowTokens,
 } from "../lib/contextWindow";
 import {
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
@@ -6268,7 +6266,7 @@ function ChatViewContent(props: ChatViewProps) {
     wasShownForCurrentMismatch:
       revealedBranchMismatchKey !== null && revealedBranchMismatchKey === activeBranchMismatchKey,
   });
-  const compactDisabled =
+  const compactUnavailable =
     !activeThread ||
     !activeProject ||
     !isServerThread ||
@@ -6278,8 +6276,8 @@ function ChatViewContent(props: ChatViewProps) {
     activeEnvironmentUnavailable ||
     pendingApprovals.length > 0 ||
     pendingUserInputs.length > 0 ||
-    showPlanFollowUpPrompt ||
-    composerHasDraftContent;
+    showPlanFollowUpPrompt;
+  const compactDisabled = compactUnavailable || composerHasDraftContent;
   const compactDisabledReason = compactDisabled
     ? composerHasDraftContent
       ? "Send or clear your draft before compacting"
@@ -6650,75 +6648,32 @@ function ChatViewContent(props: ChatViewProps) {
   // composer remains the fallback so the prompt never disappears.
   const browserTakeoverBannerInPreview = previewPanelOpen ? browserTakeoverBanner : null;
   const browserTakeoverBannerInComposer = previewPanelOpen ? null : browserTakeoverBanner;
-  const [dismissedResumeCompactionKeys, setDismissedResumeCompactionKeys] = useState<
-    ReadonlySet<string>
-  >(new Set());
-  const resumeCompactionKey =
-    activeThread && activeContextWindow
-      ? `${activeThread.id}:${activeContextWindow.updatedAt}`
+  // Tokens a stale Claude session would re-read on its next turn. While set,
+  // the send button reads "Compact and send" and a send compacts first;
+  // "Send with full history" in its hold menu skips that once.
+  const resumeCompactionTokens =
+    activeContextWindow &&
+    !resumeCompactionPermanentlyDismissed &&
+    !compactUnavailable &&
+    shouldOfferResumeCompaction({
+      provider: selectedProvider,
+      usedTokens: activeContextWindow.usedTokens,
+      updatedAt: activeContextWindow.updatedAt,
+      now: `${nowMinute}:00.000Z`,
+    })
+      ? activeContextWindow.usedTokens
       : null;
-  const resumeCompactionBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
-    if (
-      !activeThread ||
-      !activeContextWindow ||
-      resumeCompactionKey === null ||
-      dismissedResumeCompactionKeys.has(resumeCompactionKey) ||
-      resumeCompactionPermanentlyDismissed ||
-      pendingUserInputs.length > 0 ||
-      phase === "running" ||
-      !shouldOfferResumeCompaction({
-        provider: selectedProvider,
-        usedTokens: activeContextWindow.usedTokens,
-        updatedAt: activeContextWindow.updatedAt,
-        now: `${nowMinute}:00.000Z`,
-      })
-    ) {
-      return null;
+  // Set only for the synchronous span of a "Send with full history" submit;
+  // onSend reads it before its first await.
+  const keepFullHistoryOnceRef = useRef(false);
+  const sendWithFullHistory = useCallback((send: () => void) => {
+    keepFullHistoryOnceRef.current = true;
+    try {
+      send();
+    } finally {
+      keepFullHistoryOnceRef.current = false;
     }
-
-    const compactAction = (
-      <Button
-        size="xs"
-        variant="outline"
-        disabled={compactDisabled}
-        onClick={() => {
-          if (!compactDisabled) resolveComposerHandle(composerRef)?.compactContext();
-        }}
-      >
-        Compact
-      </Button>
-    );
-    return {
-      id: `resume-compaction:${resumeCompactionKey}`,
-      variant: "info",
-      icon: <Minimize2Icon />,
-      title: "Resume with less context",
-      description: `${formatContextWindowTokens(activeContextWindow.usedTokens)} tokens from an older session`,
-      actions: compactDisabledReason ? (
-        <Tooltip>
-          <TooltipTrigger render={<span className="inline-flex">{compactAction}</span>} />
-          <TooltipPopup side="top">{compactDisabledReason}</TooltipPopup>
-        </Tooltip>
-      ) : (
-        compactAction
-      ),
-      dismissLabel: "Keep full history",
-      onDismiss: () =>
-        setDismissedResumeCompactionKeys((keys) => new Set(keys).add(resumeCompactionKey)),
-    };
-  }, [
-    activeContextWindow,
-    activeThread,
-    compactDisabled,
-    compactDisabledReason,
-    dismissedResumeCompactionKeys,
-    nowMinute,
-    pendingUserInputs.length,
-    phase,
-    resumeCompactionKey,
-    resumeCompactionPermanentlyDismissed,
-    selectedProvider,
-  ]);
+  }, []);
   // The stash card sits in the banner stack but is filled by the composer.
   const hasPromptStash = usePromptStashStore((state) => state.entries.length > 0);
   const [stashSlot, setStashSlot] = useState<HTMLDivElement | null>(null);
@@ -6726,8 +6681,6 @@ function ChatViewContent(props: ChatViewProps) {
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     const browserTakeoverItems =
       browserTakeoverBannerInComposer === null ? [] : [browserTakeoverBannerInComposer];
-    const resumeCompactionItems =
-      resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
         ...(storageBannerItem ? [storageBannerItem] : []),
@@ -6735,7 +6688,6 @@ function ChatViewContent(props: ChatViewProps) {
         ...(usageRecovery.banner ? [usageRecovery.banner] : []),
         ...(usageRecovery.lowUsageBanner ? [usageRecovery.lowUsageBanner] : []),
         ...browserTakeoverItems,
-        ...resumeCompactionItems,
         ...parkedThreadItems,
       ];
     }
@@ -6784,7 +6736,6 @@ function ChatViewContent(props: ChatViewProps) {
           setBranchMismatchDismissTick((tick) => tick + 1);
         },
       },
-      ...resumeCompactionItems,
       ...parkedThreadItems,
     ];
   }, [
@@ -6794,7 +6745,6 @@ function ChatViewContent(props: ChatViewProps) {
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,
     parkedThreadBannerItem,
-    resumeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
     usageRecovery.banner,
@@ -7811,6 +7761,7 @@ function ChatViewContent(props: ChatViewProps) {
     target: "current" | "new-chat" | "side-chat" = "current",
   ) => {
     e?.preventDefault();
+    const keepFullHistory = keepFullHistoryOnceRef.current;
     if (target !== "current" && activeThread?.temporary) {
       setThreadError(
         activeThread.id,
@@ -8114,7 +8065,16 @@ function ChatViewContent(props: ChatViewProps) {
       messageTextWithReviewComments,
       composerIssueContextsSnapshot,
     );
-    const shouldQueueBehindActiveRun = phase === "running" && dispatchMode === "queue";
+    // A stale Claude session compacts before this message so the turn does not re-read the
+    // old history. The message queues behind the /compact run, since steering into it is
+    // rejected.
+    const compactBeforeSend =
+      sendsToCurrentThread &&
+      resumeCompactionTokens !== null &&
+      !keepFullHistory &&
+      messageTextForSend.trim().toLowerCase() !== "/compact";
+    const shouldQueueBehindActiveRun =
+      compactBeforeSend || (phase === "running" && dispatchMode === "queue");
     const computerControlSequenceForSend = computerControlChangeSequence.current;
     // Another thread's control epoch never applies to a new chat.
     const generationForSend = sendsToCurrentThread
@@ -8283,6 +8243,22 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
 
+    if (failure === null && compactBeforeSend) {
+      const compactResult = await startThreadTurn({
+        environmentId,
+        input: {
+          threadId: threadIdForSend,
+          message: { messageId: newMessageId(), role: "user", text: "/compact", attachments: [] },
+          modelSelection: ctxSelectedModelSelection,
+          runtimeMode,
+          interactionMode,
+        },
+      });
+      if (compactResult._tag === "Failure") {
+        failure = compactResult;
+      }
+    }
+
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
       const bootstrap =
@@ -8381,7 +8357,7 @@ function ChatViewContent(props: ChatViewProps) {
           titleSeed: title,
           runtimeMode,
           interactionMode,
-          dispatchMode: sendsToCurrentThread ? dispatchMode : "auto",
+          dispatchMode: compactBeforeSend ? "queue" : sendsToCurrentThread ? dispatchMode : "auto",
           ...computerControlFieldsForTurn({
             fields: computerControlForSend.fields,
             // startThreadTurn launches whenever it creates or prepares the thread.
@@ -10754,6 +10730,8 @@ function ChatViewContent(props: ChatViewProps) {
                               activeContextWindow={activeContextWindow}
                               compactDisabled={compactDisabled}
                               compactDisabledReason={compactDisabledReason}
+                              resumeCompactionTokens={resumeCompactionTokens}
+                              onSendWithFullHistory={sendWithFullHistory}
                               resolvedTheme={resolvedTheme}
                               settings={settings}
                               keybindings={keybindings}

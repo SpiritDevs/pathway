@@ -20,6 +20,6 @@ You can choose the model used for long summaries in **Settings → General → C
 
 ## Claude native compaction
 
-Claude can compact its current native session without changing models. Use `/compact` or the **Compact context** action in the context-window meter. Older Claude sessions with at least 100,000 tokens offer compaction before they resume.
+Claude can compact its current native session without changing models. Use `/compact` or the **Compact context** action in the context-window meter. When you return to a Claude session with at least 100,000 tokens after more than 70 minutes, the send button changes to **Compact and send**: sending summarizes the history first, then sends your message. To keep the full history for that message, hold the send button (or right-click it) and choose **Send with full history**.
 
 The **Auto-compact after** Claude provider setting accepts a value from 100,000 to 1,000,000 tokens. Leave it blank to use Claude's default.
