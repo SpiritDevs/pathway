@@ -2,6 +2,7 @@ import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
 } from "./lib/terminalContext";
+import { COMPUTER_USE_SLASH_COMMAND } from "@spiritdevs/shared/computerInvocation";
 import {
   collectComposerInlineTokens,
   type ComposerInlineToken,
@@ -20,6 +21,8 @@ export type ComposerPromptSegment =
   | {
       type: "skill";
       name: string;
+      /** `/` for a Pathway command the server reads as text, such as `/computer-use`. */
+      sigil?: "/";
     }
   | {
       type: "terminal-context";
@@ -195,6 +198,9 @@ export function selectionTouchesMentionBoundary(
   });
 }
 
+// The server only reads `/computer-use` at the very start of a message, so only there is it a chip.
+const LEADING_COMPUTER_USE = /^\/computer-use(?=\s)/;
+
 export function splitPromptIntoComposerSegments(
   prompt: string,
   terminalContexts: ReadonlyArray<TerminalContextDraft> = [],
@@ -204,8 +210,12 @@ export function splitPromptIntoComposerSegments(
   }
 
   const segments: ComposerPromptSegment[] = [];
+  const command = LEADING_COMPUTER_USE.exec(prompt);
+  if (command) {
+    segments.push({ type: "skill", name: COMPUTER_USE_SLASH_COMMAND, sigil: "/" });
+  }
   let terminalContextIndex = 0;
-  forEachPromptSegmentSlice(prompt, (slice) => {
+  forEachPromptSegmentSlice(command ? prompt.slice(command[0].length) : prompt, (slice) => {
     if (slice.type === "text") {
       segments.push(...splitPromptTextIntoComposerSegments(slice.text));
       return false;

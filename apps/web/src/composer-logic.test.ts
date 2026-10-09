@@ -158,6 +158,11 @@ describe("replaceTextRange", () => {
 });
 
 describe("expandCollapsedComposerCursor", () => {
+  it("counts a /computer-use chip as one collapsed character", () => {
+    const text = "/computer-use open Calculator";
+    expect(expandCollapsedComposerCursor(text, 1)).toBe("/computer-use".length);
+    expect(collapseExpandedComposerCursor(text, "/computer-use ".length)).toBe(2);
+  });
   it("keeps cursor unchanged when no mention segment is present", () => {
     expect(expandCollapsedComposerCursor("plain text", 5)).toBe(5);
   });

@@ -6,6 +6,8 @@ import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import { type ServerProviderSkill } from "@spiritdevs/contracts";
+import { COMPUTER_USE_SLASH_COMMAND } from "@spiritdevs/shared/computerInvocation";
+import { MonitorIcon, type LucideIcon } from "lucide-react";
 import { serializeComposerFileLink } from "@spiritdevs/shared/composerTrigger";
 import {
   $applyNodeReplacement,
@@ -115,6 +117,7 @@ type SerializedComposerSkillNode = Spread<
     skillName: string;
     skillLabel?: string;
     skillDescription?: string;
+    sigil?: "/";
     type: "composer-skill";
     version: 1;
   },
@@ -245,7 +248,21 @@ function skillMetadataByName(
   );
 }
 
-function ComposerSkillDecorator(props: { skillLabel: string; skillDescription: string | null }) {
+// Pathway commands written as `/name` that the composer shows as a chip.
+const COMMAND_CHIPS: Record<string, { label: string; description: string; icon: LucideIcon }> = {
+  [COMPUTER_USE_SLASH_COMMAND]: {
+    label: "Computer use",
+    description: "Lets the agent use this computer for this request.",
+    icon: MonitorIcon,
+  },
+};
+
+function ComposerSkillDecorator(props: {
+  skillLabel: string;
+  skillDescription: string | null;
+  icon?: LucideIcon | undefined;
+}) {
+  const Icon = props.icon;
   const chip = (
     <span
       className={COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME}
@@ -253,11 +270,15 @@ function ComposerSkillDecorator(props: { skillLabel: string; skillDescription: s
       spellCheck={false}
       data-composer-skill-chip="true"
     >
-      <span
-        aria-hidden="true"
-        className={COMPOSER_INLINE_CHIP_ICON_CLASS_NAME}
-        dangerouslySetInnerHTML={{ __html: SKILL_CHIP_ICON_SVG }}
-      />
+      {Icon ? (
+        <Icon aria-hidden="true" className={COMPOSER_INLINE_CHIP_ICON_CLASS_NAME} />
+      ) : (
+        <span
+          aria-hidden="true"
+          className={COMPOSER_INLINE_CHIP_ICON_CLASS_NAME}
+          dangerouslySetInnerHTML={{ __html: SKILL_CHIP_ICON_SVG }}
+        />
+      )}
       <span className={COMPOSER_INLINE_SKILL_CHIP_LABEL_CLASS_NAME}>{props.skillLabel}</span>
     </span>
   );
@@ -280,6 +301,7 @@ class ComposerSkillNode extends DecoratorNode<React.ReactElement> {
   __skillName: string;
   __skillLabel: string;
   __skillDescription: string | null;
+  __sigil: "$" | "/";
 
   static override getType(): string {
     return "composer-skill";
@@ -290,6 +312,7 @@ class ComposerSkillNode extends DecoratorNode<React.ReactElement> {
       node.__skillName,
       node.__skillLabel,
       node.__skillDescription,
+      node.__sigil,
       node.__key,
     );
   }
@@ -299,6 +322,7 @@ class ComposerSkillNode extends DecoratorNode<React.ReactElement> {
       serializedNode.skillName,
       serializedNode.skillLabel ?? serializedNode.skillName,
       serializedNode.skillDescription ?? null,
+      serializedNode.sigil ?? "$",
     ).updateFromJSON(serializedNode);
   }
 
@@ -306,13 +330,15 @@ class ComposerSkillNode extends DecoratorNode<React.ReactElement> {
     skillName: string,
     skillLabel: string,
     skillDescription: string | null,
+    sigil: "$" | "/" = "$",
     key?: NodeKey,
   ) {
     super(key);
-    const normalizedSkillName = skillName.startsWith("$") ? skillName.slice(1) : skillName;
+    const normalizedSkillName = skillName.startsWith(sigil) ? skillName.slice(1) : skillName;
     this.__skillName = normalizedSkillName;
     this.__skillLabel = skillLabel;
     this.__skillDescription = skillDescription;
+    this.__sigil = sigil;
   }
 
   override exportJSON(): SerializedComposerSkillNode {
@@ -321,6 +347,7 @@ class ComposerSkillNode extends DecoratorNode<React.ReactElement> {
       skillName: this.__skillName,
       skillLabel: this.__skillLabel,
       ...(this.__skillDescription ? { skillDescription: this.__skillDescription } : {}),
+      ...(this.__sigil === "/" ? { sigil: "/" as const } : {}),
       type: "composer-skill",
       version: 1,
     };
@@ -337,7 +364,7 @@ class ComposerSkillNode extends DecoratorNode<React.ReactElement> {
   }
 
   override getTextContent(): string {
-    return `$${this.__skillName}`;
+    return `${this.__sigil}${this.__skillName}`;
   }
 
   override isInline(): true {
@@ -349,6 +376,7 @@ class ComposerSkillNode extends DecoratorNode<React.ReactElement> {
       <ComposerSkillDecorator
         skillLabel={this.__skillLabel}
         skillDescription={this.__skillDescription}
+        icon={this.__sigil === "/" ? COMMAND_CHIPS[this.__skillName]?.icon : undefined}
       />
     );
   }
@@ -358,8 +386,11 @@ function $createComposerSkillNode(
   skillName: string,
   skillLabel: string,
   skillDescription: string | null,
+  sigil: "$" | "/" = "$",
 ): ComposerSkillNode {
-  return $applyNodeReplacement(new ComposerSkillNode(skillName, skillLabel, skillDescription));
+  return $applyNodeReplacement(
+    new ComposerSkillNode(skillName, skillLabel, skillDescription, sigil),
+  );
 }
 
 function ComposerTerminalContextDecorator(props: { context: TerminalContextDraft }) {
@@ -836,6 +867,13 @@ function $setComposerEditorPrompt(
       continue;
     }
     if (segment.type === "skill") {
+      const command = segment.sigil === "/" ? COMMAND_CHIPS[segment.name] : undefined;
+      if (command) {
+        paragraph.append(
+          $createComposerSkillNode(segment.name, command.label, command.description, "/"),
+        );
+        continue;
+      }
       const metadata = skillMetadata.get(segment.name);
       paragraph.append(
         $createComposerSkillNode(

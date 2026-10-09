@@ -15,6 +15,19 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
+  it("shows a leading /computer-use as a command chip, and only at the start", () => {
+    expect(splitPromptIntoComposerSegments("/computer-use open Calculator")).toEqual([
+      { type: "skill", name: "computer-use", sigil: "/" },
+      { type: "text", text: " open Calculator" },
+    ]);
+    expect(splitPromptIntoComposerSegments("/computer-use")).toEqual([
+      { type: "text", text: "/computer-use" },
+    ]);
+    expect(splitPromptIntoComposerSegments("try /computer-use now")).toEqual([
+      { type: "text", text: "try /computer-use now" },
+    ]);
+  });
+
   it("does not convert an incomplete trailing mention token", () => {
     expect(splitPromptIntoComposerSegments("Inspect @AGENTS.md")).toEqual([
       { type: "text", text: "Inspect @AGENTS.md" },
