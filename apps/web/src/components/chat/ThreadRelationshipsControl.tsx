@@ -782,7 +782,7 @@ export function ThreadLineagePanel() {
           : GitForkIcon;
     const relationship = relationshipLabel(edge, currentThreadId);
     const threadTitle = relationshipThreadTitle({
-      title: node?.thread?.title ?? threadId,
+      title: node?.thread?.title ?? relationship,
       isSubagent,
     });
     // Subagents this thread started get a details card; every other row keeps its one-line hint.

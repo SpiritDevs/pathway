@@ -440,10 +440,12 @@ function Sidebar({
         data-variant={variant}
       >
         {hoverRevealEnabled ? (
+          // Kept to a sliver: it overlays the content edge, so anything wider swallows the
+          // controls there (e.g. the browser panel's back button).
           <div
             aria-hidden="true"
             className={cn(
-              "absolute inset-y-0 z-30 hidden w-8 md:block group-data-[state=expanded]:hidden",
+              "absolute inset-y-0 z-30 hidden w-1.5 md:block group-data-[state=expanded]:hidden",
               side === "left" ? "left-0" : "right-0",
             )}
             data-slot="sidebar-hover-target"

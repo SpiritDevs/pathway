@@ -1,5 +1,4 @@
 import { useCheckProviderUpdates } from "../ProviderUpdateCheckCoordinator";
-import { BrowserPasswordsSettings } from "./BrowserPasswordsSettings";
 import { ChevronRightIcon, SettingsIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
@@ -2660,8 +2659,6 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
-
-      <BrowserPasswordsSettings />
 
       <SettingsSection title="About">
         {isElectron || HOSTED_APP_CHANNEL ? (

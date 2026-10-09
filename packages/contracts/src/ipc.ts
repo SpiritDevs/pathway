@@ -63,8 +63,10 @@ import type {
   PreviewResizeInput,
   PreviewSessionSnapshot,
 } from "./preview.ts";
+import { BrowserAddress, BrowserSitePermission } from "./browserSettings.ts";
 import {
   PREVIEW_AUTOMATION_RECORDING_CHUNK_MAX_BYTES,
+  PreviewAutomationCdpInput,
   PreviewAutomationClickInput,
   PreviewAutomationEvaluateInput,
   PreviewAutomationHost,
@@ -1352,6 +1354,172 @@ export const DesktopPreviewAutofillLoginInputSchema = Schema.Struct({
 export type DesktopPreviewAutofillLoginInput =
   typeof DesktopPreviewAutofillLoginInputSchema.Type.input;
 
+// ── Built-in browser: find, downloads, extensions, permissions, import ──
+
+export const DesktopPreviewFindInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  text: Schema.String.check(Schema.isMaxLength(1024)),
+  forward: Schema.Boolean,
+  /** False starts a new search; true moves to the next or previous match. */
+  findNext: Schema.Boolean,
+});
+export type DesktopPreviewFindInput = typeof DesktopPreviewFindInputSchema.Type;
+
+export const DesktopPreviewFindResultSchema = Schema.Struct({
+  activeMatchOrdinal: Schema.Int,
+  matches: Schema.Int,
+});
+export type DesktopPreviewFindResult = typeof DesktopPreviewFindResultSchema.Type;
+
+/** What Clear browsing data removes. History lives in the client and is cleared there. */
+export const DesktopBrowserClearDataInputSchema = Schema.Struct({
+  cookies: Schema.Boolean,
+  siteData: Schema.Boolean,
+  cache: Schema.Boolean,
+  downloads: Schema.Boolean,
+});
+export type DesktopBrowserClearDataInput = typeof DesktopBrowserClearDataInputSchema.Type;
+
+export const DesktopBrowserDownloadState = Schema.Literals([
+  "progressing",
+  "paused",
+  "completed",
+  "cancelled",
+  "interrupted",
+  "blocked",
+]);
+export type DesktopBrowserDownloadState = typeof DesktopBrowserDownloadState.Type;
+
+export const DesktopBrowserDownloadSchema = Schema.Struct({
+  id: Schema.String,
+  url: Schema.String,
+  filename: Schema.String,
+  /** Where the file is saved; empty until the save location is chosen. */
+  path: Schema.String,
+  mimeType: Schema.String,
+  totalBytes: Schema.Number,
+  receivedBytes: Schema.Number,
+  state: DesktopBrowserDownloadState,
+  startedAt: Schema.String,
+  endedAt: Schema.NullOr(Schema.String),
+  /** False once a completed file has been moved or deleted. */
+  exists: Schema.Boolean,
+  initiator: Schema.Literals(["user", "agent"]),
+});
+export type DesktopBrowserDownload = typeof DesktopBrowserDownloadSchema.Type;
+
+export const DesktopBrowserDownloadIdSchema = Schema.Struct({ id: Schema.String });
+
+export const DesktopBrowserExtensionSchema = Schema.Struct({
+  /** Chrome's extension id; null when the folder could not be read. */
+  id: Schema.NullOr(Schema.String),
+  name: Schema.String,
+  version: Schema.String,
+  description: Schema.String,
+  path: Schema.String,
+  enabled: Schema.Boolean,
+  loaded: Schema.Boolean,
+  error: Schema.NullOr(Schema.String),
+});
+export type DesktopBrowserExtension = typeof DesktopBrowserExtensionSchema.Type;
+
+export const DesktopBrowserExtensionManifestSchema = Schema.Struct({
+  name: Schema.String,
+  version: Schema.String,
+  description: Schema.String,
+});
+export type DesktopBrowserExtensionManifest = typeof DesktopBrowserExtensionManifestSchema.Type;
+
+/** A website asked for a permission set to Ask; the client prompts the user. */
+export const DesktopBrowserPermissionRequestSchema = Schema.Struct({
+  requestId: Schema.String,
+  webContentsId: Schema.Int,
+  origin: Schema.String,
+  /** Camera and microphone arrive together when a page asks for both. */
+  permissions: Schema.Array(BrowserSitePermission),
+});
+export type DesktopBrowserPermissionRequest = typeof DesktopBrowserPermissionRequestSchema.Type;
+
+export const DesktopBrowserPermissionEventSchema = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("request"),
+    request: DesktopBrowserPermissionRequestSchema,
+  }),
+  /** The request was answered, timed out, or its page went away. */
+  Schema.Struct({ type: Schema.Literal("settled"), requestId: Schema.String }),
+]);
+export type DesktopBrowserPermissionEvent = typeof DesktopBrowserPermissionEventSchema.Type;
+
+export const DesktopBrowserPermissionResponseSchema = Schema.Struct({
+  requestId: Schema.String,
+  allow: Schema.Boolean,
+});
+export type DesktopBrowserPermissionResponse = typeof DesktopBrowserPermissionResponseSchema.Type;
+
+export const DesktopBrowserImportBrowserId = Schema.Literals([
+  "chrome",
+  "chrome-beta",
+  "chrome-canary",
+  "chromium",
+  "brave",
+  "edge",
+  "arc",
+  "vivaldi",
+  "opera",
+]);
+export type DesktopBrowserImportBrowserId = typeof DesktopBrowserImportBrowserId.Type;
+
+export const DesktopBrowserImportProfileSchema = Schema.Struct({
+  browserId: DesktopBrowserImportBrowserId,
+  browserName: Schema.String,
+  profileDirectory: Schema.String,
+  profileName: Schema.String,
+});
+export type DesktopBrowserImportProfile = typeof DesktopBrowserImportProfileSchema.Type;
+
+export const DesktopBrowserImportInputSchema = Schema.Struct({
+  profile: DesktopBrowserImportProfileSchema,
+  passwords: Schema.Boolean,
+  cookies: Schema.Boolean,
+  history: Schema.Boolean,
+  extensions: Schema.Boolean,
+  /** Cookies go into each of these environments' browser storage. */
+  environmentIds: Schema.Array(EnvironmentId),
+});
+export type DesktopBrowserImportInput = typeof DesktopBrowserImportInputSchema.Type;
+
+export const DesktopBrowserImportResultSchema = Schema.Struct({
+  /** Handed to the client, which saves them to the password manager. */
+  passwords: Schema.Array(
+    Schema.Struct({ origin: Schema.String, username: Schema.String, password: Schema.String }),
+  ),
+  cookies: Schema.Int,
+  history: Schema.Array(
+    Schema.Struct({
+      url: Schema.String,
+      title: Schema.String,
+      lastVisitedAt: Schema.String,
+      visits: Schema.Int,
+    }),
+  ),
+  /** Copied into Pathway's data; the client adds them to its extension list. */
+  extensions: Schema.Array(
+    Schema.Struct({ id: Schema.String, name: Schema.String, path: Schema.String }),
+  ),
+  skipped: Schema.Array(Schema.Struct({ kind: Schema.String, reason: Schema.String })),
+});
+export type DesktopBrowserImportResult = typeof DesktopBrowserImportResultSchema.Type;
+
+export const DesktopPreviewAutofillAddressInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  address: BrowserAddress,
+});
+
+export const DesktopPreviewAutomationCdpInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  input: PreviewAutomationCdpInput,
+});
+
 export const DesktopPreviewAutomationTypeInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   input: PreviewAutomationTypeInput,
@@ -1677,6 +1845,46 @@ export interface DesktopPreviewBridge {
     onFrame: (listener: (frame: DesktopPreviewRecordingFrame) => void) => () => void;
   };
   autofillLogin?: (tabId: string, input: DesktopPreviewAutofillLoginInput) => Promise<void>;
+  /** Fills a saved address into the page's address form fields. */
+  autofillAddress?: (tabId: string, address: BrowserAddress) => Promise<void>;
+  /** Highlights matches of `text` in the page, Chrome's Find in page. */
+  findInPage?: (input: DesktopPreviewFindInput) => Promise<DesktopPreviewFindResult>;
+  stopFindInPage?: (tabId: string) => Promise<void>;
+  print?: (tabId: string) => Promise<void>;
+  /** Clears the chosen kinds of data from every environment's browser. */
+  clearBrowsingData?: (input: DesktopBrowserClearDataInput) => Promise<void>;
+  downloads?: {
+    list: () => Promise<ReadonlyArray<DesktopBrowserDownload>>;
+    open: (id: string) => Promise<void>;
+    showInFolder: (id: string) => Promise<void>;
+    pause: (id: string) => Promise<void>;
+    resume: (id: string) => Promise<void>;
+    cancel: (id: string) => Promise<void>;
+    /** Removes the entry from history; the file stays on disk. */
+    remove: (id: string) => Promise<void>;
+    clear: () => Promise<void>;
+    /** The system Downloads folder, shown when no location is chosen. */
+    defaultDirectory: () => Promise<string>;
+    /** Opens the folder new downloads are saved to. */
+    openFolder?: () => Promise<void>;
+    onChange: (listener: (downloads: ReadonlyArray<DesktopBrowserDownload>) => void) => () => void;
+  };
+  extensions?: {
+    /** The extensions in client settings, with whether each loaded. */
+    list: () => Promise<ReadonlyArray<DesktopBrowserExtension>>;
+    /** Reads an unpacked extension folder's manifest; rejects when it isn't one. */
+    inspect: (path: string) => Promise<DesktopBrowserExtensionManifest>;
+    onChange: (listener: () => void) => () => void;
+  };
+  permissions?: {
+    onEvent: (listener: (event: DesktopBrowserPermissionEvent) => void) => () => void;
+    respond: (response: DesktopBrowserPermissionResponse) => Promise<void>;
+  };
+  browserImport?: {
+    listProfiles: () => Promise<ReadonlyArray<DesktopBrowserImportProfile>>;
+    isBrowserRunning: (browserId: DesktopBrowserImportBrowserId) => Promise<boolean>;
+    run: (input: DesktopBrowserImportInput) => Promise<DesktopBrowserImportResult>;
+  };
   automation: {
     status: (tabId: string) => Promise<PreviewAutomationStatus>;
     snapshot: (tabId: string) => Promise<PreviewAutomationSnapshot>;
@@ -1686,6 +1894,10 @@ export interface DesktopPreviewBridge {
     scroll: (tabId: string, input: PreviewAutomationScrollInput) => Promise<void>;
     evaluate: (tabId: string, input: PreviewAutomationEvaluateInput) => Promise<unknown>;
     waitFor: (tabId: string, input: PreviewAutomationWaitForInput) => Promise<void>;
+    /** Sends one raw Chrome DevTools Protocol command. Callers check the user's CDP settings. */
+    cdp?: (tabId: string, input: PreviewAutomationCdpInput) => Promise<unknown>;
+    /** Notes that an agent is acting in this tab, so downloads it starts count as the agent's. */
+    markAgentActivity?: (tabId: string) => Promise<void>;
   };
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;
   onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;

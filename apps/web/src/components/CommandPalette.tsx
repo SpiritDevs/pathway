@@ -76,6 +76,7 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   CameraIcon,
+  GlobeIcon,
   CircleDotIcon,
   Columns2Icon,
   CornerLeftUpIcon,
@@ -120,6 +121,7 @@ import { useHandleNewThread, useNewThreadHandler } from "../hooks/useHandleNewTh
 import { useComputerEventsServed } from "../hooks/useComputerSupport";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
+import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
 import { useSnapShotAccountId } from "../lib/snapShotAccount";
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
@@ -286,6 +288,33 @@ const PALETTE_PANE_DESTINATION_LABELS = PALETTE_PANE_DESTINATIONS.map(
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 const EMPTY_REPOSITORY_CHOICE_CANDIDATES: ReadonlyArray<SidebarProjectSnapshot> = [];
 const LucideNamedIcon = lazy(() => import("./LucideNamedIcon"));
+
+const BROWSER_SETTINGS_PALETTE_PAGES = [
+  {
+    key: "overview",
+    title: "Open Browser settings",
+    to: "/settings/browser",
+    searchTerms: ["browser", "built-in browser", "browser use", "site permissions", "cdp"],
+  },
+  {
+    key: "history",
+    title: "Open browsing history",
+    to: "/settings/browser/history",
+    searchTerms: ["browsing history", "history", "visited pages"],
+  },
+  {
+    key: "downloads",
+    title: "Open downloads",
+    to: "/settings/browser/downloads",
+    searchTerms: ["downloads", "download history", "files"],
+  },
+  {
+    key: "passwords",
+    title: "Open password manager",
+    to: "/settings/browser/passwords",
+    searchTerms: ["passwords", "logins", "password manager", "autofill"],
+  },
+] as const;
 
 function FocusPaletteIconFallback() {
   return <CircleDotIcon className="size-full" />;
@@ -2140,6 +2169,20 @@ function OpenCommandPaletteDialog(props: {
             requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
           );
           await snapShotBridge.captureSnapShot?.({ type: action.type });
+        },
+      });
+    }
+  }
+  if (isElectron) {
+    for (const page of BROWSER_SETTINGS_PALETTE_PAGES) {
+      actionItems.push({
+        kind: "action",
+        value: `action:browser-settings-${page.key}`,
+        searchTerms: page.searchTerms,
+        title: page.title,
+        icon: <GlobeIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await navigate({ to: page.to });
         },
       });
     }

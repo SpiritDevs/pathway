@@ -9,12 +9,15 @@ export function PreviewFavicon({
   url,
   className = "size-3",
   fallback,
+  size = 32,
 }: {
   url: string | null;
   className?: string;
   fallback?: ReactNode;
+  /** Pixel size to fetch; ask for twice the rendered size so large icons stay sharp. */
+  size?: number;
 }) {
-  const faviconUrl = faviconUrlForOrigin(url, 32);
+  const faviconUrl = faviconUrlForOrigin(url, size);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   if (!faviconUrl || failedUrl === faviconUrl) {
     return fallback !== undefined ? fallback : <Globe2 className={cn("shrink-0", className)} />;

@@ -1,11 +1,13 @@
 import * as Effect from "effect/Effect";
 import type {
+  PreviewAutomationHistoryResult,
   PreviewAutomationOperation,
   PreviewAutomationOpenInput,
   PreviewAutomationRecordingArtifact,
   PreviewAutomationRecordingStatus,
   PreviewAutomationResizeResult,
   PreviewAutomationSetColorSchemeResult,
+  PreviewAutomationSiteToolsResult,
   PreviewAutomationSnapshot,
   PreviewAutomationStatus,
   PreviewTabId,
@@ -84,6 +86,14 @@ const handlers = {
     invokeTargeted<PreviewAutomationRecordingStatus>("recordingStart", input ?? {}),
   preview_recording_stop: (input) =>
     invokeTargeted<PreviewAutomationRecordingArtifact>("recordingStop", input ?? {}),
+  preview_history: (input) =>
+    invokeTargeted<PreviewAutomationHistoryResult>("history", input ?? {}),
+  preview_site_tools: (input) =>
+    invokeTargeted<PreviewAutomationSiteToolsResult>("siteTools", input ?? {}),
+  preview_call_site_tool: (input) =>
+    invokeTargeted<unknown>("callSiteTool", input).pipe(Effect.map((result) => result ?? null)),
+  preview_cdp: (input) =>
+    invokeTargeted<unknown>("cdp", input).pipe(Effect.map((result) => result ?? null)),
 } satisfies Parameters<typeof PreviewToolkit.toLayer>[0];
 
 const { preview_snapshot, ...standardHandlers } = handlers;

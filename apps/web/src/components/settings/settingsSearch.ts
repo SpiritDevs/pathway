@@ -14,6 +14,7 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/computer"
+  | "/settings/browser"
   | "/settings/dictation"
   | "/settings/dictation/models"
   | "/settings/dictation/history"
@@ -92,6 +93,12 @@ export function settingsLocationIsVisibleForWorkspace(
   return section === null || settingsPathIsVisibleForWorkspace(section, workspaceKind);
 }
 
+/** Sections for the desktop app only; web and hosted clients hide them. */
+export const DESKTOP_ONLY_SETTINGS_PATHS: ReadonlySet<SettingsSearchPath> = new Set([
+  "/settings/snap-shot",
+  "/settings/browser",
+]);
+
 const COMPANY_SCOPED_SETTINGS_PATHS: ReadonlySet<SettingsPath> = new Set([
   "/settings/members-teams",
   "/settings/company-members",
@@ -112,6 +119,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": "Keybindings",
   "/settings/snap-shot": "SnapShots",
   "/settings/computer": "Computer use",
+  "/settings/browser": "Browser",
   "/settings/projects": "Projects",
   "/settings/members-teams": "Members & Teams",
   "/settings/company-members": "Members",
@@ -170,6 +178,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/keybindings",
       "/settings/snap-shot",
       "/settings/computer",
+      "/settings/browser",
       "/settings/projects",
     ],
   },
@@ -461,12 +470,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
   },
   {
-    id: "browser-passwords",
-    title: "Passwords and saved website logins",
-    to: "/settings/general",
-    targetId: "browser-passwords",
-  },
-  {
     id: "project-grouping",
     title: "Project grouping",
     to: "/settings/general",
@@ -705,6 +708,120 @@ export const SETTINGS_SEARCH_ITEMS = [
       "reduced oversight denylist",
     ],
     to: "/settings/computer",
+  },
+  {
+    id: "browser-agent-control",
+    title: "Let agents control the built-in browser",
+    to: "/settings/browser",
+    searchTerms: ["browser use", "agent browser", "built-in browser"],
+  },
+  {
+    id: "browser-import",
+    title: "Import from your browser",
+    to: "/settings/browser",
+    searchTerms: ["import chrome", "import cookies", "import passwords", "import history"],
+  },
+  {
+    id: "browser-web-links",
+    title: "Web link target",
+    to: "/settings/browser",
+    searchTerms: ["open links", "default browser", "external browser"],
+  },
+  {
+    id: "browser-local-links",
+    title: "Local URL open destination",
+    to: "/settings/browser",
+    searchTerms: ["localhost", "dev server", "local development"],
+  },
+  {
+    id: "browser-full-url",
+    title: "Show full URL",
+    to: "/settings/browser",
+    searchTerms: ["address bar", "query string", "path"],
+  },
+  {
+    id: "browser-clear-data",
+    title: "Browsing data",
+    to: "/settings/browser",
+    searchTerms: ["clear browsing data", "cookies", "cache", "site data"],
+  },
+  {
+    id: "browser-history",
+    title: "Browsing history",
+    to: "/settings/browser",
+    searchTerms: ["visited pages", "history"],
+  },
+  {
+    id: "browser-annotation-screenshots",
+    title: "Annotation screenshots",
+    to: "/settings/browser",
+    searchTerms: ["annotate", "comments", "screenshot", "drag selection"],
+  },
+  {
+    id: "browser-passwords",
+    title: "Password manager",
+    to: "/settings/browser",
+    searchTerms: ["passwords", "saved website logins", "autofill"],
+  },
+  {
+    id: "browser-contact-info",
+    title: "Contact info",
+    to: "/settings/browser",
+    searchTerms: ["addresses", "phone numbers", "email addresses", "autofill"],
+  },
+  {
+    id: "browser-extensions",
+    title: "Extension manager",
+    to: "/settings/browser",
+    searchTerms: ["chrome extensions", "unpacked extension"],
+  },
+  {
+    id: "browser-download-location",
+    title: "Download location",
+    to: "/settings/browser",
+    searchTerms: ["downloads folder", "save location"],
+  },
+  {
+    id: "browser-ask-where-to-save",
+    title: "Ask where to save downloads",
+    to: "/settings/browser",
+    searchTerms: ["save dialog"],
+  },
+  {
+    id: "browser-download-history",
+    title: "Download history",
+    to: "/settings/browser",
+    searchTerms: ["downloads", "downloaded files"],
+  },
+  {
+    id: "browser-site-settings",
+    title: "Site settings",
+    to: "/settings/browser",
+    searchTerms: ["camera", "microphone", "location", "notifications", "pop-ups"],
+  },
+  {
+    id: "browser-history-access",
+    title: "History approval",
+    to: "/settings/browser",
+    searchTerms: ["agent history access"],
+  },
+  {
+    id: "browser-site-tools",
+    title: "Enable site tools",
+    to: "/settings/browser",
+    searchTerms: ["webmcp", "site tools"],
+  },
+  {
+    id: "browser-agent-permissions",
+    title: "Agent permissions",
+    to: "/settings/browser",
+    searchTerms: ["site access", "block sites", "approval"],
+  },
+  {
+    id: "browser-full-cdp",
+    title: "Enable full CDP access",
+    to: "/settings/browser",
+    searchTerms: ["chrome devtools protocol", "developer mode", "cdp"],
   },
   {
     id: "providers",

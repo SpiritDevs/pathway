@@ -1,4 +1,4 @@
-import type { PreviewAnnotationPayload } from "@spiritdevs/contracts";
+import type { BrowserAnnotationScreenshots, PreviewAnnotationPayload } from "@spiritdevs/contracts";
 import { buildElementContextBlock, normalizeElementContextSelection } from "./elementContext";
 
 const TRAILING_PREVIEW_ANNOTATION_BLOCK_PATTERN =
@@ -97,6 +97,19 @@ export function extractTrailingPreviewAnnotation(prompt: string): ExtractedPrevi
       hasScreenshot: body.includes("The attached screenshot is the annotated preview crop."),
     },
   };
+}
+
+/**
+ * Applies Settings → Browser → Annotation screenshots. "drag" keeps the
+ * screenshot only when the user dragged out a region or drew on the page.
+ */
+export function applyAnnotationScreenshotSetting(
+  annotation: PreviewAnnotationPayload,
+  mode: BrowserAnnotationScreenshots,
+): PreviewAnnotationPayload {
+  if (mode === "always" || !annotation.screenshot) return annotation;
+  const dragged = annotation.regions.length > 0 || annotation.strokes.length > 0;
+  return dragged ? annotation : { ...annotation, screenshot: null };
 }
 
 export async function previewAnnotationScreenshotFile(

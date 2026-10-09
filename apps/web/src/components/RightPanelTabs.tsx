@@ -27,12 +27,10 @@ import {
 } from "lucide-react";
 import {
   type ComponentProps,
-  createContext,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type ReactNode,
   useCallback,
-  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -149,14 +147,6 @@ export interface PullRequestTabStatus {
   number: number;
   state: PullRequestState;
   isDraft: boolean;
-}
-
-const RightPanelTabBarActionsContext = createContext<HTMLElement | null>(null);
-
-/** Mounts controls owned by the active surface into the right-panel tab bar. */
-export function RightPanelTabBarActions({ children }: { children: ReactNode }) {
-  const host = useContext(RightPanelTabBarActionsContext);
-  return host ? createPortal(children, host) : null;
 }
 
 /**
@@ -663,7 +653,6 @@ function SurfaceIcon({
 }
 
 export function RightPanelTabs(props: RightPanelTabsProps) {
-  const [tabBarActionsHost, setTabBarActionsHost] = useState<HTMLDivElement | null>(null);
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
   const { resolvedTheme } = useTheme();
   const tabListRef = useRef<HTMLDivElement>(null);
@@ -940,10 +929,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           ) : null}
         </div>
       </ScrollArea>
-      <div
-        ref={setTabBarActionsHost}
-        className="flex shrink-0 items-center [-webkit-app-region:no-drag]"
-      />
       {props.layoutControls ? (
         <div className="flex h-full shrink-0 items-center">{props.layoutControls}</div>
       ) : null}
@@ -967,9 +952,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         {props.leadingTab?.active ? null : props.activeSurfaceId === null ? (
           <RightPanelEmptyState actions={surfaceActions} />
         ) : (
-          <RightPanelTabBarActionsContext.Provider value={tabBarActionsHost}>
-            <NewTabToolsProvider value={newTabTools}>{props.children}</NewTabToolsProvider>
-          </RightPanelTabBarActionsContext.Provider>
+          <NewTabToolsProvider value={newTabTools}>{props.children}</NewTabToolsProvider>
         )}
       </div>
     </PreviewPanelShell>

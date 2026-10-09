@@ -2713,9 +2713,49 @@ label:has(> select#reasoning-effort) select {
   animation: prompt-stash-count-enter 180ms ease-out both;
 }
 
+/* Built-in browser downloads button. Both cues run once per download event
+   (React remounts the element by key), so nothing repaints continuously. */
+@keyframes browser-download-start {
+  0% {
+    transform: translateY(-5px);
+    opacity: 0;
+  }
+  60% {
+    transform: translateY(1px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+.browser-download-start {
+  animation: browser-download-start 450ms ease-out both;
+}
+
+@keyframes browser-download-done {
+  0% {
+    transform: scale(0.85);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.15);
+    opacity: 0;
+  }
+}
+
+.browser-download-done {
+  animation: browser-download-done 900ms ease-out forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .prompt-stash-count-enter {
+  .prompt-stash-count-enter,
+  .browser-download-start,
+  .browser-download-done {
     animation: none;
+  }
+  .browser-download-done {
+    opacity: 0;
   }
   [data-slot="skeleton"]::after {
     content: none;
@@ -2903,6 +2943,108 @@ label:has(> select#reasoning-effort) select {
 
 .chat-composer-content-sized-shell:has([data-chat-composer-footer]) {
   --composer-settings-extension: calc(2.25rem + 1px);
+}
+
+/*
+ * Over a web page the glass has nothing to blur (webviews are their own layer), so the
+ * floating composer is opaque and lifted off the page with a shadow. Like the default dark
+ * theme, the input and settings row paint their own surface, so the corners follow the
+ * input's rounding instead of the glass layer's.
+ */
+[data-chat-floating] {
+  --glass-opacity: 100%;
+
+  .chat-composer-glass-shell::before {
+    display: none;
+  }
+
+  .chat-composer-content-sized-shell
+    :is([data-chat-composer-content-sized], [data-chat-composer-footer]) {
+    background-color: var(--chat-composer-glass-surface);
+  }
+
+  [data-chat-composer-content-sized] {
+    box-shadow: none;
+  }
+}
+
+/*
+ * Expanded, the conversation grows out of the input's top edge at the input's width, and
+ * one shadow wraps the conversation, input and settings row together.
+ */
+[data-chat-floating="expanded"] {
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 10%)) drop-shadow(0 12px 32px rgb(0 0 0 / 22%));
+
+  .chat-composer-horizontal-inset {
+    padding-inline: 0;
+  }
+
+  :is([data-chat-composer-content-sized], :has(> [data-chat-composer-content-sized])) {
+    border-start-start-radius: 0;
+    border-start-end-radius: 0;
+  }
+
+  /* The list runs on behind the opaque input so it scrolls under it; the clip stops the
+     panel inside the input, above the settings row. A side chat shown here takes the
+     same shape. */
+  .chat-messages-panel {
+    @apply mx-px border-x border-border/60 bg-background;
+    clip-path: inset(0 0 calc(env(safe-area-inset-bottom) + 6rem) 0);
+  }
+
+  [data-side-chat-surface="true"] {
+    background-color: transparent;
+  }
+}
+
+[data-chat-floating="collapsed"] {
+  /* One shadow around the strip, input and settings row together, so no piece shades another. */
+  [data-chat-composer-stack] {
+    filter: drop-shadow(0 1px 2px rgb(0 0 0 / 10%)) drop-shadow(0 8px 24px rgb(0 0 0 / 18%));
+  }
+
+  /* The strip runs on behind the input, so the input's top border is the only line
+     between them. */
+  [data-composer-context-strip="expanded"] > div {
+    overflow: visible;
+  }
+}
+
+/*
+ * The floating composer folds its context strip and settings row behind the input
+ * until it is focused, or one of their menus is open.
+ */
+[data-chat-floating="collapsed"] .chat-composer-context-strip-top {
+  max-height: 4rem;
+  transition-property: max-height, margin-bottom, padding, border-width, opacity;
+  transition-duration: 180ms;
+  transition-timing-function: ease-out;
+}
+
+[data-chat-floating="collapsed"] [data-chat-composer-footer] {
+  max-height: 3rem;
+  transition-property: max-height, padding, border-width, opacity;
+  transition-duration: 180ms;
+  transition-timing-function: ease-out;
+}
+
+[data-chat-floating="collapsed"]:not(:focus-within, :has([data-popup-open])) {
+  .chat-composer-context-strip-top,
+  [data-chat-composer-footer] {
+    overflow: clip;
+    max-height: 0;
+    margin-bottom: 0;
+    padding-block: 0;
+    border-width: 0;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-chat-floating="collapsed"]
+    :is(.chat-composer-context-strip-top, [data-chat-composer-footer]) {
+    transition: none;
+  }
 }
 
 @supports not (clip-path: shape(from 0 0, line to 1px 1px)) {

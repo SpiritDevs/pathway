@@ -1,5 +1,9 @@
 import {
   DesktopPreviewAnnotationThemeInputSchema,
+  DesktopPreviewAutofillAddressInputSchema,
+  DesktopPreviewAutomationCdpInputSchema,
+  DesktopPreviewFindInputSchema,
+  DesktopPreviewFindResultSchema,
   DesktopPreviewAutofillLoginInputSchema,
   DesktopPreviewArtifactInputSchema,
   DesktopPreviewAutomationClickInputSchema,
@@ -426,7 +430,64 @@ export const autofillLogin = {
   }),
 };
 
+export const findInPage = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_FIND_IN_PAGE_CHANNEL,
+  payload: DesktopPreviewFindInputSchema,
+  result: DesktopPreviewFindResultSchema,
+  handler: Effect.fn("desktop.ipc.preview.findInPage")(function* (input) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.findInPage(input);
+  }),
+});
+
+export const stopFindInPage = tabMethod(
+  IpcChannels.PREVIEW_STOP_FIND_IN_PAGE_CHANNEL,
+  "desktop.ipc.preview.stopFindInPage",
+  (manager, tabId) => manager.stopFindInPage(tabId),
+);
+
+export const print = tabMethod(
+  IpcChannels.PREVIEW_PRINT_CHANNEL,
+  "desktop.ipc.preview.print",
+  (manager, tabId) => manager.print(tabId),
+);
+
+export const markAgentActivity = tabMethod(
+  IpcChannels.PREVIEW_AUTOMATION_MARK_ACTIVITY_CHANNEL,
+  "desktop.ipc.preview.markAgentActivity",
+  (manager, tabId) => manager.markAgentActivity(tabId),
+);
+
+const decodeAutofillAddress = Schema.decodeUnknownOption(DesktopPreviewAutofillAddressInputSchema);
+// Like autofillLogin: a saved address is personal data, so keep it out of schema errors.
+export const autofillAddress = {
+  channel: IpcChannels.PREVIEW_AUTOFILL_ADDRESS_CHANNEL,
+  handler: Effect.fn("desktop.ipc.preview.autofillAddress")(function* (raw: unknown) {
+    const decoded = decodeAutofillAddress(raw);
+    if (Option.isNone(decoded))
+      return yield* new PreviewManager.PreviewAutofillError({ reason: "failed" });
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.autofillAddress(decoded.value.tabId, decoded.value.address);
+  }),
+};
+
+export const automationCdp = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_AUTOMATION_CDP_CHANNEL,
+  payload: DesktopPreviewAutomationCdpInputSchema,
+  result: Schema.Unknown,
+  handler: Effect.fn("desktop.ipc.preview.automationCdp")(function* ({ tabId, input }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.automationCdp(tabId, input);
+  }),
+});
+
 export const methods = [
+  findInPage,
+  stopFindInPage,
+  print,
+  markAgentActivity,
+  autofillAddress,
+  automationCdp,
   autofillLogin,
   createTab,
   closeTab,

@@ -363,7 +363,8 @@ export function PreviewSiteInfo({
         </PopoverTrigger>
         <PopoverPopup
           align="start"
-          className="w-80"
+          // Opaque, not glass: it opens over arbitrary page content.
+          className="w-80 bg-popover"
           viewportClassName="px-(--viewport-inline-padding) pt-3 pb-2 [--viewport-inline-padding:--spacing(2)]"
         >
           {view === "site" ? (

@@ -12,6 +12,14 @@
       "types": "./src/desktopFlavor.ts",
       "import": "./src/desktopFlavor.ts"
     },
+    "./siteTools": {
+      "types": "./src/siteTools.ts",
+      "import": "./src/siteTools.ts"
+    },
+    "./browserAddressAutofill": {
+      "types": "./src/browserAddressAutofill.ts",
+      "import": "./src/browserAddressAutofill.ts"
+    },
     "./browserPasswordAutofill": {
       "types": "./src/browserPasswordAutofill.ts",
       "import": "./src/browserPasswordAutofill.ts"

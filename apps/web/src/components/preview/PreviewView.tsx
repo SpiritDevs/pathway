@@ -12,14 +12,16 @@ import { isLoopbackHost, normalizePreviewUrl } from "@spiritdevs/shared/preview"
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
-  BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT,
   recordVisitForThread,
-  removeUrlForThread,
   setTitleForThreadUrl,
   useThreadRecentHistory,
 } from "~/browserHistoryStore";
 import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerDraftStore";
-import { previewAnnotationScreenshotFile } from "~/lib/previewAnnotation";
+import {
+  applyAnnotationScreenshotSetting,
+  previewAnnotationScreenshotFile,
+} from "~/lib/previewAnnotation";
+import { getClientSettings } from "~/hooks/useSettings";
 import { ensureLocalApi } from "~/localApi";
 import {
   readThreadPreviewState,
@@ -48,6 +50,8 @@ import { closePreviewSession } from "./closePreviewSession";
 import { openPreviewSession } from "./openPreviewSession";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
+import { PreviewDownloadsMenu } from "./PreviewDownloadsMenu";
+import { PreviewFindBar } from "./PreviewFindBar";
 import { PreviewMoreMenu } from "./PreviewMoreMenu";
 import { previewSiteActions } from "./PreviewSiteInfo";
 import {
@@ -120,6 +124,7 @@ function DesktopPreviewView({
 }: Props) {
   const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);
   const [pickActive, setPickActive] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
   const activeRecordingTabIds = useActiveBrowserRecordingTabIds();
   const pickActiveRef = useRef(false);
   const isMountedRef = useRef(true);
@@ -128,10 +133,7 @@ function DesktopPreviewView({
   const threadRefRef = useRef(threadRef);
   threadRefRef.current = threadRef;
   const previewState = useThreadPreviewState(threadRef);
-  const recentHistoryEntries = useThreadRecentHistory(
-    threadRef,
-    BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT,
-  );
+  const recentHistoryEntries = useThreadRecentHistory(threadRef, 1);
   const miniPlayer = usePreviewMiniPlayerStore((state) =>
     selectThreadPreviewMiniPlayer(state.byThreadKey, threadRef),
   );
@@ -671,7 +673,11 @@ function DesktopPreviewView({
       try {
         const result = await previewBridge.pickElement(runtimeTabId);
         if (!result) return;
-        const { annotation, submission } = result;
+        const { submission } = result;
+        const annotation = applyAnnotationScreenshotSetting(
+          result.annotation,
+          getClientSettings().browserAnnotationScreenshots,
+        );
         addPreviewAnnotation(threadRef, annotation);
         let screenshotFile: File | null = null;
         try {
@@ -799,11 +805,6 @@ function DesktopPreviewView({
         onCapture={previewBridge && tabId ? handleCapture : undefined}
         captureDisabled={!desktopOverlay || isUnreachable}
         recording={recordingRuntimeTabId !== null}
-        onPictureInPicture={
-          allowInlinePictureInPicture && previewBridge && tabId ? handlePictureInPicture : undefined
-        }
-        pictureInPicture={miniPlayer?.tabId === tabId}
-        pictureInPictureDisabled={!desktopOverlay?.hasWebContents || isUnreachable}
         onPickElement={previewBridge && tabId ? handlePickElement : undefined}
         pickActive={pickActive}
         // Disable when there's no tab (nothing to pick on) OR the page
@@ -812,6 +813,11 @@ function DesktopPreviewView({
         pickDisabled={!tabId || isUnreachable}
         pickDisabledReason={
           isUnreachable ? "Page didn't load — pick unavailable until the page renders" : undefined
+        }
+        renderDownloads={
+          previewBridge?.downloads
+            ? (buttonClassName) => <PreviewDownloadsMenu buttonClassName={buttonClassName} />
+            : undefined
         }
         trailingActions={
           <PreviewMoreMenu
@@ -822,11 +828,27 @@ function DesktopPreviewView({
             deviceToolbarVisible={viewport._tag !== "fill"}
             onToggleDeviceToolbar={handleToggleDeviceToolbar}
             nativePictureInPicture={desktopOverlay?.pictureInPicture ?? false}
+            pictureInPicture={miniPlayer?.tabId === tabId}
+            onPictureInPicture={
+              allowInlinePictureInPicture && previewBridge && tabId
+                ? handlePictureInPicture
+                : undefined
+            }
+            pictureInPictureDisabled={!desktopOverlay?.hasWebContents || isUnreachable}
             onNativePictureInPicture={handleNativePictureInPicture}
+            onFindInPage={() => setFindOpen(true)}
+            onTakeScreenshot={() => handleCapture(false)}
           />
         }
       />
 
+      {findOpen && runtimeTabId && !showEmptyState ? (
+        <PreviewFindBar
+          key={runtimeTabId}
+          tabId={runtimeTabId}
+          onClose={() => setFindOpen(false)}
+        />
+      ) : null}
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {runtimeTabId && snapshot && !showEmptyState ? (
           <BrowserSurfaceSlot
@@ -841,8 +863,6 @@ function DesktopPreviewView({
             environmentId={threadRef.environmentId}
             configuredUrls={configuredUrls}
             recentlySeenUrls={previewState.recentlySeenUrls}
-            recentEntries={recentHistoryEntries}
-            onRemoveRecent={(url) => removeUrlForThread(threadRef, url)}
             onOpenUrl={(next) => void handleOpenServerUrl(next)}
           />
         ) : null}

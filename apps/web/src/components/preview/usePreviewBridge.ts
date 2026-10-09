@@ -10,7 +10,9 @@ import { useEffect, useRef } from "react";
 
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";
 import { openUrlInPreview } from "~/browser/openFileInPreview";
-import { recordVisitForThread } from "~/browserHistoryStore";
+import { isBrowserAgentActive } from "~/browser/browserAgentActivity";
+import { browserAgentOrigin } from "~/browser/browserAgentApproval";
+import { recordNavigationForThread, recordVisitForThread } from "~/browserHistoryStore";
 import { applyPreviewDesktopState, type DesktopPreviewOverlay } from "~/previewStateStore";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -59,6 +61,14 @@ export function usePreviewBridge(input: {
       if (!reported) return;
       lastReportedUrl.current = reported.lastReportedUrl;
       lastReportedKind.current = reported.lastReportedKind;
+      if (state.navStatus.kind === "Success" && browserAgentOrigin(state.navStatus.url)) {
+        recordNavigationForThread(
+          threadRef,
+          state.navStatus.url,
+          state.navStatus.title,
+          isBrowserAgentActive(runtimeTabId) ? "agent" : "user",
+        );
+      }
       void reportStatus({
         environmentId: threadRef.environmentId,
         input: reported.input,

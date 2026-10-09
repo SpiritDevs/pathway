@@ -2,7 +2,8 @@ import type { EnvironmentId } from "@spiritdevs/contracts";
 import { ChevronDown, Globe } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { historyEntryVisits, type BrowserHistoryEntry } from "~/browserHistoryStore";
+import { useBrowserHistoryStore, useBrowserWideHistory } from "~/browserHistoryStore";
+import { useBrowserPinnedSites, useBrowserPinnedSitesStore } from "~/browserPinnedSitesStore";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "~/components/ui/empty";
 import { Kbd } from "~/components/ui/kbd";
 import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "~/components/ui/menu";
@@ -12,24 +13,23 @@ import { PreviewLocalServerCard } from "./PreviewLocalServerCard";
 import { PreviewSiteTile } from "./PreviewSiteTile";
 import { useDiscoveredLocalServers } from "./useDiscoveredLocalServers";
 
-const FREQUENT_SITE_LIMIT = 8;
+const RECENT_SITE_LIMIT = 8;
 
 interface Props {
   environmentId: EnvironmentId;
   configuredUrls?: ReadonlyArray<string> | undefined;
   recentlySeenUrls?: ReadonlyArray<string> | undefined;
-  recentEntries: ReadonlyArray<BrowserHistoryEntry>;
-  onRemoveRecent: (url: string) => void;
   onOpenUrl: (url: string) => void;
 }
 
-/** The new-tab page: the panel's other tools, frequently visited pages, then servers. */
+/**
+ * The new-tab page: the panel's other tools, pinned and recently visited pages
+ * from history across every project, then servers.
+ */
 export function PreviewEmptyState({
   environmentId,
   configuredUrls,
   recentlySeenUrls,
-  recentEntries,
-  onRemoveRecent,
   onOpenUrl,
 }: Props) {
   const tools = useNewTabTools();
@@ -38,14 +38,18 @@ export function PreviewEmptyState({
     configuredUrls,
     recentlySeenUrls,
   });
-  const frequent = recentEntries
-    .filter((entry) => URL.canParse(entry.url))
-    .toSorted(
-      (a, b) => historyEntryVisits(b) - historyEntryVisits(a) || b.lastVisitedAt - a.lastVisitedAt,
-    )
-    .slice(0, FREQUENT_SITE_LIMIT);
+  const history = useBrowserWideHistory();
+  const pinned = useBrowserPinnedSites();
+  const { pin, unpin } = useBrowserPinnedSitesStore.getState();
+  const { removeEverywhere } = useBrowserHistoryStore.getState();
+  const pinnedUrls = new Set(pinned.map((site) => site.url));
+  const recent = history
+    .filter((entry) => URL.canParse(entry.url) && !pinnedUrls.has(entry.url))
+    .slice(0, RECENT_SITE_LIMIT);
+  const titleOf = (url: string, fallback?: string) =>
+    history.find((entry) => entry.url === url)?.title ?? fallback;
 
-  if (tools.length === 0 && servers.length === 0 && frequent.length === 0) {
+  if (tools.length === 0 && servers.length === 0 && pinned.length === 0 && recent.length === 0) {
     return (
       <Empty>
         <EmptyMedia variant="icon">
@@ -72,15 +76,38 @@ export function PreviewEmptyState({
             </div>
           </NewTabSection>
         ) : null}
-        {frequent.length > 0 ? (
-          <NewTabSection title="Frequently visited">
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-1">
-              {frequent.map((entry) => (
+        {pinned.length > 0 ? (
+          <NewTabSection title="Pinned">
+            <div className={SITE_GRID_CLASS_NAME}>
+              {pinned
+                .filter((site) => URL.canParse(site.url))
+                .map((site) => (
+                  <PreviewSiteTile
+                    key={site.url}
+                    url={site.url}
+                    title={titleOf(site.url, site.title)}
+                    pinned
+                    onOpen={() => onOpenUrl(site.url)}
+                    onTogglePin={() => unpin(site.url)}
+                  />
+                ))}
+            </div>
+          </NewTabSection>
+        ) : null}
+        {recent.length > 0 ? (
+          <NewTabSection title="Recently visited">
+            <div className={SITE_GRID_CLASS_NAME}>
+              {recent.map((entry) => (
                 <PreviewSiteTile
                   key={entry.url}
-                  entry={entry}
+                  url={entry.url}
+                  title={entry.title}
+                  pinned={false}
                   onOpen={() => onOpenUrl(entry.url)}
-                  onRemove={() => onRemoveRecent(entry.url)}
+                  onTogglePin={() =>
+                    pin({ url: entry.url, ...(entry.title ? { title: entry.title } : {}) })
+                  }
+                  onRemove={() => removeEverywhere([entry.url])}
                 />
               ))}
             </div>
@@ -107,6 +134,8 @@ export function PreviewEmptyState({
     </div>
   );
 }
+
+const SITE_GRID_CLASS_NAME = "grid grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-1";
 
 function NewTabSection({ title, children }: { title: string; children: ReactNode }) {
   return (

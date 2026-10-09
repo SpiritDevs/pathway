@@ -23,7 +23,7 @@ Every browser tab is either **remote** or **local**:
 
 Hover a browser tab to see the page's title, its site, whether it is remote or local, and where it runs, above a preview of the page. Remote previews are live; local previews are a snapshot taken when you hover.
 
-In a local tab, the address bar shows just the site once you leave it. Click it to see and edit the full address. The sliders button at its left shows whether the connection is secure, and **Clear site data** signs you out of that site and reloads it.
+In a local tab, the address bar shows just the site once you leave it. Click it to see and edit the full address. To keep the full address visible, turn on **Show full URL** in [Browser settings](browser-settings.md). The sliders button at its left shows whether the connection is secure, and **Clear site data** signs you out of that site and reloads it.
 
 When the thread's environment is another machine, the browser opens remote by default. When it is the machine the desktop app runs on, it opens local. The web app and iOS always use the remote browser. On desktop, choose either one from the **+** menu in the panel's tab bar. Both kinds of tab can sit side by side.
 
@@ -32,6 +32,8 @@ Servers listed under **Local servers** run on the environment, so they open in t
 When an agent browses in the remote browser, a small live preview of its page floats over the conversation on desktop and web. On iOS it appears above the composer. Click the preview, or choose **Open in right panel**, to see the same page in the browser panel. If the connection drops, the preview and the panel reconnect on their own. Choose **Reconnect** if the connection still fails.
 
 On iOS, you can also choose Remote browser from the thread's top-right menu. It opens on the page the agent is using, as a full navigation screen. Use Back to return to the conversation. Enter a website address or choose New tab to begin. Reconnect browser retries the connection if loading fails.
+
+When you send a message while a browser tab is showing in the panel, including from the composer floating over a maximized browser, the agent is told which tab you are looking at, so "this page" means that tab.
 
 Use the tab bar to open, select, and close pages. Websites can open additional tabs for links and sign-in flows. Closing the final remote-browser tab stops its browser process. Opening the browser later reuses the task's saved website profile.
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   appendPreviewAnnotationPrompt,
+  applyAnnotationScreenshotSetting,
   buildPreviewAnnotationPrompt,
   extractTrailingPreviewAnnotation,
 } from "./previewAnnotation";
@@ -83,5 +84,23 @@ describe("preview annotations", () => {
     expect(extractedSecond.annotation?.id).toBe("annotation_2");
     expect(extractedFirst.annotation?.id).toBe("annotation_1");
     expect(extractedFirst.promptText).toBe("Fix this");
+  });
+});
+
+describe("applyAnnotationScreenshotSetting", () => {
+  it("keeps every screenshot when set to always", () => {
+    const clicked = { ...annotation, regions: [], strokes: [] };
+    expect(applyAnnotationScreenshotSetting(clicked, "always")).toBe(clicked);
+  });
+
+  it("keeps drag-selection screenshots when set to drag", () => {
+    expect(applyAnnotationScreenshotSetting(annotation, "drag").screenshot).not.toBeNull();
+  });
+
+  it("drops click-only screenshots when set to drag", () => {
+    const clicked = { ...annotation, regions: [], strokes: [] };
+    const result = applyAnnotationScreenshotSetting(clicked, "drag");
+    expect(result.screenshot).toBeNull();
+    expect(buildPreviewAnnotationPrompt(result)).not.toContain("attached screenshot");
   });
 });

@@ -1,7 +1,11 @@
 import {
+  PreviewAutomationCallSiteToolInput,
+  PreviewAutomationCdpInput,
   PreviewAutomationClickInput,
   PreviewAutomationError,
   PreviewAutomationEvaluateInput,
+  PreviewAutomationHistoryInput,
+  PreviewAutomationHistoryResult,
   PreviewAutomationNavigateInput,
   PreviewAutomationOpenInput,
   PreviewAutomationPressInput,
@@ -12,6 +16,7 @@ import {
   PreviewAutomationScrollInput,
   PreviewAutomationSetColorSchemeInput,
   PreviewAutomationSetColorSchemeResult,
+  PreviewAutomationSiteToolsResult,
   PreviewAutomationSnapshot,
   PreviewAutomationStatus,
   PreviewAutomationTabTargetInput,
@@ -204,6 +209,50 @@ export const PreviewRecordingStopTool = safeBrowserTool(
   }).annotate(Tool.Title, "Stop browser recording"),
 );
 
+export const PreviewHistoryTool = readonlyBrowserTool(
+  Tool.make("preview_history", {
+    description:
+      "Search pages the user and agents visited in Pathway's built-in browser, newest first. Depending on the user's settings this may ask them first, or be refused.",
+    parameters: PreviewAutomationHistoryInput,
+    success: PreviewAutomationHistoryResult,
+    failure: PreviewAutomationError,
+    dependencies,
+  }).annotate(Tool.Title, "Read browsing history"),
+);
+
+export const PreviewSiteToolsTool = readonlyBrowserTool(
+  Tool.make("preview_site_tools", {
+    description:
+      "List the tools the website in the tab selected by tabId (or this agent session's current tab) exposes to agents through WebMCP (navigator.modelContext). Prefer a site's own tools over clicking when they fit the task.",
+    parameters: PreviewAutomationTabTargetInput,
+    success: PreviewAutomationSiteToolsResult,
+    failure: PreviewAutomationError,
+    dependencies,
+  }).annotate(Tool.Title, "List site tools"),
+);
+
+export const PreviewCallSiteToolTool = browserTool(
+  Tool.make("preview_call_site_tool", {
+    description:
+      "Call a WebMCP tool listed by preview_site_tools in the tab selected by tabId, or this agent session's current tab. Returns the tool's result.",
+    parameters: PreviewAutomationCallSiteToolInput,
+    success: Schema.Unknown,
+    failure: PreviewAutomationError,
+    dependencies,
+  }).annotate(Tool.Title, "Call site tool"),
+);
+
+export const PreviewCdpTool = browserTool(
+  Tool.make("preview_cdp", {
+    description:
+      "Send one raw Chrome DevTools Protocol command to the tab selected by tabId, or this agent session's current tab. Only works when the user enabled full CDP access in Settings → Browser; prefer the other preview tools.",
+    parameters: PreviewAutomationCdpInput,
+    success: Schema.Unknown,
+    failure: PreviewAutomationError,
+    dependencies,
+  }).annotate(Tool.Title, "Send DevTools Protocol command"),
+);
+
 export const PreviewToolkit = Toolkit.make(
   PreviewStatusTool,
   PreviewOpenTool,
@@ -219,6 +268,10 @@ export const PreviewToolkit = Toolkit.make(
   PreviewWaitForTool,
   PreviewRecordingStartTool,
   PreviewRecordingStopTool,
+  PreviewHistoryTool,
+  PreviewSiteToolsTool,
+  PreviewCallSiteToolTool,
+  PreviewCdpTool,
 );
 
 export const PreviewStandardToolkit = Toolkit.make(
@@ -235,6 +288,10 @@ export const PreviewStandardToolkit = Toolkit.make(
   PreviewWaitForTool,
   PreviewRecordingStartTool,
   PreviewRecordingStopTool,
+  PreviewHistoryTool,
+  PreviewSiteToolsTool,
+  PreviewCallSiteToolTool,
+  PreviewCdpTool,
 );
 
 export const PreviewSnapshotToolkit = Toolkit.make(PreviewSnapshotTool);

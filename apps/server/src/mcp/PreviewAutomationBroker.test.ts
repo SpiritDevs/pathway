@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   PreviewAutomationBrowserPageError,
+  PreviewAutomationPermissionDeniedError,
   PreviewAutomationClientDisconnectedError,
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationMalformedResponseError,
@@ -486,6 +487,43 @@ it.effect("tells the agent a browser page is the user's, rather than a bare fail
     }),
   );
 });
+
+it.effect("tells the agent which browser setting refused the request", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: false,
+          error: {
+            _tag: "PreviewAutomationPermissionDeniedError",
+            message: "refused",
+            detail: { reason: "site-blocked", origin: "https://example.com" },
+          },
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const error = yield* broker
+        .invoke<void>({
+          scope,
+          operation: "click",
+          input: { locator: "button" },
+          tabId: PreviewTabId.make("tab-1"),
+        })
+        .pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(PreviewAutomationPermissionDeniedError);
+      expect(error).toMatchObject({ reason: "site-blocked", origin: "https://example.com" });
+      expect(error.message).toContain("on https://example.com was refused");
+      expect(error.message).toContain("Agent permissions");
+    }),
+  ),
+);
 
 it.effect("distinguishes malformed remote failures", () =>
   Effect.scoped(

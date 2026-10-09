@@ -124,6 +124,35 @@ export const PREVIEW_POINTER_EVENT_CHANNEL = "desktop:preview-pointer-event";
 export const PREVIEW_OPEN_IN_NEW_TAB_CHANNEL = "desktop:preview-open-in-new-tab";
 
 export const PREVIEW_AUTOFILL_LOGIN_CHANNEL = "desktop:preview-autofill-login";
+export const PREVIEW_AUTOFILL_ADDRESS_CHANNEL = "desktop:preview-autofill-address";
+export const PREVIEW_FIND_IN_PAGE_CHANNEL = "desktop:preview-find-in-page";
+export const PREVIEW_STOP_FIND_IN_PAGE_CHANNEL = "desktop:preview-stop-find-in-page";
+export const PREVIEW_PRINT_CHANNEL = "desktop:preview-print";
+export const PREVIEW_AUTOMATION_CDP_CHANNEL = "desktop:preview-automation-cdp";
+export const PREVIEW_AUTOMATION_MARK_ACTIVITY_CHANNEL = "desktop:preview-automation-mark-activity";
+
+// Settings → Browser: data shared by every environment's built-in browser.
+export const BROWSER_CLEAR_DATA_CHANNEL = "desktop:browser-clear-data";
+export const BROWSER_DOWNLOADS_LIST_CHANNEL = "desktop:browser-downloads-list";
+export const BROWSER_DOWNLOADS_OPEN_CHANNEL = "desktop:browser-downloads-open";
+export const BROWSER_DOWNLOADS_SHOW_CHANNEL = "desktop:browser-downloads-show";
+export const BROWSER_DOWNLOADS_PAUSE_CHANNEL = "desktop:browser-downloads-pause";
+export const BROWSER_DOWNLOADS_RESUME_CHANNEL = "desktop:browser-downloads-resume";
+export const BROWSER_DOWNLOADS_CANCEL_CHANNEL = "desktop:browser-downloads-cancel";
+export const BROWSER_DOWNLOADS_REMOVE_CHANNEL = "desktop:browser-downloads-remove";
+export const BROWSER_DOWNLOADS_CLEAR_CHANNEL = "desktop:browser-downloads-clear";
+export const BROWSER_DOWNLOADS_DEFAULT_DIRECTORY_CHANNEL =
+  "desktop:browser-downloads-default-directory";
+export const BROWSER_DOWNLOADS_OPEN_FOLDER_CHANNEL = "desktop:browser-downloads-open-folder";
+export const BROWSER_DOWNLOADS_CHANGED_CHANNEL = "desktop:browser-downloads-changed";
+export const BROWSER_EXTENSIONS_LIST_CHANNEL = "desktop:browser-extensions-list";
+export const BROWSER_EXTENSIONS_INSPECT_CHANNEL = "desktop:browser-extensions-inspect";
+export const BROWSER_EXTENSIONS_CHANGED_CHANNEL = "desktop:browser-extensions-changed";
+export const BROWSER_PERMISSION_EVENT_CHANNEL = "desktop:browser-permission-event";
+export const BROWSER_PERMISSION_RESPOND_CHANNEL = "desktop:browser-permission-respond";
+export const BROWSER_IMPORT_LIST_PROFILES_CHANNEL = "desktop:browser-import-list-profiles";
+export const BROWSER_IMPORT_IS_RUNNING_CHANNEL = "desktop:browser-import-is-running";
+export const BROWSER_IMPORT_RUN_CHANNEL = "desktop:browser-import-run";
 
 export const COMPUTER_GET_STATE_CHANNEL = "desktop:computer-get-state";
 export const COMPUTER_REQUEST_PERMISSIONS_CHANNEL = "desktop:computer-request-permissions";

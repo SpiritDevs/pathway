@@ -419,3 +419,21 @@ _Avoid_: Visualization (that is a `visualize{}` card linking a live workspace fi
 
 **HTML render bridge**:
 The JSON-RPC messages, a subset of MCP Apps over `postMessage`, between a render and its client: `ui/notifications/host-context-changed` (theme), `ui/open-link`, and `ui/notifications/size-changed`.
+
+## Built-in browser settings
+
+These terms belong to Settings → Browser, which configures the desktop's local browser. See
+[browser settings](browser-settings.md).
+
+**Agent permissions**:
+Per-site rules for what agents may do in the built-in browser: Browse (allow, approval, block), Download and Debug (CDP). A Default row covers unlisted sites; the most specific site pattern wins per column. Stored as `browserAgentPermissions` in client settings.
+_Avoid_: Site permissions (those govern the page, not the agent).
+
+**Site permissions**:
+What a web page may use in the built-in browser: camera, microphone, location, notifications, clipboard, MIDI, pop-ups and sound. Each is Ask, Allow or Block, with per-origin exceptions. Stored as `browserSitePermissions`.
+
+**Site tools**:
+Tools a website exposes to agents, including WebMCP. Agents can list and call them only when Enable site tools and agent control are both on.
+
+**Full CDP access**:
+The developer-mode switch that lets agents send raw Chrome DevTools Protocol commands. It needs the site's Debug (CDP) permission as well.

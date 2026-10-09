@@ -6,9 +6,15 @@ import { squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runti
 import {
   FILL_PREVIEW_VIEWPORT,
   PREVIEW_AUTOMATION_OPERATIONS,
+  resolveBrowserAgentAccess,
   type DesktopPreviewBridge,
   type EnvironmentId,
+  type PreviewAutomationCallSiteToolInput,
+  type PreviewAutomationCdpInput,
+  type PreviewAutomationHistoryInput,
   type PreviewAutomationNavigateInput,
+  type PreviewAutomationPermissionDeniedReason,
+  type PreviewAutomationSiteTool,
   type PreviewAutomationOpenInput,
   type PreviewAutomationRecordingReadInput,
   type PreviewAutomationResizeInput,
@@ -23,6 +29,7 @@ import {
   type ScopedThreadRef,
 } from "@spiritdevs/contracts";
 import { resolvePreviewViewport } from "@spiritdevs/shared/previewViewport";
+import { SITE_TOOLS_LIST_EXPRESSION, siteToolCallExpression } from "@spiritdevs/shared/siteTools";
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Atom } from "effect/unstable/reactivity";
 import * as Encoding from "effect/Encoding";
@@ -36,6 +43,17 @@ import {
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { resolveBrowserNavigationTarget } from "~/browser/browserTargetResolver";
+import { BrowserAgentApprovalHost } from "~/browser/BrowserAgentApprovalHost";
+import { BrowserDialogsHost } from "~/browser/BrowserDialogsHost";
+import { BrowserPermissionPromptHost } from "~/browser/BrowserPermissionPromptHost";
+import { markBrowserAgentActivity } from "~/browser/browserAgentActivity";
+import {
+  browserAgentOrigin,
+  browserAgentSiteDecision,
+  requestBrowserAgentApproval,
+} from "~/browser/browserAgentApproval";
+import { browserHistoryForAgent, useBrowserHistoryStore } from "~/browserHistoryStore";
+import { getClientSettings } from "~/hooks/useSettings";
 import {
   readActiveBrowserRecordingTargets,
   startBrowserRecording,
@@ -58,6 +76,7 @@ import {
   assertPreviewAutomationWebPage,
   PreviewAutomationOperationError,
   PreviewAutomationOverlayTimeoutError,
+  PreviewAutomationPermissionDeniedHostError,
   PreviewAutomationRecordingNotActiveError,
   PreviewAutomationTargetUnavailableError,
   PreviewAutomationViewportTimeoutError,
@@ -86,6 +105,8 @@ import { isPreviewViewportReady } from "./previewViewportReadiness";
 import { shouldRollbackPreviewViewport } from "./previewViewportRollback";
 
 const PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS = 500;
+/** Leaves room to answer the agent before the server gives up on the request. */
+const APPROVAL_RESPONSE_MARGIN_MS = 1_000;
 
 /**
  * Surface the tab the agent is automating on whichever browser view the user
@@ -289,6 +310,9 @@ export function PreviewAutomationHosts() {
   if (!isElectron || !previewBridge?.automation) return null;
   return (
     <>
+      <BrowserAgentApprovalHost />
+      <BrowserDialogsHost />
+      <BrowserPermissionPromptHost />
       {/*
        * Host lifetime follows the desktop runtime's environment connections,
        * not the routed thread. This keeps background threads automatable and
@@ -388,8 +412,44 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             threadId: request.threadId,
             tabId,
           });
+          return url;
         };
-        const requireReadyTab = async (options?: { readonly follow?: boolean }) => {
+        // Settings → Browser decides what agents may do; read it per request so changes apply at once.
+        const settings = getClientSettings();
+        const deny = (reason: PreviewAutomationPermissionDeniedReason, origin?: string | null) =>
+          new PreviewAutomationPermissionDeniedHostError({
+            requestId: request.requestId,
+            operation: request.operation,
+            environmentId,
+            threadId: request.threadId,
+            tabId,
+            reason,
+            ...(origin ? { origin } : {}),
+          });
+        if (!settings.browserAgentControlEnabled && request.operation !== "status") {
+          throw deny("agent-control-disabled");
+        }
+        const approvalWaitMs = Math.max(
+          APPROVAL_RESPONSE_MARGIN_MS,
+          request.timeoutMs - APPROVAL_RESPONSE_MARGIN_MS,
+        );
+        const requireSiteAccess = async (url: string | null) => {
+          const origin = browserAgentOrigin(url);
+          const decision = browserAgentSiteDecision(getClientSettings(), url);
+          if (decision === "allow" || origin === null) return;
+          if (decision === "block") throw deny("site-blocked", origin);
+          const answer = await requestBrowserAgentApproval(
+            { kind: "site", origin },
+            approvalWaitMs,
+          );
+          if (answer === "pending") throw deny("approval-pending", origin);
+          if (!answer) throw deny("approval-denied", origin);
+        };
+        const requireReadyTab = async (options?: {
+          readonly follow?: boolean;
+          /** Navigation checks its destination instead of the page it leaves. */
+          readonly checkSite?: boolean;
+        }) => {
           const bridge = previewBridge;
           const readyTabId = tabId;
           if (!bridge || !readyTabId) {
@@ -408,11 +468,15 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             request.operation,
             request.timeoutMs,
           );
-          await requireWebPage(bridge, runtimeTabId);
+          const url = await requireWebPage(bridge, runtimeTabId);
+          if (options?.checkSite !== false) await requireSiteAccess(url);
+          markBrowserAgentActivity(runtimeTabId);
+          void bridge.automation.markAgentActivity?.(runtimeTabId).catch(() => undefined);
           return {
             bridge,
             tabId: readyTabId,
             runtimeTabId,
+            url,
           };
         };
         switch (request.operation) {
@@ -426,6 +490,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
                   url: input.url,
                 }).resolvedUrl
               : undefined;
+            if (resolvedInputUrl) await requireSiteAccess(resolvedInputUrl);
             let activeTabId = resolvePreviewAutomationOpenTab(
               state,
               request.tabId,
@@ -511,9 +576,13 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
               // operation failure.
               await waitForPreviewPresentation(activeRuntimeTabId);
             }
+            markBrowserAgentActivity(activeRuntimeTabId);
             if (reusedExistingTab && resolvedInputUrl && previewBridge) {
               assertPreviewRuntimeCurrent(threadRef, activeTabId, activeRuntimeTabId, request);
               await requireWebPage(previewBridge, activeRuntimeTabId);
+              void previewBridge.automation
+                .markAgentActivity?.(activeRuntimeTabId)
+                .catch(() => undefined);
               await previewBridge.navigate(activeRuntimeTabId, resolvedInputUrl);
               await waitForNavigationReadiness(
                 threadRef,
@@ -528,7 +597,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             return await currentStatus(threadRef, activeTabId);
           }
           case "navigate": {
-            const ready = await requireReadyTab({ follow: true });
+            const ready = await requireReadyTab({ follow: true, checkSite: false });
             const input = request.input as PreviewAutomationNavigateInput;
             const resolution = resolveBrowserNavigationTarget(
               environmentId,
@@ -537,6 +606,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
                 url: input.url!,
               },
             );
+            await requireSiteAccess(resolution.resolvedUrl);
             await ready.bridge.navigate(ready.runtimeTabId, resolution.resolvedUrl);
             await waitForNavigationReadiness(
               threadRef,
@@ -682,6 +752,49 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             return await ready.bridge.automation.waitFor(
               ready.runtimeTabId,
               request.input as Parameters<typeof ready.bridge.automation.waitFor>[1],
+            );
+          }
+          case "history": {
+            const access = settings.browserHistoryAccess;
+            if (access === "disabled") throw deny("history-disabled");
+            if (access === "ask") {
+              const answer = await requestBrowserAgentApproval({ kind: "history" }, approvalWaitMs);
+              if (answer === "pending") throw deny("approval-pending");
+              if (!answer) throw deny("history-denied");
+            }
+            return browserHistoryForAgent(
+              useBrowserHistoryStore.getState().byProjectKey,
+              request.input as PreviewAutomationHistoryInput,
+            );
+          }
+          case "siteTools": {
+            if (!settings.browserSiteToolsEnabled) throw deny("site-tools-disabled");
+            const ready = await requireReadyTab();
+            const listed = (await ready.bridge.automation.evaluate(ready.runtimeTabId, {
+              expression: SITE_TOOLS_LIST_EXPRESSION,
+            })) as { readonly tools?: ReadonlyArray<PreviewAutomationSiteTool> } | null;
+            return { tools: listed?.tools ?? [] };
+          }
+          case "callSiteTool": {
+            if (!settings.browserSiteToolsEnabled) throw deny("site-tools-disabled");
+            const ready = await requireReadyTab({ follow: true });
+            const input = request.input as PreviewAutomationCallSiteToolInput;
+            return await ready.bridge.automation.evaluate(ready.runtimeTabId, {
+              expression: siteToolCallExpression(input.name, input.arguments),
+            });
+          }
+          case "cdp": {
+            if (!settings.browserFullCdpEnabled) throw deny("cdp-disabled");
+            const ready = await requireReadyTab();
+            const origin = browserAgentOrigin(ready.url);
+            const access = resolveBrowserAgentAccess(settings.browserAgentPermissions, origin);
+            if (access.cdp === "block") throw deny("cdp-disabled", origin);
+            if (!ready.bridge.automation.cdp) {
+              throw new PreviewAutomationTargetUnavailableError(unavailableTarget);
+            }
+            return await ready.bridge.automation.cdp(
+              ready.runtimeTabId,
+              request.input as PreviewAutomationCdpInput,
             );
           }
           case "recordingStart": {

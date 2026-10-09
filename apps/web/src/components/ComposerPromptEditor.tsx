@@ -43,6 +43,7 @@ import {
   type Spread,
 } from "lexical";
 import {
+  type ReactNode,
   createContext,
   use,
   useCallback,
@@ -884,7 +885,8 @@ interface ComposerPromptEditorProps {
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   skills: ReadonlyArray<ServerProviderSkill>;
   disabled: boolean;
-  placeholder: string;
+  /** Text, or a live element such as an elapsed timer; only text is announced. */
+  placeholder: ReactNode;
   className?: string;
   onRemoveTerminalContext: (contextId: string) => void;
   onChange: (
@@ -1777,7 +1779,7 @@ function ComposerPromptEditorInner({
                 className,
               )}
               data-testid="composer-editor"
-              aria-placeholder={placeholder}
+              aria-placeholder={typeof placeholder === "string" ? placeholder : ""}
               placeholder={<span />}
               onPaste={onPaste}
             />

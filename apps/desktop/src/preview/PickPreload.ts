@@ -1,5 +1,6 @@
 // @effect-diagnostics globalDate:off - This isolated Electron preload does not run inside an Effect runtime.
 import { ipcRenderer } from "electron";
+import { installSiteToolsShim } from "@spiritdevs/shared/siteTools";
 import { getElementContext } from "react-grab/primitives";
 import type {
   DesktopPreviewAnnotationTheme,
@@ -22,6 +23,7 @@ import {
   ANNOTATION_THEME_CHANNEL,
   CANCEL_PICK_CHANNEL,
   ELEMENT_PICKED_CHANNEL,
+  SITE_TOOLS_ENABLED_CHANNEL,
   START_PICK_CHANNEL,
 } from "./GuestProtocol.ts";
 const OVERLAY_ATTRIBUTE = "data-pathway-annotation-ui";
@@ -263,6 +265,32 @@ async function captureElement(element: Element): Promise<PickedElementPayload | 
   }
 }
 
+// Constructed sheets, not <style> elements: a CSP without 'unsafe-inline' styles
+// (firefox.com, …) blocks <style> and would leave the overlay unstyled.
+function constructedSheet(css: string): CSSStyleSheet {
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(css);
+  return sheet;
+}
+
+// Built with DOM APIs, not innerHTML: pages that enforce Trusted Types (Google sign-in,
+// YouTube, …) reject string HTML and would abort the whole overlay.
+function createStrokeIcon(size: number, strokeWidth: number, d: string): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 20 20");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", d);
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", String(strokeWidth));
+  path.setAttribute("stroke-linecap", "round");
+  svg.appendChild(path);
+  return svg;
+}
+
 function createButton(label: string, title: string): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
@@ -358,18 +386,16 @@ function startAnnotation(snapshotDataUrl: string | null): void {
   host.style.cssText = `position:fixed;inset:0;z-index:${Z_INDEX_OVERLAY};pointer-events:none`;
   applyAnnotationTheme(host, annotationTheme);
   const shadowRoot = host.attachShadow({ mode: "closed" });
-  const themeStyle = document.createElement("style");
-  themeStyle.textContent = previewAnnotationStyles;
-  shadowRoot.appendChild(themeStyle);
+  shadowRoot.adoptedStyleSheets = [constructedSheet(previewAnnotationStyles)];
 
   const root = document.createElement("div");
   root.setAttribute(OVERLAY_ATTRIBUTE, "");
   root.className = "fixed inset-0 font-sans text-foreground";
   root.style.cssText = "pointer-events:none";
-  const cursorStyle = document.createElement("style");
-  cursorStyle.setAttribute(OVERLAY_ATTRIBUTE, "");
-  cursorStyle.textContent = `html[data-pathway-annotation-tool] body, html[data-pathway-annotation-tool] body * { cursor: crosshair !important; } [${OVERLAY_ATTRIBUTE}], [${OVERLAY_ATTRIBUTE}] * { cursor: default !important; } [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-inner-spin-button, [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-outer-spin-button { appearance:none; margin:0; }`;
-  document.documentElement.appendChild(cursorStyle);
+  const cursorStyle = constructedSheet(
+    `html[data-pathway-annotation-tool] body, html[data-pathway-annotation-tool] body * { cursor: crosshair !important; } [${OVERLAY_ATTRIBUTE}], [${OVERLAY_ATTRIBUTE}] * { cursor: default !important; } [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-inner-spin-button, [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-outer-spin-button { appearance:none; margin:0; }`,
+  );
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, cursorStyle];
   shadowRoot.appendChild(root);
 
   if (snapshotDataUrl) {
@@ -442,9 +468,15 @@ function startAnnotation(snapshotDataUrl: string | null): void {
   adjust.setAttribute("aria-expanded", "false");
   adjust.className +=
     " h-8 w-8 shrink-0 bg-muted p-0 text-muted-foreground hover:bg-accent hover:text-accent-foreground";
-  adjust.innerHTML =
-    '<svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M4 5h12M4 10h12M4 15h12M7 3v4M13 8v4M9 13v4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
-  composerRow.appendChild(adjust);
+  adjust.appendChild(createStrokeIcon(15, 1.6, "M4 5h12M4 10h12M4 15h12M7 3v4M13 8v4M9 13v4"));
+
+  const dragHandle = document.createElement("button");
+  dragHandle.type = "button";
+  dragHandle.textContent = "⠿";
+  dragHandle.title = "Drag annotation editor";
+  dragHandle.className =
+    "-me-1 h-8 w-4 shrink-0 cursor-grab touch-none select-none border-0 bg-transparent p-0 font-sans text-base leading-5 text-muted-foreground hover:text-foreground";
+  composerRow.append(dragHandle, adjust);
 
   const comment = document.createElement("textarea");
   comment.placeholder = "Describe the change…";
@@ -452,14 +484,6 @@ function startAnnotation(snapshotDataUrl: string | null): void {
   comment.className =
     "min-h-8 max-h-24 min-w-0 flex-1 resize-none overflow-y-hidden border-0 border-b border-b-transparent bg-transparent px-0 py-1.5 font-sans text-sm leading-5 text-foreground outline-none ring-0 placeholder:text-muted-foreground focus:border-b-primary focus:outline-none focus:ring-0";
   composerRow.appendChild(comment);
-
-  const dragHandle = document.createElement("button");
-  dragHandle.type = "button";
-  dragHandle.textContent = "⠿";
-  dragHandle.title = "Drag annotation editor";
-  dragHandle.className =
-    "hidden h-8 w-6 shrink-0 cursor-grab select-none border-0 bg-transparent p-0 font-sans text-lg font-bold leading-5 text-muted-foreground";
-  composerRow.appendChild(dragHandle);
 
   const submit = createButton("Attach", "Attach annotation and screenshot (Enter)");
   submit.className +=
@@ -483,7 +507,9 @@ function startAnnotation(snapshotDataUrl: string | null): void {
   let pendingCapture = false;
   let editorExpanded = false;
   let editorWasShown = false;
+  // Set while expanded or once the user drags the editor; otherwise it follows the targets.
   let editorPosition: { left: number; top: number } | null = null;
+  let editorMoved = false;
   let editorDrag: { pointerId: number; offsetX: number; offsetY: number } | null = null;
   let editorLayoutFrame: number | null = null;
 
@@ -713,7 +739,11 @@ function startAnnotation(snapshotDataUrl: string | null): void {
     "display:grid;grid-template-columns:82px minmax(0,1fr);gap:8px;align-items:center";
   const dimensionLabel = document.createElement("div");
   dimensionLabel.className = "grid gap-2 font-sans text-xs font-medium text-muted-foreground";
-  dimensionLabel.innerHTML = "<span>Width</span><span>Height</span>";
+  for (const text of ["Width", "Height"]) {
+    const span = document.createElement("span");
+    span.textContent = text;
+    dimensionLabel.appendChild(span);
+  }
   const dimensionControls = document.createElement("div");
   dimensionControls.style.cssText = "position:relative;display:grid;gap:3px;padding-left:22px";
   const widthInput = createUnitInput("px", "auto");
@@ -736,9 +766,15 @@ function startAnnotation(snapshotDataUrl: string | null): void {
   let aspectLocked = true;
   let aspectRatio = 1;
   const refreshAspectButton = (): void => {
-    aspectLock.innerHTML = aspectLocked
-      ? '<svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M8 6.5 9.5 5A3.5 3.5 0 0 1 14.5 10l-1.5 1.5M12 13.5 10.5 15A3.5 3.5 0 0 1 5.5 10L7 8.5M7.5 12.5l5-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>'
-      : '<svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="m6 6 8 8M8 6.5 9.5 5A3.5 3.5 0 0 1 14 9M12 13.5 10.5 15A3.5 3.5 0 0 1 6 11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
+    aspectLock.replaceChildren(
+      createStrokeIcon(
+        14,
+        1.7,
+        aspectLocked
+          ? "M8 6.5 9.5 5A3.5 3.5 0 0 1 14.5 10l-1.5 1.5M12 13.5 10.5 15A3.5 3.5 0 0 1 5.5 10L7 8.5M7.5 12.5l5-5"
+          : "m6 6 8 8M8 6.5 9.5 5A3.5 3.5 0 0 1 14 9M12 13.5 10.5 15A3.5 3.5 0 0 1 6 11",
+      ),
+    );
     aspectLock.setAttribute("aria-pressed", String(aspectLocked));
     aspectLock.classList.toggle("bg-primary/10", aspectLocked);
     aspectLock.classList.toggle("text-primary", aspectLocked);
@@ -848,13 +884,16 @@ function startAnnotation(snapshotDataUrl: string | null): void {
     };
   };
 
-  const applyEditorPosition = (position: { left: number; top: number }): void => {
+  const applyEditorPosition = (position: {
+    left: number;
+    top: number;
+  }): { left: number; top: number } => {
     const clamped = clampEditorPosition(position.left, position.top);
     editor.style.left = `${clamped.left}px`;
     editor.style.top = `${clamped.top}px`;
     editor.style.right = "auto";
     editor.style.bottom = "auto";
-    if (editorExpanded) editorPosition = clamped;
+    return clamped;
   };
 
   const getAnnotationBounds = (): PreviewAnnotationRect | null =>
@@ -902,7 +941,7 @@ function startAnnotation(snapshotDataUrl: string | null): void {
     editorLayoutFrame = window.requestAnimationFrame(() => {
       editorLayoutFrame = null;
       if (editor.style.display === "none") return;
-      if (editorExpanded && editorPosition) applyEditorPosition(editorPosition);
+      if (editorPosition) editorPosition = applyEditorPosition(editorPosition);
       else positionCompactEditor();
     });
   }
@@ -912,18 +951,16 @@ function startAnnotation(snapshotDataUrl: string | null): void {
     if (!editorExpanded) {
       const rect = editor.getBoundingClientRect();
       editorExpanded = true;
-      editorPosition = { left: rect.left, top: rect.top };
+      editorPosition ??= { left: rect.left, top: rect.top };
       stylePanel.style.display = selected.size > 0 ? "grid" : "none";
-      dragHandle.style.display = "block";
       adjust.setAttribute("aria-expanded", "true");
       adjust.title = "Collapse annotation editor";
       adjust.setAttribute("aria-label", "Collapse annotation editor");
       if (selected.size > 0) syncStyleControls();
     } else {
       editorExpanded = false;
-      editorPosition = null;
+      if (!editorMoved) editorPosition = null;
       stylePanel.style.display = "none";
-      dragHandle.style.display = "none";
       adjust.setAttribute("aria-expanded", "false");
       adjust.title = "Expand annotation editor";
       adjust.setAttribute("aria-label", "Expand annotation editor");
@@ -932,7 +969,7 @@ function startAnnotation(snapshotDataUrl: string | null): void {
   });
 
   const onEditorPointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0 || !editorExpanded) return;
+    if (event.button !== 0) return;
     const rect = editor.getBoundingClientRect();
     editorDrag = {
       pointerId: event.pointerId,
@@ -947,7 +984,8 @@ function startAnnotation(snapshotDataUrl: string | null): void {
 
   const onEditorPointerMove = (event: PointerEvent): void => {
     if (!editorDrag || editorDrag.pointerId !== event.pointerId) return;
-    applyEditorPosition({
+    editorMoved = true;
+    editorPosition = applyEditorPosition({
       left: event.clientX - editorDrag.offsetX,
       top: event.clientY - editorDrag.offsetY,
     });
@@ -1193,7 +1231,9 @@ function startAnnotation(snapshotDataUrl: string | null): void {
     ipcRenderer.off(CANCEL_PICK_CHANNEL, onCancel);
     ipcRenderer.off(ANNOTATION_CAPTURED_CHANNEL, onCaptured);
     document.documentElement.removeAttribute("data-pathway-annotation-tool");
-    cursorStyle.remove();
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter(
+      (sheet) => sheet !== cursorStyle,
+    );
     host.remove();
     activeSession = null;
     if (notifyMain) ipcRenderer.send(ELEMENT_PICKED_CHANNEL, null);
@@ -1303,6 +1343,14 @@ ipcRenderer.on(
     startAnnotation(typeof snapshotDataUrl === "string" ? snapshotDataUrl : null);
   },
 );
+// Before page scripts run, so sites can register WebMCP tools as they load.
+if (
+  /^https?:$/.test(location.protocol) &&
+  ipcRenderer.sendSync(SITE_TOOLS_ENABLED_CHANNEL) === true
+) {
+  installSiteToolsShim(globalThis);
+}
+
 ipcRenderer.on(ANNOTATION_THEME_CHANNEL, (_event, theme: DesktopPreviewAnnotationTheme) => {
   annotationTheme = theme;
   activeSession?.applyTheme(theme);

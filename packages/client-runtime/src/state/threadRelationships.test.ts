@@ -171,6 +171,38 @@ describe("thread relationships", () => {
     );
   });
 
+  it("leaves a deleted fork out even though its fork transfer remains", () => {
+    const parent = ThreadId.make("thread-parent");
+    const deletedSideChat = ThreadId.make("thread-deleted-side-chat");
+    const graph = deriveThreadRelationshipGraph({
+      threads: [
+        {
+          id: parent,
+          title: "Parent",
+          status: "completed",
+          archivedAt: null,
+          forkedFrom: null,
+          lineage: { rootThreadId: parent, parentThreadId: null, relationshipToParent: null },
+        },
+      ] as never,
+      projection: {
+        thread: { id: parent },
+        subagents: [],
+        contextTransfers: [
+          {
+            type: "fork",
+            sourceThreadId: parent,
+            targetThreadId: deletedSideChat,
+            status: "consumed",
+          },
+        ],
+      } as never,
+    });
+
+    expect(graph.nodes.has(deletedSideChat)).toBe(false);
+    expect(graph.edges).toEqual([]);
+  });
+
   it("reports a finished subagent as live while its thread runs follow-up work", () => {
     const parent = ThreadId.make("thread-parent");
     const child = ThreadId.make("thread-child");

@@ -67,6 +67,7 @@ import { Route as SettingsCompanyTeamsRouteImport } from './routes/settings.comp
 import { Route as SettingsCompanyRolesRouteImport } from './routes/settings.company-roles'
 import { Route as SettingsCompanyMembersRouteImport } from './routes/settings.company-members'
 import { Route as SettingsCalendarsRouteImport } from './routes/settings.calendars'
+import { Route as SettingsBrowserRouteImport } from './routes/settings.browser'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppleRouteImport } from './routes/settings.apple'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
@@ -82,6 +83,12 @@ import { Route as SettingsDictationPreviewRouteImport } from './routes/settings.
 import { Route as SettingsDictationModelsRouteImport } from './routes/settings.dictation_.models'
 import { Route as SettingsDictationHistoryRouteImport } from './routes/settings.dictation_.history'
 import { Route as SettingsDictationDictionaryRouteImport } from './routes/settings.dictation_.dictionary'
+import { Route as SettingsBrowserSiteSettingsRouteImport } from './routes/settings.browser_.site-settings'
+import { Route as SettingsBrowserPasswordsRouteImport } from './routes/settings.browser_.passwords'
+import { Route as SettingsBrowserHistoryRouteImport } from './routes/settings.browser_.history'
+import { Route as SettingsBrowserExtensionsRouteImport } from './routes/settings.browser_.extensions'
+import { Route as SettingsBrowserDownloadsRouteImport } from './routes/settings.browser_.downloads'
+import { Route as SettingsBrowserContactInfoRouteImport } from './routes/settings.browser_.contact-info'
 import { Route as SettingsAppearanceActionPaletteRouteImport } from './routes/settings.appearance_.action-palette'
 import { Route as IssuesMilestonesMilestoneIdRouteImport } from './routes/issues_.milestones_.$milestoneId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
@@ -389,6 +396,11 @@ const SettingsCalendarsRoute = SettingsCalendarsRouteImport.update({
   path: '/calendars',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsBrowserRoute = SettingsBrowserRouteImport.update({
+  id: '/browser',
+  path: '/browser',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
   id: '/archived',
   path: '/archived',
@@ -470,6 +482,41 @@ const SettingsDictationDictionaryRoute =
     path: '/dictation/dictionary',
     getParentRoute: () => SettingsRoute,
   } as any)
+const SettingsBrowserSiteSettingsRoute =
+  SettingsBrowserSiteSettingsRouteImport.update({
+    id: '/browser_/site-settings',
+    path: '/browser/site-settings',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsBrowserPasswordsRoute =
+  SettingsBrowserPasswordsRouteImport.update({
+    id: '/browser_/passwords',
+    path: '/browser/passwords',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsBrowserHistoryRoute = SettingsBrowserHistoryRouteImport.update({
+  id: '/browser_/history',
+  path: '/browser/history',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsBrowserExtensionsRoute =
+  SettingsBrowserExtensionsRouteImport.update({
+    id: '/browser_/extensions',
+    path: '/browser/extensions',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsBrowserDownloadsRoute =
+  SettingsBrowserDownloadsRouteImport.update({
+    id: '/browser_/downloads',
+    path: '/browser/downloads',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsBrowserContactInfoRoute =
+  SettingsBrowserContactInfoRouteImport.update({
+    id: '/browser_/contact-info',
+    path: '/browser/contact-info',
+    getParentRoute: () => SettingsRoute,
+  } as any)
 const SettingsAppearanceActionPaletteRoute =
   SettingsAppearanceActionPaletteRouteImport.update({
     id: '/appearance_/action-palette',
@@ -531,6 +578,7 @@ export interface FileRoutesByFullPath {
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/apple': typeof SettingsAppleRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/browser': typeof SettingsBrowserRoute
   '/settings/calendars': typeof SettingsCalendarsRoute
   '/settings/company-members': typeof SettingsCompanyMembersRoute
   '/settings/company-roles': typeof SettingsCompanyRolesRoute
@@ -575,6 +623,12 @@ export interface FileRoutesByFullPath {
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/issues/milestones/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
   '/settings/appearance/action-palette': typeof SettingsAppearanceActionPaletteRoute
+  '/settings/browser/contact-info': typeof SettingsBrowserContactInfoRoute
+  '/settings/browser/downloads': typeof SettingsBrowserDownloadsRoute
+  '/settings/browser/extensions': typeof SettingsBrowserExtensionsRoute
+  '/settings/browser/history': typeof SettingsBrowserHistoryRoute
+  '/settings/browser/passwords': typeof SettingsBrowserPasswordsRoute
+  '/settings/browser/site-settings': typeof SettingsBrowserSiteSettingsRoute
   '/settings/dictation/dictionary': typeof SettingsDictationDictionaryRoute
   '/settings/dictation/history': typeof SettingsDictationHistoryRoute
   '/settings/dictation/models': typeof SettingsDictationModelsRoute
@@ -610,6 +664,7 @@ export interface FileRoutesByTo {
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/apple': typeof SettingsAppleRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/browser': typeof SettingsBrowserRoute
   '/settings/calendars': typeof SettingsCalendarsRoute
   '/settings/company-members': typeof SettingsCompanyMembersRoute
   '/settings/company-roles': typeof SettingsCompanyRolesRoute
@@ -654,6 +709,12 @@ export interface FileRoutesByTo {
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/issues/milestones/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
   '/settings/appearance/action-palette': typeof SettingsAppearanceActionPaletteRoute
+  '/settings/browser/contact-info': typeof SettingsBrowserContactInfoRoute
+  '/settings/browser/downloads': typeof SettingsBrowserDownloadsRoute
+  '/settings/browser/extensions': typeof SettingsBrowserExtensionsRoute
+  '/settings/browser/history': typeof SettingsBrowserHistoryRoute
+  '/settings/browser/passwords': typeof SettingsBrowserPasswordsRoute
+  '/settings/browser/site-settings': typeof SettingsBrowserSiteSettingsRoute
   '/settings/dictation/dictionary': typeof SettingsDictationDictionaryRoute
   '/settings/dictation/history': typeof SettingsDictationHistoryRoute
   '/settings/dictation/models': typeof SettingsDictationModelsRoute
@@ -692,6 +753,7 @@ export interface FileRoutesById {
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/apple': typeof SettingsAppleRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/browser': typeof SettingsBrowserRoute
   '/settings/calendars': typeof SettingsCalendarsRoute
   '/settings/company-members': typeof SettingsCompanyMembersRoute
   '/settings/company-roles': typeof SettingsCompanyRolesRoute
@@ -736,6 +798,12 @@ export interface FileRoutesById {
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/issues_/milestones_/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
   '/settings/appearance_/action-palette': typeof SettingsAppearanceActionPaletteRoute
+  '/settings/browser_/contact-info': typeof SettingsBrowserContactInfoRoute
+  '/settings/browser_/downloads': typeof SettingsBrowserDownloadsRoute
+  '/settings/browser_/extensions': typeof SettingsBrowserExtensionsRoute
+  '/settings/browser_/history': typeof SettingsBrowserHistoryRoute
+  '/settings/browser_/passwords': typeof SettingsBrowserPasswordsRoute
+  '/settings/browser_/site-settings': typeof SettingsBrowserSiteSettingsRoute
   '/settings/dictation_/dictionary': typeof SettingsDictationDictionaryRoute
   '/settings/dictation_/history': typeof SettingsDictationHistoryRoute
   '/settings/dictation_/models': typeof SettingsDictationModelsRoute
@@ -774,6 +842,7 @@ export interface FileRouteTypes {
     | '/settings/appearance'
     | '/settings/apple'
     | '/settings/archived'
+    | '/settings/browser'
     | '/settings/calendars'
     | '/settings/company-members'
     | '/settings/company-roles'
@@ -818,6 +887,12 @@ export interface FileRouteTypes {
     | '/draft/$draftId'
     | '/issues/milestones/$milestoneId'
     | '/settings/appearance/action-palette'
+    | '/settings/browser/contact-info'
+    | '/settings/browser/downloads'
+    | '/settings/browser/extensions'
+    | '/settings/browser/history'
+    | '/settings/browser/passwords'
+    | '/settings/browser/site-settings'
     | '/settings/dictation/dictionary'
     | '/settings/dictation/history'
     | '/settings/dictation/models'
@@ -853,6 +928,7 @@ export interface FileRouteTypes {
     | '/settings/appearance'
     | '/settings/apple'
     | '/settings/archived'
+    | '/settings/browser'
     | '/settings/calendars'
     | '/settings/company-members'
     | '/settings/company-roles'
@@ -897,6 +973,12 @@ export interface FileRouteTypes {
     | '/draft/$draftId'
     | '/issues/milestones/$milestoneId'
     | '/settings/appearance/action-palette'
+    | '/settings/browser/contact-info'
+    | '/settings/browser/downloads'
+    | '/settings/browser/extensions'
+    | '/settings/browser/history'
+    | '/settings/browser/passwords'
+    | '/settings/browser/site-settings'
     | '/settings/dictation/dictionary'
     | '/settings/dictation/history'
     | '/settings/dictation/models'
@@ -934,6 +1016,7 @@ export interface FileRouteTypes {
     | '/settings/appearance'
     | '/settings/apple'
     | '/settings/archived'
+    | '/settings/browser'
     | '/settings/calendars'
     | '/settings/company-members'
     | '/settings/company-roles'
@@ -978,6 +1061,12 @@ export interface FileRouteTypes {
     | '/_chat/draft/$draftId'
     | '/issues_/milestones_/$milestoneId'
     | '/settings/appearance_/action-palette'
+    | '/settings/browser_/contact-info'
+    | '/settings/browser_/downloads'
+    | '/settings/browser_/extensions'
+    | '/settings/browser_/history'
+    | '/settings/browser_/passwords'
+    | '/settings/browser_/site-settings'
     | '/settings/dictation_/dictionary'
     | '/settings/dictation_/history'
     | '/settings/dictation_/models'
@@ -1421,6 +1510,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsCalendarsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/browser': {
+      id: '/settings/browser'
+      path: '/browser'
+      fullPath: '/settings/browser'
+      preLoaderRoute: typeof SettingsBrowserRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/archived': {
       id: '/settings/archived'
       path: '/archived'
@@ -1526,6 +1622,48 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsDictationDictionaryRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/browser_/site-settings': {
+      id: '/settings/browser_/site-settings'
+      path: '/browser/site-settings'
+      fullPath: '/settings/browser/site-settings'
+      preLoaderRoute: typeof SettingsBrowserSiteSettingsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/browser_/passwords': {
+      id: '/settings/browser_/passwords'
+      path: '/browser/passwords'
+      fullPath: '/settings/browser/passwords'
+      preLoaderRoute: typeof SettingsBrowserPasswordsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/browser_/history': {
+      id: '/settings/browser_/history'
+      path: '/browser/history'
+      fullPath: '/settings/browser/history'
+      preLoaderRoute: typeof SettingsBrowserHistoryRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/browser_/extensions': {
+      id: '/settings/browser_/extensions'
+      path: '/browser/extensions'
+      fullPath: '/settings/browser/extensions'
+      preLoaderRoute: typeof SettingsBrowserExtensionsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/browser_/downloads': {
+      id: '/settings/browser_/downloads'
+      path: '/browser/downloads'
+      fullPath: '/settings/browser/downloads'
+      preLoaderRoute: typeof SettingsBrowserDownloadsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/browser_/contact-info': {
+      id: '/settings/browser_/contact-info'
+      path: '/browser/contact-info'
+      fullPath: '/settings/browser/contact-info'
+      preLoaderRoute: typeof SettingsBrowserContactInfoRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/appearance_/action-palette': {
       id: '/settings/appearance_/action-palette'
       path: '/appearance/action-palette'
@@ -1609,6 +1747,7 @@ interface SettingsRouteChildren {
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute
   SettingsAppleRoute: typeof SettingsAppleRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
+  SettingsBrowserRoute: typeof SettingsBrowserRoute
   SettingsCalendarsRoute: typeof SettingsCalendarsRoute
   SettingsCompanyMembersRoute: typeof SettingsCompanyMembersRoute
   SettingsCompanyRolesRoute: typeof SettingsCompanyRolesRoute
@@ -1649,6 +1788,12 @@ interface SettingsRouteChildren {
   SettingsUsageRoute: typeof SettingsUsageRoute
   SettingsXcodeRoute: typeof SettingsXcodeRoute
   SettingsAppearanceActionPaletteRoute: typeof SettingsAppearanceActionPaletteRoute
+  SettingsBrowserContactInfoRoute: typeof SettingsBrowserContactInfoRoute
+  SettingsBrowserDownloadsRoute: typeof SettingsBrowserDownloadsRoute
+  SettingsBrowserExtensionsRoute: typeof SettingsBrowserExtensionsRoute
+  SettingsBrowserHistoryRoute: typeof SettingsBrowserHistoryRoute
+  SettingsBrowserPasswordsRoute: typeof SettingsBrowserPasswordsRoute
+  SettingsBrowserSiteSettingsRoute: typeof SettingsBrowserSiteSettingsRoute
   SettingsDictationDictionaryRoute: typeof SettingsDictationDictionaryRoute
   SettingsDictationHistoryRoute: typeof SettingsDictationHistoryRoute
   SettingsDictationModelsRoute: typeof SettingsDictationModelsRoute
@@ -1662,6 +1807,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsAppleRoute: SettingsAppleRoute,
   SettingsArchivedRoute: SettingsArchivedRoute,
+  SettingsBrowserRoute: SettingsBrowserRoute,
   SettingsCalendarsRoute: SettingsCalendarsRoute,
   SettingsCompanyMembersRoute: SettingsCompanyMembersRoute,
   SettingsCompanyRolesRoute: SettingsCompanyRolesRoute,
@@ -1706,6 +1852,12 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsUsageRoute: SettingsUsageRoute,
   SettingsXcodeRoute: SettingsXcodeRoute,
   SettingsAppearanceActionPaletteRoute: SettingsAppearanceActionPaletteRoute,
+  SettingsBrowserContactInfoRoute: SettingsBrowserContactInfoRoute,
+  SettingsBrowserDownloadsRoute: SettingsBrowserDownloadsRoute,
+  SettingsBrowserExtensionsRoute: SettingsBrowserExtensionsRoute,
+  SettingsBrowserHistoryRoute: SettingsBrowserHistoryRoute,
+  SettingsBrowserPasswordsRoute: SettingsBrowserPasswordsRoute,
+  SettingsBrowserSiteSettingsRoute: SettingsBrowserSiteSettingsRoute,
   SettingsDictationDictionaryRoute: SettingsDictationDictionaryRoute,
   SettingsDictationHistoryRoute: SettingsDictationHistoryRoute,
   SettingsDictationModelsRoute: SettingsDictationModelsRoute,

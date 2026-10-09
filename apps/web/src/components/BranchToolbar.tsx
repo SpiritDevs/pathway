@@ -1,4 +1,5 @@
 import { useEnvironmentQuery } from "../state/query";
+import { COMPOSER_CONTEXT_STRIP_CLASS_NAME } from "./chat/composerContextStrip";
 import type { Project } from "../types";
 import { vcsEnvironment } from "../state/vcs";
 import { useVcsInitAction } from "../state/sourceControlActions";
@@ -22,7 +23,16 @@ import {
   MonitorIcon,
   PlusIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { useProject, useThreadShell, useThreadShellsForProjectRefs } from "../state/entities";
@@ -91,6 +101,8 @@ interface BranchToolbarProps {
   onMoveToWorktree?: () => void;
   moveToWorktreeDisabled?: boolean;
   moveToWorktreeTooltip?: string;
+  /** Composer strip only: a control placed first, shown even before a project is chosen. */
+  leadingControl?: ReactNode;
 }
 
 interface MobileRunContextSelectorProps {
@@ -487,6 +499,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   onMoveToWorktree,
   moveToWorktreeDisabled,
   moveToWorktreeTooltip,
+  leadingControl,
 }: BranchToolbarProps) {
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -619,7 +632,12 @@ export const BranchToolbar = memo(function BranchToolbar({
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
   const labelsOverflow = useLabelsOverflow(stripElement);
 
-  if (!hasActiveThread || !activeProject) return null;
+  if (!hasActiveThread) return null;
+  if (!activeProject) {
+    return leadingControl !== undefined && layout !== "panel" ? (
+      <div className={COMPOSER_CONTEXT_STRIP_CLASS_NAME}>{leadingControl}</div>
+    ) : null;
+  }
 
   const internalOnly =
     activeProject.workspaceRoot === null ||
@@ -674,8 +692,18 @@ export const BranchToolbar = memo(function BranchToolbar({
     <div
       ref={setStripElement}
       data-compact={labelsOverflow ? "" : undefined}
-      className="chat-composer-context-strip chat-composer-context-strip-top group/composer-context -mb-4 mx-auto flex w-[calc(100%-2.75rem-2px)] max-w-[calc(48rem-2.75rem-2px)] items-center gap-2 rounded-t-[20px] border border-b-0 border-border/60 px-2 pt-1 pb-5"
+      className={COMPOSER_CONTEXT_STRIP_CLASS_NAME}
     >
+      {leadingControl !== undefined ? (
+        <>
+          {leadingControl}
+          <Separator
+            orientation="vertical"
+            className="mx-0.5 h-3.5!"
+            data-composer-context-control
+          />
+        </>
+      ) : null}
       {isMobile && showGitControls && !internalOnly ? (
         <MobileRunContextSelector
           repositoryReady={repositoryReady}

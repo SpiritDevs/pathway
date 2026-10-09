@@ -136,6 +136,12 @@ export interface ThreadPanelVisibility {
 interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
   threadPanelVisibilityByThreadKey: Record<string, ThreadPanelVisibility>;
+  /**
+   * The thread whose right panel fills the workspace. Session-only; kept here rather than
+   * in ChatView so it survives a draft being promoted to a server thread.
+   */
+  maximizedThreadKey: string | null;
+  setMaximizedThreadKey: (threadKey: string | null) => void;
   open: (
     ref: ScopedThreadRef,
     kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "thread">,
@@ -607,6 +613,8 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
     (set) => ({
       byThreadKey: {},
       threadPanelVisibilityByThreadKey: {},
+      maximizedThreadKey: null,
+      setMaximizedThreadKey: (maximizedThreadKey) => set({ maximizedThreadKey }),
       open: (ref, kind) =>
         set((state) =>
           updateThread(state, ref, (current) => {

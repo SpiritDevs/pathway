@@ -13,6 +13,17 @@ import { SETTINGS_SECTION_LABELS } from "./settingsSearch";
 
 const SETTINGS_BREADCRUMB_LABELS: Readonly<Record<string, string>> = SETTINGS_SECTION_LABELS;
 
+/** Pages below a section; the crumb shows the section, then the page. */
+const SETTINGS_SUBPAGE_LABELS: Readonly<Record<string, string>> = {
+  "/settings/appearance/action-palette": "Action Palette",
+  "/settings/browser/history": "Browsing history",
+  "/settings/browser/downloads": "Download history",
+  "/settings/browser/passwords": "Password manager",
+  "/settings/browser/contact-info": "Contact info",
+  "/settings/browser/site-settings": "Site settings",
+  "/settings/browser/extensions": "Extension manager",
+};
+
 function settingsBreadcrumbLabel(pathname: string): string | null {
   const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
   const exactLabel = SETTINGS_BREADCRUMB_LABELS[normalizedPathname];
@@ -93,10 +104,7 @@ export function SettingsBreadcrumb({ pathname }: { pathname: string }) {
   const sectionLabel = settingsBreadcrumbLabel(pathname);
   const projectKey = settingsProjectKeyFromPathname(pathname);
   const emailEnvironmentId = settingsEmailEnvironmentIdFromPathname(pathname);
-  const subpageLabel =
-    pathname.replace(/\/+$/, "") === "/settings/appearance/action-palette"
-      ? "Action Palette"
-      : null;
+  const subpageLabel = SETTINGS_SUBPAGE_LABELS[pathname.replace(/\/+$/, "")] ?? null;
 
   return (
     <WorkspaceBreadcrumb ariaLabel="Settings breadcrumb">
@@ -114,7 +122,18 @@ export function SettingsBreadcrumb({ pathname }: { pathname: string }) {
       ) : null}
       {subpageLabel ? (
         <>
-          <WorkspaceBreadcrumbItem>{sectionLabel}</WorkspaceBreadcrumbItem>
+          <WorkspaceBreadcrumbItem>
+            {pathname.startsWith("/settings/browser/") ? (
+              <Link
+                to="/settings/browser"
+                className="rounded-sm outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {sectionLabel}
+              </Link>
+            ) : (
+              sectionLabel
+            )}
+          </WorkspaceBreadcrumbItem>
           <WorkspaceBreadcrumbSeparator />
         </>
       ) : null}

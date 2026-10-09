@@ -24,6 +24,8 @@ Drag the line between two panels to resize them. Double-click it to give every p
 
 To give a thread's side panel the whole page, click **Maximize panel** in the top-right corner. The thread becomes the first of the panel's tabs: click it to see the chat, or click any other tab, or open something, to go back to the panel. Click **Restore panel**, or hide the side panel, to put it back beside the chat. The Pull requests page works the same way, with the list as its first tab.
 
+While a maximized panel shows any tab other than a side chat, such as a web page or a terminal, the thread's composer floats in the bottom-right corner so you can message the agent about it without leaving it. Until you click into it, only the input shows; the bars above and below it slide out when it has focus. On a new thread, the first control above the composer picks the project; if the thread has no project, it starts as a conversation. When the agent finishes, its reply appears in a card above the composer: click it, or the up arrow, to open the conversation in the corner, and use **Minimize chat** to fold it back to the composer. If the thread has side chats open, click the title at the top of the conversation to switch to one of them, or back to the thread. Drag the conversation by its title row, or the folded chat by its title or reply card, to move the chat to the bottom left, bottom center, bottom right, top left, or top right of the panel; let go anywhere and it settles in the nearest of those spots, where it stays.
+
 Panels are remembered on each device, so they are still there after you restart Pathway. A link you share opens only the page it points to, not your panels.
 
 ## Opening a window

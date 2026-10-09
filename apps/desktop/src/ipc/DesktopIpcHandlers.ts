@@ -60,6 +60,7 @@ import {
   setSnapShotAnimationDestination,
   setSnapShotShortcutSuppressed,
 } from "./methods/snapShot.ts";
+import * as BrowserIpc from "./methods/browser.ts";
 import * as ComputerIpc from "./methods/computer.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import * as WindowsIpc from "./methods/windows.ts";
@@ -135,6 +136,10 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(checkForUpdate);
   for (const previewMethod of PreviewIpc.methods) {
     yield* ipc.handle(previewMethod);
+  }
+  yield* BrowserIpc.installBrowserSettings();
+  for (const browserMethod of BrowserIpc.methods) {
+    yield* ipc.handle(browserMethod);
   }
   yield* ipc.handle(WindowsIpc.openWindow);
   yield* ipc.handle(WindowsIpc.closeWindow);

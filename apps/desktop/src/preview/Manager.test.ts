@@ -1,6 +1,7 @@
 import * as NodeUtil from "node:util";
 import { it as effectIt } from "@effect/vitest";
 import type { DesktopPreviewRecordingFrame } from "@spiritdevs/contracts";
+import { DEFAULT_CLIENT_SETTINGS } from "@spiritdevs/contracts";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -197,6 +198,15 @@ const browserSessionLayer = Layer.succeed(
     partitionOf: () => Effect.succeed("persist:pathway-preview-test"),
     clearCookies: () => Effect.void,
     clearCache: () => Effect.void,
+    clearBrowsingData: () => Effect.void,
+    configure: () => Effect.void,
+    settings: () => DEFAULT_CLIENT_SETTINGS,
+    onSession: () => Effect.void,
+    applyPagePolicy: () => undefined,
+    markAgentActivity: () => undefined,
+    isAgentActive: () => false,
+    subscribePermissionEvents: () => Effect.void,
+    respondPermission: () => Effect.void,
   }),
 );
 

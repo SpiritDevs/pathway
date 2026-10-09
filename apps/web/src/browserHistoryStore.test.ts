@@ -9,16 +9,18 @@ const { readPreparedConnection } = vi.hoisted(() => ({
 vi.mock("~/state/session", () => ({ readPreparedConnection }));
 
 import {
+  BROWSER_HISTORY_IMPORTED_KEY,
   BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT,
   BROWSER_HISTORY_MAX_PROJECTS,
   BROWSER_HISTORY_MAX_TITLE_LENGTH,
   type BrowserHistoryEntry,
+  browserHistoryForAgent,
   evictExcessProjects,
+  listBrowserHistory,
   mergeBrowserHistoryState,
   migratePersistedBrowserHistoryState,
   normalizeHistoryUrl,
   recordVisitForThread,
-  removeUrlForThread,
   resetBrowserHistoryForTests,
   setTitleForThreadUrl,
   upsertHistoryEntry,
@@ -340,7 +342,7 @@ describe("useBrowserHistoryStore", () => {
     useBrowserHistoryStore.getState().registerThreadProject(threadRef, "proj-a");
     recordVisitForThread(threadRef, "http://a.test/", 1);
     recordVisitForThread(threadRef, "http://b.test/", 2);
-    removeUrlForThread(threadRef, "http://a.test/");
+    useBrowserHistoryStore.getState().removeUrl("proj-a", "http://a.test/");
     expect(useBrowserHistoryStore.getState().byProjectKey["proj-a"]?.map((e) => e.url)).toEqual([
       "http://b.test/",
     ]);
@@ -441,5 +443,74 @@ describe("mergeBrowserHistoryState", () => {
     expect(merged.projectKeyByThreadKey).toEqual({ good: "b" });
     expect(merged.pendingVisitsByThreadKey).toEqual({});
     expect(merged.pendingTitlesByThreadKey).toEqual({});
+  });
+});
+
+describe("browser history across projects", () => {
+  beforeEach(() => resetBrowserHistoryForTests());
+
+  it("lists one row per address, newest visit first, with summed visits", () => {
+    const list = listBrowserHistory({
+      a: [entry({ url: "https://example.com/", lastVisitedAt: 1000, title: "Example" })],
+      b: [
+        entry({ url: "https://example.com/", lastVisitedAt: 3000, source: "agent" }),
+        entry({ url: "https://other.test/", lastVisitedAt: 2000 }),
+      ],
+    });
+    expect(list.map((row) => row.url)).toEqual(["https://example.com/", "https://other.test/"]);
+    expect(list[0]).toMatchObject({
+      title: "Example",
+      source: "agent",
+      visits: 2,
+      projectKey: "b",
+    });
+  });
+
+  it("answers agent history queries by title or address", () => {
+    const byProjectKey = {
+      a: [
+        entry({ url: "https://docs.example.com/", lastVisitedAt: 2000, title: "Guides" }),
+        entry({ url: "https://other.test/", lastVisitedAt: 1000, source: "agent" as const }),
+      ],
+    };
+    expect(browserHistoryForAgent(byProjectKey, { query: "GUIDES" }).entries).toEqual([
+      {
+        url: "https://docs.example.com/",
+        title: "Guides",
+        lastVisitedAt: new Date(2000).toISOString(),
+        visits: 1,
+        source: "user",
+      },
+    ]);
+    expect(browserHistoryForAgent(byProjectKey, { limit: 1 }).entries).toHaveLength(1);
+  });
+
+  it("removes an address from every project", () => {
+    useBrowserHistoryStore.setState({
+      byProjectKey: {
+        a: [entry({ url: "https://example.com/" })],
+        b: [entry({ url: "https://example.com/" }), entry({ url: "https://other.test/" })],
+      },
+    });
+    useBrowserHistoryStore.getState().removeEverywhere(["https://example.com/"]);
+    expect(useBrowserHistoryStore.getState().byProjectKey).toEqual({
+      b: [entry({ url: "https://other.test/" })],
+    });
+  });
+
+  it("imports valid entries once, newest first", () => {
+    useBrowserHistoryStore
+      .getState()
+      .importEntries([
+        entry({ url: "https://old.test/", lastVisitedAt: 1000 }),
+        entry({ url: "https://new.test/", lastVisitedAt: 2000 }),
+        entry({ url: "https://new.test/", lastVisitedAt: 1500 }),
+        entry({ url: "not a url", lastVisitedAt: 3000 }),
+      ]);
+    expect(
+      useBrowserHistoryStore
+        .getState()
+        .byProjectKey[BROWSER_HISTORY_IMPORTED_KEY]?.map((row) => row.url),
+    ).toEqual(["https://new.test/", "https://old.test/"]);
   });
 });

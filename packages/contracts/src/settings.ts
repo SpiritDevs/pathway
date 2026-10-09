@@ -11,6 +11,17 @@ import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import {
+  BrowserAddress,
+  BrowserAgentPermissions,
+  BrowserAnnotationScreenshots,
+  BrowserExtensionSetting,
+  BrowserHistoryAccess,
+  BrowserLinkTarget,
+  BrowserSitePermissionSettings,
+  DEFAULT_BROWSER_AGENT_PERMISSIONS,
+  DEFAULT_BROWSER_SITE_PERMISSION_SETTINGS,
+} from "./browserSettings.ts";
 import { ThreadEnvMode } from "./environment.ts";
 import { EmailCaptureSettings } from "./email.ts";
 import {
@@ -410,6 +421,41 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   snapShotFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Settings → Browser: the desktop's built-in browser.
+  browserAgentControlEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  browserWebLinkTarget: BrowserLinkTarget.pipe(
+    Schema.withDecodingDefault(Effect.succeed<BrowserLinkTarget>("external")),
+  ),
+  browserLocalLinkTarget: BrowserLinkTarget.pipe(
+    Schema.withDecodingDefault(Effect.succeed<BrowserLinkTarget>("browser")),
+  ),
+  browserShowFullUrl: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  browserAnnotationScreenshots: BrowserAnnotationScreenshots.pipe(
+    Schema.withDecodingDefault(Effect.succeed<BrowserAnnotationScreenshots>("always")),
+  ),
+  /** Empty means the system Downloads folder. */
+  browserDownloadDirectory: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withDecodingDefault(Effect.succeed("")),
+  ),
+  browserAskWhereToSave: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  browserHistoryAccess: BrowserHistoryAccess.pipe(
+    Schema.withDecodingDefault(Effect.succeed<BrowserHistoryAccess>("ask")),
+  ),
+  browserSiteToolsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  browserFullCdpEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  browserAgentPermissions: BrowserAgentPermissions.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_AGENT_PERMISSIONS)),
+  ),
+  browserSitePermissions: BrowserSitePermissionSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_SITE_PERMISSION_SETTINGS)),
+  ),
+  browserSaveAddresses: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  browserAddresses: Schema.Array(BrowserAddress).pipe(
+    Schema.withDecodingDefault(Effect.succeed<ReadonlyArray<BrowserAddress>>([])),
+  ),
+  browserExtensions: Schema.Array(BrowserExtensionSetting).pipe(
+    Schema.withDecodingDefault(Effect.succeed<ReadonlyArray<BrowserExtensionSetting>>([])),
+  ),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Show the in-chat Computer preview when an agent starts driving the desktop.
   autoOpenComputerPane: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -1327,6 +1373,21 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotSound: Schema.optionalKey(SnapShotSound),
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
+  browserAgentControlEnabled: Schema.optionalKey(Schema.Boolean),
+  browserWebLinkTarget: Schema.optionalKey(BrowserLinkTarget),
+  browserLocalLinkTarget: Schema.optionalKey(BrowserLinkTarget),
+  browserShowFullUrl: Schema.optionalKey(Schema.Boolean),
+  browserAnnotationScreenshots: Schema.optionalKey(BrowserAnnotationScreenshots),
+  browserDownloadDirectory: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
+  browserAskWhereToSave: Schema.optionalKey(Schema.Boolean),
+  browserHistoryAccess: Schema.optionalKey(BrowserHistoryAccess),
+  browserSiteToolsEnabled: Schema.optionalKey(Schema.Boolean),
+  browserFullCdpEnabled: Schema.optionalKey(Schema.Boolean),
+  browserAgentPermissions: Schema.optionalKey(BrowserAgentPermissions),
+  browserSitePermissions: Schema.optionalKey(BrowserSitePermissionSettings),
+  browserSaveAddresses: Schema.optionalKey(Schema.Boolean),
+  browserAddresses: Schema.optionalKey(Schema.Array(BrowserAddress)),
+  browserExtensions: Schema.optionalKey(Schema.Array(BrowserExtensionSetting)),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   autoOpenComputerPane: Schema.optionalKey(Schema.Boolean),
   computerPreviewSize: Schema.optionalKey(ComputerPreviewSize),

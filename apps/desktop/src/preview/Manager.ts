@@ -6,6 +6,7 @@
  * here). Single layer-scoped browser session partition.
  */
 import type {
+  BrowserAddress,
   DesktopPreviewAnnotationTheme,
   DesktopPreviewAutofillLoginInput,
   DesktopPreviewColorScheme,
@@ -18,6 +19,9 @@ import type {
   DesktopPreviewRecordingFrame,
   DesktopPreviewScreenshotArtifact,
   DesktopPreviewSiteInfo,
+  DesktopPreviewFindInput,
+  DesktopPreviewFindResult,
+  PreviewAutomationCdpInput,
   PreviewAutomationClickInput,
   PreviewAutomationActionEvent,
   PreviewAutomationConsoleEntry,
@@ -30,6 +34,8 @@ import type {
   PreviewAutomationTypeInput,
   PreviewAutomationWaitForInput,
 } from "@spiritdevs/contracts";
+import { resolveBrowserSitePermission } from "@spiritdevs/contracts";
+import { fillBrowserAddressFields } from "@spiritdevs/shared/browserAddressAutofill";
 import { fillBrowserLoginFields } from "@spiritdevs/shared/browserPasswordAutofill";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import { isWebPageUrl, normalizePreviewUrl } from "@spiritdevs/shared/preview";
@@ -1373,7 +1379,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       if (Option.isSome(next)) yield* emit(tabId, next.value);
     });
     const sync = () => runFork(syncState(true));
-    const syncNavigation = () => runFork(syncState(false));
+    const syncNavigation = () => {
+      browserSession.applyPagePolicy(wc);
+      runFork(syncState(false));
+    };
     const failed = (
       _event: Event,
       code: number,
@@ -1450,6 +1459,22 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         browserContents.add(wc);
         wc.setWindowOpenHandler((details) => {
           if (previewWindowOpenAction(details, previewOpenerPreferences(wc)) === "popup") {
+            const opener = URL.canParse(wc.getURL()) ? new URL(wc.getURL()).origin : null;
+            const popups = resolveBrowserSitePermission(
+              browserSession.settings().browserSitePermissions,
+              opener,
+              "popups",
+            );
+            if (popups === "block") {
+              runFork(
+                emitOpenInNewTab({
+                  tabId,
+                  url: details.url,
+                  blockedReason: "Pop-ups are blocked for this site in Settings → Browser.",
+                }).pipe(Effect.ignore),
+              );
+              return { action: "deny" };
+            }
             return { action: "allow", overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS };
           }
           if (details.url !== "" && details.url !== "about:blank") {
@@ -1921,6 +1946,15 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           }
           const cropRect = normalizeCaptureRect(args[1]);
           const submission = args[2] === "send" ? "send" : "attach";
+          // Settings → Browser can limit screenshots to annotations with a dragged region.
+          if (
+            cropRect === null &&
+            browserSession.settings().browserAnnotationScreenshots === "drag"
+          ) {
+            settle({ annotation: payload, submission });
+            if (!wc.isDestroyed()) wc.send(ANNOTATION_CAPTURED_CHANNEL);
+            return;
+          }
           runFork(
             captureAnnotationScreenshot(tabId, wc, cropRect).pipe(
               Effect.matchEffect({
@@ -3497,6 +3531,92 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
   });
 
+  const findInPage = Effect.fn("PreviewManager.findInPage")(function* (
+    input: DesktopPreviewFindInput,
+  ) {
+    const wc = yield* requireWebContents(input.tabId);
+    const context = { operation: "findInPage", tabId: input.tabId, webContentsId: wc.id };
+    if (input.text === "") {
+      yield* attempt(context, () => wc.stopFindInPage("clearSelection"));
+      return { activeMatchOrdinal: 0, matches: 0 } satisfies DesktopPreviewFindResult;
+    }
+    return yield* boundedPromise(
+      context,
+      () =>
+        new Promise<DesktopPreviewFindResult>((resolve) => {
+          let requestId = -1;
+          const onFound = (_event: Electron.Event, result: Electron.Result) => {
+            if (result.requestId !== requestId || !result.finalUpdate) return;
+            wc.off("found-in-page", onFound);
+            resolve({ activeMatchOrdinal: result.activeMatchOrdinal, matches: result.matches });
+          };
+          wc.on("found-in-page", onFound);
+          requestId = wc.findInPage(input.text, {
+            forward: input.forward,
+            findNext: input.findNext,
+          });
+        }),
+      PREVIEW_COMMAND_TIMEOUT_MS,
+    );
+  });
+
+  const stopFindInPage = Effect.fn("PreviewManager.stopFindInPage")(function* (tabId: string) {
+    const wc = yield* requireWebContents(tabId);
+    yield* attempt({ operation: "stopFindInPage", tabId, webContentsId: wc.id }, () =>
+      wc.stopFindInPage("clearSelection"),
+    );
+  });
+
+  const print = Effect.fn("PreviewManager.print")(function* (tabId: string) {
+    const wc = yield* requireWebContents(tabId);
+    yield* requireWebPage(tabId, wc, "print");
+    // Resolves when the system print dialog closes, printed or cancelled.
+    yield* attemptPromise(
+      { operation: "print", tabId, webContentsId: wc.id },
+      () => new Promise<void>((resolve) => wc.print({}, () => resolve())),
+    );
+  });
+
+  const autofillAddress = Effect.fn("PreviewManager.autofillAddress")(function* (
+    tabId: string,
+    address: BrowserAddress,
+  ) {
+    const wc = yield* requireWebContents(tabId);
+    yield* withControlSession(tabId, wc, "autofill", (send) =>
+      Effect.gen(function* () {
+        const inputJson = yield* encodeJson(
+          { operation: "autofillAddress.encode", tabId },
+          address,
+        );
+        const filled = yield* evaluateWithDebugger<number>(
+          tabId,
+          send,
+          `(() => { try { return (${fillBrowserAddressFields.toString()})(${inputJson}); } catch { return 0; } })()`,
+          true,
+        );
+        if (filled === 0) return yield* new PreviewAutofillError({ reason: "ambiguous" });
+      }),
+    );
+  });
+
+  /** Sends one raw DevTools Protocol command. Callers enforce Settings → Browser → Full CDP. */
+  const automationCdp = Effect.fn("PreviewManager.automationCdp")(function* (
+    tabId: string,
+    input: PreviewAutomationCdpInput,
+  ) {
+    const wc = yield* requireWebContents(tabId);
+    return yield* withControlSession(tabId, wc, `cdp ${input.method}`, (send) =>
+      send(input.method, input.params ?? {}),
+    );
+  });
+
+  const markAgentActivity = Effect.fn("PreviewManager.markAgentActivity")(function* (
+    tabId: string,
+  ) {
+    const wc = yield* requireWebContents(tabId);
+    browserSession.markAgentActivity(wc.id);
+  });
+
   const subscribe = <A>(
     ref: Ref.Ref<ReadonlySet<A>>,
     listener: A,
@@ -3528,8 +3648,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   yield* Effect.addFinalizer(() => destroy().pipe(Effect.ignore));
 
   return {
+    autofillAddress,
+    automationCdp,
     automationClick,
     automationEvaluate,
+    findInPage,
+    markAgentActivity,
+    print,
+    stopFindInPage,
     automationPress,
     automationScroll,
     automationSnapshot,
@@ -3940,6 +4066,20 @@ export class PreviewManager extends Context.Service<
       tabId: string,
       input: PreviewAutomationWaitForInput,
     ) => Effect.Effect<void, PreviewManagerError>;
+    readonly findInPage: (
+      input: DesktopPreviewFindInput,
+    ) => Effect.Effect<DesktopPreviewFindResult, PreviewManagerError>;
+    readonly stopFindInPage: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
+    readonly print: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
+    readonly autofillAddress: (
+      tabId: string,
+      address: BrowserAddress,
+    ) => Effect.Effect<void, PreviewManagerError>;
+    readonly automationCdp: (
+      tabId: string,
+      input: PreviewAutomationCdpInput,
+    ) => Effect.Effect<unknown, PreviewManagerError>;
+    readonly markAgentActivity: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly subscribeStateChanges: (listener: Listener) => Effect.Effect<void, never, Scope.Scope>;
     readonly subscribePointerEvents: (
       listener: PointerEventListener,
@@ -4037,6 +4177,12 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     automationScroll: operations.automationScroll,
     automationEvaluate: operations.automationEvaluate,
     automationWaitFor: operations.automationWaitFor,
+    findInPage: operations.findInPage,
+    stopFindInPage: operations.stopFindInPage,
+    print: operations.print,
+    autofillAddress: operations.autofillAddress,
+    automationCdp: operations.automationCdp,
+    markAgentActivity: operations.markAgentActivity,
     subscribeStateChanges: operations.subscribeStateChanges,
     subscribePointerEvents: operations.subscribePointerEvents,
     subscribeOpenInNewTab: operations.subscribeOpenInNewTab,

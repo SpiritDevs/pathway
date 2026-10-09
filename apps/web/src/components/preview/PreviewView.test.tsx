@@ -1,5 +1,5 @@
 import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
-import { act, Profiler } from "react";
+import { act, Profiler, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -49,7 +49,6 @@ const EMPTY_HISTORY: never[] = [];
 vi.mock("~/browserHistoryStore", () => ({
   recordVisitForThread: mocks.recordVisitForThread,
   setTitleForThreadUrl: vi.fn(),
-  removeUrlForThread: vi.fn(),
   BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT: 50,
   useThreadRecentHistory: () => EMPTY_HISTORY,
 }));
@@ -69,8 +68,14 @@ vi.mock("~/composerDraftStore", () => ({
 }));
 
 vi.mock("~/lib/previewAnnotation", () => ({
+  applyAnnotationScreenshotSetting: (annotation: unknown) => annotation,
   previewAnnotationScreenshotFile: mocks.previewAnnotationScreenshotFile,
 }));
+
+vi.mock("~/hooks/useSettings", async () => {
+  const { DEFAULT_CLIENT_SETTINGS } = await import("@spiritdevs/contracts");
+  return { getClientSettings: () => DEFAULT_CLIENT_SETTINGS };
+});
 
 vi.mock("~/localApi", () => ({
   ensureLocalApi: vi.fn(),
@@ -207,19 +212,11 @@ vi.mock("./PreviewChromeRow", () => ({
   PreviewChromeRow: (props: {
     onSubmit: (url: string) => void;
     onPickElement?: () => void;
-    onPictureInPicture?: () => void;
-    pictureInPicture?: boolean;
-    trailingActions?: {
-      props: { onNativePictureInPicture?: () => void };
-    };
+    trailingActions?: ReactNode;
   }) => {
     mocks.submittedUrl = props.onSubmit;
     mocks.toggleAnnotation = props.onPickElement ?? null;
-    mocks.togglePictureInPicture = props.onPictureInPicture ?? null;
-    mocks.toggleNativePictureInPicture =
-      props.trailingActions?.props.onNativePictureInPicture ?? null;
-    mocks.pictureInPicturePressed = props.pictureInPicture ?? false;
-    return null;
+    return props.trailingActions ?? null;
   },
 }));
 
@@ -230,13 +227,21 @@ vi.mock("./PreviewEmptyState", () => ({
   },
 }));
 vi.mock("./PreviewMoreMenu", () => ({
-  PreviewMoreMenu: (props: { onNativePictureInPicture: () => void }) => {
+  PreviewMoreMenu: (props: {
+    onNativePictureInPicture: () => void;
+    onPictureInPicture?: () => void;
+    pictureInPicture: boolean;
+  }) => {
     mocks.toggleNativePictureInPicture = props.onNativePictureInPicture;
+    mocks.togglePictureInPicture = props.onPictureInPicture ?? null;
+    mocks.pictureInPicturePressed = props.pictureInPicture;
     return null;
   },
 }));
+vi.mock("./PreviewDownloadsMenu", () => ({ PreviewDownloadsMenu: () => null }));
 vi.mock("./PreviewUnreachable", () => ({ PreviewUnreachable: () => null }));
 vi.mock("./ZoomIndicator", () => ({ ZoomIndicator: () => null }));
+vi.mock("./PreviewFindBar", () => ({ PreviewFindBar: () => null }));
 vi.mock("./AgentBrowserCursor", () => ({ AgentBrowserCursor: () => null }));
 vi.mock("~/browser/BrowserSurfaceSlot", () => ({ BrowserSurfaceSlot: () => null }));
 vi.mock("~/browser/RemoteBrowserView", () => ({

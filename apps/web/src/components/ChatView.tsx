@@ -255,16 +255,21 @@ import {
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
-import {
-  RightPanelTabBarActions,
-  RightPanelTabs,
-  type PullRequestTabStatus,
-} from "./RightPanelTabs";
+import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
 import { InlineRightPanelPortal } from "./preview/InlineRightPanelPresence";
 import { TerminalCardPortal } from "./terminal/TerminalCardPortal";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbar } from "./BranchToolbar";
+import { WorkspaceProjectSelector } from "./chat/WorkspaceProjectSelector";
+import {
+  FLOATING_CHAT_CORNER_CLASS_NAME,
+  FloatingChatCorner,
+  FloatingChatTitleBar,
+  FloatingChatHeader,
+  FloatingChatReplyCard,
+  useFloatingChatDrag,
+} from "./chat/FloatingChatControls";
 import {
   keybindingCaptureOwnsEvent,
   resolveShortcutCommand,
@@ -274,7 +279,10 @@ import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
+  FolderIcon,
   GitBranchIcon,
+  MessageSquareIcon,
   MessagesSquareIcon,
   PaperclipIcon,
   TriangleAlertIcon,
@@ -343,6 +351,7 @@ import {
   type TerminalContextDraft,
   type TerminalContextSelection,
 } from "../lib/terminalContext";
+import { appendBrowserTabContextToPrompt, type BrowserTabContext } from "../lib/browserTabContext";
 import {
   appendElementContextsToPrompt,
   type ElementContextDraft,
@@ -533,7 +542,7 @@ import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
-import { Button } from "./ui/button";
+import { Button, buttonVariants } from "./ui/button";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -730,6 +739,7 @@ function formatOutgoingPrompt(params: {
   return applyPromptEffortKeepingComputerUse(params.text, promptEffort);
 }
 const SCRIPT_TERMINAL_COLS = 120;
+const FLOATING_CHAT_CORNER_KEY = "pathway:floating-chat-corner";
 const SCRIPT_TERMINAL_ROWS = 30;
 
 type ChatViewProps =
@@ -742,6 +752,8 @@ type ChatViewProps =
       onOpenIssueContext?: (context: IssueContextSelection) => void;
       presentation?: "page" | "panel";
       panelOwnerThreadRef?: ScopedThreadRef;
+      /** Where a side chat puts its controls instead of its own top-right corner; null waits for it. */
+      panelControlsHost?: HTMLElement | null;
       routeKind: "server";
       draftId?: never;
     }
@@ -754,6 +766,7 @@ type ChatViewProps =
       onOpenIssueContext?: (context: IssueContextSelection) => void;
       presentation?: "page" | "panel";
       panelOwnerThreadRef?: never;
+      panelControlsHost?: never;
       routeKind: "draft";
       draftId: DraftId;
     };
@@ -1526,6 +1539,7 @@ function ChatViewContent(props: ChatViewProps) {
     [props.onOpenIssueContext],
   );
   const panelOwnerThreadRef = routeKind === "server" ? props.panelOwnerThreadRef : undefined;
+  const panelControlsHost = routeKind === "server" ? props.panelControlsHost : undefined;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const handleNewThread = useNewThreadHandler();
   const routeThreadRef = useMemo(
@@ -1884,9 +1898,7 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
-  const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
-    null,
-  );
+  const maximizedRightPanelThreadKey = useRightPanelStore((state) => state.maximizedThreadKey);
   const [respondingRequestIds, setRespondingRequestIds] = useState<RuntimeRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     RuntimeRequestId[]
@@ -1922,6 +1934,51 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const previewPanelInlineSize = usePreviewPanelInlineSize(workspaceLayoutWidth ?? undefined);
   const [conversationLayoutRef, conversationLayoutWidth] = useElementWidth<HTMLDivElement>();
+  const conversationLayoutElementRef = useRef<HTMLDivElement | null>(null);
+  const setConversationLayoutElement = useCallback(
+    (element: HTMLDivElement | null) => {
+      conversationLayoutElementRef.current = element;
+      conversationLayoutRef(element);
+    },
+    [conversationLayoutRef],
+  );
+  // The desktop browser's webviews sit in a fixed layer above the whole app, so the floating
+  // chat moves into a body-level layer over them. Moving one host node, rather than rendering
+  // the column in two places, keeps the composer and timeline mounted across the switch.
+  const [chatColumnHost] = useState(() => {
+    const host = document.createElement("div");
+    host.className = "contents";
+    return host;
+  });
+  const placeChatColumnInline = useCallback(
+    (slot: HTMLDivElement | null) => {
+      slot?.append(chatColumnHost);
+    },
+    [chatColumnHost],
+  );
+  const placeChatColumnFloating = useCallback(
+    (layer: HTMLDivElement | null) => {
+      const anchor = conversationLayoutElementRef.current;
+      if (!layer || !anchor) return;
+      layer.append(chatColumnHost);
+      const syncBounds = () => {
+        const bounds = anchor.getBoundingClientRect();
+        layer.style.left = `${bounds.left}px`;
+        layer.style.top = `${bounds.top}px`;
+        layer.style.width = `${bounds.width}px`;
+        layer.style.height = `${bounds.height}px`;
+      };
+      syncBounds();
+      const observer = new ResizeObserver(syncBounds);
+      observer.observe(anchor);
+      window.addEventListener("resize", syncBounds);
+      return () => {
+        observer.disconnect();
+        window.removeEventListener("resize", syncBounds);
+      };
+    },
+    [chatColumnHost],
+  );
   const threadPanelPopoverAnchorRef = useRef<HTMLElement | null>(null);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -3810,6 +3867,61 @@ function ChatViewContent(props: ChatViewProps) {
   const isDraftHeroState =
     isLocalDraftThread && timelineEntries.length === 0 && !isWorking && !draftHeroDockRequested;
   const draftHeroTransition = useDraftHeroLayoutTransition(isDraftHeroState);
+  // Over a maximized browser the chat floats in the corner: the composer alone, a card when
+  // the agent replies, and the whole conversation when expanded.
+  // A side chat brings its own composer, so the thread's stays docked there.
+  const chatFloating = rightPanelMaximized && !threadTabActive && activeRightPanelKind !== "thread";
+  const [floatingChatExpandedThreadKey, setFloatingChatExpandedThreadKey] = useState<string | null>(
+    null,
+  );
+  const floatingChatExpanded = chatFloating && floatingChatExpandedThreadKey === routeThreadKey;
+  const floatingChatCollapsed = chatFloating && !floatingChatExpanded;
+  const floatingChatRef = useRef<HTMLDivElement | null>(null);
+  const [floatingChatCorner, setFloatingChatCorner] = useLocalStorage(
+    FLOATING_CHAT_CORNER_KEY,
+    "bottom-right",
+    FloatingChatCorner,
+  );
+  const floatingChatDrag = useFloatingChatDrag(floatingChatRef, setFloatingChatCorner);
+  // The expanded chat can show one of the thread's side chats in place of the thread.
+  const [floatingHeaderActionsHost, setFloatingHeaderActionsHost] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const [floatingSideChat, setFloatingSideChat] = useState<{
+    readonly threadKey: string | null;
+    readonly threadId: ThreadId;
+  } | null>(null);
+  const floatingSideChatId =
+    floatingChatExpanded &&
+    floatingSideChat?.threadKey === routeThreadKey &&
+    sideChatThreadIds.includes(floatingSideChat.threadId)
+      ? floatingSideChat.threadId
+      : null;
+  const [floatingReplyThreadKey, setFloatingReplyThreadKey] = useState<string | null>(null);
+  const floatingReplyWorkRef = useRef({ threadKey: routeThreadKey, isWorking });
+  useEffect(() => {
+    const previous = floatingReplyWorkRef.current;
+    floatingReplyWorkRef.current = { threadKey: routeThreadKey, isWorking };
+    if (isWorking) setFloatingReplyThreadKey(null);
+    else if (previous.threadKey === routeThreadKey && previous.isWorking && chatFloating) {
+      setFloatingReplyThreadKey(routeThreadKey);
+    }
+  }, [chatFloating, isWorking, routeThreadKey]);
+  const latestAssistantReply = useMemo(
+    () =>
+      timelineEntries.findLast(
+        (entry) => entry.kind === "message" && entry.message.role === "assistant",
+      ),
+    [timelineEntries],
+  );
+  const floatingReplyText =
+    chatFloating &&
+    !floatingChatExpanded &&
+    !isWorking &&
+    floatingReplyThreadKey === routeThreadKey &&
+    latestAssistantReply?.kind === "message"
+      ? latestAssistantReply.message.text
+      : null;
   const captureDraftHeroComposerRect = draftHeroTransition.captureComposerRect;
   const { turnDiffSummaries } = useThreadTurnDiffSummaries(isServerThread ? activeThreadRef : null);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
@@ -4117,21 +4229,25 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
     [activeActivityRun, serverProjection?.nodes, showSubagentComposerBar],
   );
+  // The floating composer has no hero headline, so a new thread picks its project in the strip.
+  const floatingProjectPicker = floatingChatCollapsed && isLocalDraftThread;
   const showComposerContextStrip =
     !isPanelPresentation &&
     !showSubagentComposerBar &&
-    shouldShowComposerContextStrip({
-      isDraftHeroState,
-      isGitRepo,
-      hasActiveProject: activeProject !== null,
-      persistInActiveThreads: settings.persistComposerContextStrip,
-    });
+    (floatingProjectPicker ||
+      shouldShowComposerContextStrip({
+        isDraftHeroState,
+        isGitRepo,
+        hasActiveProject: activeProject !== null,
+        persistInActiveThreads: settings.persistComposerContextStrip,
+      }));
   const renderComposerContextStrip =
     !isPanelPresentation &&
     !showSubagentComposerBar &&
-    isGitRepo &&
-    activeProject !== null &&
-    (routeKind === "draft" || settings.persistComposerContextStrip);
+    (floatingProjectPicker ||
+      (isGitRepo &&
+        activeProject !== null &&
+        (routeKind === "draft" || settings.persistComposerContextStrip)));
   const initialDiffPanelGitScope =
     gitStatusQuery.data?.hasWorkingTreeChanges === true ? "unstaged" : "branch";
   const diffPanelGitStatusResolutionKey = gitStatusQuery.data ? "resolved" : "pending";
@@ -4828,6 +4944,41 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const activeEnvironmentLabel = activeEnvironment?.label ?? "Environment";
   const remoteBrowserPage = useRemoteBrowserPage(activeThreadRef);
+  // The browser tab showing beside or behind the chat; sends tell the agent "this page" is it.
+  const visibleBrowserTab = ((): BrowserTabContext | null => {
+    if (!rightPanelOpen || threadTabActive || activeRightPanelSurface?.kind !== "preview") {
+      return null;
+    }
+    if (isRemoteBrowserSurface(activeRightPanelSurface)) return remoteBrowserPage;
+    const tabId = activeRightPanelSurface.resourceId;
+    const navStatus = tabId ? activePreviewState.sessions[tabId]?.navStatus : undefined;
+    return tabId && navStatus && navStatus._tag !== "Idle"
+      ? { tabId, url: navStatus.url, title: navStatus.title }
+      : null;
+  })();
+  // Watching a desktop tab hands the agent back to this desktop, the way watching the remote
+  // browser claims the agent for it; otherwise "this page" points at a tab the agent can't reach.
+  const localBrowserTabVisible =
+    rightPanelOpen &&
+    !threadTabActive &&
+    activeRightPanelSurface?.kind === "preview" &&
+    !isRemoteBrowserSurface(activeRightPanelSurface);
+  const activeThreadEnvironmentId = activeThreadRef?.environmentId;
+  const activeThreadIdForBrowserHost = activeThreadRef?.threadId;
+  useEffect(() => {
+    if (!localBrowserTabVisible || !activeThreadEnvironmentId || !activeThreadIdForBrowserHost) {
+      return;
+    }
+    void remoteBrowserCommand({
+      environmentId: activeThreadEnvironmentId,
+      input: { action: "selectHost", threadId: activeThreadIdForBrowserHost, host: "automatic" },
+    });
+  }, [
+    activeThreadEnvironmentId,
+    activeThreadIdForBrowserHost,
+    localBrowserTabVisible,
+    remoteBrowserCommand,
+  ]);
   const rightPanelToolShortcuts = useMemo(
     () => ({
       diff: shortcutLabelForCommand(keybindings, "diff.toggle"),
@@ -4963,7 +5114,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadRef, previewPanelOpen, revealBrowserSurface]);
   const closePreviewPanel = useCallback(() => {
     if (activeThreadRef) {
-      setMaximizedRightPanelThreadKey(null);
+      useRightPanelStore.getState().setMaximizedThreadKey(null);
       useRightPanelStore.getState().close(activeThreadRef);
     }
   }, [activeThreadRef]);
@@ -5161,9 +5312,10 @@ function ChatViewContent(props: ChatViewProps) {
   const toggleRightPanelMaximized = useCallback(() => {
     if (!canMaximizeRightPanel || !activeThreadRef) return;
     // Maximizing shows the panel's surface; the thread tab is one click away.
-    useRightPanelStore.getState().setPageTabActive(activeThreadRef, false);
-    setMaximizedRightPanelThreadKey((threadKey) =>
-      threadKey === routeThreadKey ? null : routeThreadKey,
+    const store = useRightPanelStore.getState();
+    store.setPageTabActive(activeThreadRef, false);
+    store.setMaximizedThreadKey(
+      store.maximizedThreadKey === routeThreadKey ? null : routeThreadKey,
     );
   }, [activeThreadRef, canMaximizeRightPanel, routeThreadKey]);
   const cleanupRightPanelSurfaces = useCallback(
@@ -7389,6 +7541,17 @@ function ChatViewContent(props: ChatViewProps) {
       },
     );
   }, [activeCompanyId, activeThread, draftId, isServerThread, setLogicalProjectDraftThreadId]);
+  const draftProjectMissing =
+    isLocalDraftThread &&
+    activeThread !== undefined &&
+    activeThread !== null &&
+    activeThread.projectId !== null &&
+    activeProject === null;
+  // The floating composer has no hero headline to pick a project from, so a draft whose
+  // project can't be found starts as a conversation instead of sitting disabled.
+  useEffect(() => {
+    if (chatFloating && draftProjectMissing && supportsConversations) handleSelectConversation();
+  }, [chatFloating, draftProjectMissing, handleSelectConversation, supportsConversations]);
   const handleTemporaryChange = useCallback(
     (temporary: boolean, keep = false) => {
       if (!activeThread || sendInFlightRef.current) return;
@@ -8102,9 +8265,12 @@ function ChatViewContent(props: ChatViewProps) {
       model: ctxSelectedModel,
       models: ctxSelectedProviderModels,
       effort: ctxSelectedPromptEffort,
-      text: applyComposerGoalIntent(
-        messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
-        sendCtx?.goalMode === true,
+      text: appendBrowserTabContextToPrompt(
+        applyComposerGoalIntent(
+          messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+          sendCtx?.goalMode === true,
+        ),
+        visibleBrowserTab,
       ),
     });
     if (pendingDraftTarget !== null) {
@@ -10179,17 +10345,29 @@ function ChatViewContent(props: ChatViewProps) {
       {panelToggleControls}
     </div>
   );
-  const sideChatThreadPanelControl = isPanelPresentation ? (
-    <RightPanelTabBarActions>
-      <div data-side-chat-surface="true">
-        <PanelLayoutControls
-          {...panelToggleControlProps}
-          showTerminalControl={false}
-          showRightPanelControl={false}
-        />
-      </div>
-    </RightPanelTabBarActions>
-  ) : null;
+  // Side chats have no header, so the toggle sits in the conversation's top-right corner,
+  // or in the host's header when it gives one.
+  const sideChatPanelLayoutControls = (
+    <PanelLayoutControls
+      {...panelToggleControlProps}
+      showTerminalControl={false}
+      showRightPanelControl={false}
+    />
+  );
+  const sideChatThreadPanelControl = !isPanelPresentation ? null : panelControlsHost ===
+    undefined ? (
+    <div className="absolute top-1.5 right-4 z-20 h-8" data-side-chat-surface="true">
+      {sideChatPanelLayoutControls}
+    </div>
+  ) : (
+    panelControlsHost &&
+    createPortal(
+      <div className="flex h-8 items-center" data-side-chat-surface="true">
+        {sideChatPanelLayoutControls}
+      </div>,
+      panelControlsHost,
+    )
+  );
 
   const rightPanelTabsProps = {
     surfaces: rightPanelState.surfaces,
@@ -10234,6 +10412,13 @@ function ChatViewContent(props: ChatViewProps) {
     liveAgentCount: agentPanelModel.liveCount,
   };
 
+  const expandFloatingChat = () => {
+    setFloatingReplyThreadKey(null);
+    setFloatingChatExpandedThreadKey(routeThreadKey);
+    // The timeline was hidden; land on the latest message once it lays out.
+    requestAnimationFrame(() => scrollToEnd());
+  };
+
   const workspaceFileDropHandlers = makeWorkspaceFileDropHandlers({
     setDragActive: setIsWorkspaceFileDragActive,
     addFiles: (files) => resolveComposerHandle(composerRef)?.addDroppedFiles(files),
@@ -10270,11 +10455,6 @@ function ChatViewContent(props: ChatViewProps) {
               COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
             )}
           >
-            {inlineRightPanelOwnsTitleBar
-              ? threadPanelHeaderControl
-              : !rightPanelOpen
-                ? panelLayoutControls
-                : null}
             <ChatHeader
               activeThreadEnvironmentId={activeThread.environmentId}
               activeThreadId={activeThread.id}
@@ -10296,6 +10476,13 @@ function ChatViewContent(props: ChatViewProps) {
               onOpenThread={onOpenRelatedThread}
               {...(isServerThread ? { onRenameThread: handleRenameActiveThread } : {})}
             />
+            {/* After ChatHeader: Electron applies app-regions in DOM order, so the
+                header row's inherited drag would otherwise cover these controls. */}
+            {inlineRightPanelOwnsTitleBar
+              ? threadPanelHeaderControl
+              : !rightPanelOpen
+                ? panelLayoutControls
+                : null}
           </header>
         ) : null}
 
@@ -10309,19 +10496,77 @@ function ChatViewContent(props: ChatViewProps) {
         />
         {/* Main content area with optional plan sidebar */}
         <div
-          ref={conversationLayoutRef}
+          ref={setConversationLayoutElement}
           className="relative flex min-h-0 min-w-0 flex-1"
           data-thread-details-inline-reserved={inlineThreadPanelOpen ? "true" : undefined}
         >
-          {/* Chat column */}
+          {/* Chat column: rendered once into chatColumnHost, which moves between here and the floating layer. */}
+          {chatFloating ? null : <div ref={placeChatColumnInline} className="contents" />}
+          {inlineThreadPanelOpen ? (
+            <ThreadDetailsPanel mode="inline" {...threadDetailsPanelProps} />
+          ) : null}
+        </div>
+        {/* end horizontal flex container */}
+        {chatFloating
+          ? createPortal(
+              <div ref={placeChatColumnFloating} className="pointer-events-none fixed z-[35]" />,
+              document.body,
+            )
+          : null}
+        {createPortal(
           <div
-            className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+            ref={floatingChatRef}
+            className={cn(
+              "relative flex min-h-0 min-w-0 flex-1 flex-col",
+              chatFloating &&
+                "absolute w-[min(46rem,calc(100%-1.5rem))] flex-none [-webkit-app-region:no-drag]",
+              chatFloating && FLOATING_CHAT_CORNER_CLASS_NAME[floatingChatCorner],
+              floatingChatExpanded && "pointer-events-auto h-[min(44rem,calc(100%-1rem))]",
+              floatingChatCollapsed && "pointer-events-none",
+            )}
+            data-chat-floating={
+              chatFloating ? (floatingChatExpanded ? "expanded" : "collapsed") : undefined
+            }
             data-chat-workspace-drop-target="true"
             onDragEnter={workspaceFileDropHandlers.onDragEnter}
             onDragOver={workspaceFileDropHandlers.onDragOver}
             onDragLeave={workspaceFileDropHandlers.onDragLeave}
             onDrop={workspaceFileDropHandlers.onDrop}
           >
+            {floatingChatExpanded ? (
+              <FloatingChatHeader
+                title={activeThread.title}
+                sideChats={sideChatThreadIds.map((id) => ({
+                  id,
+                  title: rightPanelThreadTitlesById.get(id)?.trim() || "Side chat",
+                }))}
+                selectedSideChatId={floatingSideChatId}
+                actionsRef={setFloatingHeaderActionsHost}
+                dragHandlers={floatingChatDrag}
+                onSelectSideChat={(sideChatId) => {
+                  const threadId = sideChatThreadIds.find((id) => id === sideChatId);
+                  setFloatingSideChat(threadId ? { threadKey: routeThreadKey, threadId } : null);
+                }}
+                onMinimize={() => {
+                  setFloatingChatExpandedThreadKey(null);
+                  setFloatingSideChat(null);
+                }}
+              />
+            ) : null}
+            {floatingSideChatId !== null && activeThreadRef ? (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <ChatView
+                  key={floatingSideChatId}
+                  environmentId={activeThreadRef.environmentId}
+                  threadId={floatingSideChatId}
+                  routeKind="server"
+                  presentation="panel"
+                  panelOwnerThreadRef={activeThreadRef}
+                  panelControlsHost={floatingHeaderActionsHost}
+                  reserveTitleBarControlInset={false}
+                />
+              </div>
+            ) : null}
             {isWorkspaceFileDragActive ? (
               <div
                 className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-primary/[0.035]"
@@ -10346,7 +10591,12 @@ function ChatViewContent(props: ChatViewProps) {
               />
             </div>
             {/* Messages Wrapper */}
-            <div className="relative flex min-h-0 flex-1 flex-col">
+            <div
+              className={cn(
+                "chat-messages-panel relative flex min-h-0 flex-1 flex-col",
+                (floatingChatCollapsed || floatingSideChatId !== null) && "hidden",
+              )}
+            >
               {activeThreadRef ? <ComputerPreviewRail threadRef={activeThreadRef} /> : null}
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
@@ -10455,9 +10705,12 @@ function ChatViewContent(props: ChatViewProps) {
               ref={setComposerOverlayElement}
               data-chat-composer-overlay="true"
               className={cn(
-                isDraftHeroState
-                  ? "pointer-events-none absolute inset-0 z-20 flex items-center"
-                  : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2",
+                floatingSideChatId !== null && "hidden",
+                floatingChatCollapsed
+                  ? "pointer-events-none relative z-20"
+                  : isDraftHeroState
+                    ? "pointer-events-none absolute inset-0 z-20 flex items-center"
+                    : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2",
               )}
             >
               <div
@@ -10465,7 +10718,18 @@ function ChatViewContent(props: ChatViewProps) {
                 className="chat-composer-horizontal-inset w-full"
               >
                 <div className="pointer-events-auto relative z-10">
-                  {isDraftHeroState ? (
+                  {floatingChatCollapsed ? (
+                    floatingReplyText !== null ? (
+                      <FloatingChatReplyCard
+                        title={activeThread.title}
+                        text={floatingReplyText}
+                        onOpen={expandFloatingChat}
+                        onDismiss={() => setFloatingReplyThreadKey(null)}
+                        dragHandlers={floatingChatDrag}
+                      />
+                    ) : null
+                  ) : null}
+                  {isDraftHeroState && !floatingChatCollapsed ? (
                     <div className="absolute inset-x-0 bottom-full">
                       <div
                         className="pb-8"
@@ -10515,6 +10779,7 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : null}
                   <div
                     ref={draftHeroTransition.composerAnchorRef}
+                    data-chat-composer-stack
                     className="relative z-10"
                     style={
                       forceExpandedMobileComposer
@@ -10522,73 +10787,118 @@ function ChatViewContent(props: ChatViewProps) {
                         : undefined
                     }
                   >
-                    <div
-                      aria-hidden={!showComposerContextStrip}
-                      className={cn(
-                        "grid transition-[grid-template-rows,opacity,transform] motion-reduce:transition-none",
-                        showComposerContextStrip
-                          ? "grid-rows-[1fr] translate-y-0 opacity-100"
-                          : "pointer-events-none grid-rows-[0fr] -translate-y-1 opacity-0",
-                      )}
-                      data-composer-context-strip={
-                        showComposerContextStrip ? "expanded" : "collapsed"
-                      }
-                      inert={showComposerContextStrip ? undefined : true}
-                      style={{
-                        transitionDuration: `${DRAFT_HERO_TRANSITION_DURATION_MS}ms`,
-                        transitionTimingFunction: DRAFT_HERO_TRANSITION_EASING,
-                      }}
-                    >
-                      <div className="min-h-0 overflow-hidden">
-                        <div
-                          data-terminal-open={terminalUiState.terminalOpen ? "true" : undefined}
-                          className="relative z-0"
-                        >
-                          {renderComposerContextStrip && (
-                            <div className="pointer-events-auto">
-                              <BranchToolbar
-                                {...(!isServerThread && activeProject
-                                  ? {
-                                      workspaceContext: {
-                                        project: activeProject,
-                                        worktreePath: activeThread.worktreePath,
-                                        temporary: activeThread.temporary ?? false,
-                                      },
-                                    }
-                                  : {})}
-                                environmentId={activeThread.environmentId}
-                                threadId={activeThread.id}
-                                showGitControls={isGitRepo}
-                                {...(routeKind === "draft" && draftId ? { draftId } : {})}
-                                onEnvModeChange={onEnvModeChange}
-                                startFromOrigin={startFromOrigin}
-                                onStartFromOriginChange={onStartFromOriginChange}
-                                {...(canOverrideServerThreadEnvMode
-                                  ? { effectiveEnvModeOverride: envMode }
-                                  : {})}
-                                {...(canOverrideServerThreadEnvMode
-                                  ? {
-                                      activeThreadBranchOverride: activeThreadBranch,
-                                      onActiveThreadBranchOverrideChange:
-                                        setActiveThreadBranchOverride,
-                                    }
-                                  : {})}
-                                envLocked={envLocked}
-                                environmentLocked={envLocked || draftPlacement.locked}
-                                onComposerFocusRequest={scheduleComposerFocus}
-                                {...(canCheckoutPullRequestIntoThread
-                                  ? { onCheckoutPullRequestRequest: openPullRequestDialog }
-                                  : {})}
-                                onEnvironmentChange={onEnvironmentChange}
-                                onLinkEnvironmentRequest={onLinkEnvironmentRequest}
-                                autoPlacement={autoPlacement}
-                                availableEnvironments={logicalProjectEnvironments}
-                              />
-                            </div>
-                          )}
+                    {floatingChatCollapsed &&
+                    floatingReplyText === null &&
+                    timelineEntries.length > 0 ? (
+                      // Once there is an answer, the conversation's title takes the strip's place.
+                      <div className="relative z-0">
+                        <FloatingChatTitleBar
+                          title={activeThread.title}
+                          onExpand={expandFloatingChat}
+                          dragHandlers={floatingChatDrag}
+                        />
+                      </div>
+                    ) : (
+                      <div
+                        aria-hidden={!showComposerContextStrip}
+                        className={cn(
+                          "grid transition-[grid-template-rows,opacity,transform] motion-reduce:transition-none",
+                          showComposerContextStrip
+                            ? "grid-rows-[1fr] translate-y-0 opacity-100"
+                            : "pointer-events-none grid-rows-[0fr] -translate-y-1 opacity-0",
+                        )}
+                        data-composer-context-strip={
+                          showComposerContextStrip ? "expanded" : "collapsed"
+                        }
+                        inert={showComposerContextStrip ? undefined : true}
+                        style={{
+                          transitionDuration: `${DRAFT_HERO_TRANSITION_DURATION_MS}ms`,
+                          transitionTimingFunction: DRAFT_HERO_TRANSITION_EASING,
+                        }}
+                      >
+                        <div className="min-h-0 overflow-hidden">
+                          <div
+                            data-terminal-open={terminalUiState.terminalOpen ? "true" : undefined}
+                            className="relative z-0"
+                          >
+                            {renderComposerContextStrip && (
+                              <div className="pointer-events-auto">
+                                <BranchToolbar
+                                  {...(!isServerThread && activeProject
+                                    ? {
+                                        workspaceContext: {
+                                          project: activeProject,
+                                          worktreePath: activeThread.worktreePath,
+                                          temporary: activeThread.temporary ?? false,
+                                        },
+                                      }
+                                    : {})}
+                                  environmentId={activeThread.environmentId}
+                                  threadId={activeThread.id}
+                                  showGitControls={isGitRepo}
+                                  {...(routeKind === "draft" && draftId ? { draftId } : {})}
+                                  onEnvModeChange={onEnvModeChange}
+                                  startFromOrigin={startFromOrigin}
+                                  onStartFromOriginChange={onStartFromOriginChange}
+                                  {...(canOverrideServerThreadEnvMode
+                                    ? { effectiveEnvModeOverride: envMode }
+                                    : {})}
+                                  {...(canOverrideServerThreadEnvMode
+                                    ? {
+                                        activeThreadBranchOverride: activeThreadBranch,
+                                        onActiveThreadBranchOverrideChange:
+                                          setActiveThreadBranchOverride,
+                                      }
+                                    : {})}
+                                  envLocked={envLocked}
+                                  environmentLocked={envLocked || draftPlacement.locked}
+                                  onComposerFocusRequest={scheduleComposerFocus}
+                                  {...(canCheckoutPullRequestIntoThread
+                                    ? { onCheckoutPullRequestRequest: openPullRequestDialog }
+                                    : {})}
+                                  onEnvironmentChange={onEnvironmentChange}
+                                  onLinkEnvironmentRequest={onLinkEnvironmentRequest}
+                                  autoPlacement={autoPlacement}
+                                  availableEnvironments={logicalProjectEnvironments}
+                                  {...(floatingProjectPicker
+                                    ? {
+                                        leadingControl: (
+                                          <WorkspaceProjectSelector
+                                            activeProjectRef={activeProjectRef}
+                                            activeProjectTitle={activeProject?.title ?? null}
+                                            ariaLabel="Choose a project"
+                                            menuAlign="start"
+                                            triggerClassName={cn(
+                                              buttonVariants({ variant: "ghost", size: "xs" }),
+                                              "min-w-0 max-w-48 shrink font-medium",
+                                            )}
+                                            renderTrigger={(name) => (
+                                              <>
+                                                {activeThread.projectId === null ? (
+                                                  <MessageSquareIcon className="size-3" />
+                                                ) : (
+                                                  <FolderIcon className="size-3" />
+                                                )}
+                                                <span className="min-w-0 truncate">{name}</span>
+                                                <ChevronDownIcon className="size-3 opacity-60" />
+                                              </>
+                                            )}
+                                            onSelectProject={handleHeaderProjectChange}
+                                            {...(supportsConversations
+                                              ? { onSelectConversation: handleSelectConversation }
+                                              : {})}
+                                            conversationSelected={activeThread.projectId === null}
+                                          />
+                                        ),
+                                      }
+                                    : {})}
+                                />
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    )}
                     <div className="chat-composer-glass-shell chat-composer-glass-shell-with-context chat-composer-content-sized-shell relative mx-auto w-full max-w-3xl">
                       <div className="relative z-10 w-full">
                         <div className="relative z-10">
@@ -10693,6 +11003,7 @@ function ChatViewContent(props: ChatViewProps) {
                                 activeProject === null
                               }
                               phase={phase}
+                              workingSince={isWorking ? activeWorkStartedAt : null}
                               isConnecting={false}
                               isSendBusy={isSendBusy || draftPlacement.blocked}
                               isPreparingWorktree={isPreparingWorktree}
@@ -10884,13 +11195,9 @@ function ChatViewContent(props: ChatViewProps) {
                 projectTitle={activeProject.title}
               />
             ) : null}
-          </div>
-          {/* end chat column */}
-          {inlineThreadPanelOpen ? (
-            <ThreadDetailsPanel mode="inline" {...threadDetailsPanelProps} />
-          ) : null}
-        </div>
-        {/* end horizontal flex container */}
+          </div>,
+          chatColumnHost,
+        )}
 
         {!isPanelPresentation ? (
           <TerminalCardPortal
@@ -10927,9 +11234,14 @@ function ChatViewContent(props: ChatViewProps) {
 
       {rightPanelMaximized && activeThreadRef ? (
         // Maximized, the panel covers the chat. Its thread tab hides the panel to show the
-        // chat underneath, while the tabs stay in the top bar.
+        // chat underneath, while the tabs stay in the top bar. Electron applies app-regions
+        // in DOM order regardless of stacking, so the panel opts out of the chat header's
+        // drag region beneath it; otherwise its address bar sits in a window-drag zone.
         <div
-          className={cn("absolute inset-0 z-50 flex", threadTabActive && "invisible")}
+          className={cn(
+            "absolute inset-0 z-50 flex",
+            threadTabActive ? "invisible" : "[-webkit-app-region:no-drag]",
+          )}
           data-right-panel-maximized={threadTabActive ? "page" : "panel"}
         >
           <RightPanelTabs

@@ -132,7 +132,13 @@ import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
-import { ComposerAddMenu, ComposerAddMenuButton, type ComposerAddAction } from "./ComposerAddMenu";
+import {
+  ComposerAddMenu,
+  ComposerAddMenuButton,
+  type ComposerAddAction,
+  type ComposerAddMenuView,
+} from "./ComposerAddMenu";
+import { WorkingTimer } from "./WorkingTimer";
 import { composerAddSkillItems, GOAL_COMPOSER_PLACEHOLDER } from "./composerAddMenu.logic";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
@@ -568,6 +574,8 @@ export interface ChatComposerProps {
 
   // Session phase
   phase: SessionPhase;
+  /** When the running turn started; the empty composer counts up from it. */
+  workingSince?: string | null;
   isConnecting: boolean;
   isSendBusy: boolean;
   isPreparingWorktree: boolean;
@@ -744,6 +752,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isLocalDraftThread: _isLocalDraftThread,
     projectSelectionRequired,
     phase,
+    workingSince = null,
     isConnecting,
     isSendBusy,
     isPreparingWorktree,
@@ -1149,18 +1158,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const [composerMenuAnchor, setComposerMenuAnchor] = useState<HTMLDivElement | null>(null);
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
-  const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
+  // Where the add menu's search starts in the prompt; what is typed after it filters the menu.
+  const [addMenuSearchStart, setAddMenuSearchStart] = useState<number | null>(null);
+  const [addMenuView, setAddMenuView] = useState<ComposerAddMenuView>("main");
+  const isAddMenuOpen = addMenuSearchStart !== null;
   // The draft target is captured on open: the sketch lands in the thread it was started from.
   const [sketchEditor, setSketchEditor] = useState<{
     imageId: string | null;
     scene: SketchScene | null;
     draftTarget: ScopedThreadRef | DraftId;
   } | null>(null);
-  const [addMenuPathQuery, setAddMenuPathQuery] = useState<string | null>(null);
 
   useEffect(() => {
-    setIsAddMenuOpen(false);
-    setAddMenuPathQuery(null);
+    setAddMenuSearchStart(null);
   }, [environmentId, activeThreadId, draftId, selectedInstanceId, gitCwd]);
   const [stashPulse, setStashPulse] = useState<{ key: number; active: boolean }>({
     key: 0,
@@ -1290,10 +1300,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     cwd: isPathTrigger ? gitCwd : null,
     query: isPathTrigger ? pathTriggerQuery : null,
   });
+  const composerEditorValue = activePendingProgress ? activePendingProgress.customAnswer : prompt;
+  const addMenuSearchEnd = expandCollapsedComposerCursor(composerEditorValue, composerCursor);
+  const addMenuSearch =
+    addMenuSearchStart !== null && addMenuSearchEnd >= addMenuSearchStart
+      ? composerEditorValue.slice(addMenuSearchStart, addMenuSearchEnd)
+      : "";
+  const searchingAddMenuPaths = isAddMenuOpen && addMenuView === "paths";
   const addMenuPaths = useComposerPathSearch({
     environmentId,
-    cwd: isAddMenuOpen && addMenuPathQuery !== null ? gitCwd : null,
-    query: isAddMenuOpen ? addMenuPathQuery : null,
+    cwd: searchingAddMenuPaths ? gitCwd : null,
+    query: searchingAddMenuPaths ? addMenuSearch : null,
   });
 
   const needsClaudeCatalog =
@@ -3324,12 +3341,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (goalMode) chooseComposerMode("default");
     else toggleInteractionMode();
   };
-  const insertFromAddMenu = (text: string, atStart = false) => {
+  /**
+   * Replaces the add menu's search, the text typed since it opened, with `text`
+   * (at the start of the prompt when `atStart`), or removes it when there is no text.
+   */
+  const replaceAddMenuSearch = (text?: string, atStart = false) => {
     const snapshot = readComposerSnapshot();
-    const cursor = atStart ? 0 : snapshot.expandedCursor;
-    const prefix = cursor > 0 && !/\s/.test(snapshot.value[cursor - 1] ?? "") ? " " : "";
-    applyPromptReplacement(cursor, cursor, `${prefix}${text} `);
+    const end = snapshot.expandedCursor;
+    const start = Math.min(addMenuSearchStart ?? end, end);
+    if (text === undefined) {
+      if (end > start) applyPromptReplacement(start, end, "", { focusEditorAfterReplace: false });
+    } else if (atStart) {
+      applyPromptReplacement(0, end, `${text} ${snapshot.value.slice(0, start)}`);
+    } else {
+      const prefix = start > 0 && !/\s/.test(snapshot.value[start - 1] ?? "") ? " " : "";
+      applyPromptReplacement(start, end, `${prefix}${text} `);
+    }
     setComposerTrigger(null);
+  };
+  const clearingAddMenuSearch = (run: () => void) => () => {
+    replaceAddMenuSearch();
+    run();
   };
   const modeDisabled = Boolean(composerControlsDisabledReason) || pendingUserInputs.length > 0;
   const addActions: ComposerAddAction[] = [
@@ -3339,7 +3371,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       description: "Describe a goal and measurable outcomes",
       icon: <TargetIcon className="size-4" />,
       disabled: modeDisabled,
-      run: () => chooseComposerMode("goal"),
+      run: clearingAddMenuSearch(() => chooseComposerMode("goal")),
     },
     {
       id: "plan-mode",
@@ -3347,7 +3379,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       description: "Turn plan mode on",
       icon: <PencilRulerIcon className="size-4" />,
       disabled: modeDisabled || !composerProviderControls.showInteractionModeToggle,
-      run: () => chooseComposerMode("plan"),
+      run: clearingAddMenuSearch(() => chooseComposerMode("plan")),
     },
     ...(computerUseAvailable
       ? [
@@ -3357,7 +3389,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             description: "Use Pathway Computer for this request",
             icon: <MonitorIcon className="size-4" />,
             disabled: pendingUserInputs.length > 0,
-            run: () => insertFromAddMenu("/computer-use", true),
+            run: () => replaceAddMenuSearch("/computer-use", true),
           },
         ]
       : []),
@@ -3369,7 +3401,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             description: "Return to Build",
             icon: <BotIcon className="size-4" />,
             disabled: modeDisabled,
-            run: () => chooseComposerMode("default"),
+            run: clearingAddMenuSearch(() => chooseComposerMode("default")),
           },
         ]
       : []),
@@ -3380,7 +3412,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       icon: <SignatureIcon className="size-4" />,
       disabled:
         pendingUserInputs.length > 0 || composerImages.length >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
-      run: () => setSketchEditor({ imageId: null, scene: null, draftTarget: composerDraftTarget }),
+      run: clearingAddMenuSearch(() =>
+        setSketchEditor({ imageId: null, scene: null, draftTarget: composerDraftTarget }),
+      ),
     },
     ...(recordSkillOffered
       ? [
@@ -3397,19 +3431,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     : `Show the agent a task on ${recordSkillTargetName}`,
             icon: <CircleDotIcon className="size-4" />,
             disabled: routeKind === "draft" || recordSkillBusy || pendingUserInputs.length > 0,
-            run: startWorkflowRecording,
+            run: clearingAddMenuSearch(startWorkflowRecording),
           },
         ]
       : []),
   ];
   const setAddMenuOpen = (open: boolean) => {
-    setIsAddMenuOpen(open);
     if (!open) {
-      setAddMenuPathQuery(null);
+      setAddMenuSearchStart(null);
       return;
     }
+    // The search starts at the caret, so text typed before opening stays in the prompt.
+    const snapshot = readComposerSnapshot();
+    setAddMenuSearchStart(snapshot.expandedCursor);
+    setAddMenuView("main");
     setIsStashMenuOpen(false);
     setComposerTrigger(null);
+    composerEditorRef.current?.focusAt(snapshot.cursor);
   };
   const attachmentButton = (
     <ComposerAddMenuButton
@@ -3420,6 +3458,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const addMenu = isAddMenuOpen && !isComposerApprovalState && (
     <ComposerAddMenu
+      search={addMenuSearch}
+      view={addMenuView}
+      onViewChange={(view) => {
+        replaceAddMenuSearch();
+        setAddMenuView(view);
+      }}
       attachmentDisabled={
         pendingUserInputs.length > 0 && (!questionAttachments.enabled || activePendingIsResponding)
       }
@@ -3429,7 +3473,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       skillsError={
         needsClaudeCatalog && scopedCatalog.error ? "Unable to load this project's skills." : null
       }
-      onSelectSkill={(item) => insertFromAddMenu(`$${item.skill.name}`)}
+      onSelectSkill={(item) => replaceAddMenuSearch(`$${item.skill.name}`)}
       stashEntries={stashQueue}
       stashShortcut={shortcutLabelForCommand(keybindings, "composer.stash")}
       stashRestoreDisabled={pendingUserInputs.length > 0}
@@ -3438,16 +3482,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         pendingUserInputs.length > 0 ||
         (prompt.trim().length === 0 && composerImages.length === 0)
       }
-      onStash={() => void stashCurrentPrompt()}
-      onRestoreStash={restoreStashEntry}
+      onStash={clearingAddMenuSearch(() => void stashCurrentPrompt())}
+      onRestoreStash={(entry) => clearingAddMenuSearch(() => restoreStashEntry(entry))()}
       onDeleteStash={deleteStashEntry}
-      onAttachFiles={() => attachmentInputRef.current?.click()}
+      onAttachFiles={clearingAddMenuSearch(() => attachmentInputRef.current?.click())}
       paths={addMenuPaths.entries}
       pathsLoading={addMenuPaths.isPending}
       pathsError={addMenuPaths.error}
       canBrowsePaths={Boolean(gitCwd) && pendingUserInputs.length === 0}
-      onPathQueryChange={setAddMenuPathQuery}
-      onAttachPath={(path) => insertFromAddMenu(serializeComposerFileLink(path))}
+      onAttachPath={(path) => replaceAddMenuSearch(serializeComposerFileLink(path))}
       onClose={(restoreFocus) => {
         setAddMenuOpen(false);
         if (restoreFocus) scheduleComposerFocus();
@@ -3952,22 +3995,28 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onCommandKeyDown={onComposerCommandKey}
                     onPaste={onComposerPaste}
                     placeholder={
-                      isComposerApprovalState
-                        ? (activePendingApproval?.detail ??
-                          "Resolve this approval request to continue")
-                        : activePendingProgress
-                          ? "Type your own answer, or leave this blank to use the selected option"
-                          : showPlanFollowUpPrompt && activeProposedPlan
-                            ? "Add feedback to refine the plan, or leave this blank to implement it"
-                            : projectSelectionRequired
-                              ? "Choose a project above to start a thread"
-                              : noProviderAvailable
-                                ? providerAvailabilityCopy.placeholder
-                                : phase === "disconnected"
-                                  ? DISCONNECTED_COMPOSER_PLACEHOLDER
-                                  : goalMode
-                                    ? GOAL_COMPOSER_PLACEHOLDER
-                                    : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                      isComposerApprovalState ? (
+                        (activePendingApproval?.detail ??
+                        "Resolve this approval request to continue")
+                      ) : activePendingProgress ? (
+                        "Type your own answer, or leave this blank to use the selected option"
+                      ) : showPlanFollowUpPrompt && activeProposedPlan ? (
+                        "Add feedback to refine the plan, or leave this blank to implement it"
+                      ) : projectSelectionRequired ? (
+                        "Choose a project above to start a thread"
+                      ) : noProviderAvailable ? (
+                        providerAvailabilityCopy.placeholder
+                      ) : phase === "disconnected" ? (
+                        DISCONNECTED_COMPOSER_PLACEHOLDER
+                      ) : workingSince ? (
+                        <>
+                          Working for <WorkingTimer createdAt={workingSince} />
+                        </>
+                      ) : goalMode ? (
+                        GOAL_COMPOSER_PLACEHOLDER
+                      ) : (
+                        "Ask anything, @tag files/folders, $use skills, or / for commands"
+                      )
                     }
                     disabled={isConnecting || isComposerApprovalState || projectSelectionRequired}
                   />

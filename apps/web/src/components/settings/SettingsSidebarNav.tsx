@@ -1,5 +1,5 @@
 import { Clock3Icon } from "lucide-react";
-import { CameraIcon, MonitorIcon } from "lucide-react";
+import { CameraIcon, GlobeIcon, MonitorIcon } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -79,6 +79,7 @@ import { SETTINGS_AUTO_SCOPE, SETTINGS_PROFILE_SCOPE } from "~/cloud/settingsCom
 import { scrollToSettingsTarget } from "./settingsLayout";
 import { isPaneFocused, usePaneId } from "../../panes/usePaneFocus";
 import {
+  DESKTOP_ONLY_SETTINGS_PATHS,
   searchSettings,
   settingsPathIsVisibleForWorkspace,
   settingsSectionPathForSearchPath,
@@ -107,6 +108,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/keybindings": KeyboardIcon,
   "/settings/snap-shot": CameraIcon,
   "/settings/computer": MonitorIcon,
+  "/settings/browser": GlobeIcon,
   "/settings/dictation": MicIcon,
   "/settings/dictation/models": HardDriveIcon,
   "/settings/dictation/history": HistoryIcon,
@@ -203,7 +205,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       searchSettings(query).filter(
         (item) =>
           settingsPathIsVisibleForWorkspace(item.to, workspaceKind) &&
-          (isElectron || item.to !== "/settings/snap-shot") &&
+          (isElectron || !DESKTOP_ONLY_SETTINGS_PATHS.has(item.to)) &&
           (computerSettingsVisible || item.to !== "/settings/computer") &&
           dictationSettingsPathVisible(item.to, dictationAvailability),
       ),
@@ -491,7 +493,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                     .filter(
                       (to) =>
                         settingsPathIsVisibleForWorkspace(to, workspaceKind) &&
-                        (isElectron || to !== "/settings/snap-shot") &&
+                        (isElectron || !DESKTOP_ONLY_SETTINGS_PATHS.has(to)) &&
                         (computerSettingsVisible || to !== "/settings/computer") &&
                         dictationSettingsPathVisible(to, dictationAvailability),
                     )

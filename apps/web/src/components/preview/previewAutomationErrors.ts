@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   type PreviewAutomationHost,
   PreviewAutomationOperation,
+  PreviewAutomationPermissionDeniedReason,
   type PreviewAutomationRequest,
   type PreviewAutomationResponse,
   PreviewTabId,
@@ -155,6 +156,28 @@ export class PreviewAutomationBrowserPageHostError extends Schema.TaggedErrorCla
   }
 }
 
+/** The user's browser settings, or the user's answer to an approval prompt, refuse the request. */
+export class PreviewAutomationPermissionDeniedHostError extends Schema.TaggedErrorClass<PreviewAutomationPermissionDeniedHostError>()(
+  "PreviewAutomationPermissionDeniedHostError",
+  {
+    requestId: TrimmedNonEmptyString,
+    operation: PreviewAutomationOperation,
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    tabId: Schema.NullOr(PreviewTabId),
+    reason: PreviewAutomationPermissionDeniedReason,
+    origin: Schema.optional(Schema.String),
+  },
+) {
+  get responseTag() {
+    return "PreviewAutomationPermissionDeniedError" as const;
+  }
+
+  override get message(): string {
+    return `Preview automation ${this.operation} request ${this.requestId} was refused by browser settings (${this.reason}).`;
+  }
+}
+
 /**
  * Agents use websites and blank tabs. Browser pages, such as Chrome's settings,
  * are the user's; the main process also refuses to drive them.
@@ -247,6 +270,7 @@ export const PreviewAutomationHostError = Schema.Union([
   PreviewAutomationRecordingNotActiveError,
   PreviewAutomationTargetNotEditableHostError,
   PreviewAutomationBrowserPageHostError,
+  PreviewAutomationPermissionDeniedHostError,
   PreviewAutomationOperationError,
 ]);
 export type PreviewAutomationHostError = typeof PreviewAutomationHostError.Type;

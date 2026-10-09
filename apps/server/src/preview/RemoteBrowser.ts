@@ -33,6 +33,12 @@ import { EventStoreV2, layer as eventStoreLayer } from "../orchestration-v2/Even
 import { issueAssetUrl } from "../assets/AssetAccess.ts";
 import { type BrowserArtifact, RemoteBrowserRuntime } from "./RemoteBrowserRuntime.ts";
 
+const DESKTOP_ONLY_OPERATIONS: ReadonlySet<string> = new Set([
+  "history",
+  "siteTools",
+  "callSiteTool",
+  "cdp",
+]);
 export interface RemoteBrowserService {
   readonly interact: (
     input: PreviewRemoteInteractionCommand,
@@ -166,7 +172,11 @@ export const makeRemoteBrowser = Effect.fn("RemoteBrowser.make")(function* ({
   const requests = yield* broker.connect({
     clientId,
     environmentId,
-    supportedOperations: PREVIEW_AUTOMATION_OPERATIONS,
+    // History, site tools, and CDP follow the user's desktop browser settings; this headless
+    // browser has none, so the broker routes those to a desktop host instead.
+    supportedOperations: PREVIEW_AUTOMATION_OPERATIONS.filter(
+      (operation) => !DESKTOP_ONLY_OPERATIONS.has(operation),
+    ),
   });
   yield* requests.pipe(
     Stream.runForEach((event) => {

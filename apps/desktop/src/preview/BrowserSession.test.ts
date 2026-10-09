@@ -23,10 +23,14 @@ const { fromPartition, sessions } = vi.hoisted(() => ({
 }));
 
 vi.mock("electron", () => ({
+  ipcMain: { on: vi.fn(), off: vi.fn() },
   session: {
     fromPartition,
   },
+  webContents: { getAllWebContents: () => [] },
 }));
+
+import { DEFAULT_CLIENT_SETTINGS, type DesktopBrowserPermissionEvent } from "@spiritdevs/contracts";
 
 import * as BrowserSession from "./BrowserSession.ts";
 
@@ -112,6 +116,63 @@ describe("BrowserSession", () => {
         );
       }
     }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("applies site settings and asks the client for permissions set to Ask", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const partition = yield* browserSessions.getPartition("scope-a");
+      yield* browserSessions.getSession("scope-a");
+      const browserSession = sessions.get(partition);
+      assert.isDefined(browserSession);
+      const requestHandler = browserSession.setPermissionRequestHandler.mock.calls[0]?.[0];
+      const checkHandler = browserSession.setPermissionCheckHandler.mock.calls[0]?.[0];
+
+      yield* browserSessions.configure({
+        ...DEFAULT_CLIENT_SETTINGS,
+        browserSitePermissions: {
+          defaults: { location: "block" },
+          sites: [{ origin: "https://maps.example", permissions: { location: "allow" } }],
+        },
+      });
+      const decide = (permission: string, details: Record<string, unknown>) => {
+        let granted: boolean | undefined;
+        requestHandler(contents, permission, (value: boolean) => (granted = value), details);
+        return granted;
+      };
+      const contents = {
+        id: 7,
+        getURL: () => "https://a.example/",
+        once: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+      };
+      assert.isFalse(decide("geolocation", { requestingUrl: "https://a.example/" }));
+      assert.isTrue(decide("geolocation", { requestingUrl: "https://maps.example/x" }));
+      assert.isTrue(checkHandler(null, "geolocation", "https://maps.example", {}) as boolean);
+      assert.isFalse(checkHandler(null, "geolocation", "https://a.example", {}) as boolean);
+
+      const events: Array<DesktopBrowserPermissionEvent> = [];
+      yield* browserSessions.subscribePermissionEvents((event) => events.push(event));
+      assert.isUndefined(
+        decide("media", { requestingUrl: "https://a.example/", mediaTypes: ["video", "audio"] }),
+      );
+      const request = events[0];
+      assert.strictEqual(request?.type, "request");
+      if (request?.type !== "request") return;
+      assert.deepStrictEqual(request.request.permissions, ["camera", "microphone"]);
+      let granted: boolean | undefined;
+      requestHandler(contents, "media", (value: boolean) => (granted = value), {
+        requestingUrl: "https://a.example/",
+        mediaTypes: ["audio"],
+      });
+      const second = events[1];
+      assert.strictEqual(second?.type, "request");
+      if (second?.type !== "request") return;
+      yield* browserSessions.respondPermission(second.request.requestId, true);
+      assert.isTrue(granted);
+      assert.deepInclude(events, { type: "settled", requestId: second.request.requestId });
+    }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 
   it.effect("preserves partition scope and the platform failure chain", () => {

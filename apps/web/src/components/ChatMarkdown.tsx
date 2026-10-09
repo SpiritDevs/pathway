@@ -131,6 +131,7 @@ import {
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
 import { parsePullRequestReference } from "~/pullRequestReference";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
+import { browserLinkTarget } from "~/browser/browserLinkTarget";
 import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import {
   isBrowserPreviewFile,
@@ -1577,6 +1578,30 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
               onClick?.(event);
               if (isSameDocumentLink && href) {
                 handleMarkdownFragmentClick(event, href);
+                return;
+              }
+              // Plain clicks follow Settings → Browser; modified clicks keep the default.
+              if (
+                canOpenInPreview &&
+                href &&
+                faviconHost &&
+                !event.defaultPrevented &&
+                event.button === 0 &&
+                !event.metaKey &&
+                !event.ctrlKey &&
+                !event.shiftKey &&
+                !event.altKey &&
+                browserLinkTarget(href, getClientSettings()) === "browser"
+              ) {
+                event.preventDefault();
+                void openExternalLinkInPreview(href).then((result) => {
+                  if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+                    reportMarkdownActionFailure(
+                      { operation: "open-link-in-preview", target: href },
+                      result.cause,
+                    );
+                  }
+                });
               }
             }}
             onContextMenu={(event) => {

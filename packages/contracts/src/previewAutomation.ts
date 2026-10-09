@@ -43,6 +43,10 @@ export const PREVIEW_AUTOMATION_OPERATIONS = [
   ...PREVIEW_AUTOMATION_V1_OPERATIONS,
   "resize",
   "setColorScheme",
+  "history",
+  "siteTools",
+  "callSiteTool",
+  "cdp",
 ] as const;
 
 export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_OPERATIONS);
@@ -443,6 +447,83 @@ export const PreviewAutomationEvaluateInput = Schema.Struct({
     "Evaluates JavaScript in the page. Prefer snapshot and semantic actions; use evaluate for inspection or unsupported interactions.",
 });
 export type PreviewAutomationEvaluateInput = typeof PreviewAutomationEvaluateInput.Type;
+
+export const PreviewAutomationHistoryInput = Schema.Struct({
+  ...PreviewAutomationTabTargetFields,
+  query: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(512)).annotate({
+      description:
+        "Case-insensitive text matched against page titles and URLs. Omit to list recent pages.",
+    }),
+  ),
+  limit: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThan(0))
+      .check(Schema.isLessThanOrEqualTo(200))
+      .annotate({ description: "Maximum entries to return. Defaults to 50; maximum 200." }),
+  ),
+}).annotate({
+  description:
+    "Reads pages the user and agents visited in Pathway's built-in browser, newest first. The user may be asked to approve access.",
+});
+export type PreviewAutomationHistoryInput = typeof PreviewAutomationHistoryInput.Type;
+
+export const PreviewAutomationHistoryEntry = Schema.Struct({
+  url: Schema.String,
+  title: Schema.NullOr(Schema.String),
+  lastVisitedAt: Schema.String,
+  visits: Schema.Int,
+  source: Schema.Literals(["user", "agent"]),
+});
+export type PreviewAutomationHistoryEntry = typeof PreviewAutomationHistoryEntry.Type;
+
+export const PreviewAutomationHistoryResult = Schema.Struct({
+  entries: Schema.Array(PreviewAutomationHistoryEntry),
+});
+export type PreviewAutomationHistoryResult = typeof PreviewAutomationHistoryResult.Type;
+
+/** A tool a website exposes to agents through `navigator.modelContext` (WebMCP). */
+export const PreviewAutomationSiteTool = Schema.Struct({
+  name: Schema.String,
+  description: Schema.NullOr(Schema.String),
+  inputSchema: Schema.optional(Schema.Unknown),
+});
+export type PreviewAutomationSiteTool = typeof PreviewAutomationSiteTool.Type;
+
+export const PreviewAutomationSiteToolsResult = Schema.Struct({
+  tools: Schema.Array(PreviewAutomationSiteTool),
+});
+export type PreviewAutomationSiteToolsResult = typeof PreviewAutomationSiteToolsResult.Type;
+
+export const PreviewAutomationCallSiteToolInput = Schema.Struct({
+  ...PreviewAutomationTabTargetFields,
+  name: Schema.String.check(Schema.isTrimmed())
+    .check(Schema.isNonEmpty())
+    .check(Schema.isMaxLength(256))
+    .annotate({ description: "Tool name from preview_site_tools." }),
+  arguments: Schema.optional(
+    Schema.Record(Schema.String, Schema.Unknown).annotate({
+      description: "Arguments object matching the tool's inputSchema.",
+    }),
+  ),
+}).annotate({ description: "Calls a tool the open website exposes through WebMCP." });
+export type PreviewAutomationCallSiteToolInput = typeof PreviewAutomationCallSiteToolInput.Type;
+
+export const PreviewAutomationCdpInput = Schema.Struct({
+  ...PreviewAutomationTabTargetFields,
+  method: Schema.String.check(Schema.isTrimmed())
+    .check(Schema.isNonEmpty())
+    .check(Schema.isMaxLength(256))
+    .annotate({ description: "Chrome DevTools Protocol method, for example Network.getCookies." }),
+  params: Schema.optional(
+    Schema.Record(Schema.String, Schema.Unknown).annotate({
+      description: "Method parameters as a JSON object.",
+    }),
+  ),
+}).annotate({
+  description:
+    "Sends one raw Chrome DevTools Protocol command to the tab. Requires full CDP access in Settings → Browser.",
+});
+export type PreviewAutomationCdpInput = typeof PreviewAutomationCdpInput.Type;
 
 export const PreviewAutomationWaitForInput = Schema.Struct({
   ...PreviewAutomationTabTargetFields,
@@ -858,6 +939,51 @@ export class PreviewAutomationBrowserPageError extends Schema.TaggedErrorClass<P
   }
 }
 
+export const PreviewAutomationPermissionDeniedReason = Schema.Literals([
+  "agent-control-disabled",
+  "site-blocked",
+  "approval-denied",
+  "approval-pending",
+  "history-disabled",
+  "history-denied",
+  "site-tools-disabled",
+  "cdp-disabled",
+]);
+export type PreviewAutomationPermissionDeniedReason =
+  typeof PreviewAutomationPermissionDeniedReason.Type;
+
+const PERMISSION_DENIED_MESSAGES: Record<PreviewAutomationPermissionDeniedReason, string> = {
+  "agent-control-disabled":
+    "the user has turned off agent control of the built-in browser in Settings → Browser.",
+  "site-blocked": "the user blocks agents on this site in Settings → Browser → Agent permissions.",
+  "approval-denied": "the user declined to let the agent use this site.",
+  "approval-pending":
+    "the user has not answered the approval prompt yet. Tell them what you need, then retry once they approve.",
+  "history-disabled": "the user has turned off agent access to browsing history.",
+  "history-denied": "the user declined to share browsing history.",
+  "site-tools-disabled": "the user has turned off site tools (WebMCP) in Settings → Browser.",
+  "cdp-disabled":
+    "full CDP access is off, or blocked for this site, in Settings → Browser. Ask the user to enable it.",
+};
+
+/** The user's browser settings refuse this request. Do not retry it unchanged. */
+export class PreviewAutomationPermissionDeniedError extends Schema.TaggedErrorClass<PreviewAutomationPermissionDeniedError>()(
+  "PreviewAutomationPermissionDeniedError",
+  {
+    ...PreviewAutomationRequestErrorFields,
+    ...PreviewAutomationRemoteDiagnosticFields,
+    reason: Schema.optional(PreviewAutomationPermissionDeniedReason),
+    origin: Schema.optional(Schema.String),
+  },
+) {
+  override get message(): string {
+    const why = this.reason
+      ? PERMISSION_DENIED_MESSAGES[this.reason]
+      : "the user's browser settings refuse it.";
+    return `Preview automation ${this.operation}${this.origin ? ` on ${this.origin}` : ""} was refused: ${why}`;
+  }
+}
+
 export class PreviewAutomationResultTooLargeError extends Schema.TaggedErrorClass<PreviewAutomationResultTooLargeError>()(
   "PreviewAutomationResultTooLargeError",
   {
@@ -925,6 +1051,7 @@ export const PreviewAutomationError = Schema.Union([
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationTargetNotEditableError,
   PreviewAutomationBrowserPageError,
+  PreviewAutomationPermissionDeniedError,
   PreviewAutomationResultTooLargeError,
   PreviewAutomationClientDisconnectedError,
   PreviewAutomationRequestQueueClosedError,

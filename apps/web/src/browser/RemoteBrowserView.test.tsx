@@ -28,7 +28,6 @@ vi.mock("~/state/environments", () => ({
 vi.mock("~/browserHistoryStore", () => ({
   BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT: 50,
   recordVisitForThread: vi.fn(),
-  removeUrlForThread: vi.fn(),
   useThreadRecentHistory: () => [],
 }));
 vi.mock("~/components/preview/PreviewEmptyState", () => ({ PreviewEmptyState: () => null }));

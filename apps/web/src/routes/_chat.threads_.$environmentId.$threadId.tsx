@@ -9,8 +9,10 @@ import {
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import { Atom } from "effect/unstable/reactivity";
+import { PlusIcon } from "lucide-react";
 import { useEffect } from "react";
 
+import threadNotFoundUrl from "../assets/thread-not-found.png?url";
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
@@ -19,17 +21,23 @@ import {
   resolveThreadRouteRef,
   resolveThreadRouteRenderState,
 } from "../threadRoutes";
+import { Button } from "~/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "~/components/ui/empty";
 import { SidebarInset } from "~/components/ui/sidebar";
+import { environmentCatalog } from "../connection/catalog";
 import { resolveThreadDetailRef, useThreadShell, useThreadStatus } from "../state/entities";
 import { environmentSnapshotAtom } from "../state/shell";
 
 /**
  * The only facts the route needs from the (unfiltered) shell stream. A string keeps the route,
- * and the chat view under it, from re-rendering when unrelated threads update.
+ * and the chat view under it, from re-rendering when unrelated threads update. A thread in an
+ * environment this client does not know is absent: that shell would never load.
  */
 const threadRouteShellPresenceAtom = Atom.family((key: string) => {
   const [environmentId, threadId] = JSON.parse(key) as [EnvironmentId, ThreadId];
   return Atom.make((get) => {
+    const catalog = get(environmentCatalog.catalogValueAtom);
+    if (catalog.isReady && !catalog.entries.has(environmentId)) return "absent" as const;
     const snapshot = get(environmentSnapshotAtom(environmentId));
     if (snapshot === null) return "loading" as const;
     return snapshot.threads.some((thread) => thread.id === threadId)
@@ -100,15 +108,7 @@ function ChatThreadRouteView() {
   }, [navigate, queuedThread, threadRef]);
   const serverThreadStarted = threadHasStarted(serverThreadShell);
 
-  useEffect(() => {
-    if (!threadRef || !bootstrapComplete) {
-      return;
-    }
-
-    if (renderState === "missing" && !queuedThread && !queueId) {
-      void navigate({ to: "/threads", replace: true });
-    }
-  }, [bootstrapComplete, navigate, renderState, threadRef, queuedThread, queueId]);
+  const threadMissing = renderState === "missing" && !queuedThread && !queueId;
 
   useEffect(() => {
     if (!threadRef || !serverThreadStarted || !draftThread) {
@@ -138,6 +138,8 @@ function ChatThreadRouteView() {
             Back to threads
           </Link>
         </div>
+      ) : threadMissing ? (
+        <ThreadNotFound />
       ) : (
           queuedThread
             ? queuedThread.environmentId === threadRef.environmentId
@@ -150,6 +152,33 @@ function ChatThreadRouteView() {
         />
       ) : null}
     </SidebarInset>
+  );
+}
+
+function ThreadNotFound() {
+  return (
+    <Empty className="flex-1">
+      <EmptyHeader className="max-w-md">
+        <img
+          src={threadNotFoundUrl}
+          alt=""
+          width={160}
+          height={120}
+          className="mx-auto mb-4 select-none opacity-70 dark:opacity-40 dark:invert"
+          draggable={false}
+        />
+        <EmptyTitle className="text-foreground text-xl">Couldn’t find this thread</EmptyTitle>
+        <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
+          It may have been deleted, or it belongs to an environment this device isn’t connected to.
+        </EmptyDescription>
+        <div className="mt-5 flex justify-center">
+          <Button render={<Link to="/threads" />} size="sm">
+            <PlusIcon className="size-4" />
+            Start new chat
+          </Button>
+        </div>
+      </EmptyHeader>
+    </Empty>
   );
 }
 

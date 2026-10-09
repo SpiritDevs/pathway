@@ -1,7 +1,12 @@
 "use client";
 
 import type { DesktopPreviewColorScheme } from "@spiritdevs/contracts";
+import { useNavigate } from "@tanstack/react-router";
 import { Minus, MoreHorizontal, Plus as PlusIcon, RotateCcw } from "lucide-react";
+
+import { openBrowserDialog } from "~/browser/browserDialogs";
+import { browserAddressSummary } from "~/components/settings/browser/BrowserContactInfoSettings";
+import { useClientSettings } from "~/hooks/useSettings";
 
 import { Button } from "~/components/ui/button";
 import {
@@ -46,16 +51,25 @@ interface Props {
   deviceToolbarVisible: boolean;
   /** Switches between fill-panel mode and a fixed responsive viewport. */
   onToggleDeviceToolbar: () => void;
+  /** Whether the preview floats over the chat; absent where floating isn't offered. */
+  pictureInPicture: boolean;
+  /** Floats the preview over the chat, or docks it back. */
+  onPictureInPicture?: (() => void) | undefined;
+  pictureInPictureDisabled: boolean;
   /** Whether the separate native always-on-top preview window is open. */
   nativePictureInPicture: boolean;
   /** Toggles the optional native always-on-top preview window. */
   onNativePictureInPicture: () => void;
+  /** Opens the find bar for the active tab. */
+  onFindInPage: () => void;
+  /** Saves a screenshot of the active tab, like the chrome-row capture button. */
+  onTakeScreenshot: () => void;
 }
 
 /**
- * Three-dot menu in the chrome row. Wires Hard reload, DevTools, zoom
- * controls, and storage-clearing actions. Without the desktop bridge the
- * menu still opens so the chrome reads the same, but every action is disabled.
+ * Three-dot menu in the chrome row: page tools, zoom, view options, and the
+ * way into browser data and settings. Without the desktop bridge the menu
+ * still opens so the chrome reads the same, but bridge actions are disabled.
  */
 export function PreviewMoreMenu({
   tabId,
@@ -64,9 +78,17 @@ export function PreviewMoreMenu({
   colorScheme,
   deviceToolbarVisible,
   onToggleDeviceToolbar,
+  pictureInPicture,
+  onPictureInPicture,
+  pictureInPictureDisabled,
   nativePictureInPicture,
   onNativePictureInPicture,
+  onFindInPage,
+  onTakeScreenshot,
 }: Props) {
+  const navigate = useNavigate();
+  const saveAddresses = useClientSettings((settings) => settings.browserSaveAddresses);
+  const addresses = useClientSettings((settings) => settings.browserAddresses);
   const bridge = previewBridge;
   const tabDisabled = !bridge || !tabId || !hasWebContents;
   const callTab =
@@ -98,12 +120,26 @@ export function PreviewMoreMenu({
         </TooltipTrigger>
         <TooltipPopup>More</TooltipPopup>
       </Tooltip>
-      <MenuPopup align="end" sideOffset={6} className="min-w-64">
+      {/* Opaque, not glass: these open over arbitrary page content, which would tint them. */}
+      <MenuPopup align="end" sideOffset={6} className="min-w-64 bg-popover">
         <MenuItem onClick={callTab((b, id) => b.hardReload(id))} disabled={tabDisabled}>
           Hard reload
         </MenuItem>
         <MenuItem onClick={callTab((b, id) => b.openDevTools(id))} disabled={tabDisabled}>
           Open DevTools
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem onClick={onFindInPage} disabled={tabDisabled || !bridge?.findInPage}>
+          Find in page
+        </MenuItem>
+        <MenuItem
+          onClick={callTab((b, id) => b.print?.(id) ?? Promise.resolve())}
+          disabled={tabDisabled || !bridge?.print}
+        >
+          Print…
+        </MenuItem>
+        <MenuItem onClick={onTakeScreenshot} disabled={tabDisabled}>
+          Take a screenshot
         </MenuItem>
         <MenuSeparator />
         {/*
@@ -161,6 +197,11 @@ export function PreviewMoreMenu({
         <MenuItem onClick={onToggleDeviceToolbar} disabled={tabDisabled}>
           {deviceToolbarVisible ? "Hide device toolbar" : "Show device toolbar"}
         </MenuItem>
+        {onPictureInPicture ? (
+          <MenuItem onClick={onPictureInPicture} disabled={pictureInPictureDisabled}>
+            {pictureInPicture ? "Close floating preview" : "Float preview over chat"}
+          </MenuItem>
+        ) : null}
         <MenuItem onClick={onNativePictureInPicture} disabled={tabDisabled}>
           {nativePictureInPicture
             ? "Close separate preview window"
@@ -168,7 +209,7 @@ export function PreviewMoreMenu({
         </MenuItem>
         <MenuSub>
           <MenuSubTrigger disabled={tabDisabled}>Appearance</MenuSubTrigger>
-          <MenuSubPopup className="min-w-32">
+          <MenuSubPopup className="min-w-32 bg-popover">
             <MenuRadioGroup
               value={colorScheme}
               onValueChange={(value) => {
@@ -187,17 +228,50 @@ export function PreviewMoreMenu({
           </MenuSubPopup>
         </MenuSub>
         <MenuSeparator />
-        <MenuItem
-          onClick={() => void bridge?.clearCookies().catch(() => undefined)}
-          disabled={!bridge}
-        >
-          Clear cookies
+        <MenuItem onClick={() => openBrowserDialog("import")} disabled={!bridge?.browserImport}>
+          Import cookies and passwords…
         </MenuItem>
-        <MenuItem
-          onClick={() => void bridge?.clearCache().catch(() => undefined)}
-          disabled={!bridge}
-        >
-          Clear cache
+        <MenuSub>
+          <MenuSubTrigger>Passwords and autofill</MenuSubTrigger>
+          <MenuSubPopup className="min-w-48 bg-popover">
+            <MenuItem onClick={() => void navigate({ to: "/settings/browser/passwords" })}>
+              Password manager
+            </MenuItem>
+            <MenuItem onClick={() => void navigate({ to: "/settings/browser/contact-info" })}>
+              Contact info
+            </MenuItem>
+            {saveAddresses && addresses.length > 0 && bridge?.autofillAddress ? (
+              <>
+                <MenuSeparator />
+                {addresses.map((address) => (
+                  <MenuItem
+                    key={address.id}
+                    disabled={tabDisabled}
+                    onClick={callTab(
+                      (b, id) => b.autofillAddress?.(id, address) ?? Promise.resolve(),
+                    )}
+                  >
+                    <span className="min-w-0 truncate">
+                      Fill {address.fullName || browserAddressSummary(address)}
+                    </span>
+                  </MenuItem>
+                ))}
+              </>
+            ) : null}
+          </MenuSubPopup>
+        </MenuSub>
+        <MenuItem onClick={() => void navigate({ to: "/settings/browser/downloads" })}>
+          Downloads
+        </MenuItem>
+        <MenuItem onClick={() => void navigate({ to: "/settings/browser/history" })}>
+          History
+        </MenuItem>
+        <MenuItem onClick={() => openBrowserDialog("clear-data")} disabled={!bridge}>
+          Clear browsing data…
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem onClick={() => void navigate({ to: "/settings/browser" })}>
+          Browser settings
         </MenuItem>
       </MenuPopup>
     </Menu>

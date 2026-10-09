@@ -1,5 +1,7 @@
 import type {
   DesktopBridge,
+  DesktopBrowserDownload,
+  DesktopBrowserPermissionEvent,
   DesktopPreviewOpenInNewTabEvent,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingFrame,
@@ -340,6 +342,71 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     },
     autofillLogin: (tabId, input) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOFILL_LOGIN_CHANNEL, { tabId, input }),
+    autofillAddress: (tabId, address) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOFILL_ADDRESS_CHANNEL, { tabId, address }),
+    findInPage: (input) => ipcRenderer.invoke(IpcChannels.PREVIEW_FIND_IN_PAGE_CHANNEL, input),
+    stopFindInPage: (tabId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_STOP_FIND_IN_PAGE_CHANNEL, { tabId }),
+    print: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_PRINT_CHANNEL, { tabId }),
+    clearBrowsingData: (input) => ipcRenderer.invoke(IpcChannels.BROWSER_CLEAR_DATA_CHANNEL, input),
+    downloads: {
+      list: () => ipcRenderer.invoke(IpcChannels.BROWSER_DOWNLOADS_LIST_CHANNEL),
+      open: (id) => ipcRenderer.invoke(IpcChannels.BROWSER_DOWNLOADS_OPEN_CHANNEL, { id }),
+      showInFolder: (id) => ipcRenderer.invoke(IpcChannels.BROWSER_DOWNLOADS_SHOW_CHANNEL, { id }),
+      pause: (id) => ipcRenderer.invoke(IpcChannels.BROWSER_DOWNLOADS_PAUSE_CHANNEL, { id }),
+      resume: (id) => ipcRenderer.invoke(IpcChannels.BROWSER_DOWNLOADS_RESUME_CHANNEL, { id }),
+      cancel: (id) => ipcRenderer.invoke(IpcChannels.BROWSER_DOWNLOADS_CANCEL_CHANNEL, { id }),
+      remove: (id) => ipcRenderer.invoke(IpcChannels.BROWSER_DOWNLOADS_REMOVE_CHANNEL, { id }),
+      clear: () => ipcRenderer.invoke(IpcChannels.BROWSER_DOWNLOADS_CLEAR_CHANNEL),
+      defaultDirectory: () =>
+        ipcRenderer.invoke(IpcChannels.BROWSER_DOWNLOADS_DEFAULT_DIRECTORY_CHANNEL),
+      openFolder: () => ipcRenderer.invoke(IpcChannels.BROWSER_DOWNLOADS_OPEN_FOLDER_CHANNEL),
+      onChange: (listener) => {
+        const wrappedListener = (_event: Electron.IpcRendererEvent, downloads: unknown) => {
+          if (!Array.isArray(downloads)) return;
+          listener(downloads as ReadonlyArray<DesktopBrowserDownload>);
+        };
+        ipcRenderer.on(IpcChannels.BROWSER_DOWNLOADS_CHANGED_CHANNEL, wrappedListener);
+        return () =>
+          ipcRenderer.removeListener(
+            IpcChannels.BROWSER_DOWNLOADS_CHANGED_CHANNEL,
+            wrappedListener,
+          );
+      },
+    },
+    extensions: {
+      list: () => ipcRenderer.invoke(IpcChannels.BROWSER_EXTENSIONS_LIST_CHANNEL),
+      inspect: (path) =>
+        ipcRenderer.invoke(IpcChannels.BROWSER_EXTENSIONS_INSPECT_CHANNEL, { path }),
+      onChange: (listener) => {
+        const wrappedListener = () => listener();
+        ipcRenderer.on(IpcChannels.BROWSER_EXTENSIONS_CHANGED_CHANNEL, wrappedListener);
+        return () =>
+          ipcRenderer.removeListener(
+            IpcChannels.BROWSER_EXTENSIONS_CHANGED_CHANNEL,
+            wrappedListener,
+          );
+      },
+    },
+    permissions: {
+      onEvent: (listener) => {
+        const wrappedListener = (_event: Electron.IpcRendererEvent, event: unknown) => {
+          if (typeof event !== "object" || event === null) return;
+          listener(event as DesktopBrowserPermissionEvent);
+        };
+        ipcRenderer.on(IpcChannels.BROWSER_PERMISSION_EVENT_CHANNEL, wrappedListener);
+        return () =>
+          ipcRenderer.removeListener(IpcChannels.BROWSER_PERMISSION_EVENT_CHANNEL, wrappedListener);
+      },
+      respond: (response) =>
+        ipcRenderer.invoke(IpcChannels.BROWSER_PERMISSION_RESPOND_CHANNEL, response),
+    },
+    browserImport: {
+      listProfiles: () => ipcRenderer.invoke(IpcChannels.BROWSER_IMPORT_LIST_PROFILES_CHANNEL),
+      isBrowserRunning: (browserId) =>
+        ipcRenderer.invoke(IpcChannels.BROWSER_IMPORT_IS_RUNNING_CHANNEL, { browserId }),
+      run: (input) => ipcRenderer.invoke(IpcChannels.BROWSER_IMPORT_RUN_CHANNEL, input),
+    },
     automation: {
       status: (tabId) =>
         ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_STATUS_CHANNEL, { tabId }),
@@ -357,6 +424,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_EVALUATE_CHANNEL, { tabId, input }),
       waitFor: (tabId, input) =>
         ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_WAIT_FOR_CHANNEL, { tabId, input }),
+      cdp: (tabId, input) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_CDP_CHANNEL, { tabId, input }),
+      markAgentActivity: (tabId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_MARK_ACTIVITY_CHANNEL, { tabId }),
     },
     onStateChange: (listener) => {
       const wrappedListener = (

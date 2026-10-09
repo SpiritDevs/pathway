@@ -48,6 +48,7 @@ export * from "./review.ts";
 export * from "./computer.ts";
 export * from "./computerAudit.ts";
 export * from "./computerBrowser.ts";
+export * from "./browserSettings.ts";
 export * from "./computerSpaces.ts";
 export * from "./preview.ts";
 export * from "./previewAutomation.ts";

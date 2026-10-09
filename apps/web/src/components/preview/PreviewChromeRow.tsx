@@ -4,7 +4,6 @@ import {
   Camera,
   ExternalLink,
   MousePointerClick,
-  PictureInPicture2,
   RotateCw,
 } from "lucide-react";
 import {
@@ -19,6 +18,7 @@ import {
 import { Button } from "~/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 
 import { PreviewSiteInfo, type PreviewSiteActions } from "./PreviewSiteInfo";
@@ -43,9 +43,6 @@ interface Props {
   onCapture?: ((record: boolean) => void) | undefined;
   captureDisabled?: boolean | undefined;
   recording?: boolean | undefined;
-  onPictureInPicture?: (() => void) | undefined;
-  pictureInPicture?: boolean | undefined;
-  pictureInPictureDisabled?: boolean | undefined;
   /**
    * When provided, renders an annotation-mode toggle button to the right of
    * the URL input. Pressed while annotation mode is active (button shows in `pressed`
@@ -56,9 +53,11 @@ interface Props {
   pickDisabled?: boolean | undefined;
   /** Optional reason string surfaced in the disabled tooltip. */
   pickDisabledReason?: string | undefined;
+  /** Renders the downloads button at the end of the page-tools pill. */
+  renderDownloads?: ((buttonClassName: string) => ReactNode) | undefined;
   /**
    * Trailing slot rendered after the URL input. Used by the preview view
-   * to mount the three-dot menu (hard reload, devtools, zoom, clear data).
+   * to mount the three-dot menu.
    */
   trailingActions?: ReactNode;
 }
@@ -96,17 +95,16 @@ export function PreviewChromeRow({
   onCapture,
   captureDisabled,
   recording,
-  onPictureInPicture,
-  pictureInPicture,
-  pictureInPictureDisabled,
   onPickElement,
   pickActive,
   pickDisabled,
   pickDisabledReason,
+  renderDownloads,
   trailingActions,
 }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [draft, setDraft] = useState(url);
+  const showFullUrl = useClientSettings((settings) => settings.browserShowFullUrl);
   const [inputFocused, setInputFocused] = useState(false);
 
   useEffect(() => {
@@ -197,7 +195,12 @@ export function PreviewChromeRow({
           )}
         >
           {!inputFocused ? (
-            <InputGroupAddon align="inline-start" className="ps-1">
+            // Hover-revealed like the open-in-browser control; stays up while its popover
+            // is open or it holds keyboard focus.
+            <InputGroupAddon
+              align="inline-start"
+              className="pointer-events-none absolute inset-y-0 left-0 opacity-0 transition-opacity group-hover/address:pointer-events-auto group-hover/address:opacity-100 has-[[data-popup-open]]:pointer-events-auto has-[[data-popup-open]]:opacity-100 has-focus-visible:pointer-events-auto has-focus-visible:opacity-100"
+            >
               <PreviewSiteInfo url={url} actions={siteActions} />
             </InputGroupAddon>
           ) : null}
@@ -206,12 +209,11 @@ export function PreviewChromeRow({
               render={
                 <InputGroupInput
                   ref={inputRef}
-                  value={inputFocused ? draft : settledAddress(url)}
+                  value={inputFocused ? draft : showFullUrl ? url : settledAddress(url)}
                   title={inputFocused ? undefined : url}
                   className={cn(
-                    onOpenInBrowser &&
-                      !inputFocused &&
-                      "group-hover/address:pe-7 transition-[padding]",
+                    !inputFocused && "group-hover/address:ps-7 transition-[padding]",
+                    onOpenInBrowser && !inputFocused && "group-hover/address:pe-7",
                   )}
                   onChange={(event) => setDraft(event.target.value)}
                   onFocus={() => {
@@ -263,7 +265,7 @@ export function PreviewChromeRow({
           ) : null}
         </InputGroup>
 
-        {onPickElement || onCapture || onPictureInPicture ? (
+        {onPickElement || onCapture || renderDownloads ? (
           <div className={PILL_CLASS_NAME} role="group" aria-label="Page tools">
             {onPickElement ? (
               <Tooltip>
@@ -317,31 +319,7 @@ export function PreviewChromeRow({
                 </TooltipPopup>
               </Tooltip>
             ) : null}
-            {onPictureInPicture ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      variant={pictureInPicture ? "secondary" : "ghost"}
-                      size="icon-sm"
-                      onClick={onPictureInPicture}
-                      aria-label={
-                        pictureInPicture ? "Close floating preview" : "Float preview over chat"
-                      }
-                      aria-pressed={pictureInPicture ? "true" : "false"}
-                      type="button"
-                      className={PILL_BUTTON_CLASS_NAME}
-                      disabled={pictureInPictureDisabled}
-                    />
-                  }
-                >
-                  <PictureInPicture2 className={cn(pictureInPicture && "text-primary")} />
-                </TooltipTrigger>
-                <TooltipPopup>
-                  {pictureInPicture ? "Close floating preview" : "Float preview over chat"}
-                </TooltipPopup>
-              </Tooltip>
-            ) : null}
+            {renderDownloads?.(PILL_BUTTON_CLASS_NAME)}
           </div>
         ) : null}
         {trailingActions}

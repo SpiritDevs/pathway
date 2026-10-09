@@ -21,7 +21,7 @@ import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
-import { WorkspaceViewFrame } from "../workspace/WorkspaceViewFrame";
+import { SidebarInset } from "../ui/sidebar";
 import { formatTrackedDuration, type ActiveTimeEntry, type TimeEntry } from "./timeTracker.logic";
 
 import { TimeTrackerAnalytics } from "./TimeTrackerAnalytics";
@@ -278,7 +278,7 @@ export function TimeTrackerView() {
   };
 
   return (
-    <WorkspaceViewFrame title="Time Tracker">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
       <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto flex w-full max-w-6xl flex-col px-5 py-6 sm:px-8 sm:py-8">
           <div className="flex flex-wrap items-end justify-between gap-4">
@@ -513,8 +513,8 @@ export function TimeTrackerView() {
                           params={{ environmentId: entry.environmentId, threadId: entry.threadId }}
                         >
                           Thread:{" "}
-                          {threadTitles.get(`${entry.environmentId}:${entry.threadId}`) ??
-                            entry.threadId}
+                          {threadTitles.get(`${entry.environmentId}:${entry.threadId}`) ||
+                            "Unknown thread"}
                         </Link>
                       )}
                       <span className="mt-1 inline-flex rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
@@ -583,6 +583,6 @@ export function TimeTrackerView() {
           </section>
         </div>
       </ScrollArea>
-    </WorkspaceViewFrame>
+    </SidebarInset>
   );
 }

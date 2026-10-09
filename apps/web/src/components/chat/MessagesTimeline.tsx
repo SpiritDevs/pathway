@@ -152,12 +152,14 @@ import {
   extractTrailingElementContexts,
   type ParsedElementContextEntry,
 } from "~/lib/elementContext";
+import { extractTrailingBrowserTabContext } from "~/lib/browserTabContext";
 import { extractTrailingIssueContexts, type IssueContextSelection } from "~/lib/issueContext";
 import {
   extractTrailingPreviewAnnotation,
   type ParsedPreviewAnnotation,
 } from "~/lib/previewAnnotation";
 import { cn } from "~/lib/utils";
+import { WorkingTimer } from "./WorkingTimer";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@spiritdevs/contracts/settings";
 import {
@@ -1587,7 +1589,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     hasEditableText,
     hasMessageText,
   } = useMemo(() => {
-    const issueContextState = extractTrailingIssueContexts(row.message.text);
+    // The browser tab block is for the agent only; the user already knows which page they were on.
+    const issueContextState = extractTrailingIssueContexts(
+      extractTrailingBrowserTabContext(row.message.text).promptText,
+    );
     const displayedUserMessage = deriveDisplayedUserMessageState(issueContextState.promptText);
     const terminalContexts = displayedUserMessage.contexts;
     const previewAnnotations: ParsedPreviewAnnotation[] = [];
@@ -2846,29 +2851,6 @@ function WaitingBackgroundTimelineRow({
 // does not create a React commit every second while a response is streaming.
 // ---------------------------------------------------------------------------
 
-/** Live "Working for Xs" label. */
-function WorkingTimer({ createdAt }: { createdAt: string }) {
-  const textRef = useRef<HTMLSpanElement>(null);
-  const initialText = formatWorkingTimerNow(createdAt);
-
-  useEffect(() => {
-    const updateText = () => {
-      if (textRef.current) {
-        textRef.current.textContent = formatWorkingTimerNow(createdAt);
-      }
-    };
-    updateText();
-    const id = setInterval(updateText, 1000);
-    return () => clearInterval(id);
-  }, [createdAt]);
-
-  return (
-    <span ref={textRef} className="tabular-nums">
-      {initialText}
-    </span>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Extracted row sections — own their state / store subscriptions so changes
 // re-render only the affected row, not the entire list.
@@ -3632,33 +3614,6 @@ function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
 // ---------------------------------------------------------------------------
 // Pure helpers
 // ---------------------------------------------------------------------------
-
-function formatWorkingTimer(startIso: string, endIso: string): string | null {
-  const startedAtMs = Date.parse(startIso);
-  const endedAtMs = Date.parse(endIso);
-  if (!Number.isFinite(startedAtMs) || !Number.isFinite(endedAtMs)) {
-    return null;
-  }
-
-  const elapsedSeconds = Math.max(0, Math.floor((endedAtMs - startedAtMs) / 1000));
-  if (elapsedSeconds < 60) {
-    return `${elapsedSeconds}s`;
-  }
-
-  const hours = Math.floor(elapsedSeconds / 3600);
-  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
-  const seconds = elapsedSeconds % 60;
-
-  if (hours > 0) {
-    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-  }
-
-  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
-}
-
-function formatWorkingTimerNow(startIso: string): string {
-  return formatWorkingTimer(startIso, new Date().toISOString()) ?? "0s";
-}
 
 type WorkEntryIconName =
   | "bot"

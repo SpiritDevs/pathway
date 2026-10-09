@@ -21,7 +21,6 @@ import {
   Command,
   CommandGroup,
   CommandGroupLabel,
-  CommandInput,
   CommandItem,
   CommandList,
   CommandShortcut,
@@ -55,7 +54,9 @@ const PANEL_TOP_GAP_PX = 8;
 function measureAvailableHeight(panel: HTMLElement): number {
   const composerTop = panel.parentElement?.getBoundingClientRect().top ?? 0;
   const overlay = panel.closest<HTMLElement>("[data-chat-composer-overlay]");
-  const boundary = overlay?.offsetParent ?? overlay;
+  // The folded floating composer's column hugs it, so measure against the layer it floats in.
+  const floating = panel.closest<HTMLElement>('[data-chat-floating="collapsed"]');
+  const boundary = floating?.offsetParent ?? overlay?.offsetParent ?? overlay;
   const boundaryTop = boundary ? boundary.getBoundingClientRect().top : 0;
   return Math.min(PANEL_MAX_HEIGHT_PX, composerTop - boundaryTop - PANEL_TOP_GAP_PX);
 }
@@ -106,6 +107,8 @@ export function ComposerAddMenuButton(props: {
       aria-controls={props.open ? "composer-add-menu" : undefined}
       data-composer-add-trigger="true"
       disabled={props.disabled}
+      // Keeps the editor's caret, where the menu's search starts.
+      onMouseDown={(event) => event.preventDefault()}
       onClick={() => props.onOpenChange(!props.open)}
     >
       <PlusIcon className="size-4" />
@@ -113,11 +116,61 @@ export function ComposerAddMenuButton(props: {
   );
 }
 
+export type ComposerAddMenuView = "main" | "attachments" | "paths" | "stash";
+
+export type ComposerAddMenuKeyAction =
+  | { type: "highlight"; row: string }
+  | { type: "pick"; row: string | null }
+  | { type: "back" }
+  | { type: "close" };
+
+/**
+ * What a key typed in the composer does while the add menu is open, or null to
+ * leave it to the editor. `rows` are the enabled rows in display order.
+ */
+export function resolveAddMenuKey(input: {
+  key: string;
+  shiftKey: boolean;
+  view: ComposerAddMenuView;
+  rows: readonly string[];
+  activeRow: string | null;
+}): ComposerAddMenuKeyAction | null {
+  const { rows } = input;
+  const index = input.activeRow === null ? -1 : rows.indexOf(input.activeRow);
+  switch (input.key) {
+    case "ArrowDown":
+    case "ArrowUp": {
+      if (rows.length === 0) return null;
+      const offset = input.key === "ArrowDown" ? 1 : -1;
+      const from = index >= 0 ? index : input.key === "ArrowDown" ? -1 : 0;
+      return { type: "highlight", row: rows[(from + offset + rows.length) % rows.length]! };
+    }
+    case "Enter":
+    case "Tab":
+      // Shift+Enter still breaks the line, Shift+Tab still switches modes.
+      if (input.shiftKey) return null;
+      return { type: "pick", row: rows[index] ?? rows[0] ?? null };
+    case "Escape":
+      return input.view === "main" ? { type: "close" } : { type: "back" };
+    default:
+      return null;
+  }
+}
+
+/** Keeps Base UI's own hover highlight out of the way; the composer's keys drive `data-active`. */
+const ACTIVE_ROW_CLASS =
+  "cursor-pointer select-none hover:bg-transparent hover:text-inherit data-highlighted:bg-transparent data-highlighted:text-inherit data-active:bg-accent! data-active:text-accent-foreground!";
+
 /**
  * Panel that grows out of the composer's top edge. Render it as a direct child
  * of the composer surface; the surface squares its top corners while it is open.
+ * The editor keeps focus: what is typed after the menu opens is `search`, and
+ * arrows, Enter, Tab and Escape drive the menu.
  */
 export function ComposerAddMenu(props: {
+  search: string;
+  view: ComposerAddMenuView;
+  onViewChange: (view: ComposerAddMenuView) => void;
   attachmentDisabled: boolean;
   actions: readonly ComposerAddAction[];
   skills: readonly ComposerAddSkillItem[];
@@ -137,17 +190,27 @@ export function ComposerAddMenu(props: {
   pathsLoading: boolean;
   pathsError: string | null;
   canBrowsePaths: boolean;
-  onPathQueryChange: (query: string | null) => void;
   onAttachPath: (path: string) => void;
   /** Closes the panel; `restoreFocus` is true when the composer should take focus back. */
   onClose: (restoreFocus: boolean) => void;
 }) {
-  const [view, setView] = useState<"main" | "attachments" | "paths" | "stash">("main");
-  const [query, setQuery] = useState("");
+  const { view, search } = props;
+  const [activeRow, setActiveRow] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const heightStyle = useAttachedPanelHeightStyle(panelRef);
-  const onCloseRef = useRef(props.onClose);
-  onCloseRef.current = props.onClose;
+  const latestRef = useRef({
+    view,
+    activeRow,
+    onClose: props.onClose,
+    onViewChange: props.onViewChange,
+  });
+  latestRef.current = { view, activeRow, onClose: props.onClose, onViewChange: props.onViewChange };
+
+  const enabledRows = () =>
+    Array.from(
+      panelRef.current?.querySelectorAll<HTMLElement>("[data-add-menu-row]:not([data-disabled])") ??
+        [],
+    );
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -155,34 +218,94 @@ export function ComposerAddMenu(props: {
       if (!(target instanceof Element)) return;
       if (panelRef.current?.contains(target)) return;
       if (target.closest("[data-composer-add-trigger]")) return;
-      onCloseRef.current(false);
+      latestRef.current.onClose(false);
+    };
+    // Captured ahead of the editor so Enter picks a row instead of sending.
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (
+        event.isComposing ||
+        !(target instanceof Element) ||
+        !target.closest('[contenteditable="true"]') ||
+        !panelRef.current?.parentElement?.contains(target)
+      ) {
+        return;
+      }
+      const rows = enabledRows();
+      const action = resolveAddMenuKey({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        view: latestRef.current.view,
+        rows: rows.map((row) => row.dataset.addMenuRow ?? ""),
+        activeRow: latestRef.current.activeRow,
+      });
+      if (!action) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (action.type === "highlight") setActiveRow(action.row);
+      else if (action.type === "pick") {
+        rows.find((row) => row.dataset.addMenuRow === action.row)?.click();
+      } else if (action.type === "back") latestRef.current.onViewChange("main");
+      else latestRef.current.onClose(true);
     };
     document.addEventListener("pointerdown", onPointerDown, true);
-    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
   }, []);
 
-  const changeView = (next: typeof view) => {
-    setView(next);
-    setQuery("");
-    props.onPathQueryChange(next === "paths" ? "" : null);
-  };
+  // The first enabled row is active until the keys or pointer pick another that is still shown.
+  useLayoutEffect(() => {
+    const rows = enabledRows();
+    const active = rows.find((row) => row.dataset.addMenuRow === activeRow) ?? rows[0];
+    const next = active?.dataset.addMenuRow ?? null;
+    if (next !== activeRow) setActiveRow(next);
+  });
+  useLayoutEffect(() => {
+    if (activeRow === null) return;
+    panelRef.current
+      ?.querySelector(`[data-add-menu-row="${CSS.escape(activeRow)}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeRow]);
+
+  const rowProps = (value: string, disabled = false) => ({
+    value,
+    disabled,
+    "data-add-menu-row": value,
+    "data-active": activeRow === value ? "" : undefined,
+    onMouseMove: () => {
+      if (!disabled && activeRow !== value) setActiveRow(value);
+    },
+  });
   const select = (run: () => void) => {
-    props.onPathQueryChange(null);
     props.onClose(false);
     run();
   };
   const matches = (label: string, description = "") =>
-    `${label} ${description}`.toLowerCase().includes(query.trim().toLowerCase());
+    `${label} ${description}`.toLowerCase().includes(search.trim().toLowerCase());
+  const backButton = (
+    <Button
+      size="icon-xs"
+      variant="ghost"
+      className="-ml-1 shrink-0 rounded-full"
+      aria-label="Back"
+      onClick={() => props.onViewChange("main")}
+    >
+      <ArrowLeftIcon className="size-4" />
+    </Button>
+  );
+  const subViewLabelClass = cn(GROUP_LABEL_CLASS, "flex items-center gap-1");
   const actionRows = (actions: readonly ComposerAddAction[]) =>
     actions
       .filter((item) => matches(item.label, item.description))
       .map((item) => (
         <CommandItem
           key={item.id}
-          value={item.id}
-          disabled={item.disabled}
+          {...rowProps(item.id, item.disabled)}
           onClick={() => select(item.run)}
-          className={ROW_CLASS}
+          className={cn(ROW_CLASS, ACTIVE_ROW_CLASS)}
         >
           {item.icon}
           <span className="min-w-0 flex-1 truncate">
@@ -199,9 +322,9 @@ export function ComposerAddMenu(props: {
     .map((item) => (
       <CommandItem
         key={item.id}
-        value={item.id}
+        {...rowProps(item.id)}
         onClick={() => select(() => props.onSelectSkill(item))}
-        className={ROW_CLASS}
+        className={cn(ROW_CLASS, ACTIVE_ROW_CLASS)}
       >
         <SparklesIcon />
         <span className="min-w-0 flex-1 truncate">
@@ -212,14 +335,13 @@ export function ComposerAddMenu(props: {
     ));
 
   const stashRows = props.stashEntries
-    .filter((entry) => stashEntryMatchesQuery(entry, query))
+    .filter((entry) => stashEntryMatchesQuery(entry, search))
     .map((entry) => (
       <CommandItem
         key={entry.id}
-        value={entry.id}
-        disabled={props.stashRestoreDisabled || Boolean(entry.pendingImageCount)}
+        {...rowProps(entry.id, props.stashRestoreDisabled || Boolean(entry.pendingImageCount))}
         onClick={() => select(() => props.onRestoreStash(entry))}
-        className={cn(ROW_CLASS, "group/stash")}
+        className={cn(ROW_CLASS, ACTIVE_ROW_CLASS, "group/stash")}
       >
         <BookmarkIcon />
         <span className="min-w-0 flex-1 truncate" title={entry.prompt || stashEntrySnippet(entry)}>
@@ -236,15 +358,12 @@ export function ComposerAddMenu(props: {
         <Button
           variant="ghost"
           size="icon-xs"
-          className="-mr-1 shrink-0 rounded-full opacity-0 group-hover/stash:opacity-100 group-data-highlighted/stash:opacity-100 focus-visible:opacity-100"
+          className="-mr-1 shrink-0 rounded-full opacity-0 group-hover/stash:opacity-100 group-data-active/stash:opacity-100 focus-visible:opacity-100"
           aria-label="Delete stashed prompt"
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") event.stopPropagation();
-          }}
           onClick={(event) => {
             event.stopPropagation();
             // Deleting the last prompt leaves nothing to show here.
-            if (props.stashEntries.length === 1) changeView("main");
+            if (props.stashEntries.length === 1) props.onViewChange("main");
             props.onDeleteStash(entry);
           }}
         >
@@ -254,9 +373,8 @@ export function ComposerAddMenu(props: {
     ));
   const stashCurrentRow = matches("Stash current prompt", "save draft later") ? (
     <CommandItem
-      value="stash-current"
-      disabled={props.stashDisabled}
-      className={ROW_CLASS}
+      {...rowProps("stash-current", props.stashDisabled)}
+      className={cn(ROW_CLASS, ACTIVE_ROW_CLASS)}
       onClick={() => select(props.onStash)}
     >
       <BookmarkPlusIcon />
@@ -274,61 +392,20 @@ export function ComposerAddMenu(props: {
       data-composer-add-menu="true"
       style={heightStyle}
       className={ATTACHED_PANEL_CLASS}
-      onKeyDown={(event) => {
-        // The panel lives inside the composer form; Enter must never submit the prompt.
-        if (event.key === "Enter") event.preventDefault();
-        if (event.key !== "Escape") return;
-        event.preventDefault();
-        event.stopPropagation();
-        if (view === "main") props.onClose(true);
-        else changeView("main");
-      }}
+      // The editor owns focus and the keyboard while this menu is open.
+      onMouseDown={(event) => event.preventDefault()}
     >
-      <Command
-        key={view}
-        mode="none"
-        value={query}
-        onValueChange={(value) => {
-          setQuery(value);
-          if (view === "paths") props.onPathQueryChange(value);
-        }}
-      >
-        <div className="flex items-center gap-1 px-1.5 pt-1.5">
-          {view !== "main" ? (
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              className="ml-1 shrink-0 rounded-full"
-              aria-label="Back"
-              onClick={() => changeView("main")}
-            >
-              <ArrowLeftIcon className="size-4" />
-            </Button>
-          ) : null}
-          <CommandInput
-            aria-label="Search the add menu"
-            size="sm"
-            placeholder={
-              view === "paths"
-                ? "Search project files and folders"
-                : view === "stash"
-                  ? "Search stashed prompts"
-                  : "Search"
-            }
-            wrapperClassName="min-w-0 flex-1 px-0 py-0"
-          />
-        </div>
-        <CommandList className="max-h-[calc(var(--add-menu-max-height,26rem)-2.75rem)] overflow-y-auto overscroll-contain not-empty:px-1.5 not-empty:pt-0 not-empty:pb-1.5">
+      <Command key={view} autoHighlight={false} mode="none">
+        <CommandList className="max-h-(--add-menu-max-height,26rem) overflow-y-auto overscroll-contain px-1.5 pb-1.5">
           {view === "main" ? (
             <>
               <CommandGroup>
                 <CommandGroupLabel className={GROUP_LABEL_CLASS}>Add</CommandGroupLabel>
                 {matches("Files and folders", "attach upload project") ? (
                   <CommandItem
-                    value="attachments"
-                    disabled={props.attachmentDisabled}
-                    className={ROW_CLASS}
-                    onClick={() => changeView("attachments")}
+                    {...rowProps("attachments", props.attachmentDisabled)}
+                    className={cn(ROW_CLASS, ACTIVE_ROW_CLASS)}
+                    onClick={() => props.onViewChange("attachments")}
                   >
                     <PaperclipIcon />
                     <span className="flex-1">Files and folders</span>
@@ -342,9 +419,9 @@ export function ComposerAddMenu(props: {
                   )
                 ) : matches("Stash prompts", "save draft later restore") ? (
                   <CommandItem
-                    value="stash"
-                    className={ROW_CLASS}
-                    onClick={() => changeView("stash")}
+                    {...rowProps("stash")}
+                    className={cn(ROW_CLASS, ACTIVE_ROW_CLASS)}
+                    onClick={() => props.onViewChange("stash")}
                   >
                     <BookmarkIcon />
                     <span className="flex-1">Stash prompts</span>
@@ -368,7 +445,7 @@ export function ComposerAddMenu(props: {
                   </p>
                 ) : skillRows.length === 0 ? (
                   <p className="px-2.5 py-1.5 text-sm text-muted-foreground">
-                    {query.trim()
+                    {search.trim()
                       ? "No matching skills."
                       : "No skills available for this provider and project."}
                   </p>
@@ -377,10 +454,13 @@ export function ComposerAddMenu(props: {
             </>
           ) : view === "attachments" ? (
             <CommandGroup>
-              <CommandGroupLabel className={GROUP_LABEL_CLASS}>Files and folders</CommandGroupLabel>
+              <CommandGroupLabel className={subViewLabelClass}>
+                {backButton}
+                Files and folders
+              </CommandGroupLabel>
               <CommandItem
-                value="upload-files"
-                className={ROW_CLASS}
+                {...rowProps("upload-files")}
+                className={cn(ROW_CLASS, ACTIVE_ROW_CLASS)}
                 onClick={() => select(props.onAttachFiles)}
               >
                 <PaperclipIcon />
@@ -390,10 +470,9 @@ export function ComposerAddMenu(props: {
                 </span>
               </CommandItem>
               <CommandItem
-                value="project-path"
-                disabled={!props.canBrowsePaths}
-                className={ROW_CLASS}
-                onClick={() => changeView("paths")}
+                {...rowProps("project-path", !props.canBrowsePaths)}
+                className={cn(ROW_CLASS, ACTIVE_ROW_CLASS)}
+                onClick={() => props.onViewChange("paths")}
               >
                 <FolderIcon />
                 <span className="flex-1">
@@ -405,7 +484,10 @@ export function ComposerAddMenu(props: {
             </CommandGroup>
           ) : view === "stash" ? (
             <CommandGroup>
-              <CommandGroupLabel className={GROUP_LABEL_CLASS}>Stashed prompts</CommandGroupLabel>
+              <CommandGroupLabel className={subViewLabelClass}>
+                {backButton}
+                Stashed prompts
+              </CommandGroupLabel>
               {stashCurrentRow}
               {stashRows}
               {stashRows.length === 0 ? (
@@ -416,14 +498,15 @@ export function ComposerAddMenu(props: {
             </CommandGroup>
           ) : (
             <CommandGroup>
-              <CommandGroupLabel className={GROUP_LABEL_CLASS}>
+              <CommandGroupLabel className={subViewLabelClass}>
+                {backButton}
                 Project files and folders
               </CommandGroupLabel>
               {props.paths.map((entry) => (
                 <CommandItem
                   key={`${entry.kind}:${entry.path}`}
-                  value={entry.path}
-                  className={ROW_CLASS}
+                  {...rowProps(entry.path)}
+                  className={cn(ROW_CLASS, ACTIVE_ROW_CLASS)}
                   onClick={() => select(() => props.onAttachPath(entry.path))}
                 >
                   {entry.kind === "directory" ? <FolderIcon /> : <FileIcon />}
@@ -434,7 +517,10 @@ export function ComposerAddMenu(props: {
                 <p role="status" className="px-2.5 py-1.5 text-sm text-muted-foreground">
                   {props.pathsLoading
                     ? "Searching project files and folders…"
-                    : (props.pathsError ?? "No matching files or folders.")}
+                    : (props.pathsError ??
+                      (search.trim()
+                        ? "No matching files or folders."
+                        : "Type to search project files and folders."))}
                 </p>
               ) : null}
             </CommandGroup>

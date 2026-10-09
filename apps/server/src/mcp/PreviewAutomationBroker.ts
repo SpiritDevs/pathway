@@ -1,6 +1,8 @@
 import {
   PREVIEW_AUTOMATION_V1_OPERATIONS,
   PreviewAutomationBrowserPageError,
+  PreviewAutomationPermissionDeniedError,
+  PreviewAutomationPermissionDeniedReason,
   PreviewAutomationClientDisconnectedError,
   PreviewAutomationExecutionError,
   PreviewAutomationInvalidSelectorError,
@@ -301,6 +303,8 @@ function remoteDetailKind(detail: unknown): RemoteDetailKind {
   }
 }
 
+const isPermissionDeniedReason = Schema.is(PreviewAutomationPermissionDeniedReason);
+
 const classifyResponseError = (
   context: PreviewAutomationRequestErrorContext,
   error: NonNullable<PreviewAutomationResponse["error"]>,
@@ -373,6 +377,24 @@ const classifyResponseError = (
         ...context,
         ...remoteDiagnostics,
       });
+    case "PreviewAutomationPermissionDeniedError": {
+      const detail =
+        typeof error.detail === "object" && error.detail !== null ? error.detail : undefined;
+      const reason =
+        detail && "reason" in detail && isPermissionDeniedReason(detail.reason)
+          ? detail.reason
+          : undefined;
+      const origin =
+        detail && "origin" in detail && typeof detail.origin === "string"
+          ? detail.origin
+          : undefined;
+      return new PreviewAutomationPermissionDeniedError({
+        ...context,
+        ...remoteDiagnostics,
+        ...(reason === undefined ? {} : { reason }),
+        ...(origin === undefined ? {} : { origin }),
+      });
+    }
     case "PreviewAutomationResultTooLargeError": {
       const detail =
         typeof error.detail === "object" && error.detail !== null ? error.detail : undefined;

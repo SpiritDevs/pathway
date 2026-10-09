@@ -119,7 +119,8 @@ export function deriveThreadRelationshipGraph(input: {
       });
     }
     for (const transfer of input.projection.contextTransfers) {
-      if (transfer.sourceThreadId === transfer.targetThreadId) continue;
+      // A fork's own lineage already links it, and drops out when the fork is deleted.
+      if (transfer.sourceThreadId === transfer.targetThreadId || transfer.type === "fork") continue;
       addEdge({
         sourceThreadId: transfer.sourceThreadId,
         targetThreadId: transfer.targetThreadId,

@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import { visitElements } from "../../test/reactElementTree";
 import type { PromptStashEntry } from "../../promptStashStore";
-import { Command, CommandInput, CommandItem } from "../ui/command";
-import { ComposerAddMenu } from "./ComposerAddMenu";
+import { Command, CommandItem } from "../ui/command";
+import { ComposerAddMenu, resolveAddMenuKey } from "./ComposerAddMenu";
 
 vi.mock("react", async (original) => {
   const actual = await original<typeof import("react")>();
@@ -28,6 +28,11 @@ function saved(id: string, prompt = `Prompt ${id}`): PromptStashEntry {
 
 function setup(overrides: Partial<ComponentProps<typeof ComposerAddMenu>> = {}) {
   const props: ComponentProps<typeof ComposerAddMenu> = {
+    search: "",
+    view: "main",
+    onViewChange: vi.fn((view) => {
+      props.view = view;
+    }),
     attachmentDisabled: false,
     actions: [],
     skills: [],
@@ -46,7 +51,6 @@ function setup(overrides: Partial<ComponentProps<typeof ComposerAddMenu>> = {}) 
     pathsLoading: false,
     pathsError: null,
     canBrowsePaths: true,
-    onPathQueryChange: vi.fn(),
     onAttachPath: vi.fn(),
     onClose: vi.fn(),
     ...overrides,
@@ -73,16 +77,6 @@ function row(tree: ReactElement, value: string) {
 function activate(element: ReactElement<Record<string, unknown>>) {
   (element.props.onClick as () => void)();
 }
-function search(tree: ReactElement, query: string) {
-  const command = visitElements(tree, (element) => element.type === Command)!;
-  (command.props.onValueChange as (value: string) => void)(query);
-}
-function escape(tree: ReactElement, key = "Escape") {
-  const event = { key, preventDefault: vi.fn(), stopPropagation: vi.fn() };
-  const handler = (tree.props as { onKeyDown: (keyboardEvent: typeof event) => void }).onKeyDown;
-  handler(event);
-  return event;
-}
 
 beforeEach(() => hooks.reset());
 
@@ -98,9 +92,6 @@ describe("Stash prompts submenu", () => {
       return false;
     });
     expect(values).toEqual(["stash-current", "newest", "older"]);
-    expect(visitElements(tree, (element) => element.type === CommandInput)?.props.placeholder).toBe(
-      "Search stashed prompts",
-    );
   });
 
   it("replaces the submenu with a direct stash action until something is stashed", () => {
@@ -146,40 +137,27 @@ describe("Stash prompts submenu", () => {
     expect(props.onClose).toHaveBeenCalledWith(false);
   });
 
-  it("searches full prompts and shows an empty result", () => {
-    const { openStash, render } = setup({
+  it("searches full prompts with the composer's search and shows an empty result", () => {
+    const { openStash, props, render } = setup({
       stashEntries: [saved("long", `${"intro ".repeat(30)}needle`)],
     });
-    search(openStash(), "needle");
+    openStash();
+    props.search = "needle";
     expect(row(render(), "long")).toBeTruthy();
-    search(render(), "absent");
+    props.search = "absent";
     expect(
       visitElements(render(), (element) => element.props.role === "status")?.props.children,
     ).toBe("No matching stashed prompts.");
   });
 
-  it("Escape returns to Add, clears search, then closes with editor focus", () => {
-    const { props, openStash, render } = setup();
-    search(openStash(), "older");
-    escape(render());
-    expect(row(render(), "stash")).toBeTruthy();
-    expect(visitElements(render(), (element) => element.type === Command)?.props.value).toBe("");
-    expect(props.onClose).not.toHaveBeenCalled();
-    escape(render());
-    expect(props.onClose).toHaveBeenCalledWith(true);
-  });
-
-  it("Back returns to Add and remounts the search for focus and keyboard highlighting", () => {
-    const { openStash, render } = setup();
+  it("Back returns to Add and remounts the list for keyboard highlighting", () => {
+    const { openStash, props, render } = setup();
     const tree = openStash();
     expect(visitElements(tree, (element) => element.type === Command)?.key).toBe("stash");
     activate(visitElements(tree, (element) => element.props["aria-label"] === "Back")!);
+    expect(props.onViewChange).toHaveBeenLastCalledWith("main");
     expect(row(render(), "attachments")).toBeTruthy();
     expect(visitElements(render(), (element) => element.type === Command)?.key).toBe("main");
-  });
-
-  it("prevents Enter from submitting the surrounding composer form", () => {
-    expect(escape(setup().openStash(), "Enter").preventDefault).toHaveBeenCalledOnce();
   });
 
   it("disables restore while attachments are saving or a question is active", () => {
@@ -207,17 +185,47 @@ describe("Stash prompts submenu", () => {
     expect(props.onRestoreStash).not.toHaveBeenCalled();
     expect(props.onClose).not.toHaveBeenCalled();
   });
+});
 
-  it("lets the delete button handle Enter without activating the restore row", () => {
-    const { openStash } = setup();
-    const button = visitElements(
-      row(openStash(), "older"),
-      (element) => element.props["aria-label"] === "Delete stashed prompt",
-    )!;
-    const event = { key: "Enter", stopPropagation: vi.fn(), preventDefault: vi.fn() };
-    const handler = button.props.onKeyDown as (keyboardEvent: typeof event) => void;
-    handler(event);
-    expect(event.stopPropagation).toHaveBeenCalledOnce();
-    expect(event.preventDefault).not.toHaveBeenCalled();
+describe("resolveAddMenuKey", () => {
+  const rows = ["attachments", "stash", "goal"];
+  const key = (pressed: string, overrides: Partial<Parameters<typeof resolveAddMenuKey>[0]> = {}) =>
+    resolveAddMenuKey({
+      key: pressed,
+      shiftKey: false,
+      view: "main",
+      rows,
+      activeRow: "stash",
+      ...overrides,
+    });
+
+  it("moves the highlight through the rows and wraps at the ends", () => {
+    expect(key("ArrowDown")).toEqual({ type: "highlight", row: "goal" });
+    expect(key("ArrowUp")).toEqual({ type: "highlight", row: "attachments" });
+    expect(key("ArrowDown", { activeRow: "goal" })).toEqual({
+      type: "highlight",
+      row: "attachments",
+    });
+    expect(key("ArrowUp", { activeRow: "attachments" })).toEqual({
+      type: "highlight",
+      row: "goal",
+    });
+    expect(key("ArrowDown", { rows: [] })).toBeNull();
+  });
+
+  it("picks the highlighted row on Enter or Tab instead of submitting the prompt", () => {
+    expect(key("Enter")).toEqual({ type: "pick", row: "stash" });
+    expect(key("Tab", { activeRow: null })).toEqual({ type: "pick", row: "attachments" });
+    expect(key("Enter", { shiftKey: true })).toBeNull();
+  });
+
+  it("Escape steps back to Add, then closes", () => {
+    expect(key("Escape", { view: "stash" })).toEqual({ type: "back" });
+    expect(key("Escape")).toEqual({ type: "close" });
+  });
+
+  it("leaves typing to the composer", () => {
+    expect(key("a")).toBeNull();
+    expect(key("Backspace")).toBeNull();
   });
 });

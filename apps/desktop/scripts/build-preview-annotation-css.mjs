@@ -29,7 +29,18 @@ const compilerInput = [
   annotationSource.replace('@import "tailwindcss";', "@tailwind utilities;"),
 ].join("\n");
 const compiler = await compile(compilerInput, { base: appRoot });
-const css = compiler.build([...candidates]);
+// Tailwind seeds --tw-* defaults (border style, shadows, …) with @property, which
+// Chromium ignores inside a shadow root. Its fallback block is gated to Safari and
+// old Firefox; ungate it so borders and shadows render in the preview overlay.
+const propertiesFallbackGate =
+  "@supports ((-webkit-hyphens: none) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color:rgb(from red r g b))))";
+const builtCss = compiler.build([...candidates]);
+if (!builtCss.includes(propertiesFallbackGate)) {
+  throw new Error(
+    "Tailwind's @property fallback gate changed; update build-preview-annotation-css.mjs.",
+  );
+}
+const css = builtCss.replace(propertiesFallbackGate, "@supports (display: block)");
 const encodedCss = `'${css
   .replaceAll("\\", "\\\\")
   .replaceAll("'", "\\'")

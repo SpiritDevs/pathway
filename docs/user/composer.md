@@ -13,7 +13,9 @@ messages, such as large pastes, stay unformatted so typing remains fast.
 Use the plus button on the left of the input to open the Add menu. It grows out of the top of
 the message field and covers the environment controls while open. The Add section holds
 attachments, Goal, Plan mode, Computer use (when the environment supports it), Sketch, and
-Stash prompts. Your skills follow. Search to find an item. Stash prompts opens your stashed prompts:
+Stash prompts. Your skills follow. Keep typing in the message field to search: only what you
+type after opening the menu counts, and choosing an item removes it from your message. Use the
+arrow keys and Enter to choose, and Escape to go back or close. Stash prompts opens your stashed prompts:
 stash the current draft, restore a prompt into this thread, or delete one. Until you have a
 stashed prompt, the Add section shows Stash current prompt instead, and only when the input
 has something to stash.

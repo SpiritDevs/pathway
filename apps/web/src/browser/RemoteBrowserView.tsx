@@ -8,12 +8,7 @@ import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runtime";
 import { normalizePreviewUrl } from "@spiritdevs/shared/preview";
-import {
-  BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT,
-  recordVisitForThread,
-  removeUrlForThread,
-  useThreadRecentHistory,
-} from "~/browserHistoryStore";
+import { recordVisitForThread } from "~/browserHistoryStore";
 import { PreviewEmptyState } from "~/components/preview/PreviewEmptyState";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -38,10 +33,6 @@ export function RemoteBrowserView({
   configuredUrls?: ReadonlyArray<string> | undefined;
 }) {
   const environmentLabel = useEnvironment(threadRef.environmentId)?.label ?? "Environment";
-  const recentHistoryEntries = useThreadRecentHistory(
-    threadRef,
-    BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT,
-  );
   const command = useAtomCommand(previewEnvironment.remoteCommand);
   const thread = useThreadProjection(threadRef)?.projection;
   const takeover = thread?.thread.browserTakeover;
@@ -347,8 +338,6 @@ export function RemoteBrowserView({
                 <PreviewEmptyState
                   environmentId={threadRef.environmentId}
                   configuredUrls={configuredUrls}
-                  recentEntries={recentHistoryEntries}
-                  onRemoveRecent={(url) => removeUrlForThread(threadRef, url)}
                   onOpenUrl={openUrl}
                 />
               </div>

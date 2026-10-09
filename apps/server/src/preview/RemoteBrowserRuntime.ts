@@ -956,6 +956,11 @@ export class RemoteBrowserRuntime {
         case "recordingStop": {
           return { ...(await this.stopRecording(tab)), tabId: tab.id };
         }
+        case "history":
+        case "siteTools":
+        case "callSiteTool":
+        case "cdp":
+          throw new Error("This browser action needs Pathway's desktop browser.");
       }
     });
   }
