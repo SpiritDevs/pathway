@@ -11003,7 +11003,11 @@ function ChatViewContent(props: ChatViewProps) {
                                 activeProject === null
                               }
                               phase={phase}
-                              workingSince={isWorking ? activeWorkStartedAt : null}
+                              workingSince={
+                                // The timeline already shows the timer; only the collapsed
+                                // floating chat hides it.
+                                floatingChatCollapsed && isWorking ? activeWorkStartedAt : null
+                              }
                               isConnecting={false}
                               isSendBusy={isSendBusy || draftPlacement.blocked}
                               isPreparingWorktree={isPreparingWorktree}

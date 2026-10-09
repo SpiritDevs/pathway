@@ -395,7 +395,6 @@ const terminalContextIdListsEqual = (
   contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index]);
 
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
-  showInteractionModeToggle: boolean;
   goalMode: boolean;
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
@@ -409,22 +408,17 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
     props.disabledReason ??
     (props.goalMode
       ? "Goal mode, click to return to Build"
-      : props.interactionMode === "plan"
-        ? "Plan mode — click to return to normal build mode"
-        : "Default mode — click to enter plan mode");
+      : "Plan mode, click to return to Build");
+  // Build is the default and needs no chip; Plan and Goal show one so the mode stays visible and
+  // one click leaves it. Shift+Tab and /plan enter them.
   const interactionModeToggle =
-    props.showInteractionModeToggle || props.goalMode ? (
+    props.goalMode || props.interactionMode === "plan" ? (
       <>
         <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
         <Tooltip>
           <TooltipTrigger render={<span className="inline-flex" title={props.disabledReason} />}>
             <ComposerControl
-              className={cn(
-                "shrink-0 whitespace-nowrap",
-                props.goalMode || props.interactionMode === "plan"
-                  ? "bg-blue-500/10 text-blue-400 hover:bg-blue-500/15 hover:text-blue-300"
-                  : "text-muted-foreground/70 hover:text-foreground/80",
-              )}
+              className="shrink-0 whitespace-nowrap bg-blue-500/10 text-blue-400 hover:bg-blue-500/15 hover:text-blue-300"
               type="button"
               onClick={() => {
                 if (!props.disabledReason) props.onToggleInteractionMode();
@@ -432,14 +426,11 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
               disabled={Boolean(props.disabledReason)}
               aria-label={interactionModeTooltip}
             >
-              {props.goalMode ? (
-                <ComposerControlIcon icon={TargetIcon} className="text-current opacity-100" />
-              ) : props.interactionMode === "plan" ? (
-                <ComposerControlIcon icon={PencilRulerIcon} className="text-current opacity-100" />
-              ) : (
-                <ComposerControlIcon icon={BotIcon} opticalSize="large" />
-              )}
-              {props.goalMode ? "Goal" : props.interactionMode === "plan" ? "Plan" : "Build"}
+              <ComposerControlIcon
+                icon={props.goalMode ? TargetIcon : PencilRulerIcon}
+                className="text-current opacity-100"
+              />
+              {props.goalMode ? "Goal" : "Plan"}
             </ComposerControl>
           </TooltipTrigger>
           <TooltipPopup side="top">{interactionModeTooltip}</TooltipPopup>
@@ -574,7 +565,7 @@ export interface ChatComposerProps {
 
   // Session phase
   phase: SessionPhase;
-  /** When the running turn started; the empty composer counts up from it. */
+  /** When the running turn started; a floating composer with no timeline counts up from it. */
   workingSince?: string | null;
   isConnecting: boolean;
   isSendBusy: boolean;
@@ -4129,7 +4120,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   ) : null}
                   <ComposerFooterModeControls
                     goalMode={goalMode}
-                    showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     interactionMode={interactionMode}
                     runtimeMode={runtimeMode}
                     {...(composerControlsDisabledReason
