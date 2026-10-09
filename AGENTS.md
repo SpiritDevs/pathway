@@ -60,11 +60,12 @@ machine. It does not mean the client works without a cloud account. Do not build
 preference, or feature paths for signed-out use unless the maintainers explicitly change this
 requirement.
 
-## The three ways to hurt yourself
+## The four ways to hurt yourself
 
 1. **Killing by pattern.** Never `pkill -f`, `pgrep | kill`, or `kill` a PID you found by matching a name, path, or worktree string. Your own agent process has this worktree's path in its argv, and this machine runs several other dev servers at once. Kill only a PID you captured at spawn, or the owner of your port from `ss -H -ltnp` after confirming `/proc/<pid>/cwd` is your worktree.
 2. **Writing to the live install.** `~/.pathway/userdata` is the developer's real Pathway database, in use while you work. Reading it and copying from it are fine, and a good way to get real test data (see Test data). Never start a server against it, never open it read-write, never clean it up.
 3. **Baking in origins.** Never set `VITE_HTTP_URL` or `VITE_WS_URL` for dev. Dev is single-origin and Vite proxies `/api`, `/ws`, `/oauth`, and `/.well-known`. Setting them bakes localhost into the bundle and silently breaks every remote browser.
+4. **Cleaning up someone else's work.** Other agents build in other checkouts on this machine while you work, and a folder that looks idle by its file dates may be mid-build. Never delete build output, caches, worktrees, or temp files outside your own worktree to free disk space without asking first. On Corey's Mac, `~/Github/cyndrbase`, `~/Github/cyndrbase-wt/` (including `target/`), and `/tmp/cyndrbase-*` are always off limits.
 
 ## Hit every surface
 
