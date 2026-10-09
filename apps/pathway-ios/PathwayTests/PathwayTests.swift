@@ -20,6 +20,7 @@ struct PathwayTests {
     }
 
     @Test func everyDestinationAppearsExactlyOnceInTheNavigationRail() {
+        #expect(Set(AppDestination.allCases) == Set([.issues, .agentThreads]))
         let railDestinations = AppDestination.sidebarSections.flatMap(\.destinations)
 
         #expect(railDestinations.count == AppDestination.allCases.count)

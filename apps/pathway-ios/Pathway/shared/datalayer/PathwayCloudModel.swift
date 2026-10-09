@@ -61,26 +61,6 @@ final class PathwayCloudModel {
         }
     )
 
-    @ObservationIgnored lazy var calendar = PathwayCalendarModel(cloudRequest: { [weak self] kind, name, arguments in
-        guard let self else { throw CancellationError() }
-        return try await request(kind: kind, name: name, arguments: arguments)
-    }, mutateWorkItem: { [weak self] companyID, kind, entityID, arguments in
-        guard let self else { throw CancellationError() }
-        return try await issues.mutate(companyID: companyID, kind: kind, entityID: entityID, args: arguments)
-    })
-    @ObservationIgnored lazy var email = PathwayEmailModel(
-        cloudRequest: { [weak self] kind, name, arguments in
-            guard let self else { throw CancellationError() }
-            return try await request(kind: kind, name: name, arguments: arguments)
-        },
-        environmentRequest: { [weak self] companyID, environmentID, method, payload in
-            guard let self, let environment = environments.first(where: {
-                $0.companyId == companyID && $0.environment.environmentId == environmentID
-            }) else { throw URLError(.notConnectedToInternet) }
-            return try await environmentRequest(environment: environment, method: method, payload: payload)
-        }
-    )
-
     @ObservationIgnored lazy var orchestrators = PathwayOrchestratorsModel(request: { [weak self] kind, name, arguments in
         guard let self else { throw CancellationError() }
         return try await request(kind: kind, name: name, arguments: arguments)
@@ -96,41 +76,6 @@ final class PathwayCloudModel {
     })
 
     @ObservationIgnored private let client: (any PathwayCloudSyncClient)?
-    @ObservationIgnored lazy var connectedMail = makeConnectedMailModel()
-
-    func makeConnectedMailModel() -> PathwayConnectedMailModel {
-        PathwayConnectedMailModel(
-        request: { [weak self] kind, name, arguments in
-            guard let self else { throw CancellationError() }
-            return try await request(kind: kind, name: name, arguments: arguments)
-        }, subscribe: { [weak self] name, arguments in
-            self?.subscribe(name: name, arguments: arguments) ?? AsyncThrowingStream { $0.finish(throwing: CancellationError()) }
-        }, relayRequest: { [weak self] path, payload in
-            guard let connect = self?.connect else { throw URLError(.notConnectedToInternet) }
-            return try await connect.relayAccountRequest(method: "POST", path: "/v1/mail/\(path)", payload: payload)
-        }, environmentRequest: { [weak self] environment in
-            guard let self else { throw CancellationError() }
-            return try await environmentRequest(environment: environment, method: "server.getConfig", payload: .object([:]))
-        }
-    )
-    }
-
-    @ObservationIgnored lazy var contacts = PathwayContactsModel(
-        request: { [weak self] kind, name, arguments in
-            guard let self else { throw CancellationError() }
-            return try await request(kind: kind, name: name, arguments: arguments)
-        }, subscribe: { [weak self] name, arguments in
-            self?.subscribe(name: name, arguments: arguments) ?? AsyncThrowingStream { $0.finish(throwing: CancellationError()) }
-        }
-    )
-    @ObservationIgnored lazy var time = PathwayTimeModel(
-        request: { [weak self] kind, name, arguments in
-            guard let self else { throw CancellationError() }
-            return try await request(kind: kind, name: name, arguments: arguments)
-        }, subscribe: { [weak self] name, arguments in
-            self?.subscribe(name: name, arguments: arguments) ?? AsyncThrowingStream { $0.finish(throwing: CancellationError()) }
-        }
-    )
     @ObservationIgnored private let connect: PathwayConnectClient?
     @ObservationIgnored private let issueEnvironmentClient: PathwayIssueEnvironmentClient
     @ObservationIgnored private var companiesSubscription: AnyCancellable?
@@ -464,11 +409,6 @@ final class PathwayCloudModel {
         changeRequestStatuses = [:]
         threadPullRequestStatuses = [:]
         issues.replaceReplica([:])
-        calendar.replaceReplica([:])
-        email.replaceReplica([:])
-        contacts.clear()
-        connectedMail.clear()
-        time.clear()
         replicaRevision += 1
     }
 
@@ -932,12 +872,6 @@ extension PathwayCloudModel {
         if changedKinds.map({ $0.contains(where: PathwayIssuesModel.includesEntityKind) }) ?? true {
             issues.replaceReplica(entitiesByCompany.mapValues { $0.changes(matching: PathwayIssuesModel.includesEntityKind) },
                                   companies: companies, versions: cursorByCompany)
-        }
-        if changedKinds.map({ !PathwayCalendarModel.replicaKinds.isDisjoint(with: $0) }) ?? true {
-            calendar.replaceReplica(entitiesByCompany.mapValues { $0.changes(matching: PathwayCalendarModel.replicaKinds.contains) }, companies: companies)
-        }
-        if changedKinds.map({ !PathwayEmailModel.replicaKinds.isDisjoint(with: $0) }) ?? true {
-            email.replaceReplica(entitiesByCompany.mapValues { $0.changes(matching: PathwayEmailModel.replicaKinds.contains) }, companies: companies)
         }
         replicaRevision += 1
         if persist { persistDiscovery() }

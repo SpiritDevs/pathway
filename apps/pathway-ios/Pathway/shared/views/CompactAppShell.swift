@@ -75,7 +75,7 @@ enum CompactAppShellMetrics {
         }
 
         private var activeDestination: AppDestination {
-            selectedDestination ?? .dashboard
+            selectedDestination ?? .agentThreads
         }
 
         private var isNavigationExpanded: Bool {
@@ -251,8 +251,7 @@ enum CompactAppShellMetrics {
 
         private var agentOrchestratorButton: some View {
             Button(action: showAgentOrchestrator) {
-                Image(systemName: "bubble.left.and.bubble.right")
-                    .font(.system(size: 23, weight: .medium))
+                PathwayOrchestratorLauncherAvatar()
                     .frame(
                         width: CompactAppShellMetrics.tabBarHeight,
                         height: CompactAppShellMetrics.tabBarHeight
@@ -303,45 +302,19 @@ enum CompactAppShellMetrics {
 
         private var tabButtons: some View {
             HStack(spacing: 0) {
-                ForEach(AppDestination.compactDestinations) { destination in
+                ForEach(AppDestination.allCases) { destination in
                     compactButton(destination)
                 }
 
                 Button(action: toggleMoreMenu) {
-                    ZStack {
-                        if !activeDestination.isCompactDestination {
-                            HStack(spacing: 4) {
-                                Image(systemName: activeDestination.systemImage)
-
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .opacity(0.45)
-                            }
-                            .font(.system(size: 22, weight: .semibold))
-                        } else {
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 18, weight: .semibold))
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .background {
-                        if !activeDestination.isCompactDestination {
-                            Capsule()
-                                .fill(Color.primary.opacity(0.08))
-                                .padding(5)
-                                .matchedGeometryEffect(
-                                    id: "selected-tab-background",
-                                    in: selectionNamespace
-                                )
-                        }
-                    }
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(
-                    activeDestination.isCompactDestination ? Color.primary : Color.accentColor
-                )
-                .accessibilityLabel(moreAccessibilityLabel)
+                .foregroundStyle(Color.primary)
+                .accessibilityLabel("Choose another view")
                 .accessibilityValue(isMoreMenuPresented ? "Expanded" : "Collapsed")
             }
             .frame(height: CompactAppShellMetrics.tabBarHeight)
@@ -359,16 +332,8 @@ enum CompactAppShellMetrics {
             )
         }
 
-        private var moreAccessibilityLabel: String {
-            if !activeDestination.isCompactDestination {
-                return "\(activeDestination.title), choose another view"
-            }
-            return "Choose another view"
-        }
-
         private func select(_ destination: AppDestination) {
-            let animation = destination.isCompactDestination ? tabSelectionSpring : tabBarSpring
-            withAnimation(animation) {
+            withAnimation(tabSelectionSpring) {
                 selectedDestination = destination
                 isMoreMenuPresented = false
                 threadChrome.collapseNavigation()
@@ -376,7 +341,7 @@ enum CompactAppShellMetrics {
         }
 
         private var activeDestination: AppDestination {
-            selectedDestination ?? .dashboard
+            selectedDestination ?? .agentThreads
         }
 
         private func toggleMoreMenu() {

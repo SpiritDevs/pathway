@@ -59,8 +59,8 @@ the computer it runs on for a company project; for a project outside a company, 
 inside the project's folder. Agents working for an orchestrator can view project settings but
 can't change them.
 
-On iPhone and iPad, choose **New Project** from the Focus menu in **Thread options**, or from the
-**Projects** screen. The sheet offers name, icon, Focus, company, source, and environment
+On iPhone and iPad, choose **New Project** directly from **Thread options**.
+The sheet offers name, icon, Focus, company, source, and environment
 choices; use **Browse** to pick each folder. A project's **Icon** row in its settings sets or clears
 its built-in icon.
 

@@ -1,91 +1,38 @@
 import Foundation
 
 enum AppDestination: String, CaseIterable, Identifiable, Hashable, Sendable {
-    case dashboard
     case issues
     case agentThreads
-    case email
-    case sourceControl
-    case calendar
-    case projects
-    case contacts
-    case timeTracker
-
-    static let compactDestinations: [AppDestination] = [
-        .dashboard,
-        .issues,
-        .agentThreads
-    ]
 
     static let sidebarSections: [AppDestinationSection] = [
-        AppDestinationSection(
-            id: "workspace",
-            title: "Workspace",
-            destinations: [.dashboard, .issues, .agentThreads]
-        ),
-        AppDestinationSection(
-            id: "work",
-            title: "Work",
-            destinations: [.projects, .sourceControl, .timeTracker]
-        ),
-        AppDestinationSection(
-            id: "connected-apps",
-            title: "Connected apps",
-            destinations: [.email, .calendar, .contacts]
-        )
+        AppDestinationSection(id: "workspace", title: "Workspace", destinations: allCases)
     ]
 
     var id: Self { self }
 
     var title: String {
         switch self {
-        case .dashboard: "Dashboard"
         case .issues: "Tasks"
         case .agentThreads: "Agent Threads"
-        case .email: "Email"
-        case .sourceControl: "Source Control"
-        case .calendar: "Calendar"
-        case .projects: "Projects"
-        case .contacts: "Contacts"
-        case .timeTracker: "Time Tracker"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .dashboard: "square.grid.2x2"
         case .issues: "checklist"
         case .agentThreads: "bubble.left.and.bubble.right"
-        case .email: "envelope"
-        case .sourceControl: "arrow.triangle.branch"
-        case .calendar: "calendar"
-        case .projects: "folder"
-        case .contacts: "person.2"
-        case .timeTracker: "clock"
         }
     }
 
     var description: String {
         switch self {
-        case .dashboard: "Review work that needs attention and continue recent threads."
         case .issues: "Track work that needs attention across your environments."
         case .agentThreads: "Continue conversations with your Pathway agents."
-        case .email: "Read and work through your email with Pathway."
-        case .sourceControl: "Review repositories, changes, and source control activity."
-        case .calendar: "View your schedule and upcoming events."
-        case .projects: "Organize work across your Pathway projects."
-        case .contacts: "Find the people and teams you work with."
-        case .timeTracker: "Track where your working time goes."
         }
     }
 
     var contextDestinations: [AppContextDestination] {
         switch self {
-        case .dashboard:
-            [
-                .init(id: "overview", title: "Overview", systemImage: "square.grid.2x2"),
-                .init(id: "activity", title: "Activity", systemImage: "waveform.path.ecg")
-            ]
         case .issues:
             [
                 .init(id: "all", title: "All tasks", systemImage: "checklist"),
@@ -94,62 +41,15 @@ enum AppDestination: String, CaseIterable, Identifiable, Hashable, Sendable {
             ]
         case .agentThreads:
             [
-                .init(
-                    id: "all",
-                    title: "All threads",
-                    systemImage: "bubble.left.and.bubble.right"
-                ),
+                .init(id: "all", title: "All threads", systemImage: "bubble.left.and.bubble.right"),
                 .init(id: "running", title: "Running", systemImage: "bolt"),
-                .init(
-                    id: "needs-attention",
-                    title: "Needs attention",
-                    systemImage: "exclamationmark.circle"
-                )
-            ]
-        case .email:
-            [
-                .init(id: "inbox", title: "Inbox", systemImage: "tray"),
-                .init(id: "unread", title: "Unread", systemImage: "envelope.badge")
-            ]
-        case .sourceControl:
-            [
-                .init(id: "repositories", title: "Repositories", systemImage: "shippingbox"),
-                .init(id: "changes", title: "Changes", systemImage: "arrow.triangle.branch"),
-                .init(id: "pull-requests", title: "Pull requests", systemImage: "arrow.triangle.pull")
-            ]
-        case .calendar:
-            [
-                .init(id: "schedule", title: "Schedule", systemImage: "calendar"),
-                .init(id: "day", title: "Day", systemImage: "calendar.day.timeline.left"),
-                .init(id: "week", title: "Week", systemImage: "calendar"),
-                .init(id: "month", title: "Month", systemImage: "calendar"),
-                .init(id: "timeline", title: "Work timeline", systemImage: "chart.bar.xaxis")
-            ]
-        case .projects:
-            [
-                .init(id: "all", title: "All projects", systemImage: "folder"),
-                .init(id: "recent", title: "Recent", systemImage: "clock.arrow.circlepath")
-            ]
-        case .contacts:
-            [
-                .init(id: "people", title: "People", systemImage: "person.2"),
-                .init(id: "favorites", title: "Favorites", systemImage: "star")
-            ]
-        case .timeTracker:
-            [
-                .init(id: "today", title: "Today", systemImage: "clock"),
-                .init(id: "this-week", title: "This week", systemImage: "calendar.day.timeline.left"),
-                .init(id: "all", title: "All sessions", systemImage: "list.bullet")
+                .init(id: "needs-attention", title: "Needs attention", systemImage: "exclamationmark.circle")
             ]
         }
     }
 
     var defaultContextDestination: AppContextDestination {
         contextDestinations[0]
-    }
-
-    var isCompactDestination: Bool {
-        Self.compactDestinations.contains(self)
     }
 }
 

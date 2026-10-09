@@ -101,7 +101,6 @@ struct PathwayFocusEditorView: View {
                     Picker("Sort threads", selection: $view.sort) {
                         ForEach(PathwayFocusThreadSort.allCases) { Text($0.title).tag($0) }
                     }
-                    Toggle("Collapsible pinned chats", isOn: $view.collapsiblePinned)
                 } header: {
                     Text("View")
                 } footer: {

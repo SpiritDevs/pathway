@@ -270,7 +270,7 @@ import Testing
         await model.stop()
     }
 
-    @Test func emailDeltasAndTombstonesPreserveUnchangedFeatureProjections() async throws {
+    @Test func nonTaskDeltasAndTombstonesPreserveTaskProjection() async throws {
         let client = ControlledCloudClient()
         let model = PathwayCloudModel(client: client)
         await model.received(companies: [company()])
@@ -281,7 +281,7 @@ import Testing
         let email = PathwaySyncChange(version: 10, entityKind: "capturedEmail", entityId: "mail", changeKind: "upsert",
             payload: .object(["id": .string("mail"), "message": .object(["id": .string("mail"), "isRead": .bool(false)])]))
         try #require(await bootstrap.next()).resume(page(epoch: 1, entities: [issue, email]))
-        await observed { model.email.messages.count == 1 }
+        await observed { model.entities(kind: "capturedEmail", companyID: "company").count == 1 }
         #expect(model.issues.records.first?.title == "Unchanged task")
         model.received(head: .init(version: 12, authorizationEpoch: 1), companyId: "company")
         try #require(await drains.next()).resume(.init(tag: "Changes", changes: [
@@ -290,12 +290,12 @@ import Testing
         ], cursor: 11, hasMore: true, latestVersion: 12, authorizationEpoch: 1))
         // Publication must progress even while the next network page is suspended.
         let lastPage = try #require(await drains.next())
-        await observed { model.email.messages.first?.isRead == true }
+        await observed { model.entities(kind: "capturedEmail", companyID: "company").first?.objectValue?["message"]?.objectValue?["isRead"]?.boolValue == true }
         #expect(model.issues.records.first?.title == "Unchanged task")
         lastPage.resume(.init(tag: "Changes", changes: [
             .init(version: 12, entityKind: "capturedEmail", entityId: "mail", changeKind: "tombstone", payload: nil)
         ], cursor: 12, hasMore: false, latestVersion: 12, authorizationEpoch: 1))
-        await observed { model.email.messages.isEmpty }
+        await observed { model.entities(kind: "capturedEmail", companyID: "company").isEmpty }
         #expect(model.issues.records.first?.title == "Unchanged task")
         model.received(head: .init(version: 12, authorizationEpoch: 2), companyId: "company")
         #expect(model.issues.records.isEmpty)

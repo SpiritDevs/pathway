@@ -13,6 +13,7 @@ struct AgentOrchestratorView: View {
     @State private var archived = false
     @State private var initialChatID: String?
     @State private var openedInitialChat = false
+    @State private var updatingChatIDs: Set<String> = []
     private var model: PathwayOrchestratorsModel { appModel.cloud.orchestrators }
 
     var body: some View {
@@ -23,37 +24,43 @@ struct AgentOrchestratorView: View {
                 ForEach(model.chats.filter { $0.flag("archived") == archived && (search.isEmpty || $0.string("title").localizedCaseInsensitiveContains(search)) }) { chat in
                     Button { model.selectedID = chat.id } label: {
                         HStack(spacing: 12) {
-                            PathwayOrchestratorAvatar(name: chat.string("title"), color: "blue")
+                            PathwayOrchestratorConversationAvatar(contacts: model.avatarContacts(for: chat))
                             VStack(alignment: .leading, spacing: 5) {
                                 HStack { Text(chat.string("title")).font(.headline); Spacer(); if chat.number("lastSequence") > chat.number("readSequence") { Circle().fill(.blue).frame(width: 8, height: 8) } }
-                                Text(chat.string("lastMessage").isEmpty ? "Start a conversation" : chat.string("lastMessage")).lineLimit(2).font(.subheadline).foregroundStyle(.secondary)
+                                Text(chat.string("lifecycleDetail").isEmpty
+                                     ? (chat.string("lastMessage").isEmpty ? "Start a conversation" : chat.string("lastMessage"))
+                                     : chat.string("lifecycleDetail"))
+                                    .lineLimit(2).font(.subheadline).foregroundStyle(.secondary)
                             }
                         }.padding(.vertical, 5)
                     }.tint(.primary)
-                }
-                if !archived {
-                    Section("Your orchestrators") {
-                        ForEach(model.contacts.filter { $0.string("status") != "archived" }) { contact in
-                            Button {
-                                Task { do { _ = try await model.conversation(title: contact.string("name"), orchestratorIDs: [contact.id], companyIDs: contact.string("companyId").isEmpty ? [] : [contact.string("companyId")]) } catch { model.errorMessage = error.localizedDescription } }
-                            } label: { Label(contact.string("name"), systemImage: "person.crop.circle") }
-                            .disabled(!contact.flag("canDirect"))
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        if chat.string("ownerSubject") == appModel.accountID {
+                            Button(chat.flag("archived") ? "Restore" : "Archive",
+                                   systemImage: chat.flag("archived") ? "tray.and.arrow.up" : "archivebox") {
+                                changeArchiveState(chat)
+                            }
+                            .tint(chat.flag("archived") ? .blue : .orange)
+                            .disabled(updatingChatIDs.contains(chat.id) || !chat.canChangeArchive(accountID: appModel.accountID))
                         }
                     }
                 }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Orchestrators")
-            .safeAreaInset(edge: .bottom) {
-                Button { archived.toggle() } label: {
-                    Label(archived ? "Show conversations" : "Archived conversations", systemImage: "archivebox")
-                        .frame(maxWidth: .infinity, alignment: .leading).padding()
-                }.background(.regularMaterial)
-            }
             .searchable(text: $search, prompt: "Search conversations")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done", action: close) }
-                ToolbarItem(placement: .primaryAction) { Button("New conversation", systemImage: "square.and.pencil") { creating = true } }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Toggle(isOn: $archived) {
+                        Label("Archived conversations", systemImage: "archivebox")
+                    }
+                    .toggleStyle(.button)
+                    .labelStyle(.iconOnly)
+                    .help(archived ? "Show active conversations" : "Show archived conversations")
+                    .accessibilityIdentifier("orchestrator-archive-toggle")
+                    Button("New conversation", systemImage: "square.and.pencil") { creating = true }
+                }
             }
             .navigationDestination(item: Binding(get: { model.selectedID }, set: { model.selectedID = $0 })) { id in
                 if let chat = model.chats.first(where: { $0.id == id }) { PathwayOrchestratorConversation(chat: chat, onOpenWork: close) }
@@ -82,6 +89,19 @@ struct AgentOrchestratorView: View {
         }
         .accessibilityIdentifier("agent-orchestrator-view")
     }
+    private func changeArchiveState(_ chat: PathwayOrchestratorRecord) {
+        guard chat.canChangeArchive(accountID: appModel.accountID), updatingChatIDs.insert(chat.id).inserted else { return }
+        model.errorMessage = nil
+        Task {
+            defer { updatingChatIDs.remove(chat.id) }
+            do {
+                try await model.mutate("updateChat", ["chatId": .string(chat.id), "archived": .bool(!chat.flag("archived"))])
+            } catch is CancellationError {
+            } catch {
+                model.errorMessage = error.localizedDescription
+            }
+        }
+    }
     private func openInitialConversation() {
         guard !openedInitialChat, !model.loading, appModel.accountID != nil else { return }
         // An explicit notification/deep-link selection always wins, including archived history.
@@ -90,11 +110,7 @@ struct AgentOrchestratorView: View {
             return
         }
         guard let initialChatID else { return }
-        let personal = model.contacts.filter {
-            $0.string("ownerSubject") == appModel.accountID && $0.string("kind") == "personal" &&
-            !$0.flag("shared") && $0.string("companyId").isEmpty &&
-            ["active", "paused"].contains($0.string("status"))
-        }.min { $0.number("createdAt") < $1.number("createdAt") }
+        let personal = model.personalContact
         let target = model.chats.first { $0.id == initialChatID } ?? model.chats.first {
             $0.string("kind") == "dm" && $0.string("leadId") == personal?.id &&
             !$0.flag("archived") && $0.string("lifecycle").isEmpty &&
@@ -111,25 +127,11 @@ struct AgentOrchestratorView: View {
     }
 }
 
-struct PathwayOrchestratorAvatar: View {
-    let name: String
-    let color: String
-    private var tint: Color { switch color { case "green", "emerald": .green; case "blue": .blue; case "orange": .orange; case "pink": .pink; default: .purple } }
-    var body: some View { Text(String(name.prefix(1)).uppercased()).font(.headline).foregroundStyle(.white).frame(width: 40, height: 40).background(tint, in: Circle()).accessibilityHidden(true) }
-}
-
 private struct PathwayThinkingAvatar: View {
     let contact: PathwayOrchestratorRecord
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.15, paused: reduceMotion || scenePhase != .active)) { context in
-            let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2)
-            PathwayOrchestratorAvatar(name: contact.string("name"), color: contact.string("color"))
-                .scaleEffect(0.5).frame(width: 20, height: 20)
-                .opacity(reduceMotion ? 1 : 0.65 + 0.35 * abs(phase - 1))
-        }
+        PathwayOrchestratorAvatar(contact: contact, size: 20, idle: true)
     }
 }
 

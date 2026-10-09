@@ -7,10 +7,6 @@ Settings groups existing preferences by view:
 - **App**: general preferences, appearance, storage and cleanup, and keyboard shortcuts.
 - **Agent Threads**: Focus Views, favourite models, notifications, and shared drafts.
 - **Tasks**: workflow, labels, automation, and integrations for each workspace.
-- **Email**: connected accounts, sender rules, mail analysis, SMTP capture, tags, and trusted senders for each workspace.
-- **Source Control**: repository conventions and generated change descriptions for each environment.
-- **Calendar**: calendars and sharing for each workspace.
-- **Projects**: project configuration for each environment.
 - **Workspaces**: server connections, companies, people, roles, environments, and providers.
 - **Account**: sign out.
 

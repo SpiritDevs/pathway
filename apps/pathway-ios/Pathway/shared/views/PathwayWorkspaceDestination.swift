@@ -157,41 +157,6 @@ struct PathwayWorkspaceDestination: View {
 
 }
 
-struct PathwaySourceControlDestination: View {
-    @Environment(PathwayAppModel.self) private var appModel
-    @State private var query = ""
-    var initialSection = "repositories"
-
-    var body: some View {
-        List {
-            ForEach(appModel.cloud.threads.filter { thread in
-                thread.shell.deletedAt == nil && thread.shell.archivedAt == nil
-                    && (query.isEmpty || thread.shell.title.localizedStandardContains(query))
-            }) { thread in
-                if let environment = appModel.cloud.environments.first(where: { $0.companyId == thread.companyId && $0.environment.environmentId == thread.environmentId }),
-                   let binding = appModel.cloud.environmentBindings.first(where: { $0.companyId == thread.companyId && $0.binding.environmentId == thread.environmentId && $0.binding.localProjectId == thread.shell.projectId }),
-                   let connect = appModel.connect {
-                    NavigationLink {
-                        PathwayWorkspaceDestination(thread: thread, environment: environment,
-                            projectRoot: binding.binding.localWorkspaceRoot, connect: connect, storageDirectory: appModel.localStorageDirectory, initialSection: initialSection)
-                    } label: {
-                        VStack(alignment: .leading) {
-                            Text(thread.shell.title)
-                            Text("\(thread.shell.branch ?? "Working tree") · \(environment.environment.label)")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-        }
-        .overlay {
-            if appModel.cloud.threads.isEmpty { ContentUnavailableView("No thread workspaces", systemImage: "arrow.triangle.branch", description: Text("Start an agent thread in a connected project to review its workspace.")) }
-        }
-        .searchable(text: $query, prompt: "Search workspaces")
-        .navigationTitle((PathwayWorkspaceSection(rawValue: initialSection) ?? .repositories).title)
-    }
-}
-
 
 /// Captured by a destination's transport so an old editor cannot silently act on
 /// a different checkout after a project binding or worktree changes.

@@ -24,13 +24,17 @@ Conversations support streaming responses, approval and input requests, queued p
 
 Open a thread's Workspace for current changes, branches, commit/push/pull, pull requests, files, terminal sessions and project scripts. Review selected files before committing. A changed file revision requires you to reload before saving; servers without revision support allow reading. Terminal input runs on the environment.
 
-## Business tools
+## Tasks and navigation
 
-- **Tasks:** plan and track work, discuss changes, attach files and start agent investigations.
-- **Calendar:** use schedule, day, week, month or work timeline views; edit events, reminders, invitees, attachments and sharing. Drag and resize events in the hour grid, or use the equivalent accessible actions.
-- **Email:** read mail captured by your environment, search and filter, mark read/unread, tag and apply bulk actions. Capture settings include retention and trigger history. This is a captured inbox, not a general outgoing-mail client.
-- **Contacts:** manage shared company contacts and favorites. Desktop users can explicitly import contacts previously stored only in their browser.
-- **Time Tracker:** start and stop a timer, review sessions and totals. Your active timer belongs to your account across devices. Desktop offers an explicit import for old local sessions.
+The main menu contains **Tasks** and **Agent Threads**. Use Tasks to plan and track work,
+discuss changes, attach files and start agent investigations. Create a project from
+**Thread options → New Project** in Agent Threads.
+
+Tap your orchestrator’s avatar to open its conversations. Its saved colour, shape, eyes and animation personality stay in sync with desktop edits while connected. Brief blinks and glances stop when Reduce Motion is enabled.
+
+Conversation rows show the participants’ saved avatars, with up to three overlapping avatars for group conversations. Tap New conversation to choose orchestrators and start a conversation. Use the adjacent archive toggle to switch between active and archived conversations.
+
+Swipe left on a conversation you own to archive it. In the archived list, swipe left to restore it. If its work is still stopping, the row shows the current status and Restore becomes available after confirmation.
 
 ## Setup and attention
 

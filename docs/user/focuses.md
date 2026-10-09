@@ -50,12 +50,13 @@ threads always stay above the sorted list in their pinned order.
 - **Project**: threads grouped by project name from A to Z, with conversations last. Each project
   follows recent activity.
 
-Turn on **Collapsible pinned chats** to add a **Pinned** header above that Focus's pinned threads.
+On desktop and web, turn on **Collapsible pinned chats** to add a **Pinned** header above that Focus's pinned threads.
 Select the header to collapse or expand them. A collapsed header shows how many threads it hides.
 On web and desktop, the thread you have open stays visible.
 
-Sort order and **Collapsible pinned chats** sync across your devices. Whether the Pinned header is
-currently collapsed is remembered on each device. On iPhone and iPad, choose both from **Sort &
+Sort order and the desktop/web **Collapsible pinned chats** preference sync across your devices.
+Whether the Pinned header is currently collapsed is remembered on each device.
+On iPhone and iPad, pinned chats are always collapsible. Choose the sort order from **Sort &
 view** in the thread options menu for the selected Focus, or in the **View** section when editing
 a Focus.
 

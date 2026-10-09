@@ -11,6 +11,10 @@ struct PathwayOrchestratorRecord: Identifiable, Equatable {
   func strings(_ key: String) -> [String] {
     (fields[key]?.arrayValue ?? []).compactMap(\.stringValue)
   }
+  func canChangeArchive(accountID: String?) -> Bool {
+    guard let accountID, string("ownerSubject") == accountID else { return false }
+    return string("lifecycle").isEmpty || string("lifecycle") == "archived"
+  }
   static func records(_ value: JSONValue) -> [Self] {
     (value.arrayValue ?? []).compactMap { value in
       guard let fields = value.objectValue, let id = fields["id"]?.stringValue else { return nil }
@@ -24,7 +28,7 @@ struct PathwayOrchestratorRecord: Identifiable, Equatable {
     "name", "color", "persona", "instructions", "responsibilities", "reviewIntervalMinutes", "kind",
     "companyId", "projectId", "shared", "models", "workerModels", "environmentIds", "allEnvironments",
     "capabilities", "directorSubjects", "managerSubjects", "maxAssignments", "proactive",
-    "rememberAutomatically", "notifyUrgent", "batchCompletions",
+    "rememberAutomatically", "notifyUrgent", "batchCompletions", "avatar", "personality",
   ]
 }
 
@@ -32,6 +36,25 @@ struct PathwayOrchestratorRecord: Identifiable, Equatable {
 final class PathwayOrchestratorsModel {
   typealias Subscribe = @MainActor (String, JSONValue) -> AsyncThrowingStream<JSONValue, Error>
   private(set) var contacts: [PathwayOrchestratorRecord] = []
+  private(set) var conversationAvatars: [PathwayOrchestratorRecord] = []
+
+  func avatarContacts(for chat: PathwayOrchestratorRecord) -> [PathwayOrchestratorRecord] {
+    chat.strings("orchestratorIds").compactMap { id in
+      guard let appearance = conversationAvatars.first(where: { $0.id == id }) else {
+        return contacts.first { $0.id == id }
+      }
+      guard var contact = contacts.first(where: { $0.id == id }) else { return appearance }
+      contact.fields.merge(appearance.fields) { _, current in current }
+      return contact
+    }
+  }
+  var personalContact: PathwayOrchestratorRecord? {
+    contacts.filter {
+      $0.string("ownerSubject") == accountID && $0.string("kind") == "personal" &&
+        !$0.flag("shared") && $0.string("companyId").isEmpty &&
+        ["active", "paused"].contains($0.string("status"))
+    }.min { $0.number("createdAt") < $1.number("createdAt") }
+  }
   private(set) var chats: [PathwayOrchestratorRecord] = []
   private(set) var messages: [String: [PathwayOrchestratorRecord]] = [:]
   private(set) var activity: [String: [PathwayOrchestratorRecord]] = [:]
@@ -99,6 +122,23 @@ final class PathwayOrchestratorsModel {
         if generation == current && !Task.isCancelled { observers[key] = nil }
       }
     }
+    if observers["avatars"] == nil {
+      observers["avatars"] = Task { [weak self] in
+        guard let self else { return }
+        do {
+          for try await value in subscribe("aiOrchestrators:conversationAvatars", .object([:])) {
+            guard !Task.isCancelled, generation == current else { return }
+            conversationAvatars = PathwayOrchestratorRecord.records(value)
+          }
+        } catch {
+          if generation == current && !Task.isCancelled {
+            conversationAvatars = []
+            errorMessage = error.localizedDescription
+          }
+        }
+        if generation == current && !Task.isCancelled { observers["avatars"] = nil }
+      }
+    }
     guard observers["chats"] == nil else { return }
     observers["chats"] = Task { [weak self] in
       guard let self else { return }
@@ -159,6 +199,7 @@ final class PathwayOrchestratorsModel {
     if clear {
       accountID = nil
       contacts = []
+      conversationAvatars = []
       contactScopes = [:]
       chats = []
       activity = [:]

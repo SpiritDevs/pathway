@@ -28,9 +28,9 @@ struct PathwayOrchestratorParticipants: View {
                             if owner && subject != current.string("ownerSubject") { Button("Remove", role: .destructive) { perform("removeParticipant", ["subject": .string(subject)]) } }
                         }
                     }
-                    ForEach(model.contacts.filter { current.strings("orchestratorIds").contains($0.id) }) { contact in
+                    ForEach(model.avatarContacts(for: current)) { contact in
                         HStack {
-                            PathwayOrchestratorAvatar(name: contact.string("name"), color: contact.string("color"))
+                            PathwayOrchestratorAvatar(contact: contact)
                             Text(contact.string("name")); Spacer()
                             if contact.id == current.string("leadId") { Text("Lead").font(.caption).foregroundStyle(.secondary) }
                             else if owner { Button("Remove", role: .destructive) { perform("removeParticipant", ["orchestratorId": .string(contact.id)]) } }
@@ -60,6 +60,7 @@ struct PathwayOrchestratorParticipants: View {
                         }.disabled(selected.isEmpty)
                     }
                     Button(current.flag("archived") ? "Unarchive conversation" : "Archive conversation") { perform("updateChat", ["archived": .bool(!current.flag("archived"))]) }
+                        .disabled(!current.canChangeArchive(accountID: appModel.accountID))
                 } else {
                     Button("Leave conversation", role: .destructive) { perform("removeParticipant", ["subject": .string(appModel.accountID ?? "")], close: true) }
                 }

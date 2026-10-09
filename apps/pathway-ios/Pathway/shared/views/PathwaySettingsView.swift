@@ -51,43 +51,6 @@ struct PathwaySettingsView: View {
                 }
                 companyEmptyState
             }
-            Section("Email") {
-                ForEach(appModel.cloud.companies) { company in
-                    NavigationLink(company.name) {
-                        PathwayEmailSettingsDestination(companyID: company.id)
-                    }
-                    .accessibilityIdentifier("settings-email-\(company.id)")
-                }
-                companyEmptyState
-            }
-            Section("Source Control") {
-                ForEach(appModel.cloud.environments) { environment in
-                    NavigationLink {
-                        PathwayAdministrationSettingsView(client: client(for: environment), sourceControl: true)
-                    } label: {
-                        environmentLabel(environment)
-                    }
-                }
-                environmentEmptyState
-            }
-            Section("Calendar") {
-                ForEach(appModel.cloud.companies) { company in
-                    NavigationLink(company.name) {
-                        PathwayCalendarSettingsView(model: appModel.cloud.calendar, companyID: company.id)
-                    }
-                }
-                companyEmptyState
-            }
-            Section("Projects") {
-                ForEach(appModel.cloud.environments) { environment in
-                    NavigationLink {
-                        PathwayAdministrationProjectsView(client: client(for: environment))
-                    } label: {
-                        environmentLabel(environment)
-                    }
-                }
-                environmentEmptyState
-            }
             Section("Account") {
                 Button("Sign out", role: .destructive) {
                     Task {
@@ -125,21 +88,6 @@ struct PathwaySettingsView: View {
         }
     }
 
-    @ViewBuilder private var environmentEmptyState: some View {
-        if appModel.cloud.environments.isEmpty {
-            Text("No environments connected.").foregroundStyle(.secondary)
-        }
-    }
-
-    private func environmentLabel(_ environment: PathwayCompanyEnvironment) -> some View {
-        VStack(alignment: .leading) {
-            Text(environment.environment.label)
-            if let company = appModel.cloud.companies.first(where: { $0.id == environment.companyId }) {
-                Text(company.name).font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
     private var environmentRequest: PathwayAdministrationRequest {
         { environment, method, payload in
             try await appModel.cloud.environmentRequest(environment: environment, method: method, payload: payload)
@@ -163,50 +111,5 @@ struct PathwaySettingsView: View {
 
     private func client(for environment: PathwayCompanyEnvironment) -> PathwayAdministrationClient {
         .init(environment: environment, request: environmentRequest, http: environmentHTTP, cloudMutation: cloudMutation)
-    }
-}
-
-private struct PathwayEmailSettingsDestination: View {
-    @Environment(PathwayAppModel.self) private var appModel
-    let companyID: String
-
-    var body: some View {
-        List {
-            NavigationLink("Connected accounts, sender rules & analysis") {
-                PathwayMailSettingsDestination(companyID: companyID)
-            }
-            NavigationLink("SMTP capture, tags & trusted senders") {
-                PathwayEmailSettingsView(
-                    model: appModel.cloud.email, companyID: companyID,
-                    environments: appModel.cloud.environments.filter { $0.companyId == companyID }
-                )
-            }
-        }
-        .navigationTitle("Email settings")
-    }
-}
-
-private struct PathwayMailSettingsDestination: View {
-    @Environment(PathwayAppModel.self) private var appModel
-    let companyID: String
-    @State private var model: PathwayConnectedMailModel?
-
-    var body: some View {
-        Group {
-            if let model {
-                PathwayConnectedMailSettings(
-                    model: model, companyID: companyID,
-                    environments: appModel.cloud.environments.filter { $0.companyId == companyID }
-                )
-            } else {
-                ProgressView("Loading mail settings")
-            }
-        }
-        .task(id: companyID) {
-            // Settings observes accounts independently so changing workspace cannot reset the inbox.
-            let settingsModel = appModel.cloud.makeConnectedMailModel()
-            model = settingsModel
-            await settingsModel.observeAccounts(companyID: companyID)
-        }
     }
 }

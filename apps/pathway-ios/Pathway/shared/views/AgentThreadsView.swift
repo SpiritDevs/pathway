@@ -240,7 +240,7 @@ struct AgentThreadsView: View {
             if listFilter == .archived {
                 ForEach(archivedThreads) { thread in compactThreadLink(thread, icon: "archivebox") }
             } else {
-            if focusView.collapsiblePinned && !pinnedThreads.isEmpty {
+            if !pinnedThreads.isEmpty {
                 Section {
                     if !isPinnedCollapsed {
                         ForEach(pinnedThreads) { thread in threadLink(thread) }
@@ -255,12 +255,17 @@ struct AgentThreadsView: View {
                         focuses.togglePinnedCollapsed(focuses.selectedID)
                     }
                 }
-            } else {
-                ForEach(pinnedThreads) { thread in threadLink(thread) }
+                .listSectionSeparator(.hidden, edges: .top)
             }
-            ForEach(sortedUnpinnedThreads) { thread in
-                threadLink(thread)
+            Section {
+                ForEach(sortedUnpinnedThreads) { thread in
+                    threadLink(thread)
+                }
             }
+            .listSectionSeparator(
+                isPinnedCollapsed && !pinnedThreads.isEmpty ? .hidden : .automatic,
+                edges: .top
+            )
 
             if !snoozedThreads.isEmpty {
                 Section {
@@ -482,6 +487,7 @@ struct AgentThreadsView: View {
                     showsSearch = true
                     searchFocused = true
                 }
+                Button("New Project", systemImage: "folder.badge.plus") { creatingProject = true }
                 Divider()
                 focusMenu
                 viewMenu
@@ -501,7 +507,7 @@ struct AgentThreadsView: View {
         }
     }
 
-    /// Sort and pinned-shelf choices for the selected Focus, All included; synced per user.
+    /// Sort choices for the selected Focus, All included; synced per user.
     private var viewMenu: some View {
         Menu {
             Picker("Sort threads", selection: Binding(
@@ -510,10 +516,6 @@ struct AgentThreadsView: View {
             )) {
                 ForEach(PathwayFocusThreadSort.allCases) { Text($0.title).tag($0) }
             }
-            Toggle("Collapsible pinned chats", isOn: Binding(
-                get: { focusView.collapsiblePinned },
-                set: { collapsible in saveFocusView { $0.collapsiblePinned = collapsible } }
-            ))
         } label: {
             Label("Sort & view", systemImage: "arrow.up.arrow.down")
         }
@@ -545,7 +547,6 @@ struct AgentThreadsView: View {
                 }
             }
             Button("New Focus", systemImage: "plus") { creatingFocus = true }
-            Button("New Project", systemImage: "folder.badge.plus") { creatingProject = true }
             if let error = focuses.errorMessage { Text(error) }
     }
 

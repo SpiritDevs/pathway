@@ -191,7 +191,7 @@ private struct FloatingAppShell: View {
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var selectedContextDestination: AppContextDestination? =
-        AppDestination.dashboard.defaultContextDestination
+        AppDestination.agentThreads.defaultContextDestination
 
     var body: some View {
         HStack(spacing: 12) {
@@ -243,7 +243,7 @@ private struct FloatingAppShell: View {
     }
 
     private var activeDestination: AppDestination {
-        selectedDestination ?? .dashboard
+        selectedDestination ?? .agentThreads
     }
 
     private var activeContextDestination: AppContextDestination {
@@ -324,11 +324,16 @@ private struct PathwayNavigationRail: View {
             Divider()
                 .padding(.horizontal, 12)
 
-            railActionButton(
-                title: "Open agent orchestrator",
-                systemImage: "bubble.left.and.bubble.right",
-                action: agentOrchestratorAction
-            )
+            Button(action: agentOrchestratorAction) {
+                PathwayOrchestratorLauncherAvatar()
+                    .frame(width: 48, height: 48)
+                    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .hoverEffect()
+            .help("Open agent orchestrator")
+            .accessibilityLabel("Open agent orchestrator")
+            .accessibilityIdentifier("agent-orchestrator-button")
             railActionButton(title: "Settings", systemImage: "gearshape", action: settingsAction)
         }
         .padding(.vertical, 8)
@@ -383,7 +388,7 @@ private struct PathwayNavigationRail: View {
     }
 
     private var activeDestination: AppDestination {
-        selectedDestination ?? .dashboard
+        selectedDestination ?? .agentThreads
     }
 }
 
@@ -416,87 +421,35 @@ private struct PathwayContextSidebar: View {
 }
 
 private struct PathwayContextDestinationView: View {
-    @Environment(PathwayAppModel.self) private var appModel
     let destination: AppDestination
     let contextDestination: AppContextDestination
     let newThreadAction: () -> Void
 
     @ViewBuilder
     var body: some View {
-        if destination == .issues {
+        switch destination {
+        case .issues:
             PathwayIssuesDestinationView(initialTab: contextDestination.id)
                 .id(contextDestination.id)
-        } else if destination == .agentThreads {
+        case .agentThreads:
             AgentThreadsView(newThreadAction: newThreadAction,
                 initialFilter: contextDestination.id == "running" ? .running : contextDestination.id == "needs-attention" ? .needsAttention : .all)
                 .id(contextDestination.id)
-        } else if destination == .dashboard {
-            PathwayDashboardView(newThreadAction: newThreadAction, activityOnly: contextDestination.id == "activity")
-        } else if destination == .calendar {
-            PathwayCalendarView(model: appModel.cloud.calendar, companies: appModel.cloud.companies, initialMode: contextDestination.id).id(contextDestination.id)
-        } else if destination == .email {
-            PathwayEmailHubView(capture: appModel.cloud.email, mail: appModel.cloud.connectedMail, companies: appModel.cloud.companies, environments: appModel.cloud.environments, initialFilter: contextDestination.id).id(contextDestination.id)
-        } else if destination == .contacts {
-            PathwayContactsView(model: appModel.cloud.contacts, companies: appModel.cloud.companies, initialFilter: contextDestination.id).id(contextDestination.id)
-        } else if destination == .timeTracker {
-            PathwayTimeView(model: appModel.cloud.time, accountID: appModel.accountID ?? "", projects: appModel.cloud.projects, initialFilter: contextDestination.id).id(contextDestination.id)
-        } else if destination == .sourceControl {
-            PathwaySourceControlDestination(initialSection: contextDestination.id).id(contextDestination.id)
-        } else if destination == .projects {
-            PathwayProjectsDestination(initialFilter: contextDestination.id).id(contextDestination.id)
-        } else {
-            PathwayFeatureDestinationView(destination: destination, newThreadAction: newThreadAction)
         }
-    }
-}
-
-struct PathwayFeaturePlaceholder: View {
-    let destination: AppDestination
-
-    var body: some View {
-        ScrollView {
-            ContentUnavailableView {
-                Label(destination.title, systemImage: destination.systemImage)
-            } description: {
-                Text(destination.description)
-            }
-            .frame(maxWidth: 720, minHeight: 420)
-            .frame(maxWidth: .infinity)
-            .padding(24)
-        }
-        .navigationTitle(destination.title)
-        .navigationBarTitleDisplayMode(.large)
-        .accessibilityIdentifier("destination-\(destination.rawValue)")
     }
 }
 
 struct PathwayFeatureDestinationView: View {
-    @Environment(PathwayAppModel.self) private var appModel
     let destination: AppDestination
     let newThreadAction: () -> Void
 
     @ViewBuilder
     var body: some View {
-        if destination == .agentThreads {
+        switch destination {
+        case .agentThreads:
             AgentThreadsView(newThreadAction: newThreadAction)
-        } else if destination == .issues {
+        case .issues:
             PathwayIssuesDestinationView()
-        } else if destination == .calendar {
-            PathwayCalendarView(model: appModel.cloud.calendar, companies: appModel.cloud.companies)
-        } else if destination == .email {
-            PathwayEmailHubView(capture: appModel.cloud.email, mail: appModel.cloud.connectedMail, companies: appModel.cloud.companies, environments: appModel.cloud.environments)
-        } else if destination == .sourceControl {
-            PathwaySourceControlDestination()
-        } else if destination == .projects {
-            PathwayProjectsDestination()
-        } else if destination == .dashboard {
-            PathwayDashboardView(newThreadAction: newThreadAction)
-        } else if destination == .contacts {
-            PathwayContactsView(model: appModel.cloud.contacts, companies: appModel.cloud.companies)
-        } else if destination == .timeTracker {
-            PathwayTimeView(model: appModel.cloud.time, accountID: appModel.accountID ?? "", projects: appModel.cloud.projects)
-        } else {
-            PathwayFeaturePlaceholder(destination: destination)
         }
     }
 }
