@@ -623,6 +623,10 @@ export interface ChatComposerProps {
   activeContextWindow: ContextWindowSnapshot | null;
   compactDisabled: boolean;
   compactDisabledReason: string | null;
+  /** Tokens a send compacts first; null when the next send keeps full history. */
+  resumeCompactionTokens: number | null;
+  /** Runs `send` as a one-off send that keeps full history instead of compacting first. */
+  onSendWithFullHistory: (send: () => void) => void;
 
   // Misc
   resolvedTheme: "light" | "dark";
@@ -769,6 +773,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeContextWindow,
     compactDisabled,
     compactDisabledReason,
+    resumeCompactionTokens,
+    onSendWithFullHistory,
     resolvedTheme,
     settings,
     keybindings,
@@ -3161,6 +3167,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
     [submitComposer],
   );
+  const handleSendWithFullHistoryPrimaryAction = useCallback(
+    () => onSendWithFullHistory(() => submitComposer()),
+    [onSendWithFullHistory, submitComposer],
+  );
   const handleStartInNewChatPrimaryAction = useCallback(() => {
     void onStartInNewChat();
   }, [onStartInNewChat]);
@@ -3483,6 +3493,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       onInterrupt={handleInterruptPrimaryAction}
       onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
       onSendWithMode={handleSendWithModePrimaryAction}
+      compactBeforeSendTokens={resumeCompactionTokens}
+      onSendWithFullHistory={handleSendWithFullHistoryPrimaryAction}
       onStartInNewChat={handleStartInNewChatPrimaryAction}
       onStartInSideChat={handleStartInSideChatPrimaryAction}
     />
