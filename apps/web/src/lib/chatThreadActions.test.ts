@@ -114,3 +114,15 @@ it("creates a new conversation in the active conversation's environment", async 
   expect(await startNewThreadFromContext(context)).toBe(true);
   expect(handleNewThread).toHaveBeenCalledWith(conversation);
 });
+
+it("falls back to a new conversation when there is no project to start a thread in", async () => {
+  const handleNewThread = vi.fn(async () => {});
+  const conversationRef = { environmentId: ENVIRONMENT_ID, projectId: null };
+  const context = createContext({
+    defaultProjectRef: null,
+    defaultConversationRef: conversationRef,
+    handleNewThread,
+  });
+  expect(await startNewThreadFromContext(context)).toBe(true);
+  expect(handleNewThread).toHaveBeenCalledWith(conversationRef);
+});

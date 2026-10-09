@@ -13,7 +13,7 @@ import { workspaceThreadStartAvailability } from "../components/projects/workspa
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
-import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { useHandleNewThread, useNewThreadHandler } from "../hooks/useHandleNewThread";
 import {
   useAllEnvironmentShellsBootstrapped,
   useProjects,
@@ -39,7 +39,8 @@ function ChatIndexRouteView() {
 /**
  * Landing on the index route drops straight into a draft thread for the most
  * recently active project, so the first screen is a prompt instead of a dead
- * end. Falls back to an add-project hero when no project exists yet.
+ * end. With no project yet it opens a draft conversation instead, and only
+ * falls back to the add-project hero when no environment can host one.
  */
 function IndexDraftLanding() {
   const projects = useProjects();
@@ -50,7 +51,7 @@ function IndexDraftLanding() {
     [threads],
   );
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
-  const handleNewThread = useNewThreadHandler();
+  const { defaultConversationRef, handleNewThread } = useHandleNewThread();
   const startingRef = useRef(false);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
 
@@ -61,24 +62,31 @@ function IndexDraftLanding() {
         : null,
     [agentThreads, bootstrapped, projects],
   );
+  const landingRef = useMemo(
+    () =>
+      !bootstrapped
+        ? null
+        : mostRecentProject !== null
+          ? scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id)
+          : defaultConversationRef,
+    [bootstrapped, defaultConversationRef, mostRecentProject],
+  );
 
   useEffect(() => {
-    if (mostRecentProject === null || startingRef.current) {
+    if (landingRef === null || startingRef.current) {
       return;
     }
     startingRef.current = true;
-    void handleNewThread(scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id), {
-      replace: true,
-    }).catch(() => {
+    void handleNewThread(landingRef, { replace: true }).catch(() => {
       startingRef.current = false;
       setStartState((state) => ({ ...state, failed: true }));
     });
-  }, [handleNewThread, mostRecentProject, startState.retryRequest]);
+  }, [handleNewThread, landingRef, startState.retryRequest]);
 
   if (!bootstrapped) {
     return null;
   }
-  if (mostRecentProject !== null) {
+  if (landingRef !== null) {
     return startState.failed ? (
       <DraftStartError
         onRetry={() => {
@@ -100,7 +108,7 @@ function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
         <EmptyHeader className="max-w-md">
           <EmptyTitle className="text-foreground text-xl">Couldn’t start a new thread</EmptyTitle>
           <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
-            The project is still available. Try opening the draft again.
+            Try opening the draft again.
           </EmptyDescription>
           <div className="mt-5 flex justify-center">
             <Button size="sm" onClick={onRetry}>

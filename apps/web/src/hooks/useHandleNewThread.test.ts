@@ -39,6 +39,7 @@ vi.mock("../state/environments", () => ({
       connection: { phase: mocks.connected ? "connected" : "disconnected" },
     })),
   }),
+  usePrimaryEnvironmentId: () => "env-a",
 }));
 vi.mock("../state/server", () => ({ primaryServerSettingsAtom: {} }));
 vi.mock("./useSettings", () => ({ useClientSettings: () => ({}) }));

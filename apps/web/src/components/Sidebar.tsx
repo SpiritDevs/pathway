@@ -4409,6 +4409,7 @@ export default function Sidebar() {
       activeDraftThread: newThreadContext.activeDraftThread,
       activeThread: newThreadContext.activeThread ?? undefined,
       defaultProjectRef: newThreadContext.defaultProjectRef,
+      defaultConversationRef: newThreadContext.defaultConversationRef,
       handleNewThread: newThreadContext.handleNewThread,
     }).then((didStart) => {
       if (!didStart && threadStartAvailability !== "unavailable") {

@@ -24,6 +24,8 @@ export interface ChatThreadActionContext {
   readonly activeDraftThread: ThreadContextLike | null;
   readonly activeThread: ThreadContextLike | undefined;
   readonly defaultProjectRef: ScopedProjectRef | null;
+  /** Where a new conversation starts when there is no project to start a thread in. */
+  readonly defaultConversationRef?: DraftProjectRef | null;
   readonly handleNewThread: NewThreadHandler;
 }
 
@@ -65,11 +67,11 @@ export async function startNewThreadFromContext(
     await context.handleNewThread(conversation);
     return true;
   }
-  const projectRef = resolveThreadActionProjectRef(context);
-  if (!projectRef) {
+  const target = resolveThreadActionProjectRef(context) ?? context.defaultConversationRef;
+  if (!target) {
     return false;
   }
 
-  await context.handleNewThread(projectRef);
+  await context.handleNewThread(target);
   return true;
 }

@@ -1,9 +1,14 @@
-import { useEnvironments } from "../state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
 import { activeCompanyIdAtom } from "../cloud/activeCompany";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
-import { DEFAULT_RUNTIME_MODE, type ThreadId, type ThreadLocation } from "@spiritdevs/contracts";
+import {
+  DEFAULT_RUNTIME_MODE,
+  type EnvironmentId,
+  type ThreadId,
+  type ThreadLocation,
+} from "@spiritdevs/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import {
@@ -28,6 +33,7 @@ import { readThreadShell, useProjects, useServerConfigs, useThreadShell } from "
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
 import { readPathwayProjectFileDefaultThreadEnvMode } from "../lib/pathwayProjectFileDefaults";
 import { resolveDefaultProviderModelSelection } from "../providerInstances";
+import { useRightPanelStore } from "../rightPanelStore";
 import { primaryServerSettingsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKeys, useUiStateStore } from "../uiStateStore";
@@ -441,6 +447,16 @@ export function useNewThreadHandler() {
         // A project's configured new-thread model is authoritative. Sticky
         // last-used state remains the fallback for projects without one.
         applyStickyState(draftId, projectModelSelection);
+        // A new conversation opens on the composer alone; its details panel is one toggle away.
+        if (projectRef.projectId === null) {
+          useRightPanelStore
+            .getState()
+            .setThreadPanelOpen(
+              scopeThreadRef(projectRef.environmentId, threadId),
+              "inline",
+              false,
+            );
+        }
 
         if (options?.navigate !== false) {
           await router.navigate({
@@ -497,6 +513,35 @@ export function useHandleNewThread() {
     });
   }, [projectOrder, projects]);
   const handleNewThread = useNewThreadHandler();
+  const serverConfigs = useServerConfigs();
+  const queueDestinations = useAtomValue(threadQueueDestinationsAtom);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  // Where a new conversation goes when there is no project to start a thread in: beside the
+  // routed thread when its environment can host one, else the primary environment, else any.
+  // Conversations belong to a company, so there is none until one is active.
+  const defaultConversationRef = useMemo((): DraftProjectRef | null => {
+    if (activeCompanyId === null) return null;
+    const hosts = [
+      ...[...serverConfigs]
+        .filter(([, config]) => config.environment.capabilities.threadConversations === true)
+        .map(([environmentId]) => environmentId),
+      ...queueDestinations.map((destination) => destination.environmentId as EnvironmentId),
+    ];
+    const routeEnvironmentId =
+      routeThreadRef?.environmentId ?? activeDraftThread?.environmentId ?? null;
+    const environmentId =
+      hosts.find((id) => id === routeEnvironmentId) ??
+      hosts.find((id) => id === primaryEnvironmentId) ??
+      hosts[0];
+    return environmentId === undefined ? null : { environmentId, projectId: null };
+  }, [
+    activeCompanyId,
+    activeDraftThread?.environmentId,
+    primaryEnvironmentId,
+    queueDestinations,
+    routeThreadRef?.environmentId,
+    serverConfigs,
+  ]);
 
   // A profile switch can leave the previous profile's thread on the route.
   return {
@@ -511,6 +556,7 @@ export function useHandleNewThread() {
     defaultProjectRef: orderedProjects[0]
       ? scopeProjectRef(orderedProjects[0].environmentId, orderedProjects[0].id)
       : null,
+    defaultConversationRef,
     handleNewThread,
     routeDraftId,
     routeThreadRef,

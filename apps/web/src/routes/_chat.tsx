@@ -28,8 +28,14 @@ function ChatRouteGlobalShortcuts() {
       : workspaceThreadStartAvailability(workspaceProjects);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const selectedThreadKeysSize = useThreadSelectionStore((state) => state.selectedThreadKeys.size);
-  const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
-    useHandleNewThread();
+  const {
+    activeDraftThread,
+    activeThread,
+    defaultConversationRef,
+    defaultProjectRef,
+    handleNewThread,
+    routeThreadRef,
+  } = useHandleNewThread();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const computerServed = useComputerEventsServed(routeThreadRef?.environmentId ?? null);
   const paneId = usePaneId();
@@ -76,6 +82,7 @@ function ChatRouteGlobalShortcuts() {
           activeDraftThread,
           activeThread: activeThread ?? undefined,
           defaultProjectRef,
+          defaultConversationRef,
           handleNewThread,
         }).then((didStart) => {
           if (!didStart && threadStartAvailability !== "unavailable") {
@@ -92,6 +99,7 @@ function ChatRouteGlobalShortcuts() {
           activeDraftThread,
           activeThread: activeThread ?? undefined,
           defaultProjectRef,
+          defaultConversationRef,
           handleNewThread,
         }).then((didStart) => {
           if (!didStart && threadStartAvailability !== "unavailable") {
