@@ -27,3 +27,14 @@ export function isDefinitiveQueueRejection(error: unknown) {
     definitiveQueueRejections.has(error.data.code)
   );
 }
+
+/** The cloud no longer has the thread or message, so a delete has nothing left to do there. */
+export function isQueueEntityNotFound(error: unknown) {
+  return (
+    error instanceof ConvexError &&
+    error.data !== null &&
+    typeof error.data === "object" &&
+    "code" in error.data &&
+    error.data.code === "entity-not-found"
+  );
+}

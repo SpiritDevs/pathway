@@ -51,7 +51,7 @@ import {
 } from "./threadTurnDelivery";
 import { watchQueueConnection, awaitQueueMutation } from "./threadQueueConnection";
 import { subscribeThreadQueuePages } from "./threadQueuePages";
-import { isDefinitiveQueueRejection } from "./threadQueueErrors";
+import { isDefinitiveQueueRejection, isQueueEntityNotFound } from "./threadQueueErrors";
 import { scopedCompanyRegistryReplicasAtom } from "./activeCompany";
 import { cloudAgentThreadCompanyId, cloudAgentProjectCompanyId } from "./agentThreadReadModel";
 import { companyRegistryReplicasAtom } from "./companyRegistryReplica";
@@ -723,8 +723,14 @@ export async function discardQueuedThread(
     environmentId: row.environmentId,
     ...(row.queueId ? { queueId: row.queueId } : {}),
   };
+  // A thread already gone from the cloud (deleted elsewhere, or left behind by a stale receipt)
+  // still has its local copy to clear, so deleting it again succeeds.
   if (row.cloudSaved)
-    await awaitQueueMutation(current.client.mutation(ref.discard, identity), current.closed);
+    await awaitQueueMutation(current.client.mutation(ref.discard, identity), current.closed).catch(
+      (cause: unknown) => {
+        if (!isQueueEntityNotFound(cause)) throw cause;
+      },
+    );
   if (session !== current) return;
   current.receipts.delete(queuedThreadKey(row));
   await removeCanceledLocalQueuedThread({ ...identity, accountId: current.accountId });
