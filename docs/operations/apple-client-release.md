@@ -39,7 +39,9 @@ Export the Apple Development identity from Keychain Access including its private
 encode it with `base64 -i certificate.p12 | pbcopy` when configuring the secret. The desktop
 Developer ID certificate in `CSC_LINK` cannot sign the iOS archive. The script imports the
 development identity into a temporary keychain and uses automatic provisioning for the app
-and extensions. The team needs a registered development device for development profiles.
+and extensions. It verifies the Team ID in the certificate's organizational unit (`OU`) and
+matches its fingerprint to a valid signing identity; the display name can contain a personal
+identifier. The team needs a registered development device for development profiles.
 On exit, the script restores the original keychain search list, deletes its temporary signing
 files/keychain, and removes newly downloaded provisioning profiles.
 

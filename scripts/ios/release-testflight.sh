@@ -82,11 +82,7 @@ security import "$signing_root/certificate.p12" -k "$keychain_path" \
   -P "$IOS_DEVELOPMENT_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
 security set-key-partition-list -S apple-tool:,apple:,codesign: \
   -k "$keychain_password" "$keychain_path" >/dev/null
-if ! security find-identity -v -p codesigning "$keychain_path" \
-  | grep -F 'Apple Development:' | grep -Fq "($APPLE_TEAM_ID)"; then
-  echo "The signing certificate must include an Apple Development private key for APPLE_TEAM_ID." >&2
-  exit 1
-fi
+node scripts/ios/check-signing-identity.ts "$keychain_path" "$APPLE_TEAM_ID"
 security list-keychains -d user -s "$keychain_path" "${original_keychains[@]}"
 
 node scripts/configure-pathway-ios.ts
